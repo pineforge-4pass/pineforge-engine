@@ -133,6 +133,9 @@ private:
         bool active = false;
     };
 
+    // Derived lookup cursor over retained_.bars (reset-and-rescan in
+    // broker_bar()); waived from the state hash by
+    // scripts/check_broker_state_hash_coverage.py::SCHEDULER_CACHE_WAIVERS.
     mutable std::size_t broker_bar_cursor = 0;
 
     // @source-state begin

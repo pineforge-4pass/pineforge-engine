@@ -24,6 +24,7 @@ set(TEST_SOURCES
     test_l10q_pyramid_terrace_exit
     test_l10s_pyramiding_same_bar_ids
     test_l10t_partial_exit_residual
+    test_l10z_review_fixes
     test_l10r_dual_stop_same_bar_order
     test_l10p_three_way_entry_bar_exit
     test_l10v_first_partial_leg_timing

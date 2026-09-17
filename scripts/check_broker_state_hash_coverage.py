@@ -40,6 +40,21 @@ NESTED_STRUCTS = {
 # the stale debt row rather than silently preserving it).
 PINNED_HASH_DEBT: set[str] = set()  # L8g settled the three sibling-lane debts (A41(2)); keep empty
 
+# R4-D L10z review fix 7: explicit waivers for PineScheduler caches that live
+# outside the @source-state regions (so `durable_members` never sees them) and
+# are pure derived lookups over already-hashed state. Each entry is enforced
+# fail-closed below: the member must still exist as a mutable cache field in
+# the scheduler header and must NOT be folded into pine_state_hash.cpp (fold it
+# and delete the row instead of leaving a stale waiver).
+SCHEDULER_CACHE_WAIVERS: dict[str, str] = {
+    "broker_bar_cursor": (
+        "Derived bar-lookup cursor over the hashed retained_.bars prefix; "
+        "broker_bar() rebuilds it by reset-and-rescan "
+        "(pine_scheduler.hpp:72-95), so it is never next-decision state "
+        "(L10c)."
+    ),
+}
+
 GENERIC_HEADERS = ("include/pineforge/engine.hpp",)
 SOURCE_HEADERS = (
     "include/pineforge/source/pine_adapter.hpp",
@@ -218,6 +233,16 @@ def main(root: Path = ROOT) -> int:
             if fold not in source_hash:
                 raise ValueError("L4c adapter policy hash fold is missing: " + fold)
 
+        scheduler_header = (root / "include/pineforge/source/pine_scheduler.hpp").read_text()
+        cache_errors: list[str] = []
+        for cache_name in SCHEDULER_CACHE_WAIVERS:
+            if not re.search(r"\bmutable\b[^;{]*\b" + re.escape(cache_name) + r"\b\s*(?:=|;)",
+                             scheduler_header):
+                cache_errors.append(
+                    cache_name + " is no longer a mutable PineScheduler cache member")
+            if re.search(r"\b" + re.escape(cache_name) + r"\b", source_hash):
+                cache_errors.append(
+                    cache_name + " is folded in pine_state_hash.cpp; remove its waiver")
         generic = durable_members(root, GENERIC_HEADERS)
         source = durable_members(root, SOURCE_HEADERS) | source_class_members(root)
         nested = nested_fields(root)
@@ -237,7 +262,7 @@ def main(root: Path = ROOT) -> int:
             if not re.search(rf"\.{re.escape(field)}\b", source_hash)
         )
         debt_errors: list[str] = []  # the L8d sibling-lane pins were settled by L8g (A41(2)) and removed at MERGE-L8
-        if missing or unknown or redundant or nested_missing or debt_errors:
+        if missing or unknown or redundant or nested_missing or debt_errors or cache_errors:
             print("check_broker_state_hash_coverage: "
                   f"missing={missing}, unknown_waivers={unknown}, redundant_waivers={redundant}",
                   file=sys.stderr)
@@ -247,10 +272,14 @@ def main(root: Path = ROOT) -> int:
             if debt_errors:
                 print("check_broker_state_hash_coverage: pinned debt="
                       + repr(debt_errors), file=sys.stderr)
+            if cache_errors:
+                print("check_broker_state_hash_coverage: scheduler cache waivers="
+                      + repr(cache_errors), file=sys.stderr)
             return 1
         print("check_broker_state_hash_coverage: "
               f"{len(generic)} generic members, {len(source)} source-adapter members, "
               f"{len(nested)} nested fields, {len(waivers)} waivers, "
+              f"{len(SCHEDULER_CACHE_WAIVERS)} scheduler cache waivers, "
               f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, OK")
         return 0
     except (OSError, ValueError) as error:
