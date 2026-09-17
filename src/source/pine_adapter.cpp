@@ -1711,6 +1711,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             named_entry_cancel_tokens_.erase(token);
         }
     }
+    if (snapshot.placement_cycle == 0)
+        snapshot.placement_cycle = current_position_cycle_;
     if (snapshot.birth.cause() == OrderBirthCause::Unattributed)
         snapshot.birth = capture_order_birth();
     snapshot.coof_cascade_seg_i = coof_recalc_active_
@@ -5365,6 +5367,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.frozen_market_target_was_long = current > 0.0;
         snapshot.birth = capture_order_birth();
         snapshot.sizing = sizing_snapshot();
+        snapshot.placement_cycle = current_position_cycle_;
         if (const auto point = require_host().current_execution_point()) {
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
             snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
@@ -12773,7 +12776,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto family = found->second.family;
             if (family == PineOrderFamily::ExitLimit
                 || family == PineOrderFamily::ExitStop
-                || family == PineOrderFamily::ExitTrail) {
+                || family == PineOrderFamily::ExitTrail
+                || family == PineOrderFamily::Close
+                || family == PineOrderFamily::CloseAll) {
                 if (!found->second.from_entry.empty()
                     && std::find(ended_sources.begin(), ended_sources.end(),
                                  found->second.from_entry) == ended_sources.end()) {
