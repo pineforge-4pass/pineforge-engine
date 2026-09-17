@@ -4906,8 +4906,9 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
-    const NativeBeginArgs args{bars, n, {}, {}, false, 4,
+    NativeBeginArgs args{bars, n, {}, {}, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
+    args.simple_run = true;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();

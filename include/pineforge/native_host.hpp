@@ -387,6 +387,12 @@ struct NativeBeginArgs {
     const void* overrides_opaque = nullptr;
     bool is_stream = false;
     int warmup_n = 0;
+    // Which public overload began the run: the bare run(bars, n) lifecycle
+    // (true) or a timeframe-aware / magnified / stream begin (false).  A host
+    // may keep lifecycle surfaces (for example its higher-timeframe series
+    // evaluators) off for the bare overload; empty timeframes alone do not
+    // identify it, they only request auto-detection.
+    bool simple_run = false;
 };
 
 // Accepted input facts presented before the generic consumer aggregates the
