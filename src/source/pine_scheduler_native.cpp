@@ -132,12 +132,15 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     host.stream_warmup_mode_ = retained_.is_stream;
     host.scheduler_prepare_script_run(retained_.bars, static_eligible,
                                       expected_source_bars_, !needs_aggregation);
-    // ab9714be pine_scheduler.cpp:717-804 versus :1249-1437: the simple
-    // run(bars,n) lifecycle prepares the script but does not configure the
-    // timeframe/security evaluator surface.  TF-aware, magnified and stream
-    // begins do.  Using the retained public arguments preserves that overload
-    // distinction after the native provider has canonicalized its run spec.
-    if (!static_eligible) host.scheduler_configure_security_evaluators();
+    // ab9714be pine_scheduler.cpp:1249-1323 (run_tf_impl): every public run
+    // overload the generated wrapper calls (run_backtest / run_backtest_full,
+    // both routed through the 7-argument run) configures the request.security
+    // evaluator surface unconditionally, after prepare_script_run() received the
+    // static-eligibility flag.  Empty input/script timeframes only select
+    // auto-detection; they never disable request.security.  (R4-D L10o: gating
+    // this on static eligibility left every request.security series na on the
+    // switched route whenever the caller auto-detected the timeframe.)
+    host.scheduler_configure_security_evaluators();
     uses_aux_security_feed_ = host.scheduler_uses_aux_security_feed();
     host.scheduler_prepare_security_sequence(retained_.bars);
 }
