@@ -6783,6 +6783,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
                 one_shot_level = directional_tick(slipped, tick, exit_is_buy);
             }
+            one_shot_level = source_level_on_price_grid(one_shot_level, tick);
             submit_leg(PineOrderFamily::ExitTrail,
                        native_order::Limit{one_shot_level});
         } else if (native_trail_offset) {
@@ -8274,9 +8275,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // otherwise a LIMIT receives its level, snapped limit-or-better and
         // never slipped.
         if (source.family == PineOrderFamily::ExitTrail && facts.trigger_level
-            && non_open)
-            return directional_tick(*facts.trigger_level, staged_.syminfo.mintick,
-                                    !facts.is_buy);
+            && non_open) {
+            const double ticked = directional_tick(*facts.trigger_level, staged_.syminfo.mintick,
+                                                   !facts.is_buy);
+            return facts.is_buy ? std::min(ticked, *facts.trigger_level)
+                                : std::max(ticked, *facts.trigger_level);
+        }
         const bool deferred_open_gap = source.defer_until_post_parent_calculation
             && facts.cursor.point.provenance == NativePriceProvenance::Confirmed;
         if (!non_open || deferred_open_gap) {

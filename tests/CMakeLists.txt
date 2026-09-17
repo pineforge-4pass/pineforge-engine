@@ -23,6 +23,7 @@ set(TEST_SOURCES
     test_l10q_pyramid_terrace_exit
     test_l10s_pyramiding_same_bar_ids
     test_l10r_dual_stop_same_bar_order
+    test_l10p_three_way_entry_bar_exit
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a
