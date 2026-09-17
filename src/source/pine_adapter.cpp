@@ -11819,8 +11819,175 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
     }
 }
 
+void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // ab9714be pine_fills.cpp:7604-7648 + 7810-7843: under process_orders_on_close,
+    // a priced exit leg placed by this bar's source calc that is already marketable
+    // against this same bar's close fills in the post-calculation fill pass at the
+    // close (stop leg first, at most one leg per exit order) instead of resting
+    // for the next bar. Only the ordinary (non-COOF, non-stream) route is scoped.
+    if (config_.calc_on_order_fills || !config_.process_orders_on_close
+        || stream_mode_ || coof_recalc_active_) {
+        return;
+    }
+    const auto physical = require_host().physical_position();
+    if (physical.signed_units == 0.0) return;
+    const bool closing_long = physical.signed_units > 0.0;
+    const double raw_close = bar.close;
+    const double tick = staged_.syminfo.mintick;
+    // ab9714be pine_fills.cpp:7318-7365 (pooc_short_exit_trigger_close): the
+    // admission gate and the fill evaluation of one POOC same-bar exit reissue
+    // test a SINGLE trigger close. The pinned short reissue tests the broker's
+    // TICK close (C11.575 -> 11.58 skips L11.576782, C11.695 -> 11.70 reaches
+    // S11.698693, C12.495 -> 12.50 reaches S12.496973); every other
+    // configuration tests the RAW close. The booked price is
+    // bar_fill_price(bar.close) either way, so only the tests move. The scope
+    // below is the close-time image of the placement-time pooc_short_tick_scope
+    // of the strategy.exit lowering, which owns the same pinned reissue.
+    bool competing_entry = false;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end() && found->second.opening) {
+            competing_entry = true;
+            break;
+        }
+    }
+    const double held_units = std::abs(physical.signed_units);
+    const bool pinned_short_scope = !closing_long && !competing_entry
+        && physical.lot_count == 1
+        && position_open_script_bar_
+            != std::numeric_limits<std::int64_t>::min()
+        && position_open_script_bar_ < context.script_bar_open_ms
+        && config_.pyramiding == 0 && config_.slippage == 0
+        && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && std::abs(staged_.syminfo.pointvalue - 1.0) < 1e-12
+        && active_staged_fx(context.sub_bar_open_ms) == 1.0
+        && staged_.account_fx_effective_from_ms.empty()
+        && finite_positive(tick);
+    const auto pinned_tick_close = [&](const PlacementSnapshot& row) {
+        if (!pinned_short_scope || row.projection_predecessor == 0) return false;
+        if (row.projection_position_side
+            == static_cast<std::int32_t>(PositionSide::FLAT)) return false;
+        if (!row.oca_name.empty()) return false;
+        if (!std::isnan(row.exit_levels.trail_points)
+            || !std::isnan(row.exit_levels.trail_price)
+            || !std::isnan(row.exit_levels.trail_offset)) return false;
+        if (std::isfinite(row.qty_percent)
+            && row.qty_percent < 100.0 - 1e-9) return false;
+        const double leg_units = std::isfinite(row.projection_remaining_qty)
+            ? std::max(0.0, row.projection_remaining_qty)
+            : (std::isfinite(row.requested_qty)
+                ? std::abs(row.requested_qty) : held_units);
+        if (std::abs(leg_units - held_units) > 1e-9) return false;
+        return !row.from_entry.empty()
+            && cohort_exposure_for(row.from_entry) > 0.0;
+    };
+    struct Leg {
+        native_order::RequestHandle handle;
+        PlacementSnapshot snapshot;
+    };
+    struct Group {
+        bool has_stop = false;
+        Leg stop{};
+        bool has_limit = false;
+        Leg limit{};
+    };
+    std::vector<std::pair<SourceId, Group>> groups;
+    std::map<SourceId, std::size_t> index;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        if (row.family != PineOrderFamily::ExitLimit
+            && row.family != PineOrderFamily::ExitStop) continue;
+        if (row.birth.from_fill()) continue;
+        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        const bool stop_leg = row.family == PineOrderFamily::ExitStop;
+        const double level = stop_leg ? row.exit_levels.stop : row.exit_levels.limit;
+        if (!finite_positive(level)) continue;
+        const SourceId key = row.source_id + "\x1f" + row.from_entry;
+        auto found_group = index.find(key);
+        if (found_group == index.end()) {
+            found_group = index.emplace(key, groups.size()).first;
+            groups.push_back({key, Group{}});
+        }
+        Group& group = groups[found_group->second].second;
+        if (stop_leg) {
+            if (!group.has_stop) {
+                group.has_stop = true;
+                group.stop = Leg{handle, row};
+            }
+        } else if (!group.has_limit) {
+            group.has_limit = true;
+            group.limit = Leg{handle, row};
+        }
+    }
+    for (auto& entry : groups) {
+        Group& group = entry.second;
+        // Two-stage gate, both stages mirroring ab9714be. Stage one is the
+        // classify_order_eligibility POOC gate evaluated over the whole
+        // order: the EXIT order carries is_long=false always, so it tests
+        // the short-side (buy-close) direction for each leg and admits the
+        // order when either leg passes (pine_fills.cpp:7621-7648). Stage
+        // two is evaluate_fill_price's exit_same_bar_reissue marketability
+        // test, which uses the position side (pine_fills.cpp:7810-7843);
+        // the same-bar close fill fires on a stage-two leg only when the
+        // order also passed stage one. Both stages read the same trigger
+        // close (pooc_short_exit_trigger_close, pine_fills.cpp:7318-7365).
+        const double stop_level = group.has_stop ? group.stop.snapshot.exit_levels.stop : kNaN;
+        const double limit_level = group.has_limit ? group.limit.snapshot.exit_levels.limit : kNaN;
+        const bool pinned_reissue = (group.has_stop
+                && pinned_tick_close(group.stop.snapshot))
+            || (group.has_limit && pinned_tick_close(group.limit.snapshot));
+        const double quote_close = pinned_reissue
+            ? source_bar_fill_tick(raw_close, tick) : raw_close;
+        const bool gate = (group.has_stop && quote_close >= stop_level)
+            || (group.has_limit && quote_close <= limit_level);
+        if (!gate) continue;
+        const bool fill_stop = group.has_stop
+            && (closing_long ? quote_close <= stop_level : quote_close >= stop_level);
+        const bool fill_limit = group.has_limit
+            && (closing_long ? quote_close >= limit_level : quote_close <= limit_level);
+        if (!fill_stop && !fill_limit) continue;
+        const Leg& selected = fill_stop ? group.stop : group.limit;
+        if (!selected.handle.incarnation) continue;
+        const auto& row = selected.snapshot;
+        const double units = std::isfinite(row.projection_remaining_qty)
+            ? std::max(0.0, row.projection_remaining_qty)
+            : (std::isfinite(row.requested_qty) ? std::abs(row.requested_qty) : 0.0);
+        if (!(units > 0.0)) continue;
+        cancel_bracket_siblings(selected.handle);
+        native_order::Request request;
+        request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+        request.label = row.source_id;
+        request.comment = row.comment;
+        request.trigger = native_order::Market{};
+        PlacementSnapshot immediate = row;
+        const bool stop_close = row.family == PineOrderFamily::ExitStop;
+        // A stop leg books on the closing side's own path
+        // (apply_fill_slippage(price, is_buy)): closing a SHORT is a BUY, so
+        // the slip is ADDED to the close; closing a LONG is a SELL, so it is
+        // subtracted. A limit leg is never slipped.
+        immediate.forced_execution_price = nearest_tick(
+            raw_close + (stop_close ? (closing_long ? -1.0 : 1.0) : 0.0)
+                * config_.slippage * tick,
+            tick);
+        immediate.projection_predecessor = selected.handle.incarnation;
+        immediate.projection_predecessor_exit = true;
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(immediate), false,
+            row.source_id + "\x1f" + row.from_entry
+                + std::to_string(static_cast<int>(row.family)));
+        if (accepted) {
+            (void)require_host().execute_current(
+                {*accepted, NativeCurrentPriceRule::NearestTick});
+        }
+    }
+}
+
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
+    flush_pooc_marketable_exit_fills(bar, context);
     admit_deferred_open_marketable_sells();
     rearm_throttled_reopens();
     // A tolerant stream can synthesize a pair-less script callback without a
