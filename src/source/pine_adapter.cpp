@@ -9789,6 +9789,11 @@ bool PineExecutionAdapter::submit_margin_call_slice(
         ? held - equity / unit_margin
         : (required - equity) / unit_margin;
     if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return false;
+    // ab9714be pine_fills.cpp:1572-1575: a dust-sized restore requirement is
+    // not a broker action.  It must be discarded before lot quantization, so
+    // floating-point residue at a 1x full-margin opening cannot become a
+    // 4x epsilon Reduce (and a phantom trade row).
+    if (raw_minimum <= internal::kQtyEpsilon) return false;
     double minimum = raw_minimum;
     if (staged_.quantity_grid) {
         minimum = std::floor(raw_minimum / *staged_.quantity_grid)
@@ -11881,16 +11886,17 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail;
         const auto native = require_host().native_state();
+        // An implicit strategy.exit quantity is represented as NaN; a plain
+        // resting stop still owns the position and needs fill-based drawdown
+        // normalization in the ordinary (non-COOF) route.
         const bool normalize_resting_stop_drawdown =
             placement_snapshot->family == PineOrderFamily::ExitStop
-            && std::isfinite(placement_snapshot->requested_qty)
-            && placement_snapshot->requested_qty > 0.0
             && placement_snapshot->projection_created_bar
                 < context.coordinate.interval_index
             && placement_snapshot->oca_name.empty()
             && std::isnan(placement_snapshot->exit_levels.trail_points)
             && std::isnan(placement_snapshot->exit_levels.trail_price)
-            && config_.calc_on_order_fills && !config_.process_orders_on_close
+            && !config_.process_orders_on_close
             && config_.pyramiding == 0 && !config_.close_entries_rule_any
             && config_.slippage == 0 && config_.commission_value == 0.0
             && !stream_mode_ && (!native.spec || native.spec->intrabar.is_none());
