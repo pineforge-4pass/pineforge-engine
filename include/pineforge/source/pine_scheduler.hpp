@@ -111,6 +111,7 @@ private:
         int volume_weighted_max_samples = 64;
         bool is_stream = false;
         int warmup_n = 0;
+        bool simple_run = false;
     };
 
     void publish_series(const Bar&, PineStrategyHost&);
