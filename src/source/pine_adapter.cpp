@@ -5501,7 +5501,19 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         (void)callsite_token;
         const auto accepted = submit_or_replace(
             std::move(request), std::move(snapshot), false, "__pine_close_all");
-        if (immediately && accepted) {
+        // ab9714be pine_strategy_commands.cpp:789-801: an ordinary POOC
+        // close_all fills at the call (execute_immediate_close), ahead of any
+        // same-bar market entry the script placed before it; an under-cap add
+        // issued earlier in the pass therefore survives the flat
+        // (pine_strategy_commands.cpp:2437-2446) instead of being flattened
+        // with the book.  The script keeps the pre-close position view (KI-64).
+        const bool pooc_ordinary_close_all = config_.process_orders_on_close
+            && !immediately && !config_.calc_on_order_fills && !coof_recalc_active_;
+        if (pooc_ordinary_close_all && accepted) {
+            if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host()))
+                pine_host->freeze_script_position_view();
+        }
+        if ((immediately || pooc_ordinary_close_all) && accepted) {
             (void)require_host().execute_current(
                 {*accepted, NativeCurrentPriceRule::NearestTick});
         }
@@ -9218,7 +9230,22 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     == IntrabarPath::SampleEligibility::DistributionSamples);
             if (one_price) open_px = policy_script_bar_.open;
         }
-        const bool open_gapped = !non_open && std::isfinite(level)
+        // ab9714be pine_fills.cpp:4136-4240 + 7795-7800: a stop armed with its
+        // pending MARKET parent and already breached at the parent's fill
+        // open scratches at bar_fill_price(open).  The leg becomes live only
+        // after that opening fill, so the driver first presents it on the
+        // next path segment, crossed at the segment's start: the script-bar
+        // open itself.  That is the same opening gap, not a path cross.
+        const bool armed_after_open_fill = non_open
+            && source.family == PineOrderFamily::ExitStop
+            && policy_script_bar_valid_
+            && !config_.process_orders_on_close && !config_.calc_on_order_fills
+            && host_state.spec && host_state.spec->intrabar.is_none()
+            && facts.cursor.point.provenance == NativePriceProvenance::Confirmed
+            && facts.raw_price == policy_script_bar_.open;
+        if (armed_after_open_fill) open_px = policy_script_bar_.open;
+        const bool open_gapped = (!non_open || armed_after_open_fill)
+            && std::isfinite(level)
             && (facts.is_buy ? open_px >= level : open_px <= level);
         if (!open_gapped) return source_stop_fill();
         // ab9714be try_exit_open_gap_fill books bar.open (the script-bar
