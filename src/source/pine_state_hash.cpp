@@ -233,7 +233,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& key : cohort_keys) {
         const auto& cohort = cohorts_by_id_.at(key);
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
-        hash_native_handle_vector(f, cohort.origins); hash_native_handle_vector(f, cohort.opened);
+        hash_native_handle_vector(f, cohort.origins.members()); hash_native_handle_vector(f, cohort.opened);
         std::vector<std::uint64_t> live_origin_keys;
         live_origin_keys.reserve(cohort.live_units_by_origin.size());
         for (const auto& row : cohort.live_units_by_origin) live_origin_keys.push_back(row.first);
@@ -256,7 +256,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::vector<std::uint64_t> bracket_keys;
     for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
-    for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key)); }
+    for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key).members()); }
     f.u(pending_bracket_legs_.size());
     for (const auto& leg : pending_bracket_legs_) {
         hash_native_request(f, leg.request); hash_placement(f, leg.snapshot);

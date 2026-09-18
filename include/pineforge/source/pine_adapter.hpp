@@ -11,6 +11,7 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -367,6 +368,8 @@ public:
     void clear() noexcept {
         slots_.clear();
         size_ = 0;
+        sequence_index_.clear();
+        sequence_indexed_slots_ = 0;
     }
 
     iterator begin() noexcept { return iterator(this, 0); }
@@ -405,12 +408,182 @@ public:
         if (slot) return {iterator(this, index), false};
         slot.emplace(std::forward<Args>(args)...);
         ++size_;
+        // A late handle filling a slot below the index watermark is folded
+        // now; the minima are order-independent.
+        if (index < sequence_indexed_slots_) {
+            try {
+                fold_sequence(*slot);
+            } catch (...) {
+                sequence_index_.clear();
+                sequence_indexed_slots_ = 0;
+                throw;
+            }
+        }
         return {iterator(this, index), true};
     }
 
+    // Replaces an existing row wholesale. Its identity fields may change, so
+    // the derived sequence index is rebuilt on the next lookup.
+    void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
+        at(incarnation) = std::move(snapshot);
+        sequence_index_.clear();
+        sequence_indexed_slots_ = 0;
+    }
+
+    // Smallest command_sequence among the rows whose source_id is `source_id`:
+    // over the rows bound to `from_entry` when any is, else over all of them;
+    // UINT64_MAX when no row carries the id. Equal to a full scan of the
+    // table, but served from a derived per-id index extended over the rows
+    // appended since the previous lookup, so a per-bar caller no longer pays
+    // O(rows) per call. The index relies on a stored row's source_id /
+    // from_entry / command_sequence never being written in place (only
+    // replace() rewrites a row); it is a pure lookup over the hashed rows,
+    // never next-decision state.
+    std::uint64_t command_sequence_for(const std::string& source_id,
+                                       const std::string& from_entry) const {
+        for (; sequence_indexed_slots_ < slots_.size(); ++sequence_indexed_slots_) {
+            const auto& slot = slots_[sequence_indexed_slots_];
+            if (slot) fold_sequence(*slot);
+        }
+        constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
+        const auto minima = sequence_index_.find(source_id);
+        if (minima == sequence_index_.end()) return absent;
+        const auto paired = minima->second.by_from_entry.find(from_entry);
+        if (paired != minima->second.by_from_entry.end() && paired->second != absent)
+            return paired->second;
+        return minima->second.any;
+    }
+
 private:
+    struct SequenceMinima {
+        std::uint64_t any = std::numeric_limits<std::uint64_t>::max();
+        std::unordered_map<std::string, std::uint64_t> by_from_entry;
+    };
+
+    void fold_sequence(const PlacementSnapshot& row) const {
+        auto& minima = sequence_index_[row.source_id];
+        minima.any = std::min(minima.any, row.command_sequence);
+        const auto inserted = minima.by_from_entry.emplace(row.from_entry, row.command_sequence);
+        if (!inserted.second)
+            inserted.first->second = std::min(inserted.first->second, row.command_sequence);
+    }
+
     std::vector<std::optional<PlacementSnapshot>> slots_;
     std::size_t size_ = 0;
+    // Derived lookup cache for command_sequence_for(); see there.
+    mutable std::unordered_map<std::string, SequenceMinima> sequence_index_;
+    mutable std::size_t sequence_indexed_slots_ = 0;
+};
+
+// Append-only roster of the opening requests a source id ever accepted, in
+// acceptance order. Over a long run it holds every historical entry, while
+// the pending-origin and live-exposure queries only concern the few handles
+// still live; the per-incarnation position index lets those queries visit
+// just their positions, in roster order, instead of the whole history.
+class OriginRoster {
+public:
+    using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
+    using const_reverse_iterator =
+        std::vector<native_order::RequestHandle>::const_reverse_iterator;
+
+    void push_back(const native_order::RequestHandle& handle) {
+        auto& positions = positions_[handle.incarnation];
+        positions.push_back(items_.size());
+        try {
+            items_.push_back(handle);
+        } catch (...) {
+            positions.pop_back();
+            throw;
+        }
+    }
+    const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
+    const native_order::RequestHandle& operator[](std::size_t index) const { return items_[index]; }
+    const native_order::RequestHandle& back() const { return items_.back(); }
+    bool empty() const noexcept { return items_.empty(); }
+    std::size_t size() const noexcept { return items_.size(); }
+    const_iterator begin() const noexcept { return items_.begin(); }
+    const_iterator end() const noexcept { return items_.end(); }
+    const_reverse_iterator rbegin() const noexcept { return items_.rbegin(); }
+    const_reverse_iterator rend() const noexcept { return items_.rend(); }
+
+    // Ascending roster positions of the entries equal to `handle`.
+    void append_positions_of(const native_order::RequestHandle& handle,
+                             std::vector<std::size_t>& out) const {
+        const auto found = positions_.find(handle.incarnation);
+        if (found == positions_.end()) return;
+        for (const auto position : found->second)
+            if (items_[position] == handle) out.push_back(position);
+    }
+    // Ascending roster positions of the entries carrying `incarnation`, or
+    // null when none does. Allocation-free.
+    const std::vector<std::size_t>* positions_of(std::uint64_t incarnation) const noexcept {
+        const auto found = positions_.find(incarnation);
+        return found == positions_.end() ? nullptr : &found->second;
+    }
+
+private:
+    std::vector<native_order::RequestHandle> items_;
+    // Derived lookup over items_ (never next-decision state).
+    std::unordered_map<std::uint64_t, std::vector<std::size_t>> positions_;
+};
+
+// Ordered member list of one source bracket family. Members are appended per
+// accepted leg and only removed when cancelled, so the list retains every
+// historical leg while removals target the few live ones near its tail. The
+// per-incarnation member count bounds a removal to the suffix that holds the
+// matching members.
+class BracketRoster {
+public:
+    using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
+
+    void push_back(const native_order::RequestHandle& handle) {
+        auto& count = counts_[handle.incarnation];
+        items_.push_back(handle);
+        ++count;
+    }
+    const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
+    bool empty() const noexcept { return items_.empty(); }
+    std::size_t size() const noexcept { return items_.size(); }
+    const_iterator begin() const noexcept { return items_.begin(); }
+    const_iterator end() const noexcept { return items_.end(); }
+
+    // Erases every member equal to one of `doomed`, keeping the order of the
+    // rest: the same result as erase(remove_if(find in doomed)).
+    void remove_all(const std::vector<native_order::RequestHandle>& doomed) {
+        std::vector<std::uint64_t> incarnations;
+        std::size_t sharing = 0;
+        for (const auto& handle : doomed) {
+            if (std::find(incarnations.begin(), incarnations.end(), handle.incarnation)
+                != incarnations.end()) continue;
+            incarnations.push_back(handle.incarnation);
+            const auto found = counts_.find(handle.incarnation);
+            if (found != counts_.end()) sharing += found->second;
+        }
+        if (sharing == 0) return;
+        // Lowest position holding a member that shares a doomed incarnation.
+        std::size_t first = items_.size();
+        while (sharing > 0 && first > 0) {
+            --first;
+            if (std::find(incarnations.begin(), incarnations.end(), items_[first].incarnation)
+                != incarnations.end()) --sharing;
+        }
+        std::size_t out = first;
+        for (std::size_t in = first; in < items_.size(); ++in) {
+            if (std::find(doomed.begin(), doomed.end(), items_[in]) != doomed.end()) {
+                const auto found = counts_.find(items_[in].incarnation);
+                if (--found->second == 0) counts_.erase(found);
+                continue;
+            }
+            if (out != in) items_[out] = items_[in];
+            ++out;
+        }
+        items_.resize(out);
+    }
+
+private:
+    std::vector<native_order::RequestHandle> items_;
+    // Derived member multiplicity per incarnation (never next-decision state).
+    std::unordered_map<std::uint64_t, std::size_t> counts_;
 };
 
 struct ShortSeedPlan {
@@ -722,7 +895,7 @@ private:
     friend class PineScheduler;
     struct CohortFacts {
         native_order::CohortHandle handle{};
-        std::vector<native_order::RequestHandle> origins;
+        OriginRoster origins;
         std::vector<native_order::RequestHandle> opened;
         // Live source exposure by opening provenance.  This is source-layer
         // bookkeeping only: the generic core still resolves cohort authority
@@ -922,6 +1095,11 @@ private:
     void consume_closed_trade_rows(const native_order::ExecutionAppliedEvent&,
                                    const PlacementSnapshot*);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
+    // Roster positions, latest first, of the cohort's origins that are live
+    // handles. origin_is_pending() accepts only live handles, so walking these
+    // positions meets exactly the pending origins a reverse walk of the whole
+    // roster meets, in the same order.
+    std::vector<std::size_t> live_origin_positions(const CohortFacts&) const;
     void cancel_bracket_origin(native_order::RequestHandle);
     void cancel_bracket_siblings(native_order::RequestHandle);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);
@@ -1027,7 +1205,7 @@ private:
     std::vector<SourceId> cohort_order_;
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
-    std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
+    std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
     std::vector<DelayedMarketOrder> delayed_market_orders_;

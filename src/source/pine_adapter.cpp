@@ -965,6 +965,20 @@ void PineExecutionAdapter::suspend_brackets_for_reversal(
         double open_price) {
     const int direction = reversal.projection_position_side
         == static_cast<std::int32_t>(PositionSide::LONG) ? 1 : -1;
+    // Off the reversal's side, bracket_belongs_to_reversal() answers from a
+    // walk of the bracket's from_entry origins, which this loop never changes
+    // (it only rewrites leg lifecycles): memoise that answer per from_entry
+    // instead of repeating the walk for every retained exit row.
+    std::unordered_map<SourceId, bool> cross_side_by_entry;
+    const auto belongs = [&](const PlacementSnapshot& bracket) {
+        if (bracket.projection_position_side == reversal.projection_position_side)
+            return true;
+        const auto cached = cross_side_by_entry.find(bracket.from_entry);
+        if (cached != cross_side_by_entry.end()) return cached->second;
+        const bool value = bracket_belongs_to_reversal(bracket, reversal);
+        cross_side_by_entry.emplace(bracket.from_entry, value);
+        return value;
+    };
     for (auto row : placement_) {
         auto& candidate = row.second;
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
@@ -972,7 +986,7 @@ void PineExecutionAdapter::suspend_brackets_for_reversal(
             || candidate.family == PineOrderFamily::ExitTrail;
         if (!exit || candidate.from_entry.empty() || candidate.legs.dormant()
             || !candidate.legs.target().incarnation
-            || !bracket_belongs_to_reversal(candidate, reversal)) {
+            || !belongs(candidate)) {
             continue;
         }
         const compat::pine::ExitSuspensionContext context{
@@ -1628,7 +1642,7 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     // immutable placement evidence directly in the hash table rather than
     // default-constructing a string-bearing snapshot and move-assigning it.
     const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
-    if (!inserted.second) inserted.first->second = std::move(snapshot);
+    if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
     if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
         live_handles_.push_back(handle);
     update_l4c_priority();
@@ -2362,12 +2376,33 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
     double total = 0.0;
     // `live_units_by_origin` is a lookup table.  Quantities must follow the
     // cohort's deterministic source insertion order, never its hash buckets.
-    for (const auto& origin : found->second.origins) {
-        const auto row = found->second.live_units_by_origin.find(origin.incarnation);
-        if (row != found->second.live_units_by_origin.end()
-            && std::isfinite(row->second) && row->second > 0.0) {
-            total += row->second;
+    // Only roster positions whose incarnation has a unit row can contribute:
+    // step through just those, ascending, rather than the id's whole entry
+    // history. Allocation-free (the pending-order readback calls this).
+    const auto& facts = found->second;
+    bool have_previous = false;
+    std::size_t previous = 0;
+    for (;;) {
+        bool have_next = false;
+        std::size_t next = 0;
+        double units = 0.0;
+        for (const auto& unit : facts.live_units_by_origin) {
+            const auto* positions = facts.origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                if (have_previous && position <= previous) continue;
+                if (!have_next || position < next) {
+                    have_next = true;
+                    next = position;
+                    units = unit.second;
+                }
+                break;
+            }
         }
+        if (!have_next) break;
+        if (std::isfinite(units) && units > 0.0) total += units;
+        have_previous = true;
+        previous = next;
     }
     return std::isfinite(total) && total > 0.0 ? total : 0.0;
 }
@@ -3190,6 +3225,15 @@ bool PineExecutionAdapter::origin_is_pending(
     return std::find(live_handles_.begin(), live_handles_.end(), origin) != live_handles_.end();
 }
 
+std::vector<std::size_t> PineExecutionAdapter::live_origin_positions(
+        const CohortFacts& cohort) const {
+    std::vector<std::size_t> positions;
+    for (const auto& handle : live_handles_) cohort.origins.append_positions_of(handle, positions);
+    std::sort(positions.rbegin(), positions.rend());
+    positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+    return positions;
+}
+
 void PineExecutionAdapter::cancel_bracket_origin(native_order::RequestHandle origin) {
     pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.snapshot.bracket_origin == origin; }),
@@ -3283,12 +3327,7 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
     for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
-        family->second.erase(
-            std::remove_if(family->second.begin(), family->second.end(),
-                [&](const native_order::RequestHandle& handle) {
-                    return std::find(handles.begin(), handles.end(), handle) != handles.end();
-                }),
-            family->second.end());
+        family->second.remove_all(handles);
         if (family->second.empty()) family = bracket_families_.erase(family);
         else ++family;
     }
@@ -3388,13 +3427,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
             if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
         }
         for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
-            family->second.erase(
-                std::remove_if(family->second.begin(), family->second.end(),
-                    [&](const native_order::RequestHandle& handle) {
-                        return std::find(handles.begin(), handles.end(), handle)
-                            != handles.end();
-                    }),
-                family->second.end());
+            family->second.remove_all(handles);
             if (family->second.empty()) family = bracket_families_.erase(family);
             else ++family;
         }
@@ -3411,17 +3444,10 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 // ab9714be pine_fills.cpp:664-670: candidate exit fills tie-break by order creation sequence created_seq
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const noexcept {
-    std::uint64_t paired = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t any_row = std::numeric_limits<std::uint64_t>::max();
-    for (const auto& row : placement_) {
-        const auto& snapshot = row.second;
-        if (snapshot.source_id != exit_id) continue;
-        any_row = std::min(any_row, snapshot.command_sequence);
-        if (snapshot.from_entry == from_entry) {
-            paired = std::min(paired, snapshot.command_sequence);
-        }
-    }
-    return paired != std::numeric_limits<std::uint64_t>::max() ? paired : any_row;
+    // The same-bar exit sort asks this on every script bar while its tail
+    // group persists; the table answers from its per-id index instead of a
+    // scan over every placement ever retained (quadratic over a long run).
+    return placement_.command_sequence_for(exit_id, from_entry);
 }
 
 bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noexcept {
@@ -6546,12 +6572,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // ab9714be src/source/pine_fills.cpp:4560-4564: a pending same-id origin
     // never defers the levels once the id has filled in this cycle.
     if (cohort != cohorts_by_id_.end() && !parent_filled_this_cycle) {
-        for (auto it = cohort->second.origins.rbegin();
-             it != cohort->second.origins.rend(); ++it) {
-            const auto parent = placement_.find(it->incarnation);
+        for (const auto position : live_origin_positions(cohort->second)) {
+            const auto& origin = cohort->second.origins[position];
+            const auto parent = placement_.find(origin.incarnation);
             if (parent == placement_.end() || !parent->second.opening
-                || !origin_is_pending(*it)
-                || std::find(cohort->second.opened.begin(), cohort->second.opened.end(), *it)
+                || !origin_is_pending(origin)
+                || std::find(cohort->second.opened.begin(), cohort->second.opened.end(), origin)
                     != cohort->second.opened.end()) {
                 continue;
             }
@@ -7371,10 +7397,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             if (!from_entry.empty()) {
                 const auto cohort = cohorts_by_id_.find(from_entry);
                 if (cohort != cohorts_by_id_.end() && cohort->second.opened.empty()) {
-                    for (auto it = cohort->second.origins.rbegin();
-                         it != cohort->second.origins.rend(); ++it) {
-                        if (origin_is_pending(*it)) {
-                            pending_origin = *it;
+                    for (const auto position : live_origin_positions(cohort->second)) {
+                        const auto& origin = cohort->second.origins[position];
+                        if (origin_is_pending(origin)) {
+                            pending_origin = origin;
                             defer_until_parent = true;
                             break;
                         }
@@ -8133,11 +8159,11 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
             && !leg.snapshot.from_entry.empty()) {
             const auto cohort = cohorts_by_id_.find(leg.snapshot.from_entry);
             if (cohort != cohorts_by_id_.end()) {
-                retained_parent_pending = cohort->second.opened.empty()
-                    && std::any_of(
-                    cohort->second.origins.begin(), cohort->second.origins.end(),
-                    [&](const native_order::RequestHandle& origin) {
-                        return origin_is_pending(origin);
+                const auto live = cohort->second.opened.empty()
+                    ? live_origin_positions(cohort->second) : std::vector<std::size_t>{};
+                retained_parent_pending = std::any_of(live.begin(), live.end(),
+                    [&](std::size_t position) {
+                        return origin_is_pending(cohort->second.origins[position]);
                     });
             }
         }
@@ -8843,7 +8869,7 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
     std::vector<native_order::RequestHandle> handles;
     bool found_family = false;
     if (const auto found = bracket_families_.find(key); found != bracket_families_.end()) {
-        handles = found->second;
+        handles = found->second.members();
         bracket_families_.erase(found);
         found_family = true;
     }
