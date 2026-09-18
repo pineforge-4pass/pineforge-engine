@@ -24,13 +24,18 @@
 
 ## Why PineForge
 
-PineForge is a C++17 engine for backtesting and forward execution, with a C ABI for embedding. The separate PineForge compiler translates PineScript v6 into C++ strategies. Native order contracts prioritize deterministic actions, ownership and settlement; TradingView comparisons measure the Pine frontend's compatibility under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work.
+PineForge is a C++17 engine for backtesting and forward execution, with a C ABI for embedding. The engine has two layers:
+
+1. **A generic kernel** — a Pine-agnostic backtest and forward-execution state machine: order matching and fills, sizing, margin and settlement, the bar magnifier, indicator classes, `request.security()`, time and session math. It knows nothing about Pine or TradingView.
+2. **A source-adapter parity runtime** (`src/source/`, `PineExecutionAdapter` + `PineStrategyHost`) — maps Pine/TradingView execution semantics onto that kernel. This is where TradingView parity lives.
+
+The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), translates a PineScript v6 script into a C++ strategy that attaches the engine's Pine execution adapter; it owns translation, not execution semantics. TradingView comparisons measure this Pine path under the tested configurations. The [order model](docs/pages/fill-model.md) describes the current submodels and the remaining migration work; [Architecture](#architecture-kernel-vs-parity) states the boundary.
 
 - **Proven, not promised.** All 4,190 probes — 312 open reference strategies plus 413 real community scripts on 15 markets and timeframes — grade *excellent* or *strong* against TradingView's own trade lists: **4,182 excellent, 8 strong, zero moderate**. The current full sweep evaluates 2,819,967 TradingView trades, with 2,818,237 matched by the verifier.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **162× faster than PyneCore** on 99 timed strategies. Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** One header, 32 `extern "C"` functions, append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** One header, 65 `extern "C"` functions, append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -216,15 +221,39 @@ PyneCore's 15 non-excellent strategies involve `strategy.exit(stop=…, limit=�
 
 ---
 
-Explicit Pine frontends must use the [execution attachment and regeneration
-contract](docs/pine-order-priority-boundary.md) for retained-parent priority.
-Bare native engines and cap-only generated constructors do not opt into it.
+## Architecture: kernel vs. parity
+
+```
+Pine v6 script
+   │  pineforge-codegen (separate repo): Pine → C++ translation only
+   ▼
+GeneratedStrategy  ── indicator math + strategy.entry / exit / close calls
+   │  attach_pine_execution_adapter()
+   ▼
+Source-adapter parity runtime   src/source/, src/compat/pine/
+   PineStrategyHost, PineExecutionAdapter: Pine order lifecycle, bracket legs,
+   fill-price and slippage rules, POOC / calc_on_order_fills, margin revival,
+   trail and stop semantics
+   │  generic orders, handles, callbacks
+   ▼
+Generic kernel   src/engine_*, src/native_*, src/ta_*, magnifier, session_time, …
+   matching and fills, sizing, margin and settlement, bar magnifier,
+   indicators, request.security(), time and session math; Pine-agnostic
+```
+
+- **codegen** owns Pine → C++ translation: the `GeneratedStrategy` with its indicator math and `strategy.*` calls. It does not own execution, fill, bracket or margin semantics.
+- **The source adapter** owns TradingView parity: how Pine orders live, fill, bracket, revive and trail, expressed as ordinary kernel orders.
+- **The kernel** stays Pine-agnostic. It changes only for a *generic* capability that carries a recorded ruling — for example per-lot excursion accounting exposed as a kernel capability, or a market-if-touched (fill-through) flag on a limit order. No Pine- or TradingView-specific rule belongs in the kernel; such a rule goes to the source adapter or to codegen.
+
+Bare native engines (`NativeStrategyHost`) run the kernel without the Pine adapter. Pine frontends must attach it explicitly and follow the [execution attachment and regeneration contract](docs/pine-order-priority-boundary.md); cap-only generated constructors do not opt into the full adapter.
 
 ## What ships here
 
-- `libpineforge.a` — the static runtime: order matching and fills, sizing and margin, the bar magnifier, 66 indicator classes, `request.security()`, time and session math.
+- `libpineforge.a` — the static runtime, in two layers:
+  - **generic kernel** — order matching and fills, sizing, margin and settlement, the bar magnifier, 66 indicator classes, `request.security()`, time and session math;
+  - **source-adapter parity runtime** — `PineStrategyHost` and `PineExecutionAdapter` (`src/source/`) plus the Pine policy helpers in `src/compat/pine/`, which map Pine/TradingView execution semantics onto the kernel.
 - `<pineforge/pineforge.h>` — the public C ABI, the stability-pinned consumer surface.
-- `<pineforge/*.hpp>` — internal C++ headers the transpiler emits against (not part of the stability guarantee).
+- `<pineforge/*.hpp>`, `<pineforge/source/*.hpp>` — internal C++ headers the transpiler emits against (generated code derives from `pineforge::source::PineStrategyHost`); not part of the stability guarantee.
 - C++ unit and recorded TradingView replay tests; CI on Linux + macOS × Release + Debug, sanitizers, and a `find_package` smoke consumer.
 - `corpus/` — the 312-strategy public validation corpus (submodule).
 - `benchmarks/` — the three-way comparison harness and the throughput package.
@@ -289,14 +318,29 @@ Full flag semantics, string lifetimes and the three L0 evidence lanes behind the
 ## Repository layout
 
 ```
-include/pineforge/      public C ABI + internal C++ headers
-src/                    26 .cpp files split by concern
+include/pineforge/      public C ABI (pineforge.h) + internal C++ headers
+  ├── source/                         Pine source-adapter headers (pine_adapter.hpp, pine_strategy_host.hpp, …)
+  └── compat/pine/                    Pine policy helper headers
+src/                    48 .cpp files in two layers
+  │ generic kernel (Pine-agnostic)
   ├── c_abi.cpp                       C ABI implementations + layout asserts
-  ├── engine_*.cpp                    BacktestEngine: path resolution, lower-TF emulation, orders,
-  │                                   fills, security, run loop, report, strategy commands, risk
+  ├── engine_*.cpp                    BacktestEngine: run loop, orders, execution, path resolution,
+  │                                   lower-TF emulation, security + aux security, stream, consumer,
+  │                                   metrics, report, trade accessors, state hash
+  ├── native_*.cpp                    native orders, run spec, calendar, FX curve, execution consumer
+  ├── market_admission / market_driver / pending_order_mirror / reservation_expansion
   ├── ta_*.cpp                        66 indicator classes (moving averages, oscillators,
   │                                   volatility/trend, extremes/volume, misc)
-  └── magnifier / matrix / session_time / timeframe / timezone / math / str_utils
+  ├── magnifier / matrix / session_time / timeframe / timezone / math / str_utils
+  │ source-adapter parity runtime (Pine / TradingView semantics)
+  ├── source/
+  │   ├── pine_strategy_host.cpp      PineStrategyHost: the base every GeneratedStrategy derives from
+  │   ├── pine_adapter.cpp            PineExecutionAdapter: Pine order lifecycle, brackets, fills, margin
+  │   ├── pine_strategy_commands.cpp  strategy.entry / order / exit / close / cancel lowering
+  │   ├── pine_scheduler.cpp, pine_scheduler_native.cpp
+  │   └── pine_aux_security.cpp, pine_state_hash.cpp
+  └── compat/pine/                    exit_activation, exit_lifecycle, market_admission,
+                                      order_birth, order_priority, reservation_expansion
 tests/                  C++ unit, TradingView replay and pure-C ABI tests
 corpus/                 public submodule: 312 strategies + the 1-minute feed and derived 15m bars
 benchmarks/             three-way comparison harness, throughput package, results/
