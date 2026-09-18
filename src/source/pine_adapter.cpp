@@ -1155,6 +1155,26 @@ void PineExecutionAdapter::revive_brackets_after_margin(
                 superseded = true;
                 break;
             }
+            // The owner keeps ONE pending exit per (id, from_entry): a later
+            // bar's same-id strategy.exit re-priced it in place, so the older
+            // stop is gone and only that re-issue is a revival candidate
+            // (ab9714be pine_fills.cpp:2069-2094 scans the live pending_orders_
+            // only).  A re-issue made over a dormant predecessor carries no
+            // projection link, so match it by identity: same leg family, a
+            // later script bar and a different stop.  A same-bar re-issue
+            // still revives the originally armed stop (ab9714be
+            // pine_fills.cpp:2088-2094); a same-level re-materialization
+            // changes nothing and keeps the predecessor.
+            const auto& peer = other.second;
+            if (other.first > inc && peer.placement_cycle == current_position_cycle_
+                && peer.family == candidate.family
+                && peer.source_id == candidate.source_id
+                && peer.from_entry == candidate.from_entry
+                && peer.placement_script_open_ms > candidate.placement_script_open_ms
+                && !same_double_bits(peer.exit_levels.stop, candidate.exit_levels.stop)) {
+                superseded = true;
+                break;
+            }
         }
         if (superseded) continue;
         const double revive_stop = compat::pine::select_margin_revival_stop(candidate.legs);
