@@ -12763,6 +12763,16 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             cohort.second.opened.clear();
             cohort.second.live_units_by_origin.clear();
         }
+        // ab9714be pine_strategy_host.cpp:244 / :261
+        // reset_source_open_position_ledgers_before_book clears the close
+        // ledgers when a position is opened or reversed, so unclosed units of
+        // the prior position side cannot survive to admit a later close of that
+        // side against the new position.
+        close_logical_units_.clear();
+        close_reserved_units_.clear();
+        close_first_units_.clear();
+        close_callsite_reserved_units_.clear();
+        close_callsite_first_units_.clear();
     }
     if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
