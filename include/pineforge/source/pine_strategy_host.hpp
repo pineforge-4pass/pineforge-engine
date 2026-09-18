@@ -421,6 +421,10 @@ protected:
     // process_pending_orders before a priced exit's fill), false when the
     // non-POOC end-of-bar opening trim inherits the complete script bar.
     mutable bool excursion_margin_prefix_ = false;
+    // A slice the owner books with no sample of the current bar at all: the
+    // carried position's open slice and the general pre-exit slice own only
+    // their carried extremes and the fill itself.
+    mutable bool excursion_margin_fill_only_ = false;
     mutable bool excursion_range_end_projection_ = false;
     mutable double excursion_trail_offset_ticks_ =
         std::numeric_limits<double>::quiet_NaN();

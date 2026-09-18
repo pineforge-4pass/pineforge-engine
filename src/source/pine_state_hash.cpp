@@ -587,6 +587,7 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     // slice in the precommit pass and read back by the host's own excursion
     // sampler at settlement, so it is folded rather than waived.
     f.b(excursion_margin_prefix_);
+    f.b(excursion_margin_fill_only_);
     // The TRAIL peak basis is the precommit view's pre-slip matcher price,
     // which no durable snapshot re-derives at settlement.
     f.d(excursion_trail_raw_price_);

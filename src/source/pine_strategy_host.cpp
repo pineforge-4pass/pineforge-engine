@@ -483,6 +483,23 @@ void source::PineStrategyHost::on_native_applied(
                 lot.skip_entry_bar_low = true;
             }
         }
+        // ab9714be pine_orders.cpp:750-753 and pine_fills.cpp:7189-7193
+        // (KI-62): a MARKET entry that adds to a live same-side position is
+        // flagged so a same-bar from_entry bracket exit covers it.
+        const bool market_add = !pine_priced && event.closed_units == 0.0
+            && p != adapter_.placement_.end()
+            && (p->second.family == PineOrderFamily::Entry
+                || p->second.family == PineOrderFamily::Order)
+            && std::any_of(pyramid_entries_.begin(), pyramid_entries_.end(),
+                [&](const PyramidEntry& lot) {
+                    return lot.entry_incarnation != event.handle().incarnation;
+                });
+        if (market_add) {
+            for (auto& lot : pyramid_entries_) {
+                if (lot.entry_incarnation == event.handle().incarnation)
+                    lot.market_pyramid_add = true;
+            }
+        }
     }
     // The legacy source observer counted one broker fill for every committed
     // execution event.  The native consumer owns those events now; mirror the
@@ -498,6 +515,7 @@ void source::PineStrategyHost::on_native_applied(
     excursion_priced_fill_ = false;
     excursion_margin_call_ = false;
     excursion_margin_prefix_ = false;
+    excursion_margin_fill_only_ = false;
     excursion_trail_offset_ticks_ = std::numeric_limits<double>::quiet_NaN();
     excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
     if (position_side_ != PositionSide::FLAT) {
@@ -589,6 +607,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     // The margin slice's sampling chronology is a book fact resolved in the
     // adapter precommit pass; start clean for every request.
     excursion_margin_prefix_ = false;
+    excursion_margin_fill_only_ = false;
     return adapter_.validate_precommit(view);
 }
 
@@ -635,6 +654,7 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
     // boundary the sampler already walked, and under the bar magnifier a
     // one-price open bar has no path left to fold.
     if (excursion_range_end_projection_) return owned;
+    if (excursion_margin_call_ && excursion_margin_fill_only_) return owned;
     if (excursion_margin_call_) {
         // ab9714be pine_risk.cpp:256-292: a margin-call liquidation at the
         // adverse extreme owns the rest of the bar. Which part of the bar it
