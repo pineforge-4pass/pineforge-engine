@@ -248,6 +248,22 @@ double nearest_tick(double value, double tick) noexcept {
     return std::floor(value / tick + 0.5) * tick;
 }
 
+// The grid index k = floor(p / mintick + 0.5) re-derived as the decimal
+// quotient k / (1 / mintick), never the n * mintick product: a function of k
+// alone, so two prints on one grid point compare equal and a limit level on
+// the grid is never crossed by a ULP.
+double source_decimal_tick(double value, double tick) noexcept {
+    if (!std::isfinite(value) || !finite_positive(tick)) return value;
+    const double k = std::floor(value / tick + 0.5);
+    const double inverse = 1.0 / tick;
+    const double integral_inverse = std::floor(inverse + 0.5);
+    if (integral_inverse > 0.0
+        && std::abs(inverse - integral_inverse) <= 1e-6 * integral_inverse) {
+        return k / integral_inverse;
+    }
+    return k * tick;
+}
+
 double source_bar_fill_tick(double value, double tick) noexcept {
     if (!std::isfinite(value) || !finite_positive(tick)) return value;
     const double k = std::floor(value / tick + 0.5);
@@ -260,13 +276,7 @@ double source_bar_fill_tick(double value, double tick) noexcept {
     // Re-deriving an already rounded price as k / (1 / tick) dropped that ULP,
     // so a same-bar reversal entry no longer booked on its own close's print.
     if (k * tick == value) return value;
-    const double inverse = 1.0 / tick;
-    const double integral_inverse = std::floor(inverse + 0.5);
-    if (integral_inverse > 0.0
-        && std::abs(inverse - integral_inverse) <= 1e-6 * integral_inverse) {
-        return k / integral_inverse;
-    }
-    return k * tick;
+    return source_decimal_tick(value, tick);
 }
 
 // ab9714be engine.hpp:1264-1266: a fill AT an on-grid raw print books
@@ -3277,6 +3287,10 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
 // resurrect the dormant leg the moment the reused id regains exposure, and a
 // still-live leg can fill against the reversal's fresh lot on the same bar.
 // Removing both the book entry and the lifecycle restores the legacy rule.
+// The lifecycle half is the position-cycle filter at the top of
+// ``revive_brackets_after_margin`` (pine_orders.cpp:597-608): a row parked by
+// a finished cycle is never revived, so no walk over the whole placement
+// history is needed here -- one per flat made a long run quadratic.
 //
 // Both legacy Removes are LAZY per-broker-point eligibility checks that walk
 // the pending queue once in ``created_seq`` order, not an eager sweep.  An
@@ -3364,9 +3378,6 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
             if (family->second.empty()) family = bracket_families_.erase(family);
             else ++family;
         }
-    }
-    for (auto row : placement_) {
-        if (matches(row.second)) row.second.legs = {};
     }
     refresh_pending_view();
 }
@@ -3715,10 +3726,12 @@ double PineExecutionAdapter::coof_next_waypoint() const noexcept {
         // ab9714be pine_fills.cpp:7962-7966 and pine_scheduler.cpp:548-563: a
         // fill at a waypoint POINT books bar_fill_price(waypoint), the
         // nearest-tick rounding of the raw OHLC price, so the applied price
-        // identifies that point only on the tick grid.
+        // identifies that point only on the tick grid.  source_bar_fill_tick
+        // keeps an on-grid n * mintick booking one ULP off the waypoint's
+        // decimal print, so compare the decimal grid forms.
         const bool at_waypoint = point && finite_positive(staged_.syminfo.mintick)
-            ? source_bar_fill_tick(point->price, staged_.syminfo.mintick)
-                == source_bar_fill_tick(path_price[index], staged_.syminfo.mintick)
+            ? source_decimal_tick(point->price, staged_.syminfo.mintick)
+                == source_decimal_tick(path_price[index], staged_.syminfo.mintick)
             : point && point->price == path_price[index];
         if (index > 0 && point && finite_positive(point->price)
             && !at_waypoint && !forced_waypoint) {
@@ -9097,7 +9110,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // ab9714be engine.hpp:1207-1210 + 1264-1266: a fill at a raw bar or
         // waypoint print books floor(p / mintick + 0.5) * mintick.  Keep that
         // binary64 form unless it lies past the immutable limit the generic
-        // kernel checks (native_execution_consumer.cpp:2862-2875).
+        // kernel checks (native_execution_consumer.cpp:2862-2875); there the
+        // decimal grid form, since source_bar_fill_tick returns an on-grid
+        // n * mintick unchanged.
         const double owner_form = nearest_tick(price, staged_.syminfo.mintick);
         std::optional<double> level;
         if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
@@ -9107,7 +9122,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         const bool within = !level
             || (facts.is_buy ? owner_form <= *level : owner_form >= *level);
-        return within ? owner_form : source_bar_fill_tick(price, staged_.syminfo.mintick);
+        return within ? owner_form : source_decimal_tick(price, staged_.syminfo.mintick);
     };
     const auto source_forced_fill = [&](double forced) {
         return nearest_tick(forced, staged_.syminfo.mintick) == forced
@@ -13321,33 +13336,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             placement_snapshot->family == PineOrderFamily::ExitLimit
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail;
-        const auto native = require_host().native_state();
-        // An implicit strategy.exit quantity is represented as NaN (L10w); a
-        // re-issued default bracket carries the full-position percent (L10x).
-        // A plain resting stop still owns the position and needs fill-based
-        // drawdown normalization on every route except POOC combined with
-        // calc_on_order_fills (union of the L10w and L10x owner findings;
-        // the commission == 0 and slippage == 0 conditions below still apply).
-        const bool explicit_resting_stop =
-            std::isfinite(placement_snapshot->requested_qty)
-            && placement_snapshot->requested_qty > 0.0;
-        const bool implicit_resting_stop =
-            std::isnan(placement_snapshot->requested_qty);
-        const bool normalize_resting_stop_drawdown =
-            placement_snapshot->family == PineOrderFamily::ExitStop
-            && (explicit_resting_stop || implicit_resting_stop)
-            && placement_snapshot->projection_created_bar
-                < context.coordinate.interval_index
-            && placement_snapshot->oca_name.empty()
-            && std::isnan(placement_snapshot->exit_levels.trail_points)
-            && std::isnan(placement_snapshot->exit_levels.trail_price)
-            && !(config_.process_orders_on_close && config_.calc_on_order_fills)
-            && config_.pyramiding == 0 && !config_.close_entries_rule_any
-            && config_.slippage == 0
-            && !stream_mode_ && (!native.spec || native.spec->intrabar.is_none());
+        // RULING A48: the closed row's excursions come from the host's own
+        // per-lot sampler, so the resting-stop fill-based drawdown
+        // normalization this call site used to request is gone with it.
         if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host())) {
-            pine_host->adapter_label_bracket_trades(
-                event, from_bracket, normalize_resting_stop_drawdown);
+            pine_host->adapter_label_bracket_trades(event, from_bracket);
         }
     }
     if (placement_snapshot && placement_snapshot->opening) {

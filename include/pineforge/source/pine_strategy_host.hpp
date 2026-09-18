@@ -344,8 +344,7 @@ private:
         double price, const std::string& id, const std::string& comment,
         std::uint64_t incarnation) const;
     void adapter_label_bracket_trades(
-        const native_order::ExecutionAppliedEvent&, bool from_bracket,
-        bool normalize_resting_stop_drawdown = false);
+        const native_order::ExecutionAppliedEvent&, bool from_bracket);
     bool adapter_has_open_entry_id(const std::string&) const;
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
