@@ -6175,6 +6175,32 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 }
                 reentry = handle;
             }
+            // ab9714be pine_fills.cpp:2991-3009: a same-side call placed at
+            // the pyramiding cap moves nothing at the next opening, and the
+            // open-boundary admission retires it unless an earlier opposite
+            // same-bar command can move the account first.  A close bound to
+            // that doomed row would be cancelled with it, while the owner's
+            // close (an ordinary exit order) still flattens the held side.
+            if (reentry) {
+                const auto found = placement_.find(reentry->incarnation);
+                if (found != placement_.end() && found->second.projection_over_pyramiding) {
+                    const auto& held = found->second;
+                    bool earlier_opposite = false;
+                    for (const auto& handle : live_handles_) {
+                        const auto prior = placement_.find(handle.incarnation);
+                        if (prior == placement_.end()) continue;
+                        const auto& row = prior->second;
+                        if (row.opening && row.family == PineOrderFamily::Entry
+                            && row.is_long != held.is_long
+                            && row.placement_script_open_ms == held.placement_script_open_ms
+                            && row.source_sequence < held.source_sequence) {
+                            earlier_opposite = true;
+                            break;
+                        }
+                    }
+                    if (!earlier_opposite) reentry.reset();
+                }
+            }
             if (reentry) {
                 request.owner = native_order::WaitForApplied{*reentry};
                 all_in_dependent_close = true;
@@ -11263,7 +11289,20 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     snapshot.family = PineOrderFamily::Margin;
     snapshot.source_id = request.label;
     snapshot.requested_qty = units;
-    snapshot.forced_execution_price = mark_price;
+    // ab9714be pine_fills.cpp:1711-1726: the deferred slice books the same
+    // bar_fill_price(fire) plus the EXIT side's own market slippage as the
+    // current-point route (submit_margin_call_units); at zero slippage the
+    // fire price is pinned unchanged.
+    if (config_.slippage == 0) {
+        snapshot.forced_execution_price = mark_price;
+    } else {
+        const bool close_is_buy = position.signed_units < 0.0;
+        const double rounded = source_bar_fill_tick(mark_price, staged_.syminfo.mintick);
+        const double slipped = rounded + (close_is_buy ? 1.0 : -1.0)
+            * config_.slippage * staged_.syminfo.mintick;
+        snapshot.forced_execution_price = directional_tick(
+            slipped, staged_.syminfo.mintick, close_is_buy);
+    }
     snapshot.sizing = sizing_snapshot();
     // ab9714be pine_scheduler.cpp:250-278: a deferred slice settles after
     // every earlier fill of its bar, and only then does the legacy broker
@@ -14908,6 +14947,43 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 retire(handle);
         }
         (void)schedule_margin_call_path(policy_script_bar_, context);
+    }
+    if (placement_snapshot && event.closed_units > 0.0
+        && (placement_snapshot->family == PineOrderFamily::ExitLimit
+            || placement_snapshot->family == PineOrderFamily::ExitStop
+            || placement_snapshot->family == PineOrderFamily::ExitTrail)
+        && policy_script_bar_valid_
+        && policy_script_bar_.timestamp == context.script_bar_open_ms
+        && !config_.process_orders_on_close && !config_.calc_on_order_fills
+        && staged_.account_fx_effective_from_ms.empty()) {
+        // ab9714be pine_scheduler.cpp:267-282: the ordinary margin call runs
+        // once after every order of the bar, on the post-fill book; only an
+        // adverse extreme that strictly precedes the priced exit's fill takes
+        // the slice ahead of it (pine_fills.cpp:2224), and that slice has
+        // already settled by now, as has a carried open-price slice
+        // (pine_scheduler.cpp:177-183).  A path slice still live here was sized on
+        // the pre-exit position, so re-size it from the reduced book.  The
+        // 1x-long TV-money slice keeps its own scheduler.
+        const auto after_exit = require_host().physical_position();
+        const bool one_x_long = after_exit.signed_units > 0.0
+            && std::abs(config_.margin_long - 100.0) < 1e-12;
+        std::vector<native_order::RequestHandle> stale_margin_requests;
+        for (const auto& handle : live_handles_) {
+            const auto pending = placement_.find(handle.incarnation);
+            if (pending != placement_.end()
+                && pending->second.family == PineOrderFamily::Margin) {
+                stale_margin_requests.push_back(handle);
+            }
+        }
+        if (!one_x_long && !stale_margin_requests.empty()) {
+            for (const auto& handle : stale_margin_requests) {
+                const auto cancelled = require_host().cancel(handle);
+                if (cancelled.status == native_order::CancelStatus::Cancelled)
+                    retire(handle);
+            }
+            if (after_exit.signed_units != 0.0)
+                (void)schedule_margin_call_path(policy_script_bar_, context);
+        }
     }
     apply_fx_opening_margin_slice(event, context);
     refresh_pending_view();
