@@ -6713,27 +6713,21 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
         if (pooc_short_tick_scope) {
             const double tick = staged_.syminfo.mintick;
+            // The short exit is a buy.  rounded(low) <= limit and
+            // rounded(high) >= stop are compared on the grid INDEX of the
+            // quantized extreme (ab9714be include/pineforge/engine.hpp:1268-
+            // 1312, tick_grid_price: k / (1/mintick), so an on-grid level
+            // equals its grid point).  The k * mintick product sits one ULP
+            // above a decimal on-grid level, which made an unbounded ULP walk
+            // toward the level cross a whole tick; source_trigger_threshold
+            // resolves the same half-tick boundary with a bounded walk.
             if (family == PineOrderFamily::ExitLimit && finite_positive(limit_price)) {
-                // rounded(low) <= limit.  At the half-tick boundary positive
-                // prices round upward, so the executable raw threshold is the
-                // immediately preceding representable value.
-                double boundary =
-                    (std::floor(limit_price / tick) + 0.5) * tick;
-                while (nearest_tick(boundary, tick) > limit_price) {
-                    boundary = std::nextafter(
-                        boundary, -std::numeric_limits<double>::infinity());
-                }
-                trigger = native_order::Limit{boundary};
+                trigger = native_order::Limit{source_trigger_threshold(
+                    limit_price, tick, /*is_buy=*/true, /*is_limit=*/true)};
             } else if (family == PineOrderFamily::ExitStop
                        && finite_positive(stop_price)) {
-                // rounded(high) >= stop.
-                double boundary =
-                    (std::ceil(stop_price / tick) - 0.5) * tick;
-                while (nearest_tick(boundary, tick) < stop_price) {
-                    boundary = std::nextafter(
-                        boundary, std::numeric_limits<double>::infinity());
-                }
-                trigger = native_order::Stop{boundary};
+                trigger = native_order::Stop{source_trigger_threshold(
+                    stop_price, tick, /*is_buy=*/true, /*is_limit=*/false)};
             }
         }
         auto submit_one = [&](native_order::Owner owner, bool host_sized,
