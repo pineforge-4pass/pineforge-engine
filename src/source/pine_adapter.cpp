@@ -7291,7 +7291,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         submit_leg(PineOrderFamily::ExitLimit, native_order::Market{});
         placed_absolute_leg = true;
     }
-    if (finite_non_negative(stop_price)) {
+    // ab9714be pine_strategy_commands.cpp:1933 stores a negative stop level
+    // verbatim: a buy stop below zero is crossed by every print and fills at
+    // the next reachable point like any gapped stop.  A43 refuses negative
+    // triggers, so it rests at 0.0 (source_trigger_threshold's floor), which
+    // every print also crosses.  A negative sell stop is never reachable.
+    if (finite_non_negative(stop_price)
+        || (exit_is_buy && std::isfinite(stop_price) && stop_price < 0.0)) {
         const double native_stop = source_trigger_threshold(
             stop_price, tick, exit_is_buy, false);
         submit_leg(PineOrderFamily::ExitStop, native_order::Stop{native_stop});
@@ -7830,12 +7836,22 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
             && leg.snapshot.projection_created_during_coof
             && (leg.snapshot.family == PineOrderFamily::ExitStop
                 || leg.snapshot.family == PineOrderFamily::ExitLimit);
-        if (competing_chart_tick) {
+        const double competing_level = leg.snapshot.family == PineOrderFamily::ExitStop
+            ? leg.snapshot.exit_levels.stop : leg.snapshot.exit_levels.limit;
+        // ab9714be pine_fills.cpp:592-641: the chart-tick touch this shift
+        // suppresses exists only for a level strictly inside (raw, tick(raw)],
+        // i.e. OFF the tick grid.  An on-grid level books AT the level
+        // (bar_fill_price), so a half-tick native threshold beyond it turns
+        // every such fill into an InvalidTerms rejection (sell limit booked
+        // below its native level) and the leg never fills.
+        const bool competing_level_on_grid = finite_positive(staged_.syminfo.mintick)
+            && std::isfinite(competing_level)
+            && nearest_tick(competing_level, staged_.syminfo.mintick) == competing_level;
+        if (competing_chart_tick && !competing_level_on_grid) {
             const bool exit_is_buy = require_host().physical_position().signed_units < 0.0;
             const bool upward = leg.snapshot.family == PineOrderFamily::ExitLimit
                 ? !exit_is_buy : exit_is_buy;
-            const double source_level = leg.snapshot.family == PineOrderFamily::ExitStop
-                ? leg.snapshot.exit_levels.stop : leg.snapshot.exit_levels.limit;
+            const double source_level = competing_level;
             const double threshold = source_level + (upward ? 0.5 : -0.5)
                 * staged_.syminfo.mintick;
             if (leg.snapshot.family == PineOrderFamily::ExitStop)
