@@ -41,6 +41,7 @@ set(TEST_SOURCES
     test_l10al_reversal_single_lot
     test_l10ak_same_bar_reversal_close
     test_l10ao_percent_equity_first_lot
+    test_l10aq_margin_reissue_liveness
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a

@@ -1106,18 +1106,18 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     std::optional<PlacementSnapshot> marketable;
     native_order::RequestHandle marketable_handle{};
     for (auto row : placement_) {
+        // ab9714be pine_orders.cpp:597-608: leg ownership is position-cycle
+        // scoped, so only a bracket bound to the cycle this margin call is
+        // settling may be revived; one parked by an earlier cycle stays
+        // dormant until that cycle re-arms it.
+        if (row.second.placement_cycle != current_position_cycle_) continue;
         auto& candidate = row.second;
         const bool exit = candidate.family == PineOrderFamily::ExitLimit
             || candidate.family == PineOrderFamily::ExitStop
             || candidate.family == PineOrderFamily::ExitTrail;
         if (!exit || !candidate.legs.dormant() || candidate.from_entry.empty()
             || !(cohort_exposure_for(candidate.from_entry) > 0.0)
-            || !candidate.legs.target().incarnation
-            // ab9714be pine_orders.cpp:597-608: leg ownership is position-cycle
-            // scoped, so only a bracket bound to the cycle this margin call is
-            // settling may be revived; one parked by an earlier cycle stays
-            // dormant until that cycle re-arms it.
-            || candidate.placement_cycle != current_position_cycle_) {
+            || !candidate.legs.target().incarnation) {
             continue;
         }
         // A same-id exit re-issued after the slice REPLACED this bracket: the
@@ -1126,13 +1126,16 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         // new lot (ab9714be pine_fills.cpp:7669-7673).
         const auto inc = row.first;
         const auto target_inc = candidate.legs.target().incarnation;
-        const bool superseded = std::any_of(
-            placement_.begin(), placement_.end(),
-            [&](const auto& pair) {
-                return pair.second.projection_predecessor != 0
-                    && (pair.second.projection_predecessor == inc
-                        || pair.second.projection_predecessor == target_inc);
-            });
+        bool superseded = false;
+        for (const auto other : placement_) {
+            if (other.second.placement_cycle == current_position_cycle_
+                && other.second.projection_predecessor != 0
+                && (other.second.projection_predecessor == inc
+                    || other.second.projection_predecessor == target_inc)) {
+                superseded = true;
+                break;
+            }
+        }
         if (superseded) continue;
         const double revive_stop = compat::pine::select_margin_revival_stop(candidate.legs);
         const exit_legs::Action restore{candidate.legs.target(), candidate.legs.revision(),
@@ -3378,8 +3381,11 @@ void PineExecutionAdapter::observe_terminal_receipts() {
         if (!row.command) continue;
         std::visit([&](const auto& event) {
             using Event = std::decay_t<decltype(event)>;
+            // ab9714be pine_fills.cpp:7464-7468 and 355-359: a stale exit whose
+            // position was already closed has no effect and is removed/retired.
             if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
-                          || std::is_same_v<Event, native_order::CancelledEvent>) {
+                          || std::is_same_v<Event, native_order::CancelledEvent>
+                          || std::is_same_v<Event, native_order::NoEffectEvent>) {
                 const auto placement = placement_.find(event.handle().incarnation);
                 if (placement != placement_.end()) {
                     if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>) {
