@@ -693,6 +693,7 @@ public:
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const noexcept;
+    bool is_open_phase_exit(std::size_t trade_index) const noexcept;
     void hash_state(BrokerStateHashSink&) const;
 
     // Retained for the untouched legacy source host. New fixture state is
@@ -1109,6 +1110,7 @@ private:
     std::int64_t last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
+    std::vector<std::uint8_t> trade_exit_phase_;
     // @source-state end
     // Install-time magnifier fact from NativeBeginArgs. Scheduler already
     // folds retained_.bar_magnifier; this copy is the host-kind-free query

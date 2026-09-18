@@ -10,6 +10,7 @@
 #include <cmath>
 #include <ctime>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -462,9 +463,9 @@ void source::PineStrategyHost::on_native_applied(
             trades_[index].exit_bar_index = source_index;
         }
     }
+    const auto p = adapter_.placement_.find(event.handle().incarnation);
     // ab9714be pine_fills.cpp:42: a priced (stop/limit) entry masks the
     // assumed-OHLC extreme the path reaches BEFORE the fill.
-    const auto p = adapter_.placement_.find(event.handle().incarnation);
     const bool pine_priced = p != adapter_.placement_.end()
         && ((std::isfinite(p->second.exit_levels.stop) && p->second.exit_levels.stop > 0.0)
             || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
@@ -1393,12 +1394,25 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
         --start;
     }
     if (end - start > 1) {
-        std::stable_sort(trades.begin() + start, trades.begin() + end,
-            [&](const Trade& a, const Trade& b) {
-                const auto sa = adapter.command_sequence_for_exit(a.exit_id, a.entry_id);
-                const auto sb = adapter.command_sequence_for_exit(b.exit_id, b.entry_id);
+        // ab9714be pine_scheduler.cpp:262-283 and pine_fills.cpp:3710-3730:
+        // fills on the bar OPEN precede intrabar fills chronologically. Sibling
+        // bracket exits that fill within the same phase tie-break by command
+        // sequence (test_l10m_corpus_parity.cpp).
+        std::vector<std::size_t> indices(end - start);
+        std::iota(indices.begin(), indices.end(), start);
+        std::stable_sort(indices.begin(), indices.end(),
+            [&](std::size_t ia, std::size_t ib) {
+                const bool open_a = adapter.is_open_phase_exit(ia);
+                const bool open_b = adapter.is_open_phase_exit(ib);
+                if (open_a != open_b) return open_a;
+                const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
+                const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
                 return sa < sb;
             });
+        std::vector<Trade> sorted;
+        sorted.reserve(end - start);
+        for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
+        for (std::size_t i = 0; i < sorted.size(); ++i) trades[start + i] = std::move(sorted[i]);
     }
 }
 

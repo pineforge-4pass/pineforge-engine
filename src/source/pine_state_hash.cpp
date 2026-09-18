@@ -321,6 +321,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_handle(f, fee.opening); f.s(fee.source_id); f.d(fee.units);
         f.d(fee.nonpercent_fee);
     }
+    f.u(trade_exit_phase_.size());
+    for (const auto phase : trade_exit_phase_) f.u(phase);
     std::vector<std::uint64_t> current_debit_ordinals;
     current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
     for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);
