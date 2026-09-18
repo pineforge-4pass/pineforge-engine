@@ -607,6 +607,26 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
          && view.raw_price > 0.0)
             ? view.raw_price
             : std::numeric_limits<double>::quiet_NaN();
+    // A fill-through (slipped touch) trail leg books its fill slippage ticks
+    // past the touch; the owner's peak is still that leg's PRE-slip fill
+    // (ab9714be pine_fills.cpp:5760-5769 runs before apply_fill_slippage),
+    // which is the booked price with the slippage step taken back.  An
+    // open-gap fill is not a TRAIL event at all (ab9714be
+    // engine_path_resolve.cpp:620-631 leaves is_trail false), so it folds
+    // no peak.
+    if (!std::isnan(trail_ticks) && view.definition && std::isfinite(view.resolved_price)) {
+        const auto* touch = std::get_if<native_order::Limit>(&view.definition->request.trigger);
+        if (touch && touch->fill_through) {
+            if (view.cursor.point.path_phase == NativePathPhase::Open) {
+                excursion_trail_offset_ticks_ = std::numeric_limits<double>::quiet_NaN();
+                excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
+            } else {
+                const double slip = config_.slippage * syminfo_.mintick;
+                excursion_trail_raw_price_ = physical_position().signed_units > 0.0
+                    ? view.resolved_price + slip : view.resolved_price - slip;
+            }
+        }
+    }
     // The margin slice's sampling chronology is a book fact resolved in the
     // adapter precommit pass; start clean for every request.
     excursion_margin_prefix_ = false;

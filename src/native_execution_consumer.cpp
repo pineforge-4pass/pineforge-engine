@@ -271,7 +271,11 @@ void hash_terms_input(Fnv& f, const native_order::TermsResolvedInput& input) noe
 
 void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
     f.u(trigger.index());
-    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) f.d(limit->price);
+    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+        f.d(limit->price);
+        // Folded only when set, so every bounded limit keeps its prior digest.
+        if (limit->fill_through) f.b(true);
+    }
     if (const auto* stop = std::get_if<native_order::Stop>(&trigger)) f.d(stop->price);
     if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
         f.d(sl->stop);
@@ -2863,14 +2867,19 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
             || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
             std::optional<double> level;
+            bool fill_through = false;
             if (const auto* limit = std::get_if<native_order::Limit>(&live->request().trigger)) {
                 level = limit->price;
+                fill_through = limit->fill_through;
             } else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(
                            &live->request().trigger)) {
                 level = stop_limit->limit;
             }
-            if (!level || (terms_facts.is_buy && resolved_price > *level)
-                || (!terms_facts.is_buy && resolved_price < *level)) {
+            // A fill-through limit is a touch trigger: its terms may settle
+            // past the level.
+            if (!level || (!fill_through
+                           && ((terms_facts.is_buy && resolved_price > *level)
+                               || (!terms_facts.is_buy && resolved_price < *level)))) {
                 return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
             }
         }
@@ -3668,9 +3677,14 @@ void NativeExecutionConsumer::match_path(
             && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
                 || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
             double level = 0.0;
-            if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) level = limit->price;
-            else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) level = sl->limit;
-            resolved = native_matching::protect_limit(resolved, level, buy);
+            bool fill_through = false;
+            if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+                level = limit->price;
+                fill_through = limit->fill_through;
+            } else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
+                level = sl->limit;
+            }
+            if (!fill_through) resolved = native_matching::protect_limit(resolved, level, buy);
         }
         native_order::NativeCandidatePriceKind price_kind =
             native_order::NativeCandidatePriceKind::PointPrice;

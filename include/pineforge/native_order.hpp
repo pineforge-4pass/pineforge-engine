@@ -75,8 +75,12 @@ struct Reduce {
 using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;
 
 struct Market {};
+// `fill_through` makes the limit a touch trigger (market-if-touched): the
+// level still gates when the request becomes executable, but its fill is not
+// bounded by the level, so slippage may carry it past the level.
 struct Limit {
     double price = 0.0;
+    bool fill_through = false;
 };
 struct Stop {
     double price = 0.0;

@@ -7406,8 +7406,18 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 one_shot_level = source_trigger_threshold(
                     one_shot_level, tick, exit_is_buy, true);
             }
+            // ab9714be engine_path_resolve.cpp:984-987 books the crossed
+            // activation as a TRAIL event (fill.is_limit = false), and
+            // pine_fills.cpp:4396-4411 / pine_policy_members.cpp:45-53 then
+            // route it through apply_slippage, not apply_limit_fill: the fill
+            // lands slippage ticks WORSE than the activation.  An explicit
+            // sub-tick offset keeps the unslipped activation as its touch
+            // level (a slipped level would fire early), so the leg is a
+            // fill-through limit whose settlement may pass that level.
+            const bool slipped_touch = zero_distance && config_.slippage > 0
+                && finite_positive(tick);
             submit_leg(PineOrderFamily::ExitTrail,
-                       native_order::Limit{one_shot_level});
+                       native_order::Limit{one_shot_level, slipped_touch});
         } else if (native_trail_offset) {
             std::optional<double> native_arm_price = native_trail_price;
             // ab9714be engine_path_resolve.cpp:464-479: trailing exit already reached at placement arms immediately
@@ -9562,6 +9572,17 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     }
     if (finite_positive(source.forced_execution_price)) {
         result.resolved_price = source_forced_fill(source.forced_execution_price);
+    } else if (const auto* touch = std::get_if<native_order::Limit>(&trigger);
+               touch && touch->fill_through && trail_limit_one_shot
+               && std::isfinite(result.resolved_price)) {
+        // ab9714be pine_policy_members.cpp:45-53 (apply_slippage): the
+        // zero-offset one-shot trail's source print moves slippage ticks
+        // against the exit and is re-snapped directionally
+        // (round_to_mintick_directional), exactly as the owner's TRAIL fill.
+        const double tick = staged_.syminfo.mintick;
+        result.resolved_price = directional_tick(
+            result.resolved_price + (facts.is_buy ? 1.0 : -1.0) * config_.slippage * tick,
+            tick, facts.is_buy);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
