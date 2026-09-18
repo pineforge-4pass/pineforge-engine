@@ -980,6 +980,7 @@ private:
     void defer_open_marketable_sells(const Bar& bar);
     void admit_deferred_open_marketable_sells();
     void rearm_throttled_reopens();
+    void flush_pooc_marketable_limit_entry_fills(const Bar&, const NativeDecisionContext&);
     void flush_pooc_marketable_exit_fills(const Bar&, const NativeDecisionContext&);
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);

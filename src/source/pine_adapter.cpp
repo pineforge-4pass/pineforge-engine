@@ -12487,6 +12487,78 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
     }
 }
 
+void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // ab9714be pine_fills.cpp:7604-7646 (classify_order_eligibility) +
+    // pine_fills.cpp:8022-8043 (evaluate_fill_price): under
+    // process_orders_on_close, a pure LIMIT entry (no stop, no trail) placed by
+    // this bar's source calc is evaluated in the post-calculation fill pass
+    // (pine_scheduler.cpp:259 step 4) against THIS bar's close. When the close
+    // is on the marketable side of the limit it fills there, limit-or-better,
+    // at bar_fill_price(bar.close) with no slippage; otherwise it rests and
+    // gets the ordinary touch evaluation from the next bar on. Scoped to the
+    // ordinary (non-COOF, non-stream) route and a flat book.
+    if (config_.calc_on_order_fills || !config_.process_orders_on_close
+        || stream_mode_ || coof_recalc_active_) {
+        return;
+    }
+    if (require_host().physical_position().signed_units != 0.0) return;
+    const double raw_close = bar.close;
+    if (!finite_positive(raw_close)) return;
+    std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> marketable;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        if (row.family != PineOrderFamily::Entry || !row.opening) continue;
+        if (row.birth.from_fill()) continue;
+        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        if (row.projection_position_side
+            != static_cast<std::int32_t>(PositionSide::FLAT)) continue;
+        if (!finite_positive(row.exit_levels.limit)
+            || std::isfinite(row.exit_levels.stop)) continue;
+        if (row.direction_gate || row.terms_priced_reverse
+            || row.paired_flat_market_candidate) continue;
+        const bool at_close = row.is_long ? raw_close <= row.exit_levels.limit
+                                          : raw_close >= row.exit_levels.limit;
+        if (at_close) marketable.emplace_back(handle, row);
+    }
+    for (auto& candidate : marketable) {
+        // An earlier fill of this pass leaves the book non-flat; the owner's
+        // later rows are then ordinary pending orders again.
+        if (require_host().physical_position().signed_units != 0.0) break;
+        const auto& row = candidate.second;
+        const bool host_sized = row.deferred_cohort
+            || row.qty_type == static_cast<int>(QtyType::CASH)
+            || row.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        if (!host_sized && !finite_positive(row.requested_qty)) continue;
+        native_order::Request request;
+        request.intent = host_sized
+            ? native_order::OrderIntent{native_order::HostSized{
+                native_order::HostSizedKind::Open,
+                row.is_long ? native_order::Side::Long : native_order::Side::Short}}
+            : native_order::OrderIntent{native_order::Transact{
+                row.is_long ? row.requested_qty : -row.requested_qty}};
+        request.label = row.source_id;
+        request.comment = row.comment;
+        request.trigger = native_order::Market{};
+        request.group = group_for(row.oca_name, row.oca_type);
+        PlacementSnapshot immediate = row;
+        immediate.cancellation = {};
+        immediate.market_admission = {};
+        // bar_fill_price(bar.close): the raw close, nearest-tick rounded
+        // (pine_fills.cpp:8038-8041); a limit fill is never slipped.
+        immediate.forced_execution_price = source_bar_fill_tick(
+            raw_close, staged_.syminfo.mintick);
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(immediate), true, row.source_id);
+        if (accepted) {
+            (void)require_host().execute_current(
+                {*accepted, NativeCurrentPriceRule::NearestTick});
+        }
+    }
+}
+
 void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         const Bar& bar, const NativeDecisionContext& context) {
     // ab9714be pine_fills.cpp:7604-7648 + 7810-7843: under process_orders_on_close,
@@ -12670,6 +12742,7 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
 
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
+    flush_pooc_marketable_limit_entry_fills(bar, context);
     flush_pooc_marketable_exit_fills(bar, context);
     admit_deferred_open_marketable_sells();
     rearm_throttled_reopens();
