@@ -6274,9 +6274,21 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // facts remain in the snapshot for deferred/observer projections.
     const auto physical = require_host().physical_position();
     const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
+    // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
+    // itself explicitly partial against the live position (net of a same-bar
+    // pending close) is suppressed; an explicit qty covering the whole
+    // remaining position is a full exit and re-arms.
+    const double live_exit_units = std::max(
+        0.0, std::abs(physical.signed_units) - pending_same_bar_close_qty_);
+    double reissue_percent = std::isnan(qty_percent)
+        ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
+    if (!std::isnan(qty) && live_exit_units > internal::kQtyEpsilon)
+        reissue_percent = std::min(qty, live_exit_units) / live_exit_units * 100.0;
+    const bool partial_reissue = reissue_percent < 100.0 - internal::kFullPercentEps;
     if (const auto consumed = consumed_partial_exit_cycles_.find(partial_exit_key);
-        consumed != consumed_partial_exit_cycles_.end()
-        && physical.signed_units != 0.0 && consumed->second == current_position_cycle_) {
+        consumed != consumed_partial_exit_cycles_.end() && partial_reissue
+        && live_exit_units > internal::kQtyEpsilon
+        && consumed->second == current_position_cycle_) {
         return;
     }
     double entry_price = require_host().position_avg_price();
@@ -7335,8 +7347,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 // adverse leg does not incorrectly ride a raw sub-tick high.
                 if (already_reached) {
                     native_trail_price = nearest_tick(point->price, tick);
-                } else {
-                    native_trail_price += (buy_close ? 0.5 : -0.5) * tick;
                 }
             }
         }
@@ -7373,7 +7383,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // raw extreme half a tick short of the level already fires it.
             // Only the arm threshold moves; settlement books the source
             // level (source_trail_one_shot_fill).
-            if (!std::isfinite(source_trail_offset) && finite_positive(tick)) {
+            // ab9714be engine_path_resolve.cpp:292-308 + 746-766 test the
+            // explicit-zero trail's dormant activation on the same
+            // tick-quantized path, so its arm threshold is the same half-up
+            // projection boundary: a buy one-shot is reached only strictly
+            // below activation + half a tick (NYSE:F 2026-04-10 16:30Z low
+            // 12.075 prints 12.08 and does not reach the 12.07 activation).
+            if ((!std::isfinite(source_trail_offset) || zero_distance)
+                && finite_positive(tick)) {
                 one_shot_level = source_trigger_threshold(
                     one_shot_level, tick, exit_is_buy, true);
             }
@@ -8926,8 +8943,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     const auto snapshot = placement_.find(facts.target.incarnation);
     if (snapshot == placement_.end()) return result;
     const auto& source = snapshot->second;
+    // The already-armed explicit-zero trail's sibling generic stop (exit():
+    // "A sibling generic stop preserves the next-open print decision") is the
+    // same owner TRAIL leg (ab9714be engine_path_resolve.cpp:620-705,
+    // try_exit_open_gap_fill), so it settles on the zero-offset trail policy.
+    const bool zero_trail_sibling_stop = source.family == PineOrderFamily::ExitStop
+        && !price_present(source.exit_levels.stop)
+        && finite_positive(source.trail_activation_level);
     const bool explicit_zero_trail =
-        (source.family == PineOrderFamily::ExitTrail)
+        (source.family == PineOrderFamily::ExitTrail || zero_trail_sibling_stop)
         && std::isfinite(source.exit_levels.trail_offset)
         && std::floor(source.exit_levels.trail_offset) == 0.0;
     const auto host_state = require_host().native_state();
@@ -13301,6 +13325,40 @@ void PineExecutionAdapter::on_bar_close(
         && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
         && config_.commission_value > 0.0;
     if (non_pooc_commissioned_short && finite_positive(bar.high)) {
+        // ab9714be pine_fills.cpp:5998-6005 + 6168-6179 queue an opening
+        // affordability event for a fresh explicit-qty MARKET 1x short, and
+        // process_margin_call (pine_fills.cpp:1266-1340, the non-POOC
+        // post-script checkpoint) trims it at the fill first, then runs the
+        // entry-bar adverse pass over the survivor (the mdfe3757
+        // XAUUSD@15 2025-04-08 13:30Z pin there: 1.28 at the 3013.745 fill,
+        // then 2.4 at the 3017.3 high).  on_applied defers this commissioned
+        // shape to here, so the fill-price trim precedes the adverse slice.
+        if (position_open_script_bar_ == context.script_bar_open_ms
+            && position_open_phase_ != NativePathPhase::Close) {
+            std::size_t openings = 0;
+            bool explicit_market_opening = false;
+            for (const auto& cohort_id : cohort_order_) {
+                const auto cohort = cohorts_by_id_.find(cohort_id);
+                if (cohort == cohorts_by_id_.end()
+                    || cohort->second.cycle != current_position_cycle_) {
+                    continue;
+                }
+                for (const auto& origin : cohort->second.opened) {
+                    const auto opening = placement_.find(origin.incarnation);
+                    if (opening == placement_.end()) continue;
+                    ++openings;
+                    const auto& row = opening->second;
+                    explicit_market_opening = row.opening && !row.is_long
+                        && row.family == PineOrderFamily::Entry
+                        && finite_positive(row.requested_qty)
+                        && !price_present(row.exit_levels.limit)
+                        && !price_present(row.exit_levels.stop);
+                }
+            }
+            const double fill_price = require_host().position_avg_price();
+            if (openings == 1 && explicit_market_opening && finite_positive(fill_price))
+                (void)submit_margin_call_slice(fill_price, context, true, true);
+        }
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
         (void)submit_margin_call_slice(adverse, context, true);
     }
@@ -13655,6 +13713,14 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto sibling = placement_.find(handle.incarnation);
                 if (sibling == placement_.end()) return false;
                 const auto family = sibling->second.family;
+                // ab9714be pine_fills.cpp:7012-7024 counts other PENDING
+                // ORDERS with the id (a second binding); the stop/limit/trail
+                // legs of one strategy.exit call are one owner order, so a
+                // same-bracket leg the fill is about to OCA-retire is not a
+                // surviving sibling.
+                if (sibling->second.command_sequence == placement_snapshot->command_sequence
+                    && sibling->second.bracket_origin == placement_snapshot->bracket_origin)
+                    return false;
                 return sibling->second.source_id == placement_snapshot->source_id
                     && sibling->second.from_entry == placement_snapshot->from_entry
                     && (family == PineOrderFamily::ExitLimit
