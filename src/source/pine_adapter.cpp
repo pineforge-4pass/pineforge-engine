@@ -4289,7 +4289,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     double native_limit = limit_price;
     double native_stop = stop_price;
     if (finite_positive(limit_price) && !finite_positive(stop_price)) {
-        native_limit = explicit_fixed ? limit_price : source_trigger_threshold(
+        // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: every
+        // entry limit, explicit-qty included, is tested against the
+        // tick-quantized bar, so an off-grid level triggers on the half-up
+        // rounded print (NYSE:F ORB 10.845 / 11.425 / 11.89 limits).
+        native_limit = source_trigger_threshold(
             limit_price, staged_.syminfo.mintick, is_long, true);
     } else if (finite_positive(stop_price) && !finite_positive(limit_price)
                && !config_.calc_on_order_fills) {
@@ -13483,6 +13487,22 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     entry.snapshot, event.resolved_price);
             if (marketable_now) {
                 entry.snapshot.forced_execution_price = event.resolved_price;
+                // ab9714be pine_fills.cpp:3848-3856 orders the full close
+                // first, but each market fill still books its own side's
+                // slippage off the shared open print (engine.hpp:1207-1210).
+                // A released entry on the closed position's own side is a
+                // buy after a sell (or the reverse), so it cannot reuse the
+                // close's slipped price.
+                const auto closed_side = static_cast<PositionSide>(
+                    placement_snapshot->projection_position_side);
+                if (!priced_stop && config_.slippage != 0
+                    && closed_side != PositionSide::FLAT
+                    && entry.snapshot.is_long == (closed_side == PositionSide::LONG)) {
+                    entry.snapshot.forced_execution_price =
+                        nearest_tick(event.raw_price, staged_.syminfo.mintick)
+                        + (entry.snapshot.is_long ? 1.0 : -1.0) * config_.slippage
+                            * staged_.syminfo.mintick;
+                }
             }
             native_order::RequestHandle prior_flip_stop{};
             const bool self_touched = priced_stop && policy_script_bar_valid_

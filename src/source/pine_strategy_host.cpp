@@ -1333,6 +1333,19 @@ void source::PineStrategyHost::scheduler_feed_deferred_security_input(
 
 void source::PineStrategyHost::scheduler_feed_aux_security(int chart_index) {
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled() && scheduler_coof_enabled()) {
+        // ab9714be pine_scheduler.cpp:1705-1708 feeds the auxiliary slice
+        // before dispatch_bar, whose COOF bar takes its script checkpoint
+        // only afterwards (pine_scheduler.cpp:467).  The native scheduler
+        // checkpoints at the script-bar open and restores that checkpoint
+        // after this feed, which would discard the fed request.security
+        // values every bar.  Rebase the checkpoint on the open state plus
+        // this feed so the restore keeps them.
+        restore_script_state();
+        feed_aux_security_for_chart_bar(chart_index);
+        snapshot_script_state();
+        return;
+    }
     if (aux_security_feed_enabled()) feed_aux_security_for_chart_bar(chart_index);
 #else
     (void)chart_index;
