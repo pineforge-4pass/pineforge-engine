@@ -5268,6 +5268,95 @@ void PineExecutionAdapter::flush_pending_closes() {
 
     double remaining = 0.0;
     for (const auto& site : sites) remaining += site.target;
+    std::vector<std::pair<std::uint64_t, double>> fifo_lots;
+    if (const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+        fifo_lots.reserve(pine->pyramid_entries_.size());
+        for (const auto& lot : pine->pyramid_entries_)
+            fifo_lots.emplace_back(lot.entry_incarnation, lot.qty);
+    }
+    std::size_t fifo_prefix_size = 0;
+    // ab9714be pine_orders.cpp:29-70 source_fifo_prefix_membership, with its
+    // accumulation and endpoint ordering; openings resolve to their receipts.
+    const auto source_fifo_prefix_openings = [&](
+            const std::vector<std::pair<std::uint64_t, double>>& lots,
+            double qty_limit) -> std::optional<native_order::BindOpenings> {
+        fifo_prefix_size = 0;
+        if (current_position_cycle_ <= 0 || !std::isfinite(qty_limit) || qty_limit <= 0.0)
+            return std::nullopt;
+        double qty_closed = 0.0;
+        std::size_t prefix_size = 0;
+        for (const auto& lot : lots) {
+            if (qty_closed >= qty_limit - internal::kQtyEpsilon) break;
+            if (!std::isfinite(lot.second) || lot.second <= 0.0) return std::nullopt;
+            const double close_qty = std::min(lot.second, qty_limit - qty_closed);
+            if (lot.second - close_qty > internal::kQtyEpsilon) return std::nullopt;
+            ++prefix_size;
+            qty_closed += close_qty;
+        }
+        if (prefix_size == 0 || prefix_size == lots.size()) return std::nullopt;
+        // The selection is resolved at submission, while the owner resolves
+        // it at the fill.  Keep the late-bound FIFO Reduce whenever it drains
+        // exactly that prefix anyway; only a drain that would keep a
+        // sub-epsilon fragment or take one from the next lot needs the
+        // explicit whole-lot selection.
+        {
+            double closed = 0.0;
+            double left = qty_limit;
+            bool exact = true;
+            for (std::size_t index = 0; exact && index < prefix_size; ++index) {
+                const double amount = std::min(lots[index].second, left);
+                exact = amount == lots[index].second;
+                closed += amount;
+                left = qty_limit - closed;
+            }
+            if (exact && left == 0.0) return std::nullopt;
+        }
+        native_order::BindOpenings selection{{}, current_position_cycle_};
+        std::unordered_set<std::uint64_t> included;
+        for (std::size_t index = 0; index < prefix_size; ++index) {
+            const auto incarnation = lots[index].first;
+            if (incarnation == 0) return std::nullopt;
+            if (!included.insert(incarnation).second) continue;
+            const native_order::RequestHandle* receipt = nullptr;
+            for (const auto& cohort : cohorts_by_id_) {
+                for (const auto& opened : cohort.second.opened)
+                    if (opened.incarnation == incarnation) receipt = &opened;
+            }
+            if (!receipt) return std::nullopt;
+            selection.openings.push_back(*receipt);
+        }
+        // Every live fragment of a selected opening must belong to the
+        // prefix; otherwise the owner settles the close as a Reduce.
+        for (std::size_t index = prefix_size; index < lots.size(); ++index)
+            if (included.count(lots[index].first) != 0) return std::nullopt;
+        fifo_prefix_size = prefix_size;
+        return selection;
+    };
+    // Settlement FIFO arithmetic of one queued close over the local lot view.
+    const auto drain_source_fifo_lots = [&](
+            std::vector<std::pair<std::uint64_t, double>>& lots, double qty) {
+        if (fifo_prefix_size != 0) {
+            lots.erase(lots.begin(), lots.begin()
+                       + static_cast<std::ptrdiff_t>(fifo_prefix_size));
+            return;
+        }
+        double closed = 0.0;
+        double left = qty;
+        std::size_t consumed = 0;
+        for (auto& lot : lots) {
+            if (!(left > 0.0)) break;
+            const double amount = std::min(lot.second, left);
+            lot.second -= amount;
+            closed += amount;
+            left = qty - closed;
+            if (lot.second == 0.0) ++consumed;
+        }
+        lots.erase(lots.begin(), lots.begin() + static_cast<std::ptrdiff_t>(consumed));
+        // The host drops sub-epsilon survivors after every applied fill.
+        lots.erase(std::remove_if(lots.begin(), lots.end(), [](const auto& lot) {
+            return lot.second <= internal::kQtyEpsilon;
+        }), lots.end());
+    };
     for (const auto& site : sites) {
         remaining = std::max(0.0, remaining - site.target);
         if (site.first_ledger_consumed) {
@@ -5312,13 +5401,37 @@ void PineExecutionAdapter::flush_pending_closes() {
                 }), pending_entries_.end());
         }
 
+        // ab9714be pine_orders.cpp:29-70 / :340-347: a partial close whose
+        // FIFO drain consumes only whole lots settles as a Flatten of exactly
+        // that lot prefix.  A binary64 Reduce of the same target can keep a
+        // one-ULP fragment of the last lot, which moves every later binary64
+        // availability/ledger target off the owner's arithmetic.
+        std::optional<native_order::BindOpenings> prefix;
+        fifo_prefix_size = 0;
+        if (!closes_full) prefix = source_fifo_prefix_openings(fifo_lots, target);
+
+        // A partial target is the owner's binary64 ledger/availability
+        // arithmetic (ab9714be pine_strategy_commands.cpp:1397-1408), which
+        // execute_partial_exit_qty drains without re-quantizing.  An off-grid
+        // target cannot be an ExplicitUnits request, so resolve_terms books
+        // it as explicit units at the fill instead.
+        const bool off_grid = staged_.quantity_grid
+            && !native_order::quantity_on_grid(target, *staged_.quantity_grid);
         native_order::Request request;
-        request.intent = closes_full
+        request.intent = closes_full || prefix
             ? native_order::OrderIntent{native_order::Flatten{}}
+            : off_grid
+            ? native_order::OrderIntent{native_order::HostSized{
+                  native_order::HostSizedKind::Close, std::nullopt}}
             : native_order::OrderIntent{native_order::Reduce{native_order::ExplicitUnits{target}}};
         request.label = "__close__" + site.id;
         request.comment = site.comment;
         request.owner = native_order::Independent{};
+        if (prefix) request.owner = std::move(*prefix);
+        // Earlier sites of this flush settle first (queue order), so a later
+        // site's prefix is judged against the lots that survive them.
+        if (closes_full) fifo_lots.clear();
+        else drain_source_fifo_lots(fifo_lots, target);
         PlacementSnapshot snapshot;
         snapshot.family = PineOrderFamily::Close;
         snapshot.source_id = site.id;
@@ -5354,7 +5467,14 @@ void PineExecutionAdapter::observe_close_policy(
     if (snapshot.close_batch_calls == 0 || !(event.closed_units > 0.0)) return;
     const double remaining_position = std::abs(
         require_host().physical_position().signed_units);
-    const double actual_fill = event.closed_units;
+    // ab9714be pine_strategy_commands.cpp:1575: the reservation is bounded by
+    // the binary64 position difference qty_before - position_qty_, not by the
+    // settled close units; the two can differ by a few ULPs.
+    double actual_fill = event.closed_units;
+    if (const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host());
+        pine && std::isfinite(pine->precommit_held_units_)) {
+        actual_fill = std::max(0.0, pine->precommit_held_units_ - remaining_position);
+    }
     const auto erase_owner = [&](auto& owners, std::uint64_t token,
                                  const SourceId& id) {
         auto owner = owners.find(token);
@@ -5387,8 +5507,11 @@ void PineExecutionAdapter::observe_close_policy(
             remaining_position - reserved_other - snapshot.close_pending_later_qty);
         const double reserve = std::min(actual_fill, capacity);
         if (reserve > 0.0) {
+            // The owner keeps the id's established ledger here (ab9714be
+            // pine_strategy_commands.cpp:1557-1575); its floor stays the
+            // settled close units, never the ULP-wider position difference.
             auto& logical = close_logical_units_[snapshot.source_id];
-            logical = std::max(logical, reserve);
+            logical = std::max(logical, std::min(event.closed_units, capacity));
         }
         if (snapshot.close_callsite_token == 0) {
             if (reserve > 0.0) close_reserved_units_[snapshot.source_id] = reserve;

@@ -428,6 +428,10 @@ protected:
     mutable bool excursion_range_end_projection_ = false;
     mutable double excursion_trail_offset_ticks_ =
         std::numeric_limits<double>::quiet_NaN();
+    // Held units the applied request's precommit saw (the owner's pre-fill
+    // position_qty_); cleared after the applied notification.
+    mutable double precommit_held_units_ =
+        std::numeric_limits<double>::quiet_NaN();
     // The matcher basis behind a TRAIL fill. ab9714be pine_fills.cpp:5766-5770
     // reads the arming peak off the PRE-slip fill price (apply_fill_slippage
     // runs later, at :7136/:7184), while the booked

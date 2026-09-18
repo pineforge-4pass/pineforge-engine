@@ -50,3 +50,4 @@ excursion_margin_call_ # Transient excursion-sampler cache; re-derived from the 
 excursion_priced_fill_ # Transient excursion-sampler cache; re-derived from the immutable placement snapshots at every precommit and cleared at the applied boundary.
 excursion_range_end_projection_ # Report-only projection scope flag around range-end row building; it is false for every real settlement.
 excursion_trail_offset_ticks_ # Transient excursion-sampler cache; re-derived from the immutable native request trigger at every precommit and cleared at the applied boundary.
+precommit_held_units_ # Transient precommit cache; re-derived from the physical position at every precommit and cleared at the applied-fill boundary (same class as the excursion_* caches).

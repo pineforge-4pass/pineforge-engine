@@ -545,6 +545,7 @@ void source::PineStrategyHost::on_native_applied(
         }
     }
     adapter_.on_applied(event, context);
+    precommit_held_units_ = std::numeric_limits<double>::quiet_NaN();
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
@@ -631,6 +632,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     // adapter precommit pass; start clean for every request.
     excursion_margin_prefix_ = false;
     excursion_margin_fill_only_ = false;
+    precommit_held_units_ = std::abs(physical_position().signed_units);
     return adapter_.validate_precommit(view);
 }
 
