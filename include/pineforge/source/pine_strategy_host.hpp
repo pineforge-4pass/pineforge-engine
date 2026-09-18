@@ -414,6 +414,7 @@ protected:
     // re-derived from the immutable placement snapshots and the delivered
     // decision context, and cleared at the applied-notification boundary.
     mutable bool excursion_priced_fill_ = false;
+    mutable bool excursion_level_fill_ = false;
     mutable bool excursion_margin_call_ = false;
     // Which of the owner's two margin-slice chronologies the pending slice was
     // born in: true when it samples only the traversed waypoint prefix (the

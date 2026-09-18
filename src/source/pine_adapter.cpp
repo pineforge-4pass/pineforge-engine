@@ -1886,7 +1886,17 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0);
     snapshot.pooc_global_full_exit_tracks_bound_adds = snapshot.pooc_global_full_exit_dynamic_qty;
     if (const auto point = host.current_execution_point()) {
-        snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+        // ab9714be src/source/pine_strategy_commands.cpp:481 and
+        // src/source/pine_strategy_commands.cpp:1959 stamp an order's
+        // created_bar at the bar of the source command, and a bracket leg the
+        // pass skipped while flat stays in that same book slot
+        // (src/source/pine_fills.cpp:7461-7468), so only the
+        // process_orders_on_close gate of src/source/pine_fills.cpp:7620-7648
+        // compares created_bar with the current bar. Submitting the staged leg
+        // when its parent entry applies must not re-stamp the bar.
+        if (!snapshot.projection_created_bar_pinned) {
+            snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+        }
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
     }
@@ -6257,13 +6267,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     bool parent_long = physical.signed_units > 0.0;
     bool known_parent_level = physical.signed_units != 0.0;
     // ab9714be src/source/pine_fills.cpp:4560-4564 (pending_order_level_resolved)
-    // and 7208-7229 (materialize_relative_exit_prices_for_live_position): the
-    // legacy book resolves an EXIT's relative operands against the LIVE position
-    // whenever its ``from_entry`` already filled in the current position cycle
-    // (``cycle_filled_entry_ids_``), whatever the same script bar staged against
-    // that id.  Deferring them to a still-pending same-id origin kept the
-    // predecessor's level, so a re-issued strategy.exit left the stale trail
-    // activation resting instead of re-pricing it on the live entry price.
+    // and 7208-7229: an exit's relative operands resolve against the LIVE
+    // position once its from_entry filled this cycle (W23b); an empty from_entry
+    // means "every entry", so the entry-bar priced-exit gate reads the opening
+    // lot (W32a, ab9714be src/source/pine_strategy_commands.cpp:2595-2606,
+    // pine_fills.cpp:7695-7728).
     const bool parent_filled_this_cycle = physical.signed_units != 0.0
         && !from_entry.empty()
         && [&] {
@@ -6272,8 +6280,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }();
     const auto observe_staged_parent = [&](const PlacementSnapshot& parent) {
         if (parent_filled_this_cycle) return;
-        if (!parent.opening || parent.family != PineOrderFamily::Entry
-            || parent.source_id != from_entry) {
+        if (!parent.opening || parent.family != PineOrderFamily::Entry) {
+            return;
+        }
+        if (!from_entry.empty() && parent.source_id != from_entry) {
+            return;
             return;
         }
         // A pending same-bar parent is the level basis only while its cohort
@@ -7023,25 +7034,47 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 return;
             }
             bool defer_for_live_parent = false;
-            if (!defer_for_same_bar_priority && !snapshot.from_entry.empty()
+            // ab9714be src/source/pine_fills.cpp:7461-7468: while flat, an exit
+            // created while flat is skipped rather than removed, and waits in
+            // the book for the position to open. Defer the leg until its parent
+            // entry applies so the native core does not erase it while flat.
+            // src/source/pine_strategy_commands.cpp:2595-2606 makes an empty
+            // from_entry mean "every entry", so any pending opening entry is
+            // its parent; a named parent keeps the (id, from_entry) key that
+            // carries the queue position across a reissue
+            // (src/source/pine_strategy_commands.cpp:2627-2648).
+            const auto existing_leg = live_by_source_key_.find(key_for(replacement_key));
+            if (!defer_for_same_bar_priority
                 && require_host().physical_position().signed_units == 0.0) {
-                const auto existing = live_by_source_key_.find(key_for(replacement_key));
-                if (existing != live_by_source_key_.end()) {
-                    const auto previous = placement_.find(existing->second.incarnation);
-                    if (previous != placement_.end()) {
-                        for (const auto& live : live_handles_) {
-                            const auto parent = placement_.find(live.incarnation);
-                            if (parent != placement_.end() && parent->second.opening
-                                && parent->second.family == PineOrderFamily::Entry
-                                && parent->second.source_id == snapshot.from_entry
-                                && previous->second.source_sequence
-                                    < parent->second.source_sequence) {
-                                parent->second.retained_parent_topology = true;
-                                defer_for_live_parent = true;
-                                break;
-                            }
-                        }
+                const auto matches_parent = [&](const PlacementSnapshot& row) {
+                    return row.opening && row.family == PineOrderFamily::Entry
+                        && (snapshot.from_entry.empty()
+                            || row.source_id == snapshot.from_entry);
+                };
+                bool has_pending_parent = false;
+                for (const auto& entry : pending_entries_) {
+                    if (matches_parent(entry.snapshot)) {
+                        has_pending_parent = true;
+                        break;
                     }
+                }
+                for (const auto& entry : pending_same_bar_commands_) {
+                    if (matches_parent(entry.snapshot)) {
+                        has_pending_parent = true;
+                        break;
+                    }
+                }
+                for (const auto& live : live_handles_) {
+                    const auto parent = placement_.find(live.incarnation);
+                    if (parent == placement_.end()) continue;
+                    if (!matches_parent(parent->second)) continue;
+                    has_pending_parent = true;
+                    break;
+                }
+                if (has_pending_parent
+                    && (existing_leg != live_by_source_key_.end()
+                        || snapshot.from_entry.empty())) {
+                    defer_for_live_parent = true;
                 }
             }
             if (defer_for_same_bar_priority || defer_for_live_parent) {
@@ -7058,6 +7091,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 }
                 if (const auto point = require_host().current_execution_point()) {
                     snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+                    snapshot.projection_created_bar_pinned = true;
                     snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
                 }
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
@@ -7080,6 +7114,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 if (queued == pending_bracket_legs_.end()) pending_bracket_legs_.push_back(std::move(staged));
                 else *queued = std::move(staged);
                 return;
+            }
+            // ab9714be src/source/pine_strategy_commands.cpp:2627-2648 keys a
+            // source bracket by (exit id, from_entry) and a reissue replaces
+            // the stored leg rather than adding a second one.  A leg that was
+            // staged for a pending parent is that stored leg, so the freshly
+            // submitted instance supersedes it; otherwise the stale staged
+            // levels resurrect when a later parent entry applies.
+            for (auto stale = pending_bracket_legs_.begin();
+                 stale != pending_bracket_legs_.end();) {
+                if (stale->replacement_key == replacement_key)
+                    stale = pending_bracket_legs_.erase(stale);
+                else
+                    ++stale;
             }
             const std::uint64_t placement_high_water = placement_.high_water();
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
@@ -7511,9 +7558,223 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
 }
 
 void PineExecutionAdapter::flush_pending_bracket_legs(
-        native_order::RequestHandle just_applied, bool post_calculation) {
+        native_order::RequestHandle just_applied, bool post_calculation,
+        bool pre_script_drain) {
     auto queued = std::move(pending_bracket_legs_);
     pending_bracket_legs_.clear();
+    // ab9714be src/source/pine_scheduler.cpp:242 runs step 1 over the orders
+    // that were already resting, and that pass walks a shared fill phase in
+    // creation order (src/source/pine_fills.cpp:3782-3788). A resting bracket
+    // settles on this bar ahead of the source body only when that walk reaches
+    // its parent entry first: a leg the pass visits while the position is still
+    // flat is skipped there (src/source/pine_fills.cpp:7461-7468) and only
+    // revisited later, which on this route is the flush below the body.
+    const auto point = require_host().current_execution_point();
+    // A parent that filled in the open phase sat in phase 0 with the open-tick
+    // marketables, so the pass walked it ahead of every priced bracket of the
+    // bar. A parent that filled later on the path shares the bracket's phase,
+    // and there only the book's creation order decides.
+    const bool parent_walked_after_leg
+        = point.has_value()
+          && position_open_bar_index_
+              == point->decision.coordinate.interval_index
+          && position_open_phase_ != NativePathPhase::Open;
+    const auto resolve_parent_handle
+        = [&](const PlacementSnapshot& row)
+            -> std::optional<native_order::RequestHandle> {
+        auto origin = row.bracket_origin;
+        if (origin.incarnation == 0 && !row.from_entry.empty()) {
+            const auto cohort = cohorts_by_id_.find(row.from_entry);
+            if (cohort != cohorts_by_id_.end()
+                && !cohort->second.opened.empty()) {
+                origin = cohort->second.opened.back();
+            }
+        }
+        if (placement_.find(origin.incarnation) == placement_.end()) return std::nullopt;
+        return origin;
+    };
+    const auto resolve_parent = [&](const PlacementSnapshot& row)
+            -> const PlacementSnapshot* {
+        const auto handle = resolve_parent_handle(row);
+        if (!handle) return nullptr;
+        return &placement_.find(handle->incarnation)->second;
+    };
+    // The owner's pass orders a shared fill phase by the order's creation
+    // sequence (ab9714be src/source/pine_fills.cpp:3779-3785), the stamp the
+    // book keeps across a same-id replacement
+    // (src/source/pine_strategy_commands.cpp:481-482,
+    // src/source/pine_strategy_commands.cpp:2627-2648). This route carries the
+    // same fact on the snapshot's source sequence, which a re-issued bracket
+    // inherits (src/source/pine_adapter.cpp:6601) and the book walk already
+    // ranks on (src/source/pine_adapter.cpp:11288).
+    const auto parent_precedes_leg
+        = [](const PlacementSnapshot& leg, const PlacementSnapshot& parent) {
+        return parent.source_sequence < leg.source_sequence;
+    };
+    // A parent recreated after a named entry cancellation is the retained
+    // topology: its surviving bracket keeps the pre-cancellation book slot, so
+    // the creation-order walk reaches the leg first and skips it while the
+    // position is still flat (src/source/pine_fills.cpp:7461-7468). The owner's
+    // one exception ranks that fresh parent ahead of the retained child
+    // (ab9714be src/compat/pine/order_priority.cpp:31-85, declared by the
+    // flat_retained_child_fresh_parent_order metadata). The child of that pair
+    // has no native handle while this route still stages it, so the pair is
+    // read from the placement snapshots and the three evidence boundaries of
+    // the owner's predicate are carried as their source facts: the pass-time
+    // gates of ab9714be src/compat/pine/order_priority.cpp:11-15 become "this
+    // bar's position opened on this bar" (the owner ranks the pair while the
+    // broker is still flat, and here the walk ran ahead of this drain) plus
+    // "the pair is the whole book this route carries"; the incarnation
+    // adjacency of src/compat/pine/order_priority.cpp:85 becomes two
+    // consecutive source commands; and the owner's single exit order is the
+    // pair of legs this route splits it into, so either leg may carry the
+    // surviving-slot stamp for its bracket.
+    const bool retained_parent_first
+        = priority.attached() && priority.retained_parent_first();
+    const auto exact_retained_child = [&](const PlacementSnapshot& row,
+                                          std::uint64_t surviving) {
+        const double percent = std::isfinite(row.qty_percent)
+            ? row.qty_percent : 100.0;
+        return (row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitLimit)
+            && !row.from_entry.empty()
+            && row.projection_predecessor != 0
+            && row.projection_predecessor == surviving
+            && row.projection_position_side
+                == static_cast<std::int32_t>(PositionSide::FLAT)
+            && point && row.projection_created_bar
+                == point->decision.coordinate.interval_index - 1
+            && !row.birth.from_fill()
+            && !row.projection_after_close
+            && !row.projection_over_pyramiding
+            && !std::isfinite(row.requested_qty)
+            && percent >= 100.0 - internal::kFullPercentEps
+            && std::isfinite(row.exit_levels.stop)
+            && std::isfinite(row.exit_levels.limit)
+            && !std::isfinite(row.exit_levels.profit_ticks)
+            && !std::isfinite(row.exit_levels.loss_ticks)
+            && !std::isfinite(row.exit_levels.trail_points)
+            && !std::isfinite(row.exit_levels.trail_price)
+            && !std::isfinite(row.exit_levels.trail_offset)
+            && row.oca_name.empty() && row.oca_type == 0;
+    };
+    const auto exact_fresh_parent = [&](const PlacementSnapshot& parent,
+                                        std::uint64_t parent_incarnation,
+                                        std::uint64_t child_predecessor) {
+        const auto cancelled
+            = parent.recreated_after_named_cancelled_entry_incarnation;
+        const auto surviving
+            = parent.named_cancel_surviving_exit_incarnation;
+        return parent.opening
+            && parent.family == PineOrderFamily::Entry
+            && parent.projection_position_side
+                == static_cast<std::int32_t>(PositionSide::FLAT)
+            && parent.projection_predecessor == 0
+            && cancelled != 0 && cancelled < parent_incarnation
+            && cancelled != child_predecessor
+            && surviving > cancelled && surviving < parent_incarnation
+            && point && parent.projection_created_bar
+                == point->decision.coordinate.interval_index - 1
+            && !std::isfinite(parent.requested_qty)
+            && !parent.birth.from_fill()
+            && !parent.projection_after_close
+            && !parent.projection_over_pyramiding
+            && !parent.stop_limit_activated
+            && std::isfinite(parent.exit_levels.stop)
+            && !std::isfinite(parent.exit_levels.limit)
+            && !std::isfinite(parent.exit_levels.trail_points)
+            && !std::isfinite(parent.exit_levels.trail_price)
+            && !std::isfinite(parent.exit_levels.trail_offset)
+            && parent.oca_name.empty() && parent.oca_type == 0;
+    };
+    // The staged brackets of this drain that are the ranked child of a fresh
+    // parent entry.
+    std::vector<std::pair<std::string, std::string>> ranked_retained_brackets;
+    if (pre_script_drain && retained_parent_first && point
+        && position_open_bar_index_
+            == point->decision.coordinate.interval_index
+        && config_.process_orders_on_close && !config_.calc_on_order_fills
+        && !coof_recalc_active_ && point->decision.sub_count <= 1) {
+        std::vector<std::pair<std::string, std::string>> book_keys;
+        const auto carry_key = [&](const PlacementSnapshot& row) {
+            const auto key = std::make_pair(row.source_id, row.from_entry);
+            if (std::find(book_keys.begin(), book_keys.end(), key)
+                == book_keys.end())
+                book_keys.push_back(key);
+        };
+        for (const auto& live : live_handles_) {
+            const auto row = placement_.find(live.incarnation);
+            if (row != placement_.end()) carry_key(row->second);
+        }
+        for (const auto& staged : queued) carry_key(staged.snapshot);
+        for (const auto& entry : pending_entries_) carry_key(entry.snapshot);
+        for (const auto& command : pending_same_bar_commands_)
+            carry_key(command.snapshot);
+        for (const auto& pending : pending_coof_requests_)
+            carry_key(pending.snapshot);
+        for (const auto& delayed : delayed_market_orders_)
+            carry_key(delayed.snapshot);
+        for (const auto& leg : queued) {
+            const auto bracket = std::make_pair(leg.snapshot.source_id,
+                                               leg.snapshot.from_entry);
+            if (book_keys.size() != 1 || book_keys.front() != bracket) continue;
+            const auto handle = resolve_parent_handle(leg.snapshot);
+            if (!handle) continue;
+            const auto parent = placement_.find(handle->incarnation);
+            if (parent == placement_.end()
+                || !parent->second.retained_parent_topology) continue;
+            if (leg.snapshot.from_entry != parent->second.source_id) continue;
+            if (leg.snapshot.command_sequence
+                != parent->second.command_sequence + 1) continue;
+            if (!exact_fresh_parent(parent->second, handle->incarnation,
+                                    leg.snapshot.projection_predecessor))
+                continue;
+            for (const auto& sibling : queued) {
+                if (sibling.snapshot.source_id != bracket.first
+                    || sibling.snapshot.from_entry != bracket.second) continue;
+                if (!exact_retained_child(sibling.snapshot,
+                        parent->second.named_cancel_surviving_exit_incarnation))
+                    continue;
+                if (std::find(ranked_retained_brackets.begin(),
+                              ranked_retained_brackets.end(), bracket)
+                    == ranked_retained_brackets.end())
+                    ranked_retained_brackets.push_back(bracket);
+                break;
+            }
+        }
+    }
+    // True when the owner's step-1 walk reaches this leg's parent entry before
+    // the leg, so the leg settles with the position open ahead of the body. A
+    // leg whose parent entry was the fill that opened the position has already
+    // had that parent's calculation, so the walk also satisfies the deferred
+    // post-parent-calculation parking flag (pine_adapter.cpp:7393).
+    const auto parent_walks_first
+        = [&](const PlacementSnapshot& leg) {
+        if (!pre_script_drain) return false;
+        const auto* parent = resolve_parent(leg);
+        if (parent == nullptr) return false;
+        if (parent->retained_parent_topology) {
+            return std::find(ranked_retained_brackets.begin(),
+                             ranked_retained_brackets.end(),
+                             std::make_pair(leg.source_id, leg.from_entry))
+                != ranked_retained_brackets.end();
+        }
+        return !parent_walked_after_leg
+            || parent_precedes_leg(leg, *parent);
+    };
+    if (pre_script_drain) {
+        std::vector<PendingBracketLeg> resting;
+        resting.reserve(queued.size());
+        for (auto& leg : queued) {
+            const bool has_parent = resolve_parent(leg.snapshot) != nullptr;
+            if (has_parent && !parent_walks_first(leg.snapshot)) {
+                pending_bracket_legs_.push_back(std::move(leg));
+            } else {
+                resting.push_back(std::move(leg));
+            }
+        }
+        queued = std::move(resting);
+    }
     std::unordered_set<std::uint64_t> source_pending_orders;
     for (const auto& handle : live_handles_) {
         const auto live = placement_.find(handle.incarnation);
@@ -7636,30 +7897,53 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
             continue;
         }
         if (leg.snapshot.defer_until_post_parent_calculation
-            && !post_calculation) {
+            && !post_calculation && !parent_walks_first(leg.snapshot)) {
             pending_bracket_legs_.push_back(std::move(leg));
             continue;
         }
         bool execute_after_calculation = false;
+        // ab9714be src/source/pine_fills.cpp:7695-7728 evaluates a priced exit on
+        // the bar its parent entry fills, and a leg this route parked until
+        // post-calculation still gets that bar's touch at its level price. The
+        // stop sits on the far leg of the assumed intrabar path, so it only
+        // fires when the parent's fill leg came first; the limit sits beyond the
+        // fill on the parent's own leg, so the fill always precedes it. A level
+        // on the wrong side of the fill price is skipped, as in the entry-bar
+        // gate of src/source/pine_fills.cpp:7715-7727.
+        const bool priced_exit_leg
+            = leg.snapshot.family == PineOrderFamily::ExitStop
+              || leg.snapshot.family == PineOrderFamily::ExitLimit;
         if ((leg.snapshot.projection_predecessor != 0
              || leg.snapshot.defer_until_post_parent_calculation)
-            && leg.snapshot.family == PineOrderFamily::ExitStop
-            && policy_script_bar_valid_) {
+            && priced_exit_leg && policy_script_bar_valid_) {
             const auto cohort = cohorts_by_id_.find(leg.snapshot.from_entry);
             if (cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
                 const auto parent = placement_.find(cohort->second.opened.back().incarnation);
                 if (parent != placement_.end() && parent->second.opening) {
+                    const bool is_stop_leg
+                        = leg.snapshot.family == PineOrderFamily::ExitStop;
+                    const double level = is_stop_leg
+                        ? leg.snapshot.exit_levels.stop
+                        : leg.snapshot.exit_levels.limit;
                     const bool high_first = source_path_uses_high_first(policy_script_bar_);
-                    const bool parent_before_child = parent->second.is_long
-                        ? high_first : !high_first;
-                    const double stop = leg.snapshot.exit_levels.stop;
-                    const bool touched = parent->second.is_long
-                        ? policy_script_bar_.low <= stop : policy_script_bar_.high >= stop;
-                    execute_after_calculation = parent_before_child && touched;
+                    const bool parent_before_child = is_stop_leg
+                        ? (parent->second.is_long ? high_first : !high_first) : true;
+                    const bool touched = is_stop_leg
+                        ? (parent->second.is_long ? policy_script_bar_.low <= level
+                                                  : policy_script_bar_.high >= level)
+                        : (parent->second.is_long ? policy_script_bar_.high >= level
+                                                  : policy_script_bar_.low <= level);
+                    const double fill_price
+                        = require_host().physical_position().average_price;
+                    const bool right_side = is_stop_leg
+                        || (parent->second.is_long ? level >= fill_price
+                                                   : level <= fill_price);
+                    execute_after_calculation = parent_before_child && touched && right_side;
                     if (execute_after_calculation) {
                         const double units = std::abs(
                             require_host().physical_position().signed_units);
-                        leg.snapshot.forced_execution_price = stop;
+                        leg.snapshot.post_parent_calc_level_fill = true;
+                        leg.snapshot.forced_execution_price = level;
                         leg.snapshot.immediately = true;
                         leg.snapshot.requested_qty = units;
                         leg.snapshot.deferred_cohort = false;
@@ -7749,12 +8033,16 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
     }
     std::vector<PendingBracketLeg> ready;
     for (auto it = pending_bracket_legs_.begin(); it != pending_bracket_legs_.end();) {
+        const bool matches_parent = it->snapshot.from_entry.empty()
+            || (parent && it->snapshot.from_entry == parent->source_id);
         const bool selected = retained_parent
             ? (materialize_retained && it->family_key == retained_family
                && it->snapshot.from_entry == parent->source_id)
             : (!it->snapshot.defer_until_post_parent_calculation
-               && it->snapshot.bracket_origin == event.handle());
+               && (it->snapshot.bracket_origin == event.handle()
+                   || (it->snapshot.bracket_origin.incarnation == 0 && matches_parent)));
         if (selected) {
+            it->snapshot.bracket_origin = event.handle();
             ready.push_back(std::move(*it));
             it = pending_bracket_legs_.erase(it);
         } else {
@@ -9725,6 +10013,16 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             : native_order::OpeningShape::ReverseTo;
     }
     return result;
+}
+
+bool PineExecutionAdapter::source_post_parent_calc_level_fill(
+        std::uint64_t incarnation) const noexcept {
+    // True when the request being committed is the bracket leg this route
+    // force-executed at its own level after its parent entry's calculation
+    // (ab9714be src/source/pine_fills.cpp:7695-7728).
+    const auto snapshot = placement_.find(incarnation);
+    return snapshot != placement_.end()
+        && snapshot->second.post_parent_calc_level_fill;
 }
 
 // ab9714be pine_fills.cpp:5736-5744: priced exit fills flag fold_exit_path_extremes_ to fold pre-fill path excursion
@@ -13528,9 +13826,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto pending = placement_.find(handle.incarnation);
                 if (pending == placement_.end()) continue;
                 const auto& row = pending->second;
+                const bool matches_parent = row.from_entry.empty()
+                    || row.from_entry == placement_snapshot->source_id;
                 if ((row.family == PineOrderFamily::ExitStop
                      || row.family == PineOrderFamily::ExitLimit)
-                    && row.from_entry == placement_snapshot->source_id
+                    && matches_parent
                     && row.projection_created_bar
                         == placement_snapshot->projection_created_bar
                     && !carried_origin_leg(row)
@@ -13584,9 +13884,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 const auto pending = placement_.find(handle.incarnation);
                 if (pending == placement_.end()) continue;
                 const auto& row = pending->second;
+                const bool matches_parent = row.from_entry.empty()
+                    || row.from_entry == placement_snapshot->source_id;
                 if ((row.family != PineOrderFamily::ExitStop
                      && row.family != PineOrderFamily::ExitLimit)
-                    || row.from_entry != placement_snapshot->source_id
+                    || !matches_parent
                     || row.projection_created_bar
                         != placement_snapshot->projection_created_bar
                     || carried_origin_leg(row)) {

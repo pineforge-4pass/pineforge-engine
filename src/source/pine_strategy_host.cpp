@@ -513,6 +513,7 @@ void source::PineStrategyHost::on_native_applied(
         throw std::overflow_error("source broker fill sequence exhausted");
     ++broker_fill_event_seq_;
     excursion_priced_fill_ = false;
+    excursion_level_fill_ = false;
     excursion_margin_call_ = false;
     excursion_margin_prefix_ = false;
     excursion_margin_fill_only_ = false;
@@ -593,6 +594,8 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         trail_ticks = *off;
     }
     excursion_priced_fill_ = priced;
+    excursion_level_fill_ = adapter_.source_post_parent_calc_level_fill(
+        view.target.incarnation);
     excursion_margin_call_ = adapter_.source_margin_exit(view.target.incarnation);
     excursion_trail_offset_ticks_ = trail_ticks;
     // ab9714be pine_fills.cpp:5766-5770: the peak a TRAIL fill retraces from is
@@ -633,8 +636,18 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
         fill_fav = 0.0;
     }
     ClosedLotExcursion owned;
-    owned.favorable = std::max(facts.carried_favorable * slice, fill_fav);
-    owned.adverse = std::max(facts.carried_adverse * slice, -fill_fav);
+    // ab9714be src/source/pine_scheduler.cpp:242,257 samples the bar's H/L/C
+    // into every OPEN trade (update_per_trade_extremes, step 2) only after the
+    // resting priced exits of step 1 have closed. A leg this route force-fills
+    // at its level on its own entry bar therefore keeps the owner's unsampled
+    // entry seed: no bar of this trade was ever walked by the sampler, so the
+    // exit fill and the pre-fill path prefix below are the whole excursion.
+    const bool unsampled_entry_bar = facts.entry_bar_index == facts.exit_bar_index
+        && excursion_level_fill_;
+    const double carried_favorable = unsampled_entry_bar ? 0.0 : facts.carried_favorable;
+    const double carried_adverse = unsampled_entry_bar ? 0.0 : facts.carried_adverse;
+    owned.favorable = std::max(carried_favorable * slice, fill_fav);
+    owned.adverse = std::max(carried_adverse * slice, -fill_fav);
     // ab9714be pine_fills.cpp:5766-5770: a TRAIL fill retraces exactly the
     // trailing offset from the peak that armed it, so that peak is a pre-fill
     // favorable excursion no bar-boundary sample ever sees.
@@ -1494,6 +1507,16 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // reads its public pending projection at this decision boundary.
     sort_same_bar_exit_trades(trades_, adapter_);
     adapter_.observe_terminal_receipts();
+    // ab9714be src/source/pine_scheduler.cpp:242,258: under
+    // process_orders_on_close the orders that were already resting fill at step 1
+    // (process_pending_orders(before_pooc_script=true)) BEFORE the strategy body
+    // runs at step 3, so a bracket leg this route parked while its parent entry
+    // was pending settles on the touch bar ahead of this bar's source
+    // evaluation. Draining it here keeps the body's position state, and the
+    // levels it re-prices, on the same side of the fill as the owner; a leg that
+    // carries a predecessor receipt stays staged for the flush below the body.
+    adapter_.flush_pending_bracket_legs({}, /*post_calculation=*/false,
+                                       /*pre_script_drain=*/true);
     struct ChartEmaNaWarmupScope {
         bool previous;
         explicit ChartEmaNaWarmupScope(bool enabled)

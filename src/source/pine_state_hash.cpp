@@ -69,6 +69,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.close_pending_later_qty);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
+    f.b(value.projection_created_bar_pinned);
+    f.b(value.post_parent_calc_level_fill);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
     f.b(value.projection_over_pyramiding);
     f.b(value.projection_opposite_market_predecessor);
@@ -569,6 +571,11 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.i(override_.pyramiding); f.i(override_.slippage); f.i(override_.commission_type);
     f.i(override_.default_qty_type); f.i(override_.process_orders_on_close);
     f.i(override_.calc_on_order_fills); f.i(override_.close_entries_rule);
+    // Transient excursion-sampler cache (see pine_strategy_host.hpp): it is
+    // re-derived at every precommit, but it is next-decision visible to the
+    // excursion sampler inside an in-flight execution, so it is folded here
+    // rather than waived.
+    f.b(excursion_level_fill_);
     f.i(source_bar_index_); f.u(source_callback_count_);
     f.b(source_configuration_captured_); f.b(source_prepare_failed_);
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1

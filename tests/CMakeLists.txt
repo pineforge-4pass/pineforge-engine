@@ -45,6 +45,7 @@ set(TEST_SOURCES
     test_l10ar_priced_entry_fill
     test_l10as_priced_exit_fill
     test_l10ap_coof_chained_fill_price
+    test_l10am_entry_bar_priced_exit
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a

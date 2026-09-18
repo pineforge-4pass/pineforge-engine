@@ -204,6 +204,15 @@ struct PlacementSnapshot {
     // not a second executable order: the native request remains the sole
     // owner of matching, trigger state, and terminal receipts.
     std::int32_t projection_created_bar = -1;
+    // Set when a source command pinned projection_created_bar itself, so a
+    // later submit of the same instance (a bracket leg materialized when its
+    // parent entry applies) must not re-stamp it to the submitting bar.
+    bool projection_created_bar_pinned = false;
+    // Set when a carried bracket leg is force-executed at its own level on the
+    // bar its parent entry opened (ab9714be src/source/pine_fills.cpp:7695-7728).
+    // The close of such a leg must not inherit the exit bar's path sample: the
+    // owner books that fill at step 1, before update_per_trade_extremes().
+    bool post_parent_calc_level_fill = false;
     std::int32_t projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
     bool projection_after_close = false;
     bool projection_over_pyramiding = false;
@@ -578,6 +587,7 @@ public:
     // True when the request is a source exit leg carrying priced stop, limit
     // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
     bool source_priced_exit(std::uint64_t incarnation) const noexcept;
+    bool source_post_parent_calc_level_fill(std::uint64_t incarnation) const noexcept;
     std::optional<double> source_trail_offset_ticks(std::uint64_t incarnation) const noexcept;
     bool source_margin_exit(std::uint64_t incarnation) const noexcept;
     bool has_pending_market_exit(int current_interval_index = -1) const noexcept;
@@ -674,7 +684,8 @@ public:
     // newly pending-entry legs are appended.
     void flush_pending_bracket_legs(
         native_order::RequestHandle just_applied = {},
-        bool post_calculation = true);
+        bool post_calculation = true,
+        bool pre_script_drain = false);
     // Ordinary POOC same-direction adds are held until the source evaluation
     // closes, so a later close_all in that same evaluation settles first and
     // the add opens the next source position at the same close point.
