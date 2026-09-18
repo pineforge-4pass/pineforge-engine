@@ -910,6 +910,9 @@ private:
     void cancel_bracket_origin(native_order::RequestHandle);
     void cancel_bracket_siblings(native_order::RequestHandle);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);
+    void retire_in_position_exits_at_flat(bool preserve_pending_parents,
+                                          bool dormant_rows_only,
+                                          const PlacementSnapshot* paired_close);
     void materialize_relative_exits(PlacementSnapshot,
                                    const native_order::ExecutionAppliedEvent&);
     void materialize_pending_bracket_legs(

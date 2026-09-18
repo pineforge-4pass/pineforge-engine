@@ -251,6 +251,15 @@ double nearest_tick(double value, double tick) noexcept {
 double source_bar_fill_tick(double value, double tick) noexcept {
     if (!std::isfinite(value) || !finite_positive(tick)) return value;
     const double k = std::floor(value / tick + 0.5);
+    // ab9714be include/pineforge/engine.hpp:1207-1210 and 1258-1266: the
+    // legacy bar fill price is ``round_to_mintick`` = floor(p / mintick + 0.5)
+    // * mintick, and it is IDEMPOTENT — a price that is already on the tick
+    // grid comes back bit-identical (the comment there pins that the
+    // downstream directional snap is an identity on such a result, because
+    // n * mintick sits one binary64 ULP above the plain decimal quotient).
+    // Re-deriving an already rounded price as k / (1 / tick) dropped that ULP,
+    // so a same-bar reversal entry no longer booked on its own close's print.
+    if (k * tick == value) return value;
     const double inverse = 1.0 / tick;
     const double integral_inverse = std::floor(inverse + 0.5);
     if (integral_inverse > 0.0
@@ -2444,7 +2453,10 @@ bool PineExecutionAdapter::compute_exit_reservation(
             ? std::max(0.0, snapshot.projection_remaining_qty)
             : (std::isfinite(snapshot.requested_qty)
                 ? std::max(0.0, std::abs(snapshot.requested_qty))
-                : live_basis * percent / 100.0);
+                // ab9714be src/source/pine_strategy_commands.cpp:2761 and
+                // src/source/pine_fills.cpp:7094 both reserve a sibling leg's
+                // share as ``live_pos * (oqp / 100.0)``, percent divided first.
+                : live_basis * (percent / 100.0));
         const bool explicit_units = std::isfinite(snapshot.requested_qty);
         const auto origin = snapshot.bracket_origin.incarnation;
         if (row == reservations.end()) {
@@ -3178,6 +3190,112 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
             family->second.end());
         if (family->second.empty()) family = bracket_families_.erase(family);
         else ++family;
+    }
+    refresh_pending_view();
+}
+
+// ab9714be pine_fills.cpp:7461-7468: while the book is flat, an EXIT whose
+// ``created_position_side`` is not FLAT is Removed outright and never Skipped
+// — a bracket armed against a position that has since closed does not survive
+// the flat.  pine_fills.cpp:7667-7675 gives the reason and the second half of
+// the rule: an EXIT whose ``from_entry`` has not filled in the CURRENT
+// position cycle is Removed as well, and ``cycle_filled_entry_ids_`` is
+// cleared the moment the book goes flat, so a stale bracket must not fire
+// later against a FUTURE position reusing the same entry id.  A retired
+// candidate row keeps its lifecycle, so ``revive_brackets_after_margin`` can
+// resurrect the dormant leg the moment the reused id regains exposure, and a
+// still-live leg can fill against the reversal's fresh lot on the same bar.
+// Removing both the book entry and the lifecycle restores the legacy rule.
+//
+// Both legacy Removes are LAZY per-broker-point eligibility checks that walk
+// the pending queue once in ``created_seq`` order, not an eager sweep.  An
+// exit placed on the SAME script bar as the flattening close and BEHIND it in
+// command order — the close's paired reversal entry sits between the two
+// (pine_fills.cpp:8013-8018) — is therefore only reached once that entry has
+// filled and repopulated ``cycle_filled_entry_ids_`` for the new cycle, so
+// neither Remove applies to it and it stays armed for the fresh lot.  A
+// bracket placed on any EARLIER bar was reached while the retiring cycle was
+// still the live one, with its ``from_entry`` absent from that cycle's filled
+// set, and was Removed there.  ``paired_close`` carries the same-bar close
+// that defines the boundary; a null pointer keeps the unrestricted
+// preservation the transient-flat cleanup at the end of a close relies on.
+void PineExecutionAdapter::retire_in_position_exits_at_flat(
+        bool preserve_pending_parents, bool dormant_rows_only,
+        const PlacementSnapshot* paired_close) {
+    // A transient flat between two same-point reversal transactions does not
+    // end the pending parent's lifecycle, so the parent's own brackets are
+    // kept (the same exclusion the flat cleanup below applies per owner).
+    const auto pending_parent = [&](const PlacementSnapshot& row) {
+        if (!preserve_pending_parents || row.from_entry.empty()) return false;
+        if (paired_close != nullptr
+            && (row.projection_created_bar
+                    != paired_close->projection_created_bar
+                || row.command_sequence <= paired_close->command_sequence)) {
+            return false;
+        }
+        const SourceId& owner = row.from_entry;
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end() && found->second.opening
+                && found->second.family == PineOrderFamily::Entry
+                && found->second.source_id == owner) {
+                return true;
+            }
+        }
+        return std::any_of(pending_entries_.begin(), pending_entries_.end(),
+            [&](const PendingEntry& entry) {
+                return entry.snapshot.opening && entry.snapshot.source_id == owner;
+            });
+    };
+    const auto matches = [&](const PlacementSnapshot& snapshot) {
+        const bool exit = snapshot.family == PineOrderFamily::ExitLimit
+            || snapshot.family == PineOrderFamily::ExitStop
+            || snapshot.family == PineOrderFamily::ExitTrail;
+        return exit
+            && static_cast<PositionSide>(snapshot.projection_position_side)
+                   != PositionSide::FLAT
+            && !pending_parent(snapshot);
+    };
+    if (!dormant_rows_only) {
+        pending_bracket_legs_.erase(
+            std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+                [&](const PendingBracketLeg& row) { return matches(row.snapshot); }),
+            pending_bracket_legs_.end());
+        pending_coof_requests_.erase(
+            std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+                [&](const PendingCoofRequest& row) { return matches(row.snapshot); }),
+            pending_coof_requests_.end());
+        source_shadow_pending_.erase(
+            std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+                [&](const SourceShadowPending& row) { return matches(row.snapshot); }),
+            source_shadow_pending_.end());
+    }
+
+    std::vector<native_order::RequestHandle> handles;
+    if (!dormant_rows_only) {
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end() && matches(found->second))
+                handles.push_back(handle);
+        }
+        for (const auto& handle : handles) {
+            const auto result = require_host().cancel(handle);
+            if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+        }
+        for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
+            family->second.erase(
+                std::remove_if(family->second.begin(), family->second.end(),
+                    [&](const native_order::RequestHandle& handle) {
+                        return std::find(handles.begin(), handles.end(), handle)
+                            != handles.end();
+                    }),
+                family->second.end());
+            if (family->second.empty()) family = bracket_families_.erase(family);
+            else ++family;
+        }
+    }
+    for (auto row : placement_) {
+        if (matches(row.second)) row.second.legs = {};
     }
     refresh_pending_view();
 }
@@ -6036,7 +6154,22 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const double tick = staged_.syminfo.mintick;
     bool parent_long = physical.signed_units > 0.0;
     bool known_parent_level = physical.signed_units != 0.0;
+    // ab9714be src/source/pine_fills.cpp:4560-4564 (pending_order_level_resolved)
+    // and 7208-7229 (materialize_relative_exit_prices_for_live_position): the
+    // legacy book resolves an EXIT's relative operands against the LIVE position
+    // whenever its ``from_entry`` already filled in the current position cycle
+    // (``cycle_filled_entry_ids_``), whatever the same script bar staged against
+    // that id.  Deferring them to a still-pending same-id origin kept the
+    // predecessor's level, so a re-issued strategy.exit left the stale trail
+    // activation resting instead of re-pricing it on the live entry price.
+    const bool parent_filled_this_cycle = physical.signed_units != 0.0
+        && !from_entry.empty()
+        && [&] {
+            const auto filled = cohorts_by_id_.find(from_entry);
+            return filled != cohorts_by_id_.end() && !filled->second.opened.empty();
+        }();
     const auto observe_staged_parent = [&](const PlacementSnapshot& parent) {
+        if (parent_filled_this_cycle) return;
         if (!parent.opening || parent.family != PineOrderFamily::Entry
             || parent.source_id != from_entry) {
             return;
@@ -6070,7 +6203,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (parent != placement_.end() && !already_opened)
             observe_staged_parent(parent->second);
     }
-    if (cohort != cohorts_by_id_.end()) {
+    // ab9714be src/source/pine_fills.cpp:4560-4564: a pending same-id origin
+    // never defers the levels once the id has filled in this cycle.
+    if (cohort != cohorts_by_id_.end() && !parent_filled_this_cycle) {
         for (auto it = cohort->second.origins.rbegin();
              it != cohort->second.origins.rend(); ++it) {
             const auto parent = placement_.find(it->incarnation);
@@ -6939,6 +7074,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     };
     const bool exit_is_buy = !parent_long;
+    // ab9714be pine_fills.cpp:7672-7675: an EXIT whose ``from_entry`` never
+    // filled in the CURRENT position cycle is Removed before it can rest, and
+    // the id set is cleared the moment the book goes flat or flips.  A limit
+    // level that is only marketable against the side held at issue time is
+    // therefore never a live leg while its parent id belongs to a cycle that
+    // has not opened yet; without the removal the leg rests on its cohort
+    // binding and flattens the reversal's fresh lot at that lot's own entry
+    // price on the same bar.
+    const auto cycle_cohort = from_entry.empty()
+        ? cohorts_by_id_.end() : cohorts_by_id_.find(from_entry);
+    const bool from_entry_filled_this_cycle = from_entry.empty()
+        || (cycle_cohort != cohorts_by_id_.end()
+            && !cycle_cohort->second.opened.empty());
     bool placed_absolute_leg = false;
     if (finite_non_negative(limit_price)) {
         const double snapped_limit = nearest_tick(limit_price, tick);
@@ -6948,7 +7096,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 : source_trigger_threshold(limit_price, tick, exit_is_buy, true)});
         placed_absolute_leg = true;
     } else if (std::isfinite(limit_price) && limit_price < 0.0
-               && physical.signed_units > 0.0) {
+               && physical.signed_units > 0.0 && from_entry_filled_this_cycle) {
         // Sell limit < 0 is always marketable; A43 still refuses negatives.
         submit_leg(PineOrderFamily::ExitLimit, native_order::Market{});
         placed_absolute_leg = true;
@@ -12618,6 +12766,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         && (placement_snapshot->family == PineOrderFamily::Close
             || placement_snapshot->family == PineOrderFamily::CloseAll)
         && event.closed_units > 0.0) {
+        // ab9714be pine_fills.cpp:7461-7468: the close that flattened the book
+        // is bound to the position cycle it was issued in.  Every exit created
+        // while that position was open is Removed at the flat, before the
+        // paired reversal entry of the NEXT cycle is released below, so the
+        // stale bracket can neither fill against the fresh lot on this bar nor
+        // be revived against a later reuse of the entry id
+        // (pine_fills.cpp:7667-7675).  Only a bracket the script placed behind
+        // this same close, for the close's own paired reversal, is reached by
+        // the legacy queue walk after that entry filled and stays armed.
+        if (require_host().physical_position().signed_units == 0.0)
+            retire_in_position_exits_at_flat(/*preserve_pending_parents=*/true,
+                                             /*dormant_rows_only=*/false,
+                                             &*placement_snapshot);
         std::vector<PendingEntry> remaining;
         std::vector<PendingEntry> after_close;
         remaining.reserve(pending_entries_.size());
@@ -13444,6 +13605,15 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // parent's brackets; stale owners still retire immediately.
             if (!pending_parent(owner)) cancel_exit_orders_for_full_close(owner);
         }
+        // ab9714be pine_fills.cpp:7461-7468 / 7667-7673: the owner scan above
+        // only sees exits that are live or still pending, so a bracket that
+        // already went dormant survives the flat in its projection row and is
+        // revived against the next position that reuses its entry id.  The
+        // legacy book Removes every in-position exit at the flat whatever its
+        // current lifecycle state.
+        retire_in_position_exits_at_flat(/*preserve_pending_parents=*/true,
+                                         /*dormant_rows_only=*/true,
+                                         /*paired_close=*/nullptr);
         position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
         position_open_bar_index_ = -1;
         position_open_phase_ = NativePathPhase::None;
