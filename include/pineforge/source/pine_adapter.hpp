@@ -705,6 +705,9 @@ public:
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const noexcept;
     bool is_open_phase_exit(std::size_t trade_index) const noexcept;
+    // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
+    // slot start + i takes the phase of the trade previously at indices[i].
+    void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
     void hash_state(BrokerStateHashSink&) const;
 
     // Retained for the untouched legacy source host. New fixture state is

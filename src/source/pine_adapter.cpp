@@ -3429,6 +3429,24 @@ bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noe
         && trade_exit_phase_[trade_index] == static_cast<std::uint8_t>(NativePathPhase::Open);
 }
 
+void PineExecutionAdapter::permute_exit_phases(std::size_t start,
+                                               const std::vector<std::size_t>& indices) {
+    const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+    std::vector<std::uint8_t> permuted;
+    permuted.reserve(indices.size());
+    for (const std::size_t index : indices) {
+        permuted.push_back(index < trade_exit_phase_.size() ? trade_exit_phase_[index] : none);
+    }
+    for (std::size_t i = 0; i < permuted.size(); ++i) {
+        const std::size_t target = start + i;
+        if (target >= trade_exit_phase_.size()) {
+            if (permuted[i] == none) continue;
+            trade_exit_phase_.resize(target + 1, none);
+        }
+        trade_exit_phase_[target] = permuted[i];
+    }
+}
+
 void PineExecutionAdapter::observe_terminal_receipts() {
     auto& host = require_host();
     const auto state = host.native_state();
@@ -6468,7 +6486,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             return;
         }
         if (!from_entry.empty() && parent.source_id != from_entry) {
-            return;
             return;
         }
         // A pending same-bar parent is the level basis only while its cohort

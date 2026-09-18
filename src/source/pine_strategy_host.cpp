@@ -1389,7 +1389,7 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-static void sort_same_bar_exit_trades(std::vector<Trade>&, const source::PineExecutionAdapter&);
+static void sort_same_bar_exit_trades(std::vector<Trade>&, source::PineExecutionAdapter&);
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
@@ -1434,7 +1434,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
 
 // ab9714be pine_fills.cpp:664-670: same-bar bracket exit trades sort by script command sequence created_seq
 static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
-                                      const source::PineExecutionAdapter& adapter) {
+                                      source::PineExecutionAdapter& adapter) {
     if (trades.size() < 2) return;
     const std::size_t end = trades.size();
     std::size_t start = end - 1;
@@ -1466,6 +1466,9 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
         sorted.reserve(end - start);
         for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
         for (std::size_t i = 0; i < sorted.size(); ++i) trades[start + i] = std::move(sorted[i]);
+        // The adapter's exit phases are keyed by trade index: move them with
+        // the trades so the next call reads each trade's own phase.
+        adapter.permute_exit_phases(start, indices);
     }
 }
 
