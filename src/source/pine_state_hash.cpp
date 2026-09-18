@@ -532,7 +532,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(current_script_open_ms_);
     f.d(current_script_bar_.open); f.d(current_script_bar_.high); f.d(current_script_bar_.low);
     f.d(current_script_bar_.close); f.d(current_script_bar_.volume); f.i(current_script_bar_.timestamp);
-    f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(source_bar_count_);
+    f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(open_point_fills_); f.i(source_bar_count_);
     f.b(expected_source_bars_ >= source_bar_count_);
     f.u(applied_cursor_); f.i(coof_callback_script_open_);
     f.i(last_published_script_open_ms_);

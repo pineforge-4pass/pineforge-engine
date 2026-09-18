@@ -269,6 +269,15 @@ double source_bar_fill_tick(double value, double tick) noexcept {
     return k * tick;
 }
 
+// ab9714be engine.hpp:1264-1266: a fill AT an on-grid raw print books
+// bar_fill_price(print) = floor(p / mintick + 0.5) * mintick, which can sit
+// one binary64 ULP off the print itself; both name the same path point.
+bool source_same_point(double booked, double raw, double tick) noexcept {
+    return booked == raw
+        || (finite_positive(tick) && source_bar_fill_tick(raw, tick) == raw
+            && nearest_tick(raw, tick) == booked);
+}
+
 double directional_tick(double value, double tick, bool upward) noexcept {
     if (!std::isfinite(value) || !finite_positive(tick)) return value;
     const double scaled = value / tick;
@@ -608,7 +617,8 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
             historical_point = 0; waypoint = point->price; break;
         }
     }
-    const bool at_waypoint = point && same_double_bits(point->price, waypoint);
+    const bool at_waypoint = point
+        && source_same_point(point->price, waypoint, staged_.syminfo.mintick);
     const bool historical_segment = point && historical_point > 0 && !at_waypoint;
     const int recalc_leg = historical_segment
         ? std::max(0, historical_point - 1) : historical_point;
@@ -2262,6 +2272,23 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         admission_journal.append(std::move(event));
     }
     remember(*accepted, std::move(snapshot));
+    // ab9714be pine_strategy_commands.cpp:445-446 (entry/order) and
+    // 1694-1703 (exit): an accepted same-id instruction removes the prior
+    // pending order, including one still queued here for a later submission.
+    if (!replacement_key.empty()) {
+        pending_coof_requests_.erase(
+            std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+                [&](const PendingCoofRequest& row) { return row.replacement_key == replacement_key; }),
+            pending_coof_requests_.end());
+        pending_bracket_legs_.erase(
+            std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+                [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; }),
+            pending_bracket_legs_.end());
+        delayed_market_orders_.erase(
+            std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
+                [&](const DelayedMarketOrder& row) { return row.replacement_key == replacement_key; }),
+            delayed_market_orders_.end());
+    }
     if (key != 0) live_by_source_key_[key] = *accepted;
     if (opening) {
         const auto source = placement_.at(accepted->incarnation).source_id;
@@ -3606,7 +3633,8 @@ bool PineExecutionAdapter::defer_coof_tail() const noexcept {
     const double endpoint = high_first
         ? coof_script_bar_.low : coof_script_bar_.high;
     const auto point = require_host().current_execution_point();
-    return phase == second && point && point->price == endpoint;
+    return phase == second && point
+        && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
 }
 
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
@@ -3674,8 +3702,16 @@ double PineExecutionAdapter::coof_next_waypoint() const noexcept {
     for (int index = 0; index < 4; ++index) {
         if (path_phase[index] != coof_context_.coordinate.path_phase) continue;
         const auto point = require_host().current_execution_point();
+        // ab9714be pine_fills.cpp:7962-7966 and pine_scheduler.cpp:548-563: a
+        // fill at a waypoint POINT books bar_fill_price(waypoint), the
+        // nearest-tick rounding of the raw OHLC price, so the applied price
+        // identifies that point only on the tick grid.
+        const bool at_waypoint = point && finite_positive(staged_.syminfo.mintick)
+            ? source_bar_fill_tick(point->price, staged_.syminfo.mintick)
+                == source_bar_fill_tick(path_price[index], staged_.syminfo.mintick)
+            : point && point->price == path_price[index];
         if (index > 0 && point && finite_positive(point->price)
-            && point->price != path_price[index] && !forced_waypoint) {
+            && !at_waypoint && !forced_waypoint) {
             return path_price[index];
         }
         return index < 3 ? path_price[index + 1] : kNaN;
@@ -3725,7 +3761,8 @@ bool PineExecutionAdapter::coof_remaining_recrosses(
         const auto point = require_host().current_execution_point();
         int first = index + 1;
         if (index > 0 && point && finite_positive(point->price)
-            && point->price != path_price[index] && !forced_waypoint) {
+            && !source_same_point(point->price, path_price[index], staged_.syminfo.mintick)
+            && !forced_waypoint) {
             first = index;
         }
         bool crossed_adverse = false;
@@ -4224,7 +4261,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
         const auto point = require_host().current_execution_point();
         coof_market_next_open = coof_context_.coordinate.path_phase == second
-            && point && point->price == endpoint;
+            && point && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
     }
     double native_limit = limit_price;
     double native_stop = stop_price;
@@ -4262,7 +4299,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             + (is_long ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick;
         if (finite_positive(coof_market_fill) && finite_positive(current_quote)
-            && coof_market_fill != current_quote) {
+            && !source_same_point(current_quote, coof_market_fill, staged_.syminfo.mintick)) {
             const bool falling = coof_market_fill < current_quote;
             if (is_long) {
                 request.trigger = falling
@@ -4274,6 +4311,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                     : native_order::Trigger{native_order::Limit{coof_market_fill}};
             }
         }
+        // ab9714be pine_fills.cpp:7962-7966 + engine.hpp:1207-1210: the
+        // waypoint POINT fill books bar_fill_price(waypoint); the trigger
+        // above keeps the reachable grid level.
+        coof_market_fill = nearest_tick(next_extreme, staged_.syminfo.mintick)
+            + (is_long ? 1.0 : -1.0) * config_.slippage
+                * staged_.syminfo.mintick;
     }
     if (pure_stop_entry && explicit_fixed && current != 0.0
         && ((current > 0.0) != is_long) && source_point
@@ -5400,7 +5443,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                     * staged_.syminfo.mintick;
             if (finite_positive(coof_close_all_fill)
                 && finite_positive(current_quote)
-                && coof_close_all_fill != current_quote) {
+                && !source_same_point(current_quote, coof_close_all_fill,
+                                      staged_.syminfo.mintick)) {
                 const bool falling = coof_close_all_fill < current_quote;
                 if (buy) {
                     request.trigger = falling
@@ -5818,7 +5862,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 ? coof_script_bar_.low : coof_script_bar_.high;
             const auto point = require_host().current_execution_point();
             coof_close_next_open = coof_context_.coordinate.path_phase == second
-                && point && point->price == endpoint;
+                && point && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
         }
     }
     if (coof_recalc_active_ && !coof_first_open_ && !immediately
@@ -5833,7 +5877,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             + (buy ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick;
         if (finite_positive(coof_close_fill) && finite_positive(current_quote)
-            && coof_close_fill != current_quote) {
+            && !source_same_point(current_quote, coof_close_fill, staged_.syminfo.mintick)) {
             const bool falling = coof_close_fill < current_quote;
             if (buy) {
                 request.trigger = falling
@@ -6588,19 +6632,45 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 const bool closing_long = physical.signed_units > 0.0;
                 if (family == PineOrderFamily::ExitLimit
                     && finite_positive(limit_price) && finite_positive(endpoint)) {
+                    // ab9714be pine_fills.cpp:563-583 (KI-67 Model S): a priced
+                    // exit born in a mid-bar fill recalculation is held on the
+                    // remainder of its in-flight leg.  It gap-fills at the
+                    // leg-end waypoint when its level lies in that remainder
+                    // (engine_path_resolve.cpp:1016-1046) or when it is the
+                    // marketable LIMIT born from the second fill at O
+                    // (pine_strategy_commands.cpp:2009-2015), which is held
+                    // through O->W1 and gets one gap attempt at W1.
                     const bool marketable = closing_long
                         ? point->price >= limit_price : point->price <= limit_price;
-                    const bool endpoint_reaches = closing_long
-                        ? endpoint >= limit_price && endpoint > point->price
-                        : endpoint <= limit_price && endpoint < point->price;
-                    const bool in_flight_remainder = phase != NativePathPhase::Open
-                        && !marketable && endpoint_reaches;
+                    const bool endpoint_satisfies = closing_long
+                        ? endpoint >= limit_price : endpoint <= limit_price;
+                    const bool endpoint_ahead = closing_long
+                        ? endpoint > point->price : endpoint < point->price;
+                    const bool in_flight_remainder = !marketable
+                        && endpoint_satisfies && endpoint_ahead;
                     const bool later_same_open = phase == NativePathPhase::Open
-                        && marketable && endpoint_reaches;
-                    if (in_flight_remainder || later_same_open) {
+                        && marketable;
+                    if (in_flight_remainder
+                        || (later_same_open && endpoint_satisfies && endpoint_ahead)) {
                         trigger = native_order::Limit{endpoint};
                         coof_limit_waypoint_qualified = true;
                         coof_limit_waypoint_price = endpoint;
+                    } else if (later_same_open) {
+                        // Armed at W1: it fills there when W1 satisfies the
+                        // level, otherwise on a later leg's cross.
+                        const auto* threshold = std::get_if<native_order::Limit>(&trigger);
+                        trigger = native_order::StopLimit{
+                            endpoint, threshold ? threshold->price : limit_price};
+                        coof_limit_waypoint_qualified = endpoint_satisfies;
+                    } else if (marketable && !endpoint_ahead && !endpoint_satisfies
+                               && coof_remaining_recrosses(limit_price, closing_long)) {
+                        // Any other marketable level is held on the in-flight
+                        // leg and fills only on a later leg's exact cross
+                        // (pine_fills.cpp:576); the recross scope below decides
+                        // whether it stays on this bar.
+                        const auto* threshold = std::get_if<native_order::Limit>(&trigger);
+                        trigger = native_order::StopLimit{
+                            endpoint, threshold ? threshold->price : limit_price};
                     }
                 } else if (family == PineOrderFamily::ExitStop
                            && finite_positive(stop_price)) {
@@ -6608,7 +6678,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         ? point->price <= stop_price : point->price >= stop_price;
                     if (marketable && phase != NativePathPhase::Open
                         && std::isfinite(qty) && finite_positive(endpoint)
-                        && endpoint != point->price) {
+                        && !source_same_point(point->price, endpoint, staged_.syminfo.mintick)) {
                         trigger = native_order::Stop{endpoint};
                         coof_stop_waypoint_price = endpoint;
                     } else {
@@ -8407,7 +8477,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                 + (is_long ? 1.0 : -1.0) * config_.slippage
                     * staged_.syminfo.mintick;
             if (finite_positive(next_waypoint) && finite_positive(current_quote)
-                && next_waypoint != current_quote) {
+                && !source_same_point(current_quote, next_waypoint, staged_.syminfo.mintick)) {
                 const bool falling = next_waypoint < current_quote;
                 if (is_long) {
                     request.trigger = falling
@@ -8434,7 +8504,8 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                 case NativePathPhase::Low: target = coof_script_bar_.low; break;
                 default: break;
                 }
-                if (finite_positive(target) && target != point->price
+                if (finite_positive(target)
+                    && !source_same_point(point->price, target, staged_.syminfo.mintick)
                     && risk_coof_direct_script_bar_
                         != point->decision.script_bar_open_ms) {
                     risk_coof_forced_price = target;
@@ -8734,6 +8805,27 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     const auto& trigger = facts.definition->request.trigger;
     const bool limit_fill = std::holds_alternative<native_order::Limit>(trigger)
         || std::holds_alternative<native_order::StopLimit>(trigger);
+    const auto owner_tick_fill = [&](double price) {
+        // ab9714be engine.hpp:1207-1210 + 1264-1266: a fill at a raw bar or
+        // waypoint print books floor(p / mintick + 0.5) * mintick.  Keep that
+        // binary64 form unless it lies past the immutable limit the generic
+        // kernel checks (native_execution_consumer.cpp:2862-2875).
+        const double owner_form = nearest_tick(price, staged_.syminfo.mintick);
+        std::optional<double> level;
+        if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+            level = limit->price;
+        } else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&trigger)) {
+            level = stop_limit->limit;
+        }
+        const bool within = !level
+            || (facts.is_buy ? owner_form <= *level : owner_form >= *level);
+        return within ? owner_form : source_bar_fill_tick(price, staged_.syminfo.mintick);
+    };
+    const auto source_forced_fill = [&](double forced) {
+        return nearest_tick(forced, staged_.syminfo.mintick) == forced
+            ? owner_tick_fill(forced)
+            : source_bar_fill_tick(forced, staged_.syminfo.mintick);
+    };
     const bool non_open = facts.cursor.point.path_phase != NativePathPhase::Open;
     const bool source_gap_point = !non_open
         || facts.cursor.point.provenance == NativePriceProvenance::ObservedPrint;
@@ -8816,6 +8908,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 && source.oca_type == 2;
             if (raw_oca_reduce) {
                 return nearest_tick(facts.raw_price, staged_.syminfo.mintick);
+            }
+            // ab9714be pine_fills.cpp:7943-7945: an exit gapped at the open
+            // books bar_fill_price(open).
+            if (source.family == PineOrderFamily::ExitLimit) {
+                return owner_tick_fill(facts.raw_price);
             }
             return source_bar_fill_tick(facts.raw_price, staged_.syminfo.mintick);
         }
@@ -8901,10 +8998,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             result.resolved_price = source_stop_resolved();
         }
         if (finite_positive(source.forced_execution_price)) {
-            // ab9714be pine_fills.cpp:1712-1726: margin slices use exact fire price
+            // ab9714be pine_fills.cpp:1712-1726: margin slices use the exact fire
+            // price (W34a); every other forced fill goes through the chained-fill
+            // tick-grid helper (W35a).
             result.resolved_price = source.family == PineOrderFamily::Margin
                 ? source.forced_execution_price
-                : source_bar_fill_tick(source.forced_execution_price, staged_.syminfo.mintick);
+                : source_forced_fill(source.forced_execution_price);
         }
         if (source.family == PineOrderFamily::ExitLimit && facts.trigger_level
             && facts.cursor.point.path_phase != NativePathPhase::Open) {
@@ -8952,8 +9051,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         result.resolved_price = source_limit_fill();
     }
     if (finite_positive(source.forced_execution_price)) {
-        result.resolved_price = source_bar_fill_tick(
-            source.forced_execution_price, staged_.syminfo.mintick);
+        result.resolved_price = source_forced_fill(source.forced_execution_price);
     }
     // Source stop/trail exits crossed inside a modeled path settle at their
     // armed level, whereas an open gap retains the presented open quote.  The
@@ -9095,8 +9193,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             : (source_gap_point ? source_bar_fill() : source_stop_fill());
     }
     if (finite_positive(source.forced_execution_price)) {
-        result.resolved_price = source_bar_fill_tick(
-            source.forced_execution_price, staged_.syminfo.mintick);
+        result.resolved_price = source_forced_fill(source.forced_execution_price);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail

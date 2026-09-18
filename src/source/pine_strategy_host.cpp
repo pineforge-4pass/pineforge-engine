@@ -688,7 +688,10 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
         return owned;
     }
     if (!excursion_priced_fill_) return owned;
-    if (scheduler_.bar_magnifier_enabled()
+    // ab9714be pine_scheduler.cpp:99-106 and 548-552: the calc_on_order_fills
+    // historical dispatch books an O-point fill against a one-price point
+    // bar, so no path extreme precedes it.
+    if ((scheduler_.bar_magnifier_enabled() || config_.calc_on_order_fills)
         && std::abs(facts.fill_price - current_bar_.open) < 1e-7) {
         return owned;
     }

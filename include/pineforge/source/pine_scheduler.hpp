@@ -145,6 +145,7 @@ private:
     Bar current_script_bar_{};
     bool current_script_bar_valid_ = false;
     bool saw_open_fill_ = false;
+    int open_point_fills_ = 0;
     int source_bar_count_ = 0;
     int expected_source_bars_ = 0;
     std::uint64_t applied_cursor_ = 0;

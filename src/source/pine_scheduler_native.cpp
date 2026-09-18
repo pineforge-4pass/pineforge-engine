@@ -36,7 +36,7 @@ void PineScheduler::reset_language() {
     language_.coof_checkpoint_src_volume_.clear(); language_.coof_checkpoint_src_hl2_.clear();
     language_.coof_checkpoint_src_hlc3_.clear(); language_.coof_checkpoint_src_ohlc4_.clear();
     language_.coof_checkpoint_src_hlcc4_.clear();
-    current_script_open_ms_ = 0; saw_open_fill_ = false;
+    current_script_open_ms_ = 0; saw_open_fill_ = false; open_point_fills_ = 0;
     current_script_bar_ = {}; current_script_bar_valid_ = false;
     source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
@@ -470,6 +470,7 @@ void PineScheduler::bar_open(const Bar& value, const NativeDecisionContext& cont
     if (context.script_bar_open_ms != current_script_open_ms_) {
         current_script_open_ms_ = context.script_bar_open_ms;
         saw_open_fill_ = false;
+        open_point_fills_ = 0;
         coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
         if (host.scheduler_coof_enabled()) snapshot_coof_script_state(host);
     }
@@ -599,7 +600,23 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         return;
     }
     if (host.adapter_.suppress_grouped_stop_recalc(event, context)) return;
-    const bool at_open = context.coordinate.path_phase == NativePathPhase::Open;
+    // ab9714be pine_scheduler.cpp:531-537: the historical O point admits the
+    // carried order's open fill and one refill; every later fill advances
+    // along the path.  The native matcher may book such a fill at the start
+    // (t == 0) of the O->W1 segment instead of at the Open phase; both are
+    // the same O point, so its recalculation carries Open provenance.  Once
+    // the O point is spent, a further fill at that price lies on the O->W1
+    // leg (pine_scheduler.cpp:571-606) and its recalculation says so.
+    const bool bar_known = current_script_bar_valid_
+        && current_script_bar_.timestamp == context.script_bar_open_ms;
+    const NativePathPhase first_extreme = bar_known
+        && host.adapter_.source_path_uses_high_first(current_script_bar_)
+        ? NativePathPhase::High : NativePathPhase::Low;
+    const bool open_point = context.coordinate.path_phase == NativePathPhase::Open
+        || (bar_known && context.coordinate.path_phase == first_extreme
+            && event.cursor.t == 0.0);
+    const bool at_open = open_point && open_point_fills_ < 2;
+    open_point_fills_ = at_open ? open_point_fills_ + 1 : 2;
     const bool first_open = at_open && !saw_open_fill_;
     if (at_open) saw_open_fill_ = true;
     const bool first_callback = coof_callback_script_open_
@@ -620,8 +637,21 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     language_.history_slot_is_new_ =
         !language_.coof_checkpoint_contains_current_bar_;
     publish_series(callback_bar, host);
+    NativeDecisionContext coof_context = context;
+    if (at_open) coof_context.coordinate.path_phase = NativePathPhase::Open;
+    else if (open_point && bar_known) coof_context.coordinate.path_phase = first_extreme;
     host.adapter_.begin_coof_recalc(
-        event, context, first_open, host.broker_fill_event_seq_);
+        event, coof_context, first_open, host.broker_fill_event_seq_);
+    // ab9714be pine_scheduler.cpp:357-366: under COOF every fill recalculation
+    // invokes update_per_trade_extremes() against the full script bar, except
+    // the carried positive-slip POOC opening-money chain at O
+    // (pine_scheduler.cpp:494-511), whose exits see only the open.
+    Bar extremes_bar = callback_bar;
+    if (host.config_.process_orders_on_close && host.config_.slippage > 0 && open_point) {
+        extremes_bar.high = extremes_bar.low = extremes_bar.close = extremes_bar.open;
+    }
+    sample_open_trade_extremes(
+        host.pyramid_entries_, host.position_side_, host.bar_index_, extremes_bar);
     try {
         host.scheduler_publish_source_bar(
             callback_bar, true, callback_advances_source_bar);
