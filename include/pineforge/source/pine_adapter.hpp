@@ -1114,8 +1114,10 @@ private:
                                            std::int64_t);
     bool defer_coof_tail() const noexcept;
     bool source_path_uses_high_first(const Bar&) const noexcept;
+    bool coof_fill_on_path_point() const noexcept;
+    bool coof_fill_at_path_point(double waypoint) const noexcept;
     bool coof_current_fill_was_forced_waypoint() const noexcept;
-    double coof_next_waypoint() const noexcept;
+    double coof_next_waypoint(int* path_index = nullptr) const noexcept;
     double next_coof_waypoint_price() const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
     void flush_coof_tail(bool openings_only = false,
@@ -1258,6 +1260,7 @@ private:
     std::uint64_t coof_market_entry_recalc_incarnation_ = 0;
     std::uint64_t coof_market_entry_recalc_fill_seq_ = 0;
     std::uint64_t coof_current_fill_seq_ = 0;
+    double coof_fill_cursor_t_ = std::numeric_limits<double>::quiet_NaN();
     NativeDecisionContext coof_context_{};
     Bar coof_script_bar_{};
     bool coof_script_bar_valid_ = false;

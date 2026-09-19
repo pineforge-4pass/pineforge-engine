@@ -1303,6 +1303,7 @@ void PineExecutionAdapter::reset_for_run() {
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
+    coof_fill_cursor_t_ = kNaN;
     coof_context_ = {};
     coof_script_bar_ = {};
     coof_script_bar_valid_ = false;
@@ -3644,6 +3645,7 @@ void PineExecutionAdapter::begin_coof_recalc(
     coof_recalc_active_ = true;
     coof_first_open_ = first_open;
     coof_current_fill_seq_ = source_fill_sequence;
+    coof_fill_cursor_t_ = event.cursor.t;
     coof_market_entry_recalc_fill_seq_ = source_fill_sequence;
     coof_market_entry_recalc_incarnation_ = 0;
     if (event.opened_units != 0.0
@@ -3663,6 +3665,7 @@ void PineExecutionAdapter::end_coof_recalc() noexcept {
     coof_market_entry_recalc_incarnation_ = 0;
     coof_market_entry_recalc_fill_seq_ = 0;
     coof_current_fill_seq_ = 0;
+    coof_fill_cursor_t_ = kNaN;
     coof_context_ = {};
 }
 
@@ -3717,9 +3720,28 @@ bool PineExecutionAdapter::defer_coof_tail() const noexcept {
         ? NativePathPhase::Low : NativePathPhase::High;
     const double endpoint = high_first
         ? coof_script_bar_.low : coof_script_bar_.high;
+    return phase == second && coof_fill_at_path_point(endpoint);
+}
+
+bool PineExecutionAdapter::coof_fill_on_path_point() const noexcept {
+    // The recalculating fill's matcher cursor sits at a leg end (t 0 or 1),
+    // i.e. on an O/H/L/C point, rather than inside a leg.
+    return coof_recalc_active_
+        && (coof_fill_cursor_t_ == 0.0 || coof_fill_cursor_t_ == 1.0);
+}
+
+bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexcept {
     const auto point = require_host().current_execution_point();
-    return phase == second && point
-        && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
+    if (!point) return false;
+    // ab9714be engine.hpp:1264-1266: an on-grid print books one ULP-exact
+    // tick.  An OFF-grid waypoint books bar_fill_price(waypoint)
+    // (pine_fills.cpp:7962-7966), a tick a mid-leg fill can also book, so
+    // that tick names the waypoint only for a fill placed on a path point.
+    const double tick = staged_.syminfo.mintick;
+    if (source_same_point(point->price, waypoint, tick)) return true;
+    return finite_positive(tick) && source_bar_fill_tick(waypoint, tick) != waypoint
+        && source_decimal_tick(point->price, tick) == source_decimal_tick(waypoint, tick)
+        && coof_fill_on_path_point();
 }
 
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
@@ -3758,7 +3780,11 @@ bool PineExecutionAdapter::coof_current_fill_was_forced_waypoint() const noexcep
     return false;
 }
 
-double PineExecutionAdapter::coof_next_waypoint() const noexcept {
+double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept {
+    // path_index (optional) receives the returned waypoint's historical path
+    // index (1/2 = extreme W1/W2, 3 = C), or -1 when it is not an O/H/L/C
+    // point of the chart bar (lower-timeframe path, no waypoint).
+    if (path_index) *path_index = -1;
     if (!coof_recalc_active_ || !coof_script_bar_valid_) return kNaN;
     const auto state = require_host().native_state();
     if (state.spec && state.spec->intrabar.lower()) {
@@ -3793,14 +3819,23 @@ double PineExecutionAdapter::coof_next_waypoint() const noexcept {
         // identifies that point only on the tick grid.  source_bar_fill_tick
         // keeps an on-grid n * mintick booking one ULP off the waypoint's
         // decimal print, so compare the decimal grid forms.
-        const bool at_waypoint = point && finite_positive(staged_.syminfo.mintick)
-            ? source_decimal_tick(point->price, staged_.syminfo.mintick)
-                == source_decimal_tick(path_price[index], staged_.syminfo.mintick)
+        // An OFF-grid waypoint's booked tick is also reachable mid-leg (a
+        // limit at 13.26 on the H->L 13.255 leg), so it names the point
+        // only for a fill the matcher placed on a path point.
+        const double tick = staged_.syminfo.mintick;
+        const bool on_grid_waypoint = finite_positive(tick)
+            && source_bar_fill_tick(path_price[index], tick) == path_price[index];
+        const bool at_waypoint = point && finite_positive(tick)
+            ? source_decimal_tick(point->price, tick)
+                    == source_decimal_tick(path_price[index], tick)
+                && (on_grid_waypoint || coof_fill_on_path_point())
             : point && point->price == path_price[index];
         if (index > 0 && point && finite_positive(point->price)
             && !at_waypoint && !forced_waypoint) {
+            if (path_index) *path_index = index;
             return path_price[index];
         }
+        if (path_index && index < 3) *path_index = index + 1;
         return index < 3 ? path_price[index + 1] : kNaN;
     }
     return kNaN;
@@ -4346,9 +4381,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         const NativePathPhase second = high_first
             ? NativePathPhase::Low : NativePathPhase::High;
         const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
-        const auto point = require_host().current_execution_point();
         coof_market_next_open = coof_context_.coordinate.path_phase == second
-            && point && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
+            && coof_fill_at_path_point(endpoint);
     }
     double native_limit = limit_price;
     double native_stop = stop_price;
@@ -4382,7 +4416,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // non-first-open fill recalc waits for the next unconsumed waypoint.
         // A mid-segment fill retains that segment's endpoint; an endpoint
         // fill advances to the following waypoint.
-        const double next_extreme = coof_next_waypoint();
+        int next_extreme_index = -1;
+        const double next_extreme = coof_next_waypoint(&next_extreme_index);
         const auto point = require_host().current_execution_point();
         const double current_quote = point ? point->price : kNaN;
         coof_market_fill = source_bar_fill_tick(
@@ -4392,14 +4427,25 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         if (finite_positive(coof_market_fill) && finite_positive(current_quote)
             && !source_same_point(current_quote, coof_market_fill, staged_.syminfo.mintick)) {
             const bool falling = coof_market_fill < current_quote;
+            // An extreme (W1/W2) target arms at the raw waypoint, so the fill
+            // lands AT that point (pine_scheduler.cpp:548-563) even when its
+            // booked tick lies beyond an off-grid extreme or short of it (L
+            // 11.995 booked 12.00 would otherwise fill mid-leg).
+            // The booked tick may lie on the wrong side of that raw level,
+            // so the limit is a touch trigger (fill-through).
+            const bool extreme_target = next_extreme_index == 1
+                || next_extreme_index == 2;
+            const native_order::Limit limit = extreme_target
+                ? native_order::Limit{next_extreme, coof_market_fill != next_extreme}
+                : native_order::Limit{coof_market_fill};
             if (is_long) {
                 request.trigger = falling
-                    ? native_order::Trigger{native_order::Limit{coof_market_fill}}
+                    ? native_order::Trigger{limit}
                     : native_order::Trigger{native_order::Stop{next_extreme}};
             } else {
                 request.trigger = falling
                     ? native_order::Trigger{native_order::Stop{next_extreme}}
-                    : native_order::Trigger{native_order::Limit{coof_market_fill}};
+                    : native_order::Trigger{limit};
             }
         }
         // ab9714be pine_fills.cpp:7962-7966 + engine.hpp:1207-1210: the
@@ -6086,15 +6132,15 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 ? NativePathPhase::Low : NativePathPhase::High;
             const double endpoint = high_first
                 ? coof_script_bar_.low : coof_script_bar_.high;
-            const auto point = require_host().current_execution_point();
             coof_close_next_open = coof_context_.coordinate.path_phase == second
-                && point && source_same_point(point->price, endpoint, staged_.syminfo.mintick);
+                && coof_fill_at_path_point(endpoint);
         }
     }
     if (coof_recalc_active_ && !coof_first_open_ && !immediately
         && !coof_close_next_open
         && coof_script_bar_valid_) {
-        const double next_waypoint = coof_next_waypoint();
+        int next_waypoint_index = -1;
+        const double next_waypoint = coof_next_waypoint(&next_waypoint_index);
         const auto point = require_host().current_execution_point();
         const double current_quote = point ? point->price : kNaN;
         const bool buy = current < 0.0;
@@ -6104,15 +6150,31 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 * staged_.syminfo.mintick;
         if (finite_positive(coof_close_fill) && finite_positive(current_quote)
             && !source_same_point(current_quote, coof_close_fill, staged_.syminfo.mintick)) {
+            // ab9714be pine_scheduler.cpp:541-563 fills the recalc's market
+            // close AT the next EXTREME waypoint POINT (W1/W2) and books
+            // bar_fill_price(waypoint) (pine_fills.cpp:7962-7966).  Arm that
+            // trigger at the raw extreme the path actually reaches; the
+            // booked tick-grid price rides forced_execution_price.  An
+            // off-grid extreme (H 11.445 booked 11.45) is otherwise never
+            // touched on this bar and the close rolls to the next open.
+            // The C point admits no cascade order (pine_scheduler.cpp:
+            // 541-544, 616-620), so a C target keeps the booked level.
+            // The booked tick may lie on the wrong side of that raw level,
+            // so an extreme limit is a touch trigger (fill-through).
+            const bool extreme_target = next_waypoint_index == 1
+                || next_waypoint_index == 2;
+            const double level = extreme_target ? next_waypoint : coof_close_fill;
+            const native_order::Limit limit{level,
+                extreme_target && coof_close_fill != level};
             const bool falling = coof_close_fill < current_quote;
             if (buy) {
                 request.trigger = falling
-                    ? native_order::Trigger{native_order::Limit{coof_close_fill}}
-                    : native_order::Trigger{native_order::Stop{coof_close_fill}};
+                    ? native_order::Trigger{limit}
+                    : native_order::Trigger{native_order::Stop{level}};
             } else {
                 request.trigger = falling
-                    ? native_order::Trigger{native_order::Stop{coof_close_fill}}
-                    : native_order::Trigger{native_order::Limit{coof_close_fill}};
+                    ? native_order::Trigger{native_order::Stop{level}}
+                    : native_order::Trigger{limit};
             }
         }
     }
@@ -6916,7 +6978,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         && marketable;
                     if (in_flight_remainder
                         || (later_same_open && endpoint_satisfies && endpoint_ahead)) {
-                        trigger = native_order::Limit{endpoint};
+                        // The waypoint fill books bar_fill_price(endpoint)
+                        // (pine_fills.cpp:7962-7966); past an OFF-grid
+                        // endpoint (L 11.195 booked 11.20) the limit is a
+                        // touch trigger or the kernel refuses the booking.
+                        const bool off_grid_endpoint = finite_positive(staged_.syminfo.mintick)
+                            && source_bar_fill_tick(endpoint, staged_.syminfo.mintick) != endpoint;
+                        trigger = native_order::Limit{endpoint, off_grid_endpoint};
                         coof_limit_waypoint_qualified = true;
                         coof_limit_waypoint_price = endpoint;
                     } else if (later_same_open) {
