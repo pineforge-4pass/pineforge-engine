@@ -7624,9 +7624,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // verbatim: a buy stop below zero is crossed by every print and fills at
     // the next reachable point like any gapped stop.  A43 refuses negative
     // triggers, so it rests at 0.0 (source_trigger_threshold's floor), which
-    // every print also crosses.  A negative sell stop is never reachable.
+    // every print also crosses.  A negative sell stop is never reachable, yet
+    // the legacy book still rests it and it reserves its share of the
+    // position against later partial exits (ab9714be pine_strategy_commands.cpp:
+    // 1929-1953); at 0.0 it rests the same way and no positive print crosses it.
     if (finite_non_negative(stop_price)
-        || (exit_is_buy && std::isfinite(stop_price) && stop_price < 0.0)) {
+        || (std::isfinite(stop_price) && stop_price < 0.0)) {
         const double native_stop = source_trigger_threshold(
             stop_price, tick, exit_is_buy, false);
         submit_leg(PineOrderFamily::ExitStop, native_order::Stop{native_stop});
@@ -9611,7 +9614,20 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         const bool deferred_open_gap = source.defer_until_post_parent_calculation
             && facts.cursor.point.provenance == NativePriceProvenance::Confirmed;
-        if (!non_open || deferred_open_gap) {
+        // ab9714be pine_fills.cpp:4136-4240 + 7795-7800: the limit leg of a
+        // bracket armed with its pending MARKET parent and already marketable
+        // at the parent's fill open scratches at bar_fill_price(open), exactly
+        // like the stop leg (source_stop_resolved).  The driver first presents
+        // it on the next path segment, crossed at that segment's start: the
+        // script-bar open itself.
+        const bool limit_armed_after_open_fill = non_open
+            && source.family == PineOrderFamily::ExitLimit
+            && policy_script_bar_valid_
+            && !config_.process_orders_on_close && !config_.calc_on_order_fills
+            && host_state.spec && host_state.spec->intrabar.is_none()
+            && facts.cursor.point.provenance == NativePriceProvenance::Confirmed
+            && facts.raw_price == policy_script_bar_.open;
+        if (!non_open || deferred_open_gap || limit_armed_after_open_fill) {
             const bool raw_oca_reduce = source.family == PineOrderFamily::Order
                 && source.oca_type == 2;
             if (raw_oca_reduce) {
@@ -10562,10 +10578,34 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 // 257-278) with fold_exit_path_extremes_ cleared
                 // (pine_fills.cpp:5858): either row owns only its carried
                 // extremes and the fill.
-                const bool carried_open_slice =
+                bool carried_open_slice =
                     view.cursor.point.path_phase == NativePathPhase::Open
                     && position_open_bar_index_ >= 0
                     && position_open_bar_index_ < view.cursor.point.interval_index;
+                // ab9714be pine_fills.cpp:2544-2548 exempts a 1x long from the
+                // open slice: its opening-point rounded-money call is booked
+                // before sampling only ahead of a resting priced exit
+                // (process_carried_long_money_before_priced_orders,
+                // pine_fills.cpp:164-218).  Otherwise the end-of-bar
+                // process_margin_call (pine_fills.cpp:1350-1352, after
+                // pine_scheduler.cpp:257-270 sampled the bar) fires at the same
+                // open point and the slice inherits the complete bar.
+                if (carried_open_slice && one_x_long_opening) {
+                    bool priced_exit_rests = false;
+                    for (const auto& handle : live_handles_) {
+                        const auto found = placement_.find(handle.incarnation);
+                        if (found == placement_.end()) continue;
+                        const auto& leg = found->second;
+                        if ((leg.family == PineOrderFamily::ExitLimit
+                             && std::isfinite(leg.exit_levels.limit))
+                            || (leg.family == PineOrderFamily::ExitStop
+                                && std::isfinite(leg.exit_levels.stop))) {
+                            priced_exit_rests = true;
+                            break;
+                        }
+                    }
+                    carried_open_slice = priced_exit_rests;
+                }
                 pine->excursion_margin_fill_only_ = !config_.process_orders_on_close
                     && (carried_open_slice || (!view.current && crosses));
             }
