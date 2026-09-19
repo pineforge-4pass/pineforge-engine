@@ -3,10 +3,13 @@
 @tableofcontents
 
 Hand-written C++ strategies can run a **standalone native** path: one
-`NativeRunSpec`, one working request roster, one physical lot book, and
-close-only calculation callbacks. Pine `strategy.*` commands, cap/priority
-adapters, default source sizing, and complete Pine policy extraction are **not**
-this surface.
+`NativeRunSpec`, one working request roster, one physical lot book, and five
+host callbacks — `on_native_input`, `on_native_tick`, `on_native_bar_open`, the
+pure-virtual `on_native_bar`, and the post-fill `on_native_applied`
+(`native_host.hpp:440-452`). The script-bar calculation itself is
+`on_native_bar`; the surface is **not** close-only. Pine `strategy.*` commands,
+cap/priority adapters, default source sizing, and complete Pine policy
+extraction are **not** this surface.
 Codegen and source adapters select those policies separately. Resting requests
 use the general host commands; request-value members live in
 `<pineforge/native_order.hpp>` and are not restated here.
@@ -101,7 +104,7 @@ Always set, with documented defaults in the header:
 - `chart_timezone`: optional observation metadata; empty stays empty and is
   not the scheduling calendar
 - `slippage_ticks`: `0` .. `INT_MAX`. Buy adds, sell subtracts
-  `ticks * price_tick` **once** to form the kernel default price. A v16 terms
+  `ticks * price_tick` **once** to form the kernel default price. The terms
   resolver receives that default; an accepted override is final and is not
   slipped a second time. No mintick snap.
 - `fee_kind` / `fee_value`: `Percent`, `CashPerUnit`, `CashPerExecution`;
@@ -126,10 +129,19 @@ rewritten.
 
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
-`Ready`/`Running` is preserved. The rich
-`run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)` overload is
-an unsupported source mutation (`Failed`). Magnifier/source-feed arguments are
-not native spec fields.
+`Ready`/`Running` is preserved. Magnifier/source-feed arguments are not native
+spec fields.
+
+The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
+overload (`engine.hpp:3115-3123`) is **not** refused as a source mutation: it
+reaches `NativeExecutionConsumer::run_rich`
+(`native_execution_consumer.cpp:4990-5028`), which admits the begin, checks the
+timeframe arguments against the spec, preflights and pumps the batch exactly
+like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
+`NativeBeginArgs` fields to `prepare_native_begin` — `overrides` as an opaque
+pointer (`native_host.hpp:380-387`). No test pins either behaviour; prefer the
+plain overload. What *is* refused is source **mutation** through the setters
+(below).
 
 ## Native requests
 
@@ -150,9 +162,9 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. There is no C request API in this
 slice.
 
-`native_order::Request` values belong to `native_order_v4`; identity types stay
-`native_order_v1`. Label/comment remain inert text. The market default path
-still constructs from:
+`native_order::Request` values belong to `native_order_v5`
+(`native_order.hpp:25`); identity types stay `native_order_v1`. Label/comment
+remain inert text. The market default path still constructs from:
 
 - `order_action::Transact{signed_units}` — finite nonzero
 - `native_order::Reduce{native_order::ExplicitUnits{units}}` — finite positive
@@ -166,7 +178,7 @@ cycle identity through scoped settlement. Group cancellation/reduction is
 caused by committed execution events. See the request header for the exact
 value types; source-specific Pine lowering remains codegen/adapter work.
 
-At host epoch v16, general requests also support explicit
+At host epoch v17 (`native_host.hpp:18`), general requests also support explicit
 `native_order::ReverseTo{signed_units}` and `HostSized`. A `HostSized{Open,
 Side}` request binds its units at a matching candidate through the host's
 `resolve_execution_terms` override. The host may choose `Transact`, exact
@@ -248,6 +260,22 @@ in-callback execution as well as after callback return.
 
 This native slice does not switch generated Pine code to the native consumer
 or complete source scheduling, ownership transfer, or parity acceptance.
+
+`on_native_applied` is the **calculate-on-fill** hook: it is the point at which
+a host reacts to its own execution and may submit again. A request born there,
+mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
+that segment — the birth is admitted at the current cursor and the geometric
+search then sees only the unconsumed suffix (`born_on_remaining_path`,
+`native_execution_consumer.cpp:3253-3257`). Requests accepted before the
+segment, and discrete points, keep the ordinary birth gate above.
+
+`on_native_bar_open` fires at the modeled opening, before that point's matching
+pass (`native_execution_consumer.cpp:4394-4396`). **Lookahead warning:** the
+`Bar` it receives is the *complete* script bar — the consumer has already set
+`engine.current_bar_ = bar` (`native_execution_consumer.cpp:4187`) — so its
+high, low and close are the finished bar's, not what is known at the open. A
+host that must decide on open-only information has to restrict itself to
+`bar.open` and its own history. There is no partial-bar view in this slice.
 
 A `quantity_grid`, when present, admits Transact/Reduce quantities on the
 exact binary64 grid in `native_order.hpp`. Flatten is not gridded. Rejection
@@ -371,7 +399,9 @@ completed run with no events.
 ## Batch OHLCV vs ticks vs quiet
 
 Two driver models only: confirmed OHLCV and observed ticks. Mixing them on
-one stream is refused. Callbacks stay **close-only** (script-bar calculation).
+one stream is refused. The script-bar **calculation** callback is
+`on_native_bar`, one per completed script bucket; the opening, tick and
+post-fill hooks fire in addition to it, not instead of it.
 
 Confirmed OHLC retains the modeled **Opening**, high/low in the existing
 AUTO order, close, calculation and optional AfterCalculation close sequence.
@@ -410,8 +440,11 @@ These are existing refusals, not implied future features:
 - Monthly **input** (`M` / `nM`) on `stream_begin` / runner native warmup
 - Mixed confirmed bars and ticks
 - In-session gaps on stream/warmup
-- `calc_on_every_tick` / `calc_on_order_fills` enabled (runner rejects an
-  explicit true override; compiled strategies must still be close-only)
+- Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
+  rejects an explicit true override, and the Pine host refuses a stream begin
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:266-269`). This is a
+  limit on the *source* calculation policies, not on the native hooks:
+  `on_native_tick` and `on_native_applied` are delivered on a stream.
 - A nonempty staged native FX curve on `stream_begin`; batch runs may use one.
 - Auxiliary/native security feeds, source magnifier/tail/probe/hash/trace
   setters, `set_input`, and Pine
@@ -597,10 +630,52 @@ events and `ExecutionAppliedEvent` are separate rows in `native_events`.
 Empty timeframe strings are also valid (`run(bars, n)` and
 `stream_begin(bars, n, "", "")`). `"5"` / `"5"` must match the spec bytes.
 
+## Higher timeframes for a native host (interim)
+
+There is no native subscription API for `request.security`-style series in this
+slice. `set_native_security_feed` (`engine.hpp:3061`) is public but **inert** for
+a bare host: it only installs bars, and the routing is built per run from
+security evaluators that a native host has no sanctioned way to register —
+`configure_security_evaluators` is an empty virtual (`engine.hpp:2346`) and
+`prepare_native_security_feeds` is protected (`engine.hpp:2897`), each with a
+single caller inside the Pine host. In-run the setter is a source mutation and
+**throws**, latching `Failed` (`UnsupportedSource`) via
+`guard_native_mutation` (`engine_aux_security.cpp:91`,
+`native_execution_consumer.cpp:991-1007`).
+
+The documented interim is **self-aggregation**. `TimeframeAggregator`
+(`timeframe.hpp:288`) is public and engine-free; feed it from `on_native_input`,
+which is called once per accepted confirmed input bar before that bar is
+aggregated or matched (`native_host.hpp:438-440`). Include
+`<pineforge/timeframe.hpp>`:
+
+```cpp
+class Htf final : public pineforge::NativeStrategyHost {
+    pineforge::TimeframeAggregator daily_{"D", "15"};   // script_tf, input_tf
+    std::optional<pineforge::Bar> last_daily_;
+
+    void on_native_input(const pineforge::Bar& bar,
+                         const pineforge::NativeInputContext&) override {
+        const pineforge::AggregatedBar aggregate = daily_.feed(bar);
+        if (aggregate.is_complete) last_daily_ = aggregate.bar;
+    }
+
+    void on_native_bar(const pineforge::Bar&,
+                       const pineforge::NativeDecisionContext&) override {
+        if (!last_daily_) return;   // confirmed-only HTF value
+        // ... submit against last_daily_->close ...
+    }
+};
+```
+
+Only completed buckets are published, so this recipe has no lookahead by
+construction. The Pine scheduler uses the same class
+(`pine_scheduler_native.cpp:117-128`).
+
 ## Terms, reversal, precommit, FX curve
 
-The two const host hooks introduced at v15 remain present at the current v16
-host epoch. `resolve_execution_terms` sees read-only
+The two const host hooks introduced at v15 remain present at the current v17
+host epoch (`native_host.hpp:18`). `resolve_execution_terms` sees read-only
 candidate facts and returns a resolved price plus units only for an unresolved
 `HostSized` request. Its default is the identity price with no units. A
 `NativePrecommitView` is then available to
@@ -745,13 +820,21 @@ remains on its compatibility route until the later adapter slice.
 
 ### What still requires Pine compatibility to build
 
-The standalone native host has no Pine decision path at runtime, but the
-current `BacktestEngine` build still includes Pine-compatibility headers and
-objects. Its protected native constructor takes a `CapAttachment`, and retained
-`OrderPriority` and `IntradayCap` members remain in the base object; the root
-CMake target still compiles the corresponding `src/compat/pine/` sources. That
-build-level dependency is deliberately outside this slice. Slice B owns the
-header/constructor/member cut; this example does not claim it has removed it.
+The standalone native host has no Pine decision path at runtime, and the
+constructor/member cut has since landed: `engine.hpp` has **zero** references to
+`CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
+zero-argument (`native_host.hpp:427`); the `CapAttachment` constructor belongs
+to `source::PineStrategyHost` (`pine_strategy_host.hpp:21-25`), and the cap type
+itself lives in the adapter (`intraday_cap.hpp:18`).
+
+What remains is a **build**-level dependency, not a header or object one: the
+root CMake target is one static library that always appends
+`PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:81-134`), and one adapter
+unit, `src/compat/pine/market_admission.cpp`, is still listed outside that set
+(`CMakeLists.txt:111`). There is no kernel-only target yet. The installed-header
+closure is already clean, which the independence checker proves
+(`check_native_include_independence.py:36-46`). See
+`docs/adr/0001-kernel-adapter-boundary.md`.
 
 ### Building the kernel only
 

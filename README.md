@@ -237,15 +237,15 @@ Source-adapter parity runtime   src/source/, src/compat/pine/
    │  generic orders, handles, callbacks
    ▼
 Generic kernel   src/engine_*, src/native_*, src/ta_*, magnifier, session_time, …
-   matching and fills, sizing, margin and settlement, bar magnifier,
-   indicators, request.security(), time and session math; Pine-agnostic
+   matching and fills, slippage, fees, opening admission and settlement,
+   bar magnifier, indicators, time and session math
 ```
 
 - **codegen** owns Pine → C++ translation: the `GeneratedStrategy` with its indicator math and `strategy.*` calls. It does not own execution, fill, bracket or margin semantics.
 - **The source adapter** owns TradingView parity: how Pine orders live, fill, bracket, revive and trail, expressed as ordinary kernel orders.
-- **The kernel** stays Pine-agnostic. It changes only for a *generic* capability that carries a recorded ruling — for example per-lot excursion accounting exposed as a kernel capability, or a market-if-touched (fill-through) flag on a limit order. No Pine- or TradingView-specific rule belongs in the kernel; such a rule goes to the source adapter or to codegen.
+- **The kernel** targets Pine-agnosticism. It changes only for a *generic* capability that carries a recorded ruling — for example per-lot excursion accounting exposed as a kernel capability, or a market-if-touched (fill-through) flag on a limit order. No Pine- or TradingView-specific rule belongs in the kernel; such a rule goes to the source adapter or to codegen. Some TradingView-shaped residue does survive in `engine.hpp` today, and a few kernel capabilities are not yet reachable from a bare host — order sizing is resolved by the host, the equity curve is recorded by the host, and `request.security()` feeds have no native registration API.
 
-Bare native engines (`NativeStrategyHost`) run the kernel without the Pine adapter. Pine frontends must attach it explicitly and follow the [execution attachment and regeneration contract](docs/pine-order-priority-boundary.md); cap-only generated constructors do not opt into the full adapter.
+Bare native engines (`NativeStrategyHost`) run the kernel without the Pine adapter. Pine frontends must attach it explicitly and follow the [execution attachment and regeneration contract](docs/pine-order-priority-boundary.md); cap-only generated constructors do not opt into the full adapter. [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) states the boundary, what the kernel gives a bare host today, and the gap to the target; [the native feature-parity design](docs/design/native-feature-parity.md) is the lane roadmap that closes it.
 
 ## What ships here
 
