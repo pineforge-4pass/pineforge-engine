@@ -7601,9 +7601,16 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             && !cycle_cohort->second.opened.empty());
     bool placed_absolute_leg = false;
     if (finite_non_negative(limit_price)) {
+        // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: an
+        // exit limit is tested against the tick-quantized bar, so an ON-grid
+        // level is reached by a raw extreme half a tick short of it (NYSE:F
+        // high 10.175 -> 10.18 fills a 10.18 sell limit).  Only the
+        // calc_on_order_fills scheduler compares the raw bar; there an
+        // on-grid level stays raw.
         const double snapped_limit = nearest_tick(limit_price, tick);
         submit_leg(PineOrderFamily::ExitLimit, native_order::Limit{
-            !finite_positive(tick) || snapped_limit == limit_price
+            !finite_positive(tick)
+                    || (config_.calc_on_order_fills && snapped_limit == limit_price)
                 ? limit_price
                 : source_trigger_threshold(limit_price, tick, exit_is_buy, true)});
         placed_absolute_leg = true;
