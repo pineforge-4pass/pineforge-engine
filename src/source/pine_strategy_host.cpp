@@ -608,6 +608,22 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
          && view.raw_price > 0.0)
             ? view.raw_price
             : std::numeric_limits<double>::quiet_NaN();
+    // A zero-offset trail's matcher touch is the half-tick boundary of the
+    // rounded price path, not its fill; the owner's peak is the pre-slip fill
+    // itself, snapped onto the tick grid (ab9714be pine_fills.cpp:5761-5771,
+    // engine_internal.hpp:187-198).  Its open-gap fill is no TRAIL event
+    // (engine_path_resolve.cpp:620-631) and folds no peak.
+    if (trail_ticks == 0.0 && view.cursor.point.path_phase == NativePathPhase::Open) {
+        excursion_trail_offset_ticks_ = std::numeric_limits<double>::quiet_NaN();
+        excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
+    } else if (trail_ticks == 0.0 && std::isfinite(view.resolved_price)
+               && view.resolved_price > 0.0) {
+        const double slip = config_.slippage * syminfo_.mintick;
+        excursion_trail_raw_price_ = internal::snap_trail_level_to_tick_grid(
+            physical_position().signed_units > 0.0 ? view.resolved_price + slip
+                                                   : view.resolved_price - slip,
+            syminfo_.mintick);
+    }
     // A fill-through (slipped touch) trail leg books its fill slippage ticks
     // past the touch; the owner's peak is still that leg's PRE-slip fill
     // (ab9714be pine_fills.cpp:5760-5769 runs before apply_fill_slippage),

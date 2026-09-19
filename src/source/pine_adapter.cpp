@@ -471,11 +471,17 @@ Bar margin_call_sample_bar(const Bar& bar, double fire_price, bool prefix_sample
         high_first ? bar.low : bar.high,
         bar.close,
     };
-    int fire = 0;
-    for (int i = 0; i < 4; ++i) {
-        fire = i;
-        if (same_double_bits(path[i], fire_price)) break;
+    // finding-446: a short's slice books at the nearest-tick rounded high,
+    // which need not bit-match the raw waypoint; without the tick fallback
+    // the walk would run past it and sample the whole bar.
+    int fire = -1;
+    for (int i = 0; i < 4 && fire < 0; ++i) {
+        if (same_double_bits(path[i], fire_price)) fire = i;
     }
+    for (int i = 0; i < 4 && fire < 0 && mintick > 0.0; ++i) {
+        if (same_double_bits(nearest_tick(path[i], mintick), fire_price)) fire = i;
+    }
+    if (fire < 0) fire = 3;
     Bar prefix = bar;
     prefix.high = prefix.low = path[0];
     for (int i = 1; i <= fire; ++i) {
@@ -11706,6 +11712,7 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
     }
 
     const PlacementSnapshot* owned_trail = nullptr;
+    std::uint64_t owned_trail_incarnation = 0;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
@@ -11723,6 +11730,7 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
             return false;
         }
         owned_trail = &candidate;
+        owned_trail_incarnation = handle.incarnation;
     }
     if (owned_trail) {
         const bool full = !std::isfinite(owned_trail->requested_qty)
@@ -11739,8 +11747,10 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
     const double path[] = {bar.open, high_first ? bar.high : bar.low,
                            high_first ? bar.low : bar.high, bar.close};
     double fire_price = kNaN;
+    int fire_point = -1;
     constexpr double kArithmeticGuard = 1e-7;
-    for (double price : path) {
+    for (int point = 0; point != 4; ++point) {
+        const double price = path[point];
         if (!finite_positive(price)) continue;
         const double exact_value = position.signed_units * price
             * staged_.syminfo.pointvalue;
@@ -11750,10 +11760,50 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
             && equity + kArithmeticGuard >= exact_value
             && equity + kArithmeticGuard < rounded_value) {
             fire_price = price;
+            fire_point = point;
             break;
         }
     }
     if (!finite_positive(fire_price)) return false;
+    if (config_.process_orders_on_close && owned_trail) {
+        // ab9714be pine_fills.cpp:378-384, 1843-1846 and 1935-1937: under
+        // POOC a resting order suppresses the carried rounded-money check
+        // unless it is the owned trailing exit filling on THIS bar, and then
+        // only a path point strictly before that fill may fire.  Walk the
+        // trail over the same waypoints from its state at the open.
+        const double tick = staged_.syminfo.mintick;
+        double activation = owned_trail->trail_activation_level;
+        if (!finite_positive(activation) && finite_positive(tick)) {
+            activation = require_host().position_avg_price()
+                + internal::trail_points_to_ticks(
+                    owned_trail->exit_levels.trail_points) * tick;
+        }
+        const double offset = internal::trail_offset_to_ticks(
+            owned_trail->exit_levels.trail_offset) * tick;
+        if (!finite_positive(activation) || !std::isfinite(offset)) return false;
+        const auto state = trail_state_at_open_.find(owned_trail_incarnation);
+        bool armed = state != trail_state_at_open_.end() && state->second.activated
+            && finite_positive(state->second.best_price);
+        double best = armed ? state->second.best_price : kNaN;
+        int fill_point = -1;
+        for (int point = 0; point != 4 && fill_point < 0; ++point) {
+            const double price = path[point];
+            if (!finite_positive(price)) continue;
+            if (!armed) {
+                if (price >= activation) {
+                    armed = true;
+                    best = price;
+                }
+                continue;
+            }
+            if (offset > 0.0 ? price <= best - offset : price < best) {
+                fill_point = point;
+            } else {
+                best = std::max(best, price);
+            }
+        }
+        if (fill_point < 0 || !(fire_point < fill_point)) return false;
+    }
 
     native_order::Request request;
     request.intent = native_order::Reduce{native_order::ExplicitUnits{
@@ -11902,12 +11952,24 @@ bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
     // adverse checkpoint until after the source body unless the completed
     // old-order pass contains exactly one live, full owned trailing exit.
     // The no-trail case is the observable R26 timing discriminator.
+    // ab9714be:pine_fills.cpp:7672-7675: that pass Removes an EXIT whose
+    // from_entry never filled in the current position cycle (the opposite
+    // side's per-bar strategy.exit), so it never counts as a second order.
     const PlacementSnapshot* only = nullptr;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        const bool exit_family = row.family == PineOrderFamily::ExitLimit
+            || row.family == PineOrderFamily::ExitStop
+            || row.family == PineOrderFamily::ExitTrail;
+        if (exit_family && !row.from_entry.empty()) {
+            const auto cohort = cohorts_by_id_.find(row.from_entry);
+            if (cohort == cohorts_by_id_.end() || cohort->second.opened.empty())
+                continue;
+        }
         if (only) return true;
-        only = &found->second;
+        only = &row;
     }
     if (!only || only->family != PineOrderFamily::ExitTrail
         || only->from_entry.empty() || only->legs.dormant()
