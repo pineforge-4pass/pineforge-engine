@@ -8311,11 +8311,24 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                     const bool high_first = source_path_uses_high_first(policy_script_bar_);
                     const bool parent_before_child = is_stop_leg
                         ? (parent->second.is_long ? high_first : !high_first) : true;
+                    // ab9714be pine_fills.cpp:7711-7713 + pine_policy_members.cpp:11-17
+                    // + engine.hpp:1374-1381: the entry-bar exit is tested
+                    // against the tick-quantized bar, so an on-grid level is
+                    // touched by a raw extreme half a tick short of it
+                    // (NYSE:F high 13.455 -> 13.46 reaches a 13.46 sell limit).
+                    // Only the calc_on_order_fills scheduler compares raw.
+                    const double tick = staged_.syminfo.mintick;
+                    const bool raw_bar = config_.calc_on_order_fills
+                        || !finite_positive(tick);
+                    const double bar_high = raw_bar ? policy_script_bar_.high
+                        : source_decimal_tick(policy_script_bar_.high, tick);
+                    const double bar_low = raw_bar ? policy_script_bar_.low
+                        : source_decimal_tick(policy_script_bar_.low, tick);
                     const bool touched = is_stop_leg
-                        ? (parent->second.is_long ? policy_script_bar_.low <= level
-                                                  : policy_script_bar_.high >= level)
-                        : (parent->second.is_long ? policy_script_bar_.high >= level
-                                                  : policy_script_bar_.low <= level);
+                        ? (parent->second.is_long ? bar_low <= level
+                                                  : bar_high >= level)
+                        : (parent->second.is_long ? bar_high >= level
+                                                  : bar_low <= level);
                     const double fill_price
                         = require_host().physical_position().average_price;
                     const bool right_side = is_stop_leg
