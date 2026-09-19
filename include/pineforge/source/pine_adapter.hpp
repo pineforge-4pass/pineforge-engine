@@ -764,6 +764,11 @@ public:
     std::optional<double> source_trail_offset_ticks(std::uint64_t incarnation) const noexcept;
     bool source_margin_exit(std::uint64_t incarnation) const noexcept;
     bool has_pending_market_exit(int current_interval_index = -1) const noexcept;
+    // The carried 1x long's opening money call precedes the bar's excursion
+    // sample only ahead of one resting full-position priced exit that the
+    // open does not reach (ab9714be pine_fills.cpp:164-218).
+    bool carried_long_money_precedes_priced_exit(const NativePrecommitView&,
+                                                 double held_units) const;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
     void on_tick(const Bar&, const NativeTickContext&);
     // Called from the generic calculation callback after the source script

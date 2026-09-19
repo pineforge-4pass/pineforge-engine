@@ -7250,49 +7250,53 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 const bool wrong_limit = family == PineOrderFamily::ExitLimit
                     && finite_positive(limit_price)
                     && (long_position ? limit_price < birth : limit_price > birth);
-                const bool limit_recross = wrong_limit
-                    && coof_remaining_recrosses(limit_price, long_position);
-                const PlacementSnapshot* parent = nullptr;
-                native_order::RequestHandle parent_handle{};
-                if (const auto cohort = cohorts_by_id_.find(from_entry);
-                    cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
-                    parent_handle = cohort->second.opened.back();
-                    const auto found = placement_.find(parent_handle.incarnation);
-                    if (found != placement_.end()) parent = &found->second;
-                }
-                const bool plain_market_parent = parent
-                    && parent->family == PineOrderFamily::Entry
-                    && !finite_positive(parent->exit_levels.limit)
-                    && !finite_positive(parent->exit_levels.stop)
-                    && !finite_positive(parent->exit_levels.trail_offset)
-                    && !finite_positive(parent->exit_levels.trail_price);
-                const bool competing_opening = std::any_of(
-                    live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
-                        if (handle == parent_handle) return false;
-                        const auto candidate = placement_.find(handle.incarnation);
-                        return candidate != placement_.end()
-                            && candidate->second.opening;
-                    });
-                const bool direct_partial = point && std::any_of(
-                    placement_.begin(), placement_.end(), [&](const auto& row) {
-                        return row.second.family == PineOrderFamily::Close
-                            && row.second.immediately
-                            && row.second.projection_created_bar
-                                == point->decision.coordinate.interval_index;
-                    });
-                const double next_waypoint = coof_next_waypoint();
-                const bool reachable_stop = finite_positive(stop_price)
-                    && (long_position
-                        ? (next_waypoint <= stop_price
-                           || coof_script_bar_.close <= stop_price)
-                        : (next_waypoint >= stop_price
-                           || coof_script_bar_.close >= stop_price));
-                const bool qualified_recross = coof_limit_waypoint_qualified
-                    || (limit_recross && plain_market_parent
-                        && !competing_opening && !direct_partial
-                        && !reachable_stop);
+                // Evaluated only for a wrong-side limit that can still hold:
+                // the book scans below are otherwise dead on every reissue.
+                const auto qualified_recross = [&] {
+                    if (coof_limit_waypoint_qualified) return true;
+                    if (!coof_remaining_recrosses(limit_price, long_position)) return false;
+                    const PlacementSnapshot* parent = nullptr;
+                    native_order::RequestHandle parent_handle{};
+                    if (const auto cohort = cohorts_by_id_.find(from_entry);
+                        cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
+                        parent_handle = cohort->second.opened.back();
+                        const auto found = placement_.find(parent_handle.incarnation);
+                        if (found != placement_.end()) parent = &found->second;
+                    }
+                    const bool plain_market_parent = parent
+                        && parent->family == PineOrderFamily::Entry
+                        && !finite_positive(parent->exit_levels.limit)
+                        && !finite_positive(parent->exit_levels.stop)
+                        && !finite_positive(parent->exit_levels.trail_offset)
+                        && !finite_positive(parent->exit_levels.trail_price);
+                    if (!plain_market_parent) return false;
+                    const double next_waypoint = coof_next_waypoint();
+                    const bool reachable_stop = finite_positive(stop_price)
+                        && (long_position
+                            ? (next_waypoint <= stop_price
+                               || coof_script_bar_.close <= stop_price)
+                            : (next_waypoint >= stop_price
+                               || coof_script_bar_.close >= stop_price));
+                    if (reachable_stop) return false;
+                    const bool competing_opening = std::any_of(
+                        live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                            if (handle == parent_handle) return false;
+                            const auto candidate = placement_.find(handle.incarnation);
+                            return candidate != placement_.end()
+                                && candidate->second.opening;
+                        });
+                    if (competing_opening) return false;
+                    const bool direct_partial = point && std::any_of(
+                        placement_.begin(), placement_.end(), [&](const auto& row) {
+                            return row.second.family == PineOrderFamily::Close
+                                && row.second.immediately
+                                && row.second.projection_created_bar
+                                    == point->decision.coordinate.interval_index;
+                        });
+                    return !direct_partial;
+                };
                 if ((wrong_stop || wrong_limit)
-                    && (coof_first_open_ || wrong_stop || !qualified_recross)) {
+                    && (coof_first_open_ || wrong_stop || !qualified_recross())) {
                     snapshot.defer_until_post_parent_calculation = true;
                     delayed_market_orders_.push_back({
                         std::move(request), std::move(snapshot), replacement_key,
@@ -7537,13 +7541,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // them prevents the empty-origins origin-zero fallback a first
             // cycle uses while the new parent is still in
             // pending_same_bar_commands_ (probe9 A v0 / bprakaash).
-            for (const auto& origin : found->second.origins) {
-                const bool origin_opened =
-                    std::find(found->second.opened.begin(), found->second.opened.end(),
-                              origin) != found->second.opened.end();
-                if (origin.incarnation == 0 || origin_is_pending(origin) || origin_opened)
-                    origins.push_back(origin);
-            }
+            // The roster keeps every origin the id ever had, so collect the
+            // qualifying positions from its index and keep roster order.
+            const auto& roster = found->second.origins;
+            std::vector<std::size_t> positions;
+            if (const auto* zero = roster.positions_of(0))
+                positions.insert(positions.end(), zero->begin(), zero->end());
+            for (const auto& live : live_handles_)
+                if (origin_is_pending(live)) roster.append_positions_of(live, positions);
+            for (const auto& opened : found->second.opened)
+                roster.append_positions_of(opened, positions);
+            std::sort(positions.begin(), positions.end());
+            positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+            for (const auto position : positions) origins.push_back(roster[position]);
         }
         if (origins.empty()) origins.push_back({});
         for (const auto& origin : origins) {
@@ -7558,22 +7568,28 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool origin_opened = found != cohorts_by_id_.end()
                 && std::find(found->second.opened.begin(), found->second.opened.end(), origin)
                     != found->second.opened.end();
-            const auto family_it = bracket_families_.find(family_key);
-            const bool consumed_origin_leg = family_it != bracket_families_.end()
-                && std::any_of(family_it->second.begin(), family_it->second.end(),
-                    [&](const auto& handle) {
-                        const auto found_p = placement_.find(handle.incarnation);
-                        if (found_p == placement_.end()) return false;
-                        const auto& prior = found_p->second;
-                        return prior.family == family && prior.bracket_origin == origin
-                            && !prior.legs.dormant()
-                            && std::none_of(live_handles_.begin(), live_handles_.end(),
-                                [&](const native_order::RequestHandle& live) {
-                                    return live.incarnation == handle.incarnation;
-                                });
-                    });
+            // The consumed-leg scan walks every leg this (exit, from_entry)
+            // family ever placed, so it runs only when it decides the skip: a
+            // bracket reissued on every bar keeps its live leg and never
+            // reaches it.
+            const auto consumed_origin_leg = [&] {
+                const auto family_it = bracket_families_.find(family_key);
+                return family_it != bracket_families_.end()
+                    && std::any_of(family_it->second.begin(), family_it->second.end(),
+                        [&](const auto& handle) {
+                            const auto found_p = placement_.find(handle.incarnation);
+                            if (found_p == placement_.end()) return false;
+                            const auto& prior = found_p->second;
+                            return prior.family == family && prior.bracket_origin == origin
+                                && !prior.legs.dormant()
+                                && std::none_of(live_handles_.begin(), live_handles_.end(),
+                                    [&](const native_order::RequestHandle& live) {
+                                        return live.incarnation == handle.incarnation;
+                                    });
+                        });
+            };
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)
-                && (!origin_opened || consumed_origin_leg)) {
+                && (!origin_opened || consumed_origin_leg())) {
                 continue;
             }
             native_order::Owner owner = !config_.close_entries_rule_any && origin_opened
@@ -9662,7 +9678,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const bool wrong_side = facts.is_buy
             ? projected > level
             : projected < level;
-        if (grid_level && wrong_side) {
+        // ab9714be pine_policy_members.cpp:53-58 books that projection as is
+        // (a buy limit at 1.18054 fills 1.1805400000000001).  Substitute the
+        // grid level only where the native limit itself refuses it; a
+        // half-tick-shifted exit threshold admits the owner's spelling.
+        const auto* native_limit = std::get_if<native_order::Limit>(&trigger);
+        const bool native_admits = native_limit
+            && (facts.is_buy ? projected <= native_limit->price
+                             : projected >= native_limit->price);
+        if (grid_level && wrong_side && !native_admits) {
             return level_on_grid;
         }
         return projected;
@@ -10533,6 +10557,73 @@ bool PineExecutionAdapter::has_pending_market_exit(int current_bar) const noexce
     return false;
 }
 
+bool PineExecutionAdapter::carried_long_money_precedes_priced_exit(
+        const NativePrecommitView& view, double held_units) const {
+    // ab9714be pine_fills.cpp:164-218: the scheduler, account and single-lot
+    // book facts, then the one pending order of that book.
+    const auto state = require_host().native_state();
+    const double tick = staged_.syminfo.mintick;
+    if (config_.process_orders_on_close || config_.calc_on_order_fills
+        || stream_mode_ || (state.spec && !state.spec->intrabar.is_none())
+        || !(held_units > 1.0) || require_host().physical_position().lot_count != 1
+        || config_.commission_value != 0.0 || config_.slippage != 0
+        || std::abs(config_.margin_long - 100.0) > 1e-12
+        || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
+        || !staged_.account_fx_effective_from_ms.empty()
+        || active_staged_fx(view.cursor.point.effective_time_ms) != 1.0
+        || cap.active() || risk_.max_intraday_loss != 0.0
+        || risk_.max_drawdown != 0.0 || risk_.max_cons_loss_days > 0
+        || !pending_entries_.empty() || !pending_same_bar_commands_.empty()
+        || !pending_bracket_legs_.empty() || !finite_positive(tick)
+        || !finite_positive(view.raw_price)) {
+        return false;
+    }
+    const PlacementSnapshot* exit = nullptr;
+    for (const auto& handle : live_handles_) {
+        if (handle == view.target) continue;
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) return false;
+        const auto& leg = found->second;
+        // Broker margin slices are not source pending orders.
+        if (leg.family == PineOrderFamily::Margin) continue;
+        if (leg.family != PineOrderFamily::ExitLimit
+            && leg.family != PineOrderFamily::ExitStop) {
+            return false;
+        }
+        if (exit && (leg.source_id != exit->source_id
+                     || leg.from_entry != exit->from_entry)) {
+            return false;
+        }
+        exit = &leg;
+    }
+    if (!exit || exit->from_entry.empty() || exit->legs.dormant()
+        || exit->projection_created_bar >= view.cursor.point.interval_index
+        || !exit->oca_name.empty() || exit->oca_type != 0
+        || !std::isnan(exit->exit_levels.trail_points)
+        || !std::isnan(exit->exit_levels.trail_offset)
+        || !std::isnan(exit->exit_levels.trail_price)
+        || std::isinf(exit->exit_levels.limit) || std::isinf(exit->exit_levels.stop)) {
+        return false;
+    }
+    const auto cohort = cohorts_by_id_.find(exit->from_entry);
+    if (cohort == cohorts_by_id_.end() || cohort->second.opened.empty()) return false;
+    // One ordinary own full-position reservation.
+    if (std::isnan(exit->requested_qty)) {
+        if (!std::isfinite(exit->qty_percent) || exit->qty_percent < 100.0) return false;
+    } else if (!std::isfinite(exit->requested_qty)
+               || exit->requested_qty < held_units - internal::kQtyEpsilon) {
+        return false;
+    }
+    const double limit = exit->exit_levels.limit;
+    const double stop = exit->exit_levels.stop;
+    if (!finite_positive(limit) && !finite_positive(stop)) return false;
+    // Every finite leg participates in opening marketability, on the
+    // tick-quantized open (broker_trigger_bar).
+    const double open = nearest_tick(view.raw_price, tick);
+    return !((std::isfinite(limit) && open >= limit)
+             || (std::isfinite(stop) && open <= stop));
+}
+
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
@@ -10584,27 +10675,17 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     && position_open_bar_index_ < view.cursor.point.interval_index;
                 // ab9714be pine_fills.cpp:2544-2548 exempts a 1x long from the
                 // open slice: its opening-point rounded-money call is booked
-                // before sampling only ahead of a resting priced exit
-                // (process_carried_long_money_before_priced_orders,
-                // pine_fills.cpp:164-218).  Otherwise the end-of-bar
-                // process_margin_call (pine_fills.cpp:1350-1352, after
-                // pine_scheduler.cpp:257-270 sampled the bar) fires at the same
-                // open point and the slice inherits the complete bar.
+                // before sampling only through
+                // process_carried_long_money_before_priced_orders
+                // (pine_fills.cpp:164-218), whose book is exactly one resting
+                // full-position priced exit of the open lot that the open does
+                // not reach.  Otherwise the end-of-bar process_margin_call
+                // (pine_fills.cpp:1350-1352, after pine_scheduler.cpp:257-270
+                // sampled the bar) fires at the same open point and the slice
+                // inherits the complete bar.
                 if (carried_open_slice && one_x_long_opening) {
-                    bool priced_exit_rests = false;
-                    for (const auto& handle : live_handles_) {
-                        const auto found = placement_.find(handle.incarnation);
-                        if (found == placement_.end()) continue;
-                        const auto& leg = found->second;
-                        if ((leg.family == PineOrderFamily::ExitLimit
-                             && std::isfinite(leg.exit_levels.limit))
-                            || (leg.family == PineOrderFamily::ExitStop
-                                && std::isfinite(leg.exit_levels.stop))) {
-                            priced_exit_rests = true;
-                            break;
-                        }
-                    }
-                    carried_open_slice = priced_exit_rests;
+                    carried_open_slice = carried_long_money_precedes_priced_exit(
+                        view, physical.signed_units);
                 }
                 pine->excursion_margin_fill_only_ = !config_.process_orders_on_close
                     && (carried_open_slice || (!view.current && crosses));
@@ -11634,6 +11715,16 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
                            high_first ? bar.low : bar.high, bar.close};
     const double quantity = position.signed_units;
     const double point_value = staged_.syminfo.pointvalue;
+    // ab9714be pine_fills.cpp:1929-1965: a single-entry, commission-free book
+    // whose cached net profit carries tracked addition roundoff narrows the
+    // 1e-7 guard to what the current evaluation and that history support, so
+    // a real 1e-7 rounding deficit fires (Q 891538.56 at 1.15798 marked at
+    // 1.15808: equity 1032472.9759999 against required money 1032472.976).
+    const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host());
+    const bool supported_guard_scope = pine
+        && pine->position_entry_count_ == 1 && pine->pyramid_entries_.size() == 1
+        && pine->net_profit_sum_ == pine->net_profit_roundoff_value_
+        && std::isfinite(pine->net_profit_roundoff_bound_);
     for (int index = begin; index != 4; ++index) {
         const double price = path[index];
         if (!finite_positive(price)) continue;
@@ -11643,14 +11734,24 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
         // This trigger is exclusively for an exact-funded book whose
         // 10-significant-digit account valuation is fractionally larger.
         // Preserve the base 1e-7 guard for ordinary historical arithmetic.
-        // The native marked-equity reconstruction has one additional
-        // subtraction relative to the retired source ledger.  Preserve the
-        // base 1e-7 boundary while admitting its adjacent binary64 value;
-        // this remains far below the funded 1e-7 control.
-        constexpr double kArithmeticGuard = 1e-7;
+        double arithmetic_guard = 1e-7;
+        if (supported_guard_scope) {
+            const double entry_value = quantity * pine->position_entry_price_ * point_value;
+            const double money_scale = std::max({
+                std::abs(pine->current_equity()), std::abs(pine->open_profit(price)),
+                std::abs(entry_value), std::abs(exact_value), std::abs(equity),
+                std::abs(rounded_value)});
+            const double evaluation_guard = 8.0
+                * std::numeric_limits<double>::epsilon() * money_scale;
+            const double supported_guard = std::nextafter(
+                evaluation_guard + pine->net_profit_roundoff_bound_,
+                std::numeric_limits<double>::infinity());
+            if (std::isfinite(supported_guard))
+                arithmetic_guard = std::min(arithmetic_guard, supported_guard);
+        }
         if (!std::isfinite(exact_value) || !std::isfinite(equity)
-            || equity + kArithmeticGuard < exact_value
-            || !(equity + kArithmeticGuard < rounded_value)) {
+            || equity + arithmetic_guard < exact_value
+            || !(equity + arithmetic_guard < rounded_value)) {
             continue;
         }
         const double units = std::min(1.0, quantity);
@@ -11659,7 +11760,10 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
                                        std::abs(*grid) * 1e-9});
         if (units < quantity - guard && std::abs(rounded_units - units) > guard)
             return false;
-        return submit_margin_call_units(price, context, units, false);
+        // ab9714be pine_fills.cpp:1985-2020 books the one contract at
+        // bar_fill_price(fire), the path point that fired, not wherever the
+        // checkpoint callback happens to stand (the script-bar close).
+        return submit_margin_call_units(price, context, units, true);
     }
     return false;
 }
