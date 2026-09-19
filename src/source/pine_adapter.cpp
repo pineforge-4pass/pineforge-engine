@@ -8227,7 +8227,17 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
             && !leg.snapshot.from_entry.empty()) {
             const auto cohort = cohorts_by_id_.find(leg.snapshot.from_entry);
             if (cohort != cohorts_by_id_.end()) {
-                const auto live = cohort->second.opened.empty()
+                // A physically flat book has no open lot for this id even
+                // when the Applied of the fill that flattened it (a bracket
+                // executed at its level in the pre-script drain) is not yet
+                // observed, so the cohort's opened roster is still stale.
+                // ab9714be pine_fills.cpp:7464-7467 only Skips an exit
+                // created while flat, and the flat purge keeps it for its
+                // pending parent (pine_fills.cpp:431-437,
+                // pine_orders.cpp:507-527): it waits here for that parent.
+                const bool no_open_lot = cohort->second.opened.empty()
+                    || require_host().physical_position().signed_units == 0.0;
+                const auto live = no_open_lot
                     ? live_origin_positions(cohort->second) : std::vector<std::size_t>{};
                 retained_parent_pending = std::any_of(live.begin(), live.end(),
                     [&](std::size_t position) {
