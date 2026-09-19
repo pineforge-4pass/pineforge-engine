@@ -64,15 +64,16 @@ bool finite_non_negative(double value) noexcept {
 // samples the complete bar.  A priced exit leg still resting from an EARLIER
 // bar whose level this bar's range crosses is exactly the fill that preempts
 // the slice, so it is the discriminator between the two sampling points.
-template <typename Handles, typename Placement>
+template <typename Handles, typename Placement, typename FromEntryFilled>
 bool opening_slice_precedes_priced_exit_fill(const Handles& handles,
                                              const Placement& placement,
                                              const Bar& bar,
                                              int interval_index,
-                                             bool is_long = true,
-                                             double mintick = kNaN,
-                                             double avg_price = kNaN,
-                                             std::int64_t position_cycle = 0) noexcept {
+                                             bool is_long,
+                                             double mintick,
+                                             double avg_price,
+                                             std::int64_t position_cycle,
+                                             const FromEntryFilled& from_entry_filled) noexcept {
     // The discriminator is CYCLE-scoped, exactly like the owner's bracket
     // liveness: only a leg whose from_entry filled in THIS position cycle is
     // evaluated (ab9714be pine_fills.cpp:7669-7673), its activation and leg
@@ -103,6 +104,11 @@ bool opening_slice_precedes_priced_exit_fill(const Handles& handles,
             && row.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)) {
             continue;
         }
+        // ab9714be pine_fills.cpp:7671-7674 removes an exit whose from_entry
+        // has not filled in the live position cycle before it can fill, so
+        // a bracket the script keeps re-issuing for the other side's id
+        // (re-priced off the live position's average) cannot preempt.
+        if (!row.from_entry.empty() && !from_entry_filled(row.from_entry)) continue;
         if (row.projection_created_bar < 0
             || row.projection_created_bar > interval_index) {
             continue;
@@ -2369,6 +2375,14 @@ std::vector<native_order::RequestHandle> PineExecutionAdapter::openings_for(cons
     const auto found = cohorts_by_id_.find(id);
     return found == cohorts_by_id_.end() ? std::vector<native_order::RequestHandle>{}
                                          : found->second.opened;
+}
+
+bool PineExecutionAdapter::from_entry_filled_this_cycle(const SourceId& id) const noexcept {
+    // The source analogue of ab9714be cycle_filled_entry_ids_: the id opened
+    // in the live position cycle (reset when the book goes flat).
+    const auto found = cohorts_by_id_.find(id);
+    return found != cohorts_by_id_.end() && current_position_cycle_ > 0
+        && found->second.cycle == current_position_cycle_;
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexcept {
@@ -10498,7 +10512,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     live_handles_, placement_, sample_bar,
                     view.cursor.point.interval_index,
                     is_long_pos, staged_.syminfo.mintick,
-                    require_host().position_avg_price(), current_position_cycle_);
+                    require_host().position_avg_price(), current_position_cycle_,
+                    [this](const SourceId& id) { return from_entry_filled_this_cycle(id); });
                 const bool one_x_long_opening = physical.signed_units > 0.0
                     && !config_.process_orders_on_close
                     && std::isfinite(config_.margin_long)
@@ -10846,6 +10861,32 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         }
         const double epsilon = std::max(1e-9, std::abs(equity) * 1e-12);
         if (!(margin_pct > 0.0) || !std::isfinite(margin_pct)) {
+            return NativePrecommitVerdict::AdmitWithHostMargin;
+        }
+        // ab9714be pine_fills.cpp:5564-5663: a MARKET reversal is costed as its
+        // own new side at max(tick(close(S)), tick(fill)) against the PLACEMENT
+        // equity snapshot, fees excluded.  The post-close marked book already
+        // carries the reversal's closing fee and the carried side's gap, so it
+        // declined fee-only shortfalls that the owner admits and then trims at
+        // the fill (pine_fills.cpp:5999-6005, 1386-1482).
+        const bool market_reversal = reversal
+            && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
+            && finite_positive(source.projection_affordability_equity)
+            && finite_positive(source.projection_affordability_signal_price);
+        if (market_reversal) {
+            const double raw_fill = finite_positive(view.raw_price)
+                ? view.raw_price : view.resolved_price;
+            const double admit_price = std::max(
+                source.projection_affordability_signal_price,
+                nearest_tick(raw_fill, staged_.syminfo.mintick));
+            const double placement_equity = source.projection_affordability_equity;
+            const double reversal_required = units * admit_price
+                * staged_.syminfo.pointvalue * fx * margin_pct / 100.0;
+            const double guard = std::max(1e-9, std::abs(placement_equity) * 1e-12);
+            if (!std::isfinite(reversal_required)
+                || reversal_required > placement_equity + guard) {
+                return NativePrecommitVerdict::Refuse;
+            }
             return NativePrecommitVerdict::AdmitWithHostMargin;
         }
         if (!std::isfinite(required) || !std::isfinite(equity) || required > equity + epsilon) {
@@ -15092,6 +15133,15 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         }
                         if (row.projection_created_bar < 0
                             || row.projection_created_bar > context.coordinate.interval_index) {
+                            continue;
+                        }
+                        // ab9714be pine_fills.cpp:7671-7674 removes an exit
+                        // whose from_entry has not filled in the live cycle
+                        // (the long a direct reversal just closed), so it
+                        // cannot fill and must not preempt the opening
+                        // checkpoint (pine_fills.cpp:6069-6102, 1386-1482).
+                        if (!row.from_entry.empty()
+                            && !from_entry_filled_this_cycle(row.from_entry)) {
                             continue;
                         }
                         if (std::isfinite(row.exit_levels.stop)

@@ -1020,6 +1020,7 @@ private:
     void retire(native_order::RequestHandle) noexcept;
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
+    bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
     double percent_commission_live_equity(double) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
