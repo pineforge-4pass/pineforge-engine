@@ -13026,6 +13026,124 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
     }
 }
 
+void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // ab9714be pine_fills.cpp:3799-3845 (KI-62, samebar_add_exit_first): a
+    // from_entry PRICED bracket leg gapped through at the open and its own
+    // same-id pure MARKET pyramid add both fill at the opening tick, where
+    // the owner's priority is buy-market(1) > sell-market(2) > gapped
+    // limit(3); a long's gapped stop is a sell (2), a short's a buy (1).
+    // Unless the leg strictly precedes, the add is judged first against the
+    // still-open position (pyramiding cap, pine_orders.cpp:738, and margin)
+    // and the leg then closes the id, covering the add
+    // (pine_fills.cpp:7026-7033).  The native matcher breaks a same-point tie
+    // by incarnation, so the older leg would flatten the book and the add
+    // would open from flat.  Re-accept the unchanged leg at this opening: its
+    // fresh incarnation orders it behind the add at the same open point.
+    if (config_.calc_on_order_fills || config_.process_orders_on_close
+        || stream_mode_ || coof_recalc_active_ || context.sub_index != 0) {
+        return;
+    }
+    const auto physical = require_host().physical_position();
+    if (physical.signed_units == 0.0) return;
+    const bool long_position = physical.signed_units > 0.0;
+    const auto pure_market_add = [&](const PlacementSnapshot& add,
+                                     const SourceId& from_entry) {
+        return add.opening
+            && (add.family == PineOrderFamily::Entry
+                || add.family == PineOrderFamily::Order)
+            && add.source_id == from_entry && add.is_long == long_position
+            && !finite_positive(add.exit_levels.limit)
+            && !finite_positive(add.exit_levels.stop)
+            && !finite_positive(add.exit_levels.trail_points)
+            && !finite_positive(add.exit_levels.trail_price)
+            && !finite_positive(add.exit_levels.trail_offset)
+            && !add.birth.from_fill() && !add.birth.at_terminal_fill();
+    };
+    std::vector<native_order::RequestHandle> gapped;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& leg = found->second;
+        if ((leg.family != PineOrderFamily::ExitStop
+                && leg.family != PineOrderFamily::ExitLimit)
+            || leg.from_entry.empty() || !leg.deferred_cohort
+            || std::isfinite(leg.requested_qty)
+            || (std::isfinite(leg.qty_percent) && leg.qty_percent < 100.0 - 1e-9)
+            || finite_positive(leg.exit_levels.trail_points)
+            || finite_positive(leg.exit_levels.trail_price)
+            || finite_positive(leg.exit_levels.trail_offset)
+            || !(cohort_exposure_for(leg.from_entry) > 0.0)) {
+            continue;
+        }
+        int exit_priority = 0;
+        if (leg.family == PineOrderFamily::ExitStop && finite_positive(leg.exit_levels.stop)
+            && (long_position ? bar.open <= leg.exit_levels.stop
+                              : bar.open >= leg.exit_levels.stop)) {
+            exit_priority = long_position ? 2 : 1;
+        } else if (leg.family == PineOrderFamily::ExitLimit
+                   && finite_positive(leg.exit_levels.limit)
+                   && (long_position ? bar.open >= leg.exit_levels.limit
+                                     : bar.open <= leg.exit_levels.limit)) {
+            exit_priority = 3;
+        }
+        const int add_priority = long_position ? 1 : 2;
+        if (exit_priority == 0 || exit_priority < add_priority) continue;
+        const bool add_waits = std::any_of(live_handles_.begin(), live_handles_.end(),
+            [&](const native_order::RequestHandle& live) {
+                if (live.incarnation < handle.incarnation) return false;
+                const auto add = placement_.find(live.incarnation);
+                return add != placement_.end()
+                    && pure_market_add(add->second, leg.from_entry);
+            });
+        if (add_waits) gapped.push_back(handle);
+    }
+    const bool exit_is_buy = !long_position;
+    const double tick = staged_.syminfo.mintick;
+    for (const auto& handle : gapped) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        PlacementSnapshot leg = found->second;
+        const auto result = require_host().cancel(handle);
+        if (result.status != native_order::CancelStatus::Cancelled) continue;
+        found->second.cancellation = {
+            PineCancellationCause::Dependency, 1, 0, handle.incarnation,
+            static_cast<std::int64_t>(leg.source_sequence), handle.incarnation,
+            leg.placement_cycle, leg.legs.revision(), leg.requested_qty, kNaN};
+        retire(handle);
+        native_order::Request request;
+        request.intent = native_order::HostSized{
+            native_order::HostSizedKind::Close, std::nullopt};
+        request.label = leg.source_id;
+        request.comment = leg.comment;
+        if (leg.family == PineOrderFamily::ExitStop) {
+            request.trigger = native_order::Stop{source_trigger_threshold(
+                leg.exit_levels.stop, tick, exit_is_buy, false)};
+        } else {
+            const double snapped = nearest_tick(leg.exit_levels.limit, tick);
+            request.trigger = native_order::Limit{
+                !finite_positive(tick) || snapped == leg.exit_levels.limit
+                    ? leg.exit_levels.limit
+                    : source_trigger_threshold(leg.exit_levels.limit, tick,
+                                               exit_is_buy, true)};
+            // A limit accepted at this opening would book its own level; the
+            // owner's gapped limit fills limit-or-better at the open print.
+            leg.forced_execution_price = source_bar_fill_tick(bar.open, tick);
+        }
+        request.owner = owner_for_close(leg.from_entry, true);
+        const std::string group_name = leg.oca_name.empty()
+            ? leg.source_id + "\x1f" + leg.from_entry : leg.oca_name;
+        request.group = group_for(group_name, 1, static_cast<std::int64_t>(leg.family));
+        leg.cancellation = {};
+        const std::uint64_t family_key = key_for(leg.source_id, leg.from_entry);
+        const SourceId replacement_key = leg.source_id + "\x1f" + leg.from_entry
+            + std::to_string(static_cast<int>(leg.family));
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(leg), false, replacement_key);
+        if (accepted) bracket_families_[family_key].push_back(*accepted);
+    }
+}
+
 void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         const NativeDecisionContext& context) {
     if (!config_.process_orders_on_close
@@ -13176,6 +13294,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     update_l4c_priority();
     apply_open_market_admission(context);
     defer_open_marketable_sells(bar);
+    reaccept_gapped_bracket_behind_same_id_add(bar, context);
     source_shadow_pending_.clear();
     coof_script_bar_ = bar;
     coof_script_bar_valid_ = true;
