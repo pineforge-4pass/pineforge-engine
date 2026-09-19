@@ -34,6 +34,7 @@ from ci_verify import (
     default_runner,
     expected_version,
     main,
+    native_include_independence_command,
     parse_args,
     source_guard_commands,
     validate_config,
@@ -189,9 +190,10 @@ class Scripted:
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
 
     def _cache_values(self) -> dict[str, str]:
-        tutorial = 'OFF' if self.profile == 'native' else 'ON'
-        live = 'ON' if self.profile == 'native' else 'OFF'
+        tutorial = 'OFF' if self.profile in {'native', 'kernel'} else 'ON'
+        live = 'ON' if self.profile in {'native', 'kernel'} else 'OFF'
         sanitizers = 'ON' if self.profile == 'sanitizers' else 'OFF'
+        source_layer = 'OFF' if self.profile == 'kernel' else 'ON'
         build_type = 'Debug' if self.profile in {'debug', 'sanitizers'} else 'Release'
         values = {
             'CMAKE_HOME_DIRECTORY': str(self.source),
@@ -202,6 +204,7 @@ class Scripted:
             'PINEFORGE_BUILD_TESTS': 'ON',
             'PINEFORGE_BUILD_TUTORIAL': tutorial,
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
+            'PINEFORGE_BUILD_SOURCE_LAYER': source_layer,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
             'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
             'PINEFORGE_VERSION_SOURCE': 'FILE',
@@ -243,7 +246,7 @@ class Scripted:
         archive = self.build_dir / 'lib' / 'libpineforge.a'
         archive.parent.mkdir(parents=True, exist_ok=True)
         archive.write_bytes(b'!<arch>\nci-verify-test\n')
-        if self.profile == 'native' or self.exits.get('create_native_binaries'):
+        if self.profile in {'native', 'kernel'} or self.exits.get('create_native_binaries'):
             binary = self.build_dir / 'bin' / 'pineforge-live'
             binary.parent.mkdir(parents=True, exist_ok=True)
             binary.write_bytes(b'live')
@@ -261,7 +264,7 @@ class Scripted:
             return Completed(code, b'', b'install failed\n')
         prefix = self.build_dir / 'ci-install'
         (prefix / 'lib' / 'cmake' / 'PineForge').mkdir(parents=True, exist_ok=True)
-        if self.profile == 'native':
+        if self.profile in {'native', 'kernel'}:
             help_bin = prefix / 'bin' / 'pineforge-live'
             help_bin.parent.mkdir(parents=True, exist_ok=True)
             help_bin.write_bytes(b'live')
@@ -409,7 +412,7 @@ class ConfigValidation(unittest.TestCase):
             validate_config(parse_args(['native', '--curl-dir', str(missing)]))
 
     def test_default_build_dirs_are_profile_isolated(self):
-        for name in ('release', 'debug', 'sanitizers', 'native'):
+        for name in ('release', 'debug', 'sanitizers', 'native', 'kernel'):
             self.assertEqual(default_build_dir(ROOT, name), ROOT / f'build-ci-{name}')
             args = parse_args([name], source=ROOT)
             self.assertEqual(Path(args.build_dir), ROOT / f'build-ci-{name}')
@@ -451,6 +454,21 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'OFF')
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'ON')
         self.assertIn('-DPINEFORGE_ENABLE_SANITIZERS=ON', argv)
+
+    def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
+        values, argv = self.definitions('kernel')
+        self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Release')
+        self.assertEqual(values['PINEFORGE_BUILD_SOURCE_LAYER'], 'OFF')
+        self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
+        self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'OFF')
+        self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'OFF')
+        self.assertIn('-DPINEFORGE_BUILD_SOURCE_LAYER=OFF', argv)
+
+    def test_every_other_profile_keeps_the_source_layer(self):
+        for name in ('release', 'debug', 'sanitizers', 'native'):
+            with self.subTest(profile=name):
+                values, _ = self.definitions(name)
+                self.assertEqual(values['PINEFORGE_BUILD_SOURCE_LAYER'], 'ON')
 
     def test_native_live_on_tutorial_off(self):
         curl = tempfile.TemporaryDirectory()
@@ -862,13 +880,31 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertIn('source-guard-c-abi', failure_stages(summary))
         self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
-    def test_native_include_independence_runs_for_release_and_native_only(self):
-        for profile, expected in (("release", True), ("native", True),
+    def test_native_include_independence_runs_for_release_native_and_kernel_only(self):
+        for profile, expected in (("release", True), ("native", True), ("kernel", True),
                                   ("debug", False), ("sanitizers", False)):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(profile)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual('native-include-independence' in stage_names(summary), expected)
+
+    def test_kernel_asserts_the_kernel_archive_and_others_do_not(self):
+        for profile, expected in (("kernel", True), ("release", False), ("native", False)):
+            with self.subTest(profile=profile):
+                cfg = validate_config(parse_args([profile, '--build-dir', 'tmp-build']))
+                argv = native_include_independence_command(cfg, Path('/tmp/prefix'))
+                self.assertEqual('--kernel-archive' in argv, expected)
+                if expected:
+                    archive = argv[argv.index('--kernel-archive') + 1]
+                    self.assertEqual(Path(archive).name, 'libpineforge_kernel.a')
+
+    def test_kernel_skips_the_receipt_backed_abi_providers(self):
+        code, summary, scripted, _ = self.run_profile('kernel')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertIn('abi-providers-skipped', stage_names(summary))
+        self.assertNotIn('abi-base', scripted.names())
+        self.assertNotIn('abi-v16-frozen', scripted.names())
+        self.assertIn('ctest', scripted.names())
 
     def test_twin_parity_guard_runs_for_release_and_native_only(self):
         for profile, expected in (("release", True), ("native", True),

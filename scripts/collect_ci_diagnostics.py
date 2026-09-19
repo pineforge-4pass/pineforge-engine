@@ -55,7 +55,9 @@ def copy_regular(source: Path, target: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, required=True)
-    parser.add_argument("--profile", choices=("release", "debug", "sanitizers", "native"), required=True)
+    parser.add_argument("--profile",
+                        choices=("release", "debug", "sanitizers", "native", "kernel"),
+                        required=True)
     parser.add_argument("--output", type=Path, default=Path("ci-diagnostics"))
     parser.add_argument("--dependency-dir", type=Path,
                         help="optional native dependency logs; binaries and caches are excluded")

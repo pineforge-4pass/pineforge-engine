@@ -35,6 +35,12 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 option(PINEFORGE_BUILD_TESTS "Build the C++ test suite" ON)
 option(PINEFORGE_BUILD_EXAMPLES "Build example consumers (none yet)" OFF)
+# OFF builds the kernel alone: libpineforge.a then holds exactly the objects
+# of PineForge::kernel, the source-only headers are not installed, and every
+# Pine-bound target (corpus, tutorial, bench, the strategy.cpp example and
+# the source-including tests) is skipped with a STATUS line.
+option(PINEFORGE_BUILD_SOURCE_LAYER
+    "Build the TradingView/Pine source-adapter layer (src/source, src/compat/pine)" ON)
 option(PINEFORGE_BUILD_CORPUS_STRATEGIES
     "Build a strategy.so per .pine in corpus/ from its generated.cpp" OFF)
 option(PINEFORGE_BUILD_TUTORIAL
@@ -78,9 +84,13 @@ else()
 endif()
 
 # === pineforge library =================================================
+# The TradingView/Pine source-adapter layer. Nothing in the kernel list below
+# includes a src/source or src/compat/pine header, so these TUs are appended
+# only when PINEFORGE_BUILD_SOURCE_LAYER is ON.
 set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/compat/pine/exit_activation.cpp
     src/compat/pine/exit_lifecycle.cpp
+    src/compat/pine/market_admission.cpp
     src/compat/pine/order_birth.cpp
     src/compat/pine/order_priority.cpp
     src/compat/pine/reservation_expansion.cpp
@@ -93,7 +103,10 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_state_hash.cpp
 )
 
-add_library(pineforge STATIC
+# The kernel: the independent backtest + forward-execution state machine.
+# These TUs never reach the source layer, so they also stand alone as
+# PineForge::kernel.
+set(PINEFORGE_KERNEL_SOURCES
     src/c_abi.cpp
     src/engine_aux_security.cpp
     src/engine_lower_tf.cpp
@@ -108,7 +121,6 @@ add_library(pineforge STATIC
     src/engine_state_hash.cpp
     src/engine_stream.cpp
     src/market_admission.cpp
-    src/compat/pine/market_admission.cpp
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
@@ -130,54 +142,80 @@ add_library(pineforge STATIC
     src/native_calendar.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
-    ${PINEFORGE_SOURCE_LAYER_SOURCES}
 )
+
+# The kernel-only archive. Same objects, same flags as the kernel half of
+# libpineforge.a — a consumer that never speaks Pine links this one.
+add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})
+add_library(PineForge::kernel ALIAS pineforge_kernel)
+# So a find_package(PineForge) consumer spells it the same way an in-tree one
+# does: PineForge::kernel, not PineForge::pineforge_kernel.
+set_target_properties(pineforge_kernel PROPERTIES EXPORT_NAME kernel)
+
+# libpineforge.a always carries the whole kernel, so linking `pineforge`
+# alone never needs `pineforge_kernel`. The kernel TUs are compiled a second
+# time for it rather than shared through an OBJECT library: identical flags,
+# and no change to the archive's object set.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(pineforge STATIC
+        ${PINEFORGE_KERNEL_SOURCES}
+        ${PINEFORGE_SOURCE_LAYER_SOURCES}
+    )
+else()
+    add_library(pineforge STATIC ${PINEFORGE_KERNEL_SOURCES})
+endif()
 
 # Canonical alias for downstream find_package(PineForge) consumers.
 add_library(PineForge::pineforge ALIAS pineforge)
 
-# Hidden visibility by default — only symbols explicitly tagged with
-# PF_API in <pineforge/pineforge.h> are exported in any .so that
-# statically links libpineforge.a. Internal C++ classes (BacktestEngine,
-# ta::*, internal::*) remain hidden post-link.
-target_compile_options(pineforge PRIVATE
-    # Optimization level only for non-Debug configs — baking -O2 here
-    # unconditionally would defeat -DCMAKE_BUILD_TYPE=Debug (no breakpoints
-    # / inlined-away locals). The FP flags below stay unconditional because
-    # parity depends on them in every build type.
-    $<$<NOT:$<CONFIG:Debug>>:-O2>
-    -fPIC
-    -fvisibility=hidden
-    -fvisibility-inlines-hidden
-    -Wall
-    -Wextra
-    -Wpedantic
-    -Wno-unused-parameter
-    # Disable floating-point contraction (FMA generation). TradingView's
-    # Pine runtime executes in JavaScript, which has no FMA primitive —
-    # every multiply-add is two separately-rounded operations. With the
-    # default -O2 + clang behaviour (`-ffp-contract=on` for in-statement
-    # contraction) the engine emits FMA on ARM64 / AVX2, producing
-    # results 1-2 ULP closer to the true value than Pine. That sounds
-    # like a win but it's the wrong target — we want bit-exact parity
-    # with TradingView, not "more accurate". The 1-2 ULP drift compounds
-    # across hundreds of RMA iterations and can flip RSI threshold
-    # crossings on close-call bars (see tests/test_ta_rma_warmup.cpp).
-    # `-ffp-contract=off` forces the compiler to round each * and + to
-    # IEEE-754 double independently, matching the Pine reference.
-    -ffp-contract=off
-)
+# Every setting below is applied to both archives: the kernel objects must
+# be compiled identically whichever library they end up in.
+set(PINEFORGE_LIBRARY_TARGETS pineforge pineforge_kernel)
 
-target_include_directories(pineforge
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
+foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
+    # Hidden visibility by default — only symbols explicitly tagged with
+    # PF_API in <pineforge/pineforge.h> are exported in any .so that
+    # statically links libpineforge.a. Internal C++ classes (BacktestEngine,
+    # ta::*, internal::*) remain hidden post-link.
+    target_compile_options(${_pf_library} PRIVATE
+        # Optimization level only for non-Debug configs — baking -O2 here
+        # unconditionally would defeat -DCMAKE_BUILD_TYPE=Debug (no breakpoints
+        # / inlined-away locals). The FP flags below stay unconditional because
+        # parity depends on them in every build type.
+        $<$<NOT:$<CONFIG:Debug>>:-O2>
+        -fPIC
+        -fvisibility=hidden
+        -fvisibility-inlines-hidden
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wno-unused-parameter
+        # Disable floating-point contraction (FMA generation). TradingView's
+        # Pine runtime executes in JavaScript, which has no FMA primitive —
+        # every multiply-add is two separately-rounded operations. With the
+        # default -O2 + clang behaviour (`-ffp-contract=on` for in-statement
+        # contraction) the engine emits FMA on ARM64 / AVX2, producing
+        # results 1-2 ULP closer to the true value than Pine. That sounds
+        # like a win but it's the wrong target — we want bit-exact parity
+        # with TradingView, not "more accurate". The 1-2 ULP drift compounds
+        # across hundreds of RMA iterations and can flip RSI threshold
+        # crossings on close-call bars (see tests/test_ta_rma_warmup.cpp).
+        # `-ffp-contract=off` forces the compiler to round each * and + to
+        # IEEE-754 double independently, matching the Pine reference.
+        -ffp-contract=off
+    )
 
-target_link_libraries(pineforge PUBLIC Eigen3::Eigen)
+    target_include_directories(${_pf_library}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(${_pf_library} PUBLIC Eigen3::Eigen)
+endforeach()
 
 # === Coverage instrumentation (opt-in) =================================
 # Build with:
@@ -194,8 +232,10 @@ if(PINEFORGE_ENABLE_COVERAGE)
         message(FATAL_ERROR
             "PINEFORGE_ENABLE_COVERAGE requires Clang or GCC (got ${CMAKE_CXX_COMPILER_ID})")
     endif()
-    target_compile_options(pineforge PRIVATE ${_pf_cov_flags})
-    target_link_options(pineforge PUBLIC ${_pf_cov_flags})
+    foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
+        target_compile_options(${_pf_library} PRIVATE ${_pf_cov_flags})
+        target_link_options(${_pf_library} PUBLIC ${_pf_cov_flags})
+    endforeach()
     message(STATUS "Coverage instrumentation: ${_pf_cov_flags}")
 endif()
 
@@ -203,25 +243,29 @@ endif()
 # ASan + UBSan. Link options are PUBLIC so anything linking libpineforge.a
 # (tests, corpus strategy.so) picks up the runtime.
 if(PINEFORGE_ENABLE_SANITIZERS)
-    # Compile options must be PUBLIC, not PRIVATE: a consumer TU (test, strategy
-    # .so) that links the instrumented library but compiles WITHOUT -fsanitize
-    # gets a different Eigen alignment view than matrix.cpp, so an Eigen matrix
-    # allocated in the library and freed (header-inlined) in the consumer hits a
-    # cross-TU aligned-free mismatch -> ASan "bad-free" (seen on Linux; masked by
-    # macOS's allocator). PUBLIC keeps instrumentation consistent everywhere.
-    target_compile_options(pineforge PUBLIC
-        -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(pineforge PUBLIC -fsanitize=address,undefined)
-    # Belt-and-suspenders: disable Eigen's manual over-alignment under the
-    # sanitizer build so Eigen uses plain malloc/free (no offset pointers to
-    # mis-free). Sanitizer-lane only; normal builds keep full alignment.
-    target_compile_definitions(pineforge PUBLIC EIGEN_MAX_ALIGN_BYTES=0)
+    foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
+        # Compile options must be PUBLIC, not PRIVATE: a consumer TU (test, strategy
+        # .so) that links the instrumented library but compiles WITHOUT -fsanitize
+        # gets a different Eigen alignment view than matrix.cpp, so an Eigen matrix
+        # allocated in the library and freed (header-inlined) in the consumer hits a
+        # cross-TU aligned-free mismatch -> ASan "bad-free" (seen on Linux; masked by
+        # macOS's allocator). PUBLIC keeps instrumentation consistent everywhere.
+        target_compile_options(${_pf_library} PUBLIC
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${_pf_library} PUBLIC -fsanitize=address,undefined)
+        # Belt-and-suspenders: disable Eigen's manual over-alignment under the
+        # sanitizer build so Eigen uses plain malloc/free (no offset pointers to
+        # mis-free). Sanitizer-lane only; normal builds keep full alignment.
+        target_compile_definitions(${_pf_library} PUBLIC EIGEN_MAX_ALIGN_BYTES=0)
+    endforeach()
     message(STATUS "Sanitizers: -fsanitize=address,undefined (Eigen alignment disabled)")
 endif()
 
 # === Strict warnings (opt-in) =========================================
 if(PINEFORGE_STRICT_WARNINGS)
-    target_compile_options(pineforge PRIVATE -Wconversion -Wsign-conversion)
+    foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
+        target_compile_options(${_pf_library} PRIVATE -Wconversion -Wsign-conversion)
+    endforeach()
     message(STATUS "Strict warnings: -Wconversion -Wsign-conversion")
 endif()
 
@@ -241,12 +285,20 @@ if(PINEFORGE_BUILD_TESTS)
 endif()
 
 # === Tutorial strategy (opt-out) =======================================
-if(PINEFORGE_BUILD_TUTORIAL)
+if(PINEFORGE_BUILD_TUTORIAL AND NOT PINEFORGE_BUILD_SOURCE_LAYER)
+    message(STATUS
+        "Tutorial strategy skipped: it is Pine-bound and "
+        "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
+elseif(PINEFORGE_BUILD_TUTORIAL)
     add_subdirectory(tutorial)
 endif()
 
 # === Corpus strategies (opt-in) ========================================
-if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
+if(PINEFORGE_BUILD_CORPUS_STRATEGIES AND NOT PINEFORGE_BUILD_SOURCE_LAYER)
+    message(STATUS
+        "Corpus strategies skipped: every generated.cpp is Pine-bound and "
+        "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
+elseif(PINEFORGE_BUILD_CORPUS_STRATEGIES)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/CMakeLists.txt")
         add_subdirectory(corpus)
     else()
@@ -267,7 +319,11 @@ endif()
 #   cmake --build build --target bench_strategies -j
 option(PINEFORGE_BUILD_BENCH_STRATEGIES
     "Build benchmarks bench strategies (.dylib/.so per strategy)" OFF)
-if(PINEFORGE_BUILD_BENCH_STRATEGIES)
+if(PINEFORGE_BUILD_BENCH_STRATEGIES AND NOT PINEFORGE_BUILD_SOURCE_LAYER)
+    message(STATUS
+        "Bench strategies skipped: every generated.cpp is Pine-bound and "
+        "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
+elseif(PINEFORGE_BUILD_BENCH_STRATEGIES)
     set(_bench_strat_cmake
         "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/assets/strategies/CMakeLists.txt")
     if(EXISTS "${_bench_strat_cmake}")
@@ -296,7 +352,7 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-install(TARGETS pineforge
+install(TARGETS pineforge pineforge_kernel
     EXPORT PineForgeTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -304,10 +360,23 @@ install(TARGETS pineforge
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-install(DIRECTORY include/pineforge
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
-)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    install(DIRECTORY include/pineforge
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+    )
+else()
+    # Kernel-only: the source-adapter headers declare a layer this archive
+    # does not contain, so installing them would hand a consumer link errors
+    # instead of a compile error.
+    install(DIRECTORY include/pineforge
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING
+            PATTERN "*.h" PATTERN "*.hpp"
+            PATTERN "source" EXCLUDE
+            PATTERN "compat" EXCLUDE
+    )
+endif()
 
 # Generated version header — installed alongside the curated ones.
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/pineforge/version.h"
@@ -352,5 +421,6 @@ message(STATUS "  build tests:       ${PINEFORGE_BUILD_TESTS}")
 message(STATUS "  build tutorial:    ${PINEFORGE_BUILD_TUTORIAL}")
 message(STATUS "  build corpus:      ${PINEFORGE_BUILD_CORPUS_STRATEGIES}")
 message(STATUS "  build live runner: ${PINEFORGE_BUILD_LIVE_RUNNER}")
+message(STATUS "  build src layer:   ${PINEFORGE_BUILD_SOURCE_LAYER}")
 message(STATUS "  build bench strat: ${PINEFORGE_BUILD_BENCH_STRATEGIES}")
 message(STATUS "")

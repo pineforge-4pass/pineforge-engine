@@ -799,6 +799,79 @@ list(APPEND TEST_SOURCES
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+# === Kernel-only registration =========================================
+# With PINEFORGE_BUILD_SOURCE_LAYER=OFF libpineforge.a holds the kernel
+# alone, so a test TU that reaches a pineforge/source or compat/pine header
+# has nothing to link against. The reach is resolved here instead of being
+# listed by hand: a switched-route twin that includes its L0 carrier
+# verbatim inherits whatever that carrier includes.
+function(pineforge_test_reaches_source_layer out_var entry)
+    set(_pending "${entry}")
+    set(_seen)
+    while(_pending)
+        list(POP_FRONT _pending _current)
+        if(_current IN_LIST _seen)
+            continue()
+        endif()
+        list(APPEND _seen "${_current}")
+        if(NOT EXISTS "${_current}")
+            continue()
+        endif()
+        get_filename_component(_directory "${_current}" DIRECTORY)
+        file(STRINGS "${_current}" _includes REGEX "^[ \t]*#[ \t]*include")
+        foreach(_line IN LISTS _includes)
+            if(_line MATCHES "pineforge/(source|compat/pine)/")
+                set(${out_var} TRUE PARENT_SCOPE)
+                return()
+            endif()
+            if(_line MATCHES "\"([^\"]+)\"")
+                list(APPEND _pending "${_directory}/${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+    endwhile()
+    set(${out_var} FALSE PARENT_SCOPE)
+endfunction()
+
+# add_test/set_tests_properties rows that name a skipped twin would either
+# break configuration or register a command that is not a target, so both
+# are routed through existence-checked wrappers. Under the default build
+# every row still exists and nothing is filtered.
+function(pineforge_add_twin_test name target)
+    if(TARGET ${target})
+        add_test(NAME ${name} COMMAND ${target} ${ARGN})
+    endif()
+endfunction()
+
+function(pineforge_clear_test_labels)
+    set(_rows)
+    foreach(_row IN LISTS ARGN)
+        if(TEST ${_row})
+            list(APPEND _rows ${_row})
+        endif()
+    endforeach()
+    if(_rows)
+        set_tests_properties(${_rows} PROPERTIES LABELS "")
+    endif()
+endfunction()
+
+if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_pf_source_bound_tests)
+    foreach(test_name IN LISTS TEST_SOURCES)
+        pineforge_test_reaches_source_layer(_pf_reaches
+            "${CMAKE_CURRENT_SOURCE_DIR}/${test_name}.cpp")
+        if(_pf_reaches)
+            list(APPEND _pf_source_bound_tests ${test_name})
+        endif()
+    endforeach()
+    if(_pf_source_bound_tests)
+        list(REMOVE_ITEM TEST_SOURCES ${_pf_source_bound_tests})
+        list(LENGTH _pf_source_bound_tests _pf_source_bound_count)
+        message(STATUS
+            "Kernel-only tests: ${_pf_source_bound_count} source-bound test TUs "
+            "skipped (PINEFORGE_BUILD_SOURCE_LAYER is OFF)")
+    endif()
+endif()
+
 add_test(NAME test_cmake_version_source
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
 add_test(NAME test_ci_verify
@@ -830,19 +903,23 @@ if(PINEFORGE_ENABLE_COVERAGE)
         list(APPEND _pf_script_cpp_abi_flags --extra-flag=--coverage)
     endif()
 endif()
-add_test(
-    NAME test_script_cpp_abi
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_script_cpp_abi.py
-            --compiler ${CMAKE_CXX_COMPILER}
-            --library $<TARGET_FILE:pineforge>
-            --include ${PROJECT_SOURCE_DIR}/include
-            --generated-include ${PROJECT_BINARY_DIR}/include
-            --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
-            --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
-            ${_pf_abi_receipt_mode}
-            ${_pf_script_cpp_abi_flags}
-)
-set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+# The script ABI pair derives from pineforge::source::PineStrategyHost.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_test(
+        NAME test_script_cpp_abi
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_script_cpp_abi.py
+                --compiler ${CMAKE_CXX_COMPILER}
+                --library $<TARGET_FILE:pineforge>
+                --include ${PROJECT_SOURCE_DIR}/include
+                --generated-include ${PROJECT_BINARY_DIR}/include
+                --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
+                --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
+                ${_pf_abi_receipt_mode}
+                ${_pf_script_cpp_abi_flags}
+    )
+    set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
+
 add_test(
     NAME test_script_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_script_cpp_abi.py
@@ -895,35 +972,42 @@ set(PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT
 set(PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT
     "${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json"
     CACHE FILEPATH "Prepared actual ab9714b frozen epoch 16 ABI provider receipt")
-add_test(NAME test_settlement_cpp_abi
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
-        --compiler ${CMAKE_CXX_COMPILER}
-        --library $<TARGET_FILE:pineforge>
-        --include ${PROJECT_SOURCE_DIR}/include
-        --generated-include ${PROJECT_BINARY_DIR}/include
-        --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
-        --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
-        --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
-        --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
-        --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
-        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
-        --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
-        ${_pf_abi_receipt_mode}
-        ${_pf_script_cpp_abi_flags})
-set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+# Same pairing TU, against the frozen settlement providers.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_test(NAME test_settlement_cpp_abi
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
+            --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
+            --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
+            --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
+            --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
+            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+            --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
+            ${_pf_abi_receipt_mode}
+            ${_pf_script_cpp_abi_flags})
+    set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+endif()
+
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
-add_test(NAME test_aggregate_cpp_versions_runtime
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
-        --compiler ${CMAKE_CXX_COMPILER}
-        --library $<TARGET_FILE:pineforge>
-        --include ${PROJECT_SOURCE_DIR}/include
-        --generated-include ${PROJECT_BINARY_DIR}/include
-        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
-        --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
-        ${_pf_abi_receipt_mode}
-        ${_pf_script_cpp_abi_flags})
-set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+# Same pairing TU, for the v16/v17 ownership control.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_test(NAME test_aggregate_cpp_versions_runtime
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+            --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
+            ${_pf_abi_receipt_mode}
+            ${_pf_script_cpp_abi_flags})
+    set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
 
 add_test(
     NAME test_derive_corpus_feeds
@@ -1077,24 +1161,15 @@ foreach(test_name ${TEST_SOURCES})
     endif()
 endforeach()
 
-add_test(NAME test_l8c_short_seed_p0_10
-         COMMAND test_l8c_short_seed_guards p0-10)
-add_test(NAME test_l8c_short_seed_p1_16
-         COMMAND test_l8c_short_seed_guards p1-16)
-add_test(NAME test_l8c_short_seed_p1_18
-         COMMAND test_l8c_short_seed_guards p1-18)
-add_test(NAME test_l8c_ordering_p0_11
-         COMMAND test_l8c_adapter_ordering p0-11)
-add_test(NAME test_l8c_ordering_p1_13
-         COMMAND test_l8c_adapter_ordering p1-13)
-add_test(NAME test_l8c_ordering_p1_14
-         COMMAND test_l8c_adapter_ordering p1-14)
-add_test(NAME test_l8c_kernel_p1_21
-         COMMAND test_l8c_kernel_delta_rulings p1-21)
-add_test(NAME test_l8c_kernel_p1_22
-         COMMAND test_l8c_kernel_delta_rulings p1-22)
-add_test(NAME test_l8c_kernel_p1_24
-         COMMAND test_l8c_kernel_delta_rulings p1-24)
+pineforge_add_twin_test(test_l8c_short_seed_p0_10 test_l8c_short_seed_guards p0-10)
+pineforge_add_twin_test(test_l8c_short_seed_p1_16 test_l8c_short_seed_guards p1-16)
+pineforge_add_twin_test(test_l8c_short_seed_p1_18 test_l8c_short_seed_guards p1-18)
+pineforge_add_twin_test(test_l8c_ordering_p0_11 test_l8c_adapter_ordering p0-11)
+pineforge_add_twin_test(test_l8c_ordering_p1_13 test_l8c_adapter_ordering p1-13)
+pineforge_add_twin_test(test_l8c_ordering_p1_14 test_l8c_adapter_ordering p1-14)
+pineforge_add_twin_test(test_l8c_kernel_p1_21 test_l8c_kernel_delta_rulings p1-21)
+pineforge_add_twin_test(test_l8c_kernel_p1_22 test_l8c_kernel_delta_rulings p1-22)
+pineforge_add_twin_test(test_l8c_kernel_p1_24 test_l8c_kernel_delta_rulings p1-24)
 
 # R4-D L8a: each Fable-delta finding remains an independently addressable
 # native-route witness while sharing one compile unit for the common host
@@ -1110,49 +1185,54 @@ foreach(l8a_case
         affordability_surplus
         cap_residuals
         product_day_key)
-    add_test(NAME test_l8a_${l8a_case}
-             COMMAND test_l8a_adapter_policy_delta ${l8a_case})
+    pineforge_add_twin_test(test_l8a_${l8a_case} test_l8a_adapter_policy_delta ${l8a_case})
 endforeach()
 
-target_compile_definitions(test_l4g_runtime_budget PRIVATE
-    PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
-set(_pf_runtime_budget_mode)
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(_pf_runtime_budget_mode --candidate-only)
-elseif("$ENV{PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY}" STREQUAL "1")
-    # A40 rev 6: hosted macOS runners are not stable timing hosts (the same
-    # tree measured 12.8x and 17.2x best-of-five an hour apart), so the CI
-    # workflow sets this for its macOS lane. The relative gate still runs on
-    # every local Release build and on the Linux CI lane.
-    set(_pf_runtime_budget_mode --candidate-only)
+# The runtime-budget candidate is a Pine-bound TU: no target, no row.
+if(TARGET test_l4g_runtime_budget)
+    target_compile_definitions(test_l4g_runtime_budget PRIVATE
+        PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
+    set(_pf_runtime_budget_mode)
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(_pf_runtime_budget_mode --candidate-only)
+    elseif("$ENV{PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY}" STREQUAL "1")
+        # A40 rev 6: hosted macOS runners are not stable timing hosts (the same
+        # tree measured 12.8x and 17.2x best-of-five an hour apart), so the CI
+        # workflow sets this for its macOS lane. The relative gate still runs on
+        # every local Release build and on the Linux CI lane.
+        set(_pf_runtime_budget_mode --candidate-only)
+    endif()
+    add_test(NAME test_l4g_runtime_budget
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
+            --candidate $<TARGET_FILE:test_l4g_runtime_budget>
+            --source ${CMAKE_CURRENT_SOURCE_DIR}/test_l4g_runtime_budget.cpp
+            --csv ${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv
+            --compiler ${CMAKE_CXX_COMPILER}
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --compile-commands ${PROJECT_BINARY_DIR}/compile_commands.json
+            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+            ${_pf_abi_receipt_mode}
+            ${_pf_runtime_budget_mode})
+    set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 endif()
-add_test(NAME test_l4g_runtime_budget
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
-        --candidate $<TARGET_FILE:test_l4g_runtime_budget>
-        --source ${CMAKE_CURRENT_SOURCE_DIR}/test_l4g_runtime_budget.cpp
-        --csv ${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv
-        --compiler ${CMAKE_CXX_COMPILER}
-        --generated-include ${PROJECT_BINARY_DIR}/include
-        --compile-commands ${PROJECT_BINARY_DIR}/compile_commands.json
-        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
-        ${_pf_abi_receipt_mode}
-        ${_pf_runtime_budget_mode})
-set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
 add_test(NAME test_l4g_runtime_budget_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_runtime_budget.py)
 
 
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.
-add_test(NAME test_live_order_derived COMMAND test_native_live_order_derived_l4d)
-add_test(NAME test_pending_order_v1_canary COMMAND test_native_pending_order_v1_canary_l4d)
-add_test(NAME test_source_fifo_endpoints COMMAND test_native_source_fifo_endpoints_l4d)
+pineforge_add_twin_test(test_live_order_derived test_native_live_order_derived_l4d)
+pineforge_add_twin_test(test_pending_order_v1_canary
+                        test_native_pending_order_v1_canary_l4d)
+pineforge_add_twin_test(test_source_fifo_endpoints
+                        test_native_source_fifo_endpoints_l4d)
 
 # These restored twins already execute green through the switched route. Keep
 # their CTest rows in the required profile rather than hiding green evidence
 # behind the pending policy label.
-set_tests_properties(
-    test_native_pending_order_v1_canary_l4d
+pineforge_clear_test_labels(
+test_native_pending_order_v1_canary_l4d
     test_native_session_key_derivation_l4d
     test_native_live_state_hash_l4d
     test_metrics_l4d
@@ -1174,42 +1254,49 @@ set_tests_properties(
     test_run_inputs_overrides_l4d
     test_settlement_observation_boundary_l4d
     test_stop_decline_continue_path_l4d
-    test_taro_mc_close_residue_l4d
-    PROPERTIES LABELS "")
+    test_taro_mc_close_residue_l4d)
 
 # R4-D L0 carriers are included verbatim by their switched-route twin targets.
 # There is deliberately no ORACLE_TEST_SOURCES list: a source list that does
 # not build targets is not executable oracle coverage.
-add_test(NAME test_oracle_deferred_birth COMMAND test_native_oracle_deferred_birth_l2)
-add_test(NAME test_oracle_relative_exit COMMAND test_native_oracle_relative_exit_l2)
-add_test(NAME test_oracle_reversal_close_only COMMAND test_native_oracle_reversal_close_only_l2)
-add_test(NAME test_oracle_reversal_same_bar_tx COMMAND test_native_oracle_reversal_same_bar_tx_l2)
-add_test(NAME test_oracle_reversal_replaced_percent COMMAND test_native_oracle_reversal_replaced_percent_l2)
-add_test(NAME test_oracle_reversal_later_tick COMMAND test_native_oracle_reversal_later_tick_l2)
-add_test(NAME test_oracle_short_seed_percent COMMAND test_native_oracle_short_seed_percent_full_l2)
-add_test(NAME test_oracle_fx COMMAND test_native_oracle_fx_l2)
-add_test(NAME test_oracle_coof COMMAND test_native_oracle_coof_l2)
-add_test(NAME test_oracle_pooc_freeze COMMAND test_native_oracle_pooc_freeze_l2)
-add_test(NAME test_oracle_pooc_immediate COMMAND test_native_oracle_pooc_immediate_l2)
-add_test(NAME test_oracle_magnifier_distribution COMMAND test_native_oracle_magnifier_distribution_l2)
-add_test(NAME test_oracle_day_key COMMAND test_native_oracle_day_key_l2)
-add_test(NAME test_oracle_frozen_size COMMAND test_native_oracle_frozen_size_full_l2)
-add_test(NAME test_oracle_deferred_any_witnesses COMMAND test_native_oracle_deferred_any_witnesses_l2)
-add_test(NAME test_oracle_magnifier_barstate COMMAND test_native_oracle_magnifier_barstate_l2)
-add_test(NAME test_oracle_more_than_64_fills COMMAND test_native_oracle_more_than_64_fills_l2)
+pineforge_add_twin_test(test_oracle_deferred_birth test_native_oracle_deferred_birth_l2)
+pineforge_add_twin_test(test_oracle_relative_exit test_native_oracle_relative_exit_l2)
+pineforge_add_twin_test(test_oracle_reversal_close_only
+                        test_native_oracle_reversal_close_only_l2)
+pineforge_add_twin_test(test_oracle_reversal_same_bar_tx
+                        test_native_oracle_reversal_same_bar_tx_l2)
+pineforge_add_twin_test(test_oracle_reversal_replaced_percent
+                        test_native_oracle_reversal_replaced_percent_l2)
+pineforge_add_twin_test(test_oracle_reversal_later_tick
+                        test_native_oracle_reversal_later_tick_l2)
+pineforge_add_twin_test(test_oracle_short_seed_percent
+                        test_native_oracle_short_seed_percent_full_l2)
+pineforge_add_twin_test(test_oracle_fx test_native_oracle_fx_l2)
+pineforge_add_twin_test(test_oracle_coof test_native_oracle_coof_l2)
+pineforge_add_twin_test(test_oracle_pooc_freeze test_native_oracle_pooc_freeze_l2)
+pineforge_add_twin_test(test_oracle_pooc_immediate test_native_oracle_pooc_immediate_l2)
+pineforge_add_twin_test(test_oracle_magnifier_distribution
+                        test_native_oracle_magnifier_distribution_l2)
+pineforge_add_twin_test(test_oracle_day_key test_native_oracle_day_key_l2)
+pineforge_add_twin_test(test_oracle_frozen_size test_native_oracle_frozen_size_full_l2)
+pineforge_add_twin_test(test_oracle_deferred_any_witnesses
+                        test_native_oracle_deferred_any_witnesses_l2)
+pineforge_add_twin_test(test_oracle_magnifier_barstate
+                        test_native_oracle_magnifier_barstate_l2)
+pineforge_add_twin_test(test_oracle_more_than_64_fills
+                        test_native_oracle_more_than_64_fills_l2)
 
 # A20 fixture-facade projections preserve the original oracle literals while
 # replacing retired owner reads with the adapter's read-only view.
-add_test(NAME test_oracle_short_seed
-         COMMAND test_native_oracle_short_seed_full_l2)
-add_test(NAME test_oracle_stop_snapshot
-         COMMAND test_native_oracle_stop_snapshot_full_l2)
+pineforge_add_twin_test(test_oracle_short_seed test_native_oracle_short_seed_full_l2)
+pineforge_add_twin_test(test_oracle_stop_snapshot
+                        test_native_oracle_stop_snapshot_full_l2)
 
 # R4-D L5c/L6c: these assigned twins now reproduce their legacy source-policy
 # literals on the switched native route. L6c also completed the path-order,
 # cancellation, integration-close, and explicit off-grid reduction rows.
-set_tests_properties(
-    test_aapl15_margin_brackets_l4a
+pineforge_clear_test_labels(
+test_aapl15_margin_brackets_l4a
     test_carried_pooc_short_margin_state_l4a
     test_integer_short_margin_state_l4a
     test_intraday_cap_auto_close_l4a
@@ -1239,8 +1326,7 @@ set_tests_properties(
     test_market_entry_affordability_l4b
     test_qty_step_epsilon_floor_l4b
     test_stop_entry_placement_open_qty_l4b
-    test_oracle_stop_snapshot
-    PROPERTIES LABELS "")
+    test_oracle_stop_snapshot)
 add_test(NAME test_oracle_twin_census
          COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_twin_census.py)
 add_test(NAME test_oracle_sha256_pin
@@ -1263,7 +1349,7 @@ target_compile_options(test_c_abi PRIVATE -UNDEBUG)
 if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
 endif()
-add_test(NAME test_c_abi COMMAND test_c_abi)
+pineforge_add_twin_test(test_c_abi test_c_abi)
 
 add_test(NAME test_market_admission_schema COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/check_market_admission_schema.py)
@@ -1288,8 +1374,8 @@ target_compile_definitions(test_native_calendar_driver_contract PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256}")
 # R4-D L5a: these restored twins now pass on the merged switched route.  Keep
 # only the root-visible generic-kernel STOP rows under the interim label.
-set_tests_properties(
-    test_bracket_lifecycle_declined_reversal_l4c
+pineforge_clear_test_labels(
+test_bracket_lifecycle_declined_reversal_l4c
     test_dropped_reversal_mc_first_l4c
     test_exit_bracket_position_cycle_lifetime_l4c
     test_prearmed_exit_path_cursor_l4c
@@ -1305,14 +1391,13 @@ set_tests_properties(
     test_sizing_basis_mintick_l4b
     test_tv_money_band_l4b
     test_tv_money_carried_pooc_l4b
-    test_tv_money_precision_l4b
-    PROPERTIES LABELS "")
+    test_tv_money_precision_l4b)
 
 # R4-D L5b: these restored sizing, money, admission, deferred-close and
 # source-projection twins now pass on the switched native route. Keep the
 # required rows in the unfiltered profile without any exclusion label.
-set_tests_properties(
-    test_declined_reversal_close_leg_l4c
+pineforge_clear_test_labels(
+test_declined_reversal_close_leg_l4c
     test_famae_declined_reversal_trail_gap_l4c
     test_famx_declined_reversal_trail_leg_l4c
     test_multi_tier_exit_precedence_l4c
@@ -1348,14 +1433,13 @@ set_tests_properties(
     test_pooc_flat_signal_cost_l4d
     test_default_pct_stop_sizing_l4b
     test_percent_equity_open_entry_fee_l4b
-    test_source_fifo_endpoints
-    PROPERTIES LABELS "")
+    test_source_fifo_endpoints)
 
 # R4-D L6a: the merged-tree risk, margin, admission, stream-preflight and
 # verification-apparatus rows are complete.  Keep the explicit final override
 # adjacent to the earlier lane labels so every repaired witness is required.
-set_tests_properties(
-    test_bracket_lifecycle_declined_reversal_l4c
+pineforge_clear_test_labels(
+test_bracket_lifecycle_declined_reversal_l4c
     test_ci_verify
     test_direct_short_reversal_affordability_l4b
     test_dropped_reversal_mc_first_l4c
@@ -1367,25 +1451,23 @@ set_tests_properties(
     test_pooc_money_admission_l4b
     test_pooc_open_money_event_l4b
     test_script_run_prepare_l4d
-    test_streaming_l4d
-    PROPERTIES LABELS "")
+    test_streaming_l4d)
 
 # R4-D L7r: the final residual trail booking row now composes with the
 # round-3c adapter policies and is part of every unfiltered profile.
-set_tests_properties(test_trail_fill_snap_l4c PROPERTIES LABELS "")
+pineforge_clear_test_labels(test_trail_fill_snap_l4c)
 
 # R4-D L6b: the round-3c sizing/ShortSeed composition regressions and the
 # remaining COOF source-cadence rows are repaired on the fully merged tree.
-set_tests_properties(
-    test_calc_on_order_fills_l4c
+pineforge_clear_test_labels(
+test_calc_on_order_fills_l4c
     test_coof_market_limit_recross_l4c
     test_coof_open_recalc_context_l4c
-    test_direct_short_reversal_affordability_l4b
-    PROPERTIES LABELS "")
+    test_direct_short_reversal_affordability_l4b)
 # R4-D L6f: the merged-tree sampled-path, tick-price, trail-state,
 # request.security and stream-cadence policies now satisfy their restored rows.
-set_tests_properties(
-    test_trail_close_restart_no_fold_l4c
+pineforge_clear_test_labels(
+test_trail_close_restart_no_fold_l4c
     test_cascade_exit_gapjump_l4c
     test_coof_chart_tick_touch_l4c
     test_coof_resting_stop_siblings_l4c
@@ -1394,5 +1476,4 @@ set_tests_properties(
     test_trail_ref_entry_bar_extreme_l4c
     test_zero_offset_trail_rides_l4c
     test_magnifier_real_bars_l4b
-    test_streaming_l4d
-    PROPERTIES LABELS "")
+    test_streaming_l4d)

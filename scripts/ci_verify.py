@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
-Profiles: release, debug, sanitizers, native. Default build dir build-ci-PROFILE.
+Profiles: release, debug, sanitizers, native, kernel. Default build dir build-ci-PROFILE.
 Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14/v15/v16 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
@@ -32,7 +32,7 @@ from prepare_settlement_cpp_abi_base import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ('release', 'debug', 'sanitizers', 'native')
+PROFILES = ('release', 'debug', 'sanitizers', 'native', 'kernel')
 DEFAULT_JOBS = 4
 JOBS_MIN, JOBS_MAX = 1, 64
 SCHEMA = 'pineforge-ci-verify/v1'
@@ -53,7 +53,7 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-native-versions', ['scripts/check_native_cpp_versions.py']),
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
 )
-NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native'))
+NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 TWIN_PARITY_PROFILES = frozenset(('release', 'native'))
 
 
@@ -68,13 +68,15 @@ class Profile:
     sanitizers: bool
     live_runner: bool
     tutorial: bool
+    source_layer: bool
 
 
 PROFILE = {
-    'release': Profile('release', 'Release', False, False, True),
-    'debug': Profile('debug', 'Debug', False, False, True),
-    'sanitizers': Profile('sanitizers', 'Debug', True, False, True),
-    'native': Profile('native', 'Release', False, True, False),
+    'release': Profile('release', 'Release', False, False, True, True),
+    'debug': Profile('debug', 'Debug', False, False, True, True),
+    'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
+    'native': Profile('native', 'Release', False, True, False, True),
+    'kernel': Profile('kernel', 'Release', False, True, False, False),
 }
 
 
@@ -141,8 +143,11 @@ def source_guard_commands(source: Path) -> list[tuple[str, list[str]]]:
 
 
 def native_include_independence_command(cfg: VerifyConfig, prefix: Path) -> list[str]:
-    return [sys.executable, str(cfg.source / 'scripts/check_native_include_independence.py'),
+    argv = [sys.executable, str(cfg.source / 'scripts/check_native_include_independence.py'),
             '--build-dir', str(cfg.build_dir), '--prefix', str(prefix)]
+    if not cfg.profile.source_layer:
+        argv += ['--kernel-archive', str(cfg.build_dir / 'lib' / 'libpineforge_kernel.a')]
+    return argv
 
 
 def twin_parity_command(source: Path) -> list[str]:
@@ -160,6 +165,7 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
         'PINEFORGE_BUILD_TESTS': 'ON',
         'PINEFORGE_BUILD_TUTORIAL': 'ON' if profile.tutorial else 'OFF',
         'PINEFORGE_BUILD_LIVE_RUNNER': 'ON' if profile.live_runner else 'OFF',
+        'PINEFORGE_BUILD_SOURCE_LAYER': 'ON' if profile.source_layer else 'OFF',
         'PINEFORGE_ENABLE_SANITIZERS': 'ON' if profile.sanitizers else 'OFF',
         'PINEFORGE_BUILD_CORPUS_STRATEGIES': 'OFF',
         'PINEFORGE_BUILD_BENCH_STRATEGIES': 'OFF',
@@ -194,7 +200,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument(
         'profile', choices=PROFILES,
         help='release/debug keep tutorial ON and native OFF; '
-             'sanitizers enable PUBLIC ASan/UBSan; native enables the live runner')
+             'sanitizers enable PUBLIC ASan/UBSan; native enables the live runner; '
+             'kernel is native with the Pine source layer built OFF')
     parser.add_argument('--build-dir', type=Path, default=None,
                         help='default: <source>/build-ci-PROFILE')
     parser.add_argument('--jobs', type=int, default=DEFAULT_JOBS)
@@ -550,6 +557,7 @@ class Driver:
             ('PINEFORGE_BUILD_TESTS', True),
             ('PINEFORGE_BUILD_TUTORIAL', profile.tutorial),
             ('PINEFORGE_BUILD_LIVE_RUNNER', profile.live_runner),
+            ('PINEFORGE_BUILD_SOURCE_LAYER', profile.source_layer),
             ('PINEFORGE_ENABLE_SANITIZERS', profile.sanitizers),
             ('PINEFORGE_REQUIRE_ABI_RECEIPTS', True),
         ):
@@ -724,6 +732,7 @@ class Driver:
         self.pass_stage('profile-options', json.dumps({
             'tutorial': cmake_on(cache.get('PINEFORGE_BUILD_TUTORIAL')),
             'liveRunner': cmake_on(cache.get('PINEFORGE_BUILD_LIVE_RUNNER')),
+            'sourceLayer': cmake_on(cache.get('PINEFORGE_BUILD_SOURCE_LAYER')),
             'sanitizers': cmake_on(cache.get('PINEFORGE_ENABLE_SANITIZERS')),
             'versionSource': cache.get('PINEFORGE_VERSION_SOURCE'),
             'python': cache.get('Python3_EXECUTABLE'),
@@ -773,12 +782,18 @@ class Driver:
         else:
             self.pass_stage('native-binary', 'live runner absent as required for this profile')
 
-        self.ensure_abi_base()
-        self.ensure_abi_prior()
-        self.ensure_abi_v13()
-        self.ensure_abi_v14()
-        self.ensure_abi_v15_frozen()
-        self.ensure_abi_v16_frozen()
+        if self.cfg.profile.source_layer:
+            self.ensure_abi_base()
+            self.ensure_abi_prior()
+            self.ensure_abi_v13()
+            self.ensure_abi_v14()
+            self.ensure_abi_v15_frozen()
+            self.ensure_abi_v16_frozen()
+        else:
+            # Every receipt-backed row pairs through a source::PineStrategyHost
+            # TU, so the kernel-only build registers none of them.
+            self.pass_stage('abi-providers-skipped',
+                            'kernel-only build registers no receipt-backed ABI row')
 
         # AppleClang's ASan runtime serializes shadow-memory initialization
         # behind a process-global spin lock. Starting several instrumented

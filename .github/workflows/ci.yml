@@ -177,6 +177,53 @@ jobs:
           path: ci-diagnostics/
           if-no-files-found: warn
 
+  # Kernel-only lane: PINEFORGE_BUILD_SOURCE_LAYER=OFF. Proves the engine
+  # still configures, builds, installs and passes its source-free CTest set
+  # with no Pine adapter compiled, and that libpineforge_kernel.a carries no
+  # source-layer symbol. The live runner stays ON so both native examples
+  # are built from the kernel alone.
+  kernel-only:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-kernel-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
+
+      - name: Verify (kernel)
+        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs 4 --ccache
+
+      - name: Stage and summarize diagnostics
+        if: always()
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-kernel --profile kernel
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-kernel
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
   # Reuse the full native proof once per CI run. The reusable workflow also
   # retains manual dispatch for explicitly requested standalone verification.
   native-live:
@@ -187,7 +234,7 @@ jobs:
   # Failure, cancellation or skipping in any dependency must fail this gate.
   build-gate:
     name: build
-    needs: [preflight, build, sanitizers, native-live]
+    needs: [preflight, build, sanitizers, native-live, kernel-only]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -199,8 +246,11 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
           NATIVE_RESULT: ${{ needs.native-live.result }}
+          KERNEL_RESULT: ${{ needs.kernel-only.result }}
         run: |
           printf '%s\n' "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT"
+            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
+            "kernel: $KERNEL_RESULT"
           [[ "$PREFLIGHT_RESULT" == "success" && "$BUILD_RESULT" == "success" \
-            && "$SANITIZER_RESULT" == "success" && "$NATIVE_RESULT" == "success" ]]
+            && "$SANITIZER_RESULT" == "success" && "$NATIVE_RESULT" == "success" \
+            && "$KERNEL_RESULT" == "success" ]]

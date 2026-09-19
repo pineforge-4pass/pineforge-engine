@@ -17,5 +17,4 @@ struct History {
 };
 int last_rejected_command_bar(const admission::Journal& journal);
 History admission_history(const admission::Journal& journal);
-std::vector<uint64_t> admission_retention(const admission::Journal& journal, const std::vector<uint64_t>& live);
 } // namespace pineforge::compat::pine

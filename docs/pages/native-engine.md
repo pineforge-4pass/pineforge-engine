@@ -753,6 +753,51 @@ CMake target still compiles the corresponding `src/compat/pine/` sources. That
 build-level dependency is deliberately outside this slice. Slice B owns the
 header/constructor/member cut; this example does not claim it has removed it.
 
+### Building the kernel only
+
+`-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` (default **ON**) configures a build with
+no source-adapter translation unit compiled at all:
+
+```bash
+cmake -S . -B build-kernel -DCMAKE_BUILD_TYPE=Release \
+    -DPINEFORGE_BUILD_SOURCE_LAYER=OFF
+cmake --build build-kernel -j
+```
+
+The default build is unchanged: `libpineforge.a` still contains every kernel
+object plus the source layer, and `PineForge::pineforge` still links a Pine
+host. What the option adds is the kernel target itself, which exists in both
+builds:
+
+```cmake
+find_package(PineForge REQUIRED)
+target_link_libraries(my_native_consumer PRIVATE PineForge::kernel)
+```
+
+`PineForge::kernel` (`libpineforge_kernel.a`) is built from
+`PINEFORGE_KERNEL_SOURCES` with exactly the flags `pineforge` uses. Its only
+mention of the source layer is the opaque `pineforge::source::StrategyOverrides
+const*` forward declaration in the rich begin bridge, so it links standalone;
+`scripts/check_native_include_independence.py --kernel-archive` asserts that
+with `nm` over the archive's defined and undefined symbols.
+
+With the option OFF the build excludes, each with a CMake STATUS line:
+
+- `src/source/*.cpp` and `src/compat/pine/*.cpp`, so `libpineforge.a` holds
+  the kernel objects alone (equivalent to `libpineforge_kernel.a`);
+- the installed `include/pineforge/source/` and `include/pineforge/compat/`
+  headers, which would otherwise declare functions with no definition;
+- every Pine-bound target: the corpus and bench strategies, the tutorial
+  strategy, and the live runner's `examples/strategy.cpp`
+  (`native-market-example` and `native-selected-example` still build);
+- every test translation unit that reaches a `pineforge/source/` or
+  `compat/pine/` header, and the receipt-backed ABI rows whose pairing TU
+  derives from `PineStrategyHost`. The remaining CTest rows all run.
+
+`python3 scripts/ci_verify.py kernel` is the profile that verifies this lane
+(Release, live runner ON, tutorial OFF, source layer OFF); CI runs it as the
+`kernel-only` job.
+
 ## Runner JSON and command
 
 `pineforge-live` is optional (`-DPINEFORGE_BUILD_LIVE_RUNNER=ON`, default

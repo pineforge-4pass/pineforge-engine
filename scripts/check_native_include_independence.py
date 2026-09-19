@@ -5,6 +5,10 @@ The caller supplies a disposable installation prefix. The checker installs the
 configured build there, removes the source-only header trees, then compiles the
 native public roots and the two R4-B native examples using only that installed
 include root. It never links or runs a consumer binary.
+
+With --kernel-archive the same run also reads the kernel-only static library
+with nm: every defined and undefined symbol in it must be free of the source
+layer, which is the link-time half of the same claim.
 """
 from __future__ import annotations
 
@@ -197,6 +201,22 @@ def forbidden_symbol_lines(symbols: str) -> list[str]:
             and not is_allowed_opaque_source_symbol(line)]
 
 
+def kernel_archive_findings(archive: Path, *, evidence_dir: Path | None = None) -> list[Finding]:
+    """nm the kernel archive: neither its definitions nor its undefined
+    references may name the source layer. An undefined source symbol would
+    make the archive unlinkable on its own, which is exactly what the
+    kernel-only build promises it is not."""
+    if not archive.is_file():
+        raise InfrastructureError("kernel archive is missing: " + str(archive))
+    listed = run_command(["nm", "-C", str(archive)], label="nm " + str(archive), timeout=120)
+    if listed.returncode:
+        raise InfrastructureError("nm " + str(archive) + " failed:\n"
+                                  + listed.stdout + listed.stderr)
+    archive_text(evidence_dir, Path("nm") / "kernel-archive.txt", listed.stdout)
+    return [Finding("symbol", archive.name, line)
+            for line in forbidden_symbol_lines(listed.stdout)]
+
+
 def independence_exit_code(findings: list[Finding], *, expect_fail: bool) -> int:
     if expect_fail:
         return 0 if findings else 1
@@ -262,7 +282,7 @@ def archive_text(evidence_dir: Path | None, relative: Path, text: str) -> None:
 
 
 def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
-          evidence_dir: Path | None = None) -> int:
+          evidence_dir: Path | None = None, kernel_archive: Path | None = None) -> int:
     build_dir = build_dir.resolve()
     prefix = prefix.resolve()
     evidence_dir = evidence_dir.resolve() if evidence_dir is not None else None
@@ -355,6 +375,9 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
                                       + result.stdout + result.stderr)
         for dependency in forbidden_dependency_entries(parse_depfile(generic_depfile)):
             findings.append(Finding("dependency", "standalone Series/TA/calendar consumer", dependency))
+    if kernel_archive is not None:
+        findings.extend(kernel_archive_findings(kernel_archive.resolve(),
+                                                evidence_dir=evidence_dir))
     if findings:
         print(format_findings(findings))
     else:
@@ -370,12 +393,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prefix", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path,
                         help="optional directory for dependency files and native-example nm output")
+    parser.add_argument("--kernel-archive", type=Path, default=None,
+                        help="optional libpineforge_kernel.a to assert free of source-layer symbols")
     parser.add_argument("--expect-fail", action="store_true",
                         help="succeed only when a genuine forbidden dependency/symbol is found")
     args = parser.parse_args(argv)
     try:
         return check(args.build_dir, args.prefix, expect_fail=args.expect_fail,
-                     evidence_dir=args.evidence_dir)
+                     evidence_dir=args.evidence_dir, kernel_archive=args.kernel_archive)
     except InfrastructureError as error:
         print("native include independence: infrastructure failure: " + str(error), file=sys.stderr)
         return 1

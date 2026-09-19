@@ -29,10 +29,18 @@ target_link_libraries(pineforge-live PRIVATE pineforge_live_startup ${CMAKE_DL_L
 target_compile_options(pineforge-live PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
 install(TARGETS pineforge-live RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-add_library(native_live_example MODULE examples/strategy.cpp)
-target_link_libraries(native_live_example PRIVATE PineForge::pineforge)
-target_compile_options(native_live_example PRIVATE -fvisibility=hidden -ffp-contract=off)
-set_target_properties(native_live_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-example")
+# examples/strategy.cpp derives from pineforge::source::PineStrategyHost, so
+# it is the one example that a kernel-only build cannot compile.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(native_live_example MODULE examples/strategy.cpp)
+    target_link_libraries(native_live_example PRIVATE PineForge::pineforge)
+    target_compile_options(native_live_example PRIVATE -fvisibility=hidden -ffp-contract=off)
+    set_target_properties(native_live_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-example")
+else()
+    message(STATUS
+        "Live runner example strategy.cpp skipped: it is Pine-bound and "
+        "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
+endif()
 
 add_library(native_market_example MODULE examples/native_market_strategy.cpp)
 target_link_libraries(native_market_example PRIVATE PineForge::pineforge)
@@ -71,11 +79,13 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_live_parser COMMAND test_live_parser $<TARGET_FILE:native_live_parser_example>
         $<TARGET_FILE:live_parser_fixture> $<TARGET_FILE:live_parser_wrong_abi>)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
-        ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
-        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_parser_example>
-        $<TARGET_FILE:live_parser_fixture>)
-    set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 120)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_parser_example>
+            $<TARGET_FILE:live_parser_fixture>)
+        set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 120)
+    endif()
     foreach(contract_kind absent unknown native_no_export native_stub)
         add_library(live_contract_${contract_kind} MODULE
             ${PROJECT_SOURCE_DIR}/tests/test_live_contract_plugins.cpp)
@@ -88,12 +98,14 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_definitions(live_contract_unknown PRIVATE PF_LIVE_CONTRACT_UNKNOWN=1)
     target_compile_definitions(live_contract_native_no_export PRIVATE PF_LIVE_CONTRACT_NATIVE_NO_EXPORT=1)
     target_compile_definitions(live_contract_native_stub PRIVATE PF_LIVE_CONTRACT_NATIVE_STUB=1)
-    add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
-        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
-        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
-        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
-        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>)
-    set_tests_properties(native_live_startup_e2e PROPERTIES TIMEOUT 120)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+            $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+            $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>)
+        set_tests_properties(native_live_startup_e2e PROPERTIES TIMEOUT 120)
+    endif()
     # Exercise the real MODULE through its C ABI, without linking a second engine.
     add_executable(test_native_example_batch
         ${PROJECT_SOURCE_DIR}/tests/test_native_example_batch.cpp)
