@@ -12032,6 +12032,29 @@ bool PineExecutionAdapter::schedule_margin_call_path(
         // The legacy sites are the carried POOC *short* checkpoints; a long
         // position keeps the ordinary path slice (L8a margin_call_latch).
         if (competing_entry && position.signed_units < 0.0) return false;
+        // ab9714be pine_scheduler.cpp:246-281: a carried POOC short outside
+        // the fee-free pre-script checkpoint (pine_fills.cpp:1172-1196) with
+        // nothing resting (no before-priced-exit hook, pine_fills.cpp:2150)
+        // is sliced only by the end-of-bar process_margin_call, after the
+        // close-time script sized its brackets against the untrimmed short.
+        // The post-script carried POOC short checkpoint (on_bar_close) owns
+        // that slice; an intrabar path slice would trim the position first.
+        const bool resting_order = std::any_of(
+            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                const auto found = placement_.find(handle.incarnation);
+                return found == placement_.end()
+                    || found->second.family != PineOrderFamily::Margin;
+            });
+        if (!config_.calc_on_order_fills && !stream_mode_
+            && position.signed_units < 0.0
+            && (config_.commission_value != 0.0 || config_.slippage != 0)
+            && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
+            && position_open_script_bar_ != context.script_bar_open_ms
+            && !resting_order && pending_bracket_legs_.empty()
+            && pending_coof_requests_.empty() && delayed_market_orders_.empty()
+            && pending_entries_.empty()) {
+            return false;
+        }
     }
     // ab9714be pine_fills.cpp:1025-1063, :1314-1339: an entry-bar margin
     // pass sees only the OHLC suffix after the actual opening point. Later
