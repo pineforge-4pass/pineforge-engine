@@ -3,6 +3,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
 
@@ -682,7 +683,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     } else if (trail_ticks == 0.0 && std::isfinite(view.resolved_price)
                && view.resolved_price > 0.0) {
         const double slip = config_.slippage * syminfo_.mintick;
-        excursion_trail_raw_price_ = internal::snap_trail_level_to_tick_grid(
+        excursion_trail_raw_price_ = compat::pine::snap_trail_level_to_tick_grid(
             physical_position().signed_units > 0.0 ? view.resolved_price + slip
                                                    : view.resolved_price - slip,
             syminfo_.mintick);

@@ -7,6 +7,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
 
 #include <algorithm>
@@ -11186,7 +11187,7 @@ std::optional<double> PineExecutionAdapter::source_trail_offset_ticks(std::uint6
     if (snapshot == placement_.end()) return std::nullopt;
     if (snapshot->second.family != PineOrderFamily::ExitTrail) return std::nullopt;
     if (std::isnan(snapshot->second.exit_levels.trail_offset)) return 0.0;
-    return internal::trail_offset_to_ticks(snapshot->second.exit_levels.trail_offset);
+    return compat::pine::trail_offset_to_ticks(snapshot->second.exit_levels.trail_offset);
 }
 
 bool PineExecutionAdapter::source_margin_exit(std::uint64_t incarnation) const noexcept {
@@ -12711,10 +12712,10 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         double activation = owned_trail->trail_activation_level;
         if (!finite_positive(activation) && finite_positive(tick)) {
             activation = require_host().position_avg_price()
-                + internal::trail_points_to_ticks(
+                + compat::pine::trail_points_to_ticks(
                     owned_trail->exit_levels.trail_points) * tick;
         }
-        const double offset = internal::trail_offset_to_ticks(
+        const double offset = compat::pine::trail_offset_to_ticks(
             owned_trail->exit_levels.trail_offset) * tick;
         if (!finite_positive(activation) || !std::isfinite(offset)) return false;
         const auto state = trail_state_at_open_.find(owned_trail_incarnation);
@@ -16911,8 +16912,8 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     *trail_activation = kNaN;
     if (!std::isnan(trail_points)) {
         if (resolved) {
-            const double ticks = internal::trail_points_to_ticks(trail_points);
-            *trail_activation = internal::snap_trail_level_to_tick_grid(
+            const double ticks = compat::pine::trail_points_to_ticks(trail_points);
+            *trail_activation = compat::pine::snap_trail_level_to_tick_grid(
                 entry + direction * ticks * tick, tick);
         }
     } else {

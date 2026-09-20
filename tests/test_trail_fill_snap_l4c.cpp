@@ -64,9 +64,11 @@
 
 #include "../src/engine_internal.hpp"
 #include "exit_path_resolver_oracle.hpp"
+#include <pineforge/compat/pine/trail_ticks.hpp>
 
 using namespace pineforge;
 using namespace pineforge::internal;
+using namespace pineforge::compat::pine;
 
 static int tests_passed = 0;
 static int tests_failed = 0;

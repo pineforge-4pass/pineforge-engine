@@ -17,6 +17,7 @@
  */
 
 #include "../engine_internal.hpp"
+#include <pineforge/compat/pine/trail_ticks.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,10 @@
 namespace pineforge {
 namespace internal {
 
+// TradingView's trail tick arithmetic lives with the source layer (R5 lane N14).
+using compat::pine::snap_trail_level_to_tick_grid;
+using compat::pine::trail_offset_to_ticks;
+using compat::pine::trail_points_to_ticks;
 
 // First path position where a stop ENTRY can fire, accounting for direction:
 // long stops only fire on up-segments (price rising through the stop), short
