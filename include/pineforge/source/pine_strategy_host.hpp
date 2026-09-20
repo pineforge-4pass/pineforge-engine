@@ -513,6 +513,24 @@ private:
     }
     // Drops the entries of sec_ids the evaluator registry no longer holds.
     void prune_pine_security_states();
+    // KI-55 range-start gate for one evaluator: true when the input bar at
+    // `input_ts` belongs to an HTF bucket that opened before the cut --
+    // security_range_start_ms_ under the flag, else the run's first chart
+    // bar for a coarser-than-chart / chart-timeframe evaluator
+    // (security_first_chart_bar_ms_, split-feed runs with the auxiliary feed
+    // proving prior trading, or single-feed historical intraday forex/cfd D
+    // requests keyed to their session's actual open; false for lower TFs). The
+    // progressive feed and the historical lookahead projection builder must
+    // agree on this predicate so projected child indexes line up with the
+    // per-state feed cursor.
+    bool security_input_precedes_range_start(const SecurityEvalState& state,
+                                             int64_t input_ts) const;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // True when the auxiliary request.security feed holds a bar in
+    // [from_ms, to_ms): the evidence that an HTF bucket whose nominal open
+    // precedes the run's first chart bar was in progress at the range start.
+    bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
+#endif
     // The calling chart bar's publication boundary for a gated site
     // (publish_gate_tf_seconds): re-publish the completed caller's final
     // requested value before the retained boundary input is fed.
@@ -609,6 +627,43 @@ protected:
     // projected into the adapter at begin, so it is waived from the durable
     // fold like the other configuration slots.
     bool margin_call_enabled_ = true;
+
+    // Independent opt-in KI-55 HTF warmup parity. When enabled,
+    // request.security series aggregate from security_range_start_ms_ instead
+    // of the feed start and their embedded ta.ema na-warm per TV built-in
+    // semantics. The cut is taken per evaluator on HTF-BUCKET opens, not on
+    // input timestamps: an input bar is dropped when the D/W/M (or intraday
+    // grid) bucket it belongs to opened before the range start, so the first
+    // HTF bar every series sees is a whole bucket that opened at/after the
+    // range start (security_input_precedes_range_start). Default OFF;
+    // consulted only by pine_feed_security_eval_state, the auxiliary
+    // lower-timeframe slice and the historical lookahead projection builder.
+    bool security_range_start_na_warmup_ = false;
+    int64_t security_range_start_ms_ = 0;
+    // The run's first chart bar (0 outside a run). Without the flag above
+    // this is the default cut for every coarser-than-chart and chart-
+    // timeframe request.security aggregation: TradingView's deep-backtest
+    // series of a timeframe hold the bars of that timeframe whose OPEN lies
+    // at or after the range start, and the bucket in progress at the range
+    // start is absent -- on every lane (round 8, family P: masayanfx
+    // multi-time-score; lab tv famp-sense-{es15full,nq15full,f15full,
+    // nifty15full,nifty1d,xau1d,xau15,eur15,eth15,btc1d}, 2026-09-05: "D"
+    // on CME_MINI:ES1! 15m first reads on the 05-01 20:45Z bar (bucket 0 is
+    // the 04-02 trade date; the 04-01 date opened 03-31 22:00Z before the
+    // 04-01 00:00Z range start), "240" on 04-04 13:45Z (the 22:00Z bucket
+    // dropped), "W" on the 08-29 / 08-28 bar on every 15m and 1D lane (the
+    // Mon 03-31 week dropped), while "60" on a 00:00Z start and "D" on the
+    // NYSE / NSE lanes (the chart's first bar IS the session open) keep
+    // their first bucket). Whether the bucket was in progress is read from
+    // the auxiliary 1m feed (did it trade between the bucket's nominal open
+    // and the first chart bar? the NSE week whose Monday was a holiday opens
+    // on Tuesday and is kept). Historical intraday single-feed forex/cfd D
+    // requests also omit their partial first session, using its actual trading
+    // open rather than its label. Other single-feed series keep their feed-start
+    // behavior; native feeds retain their own rules. Lower-TF evaluators are
+    // untouched (their slices begin at the first chart bar anyway), and the
+    // flag above keeps its explicit epoch plus the EMA na-warmup semantics.
+    int64_t security_first_chart_bar_ms_ = 0;
 
     // Boundary-fallback publication replays the completed caller's already
     // evaluated final requested value. Force generated TA sites down their

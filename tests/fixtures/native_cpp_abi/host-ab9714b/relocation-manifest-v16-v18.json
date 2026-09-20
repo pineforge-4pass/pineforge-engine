@@ -26,7 +26,10 @@
     "BacktestEngine::SecurityEvalState::heikinashi",
     "BacktestEngine::SecurityEvalState::ha_prev_open",
     "BacktestEngine::SecurityEvalState::ha_prev_close",
-    "BacktestEngine::SecurityEvalState::ha_seeded"
+    "BacktestEngine::SecurityEvalState::ha_seeded",
+    "BacktestEngine::security_range_start_na_warmup_",
+    "BacktestEngine::security_range_start_ms_",
+    "BacktestEngine::security_first_chart_bar_ms_"
   ],
   "addedStorage": [],
   "addedValueMembers": [

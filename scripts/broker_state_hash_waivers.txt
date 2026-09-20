@@ -32,10 +32,10 @@ realtime_tail_ # Run-mode configuration consumed at begin; native stream lifecyc
 realtime_tail_horizon_bars_ # Run-mode configuration consumed at begin; it is not mutated by or read from broker settlement.
 security_calling_close_ms_ # Security-feed publication cursor; no order matching or account settlement branch consumes it.
 security_history_publication_replay_ # Transient scope flag of the source host's calling-boundary replay; true only inside that one call, which reaches no hash point, and false at every fold.
-security_first_chart_bar_ms_ # Feed-start metadata used while preparing security publication, not a mutable execution fact.
+security_first_chart_bar_ms_ # Source-host feed-start metadata used while preparing request.security publication, not a mutable execution fact.
 security_next_input_ms_ # Security-feed cursor; source scheduler's durable deferred-boundary state is hashed independently.
-security_range_start_ms_ # Security evaluator configuration; active evaluator buckets/series own their continuation folds.
-security_range_start_na_warmup_ # Security evaluator configuration flag; resulting source language/evaluator state is hashed.
+security_range_start_ms_ # Source-host request.security configuration; active evaluator buckets/series own their continuation folds.
+security_range_start_na_warmup_ # Source-host request.security configuration flag; resulting source language/evaluator state is hashed.
 slippage_ # Legacy configuration carrier; each executable request snapshots projected slippage terms before matching.
 syminfo_ # Metadata transport; provider copies symbol/session/timezone facts into the immutable native run specification.
 syminfo_metadata_ # Staged metadata map; it is consumed at begin and does not evolve as broker state during a run.
