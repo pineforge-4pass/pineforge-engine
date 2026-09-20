@@ -5,7 +5,7 @@
 
 namespace pineforge {
 
-namespace pine_tz {
+namespace tz_util {
 
 std::string normalize_timezone_for_posix(const std::string& tz);
 
@@ -27,6 +27,9 @@ private:
     std::unique_lock<std::mutex> lock_;
 };
 
-}  // namespace pine_tz
+}  // namespace tz_util
+
+// Deprecated spelling, kept so the source adapter compiles unchanged.
+namespace pine_tz = tz_util;
 
 } // namespace pineforge

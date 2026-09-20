@@ -369,7 +369,7 @@ void BacktestEngine::apply_realtime_tail_horizon(const Bar* bars, int n,
 
 
 bool BacktestEngine::chart_bar_ismarket(int64_t bar_ms) const {
-    return pineforge::pine_session_ismarket(syminfo_.session, syminfo_.timezone,
+    return pineforge::session_in_market(syminfo_.session, syminfo_.timezone,
                                             bar_ms, script_tf_);
 }
 

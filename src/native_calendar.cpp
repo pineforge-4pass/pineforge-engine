@@ -147,7 +147,7 @@ int cmp_stamp(const CivilStamp& a, const CivilStamp& b) {
 }
 
 bool is_utc_zone(std::string_view tz) {
-    const std::string n = pine_tz::normalize_timezone_for_posix(std::string(tz));
+    const std::string n = tz_util::normalize_timezone_for_posix(std::string(tz));
     return n.empty() || n == "UTC" || n == "Etc/UTC";
 }
 
@@ -190,7 +190,7 @@ bool epoch_to_stamp_local(int64_t ms, const std::string& tz, CivilStamp& out) {
     if (is_utc_zone(tz)) {
         if (gmtime_r(&t, &loc) == nullptr) return false;
     } else {
-        pine_tz::ScopedTimezone guard(tz);
+        tz_util::ScopedTimezone guard(tz);
         if (localtime_r(&t, &loc) == nullptr) return false;
     }
     out.year = loc.tm_year + 1900;
@@ -221,7 +221,7 @@ std::optional<int64_t> mktime_candidate(const CivilStamp& c, int isdst, const st
         // timegm is not required: UTC civil is exact integer math.
         return utc_civil_ms(c);
     }
-    pine_tz::ScopedTimezone guard(tz);
+    tz_util::ScopedTimezone guard(tz);
     sec = mktime(&t);
     if (sec == static_cast<time_t>(-1)) return std::nullopt;
     std::tm back{};
@@ -1108,7 +1108,7 @@ timezone_identity_descriptor(std::string_view timezone) {
     d.input.assign(timezone.begin(), timezone.end());
     d.zoneinfo_root = tzdir_canonical();
     const std::string norm =
-        pine_tz::normalize_timezone_for_posix(std::string(timezone.begin(), timezone.end()));
+        tz_util::normalize_timezone_for_posix(std::string(timezone.begin(), timezone.end()));
 
     auto finish = [&]() -> std::optional<TimezoneIdentityDescriptor> {
         if (!d.valid()) return std::nullopt;

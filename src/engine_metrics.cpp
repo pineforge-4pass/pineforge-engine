@@ -226,7 +226,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         if (utc) {
             walk(month_key_utc);
         } else {
-            pine_tz::ScopedTimezone guard(chart_tz);   // ONE guard for the whole walk
+            tz_util::ScopedTimezone guard(chart_tz);   // ONE guard for the whole walk
             walk(month_key_local);
         }
         std::vector<double> r;

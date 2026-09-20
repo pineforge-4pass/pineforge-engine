@@ -6,7 +6,7 @@
 
 namespace pineforge {
 
-inline double pine_random(double lo, uint32_t call_site, double hi, uint32_t seed, int bar_index) {
+inline double deterministic_random(double lo, uint32_t call_site, double hi, uint32_t seed, int bar_index) {
     // SplitMix64-style deterministic mixer. This is a PineForge PRNG contract:
     // stable across platforms/runs, intentionally not a TradingView PRNG clone.
     uint64_t x = static_cast<uint64_t>(seed);
@@ -18,6 +18,12 @@ inline double pine_random(double lo, uint32_t call_site, double hi, uint32_t see
     x ^= (x >> 31);
     double u = static_cast<double>(x >> 11) * (1.0 / 9007199254740992.0);
     return lo + u * (hi - lo);
+}
+
+// Deprecated spelling of deterministic_random, kept for generated code.
+inline double pine_random(double lo, uint32_t call_site, double hi, uint32_t seed,
+                          int bar_index) {
+    return deterministic_random(lo, call_site, hi, seed, bar_index);
 }
 
 namespace math {

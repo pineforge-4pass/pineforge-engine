@@ -5,7 +5,7 @@
 #include <sstream>
 
 namespace pineforge {
-namespace pine_tz {
+namespace tz_util {
 namespace {
 
 std::mutex& timezone_mutex() {
@@ -113,10 +113,10 @@ ScopedTimezone::~ScopedTimezone() {
     // g_active_tz caches it so the next same-zone scope skips setenv/tzset.
 }
 
-}  // namespace pine_tz
+}  // namespace tz_util
 
 std::string normalize_timezone_for_posix(const std::string& tz) {
-    return pine_tz::normalize_timezone_for_posix(tz);
+    return tz_util::normalize_timezone_for_posix(tz);
 }
 
 } // namespace pineforge

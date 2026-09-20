@@ -29,7 +29,7 @@ int hhmm_to_minutes(const std::string& hhmm) {
 // per-call setenv/tzset churn that made hour()/minute()/... pathologically slow
 // on macOS (each changed-TZ tzset() does a notifyd Mach-IPC round-trip ~173us;
 // ~888k/run over the full feed -> minutes of apparent "hang", KI-35). UTC needs
-// no tz -> tzset-free gmtime_r; other zones use the CACHED pine_tz::ScopedTimezone
+// no tz -> tzset-free gmtime_r; other zones use the CACHED tz_util::ScopedTimezone
 // (skips tzset when the active zone is unchanged, and never restores), so a run
 // that stays on one zone pays a single tzset. DST stays exact: localtime_r
 // consults the tz database exactly as the old inline lambda did.
@@ -44,7 +44,7 @@ static void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm&
     if (t.empty() || t == "UTC" || t == "Etc/UTC") {
         gmtime_r(&secs, &out);
     } else {
-        pine_tz::ScopedTimezone guard(tz);
+        tz_util::ScopedTimezone guard(tz);
         localtime_r(&secs, &out);
     }
 }
@@ -52,14 +52,14 @@ static void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm&
 // Pine time/date extraction — value-identical to the codegen's former inline
 // setenv+tzset lambda (pineforge-codegen tables.py TIME_FIELD_EXPRS) but
 // churn-free. hour()/minute()/... route through these instead of open-coding it.
-int pine_hour(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_hour; }
-int pine_minute(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_min; }
-int pine_second(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_sec; }
-int pine_dayofmonth(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mday; }
-int pine_dayofweek(int64_t bar_ms, const std::string& tz)  { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_wday + 1; }
-int pine_month(int64_t bar_ms, const std::string& tz)      { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mon + 1; }
-int pine_year(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_year + 1900; }
-int pine_weekofyear(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7; }
+int local_hour(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_hour; }
+int local_minute(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_min; }
+int local_second(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_sec; }
+int local_dayofmonth(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mday; }
+int local_dayofweek(int64_t bar_ms, const std::string& tz)  { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_wday + 1; }
+int local_month(int64_t bar_ms, const std::string& tz)      { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mon + 1; }
+int local_year(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_year + 1900; }
+int local_weekofyear(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7; }
 
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
@@ -78,7 +78,7 @@ int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
 }
 
 static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
-    pine_tz::ScopedTimezone guard(tz);
+    tz_util::ScopedTimezone guard(tz);
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
@@ -186,7 +186,7 @@ static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz
 }
 
 static int64_t calendar_week_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
-    pine_tz::ScopedTimezone guard(tz);
+    tz_util::ScopedTimezone guard(tz);
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
@@ -224,7 +224,7 @@ static int64_t calendar_month_open_local_ms(int64_t bar_ms, const std::string& t
 }
 
 static int64_t calendar_month_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
-    pine_tz::ScopedTimezone guard(tz);
+    tz_util::ScopedTimezone guard(tz);
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
@@ -281,7 +281,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         return open_ms + static_cast<int64_t>(sec) * 1000;
     }
 
-    pine_tz::ScopedTimezone guard(tz);
+    tz_util::ScopedTimezone guard(tz);
     time_t osec = static_cast<time_t>(open_ms / 1000);
     struct tm local_tm {};
     localtime_r(&osec, &local_tm);
@@ -456,13 +456,13 @@ bool passes_session_filter(const std::string& session,
 // Session predicate public free functions
 // ---------------------------------------------------------------------------
 
-bool pine_session_ismarket(const std::string& session,
+bool session_in_market(const std::string& session,
                            const std::string& tz,
                            int64_t bar_ms) {
     return passes_session_filter(session, tz, bar_ms);
 }
 
-bool pine_session_ispremarket(const std::string& session,
+bool session_in_premarket(const std::string& session,
                               const std::string& tz,
                               int64_t bar_ms) {
     if (session.empty() || session == "24x7")
@@ -499,7 +499,7 @@ bool pine_session_ispremarket(const std::string& session,
     return (mod >= pre_open_min && mod < rth_open_min);
 }
 
-bool pine_session_ispostmarket(const std::string& session,
+bool session_in_postmarket(const std::string& session,
                                const std::string& tz,
                                int64_t bar_ms) {
     if (session.empty() || session == "24x7")
@@ -537,35 +537,35 @@ bool pine_session_ispostmarket(const std::string& session,
 
 // Chart-timeframe forms (see session_time.hpp): a D/W/M chart bar is the
 // symbol's regular-session bar whatever time of day its stamp reads.
-bool pine_session_ismarket(const std::string& session,
+bool session_in_market(const std::string& session,
                            const std::string& tz,
                            int64_t bar_ms,
                            const std::string& chart_tf) {
     if (tf_is_daily_or_higher(chart_tf))
         return true;
-    return pine_session_ismarket(session, tz, bar_ms);
+    return session_in_market(session, tz, bar_ms);
 }
 
-bool pine_session_ispremarket(const std::string& session,
+bool session_in_premarket(const std::string& session,
                               const std::string& tz,
                               int64_t bar_ms,
                               const std::string& chart_tf) {
     if (tf_is_daily_or_higher(chart_tf))
         return false;
-    return pine_session_ispremarket(session, tz, bar_ms);
+    return session_in_premarket(session, tz, bar_ms);
 }
 
-bool pine_session_ispostmarket(const std::string& session,
+bool session_in_postmarket(const std::string& session,
                                const std::string& tz,
                                int64_t bar_ms,
                                const std::string& chart_tf) {
     if (tf_is_daily_or_higher(chart_tf))
         return false;
-    return pine_session_ispostmarket(session, tz, bar_ms);
+    return session_in_postmarket(session, tz, bar_ms);
 }
 
 // ---------------------------------------------------------------------------
-// pine_time / pine_time_close (existing public API)
+// timeframe_time / timeframe_time_close (existing public API)
 // ---------------------------------------------------------------------------
 
 // =========================================================================
@@ -638,7 +638,7 @@ static void resolve_session_tz(const std::string& session,
         session_tz_out = "UTC";
 }
 
-int64_t pine_time(int64_t bar_ms,
+int64_t timeframe_time(int64_t bar_ms,
                   const std::string& tf_in,
                   const std::string& session,
                   const std::string& tz_in,
@@ -657,7 +657,7 @@ int64_t pine_time(int64_t bar_ms,
     return compute_tf_open_ms(bar_ms, tf, tf_tz, "UTC", "");
 }
 
-int64_t pine_time_close(int64_t bar_ms,
+int64_t timeframe_time_close(int64_t bar_ms,
                         const std::string& tf_in,
                         const std::string& session,
                         const std::string& tz_in,
@@ -700,7 +700,7 @@ static bool symbol_clock_applies(const std::string& resolved_session,
     return cp != CalendarPeriod::NONE && resolved_session.empty();
 }
 
-int64_t pine_time(int64_t bar_ms,
+int64_t timeframe_time(int64_t bar_ms,
                   const std::string& tf_in,
                   const std::string& session,
                   const std::string& tz_in,
@@ -727,7 +727,7 @@ int64_t pine_time(int64_t bar_ms,
     return compute_tf_open_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
 }
 
-int64_t pine_time_close(int64_t bar_ms,
+int64_t timeframe_time_close(int64_t bar_ms,
                         const std::string& tf_in,
                         const std::string& session,
                         const std::string& tz_in,
@@ -754,14 +754,14 @@ int64_t pine_time_close(int64_t bar_ms,
     return compute_tf_close_ms(t_open, tf, tf_tz);
 }
 
-int64_t pine_time_tradingday(int64_t bar_ms,
+int64_t session_trading_day_open_ms(int64_t bar_ms,
                              const std::string& session,
                              const std::string& tz) {
     // 24/7 or empty session: fall back to UTC calendar-day midnight.
     if (is_allday_session(session)) {
         if (session.empty()) {
             std::fprintf(stderr,
-                "[pineforge] WARNING: pine_time_tradingday called with empty session "
+                "[pineforge] WARNING: session_trading_day_open_ms called with empty session "
                 "string — falling back to UTC calendar-day midnight.\n");
         }
         // UTC midnight: truncate to day boundary
@@ -773,7 +773,7 @@ int64_t pine_time_tradingday(int64_t bar_ms,
     if (session_start_min < 0) {
         // Unparseable session: fall back to UTC midnight
         std::fprintf(stderr,
-            "[pineforge] WARNING: pine_time_tradingday: cannot parse session '%s' "
+            "[pineforge] WARNING: session_trading_day_open_ms: cannot parse session '%s' "
             "— falling back to UTC calendar-day midnight.\n",
             session.c_str());
         time_t secs = static_cast<time_t>(bar_ms / 1000);

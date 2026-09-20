@@ -11,7 +11,9 @@ namespace pineforge {
 std::string normalize_timezone_for_posix(const std::string& tz);
 
 // ---------------------------------------------------------------------------
-// Pine time(timeframe, session?, timezone?) and time_close(...).
+// Timeframe bucket open / close for a bar timestamp (the `time(timeframe,
+// session?, timezone?)` and `time_close(...)` family a source frontend lowers
+// to).
 // Returns Unix milliseconds, or na<int64_t>() when the bar is outside the
 // requested session (TradingView semantics for filtered sessions).
 //
@@ -31,19 +33,19 @@ std::string normalize_timezone_for_posix(const std::string& tz);
 
 #define PF_PINE_TIME_HAS_SYMINFO_TZ 1
 
-int64_t pine_time(int64_t bar_ms,
-                  const std::string& tf,
-                  const std::string& session,
-                  const std::string& tz,
-                  const std::string& chart_tf,
-                  const std::string& syminfo_tz = std::string());
+int64_t timeframe_time(int64_t bar_ms,
+                       const std::string& tf,
+                       const std::string& session,
+                       const std::string& tz,
+                       const std::string& chart_tf,
+                       const std::string& syminfo_tz = std::string());
 
-int64_t pine_time_close(int64_t bar_ms,
-                        const std::string& tf,
-                        const std::string& session,
-                        const std::string& tz,
-                        const std::string& chart_tf,
-                        const std::string& syminfo_tz = std::string());
+int64_t timeframe_time_close(int64_t bar_ms,
+                             const std::string& tf,
+                             const std::string& session,
+                             const std::string& tz,
+                             const std::string& chart_tf,
+                             const std::string& syminfo_tz = std::string());
 
 // Symbol-clock forms. `sym_tz` / `sym_session` are Pine's syminfo.timezone
 // and syminfo.session (the engine's runtime overrides). For a D/W/M `tf`
@@ -71,25 +73,25 @@ int64_t pine_time_close(int64_t bar_ms,
 // the same generated.cpp collapses to the 5-arg call on older engines).
 #define PF_PINE_TIME_HAS_SESSION_DAY 1
 
-int64_t pine_time(int64_t bar_ms,
-                  const std::string& tf,
-                  const std::string& session,
-                  const std::string& tz,
-                  const std::string& chart_tf,
-                  const std::string& sym_tz,
-                  const std::string& sym_session);
+int64_t timeframe_time(int64_t bar_ms,
+                       const std::string& tf,
+                       const std::string& session,
+                       const std::string& tz,
+                       const std::string& chart_tf,
+                       const std::string& sym_tz,
+                       const std::string& sym_session);
 
-int64_t pine_time_close(int64_t bar_ms,
-                        const std::string& tf,
-                        const std::string& session,
-                        const std::string& tz,
-                        const std::string& chart_tf,
-                        const std::string& sym_tz,
-                        const std::string& sym_session);
+int64_t timeframe_time_close(int64_t bar_ms,
+                             const std::string& tf,
+                             const std::string& session,
+                             const std::string& tz,
+                             const std::string& chart_tf,
+                             const std::string& sym_tz,
+                             const std::string& sym_session);
 
 // ---------------------------------------------------------------------------
 // Low-level session helpers (exposed for engine_run.cpp, unit tests,
-// pine_time_tradingday, and session predicates).
+// session_trading_day_open_ms, and session predicates).
 // ---------------------------------------------------------------------------
 
 // Convert "HHMM" string to minutes-since-midnight.  Returns -1 on parse error.
@@ -101,14 +103,14 @@ int hhmm_to_minutes(const std::string& hhmm);
 // instead of an inline setenv+tzset lambda, which stops the per-call macOS
 // tzset()->notifyd IPC storm (KI-35): UTC uses tzset-free gmtime_r, other zones
 // use the cached ScopedTimezone. DST-correct (localtime_r via the tz database).
-int pine_hour(int64_t bar_ms, const std::string& tz);
-int pine_minute(int64_t bar_ms, const std::string& tz);
-int pine_second(int64_t bar_ms, const std::string& tz);
-int pine_dayofmonth(int64_t bar_ms, const std::string& tz);
-int pine_dayofweek(int64_t bar_ms, const std::string& tz);
-int pine_month(int64_t bar_ms, const std::string& tz);
-int pine_year(int64_t bar_ms, const std::string& tz);
-int pine_weekofyear(int64_t bar_ms, const std::string& tz);
+int local_hour(int64_t bar_ms, const std::string& tz);
+int local_minute(int64_t bar_ms, const std::string& tz);
+int local_second(int64_t bar_ms, const std::string& tz);
+int local_dayofmonth(int64_t bar_ms, const std::string& tz);
+int local_dayofweek(int64_t bar_ms, const std::string& tz);
+int local_month(int64_t bar_ms, const std::string& tz);
+int local_year(int64_t bar_ms, const std::string& tz);
+int local_weekofyear(int64_t bar_ms, const std::string& tz);
 
 // True when local_tm falls within any of the comma-separated HHMM-HHMM
 // windows in windows_body.  "24x7" or empty always returns true.
@@ -128,7 +130,7 @@ bool passes_session_filter(const std::string& session,
 // logged once per occurrence via fprintf(stderr). The fallback is
 // conservative: the returned timestamp is never more than 2 hours later
 // than the true calendar-day start; downstream consumers
-// (pine_time_tradingday) inherit the same semantics.
+// (session_trading_day_open_ms) inherit the same semantics.
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz);
 
 // -------------------------------------------------------------------------
@@ -136,9 +138,9 @@ int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz);
 // -------------------------------------------------------------------------
 // Returns the Unix-ms timestamp of the session-open of the trading day
 // that contains bar_ms.  See implementation for full algorithm + DST notes.
-int64_t pine_time_tradingday(int64_t bar_ms,
-                             const std::string& session,
-                             const std::string& tz);
+int64_t session_trading_day_open_ms(int64_t bar_ms,
+                                    const std::string& session,
+                                    const std::string& tz);
 
 // ---------------------------------------------------------------------------
 // Session predicates backing session.is* Pine v6 variables.
@@ -157,17 +159,17 @@ int64_t pine_time_tradingday(int64_t bar_ms,
 // degrade.  This is documented behaviour, not a bug.
 // ---------------------------------------------------------------------------
 
-bool pine_session_ismarket(const std::string& session,
+bool session_in_market(const std::string& session,
+                       const std::string& tz,
+                       int64_t bar_ms);
+
+bool session_in_premarket(const std::string& session,
+                          const std::string& tz,
+                          int64_t bar_ms);
+
+bool session_in_postmarket(const std::string& session,
                            const std::string& tz,
                            int64_t bar_ms);
-
-bool pine_session_ispremarket(const std::string& session,
-                              const std::string& tz,
-                              int64_t bar_ms);
-
-bool pine_session_ispostmarket(const std::string& session,
-                               const std::string& tz,
-                               int64_t bar_ms);
 
 // Chart-timeframe forms: the rule the session.is* variables of a CHART bar
 // follow. TradingView evaluates them on the chart bar, and a daily-or-higher
@@ -180,19 +182,97 @@ bool pine_session_ispostmarket(const std::string& session,
 // signal with it took 0 trades against TradingView's 57. With an intraday or
 // empty chart_tf these forms defer to the three-argument time-of-day forms
 // above, byte for byte.
-bool pine_session_ismarket(const std::string& session,
+bool session_in_market(const std::string& session,
+                       const std::string& tz,
+                       int64_t bar_ms,
+                       const std::string& chart_tf);
+
+bool session_in_premarket(const std::string& session,
+                          const std::string& tz,
+                          int64_t bar_ms,
+                          const std::string& chart_tf);
+
+bool session_in_postmarket(const std::string& session,
                            const std::string& tz,
                            int64_t bar_ms,
                            const std::string& chart_tf);
 
-bool pine_session_ispremarket(const std::string& session,
-                              const std::string& tz,
-                              int64_t bar_ms,
-                              const std::string& chart_tf);
+// ---------------------------------------------------------------------------
+// Deprecated `pine_*` spellings. They are exact inline forwards, kept so
+// generated code and the source adapter compile unchanged; new code calls the
+// neutral names above.
+// ---------------------------------------------------------------------------
 
-bool pine_session_ispostmarket(const std::string& session,
-                               const std::string& tz,
-                               int64_t bar_ms,
-                               const std::string& chart_tf);
+inline int64_t pine_time(int64_t bar_ms, const std::string& tf,
+                         const std::string& session, const std::string& tz,
+                         const std::string& chart_tf,
+                         const std::string& syminfo_tz = std::string()) {
+    return timeframe_time(bar_ms, tf, session, tz, chart_tf, syminfo_tz);
+}
+
+inline int64_t pine_time(int64_t bar_ms, const std::string& tf,
+                         const std::string& session, const std::string& tz,
+                         const std::string& chart_tf, const std::string& sym_tz,
+                         const std::string& sym_session) {
+    return timeframe_time(bar_ms, tf, session, tz, chart_tf, sym_tz, sym_session);
+}
+
+inline int64_t pine_time_close(int64_t bar_ms, const std::string& tf,
+                               const std::string& session, const std::string& tz,
+                               const std::string& chart_tf,
+                               const std::string& syminfo_tz = std::string()) {
+    return timeframe_time_close(bar_ms, tf, session, tz, chart_tf, syminfo_tz);
+}
+
+inline int64_t pine_time_close(int64_t bar_ms, const std::string& tf,
+                               const std::string& session, const std::string& tz,
+                               const std::string& chart_tf, const std::string& sym_tz,
+                               const std::string& sym_session) {
+    return timeframe_time_close(bar_ms, tf, session, tz, chart_tf, sym_tz, sym_session);
+}
+
+inline int pine_hour(int64_t bar_ms, const std::string& tz) { return local_hour(bar_ms, tz); }
+inline int pine_minute(int64_t bar_ms, const std::string& tz) { return local_minute(bar_ms, tz); }
+inline int pine_second(int64_t bar_ms, const std::string& tz) { return local_second(bar_ms, tz); }
+inline int pine_dayofmonth(int64_t bar_ms, const std::string& tz) { return local_dayofmonth(bar_ms, tz); }
+inline int pine_dayofweek(int64_t bar_ms, const std::string& tz) { return local_dayofweek(bar_ms, tz); }
+inline int pine_month(int64_t bar_ms, const std::string& tz) { return local_month(bar_ms, tz); }
+inline int pine_year(int64_t bar_ms, const std::string& tz) { return local_year(bar_ms, tz); }
+inline int pine_weekofyear(int64_t bar_ms, const std::string& tz) { return local_weekofyear(bar_ms, tz); }
+
+inline int64_t pine_time_tradingday(int64_t bar_ms, const std::string& session,
+                                    const std::string& tz) {
+    return session_trading_day_open_ms(bar_ms, session, tz);
+}
+
+inline bool pine_session_ismarket(const std::string& session, const std::string& tz,
+                                  int64_t bar_ms) {
+    return session_in_market(session, tz, bar_ms);
+}
+
+inline bool pine_session_ispremarket(const std::string& session, const std::string& tz,
+                                     int64_t bar_ms) {
+    return session_in_premarket(session, tz, bar_ms);
+}
+
+inline bool pine_session_ispostmarket(const std::string& session, const std::string& tz,
+                                      int64_t bar_ms) {
+    return session_in_postmarket(session, tz, bar_ms);
+}
+
+inline bool pine_session_ismarket(const std::string& session, const std::string& tz,
+                                  int64_t bar_ms, const std::string& chart_tf) {
+    return session_in_market(session, tz, bar_ms, chart_tf);
+}
+
+inline bool pine_session_ispremarket(const std::string& session, const std::string& tz,
+                                     int64_t bar_ms, const std::string& chart_tf) {
+    return session_in_premarket(session, tz, bar_ms, chart_tf);
+}
+
+inline bool pine_session_ispostmarket(const std::string& session, const std::string& tz,
+                                      int64_t bar_ms, const std::string& chart_tf) {
+    return session_in_postmarket(session, tz, bar_ms, chart_tf);
+}
 
 } // namespace pineforge

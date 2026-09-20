@@ -11,7 +11,7 @@ namespace pineforge {
 
 // ---------- str.format ----------
 
-std::string pine_str_format(const std::string& fmt,
+std::string str_format(const std::string& fmt,
                             const std::vector<std::string>& args) {
     std::string result = fmt;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -27,13 +27,13 @@ std::string pine_str_format(const std::string& fmt,
 
 // ---------- str.format_time ----------
 
-std::string pine_str_format_time(long long timestamp_ms,
+std::string str_format_time(long long timestamp_ms,
                                  const std::string& format,
                                  const std::string& timezone) {
     time_t secs = static_cast<time_t>(timestamp_ms / 1000);
     struct tm tm_buf;
     if (!timezone.empty() && timezone != "UTC" && timezone != "Etc/UTC") {
-        pine_tz::ScopedTimezone guard(timezone);
+        tz_util::ScopedTimezone guard(timezone);
         localtime_r(&secs, &tm_buf);
     } else {
         gmtime_r(&secs, &tm_buf);
@@ -63,7 +63,7 @@ std::string pine_str_format_time(long long timestamp_ms,
 
 // ---------- str.match ----------
 
-std::string pine_str_match(const std::string& source,
+std::string str_match(const std::string& source,
                            const std::string& regex_pattern) {
     try {
         std::regex re(regex_pattern);
@@ -83,7 +83,7 @@ std::string pine_str_match(const std::string& source,
 
 // ---------- str.split ----------
 
-std::vector<std::string> pine_str_split(const std::string& source,
+std::vector<std::string> str_split(const std::string& source,
                                         const std::string& separator) {
     if (separator.empty()) {
         return {source};
@@ -101,7 +101,7 @@ std::vector<std::string> pine_str_split(const std::string& source,
 
 // ---------- str.tostring ----------
 
-std::string pine_str_tostring(double value,
+std::string str_tostring(double value,
                               const std::string& format_mode,
                               double mintick) {
     if (std::isnan(value)) {
