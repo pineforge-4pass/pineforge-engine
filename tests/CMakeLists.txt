@@ -79,6 +79,7 @@ set(TEST_SOURCES
     test_native_report_truth_twin
     test_native_margin_model
     test_native_margin_hooks
+    test_native_margin_hooks_twin
     test_adapter_report_relower
     test_adapter_margin_relower
     test_native_margin_kernel_r5
