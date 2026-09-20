@@ -124,11 +124,14 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.b(spec.initial_margin_fraction.has_value());
     if (spec.initial_margin_fraction) f.d(*spec.initial_margin_fraction);
     f.u(native_intrabar_path_digest(spec.intrabar));
-    // Report recording is opt-in, so it folds only when it is on: a spec that
-    // leaves the kernel out of its report keeps the continuation identity it
-    // had before the policy existed (same conditional shape as the precommit
-    // digest below).
-    if (spec.report_policy != NativeReportPolicy::HostRecorded) {
+    // Report recording folds only when the consumer records of its own
+    // initiative: a spec that leaves the kernel out of its report keeps the
+    // continuation identity it had before the policy existed (same
+    // conditional shape as the precommit digest below).  A host-marked report
+    // (KernelRecordedAtHostMarks) is the same case: the consumer decides
+    // nothing and does nothing between two points of the run, so it folds
+    // nothing, exactly as HostRecorded folds nothing.
+    if (spec.report_policy == NativeReportPolicy::KernelRecorded) {
         f.u(static_cast<uint64_t>(spec.report_policy));
         f.b(spec.report_open_position_at_end);
     }
@@ -5806,8 +5809,29 @@ void NativeExecutionConsumer::record_script_report_point(
         BacktestEngine& engine, int64_t script_open_ms) const {
     const auto* spec = spec_ptr();
     if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    record_report_point(engine, script_open_ms);
+}
+
+// The same fold and the same append, at an instant only the host can name
+// (NativeReportPolicy::KernelRecordedAtHostMarks). A host whose report
+// cadence is its own — a source adapter that publishes a script bar to its
+// generated code, re-enters that script on a fill, or advances its source
+// history over a bar the script never calculates — marks the point inside
+// its own callback, where its broker-state hash and its report rows already
+// read the curve. Recording is still the kernel's: the host names when, not
+// what. Inert under every other policy, so a host that records its own
+// report, or one that asked for the per-calculation cadence, is unaffected.
+void NativeExecutionConsumer::mark_script_report_point(
+        BacktestEngine& engine, int64_t script_bar_ts) const {
+    const auto* spec = spec_ptr();
+    if (!spec || spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return;
+    record_report_point(engine, script_bar_ts);
+}
+
+void NativeExecutionConsumer::record_report_point(
+        BacktestEngine& engine, int64_t report_ts) const {
     engine.update_equity_extremes();
-    engine.record_equity_point(script_open_ms);
+    engine.record_equity_point(report_ts);
 }
 
 // A position still open when the feed ends is reported as the rows a close at

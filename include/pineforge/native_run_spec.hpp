@@ -42,9 +42,17 @@ enum class NativeAbortReporting : std::uint32_t {
 // calculation, so a bare host gets a truthful curve, finite drawdown/run-up
 // metrics and a report whose walk is not degenerate. Recording is reporting:
 // it books no cash and places no order.
+// KernelRecordedAtHostMarks records the very same series, at the points the
+// host marks: a host whose report cadence is not one point per calculation —
+// a source adapter that re-enters its script on a fill, or publishes a bar
+// its script never calculates — keeps that cadence and still stops owning
+// what a report point is. The consumer never records on its own initiative
+// under it, so it leaves the continuation identity exactly where
+// HostRecorded leaves it (see hash_spec in native_execution_consumer.cpp).
 enum class NativeReportPolicy : std::uint32_t {
     HostRecorded = 0,
     KernelRecorded = 1,
+    KernelRecordedAtHostMarks = 2,
 };
 
 enum class NativeOpenDirections : std::uint32_t {

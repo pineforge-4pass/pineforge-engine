@@ -334,6 +334,10 @@ private:
     void scheduler_feed_deferred_aux_security(int chart_index);
     void scheduler_finish_security_sequence();
     void scheduler_record_range_end(const Bar&);
+    // One report point per published source slot. The kernel records it
+    // (NativeReportPolicy::KernelRecordedAtHostMarks); this host owns only
+    // the Pine cadence that says where the points fall.
+    void scheduler_mark_report_point(std::int64_t script_bar_ts);
     void scheduler_record_broker_hash();
     void capture_script_continuation_hash();
     void scheduler_update_session_state(

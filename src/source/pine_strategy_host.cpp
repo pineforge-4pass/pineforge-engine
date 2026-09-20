@@ -1579,8 +1579,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
     if (advance_source_index) {
-        update_equity_extremes();
-        record_equity_point(bar.timestamp);
+        scheduler_mark_report_point(bar.timestamp);
         prev_bar_timestamp_ = bar.timestamp;
     }
 }
@@ -1597,9 +1596,23 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
         chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     adapter_.begin_source_evaluation();
     adapter_.observe_terminal_receipts();
-    update_equity_extremes();
-    record_equity_point(bar.timestamp);
+    scheduler_mark_report_point(bar.timestamp);
     prev_bar_timestamp_ = bar.timestamp;
+}
+
+// The Pine report series has one point per SOURCE slot this host published,
+// which is not the kernel's per-calculation cadence: a calc_on_order_fills
+// re-entry marks the slot it opened at the fill, the ordinary close
+// calculation then marks nothing, and the probe's suppressed tail marks a
+// slot generated code never calculated. The point also has to land inside
+// this callback, before scheduler_record_broker_hash() folds the extremes it
+// just moved and before scheduler_record_range_end() re-marks the curve's
+// last point. So the cadence stays here and the recording does not: the
+// kernel owns what a report point is — the extremes fold and the curve
+// append in engine.hpp — reached through the run spec's report policy.
+void source::PineStrategyHost::scheduler_mark_report_point(std::int64_t script_bar_ts) {
+    as_native_consumer(execution_consumer())
+        .mark_script_report_point(*this, script_bar_ts);
 }
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {

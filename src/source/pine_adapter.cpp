@@ -1465,6 +1465,14 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // Pine's request_abort surface reports a cooperative cancellation through
     // status, not through last_error(). Native-only hosts retain Error.
     spec.abort_reporting = NativeAbortReporting::Quiet;
+    // RP3/RP9 (L2): the kernel records the equity curve and its extremes; the
+    // source host keeps only the Pine cadence that marks where the points
+    // fall (pine_strategy_host.cpp scheduler_mark_report_point). TradingView's
+    // range-end report — which re-marks the curve's last point and re-folds
+    // every extreme from it (pine_strategy_host.cpp scheduler_record_range_end)
+    // — is report shape, not a mark-to-market row, so the kernel's own
+    // range-end producer stays off and report_open_position_at_end with it.
+    spec.report_policy = NativeReportPolicy::KernelRecordedAtHostMarks;
     // Contract P6: Pine pyramiding is adapter command policy. A resting source
     // entry must not consume a generic physical-lot cap before it fills, so
     // the projected native spec deliberately leaves max_open_lots unbounded.

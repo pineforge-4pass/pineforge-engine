@@ -96,6 +96,11 @@ public:
     }
     uint64_t high_water() const noexcept { return consumed_high_water_; }
     void reject_inherited_on_bar(BacktestEngine& engine);
+    // Report truth at the host's own cadence
+    // (NativeReportPolicy::KernelRecordedAtHostMarks): the host marks the
+    // script bar it has just published and the kernel records the point.
+    // Reporting only, and inert under every other policy.
+    void mark_script_report_point(BacktestEngine& engine, int64_t script_bar_ts) const;
     std::optional<Bar> series_bar(std::size_t subscription) const;
     // L5 calculation timing readbacks. The partial bar is the lookahead-free
     // bar so far at the current cursor; the two counters are observation of
@@ -335,6 +340,7 @@ private:
     // are reporting-only: they mark equity and synthesize report rows, and
     // never book cash, place an order or move the broker book.
     void record_script_report_point(BacktestEngine& engine, int64_t script_open_ms) const;
+    void record_report_point(BacktestEngine& engine, int64_t report_ts) const;
     void record_open_position_report_rows(BacktestEngine& engine) const;
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_discrete(BacktestEngine& engine, const NativeDriverPoint& point);

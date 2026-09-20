@@ -94,6 +94,7 @@ bool valid_report_policy(NativeReportPolicy policy) noexcept {
     switch (policy) {
     case NativeReportPolicy::HostRecorded:
     case NativeReportPolicy::KernelRecorded:
+    case NativeReportPolicy::KernelRecordedAtHostMarks:
         return true;
     }
     return false;

@@ -136,9 +136,9 @@ Always set, with documented defaults in the header:
   Cash kinds are account currency per unit or per execution.
 - `close_execution`: `NextEligiblePoint` (default) or `AfterCalculation`
 - `allowed_open_directions`: `None`, `Long`, `Short`, `Both` (default)
-- `report_policy`: `HostRecorded` (default) or `KernelRecorded`;
-  `report_open_position_at_end`: `false` (default). See *Reporting for native
-  hosts* below.
+- `report_policy`: `HostRecorded` (default), `KernelRecorded` or
+  `KernelRecordedAtHostMarks`; `report_open_position_at_end`: `false`
+  (default). See *Reporting for native hosts* below.
 - `calculation`: `BarClose` (default), `BarCloseAndFills` or
   `EveryModeledPoint`; `max_recalculations_per_point`: `8` (default, any
   value including 0 is legal); `open_bar_view`: `Complete` (default) or
@@ -731,6 +731,21 @@ curve is identical with and without an intrabar path. The result is one point
 per script bar, a finite drawdown/run-up walk, and metrics computed over a
 real series.
 
+`NativeReportPolicy::KernelRecordedAtHostMarks` records the very same series
+at the points the host marks, for a host whose report cadence is not one point
+per calculation. The consumer never records on its own initiative under it:
+the host calls the kernel's report mark from inside its own callback, naming
+the label the point carries, and the kernel performs the extremes fold and the
+curve append. The Pine adapter is that host — its report has one point per
+published *source* slot, which is not the same series of instants: a
+`calc_on_order_fills` re-entry marks the slot it opened at the fill and the
+bar's ordinary close calculation then marks nothing, and a suppressed probe
+tail advances source history, and marks, without running generated code at
+all. The point also has to land inside the callback, before the adapter takes
+that bar's broker-state hash and before its range-end rows re-mark the curve's
+last point. Under this policy the kernel owns what a report point is and the
+host owns only when.
+
 `report_open_position_at_end` (`KernelRecorded` only) adds the rows a close of
 the still-open position at the last bar's close would record — one per
 physical lot, through the same row builder every full close uses, with
@@ -742,11 +757,13 @@ exactly as the run left them; the rows appear in `fill_report` and in
 `report_trade_count()` / `get_report_trade()`, never in `closed_trade_count()`
 / `closed_trade()`.
 
-Both fields are opt-in and fold into the continuation hash only once
-`report_policy` is non-default, so a spec that does not ask for kernel
-recording keeps the continuation identity it had before these fields existed.
-Recording does move the broker-state hash, because the equity extremes it
-folds are durable engine state.
+Both fields are opt-in and fold into the continuation hash only under
+`KernelRecorded` — the one policy under which the consumer decides, on its
+own, to act between two points of a run. `HostRecorded` and
+`KernelRecordedAtHostMarks` fold nothing, so a spec that does not hand the
+kernel its cadence keeps the continuation identity it had before these fields
+existed. Recording does move the broker-state hash, because the equity
+extremes it folds are durable engine state.
 
 Per-trade reads: `closed_trade_count()` / `closed_trade(i)` return the closed
 rows this run booked; `report_trade_count()` / `get_report_trade(i)` span those
