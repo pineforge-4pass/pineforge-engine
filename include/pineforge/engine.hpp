@@ -484,12 +484,6 @@ protected:
     // --- Runtime state ---
     Bar current_bar_;
     int bar_index_ = 0;
-    // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
-    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
-    // first used by on_bar na-warm per TV built-in semantics. This selector is
-    // scoped independently from request.security so the two execution contexts
-    // cannot leak their warmup mode into each other. Default OFF.
-    bool chart_ema_na_warmup_ = false;
     // Timestamp of the input bar that FOLLOWS the one being fed to the
     // request.security evaluators; 0 = unknown (streams, the feed's last
     // bar). A historical run holds its whole feed, and the calendar

@@ -51,7 +51,8 @@
     "BacktestEngine::SecurityEvalState::last_published_label",
     "BacktestEngine::SecurityEvalState::DeferredAuxBar",
     "BacktestEngine::SecurityEvalState::deferred_aux",
-    "BacktestEngine::security_calling_close_ms_"
+    "BacktestEngine::security_calling_close_ms_",
+    "BacktestEngine::chart_ema_na_warmup_"
   ],
   "addedStorage": [],
   "addedValueMembers": [

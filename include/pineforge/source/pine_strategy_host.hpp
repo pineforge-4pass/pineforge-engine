@@ -752,6 +752,12 @@ protected:
     // fold like the other configuration slots.
     bool margin_call_enabled_ = true;
 
+    // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
+    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
+    // first used by on_bar na-warm per TV built-in semantics. This selector is
+    // scoped independently from request.security so the two execution contexts
+    // cannot leak their warmup mode into each other. Default OFF.
+    bool chart_ema_na_warmup_ = false;
     // Independent opt-in KI-55 HTF warmup parity. When enabled,
     // request.security series aggregate from security_range_start_ms_ instead
     // of the feed start and their embedded ta.ema na-warm per TV built-in

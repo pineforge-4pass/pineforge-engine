@@ -9,7 +9,7 @@ bar_index_ # Feed cursor reconstructed from delivered bars; it is not an indepen
 bars_in_market_ # Diagnostic/report counter; no admission, matching, or settlement branch reads it.
 broker_state_hash_recording_ # Opt-in output-recording switch; it changes collected reports, never the next execution decision.
 broker_state_hashes_ # Previously emitted hash history; append-only report output not consulted by execution.
-chart_ema_na_warmup_ # Source configuration copied into evaluator preparation; the evaluator's durable series state has its own fold.
+chart_ema_na_warmup_ # Source-host configuration copied into evaluator preparation; the evaluator's durable series state has its own fold.
 chart_timezone_ # Provider configuration used to form the run spec/calendar; active native calendar identity is hashed by the consumer.
 commission_type_ # Legacy configuration carrier projected into the immutable native fee terms before requests are admitted.
 commission_value_ # Legacy configuration carrier projected into the immutable native fee terms before requests are admitted.
