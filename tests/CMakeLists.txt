@@ -418,6 +418,7 @@ set(TEST_SOURCES
     test_live_flags_lane_positive
     test_native_l4c_policy_modules
     test_native_l4c_coof_literals
+    test_adapter_coof_relower
     test_native_l4c_pending_mirror
     test_native_l4c_oracle_reversal_literals
     test_l8b_exit_activation

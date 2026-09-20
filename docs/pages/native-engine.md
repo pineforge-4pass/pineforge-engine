@@ -784,14 +784,26 @@ byte-for-byte what `Complete` books.
 
 ### What stays in the source layer
 
-TradingView's COOF specifics are **not** reproduced here (design ruling R5-5):
-the waypoint-only refill, the two-fills-at-open rule, the script-state
-snapshot/restore and the adapter's own cascade guard and deferral queue all
-remain in `src/source`. A native `BarCloseAndFills` host running the adapter's
+The Pine adapter no longer schedules its own fill cascade: a
+`calc_on_order_fills` strategy projects `calculation = BarCloseAndFills` with
+`max_recalculations_per_point` set to TradingView's guard literal, and the
+consumer drives every fill recalculation from its notification drain and
+delivers it as `on_native_recalculate(..., OrderFill, cause)`. What remains in
+`src/source` is only what TradingView's COOF adds on top of that cadence
+(design ruling R5-5): the language-state snapshot/restore/commit around a
+recalculation, the waypoint-only refill deferral, the two-fills-at-open rule,
+the first-open execution chain, and the two fills Pine refuses to recalculate
+on at all — a `process_orders_on_close` fill at the already-consumed close, and
+a grouped same-entry stop sibling. Those refusals compose with the kernel
+cadence rather than replacing it: the recalculation is offered at the cursor
+and the source layer publishes nothing. `calc_on_order_fills` is a batch-only
+pairing; the Pine stream route refuses it before any spec is projected, so
+`BarCloseAndFills` never reaches forward execution. The waypoint deferral is
+still load-bearing: a native `BarCloseAndFills` host running the adapter's
 refill rule reaches the same book with the same order ids in the same order,
-but the coordinates a request born in a recalculation fills at differ: the
-adapter re-presents it at the chart bar's next waypoint, the kernel at the
-next discrete matching point of the delivered path.
+but the coordinates a request born in a recalculation fills at differ — the
+adapter re-presents it at the chart bar's next waypoint, the kernel at the next
+discrete matching point of the delivered path.
 
 ## One physical book
 

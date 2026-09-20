@@ -555,12 +555,40 @@ void source::PineStrategyHost::on_native_applied(
         }
     }
     project_short_seed_report_rows(event);
-    scheduler_.applied(event, context, *this);
+    scheduler_.applied(event);
+    // R6: with calc_on_order_fills the kernel drives this event's
+    // recalculation next, in the same drain iteration and at the same cursor
+    // (NativeCalculationTrigger::BarCloseAndFills). The range-end row stays
+    // after it, exactly where the adapter's own cascade used to put it.
+    if (!scheduler_.coof_recalculation_due(event, context, *this))
+        record_applied_range_end();
+}
+
+void source::PineStrategyHost::record_applied_range_end() {
     if (scheduler_.terminal_source_bar() || barstate_islast_) {
         const Bar terminal = scheduler_.current_script_bar()
             ? *scheduler_.current_script_bar() : current_bar_;
         scheduler_record_range_end(terminal);
     }
+}
+
+void source::PineStrategyHost::on_native_recalculate(
+        const Bar& bar, const NativeDecisionContext& context,
+        NativeCalculationReason reason,
+        const native_order::ExecutionAppliedEvent* cause) {
+    if (reason != NativeCalculationReason::OrderFill) {
+        // BarClose is the script bar's own calculation; Tick and SubBar are
+        // cadences the Pine spec never selects.
+        on_native_bar(bar, context);
+        return;
+    }
+    if (source_prepare_failed_ || cause == nullptr) return;
+    // A fill Pine does not recalculate on (POOC's terminal close fill, a
+    // grouped-stop sibling, a replayed ordinal) still spends a kernel
+    // recalculation slot; it publishes nothing and books nothing.
+    if (!scheduler_.coof_recalculation_due(*cause, context, *this)) return;
+    scheduler_.recalculate(*cause, context, *this);
+    record_applied_range_end();
 }
 
 native_order::ExecutionTerms source::PineStrategyHost::resolve_execution_terms(

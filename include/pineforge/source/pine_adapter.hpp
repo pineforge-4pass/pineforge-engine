@@ -36,6 +36,12 @@ class PineScheduler;
 
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
 
+// TradingView's calc_on_order_fills cascade guard. It is a Pine literal, not a
+// kernel default: project() hands it to the generic cadence as
+// NativeRunSpec::max_recalculations_per_point, and the adapter's own first-open
+// execution chain keeps refusing at the same count.
+inline constexpr std::uint32_t kCoofLoopGuard = 1U << 20;
+
 struct PineStrategyConfig {
     bool process_orders_on_close = false;
     bool calc_on_order_fills = false;

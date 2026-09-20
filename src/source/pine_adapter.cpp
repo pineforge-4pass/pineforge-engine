@@ -1462,6 +1462,17 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.path_order = path_order;
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
+    // R6: calc_on_order_fills IS the kernel's fill-triggered cadence. The
+    // consumer drives one recalculation at each applied execution's cursor
+    // from its own notification drain (A.4 chronology), delivered to
+    // PineStrategyHost::on_native_recalculate with reason OrderFill; Pine
+    // keeps only its language-state rollback, its waypoint deferral and this
+    // guard literal. The open-bar view stays Complete: TradingView's COOF
+    // callback reads the whole script bar (CT4).
+    if (config.calc_on_order_fills) {
+        spec.calculation = NativeCalculationTrigger::BarCloseAndFills;
+        spec.max_recalculations_per_point = kCoofLoopGuard;
+    }
     // Pine's request_abort surface reports a cooperative cancellation through
     // status, not through last_error(). Native-only hosts retain Error.
     spec.abort_reporting = NativeAbortReporting::Quiet;

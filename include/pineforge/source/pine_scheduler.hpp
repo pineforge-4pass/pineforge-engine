@@ -25,8 +25,19 @@ public:
     void tick(const Bar&, const NativeTickContext&, PineStrategyHost&);
     void bar_open(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void bar(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
-    void applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
-                 PineStrategyHost&);
+    // Applied-notification bookkeeping only. The calc_on_order_fills
+    // recalculation itself is the kernel's cadence now
+    // (NativeCalculationTrigger::BarCloseAndFills): the consumer drives it
+    // from the same drain iteration, right after this callback returns, and
+    // delivers it as recalculate() below.
+    void applied(const native_order::ExecutionAppliedEvent&);
+    // Pine's own admission of a fill recalculation, re-checked at the
+    // kernel's OrderFill cursor. Pure: it reads the freshly advanced applied
+    // cursor, the source config and adapter facts, and mutates nothing.
+    bool coof_recalculation_due(const native_order::ExecutionAppliedEvent&,
+                                const NativeDecisionContext&, PineStrategyHost&) const;
+    void recalculate(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
+                     PineStrategyHost&);
 
     PineLanguageState& language() noexcept { return language_; }
     bool is_first_tick() const noexcept { return language_.is_first_tick_; }

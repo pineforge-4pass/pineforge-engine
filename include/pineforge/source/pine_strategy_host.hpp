@@ -31,6 +31,14 @@ public:
     void on_native_tick(const Bar&, const NativeTickContext&) final;
     void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
     void on_native_bar(const Bar&, const NativeDecisionContext&) final;
+    // R6: every calculation of the run arrives here. BarClose forwards to
+    // on_native_bar exactly as the kernel's default does; OrderFill is
+    // calc_on_order_fills, which the consumer now schedules (spec
+    // NativeCalculationTrigger::BarCloseAndFills) and the source layer only
+    // executes — language-state rollback, publication, first-open chain.
+    void on_native_recalculate(const Bar&, const NativeDecisionContext&,
+                               NativeCalculationReason,
+                               const native_order::ExecutionAppliedEvent*) final;
     void on_native_applied(const native_order::ExecutionAppliedEvent&,
                            const NativeDecisionContext&) final;
     native_order::ExecutionTerms resolve_execution_terms(
@@ -356,6 +364,11 @@ private:
     double compute_liquidation_price() const;
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
+    // The range-end row an applied execution may complete. It stays ordered
+    // after the fill's calc_on_order_fills recalculation, which can advance
+    // the source bar counter, so it runs in whichever of the two callbacks is
+    // last for that event.
+    void record_applied_range_end();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     void clear_aux_security_chart_ranges();
     void prepare_aux_security_chart_ranges(const Bar*, int, const std::string&);

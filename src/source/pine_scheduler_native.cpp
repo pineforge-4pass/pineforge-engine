@@ -585,11 +585,18 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     host.scheduler_record_broker_hash();
 }
 
-void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
-                            const NativeDecisionContext& context, PineStrategyHost& host) {
+void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event) {
     if (event.ordinal <= applied_cursor_) return;
     applied_cursor_ = event.ordinal;
-    if (!host.scheduler_coof_enabled()) return;
+}
+
+bool PineScheduler::coof_recalculation_due(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context, PineStrategyHost& host) const {
+    // applied() advanced the cursor onto this event a moment ago, in the same
+    // drain iteration. A replayed ordinal never scheduled a source callback.
+    if (event.ordinal != applied_cursor_) return false;
+    if (!host.scheduler_coof_enabled()) return false;
     if (host.config_.process_orders_on_close
         && (context.coordinate.provenance == NativePriceProvenance::Calculation
             || context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
@@ -597,9 +604,19 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         // ab9714be pine_scheduler.cpp terminal POOC dispatch: a fill at the
         // already-consumed close is final for that script bar and does not
         // schedule a calc_on_order_fills source callback.
-        return;
+        return false;
     }
-    if (host.adapter_.suppress_grouped_stop_recalc(event, context)) return;
+    if (host.adapter_.suppress_grouped_stop_recalc(event, context)) return false;
+    return true;
+}
+
+// One calc_on_order_fills recalculation at the kernel's OrderFill cursor
+// (NativeCalculationTrigger::BarCloseAndFills): the consumer has already
+// delivered this event's on_native_applied and re-entered the same point
+// frame, so everything below is Pine's own language-state rollback,
+// publication and first-open execution chain.
+void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event,
+                                const NativeDecisionContext& context, PineStrategyHost& host) {
     // ab9714be pine_scheduler.cpp:531-537: the historical O point admits the
     // carried order's open fill and one refill; every later fill advances
     // along the path.  The native matcher may book such a fill at the start
@@ -679,14 +696,17 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         return;
     }
     constexpr std::uint64_t kNoFillEventBudget = std::numeric_limits<std::uint64_t>::max();
-    constexpr std::size_t kCoofLoopGuard = 1U << 20;
+    // The same TradingView literal project() hands the kernel as
+    // max_recalculations_per_point; here it still bounds Pine's own first-open
+    // execution chain inside one recalculation.
+    constexpr std::size_t kFirstOpenLoopGuard = kCoofLoopGuard;
     std::uint64_t budget = kNoFillEventBudget;
     std::size_t executed = 0;
     for (;;) {
         auto newborns = host.adapter_.take_first_open_newborns();
         if (newborns.empty()) break;
         for (const auto& handle : newborns) {
-            if (budget == 0 || executed == kCoofLoopGuard)
+            if (budget == 0 || executed == kFirstOpenLoopGuard)
                 throw std::overflow_error("Pine COOF first-open loop guard exhausted");
             --budget;
             ++executed;
