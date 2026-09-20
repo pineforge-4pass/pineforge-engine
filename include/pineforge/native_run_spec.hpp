@@ -325,21 +325,20 @@ enum class NativePathOrder : std::uint32_t {
 // Explicit, opt-in admission exceptions for a tolerated input-feed shape.
 // They are separate from slot labels because a host may need the tolerant
 // price / unavailable-volume admission while retaining canonical calendar
-// labels.  `NativeFeedTolerance` is the neutral spelling of this type; the
-// definition keeps its historical name because the native C++ ABI guard pins
-// it (scripts/check_native_cpp_versions.py), and the two are the same type.
-enum class NativeLegacyTolerance : std::uint32_t {
+// labels.  This is a feed-shape policy, not a source-language one.
+enum class NativeFeedTolerance : std::uint32_t {
     None = 0,
-    // Match engine_run.cpp's legacy batch structural check: finite OHLC values
-    // need not be positive, and NaN volume means unavailable activity.
+    // Match the batch structural check: finite OHLC values need not be
+    // positive, and NaN volume means unavailable activity.
     BatchStructuralBars = 1u << 0,
     // Source-compatible stream warmups admit finite, non-negative interim
     // OHLC values.  The final warmup close remains strictly positive.
     WarmupNonNegativeOHLC = 1u << 1,
 };
 
-// Neutral spelling of the tolerance type. Same type, same values, same hash.
-using NativeFeedTolerance = NativeLegacyTolerance;
+// Deprecated spelling of the tolerance type. Same type, same values, same
+// hash; kept so existing hosts and the source adapter compile unchanged.
+using NativeLegacyTolerance = NativeFeedTolerance;
 
 constexpr bool native_feed_tolerance_enabled(
         NativeFeedTolerance enabled, NativeFeedTolerance requested) noexcept {
@@ -456,10 +455,9 @@ struct NativeRunSpec {
     bool timeframe_undetected = false;
     // Strict native hosts retain the canonical slot-label rule. A provider
     // feed may opt into raw, strictly-increasing caller labels.  The declared
-    // type spellings below are the ones the native C++ ABI guard pins;
-    // NativeFeedTolerance is the same type under its neutral name.
+    // type spellings below are the ones the native C++ ABI guard pins.
     NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;
-    NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;
+    NativeFeedTolerance legacy_tolerance = NativeFeedTolerance::None;
     NativePathOrder path_order = NativePathOrder::Auto;
 
     std::string ticker;

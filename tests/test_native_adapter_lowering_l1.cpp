@@ -332,7 +332,7 @@ public:
             configured.timeframe_undetected = true;
         }
         if (legacy_tolerant_intrabar) {
-            configured.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+            configured.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
         }
         if (copy_intrabar && args.bar_magnifier) {
             if (synthesize_intrabar) {

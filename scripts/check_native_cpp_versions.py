@@ -369,7 +369,7 @@ def check_texts(files):
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
                    "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
                    "NativeSlotLabelPolicy", "NativePathOrder",
-                   "NativeLegacyTolerance", "NativeReportPolicy",
+                   "NativeFeedTolerance", "NativeReportPolicy",
                    "NativeTimeframeSubscription", "NativeMarginModel",
                    "NativeLiquidationSizing", "NativeLiquidationCheck",
                    "NativeMarginEquityBasis", "NativeLiquidationLevelBase",
@@ -384,6 +384,13 @@ def check_texts(files):
                "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
                "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
+    # R5 lane L12 (2.ii c) renamed the feed-tolerance surface. The deprecated
+    # spellings stay compilable for existing hosts and the source adapter, so
+    # pin them as aliases of the neutral names rather than as definitions.
+    for alias in ('using NativeLegacyTolerance = NativeFeedTolerance;',
+                  'LegacyTolerant = FeedTolerant,'):
+        if alias not in spec:
+            raise ValueError('native_run_spec_v3 dropped a deprecated alias: ' + alias)
     spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
@@ -400,7 +407,7 @@ def check_texts(files):
         raise ValueError('native_run_spec_v3 omits NativeAbortReporting')
     for member in (
             'NativeSlotLabelPolicyslot_label_policy=NativeSlotLabelPolicy::Canonical;',
-            'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;',
+            'NativeFeedTolerancelegacy_tolerance=NativeFeedTolerance::None;',
             'NativePathOrderpath_order=NativePathOrder::Auto;',
             'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;',
             'NativeReportPolicyreport_policy=NativeReportPolicy::HostRecorded;',
@@ -569,12 +576,12 @@ def check_texts(files):
     require_namespace_functions(
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v5")
-    for token in ('spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant',
-                  'NativeLegacyTolerance::BatchStructuralBars',
-                  'NativeLegacyTolerance::WarmupNonNegativeOHLC',
+    for token in ('spec.slot_label_policy == NativeSlotLabelPolicy::FeedTolerant',
+                  'NativeFeedTolerance::BatchStructuralBars',
+                  'NativeFeedTolerance::WarmupNonNegativeOHLC',
                   'NativeInputPreflightError::TimestampDeltaOverflow'):
         if token not in driver_src:
-            raise ValueError('native driver omits legacy-compatible preflight token: ' + token)
+            raise ValueError('native driver omits feed-tolerance preflight token: ' + token)
 
     consumer_src = consumer_epoch_source(files)
     if 'native_margin_model_digest(*spec.margin)' not in consumer_src:

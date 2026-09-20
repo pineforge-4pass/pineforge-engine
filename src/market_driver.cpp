@@ -38,20 +38,20 @@ bool legacy_stream_warmup_bar_structurally_valid(const Bar& bar) noexcept {
 bool preflight_bar_structurally_valid(const NativeRunSpec& spec, const Bar& bar,
                                       NativeInputPolicy policy) noexcept {
     if (policy == NativeInputPolicy::StreamWarmup
-        && native_legacy_tolerance_enabled(
-            spec.legacy_tolerance, NativeLegacyTolerance::WarmupNonNegativeOHLC)) {
+        && native_feed_tolerance_enabled(
+            spec.legacy_tolerance, NativeFeedTolerance::WarmupNonNegativeOHLC)) {
         return legacy_stream_warmup_bar_structurally_valid(bar);
     }
     if (policy == NativeInputPolicy::Batch
-        && native_legacy_tolerance_enabled(
-            spec.legacy_tolerance, NativeLegacyTolerance::BatchStructuralBars)) {
+        && native_feed_tolerance_enabled(
+            spec.legacy_tolerance, NativeFeedTolerance::BatchStructuralBars)) {
         return legacy_batch_bar_structurally_valid(bar);
     }
     return native_bar_structurally_valid(bar);
 }
 
 bool legacy_tolerant_slot_labels(const NativeRunSpec& spec) noexcept {
-    return spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant;
+    return spec.slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
 }
 
 bool timestamp_delta_overflows(std::int64_t previous, std::int64_t current) noexcept {

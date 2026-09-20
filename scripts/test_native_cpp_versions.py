@@ -91,7 +91,7 @@ class NativeVersions(unittest.TestCase):
     def test_legacy_tolerant_slot_policy_is_explicit_and_hashed(self):
         for before, after in (
             ('NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;', ''),
-            ('NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;', ''),
+            ('NativeFeedTolerance legacy_tolerance = NativeFeedTolerance::None;', ''),
             ('SlotLabelPolicy, LegacyTolerance,', 'SlotLabelPolicy,'),
             ('UnknownSlotLabelPolicy,', 'MissingSlotLabelPolicy,'),
             ('UnknownLegacyTolerance,', 'MissingLegacyTolerance,'),
@@ -103,10 +103,14 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.slot_label_policy));', '')
         self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.legacy_tolerance));', '')
         self.reject(FILES[7],
-                    'spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant',
+                    'spec.slot_label_policy == NativeSlotLabelPolicy::FeedTolerant',
                     'false')
-        self.reject(FILES[7], 'NativeLegacyTolerance::BatchStructuralBars',
-                    'NativeLegacyTolerance::RemovedBatchStructuralBars')
+        self.reject(FILES[7], 'NativeFeedTolerance::BatchStructuralBars',
+                    'NativeFeedTolerance::RemovedBatchStructuralBars')
+        # The deprecated spellings must keep existing for callers that still
+        # use them; dropping either alias is rejected too.
+        self.reject(FILES[4], 'using NativeLegacyTolerance = NativeFeedTolerance;', '')
+        self.reject(FILES[4], 'LegacyTolerant = FeedTolerant,', '')
 
     def test_path_order_policy_is_explicit_validated_hashed_and_consumed(self):
         for before, after in (

@@ -552,13 +552,13 @@ int main() {
         CHECK(canonical.native_continuation_hash() == canonical_hash);
 
         auto structural_spec = canonical_spec;
-        structural_spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+        structural_spec.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
         RecordHost structural;
         CHECK(structural.configure_native(structural_spec).status == NativeSetupStatus::Applied);
         CHECK(structural.native_continuation_hash() != canonical_hash);
 
         auto tolerant_spec = canonical_spec;
-        tolerant_spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+        tolerant_spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
         RecordHost tolerant;
         tolerant.buy_on_first = true;
         CHECK(tolerant.configure_native(tolerant_spec).status == NativeSetupStatus::Applied);
@@ -1299,8 +1299,8 @@ int main() {
               == NativeInputPreflightError::StructuralInvalid);
 
         auto tolerant = spec;
-        tolerant.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
-        tolerant.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+        tolerant.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+        tolerant.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
         Bar tolerant_zero_px{0.0, 1.0, 0.0, 1.0, 1.0, 60000};
         CHECK(preflight_native_inputs(tolerant, &tolerant_zero_px, 1, NativeInputPolicy::Batch));
         CHECK(preflight_native_inputs(tolerant, &nanvol, 1, NativeInputPolicy::Batch));

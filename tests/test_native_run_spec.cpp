@@ -441,7 +441,7 @@ void synthesized_intrabar_contract() {
     spec.intrabar.value = synthesized;
     expect_acceptance(spec);
 
-    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
     expect_acceptance(spec);
 
     synthesized.samples = 1;
@@ -474,36 +474,48 @@ void synthesized_intrabar_contract() {
           "synthesized intrabar sampling parameters are content-hashed");
 }
 
-void legacy_tolerant_policy_contract() {
+void feed_tolerant_policy_contract() {
     auto spec = complete_spec();
     check(spec.slot_label_policy == NativeSlotLabelPolicy::Canonical,
           "canonical slot labels are the native default");
-    check(spec.legacy_tolerance == NativeLegacyTolerance::None,
-          "legacy structural tolerance is opt-in");
+    check(spec.legacy_tolerance == NativeFeedTolerance::None,
+          "feed structural tolerance is opt-in");
 
-    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
     expect_acceptance(spec);
-    spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+    spec.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
     expect_acceptance(spec);
-    check(native_legacy_tolerance_enabled(
-              spec.legacy_tolerance, NativeLegacyTolerance::BatchStructuralBars),
-          "legacy structural tolerance bit is readable");
-    check(!native_legacy_tolerance_enabled(
-              NativeLegacyTolerance::None, NativeLegacyTolerance::BatchStructuralBars),
-          "absent legacy structural tolerance stays strict");
-    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(
-        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
-        | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC));
+    check(native_feed_tolerance_enabled(
+              spec.legacy_tolerance, NativeFeedTolerance::BatchStructuralBars),
+          "feed structural tolerance bit is readable");
+    check(!native_feed_tolerance_enabled(
+              NativeFeedTolerance::None, NativeFeedTolerance::BatchStructuralBars),
+          "absent feed structural tolerance stays strict");
+    spec.legacy_tolerance = static_cast<NativeFeedTolerance>(
+        static_cast<std::uint32_t>(NativeFeedTolerance::BatchStructuralBars)
+        | static_cast<std::uint32_t>(NativeFeedTolerance::WarmupNonNegativeOHLC));
     expect_acceptance(spec);
-    check(native_legacy_tolerance_enabled(
-              spec.legacy_tolerance, NativeLegacyTolerance::WarmupNonNegativeOHLC),
+    check(native_feed_tolerance_enabled(
+              spec.legacy_tolerance, NativeFeedTolerance::WarmupNonNegativeOHLC),
           "stream warmup tolerance bit is readable");
+
+    // R5 lane L12 (2.ii c): the deprecated spellings stay compilable and mean
+    // exactly the same type, enumerator value and predicate.
+    static_assert(std::is_same<NativeLegacyTolerance, NativeFeedTolerance>::value,
+                  "NativeLegacyTolerance is an alias of NativeFeedTolerance");
+    check(static_cast<std::uint32_t>(NativeSlotLabelPolicy::LegacyTolerant)
+              == static_cast<std::uint32_t>(NativeSlotLabelPolicy::FeedTolerant),
+          "LegacyTolerant keeps FeedTolerant's hashed value");
+    check(native_legacy_tolerance_enabled(
+              NativeLegacyTolerance::BatchStructuralBars,
+              NativeFeedTolerance::BatchStructuralBars),
+          "the deprecated predicate spelling still answers");
 
     spec = complete_spec();
     spec.slot_label_policy = static_cast<NativeSlotLabelPolicy>(2u);
     expect_refusal(spec, Error::UnknownSlotLabelPolicy, Field::SlotLabelPolicy);
     spec = complete_spec();
-    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(4u);
+    spec.legacy_tolerance = static_cast<NativeFeedTolerance>(4u);
     expect_refusal(spec, Error::UnknownLegacyTolerance, Field::LegacyTolerance);
 }
 
@@ -565,7 +577,7 @@ int main() {
     undetected_timeframe_contract();
     intrabar_sample_eligibility_contract();
     synthesized_intrabar_contract();
-    legacy_tolerant_policy_contract();
+    feed_tolerant_policy_contract();
     abort_reporting_contract();
     path_order_contract();
     failure_atomicity();
