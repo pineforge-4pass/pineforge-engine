@@ -773,6 +773,27 @@ public:
                const std::string& oca_name = {}, int oca_type = 0);
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
+    native_order::ExecutionTerms resolve_source_terms(const NativeExecutionTermsFacts&) const;
+    // R5 lane R4d. anchor_relative_exits runs at the end of a source
+    // evaluation: every queued relative strategy.exit whose parent entry is a
+    // live kernel request is submitted as that parent's anchored bracket
+    // child. resolve_anchored_level is the kernel's once-per-arm level hook:
+    // TradingView's projection of fill + ticks (directional_tick, the price
+    // grid spelling, the half-tick trigger threshold) is applied there.
+    void anchor_relative_exits();
+    std::optional<double> resolve_anchored_level(const NativeAnchoredLevelView&) const;
+    // How many relative legs this run placed as anchored kernel children, how
+    // many of those the fill-point re-run adopted as its own request, and how
+    // many were withdrawn instead (parent ended, definition changed, or the
+    // fill point asked for another request).
+    struct AnchoredRelativeStats {
+        std::uint64_t anchored = 0;
+        std::uint64_t adopted = 0;
+        std::uint64_t withdrawn = 0;
+    };
+    const AnchoredRelativeStats& anchored_relative_stats() const noexcept {
+        return anchored_relative_stats_;
+    }
     // R5 R2 classification, answered for the command a default-sized MARKET
     // entry on this side would write at the CURRENT execution point: true when
     // the core's native_order::Sized names the whole conversion, so the units
@@ -1048,6 +1069,30 @@ private:
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
     };
 
+    // R5 lane R4d: one relative leg of a queued strategy.exit, spelled as the
+    // kernel's anchored bracket child (native_order::FromOwnerFill under
+    // WaitForApplied{parent, PendingUntilArmed}). Until its parent fills it is
+    // a kernel request only: no placement row, no live handle, so every source
+    // book (reservations, admission, the pending projection) reads exactly
+    // what it read before. `installed_level` is the trigger level the arm hook
+    // restated; the fill-point exit() re-run adopts the armed request when it
+    // would submit that same trigger, and withdraws it otherwise.
+    struct AnchoredRelativeLeg {
+        SourceId exit_id;
+        SourceId from_entry;
+        PineOrderFamily family = PineOrderFamily::ExitLimit;
+        native_order::RequestHandle handle{};
+        native_order::RequestHandle parent{};
+        bool parent_long = true;
+        // The source tick operand this leg was anchored from (profit, loss, or
+        // the ceiled trail_points) and, for a trailing leg, the source offset.
+        double operand_ticks = 0.0;
+        double trail_offset = std::numeric_limits<double>::quiet_NaN();
+        native_order::Request request;
+        bool armed = false;
+        double installed_level = std::numeric_limits<double>::quiet_NaN();
+    };
+
     struct PendingCoofRequest {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -1181,6 +1226,23 @@ private:
                                           const PlacementSnapshot* paired_close);
     void materialize_relative_exits(PlacementSnapshot,
                                    const native_order::ExecutionAppliedEvent&);
+    void withdraw_anchored_relative_legs(const SourceId* exit_id,
+                                         const SourceId* from_entry);
+    bool anchorable_relative_exit(const PendingRelativeExit&,
+                                  native_order::RequestHandle& parent,
+                                  bool& parent_long) const;
+    struct RelativeLegShape {
+        PineOrderFamily family = PineOrderFamily::ExitLimit;
+        native_order::Trigger trigger = native_order::Limit{};
+        double signed_ticks = 0.0;
+        double operand_ticks = 0.0;
+    };
+    std::vector<RelativeLegShape> relative_leg_shapes(const PendingRelativeExit&,
+                                                      bool parent_long) const;
+    bool armed_relative_legs_adoptable(const PlacementSnapshot& opening,
+                                       const native_order::ExecutionAppliedEvent&,
+                                       const std::vector<PendingRelativeExit>&) const;
+    static bool anchored_relative_request(const native_order::Request&) noexcept;
     void materialize_pending_bracket_legs(
         const native_order::ExecutionAppliedEvent&);
     void stage_flat_children_before_parent(const SourceId&, std::int32_t,
@@ -1319,6 +1381,11 @@ private:
     std::vector<SourceShadowPending> source_shadow_pending_;
     double pending_same_bar_close_qty_ = 0.0;
     std::vector<PendingRelativeExit> pending_relative_exits_;
+    // Mutable: the kernel's arm hook is const and records the level it
+    // installed on the leg it restated.
+    mutable std::vector<AnchoredRelativeLeg> anchored_relative_legs_;
+    AnchoredRelativeStats anchored_relative_stats_{};
+    std::int64_t anchored_cohort_sequence_ = 0;
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
@@ -1349,6 +1416,9 @@ private:
     std::uint64_t receipt_cursor_ = 0;
     std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;
+    // The parent whose fill the current materialize_relative_exits re-run
+    // serves; only that parent's armed anchored legs are adoptable.
+    native_order::RequestHandle materializing_parent_{};
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;
     std::uint64_t next_sequential_group_ = 0;

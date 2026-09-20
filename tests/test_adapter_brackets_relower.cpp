@@ -52,12 +52,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -432,10 +434,1029 @@ void adapter_projects_the_tick_the_kernel_resolves_against() {
 
 #endif  // PINEFORGE_R4_HARVEST
 
+// ═══════════════════════════════════════════════════════════════════════
+// R5 lane R4d: the RELATIVE from_entry legs on the kernel's anchored legs.
+//
+// A strategy.exit whose profit / loss / trail_points operand cannot resolve
+// yet (its parent entry has not filled) used to wait in the adapter's own
+// queue until the parent's fill re-ran the whole exit() pipeline. It is now
+// also submitted as the parent's anchored bracket child
+// (native_order::FromOwnerFill in ticks, Directional rounding,
+// WaitForApplied{parent, PendingUntilArmed}); the kernel arms it at the fill,
+// the adapter restates TradingView's level projection in
+// resolve_anchored_level, and the fill-point re-run ADOPTS the armed request
+// when it is the very trigger that re-run would have submitted.
+//
+// Every scenario below queues at least one relative operand against a parent
+// that is still pending. The pinned facts are the closed rows, the equity
+// extremes, the final position AND a per-bar digest of the source pending
+// book (observe_pending_copy_v1: ids, levels, tick operands, quantities,
+// creation bar / sequence, reservation, position side) folded together with
+// the position the script sees, so "the same book as before at every point"
+// is checked, not only the trades. Request incarnations are deliberately not
+// folded: an anchored child is accepted when its parent is, not when it
+// fills.
+//
+// R4D_PINNED_DATA was harvested from the UNCHANGED adapter on the wave-5
+// integration tip 577315a: this translation unit compiled with
+// -DPINEFORGE_R4D_HARVEST against that tree's headers and libpineforge.a.
+// Rebuild it the same way; never edit a value by hand.
+namespace r4d {
+
+enum class Shape {
+    RelBracketTp,
+    RelBracketSl,
+    RelBracketEveryBar,
+    RelExitBeforeEntry,
+    RelTrailOneShot,
+    RelTrailOffset,
+    RelTrailZero,
+    RelShort,
+    RelThreeWay,
+    RelLimitParent,
+    RelParentCancel,
+    RelPyramid,
+    RelDeclined,
+    RelOcaName,
+    RelSlippage,
+    RelPartial,
+    RelReversal,
+    RelPyramidOtherId,
+    RelOrderAdd,
+    RelPartialClose,
+    RelDeclinedFlat,
+    RelCancelAll,
+    RelCancelExitId,
+    RelStopParent,
+    RelNegativeShort,
+    RelTwoExits,
+    RelGapFill,
+    RelShortTrail,
+    RelProfitOnly,
+    RelQtyExplicit,
+    RelReissueChanged,
+    RelSharedOca,
+    RelBreakoutPair,
+    RelBreakoutPairSetOnce,
+};
+
+struct Fnv {
+    std::uint64_t h = 1469598103934665603ULL;
+    void bytes(const void* data, std::size_t n) {
+        const auto* p = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ULL; }
+    }
+    void u(std::uint64_t v) { bytes(&v, sizeof v); }
+    void i(std::int64_t v) { bytes(&v, sizeof v); }
+    void d(double v) {
+        // One NaN spelling: the payload of a quiet NaN is not a source fact.
+        if (std::isnan(v)) { u(0x7ff8000000000000ULL); return; }
+        bytes(&v, sizeof v);
+    }
+    void s(const char* v) { bytes(v, std::strlen(v)); u(0xffULL); }
+};
+
+// How the scenario is scheduled. Plain is the ordinary one-calculation-per-bar
+// run; Magnifier replays every chart bar as two lower-timeframe bars, so a
+// parent fills and its legs arm on a sub-bar path; the two order-processing
+// switches are the modes this lane leaves on the adapter's own queue.
+enum class Mode { Plain, Magnifier, CalcOnOrderFills, ProcessOnClose };
+
+class Probe final : public pineforge::source::PineStrategyHost {
+public:
+    Probe(Shape shape, Mode mode) : shape_(shape) {
+        pineforge::source::PineStrategyConfig config;
+        config.calc_on_order_fills = mode == Mode::CalcOnOrderFills;
+        config.process_orders_on_close = mode == Mode::ProcessOnClose;
+        config.initial_capital = 10000.0;
+        config.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
+        config.commission_value = 0.0;
+        config.slippage = shape == Shape::RelSlippage ? 2 : 0;
+        config.pyramiding = shape == Shape::RelPyramid || shape == Shape::RelPyramidOtherId
+            ? 2 : 1;
+        if (shape == Shape::RelDeclined || shape == Shape::RelDeclinedFlat) {
+            config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            config.default_qty_value = 100.0;
+        } else {
+            config.default_qty_type = static_cast<int>(QtyType::FIXED);
+            config.default_qty_value = 2.0;
+        }
+        configure_pine_strategy(config);
+        syminfo_mintick_ = 0.01;
+        margin_call_enabled_ = false;
+    }
+
+    double signed_units() const noexcept {
+        return position_qty_ * (position_side_ == PositionSide::SHORT ? -1.0 : 1.0);
+    }
+#ifndef PINEFORGE_R4D_HARVEST
+    // The lane's own witness (absent from the 577315a headers, which is this
+    // unit's fail-before diagnostic): how many relative legs ran on the
+    // kernel's anchored bracket legs.
+    pineforge::source::PineExecutionAdapter::AnchoredRelativeStats anchored() const noexcept {
+        return adapter_.anchored_relative_stats();
+    }
+#endif
+    std::uint64_t book_digest() const noexcept { return book_.h; }
+    const std::vector<std::string>& book_lines() const noexcept { return lines_; }
+
+    void on_source_bar(const Bar&) override {
+        observe_book();
+        const int bar = bar_index_;
+        switch (shape_) {
+        case Shape::RelBracketTp:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "tp", kNaN, "",
+                              /*profit=*/250.0, /*loss=*/250.0);
+            }
+            break;
+        case Shape::RelBracketSl:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "sl", kNaN, "",
+                              800.0, 150.0);
+            }
+            break;
+        case Shape::RelBracketEveryBar:
+            if (bar == 0) strategy_entry("L", true);
+            strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          250.0, 250.0);
+            break;
+        case Shape::RelExitBeforeEntry:
+            // The exit is declared on every bar, long before its entry exists.
+            strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          300.0, 100.0);
+            if (bar == 2 || bar == 10) strategy_entry("L", true);
+            break;
+        case Shape::RelTrailOneShot:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("T", "L", kNaN, kNaN, /*trail_points=*/250.0, kNaN, kNaN, 100.0,
+                              "one-shot");
+            }
+            break;
+        case Shape::RelTrailOffset:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("T", "L", kNaN, kNaN, 300.0, /*trail_offset=*/100.0, kNaN, 100.0,
+                              "trail");
+            }
+            break;
+        case Shape::RelTrailZero:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("T", "L", kNaN, kNaN, 100.0, 0.0, kNaN, 100.0, "ride");
+            }
+            break;
+        case Shape::RelShort:
+            if (bar == 0) {
+                strategy_entry("S", false);
+                strategy_exit("X", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              250.0, 150.0);
+            }
+            break;
+        case Shape::RelThreeWay:
+            // The corpus's pending-parent shape (bracket-exit-three-way-set-
+            // once-entry-01 and its three siblings): absolute stop + limit
+            // placed with the entry, the relative trail activation queued.
+            if (bar == 0 || bar == 10) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", bar == 0 ? 104.25 : 103.25, bar == 0 ? 98.5 : 96.0,
+                              /*trail_points=*/300.0, kNaN, kNaN, 100.0, "3-way");
+            }
+            break;
+        case Shape::RelLimitParent:
+            // A resting limit parent re-issued with its relative bracket on
+            // every bar; it fills intrabar, so the legs arm on the path.
+            if (signed_units() == 0.0 && bar < 8) strategy_entry("L", true, 99.75);
+            strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          200.0, 100.0);
+            break;
+        case Shape::RelParentCancel:
+            if (bar == 0) {
+                strategy_entry("L", true, 90.0);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              250.0, 150.0);
+            }
+            if (bar == 2) strategy_cancel("L");
+            if (bar == 3) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              100.0, 150.0);
+            }
+            break;
+        case Shape::RelPyramid:
+            if (bar == 0 || bar == 2) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 400.0);
+            }
+            break;
+        case Shape::RelDeclined:
+            if (bar == 0) strategy_entry("L", true);
+            if (bar == 2) {
+                // The reversal is declined at the +1 gap open (KI-54), so its
+                // relative bracket never gets a fill to resolve against.
+                strategy_entry("S", false);
+                strategy_exit("SX", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              300.0, 300.0);
+            }
+            if (bar == 4) strategy_close("L");
+            break;
+        case Shape::RelOcaName:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "grp",
+                              250.0, 250.0);
+            }
+            break;
+        case Shape::RelSlippage:
+            // Two ticks of slippage against a one-tick stop: the level is
+            // already behind the fill print when the leg is born.
+            if (bar == 0 || bar == 9) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              300.0, 1.0);
+            }
+            break;
+        case Shape::RelPartial:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X1", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 50.0, "", kNaN, "",
+                              150.0, 300.0);
+                strategy_exit("X2", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              350.0, 300.0);
+            }
+            break;
+        case Shape::RelReversal:
+            if (bar == 0) strategy_entry("L", true);
+            if (bar == 5) {
+                strategy_entry("S", false);
+                strategy_exit("SX", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 100.0);
+            }
+            break;
+        case Shape::RelPyramidOtherId:
+            // The bracket is set once for "L"; a second id adds to the book
+            // afterwards, so the bracket's lot is no longer the whole position.
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 400.0);
+            }
+            if (bar == 2) strategy_entry("L2", true);
+            break;
+        case Shape::RelOrderAdd:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 400.0);
+            }
+            if (bar == 2) strategy_order("A", true, 1.0);
+            break;
+        case Shape::RelPartialClose:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 400.0);
+            }
+            if (bar == 2) strategy_close("L", "half", kNaN, 50.0);
+            break;
+        case Shape::RelDeclinedFlat:
+            // The whole equity at the signal close cannot be afforded at the
+            // +1 gap open: the parent is declined and its bracket never arms.
+            if (bar == 2) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              300.0, 300.0);
+            }
+            if (bar == 4) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              200.0, 700.0);
+            }
+            break;
+        case Shape::RelCancelAll:
+            if (bar == 0) {
+                strategy_entry("L", true, 90.0);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              250.0, 150.0);
+            }
+            if (bar == 2) strategy_cancel_all();
+            if (bar == 3) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              100.0, 150.0);
+            }
+            break;
+        case Shape::RelCancelExitId:
+            if (bar == 0) {
+                strategy_entry("L", true, 99.75);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              250.0, 150.0);
+                strategy_cancel("X");
+            }
+            if (bar == 6) strategy_close("L");
+            break;
+        case Shape::RelStopParent:
+            // A buy-stop parent crossed intrabar: the legs arm mid-path.
+            if (bar == 0) {
+                strategy_entry("L", true, kNaN, 100.75);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              150.0, 50.0);
+            }
+            break;
+        case Shape::RelNegativeShort:
+            // A short's profit target far below zero is no limit leg at all.
+            if (bar == 0) {
+                strategy_entry("S", false);
+                strategy_exit("X", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              20000.0, 150.0);
+            }
+            break;
+        case Shape::RelTwoExits:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X1", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              150.0, 300.0);
+                strategy_exit("X2", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              350.0, 300.0);
+            }
+            break;
+        case Shape::RelGapFill:
+            // The target sits inside the next bar's opening gap.
+            if (bar == 6) {
+                strategy_entry("S", false);
+                strategy_exit("X", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              20.0, 20.0);
+            }
+            break;
+        case Shape::RelShortTrail:
+            if (bar == 6) {
+                strategy_entry("S", false);
+                strategy_exit("T", "S", kNaN, kNaN, 300.0, 100.0, kNaN, 100.0, "trail");
+            }
+            break;
+        case Shape::RelProfitOnly:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              250.0, kNaN);
+            }
+            break;
+        case Shape::RelQtyExplicit:
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", /*qty=*/1.0, "",
+                              250.0, 250.0);
+            }
+            break;
+        case Shape::RelSharedOca:
+            // Two parents whose brackets share one OCA name: the first
+            // bracket's fill cancels the group while the second parent still
+            // rests, so its anchored children leave with it and are anchored
+            // again on the next evaluation.
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("XL", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "g",
+                              150.0, 300.0);
+                strategy_entry("S", false, kNaN, /*stop=*/97.25);
+                strategy_exit("XS", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "g",
+                              100.0, 100.0);
+            }
+            break;
+        case Shape::RelBreakoutPair:
+            // The breakout pair: a buy stop above and a sell stop below, each
+            // with its own relative bracket, all re-issued on every flat bar.
+            if (signed_units() == 0.0) {
+                strategy_entry("L", true, kNaN, /*stop=*/101.25);
+                strategy_entry("S", false, kNaN, /*stop=*/99.25);
+            }
+            strategy_exit("XL", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          150.0, 100.0);
+            strategy_exit("XS", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          150.0, 100.0);
+            break;
+        case Shape::RelBreakoutPairSetOnce:
+            if (bar == 0) {
+                strategy_entry("L", true, kNaN, /*stop=*/101.25);
+                strategy_entry("S", false, kNaN, /*stop=*/99.25);
+                strategy_exit("XL", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              150.0, 100.0);
+                strategy_exit("XS", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              150.0, 100.0);
+            }
+            break;
+        case Shape::RelReissueChanged:
+            // The queued definition changes while its limit parent still rests.
+            if (signed_units() == 0.0 && bar < 8) strategy_entry("L", true, 97.25);
+            strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                          100.0 + 10.0 * bar, 100.0);
+            break;
+        }
+    }
+
+private:
+    // The pending book and the position exactly as the script body finds them.
+    void observe_book() {
+        const int count = observe_pending_count_v1();
+        const double position = signed_units();
+        book_.i(bar_index_); book_.i(count); book_.d(position);
+        char line[512];
+        std::snprintf(line, sizeof line, "bar=%d pos=%.17g pending=%d", bar_index_, position,
+                      count);
+        lines_.emplace_back(line);
+        for (int index = 0; index < count; ++index) {
+            pf_pending_order_v1_t row{};
+            if (observe_pending_copy_v1(index, &row) != 0) { book_.i(-1); continue; }
+            book_.s(row.id); book_.s(row.from_entry); book_.i(row.type); book_.i(row.is_long);
+            book_.d(row.limit_price); book_.d(row.stop_price); book_.d(row.trail_points);
+            book_.d(row.trail_price); book_.d(row.trail_offset); book_.d(row.profit_ticks);
+            book_.d(row.loss_ticks); book_.d(row.qty); book_.d(row.qty_percent);
+            book_.s(row.oca_name); book_.i(row.created_bar); book_.i(row.created_seq);
+            book_.i(row.created_position_side); book_.i(row.created_position_cycle_seq);
+            book_.d(row.sizing_price); book_.d(row.sizing_equity);
+            book_.i(row.quantity_reservation_present); book_.d(row.quantity_reservation_units);
+            book_.d(row.legs_definition_limit_price); book_.d(row.legs_definition_stop_price);
+            book_.d(row.legs_definition_trail_price); book_.i(row.dormant_bracket);
+            std::snprintf(line, sizeof line,
+                          "  [%d] id=%s from=%s type=%d limit=%.17g stop=%.17g tp=%.17g "
+                          "tprice=%.17g toff=%.17g profit=%.17g loss=%.17g qty=%.17g pct=%.17g "
+                          "bar=%d seq=%lld side=%d resv=%.17g",
+                          index, row.id, row.from_entry, row.type, row.limit_price,
+                          row.stop_price, row.trail_points, row.trail_price, row.trail_offset,
+                          row.profit_ticks, row.loss_ticks, row.qty, row.qty_percent,
+                          row.created_bar, static_cast<long long>(row.created_seq),
+                          row.created_position_side, row.quantity_reservation_units);
+            lines_.emplace_back(line);
+        }
+    }
+
+    Shape shape_;
+    Fnv book_;
+    std::vector<std::string> lines_;
+};
+
+std::vector<Bar> feed(Shape shape) {
+    if (shape == Shape::RelDeclined || shape == Shape::RelDeclinedFlat)
+        return ::feed(::Shape::ParentRejection);
+    return ::feed(::Shape::FromEntryBracket);
+}
+
+struct Observed {
+    std::vector<Row> rows;
+    double final_equity = 0.0;
+    double max_drawdown = 0.0;
+    double max_runup = 0.0;
+    double position_units = 0.0;
+    std::uint64_t book = 0;
+    std::vector<std::string> lines;
+    std::uint64_t anchored = 0;
+    std::uint64_t adopted = 0;
+    std::uint64_t withdrawn = 0;
+};
+
+// Two lower bars per chart bar, every price taken from the chart bar itself so
+// the run stays binary-exact: a rising bar dips first, a falling bar peaks
+// first.
+std::vector<Bar> lower_feed(const std::vector<Bar>& chart) {
+    std::vector<Bar> lower;
+    for (std::size_t i = 0; i < chart.size(); ++i) {
+        const Bar& bar = chart[i];
+        const bool rising = bar.close >= bar.open;
+        Bar first = bar;
+        Bar second = bar;
+        if (rising) {
+            first.high = bar.open; first.low = bar.low; first.close = bar.low;
+            second.open = bar.low; second.low = bar.low;
+        } else {
+            first.low = bar.open; first.high = bar.high; first.close = bar.high;
+            second.open = bar.high; second.high = bar.high;
+        }
+        first.timestamp = static_cast<std::int64_t>(i) * 120000;
+        second.timestamp = first.timestamp + 60000;
+        lower.push_back(first);
+        lower.push_back(second);
+    }
+    return lower;
+}
+
+Observed observe(Shape shape, Mode mode) {
+    Observed out;
+    Probe probe(shape, mode);
+    const auto bars = feed(shape);
+    if (mode == Mode::Magnifier) {
+        const auto lower = lower_feed(bars);
+        probe.run(lower.data(), static_cast<int>(lower.size()), "1", "2",
+                  /*bar_magnifier=*/true, /*magnifier_samples=*/4,
+                  MagnifierDistribution::ENDPOINTS);
+    } else {
+        probe.run(bars.data(), static_cast<int>(bars.size()));
+    }
+#ifndef PINEFORGE_R4D_HARVEST
+    out.anchored = probe.anchored().anchored;
+    out.adopted = probe.anchored().adopted;
+    out.withdrawn = probe.anchored().withdrawn;
+#endif
+    CHECK(probe.last_error().empty());
+    if (!probe.last_error().empty()) std::printf("  run error: %s\n", probe.last_error().c_str());
+    ReportC report{};
+    probe.fill_report(&report);
+    for (int i = 0; i < report.trades_len; ++i) {
+        const TradeC& t = report.trades[i];
+        out.rows.push_back({t.entry_time, t.exit_time, t.entry_price, t.exit_price,
+                            t.qty, t.pnl, t.is_long, t.open_at_end});
+    }
+    out.final_equity = report.equity_curve_len > 0
+        ? report.equity_curve[report.equity_curve_len - 1].equity : 0.0;
+    out.max_drawdown = report.metrics.equity.max_equity_drawdown;
+    out.max_runup = report.metrics.equity.max_equity_runup;
+    BacktestEngine::free_report(&report);
+    out.position_units = probe.signed_units();
+    out.book = probe.book_digest();
+    out.lines = probe.book_lines();
+    return out;
+}
+
+// The lane's own facts per scenario: how many relative legs were placed as
+// anchored kernel children, how many of them the parent's fill point adopted
+// as its request, and how many left instead. They are NOT harvested from the
+// base (it has no anchored legs); they pin which scenarios really run on the
+// kernel primitive and which the adapter keeps on its own queue, so a hook
+// that stops reproducing the level, or a predicate that stops holding, fails
+// here even though the fallback keeps every trade identical.
+struct Legs {
+    std::uint64_t anchored;
+    std::uint64_t adopted;
+    std::uint64_t withdrawn;
+};
+
+struct Named {
+    const char* symbol;
+    const char* name;
+    Shape shape;
+    std::size_t min_rows;
+    Legs legs;
+    Mode mode = Mode::Plain;
+};
+
+constexpr Named kShapes[] = {
+    {"RelBracketTp", "rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}},
+    {"RelBracketSl", "rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}},
+    {"RelBracketEveryBar", "rel-bracket-every-bar", Shape::RelBracketEveryBar, 1, {2, 2, 0}},
+    {"RelExitBeforeEntry", "rel-exit-before-entry", Shape::RelExitBeforeEntry, 1, {4, 4, 0}},
+    {"RelTrailOneShot", "rel-trail-one-shot", Shape::RelTrailOneShot, 1, {1, 1, 0}},
+    {"RelTrailOffset", "rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}},
+    {"RelTrailZero", "rel-trail-zero", Shape::RelTrailZero, 1, {1, 1, 0}},
+    {"RelShort", "rel-short", Shape::RelShort, 1, {2, 2, 0}},
+    {"RelThreeWay", "rel-three-way", Shape::RelThreeWay, 1, {2, 2, 0}},
+    {"RelLimitParent", "rel-limit-parent", Shape::RelLimitParent, 1, {12, 4, 8}},
+    {"RelParentCancel", "rel-parent-cancel", Shape::RelParentCancel, 1, {4, 2, 2}},
+    {"RelPyramid", "rel-pyramid", Shape::RelPyramid, 1, {2, 2, 0}},
+    {"RelDeclined", "rel-declined", Shape::RelDeclined, 1, {0, 0, 0}},
+    {"RelOcaName", "rel-oca-name", Shape::RelOcaName, 1, {2, 2, 0}},
+    {"RelSlippage", "rel-slippage", Shape::RelSlippage, 1, {4, 0, 4}},
+    {"RelPartial", "rel-partial", Shape::RelPartial, 1, {0, 0, 0}},
+    {"RelReversal", "rel-reversal", Shape::RelReversal, 1, {0, 0, 0}},
+    {"RelPyramidOtherId", "rel-pyramid-other-id", Shape::RelPyramidOtherId, 1, {2, 2, 0}},
+    {"RelOrderAdd", "rel-order-add", Shape::RelOrderAdd, 1, {2, 2, 0}},
+    {"RelPartialClose", "rel-partial-close", Shape::RelPartialClose, 1, {2, 2, 0}},
+    {"RelDeclinedFlat", "rel-declined-flat", Shape::RelDeclinedFlat, 1, {4, 2, 2}},
+    {"RelCancelAll", "rel-cancel-all", Shape::RelCancelAll, 1, {4, 2, 2}},
+    {"RelCancelExitId", "rel-cancel-exit-id", Shape::RelCancelExitId, 1, {0, 0, 0}},
+    {"RelStopParent", "rel-stop-parent", Shape::RelStopParent, 1, {2, 2, 0}},
+    {"RelNegativeShort", "rel-negative-short", Shape::RelNegativeShort, 1, {2, 1, 1}},
+    {"RelTwoExits", "rel-two-exits", Shape::RelTwoExits, 1, {4, 2, 2}},
+    {"RelGapFill", "rel-gap-fill", Shape::RelGapFill, 1, {2, 2, 0}},
+    {"RelShortTrail", "rel-short-trail", Shape::RelShortTrail, 1, {1, 1, 0}},
+    {"RelProfitOnly", "rel-profit-only", Shape::RelProfitOnly, 1, {1, 1, 0}},
+    {"RelQtyExplicit", "rel-qty-explicit", Shape::RelQtyExplicit, 1, {0, 0, 0}},
+    {"RelReissueChanged", "rel-reissue-changed", Shape::RelReissueChanged, 1, {18, 2, 16}},
+    {"RelSharedOca", "rel-shared-oca", Shape::RelSharedOca, 1, {6, 4, 2}},
+    {"RelBreakoutPair", "rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 26}},
+    {"RelBreakoutPairSetOnce", "rel-breakout-pair-set-once", Shape::RelBreakoutPairSetOnce, 1,
+     {6, 4, 2}},
+    {"MagRelBreakoutPair", "mag-rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 26},
+     Mode::Magnifier},
+    {"MagRelBracketTp", "mag-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::Magnifier},
+    {"MagRelBracketSl", "mag-rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}, Mode::Magnifier},
+    {"MagRelTrailOffset", "mag-rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}, Mode::Magnifier},
+    {"MagRelTrailOneShot", "mag-rel-trail-one-shot", Shape::RelTrailOneShot, 1, {1, 1, 0}, Mode::Magnifier},
+    {"MagRelLimitParent", "mag-rel-limit-parent", Shape::RelLimitParent, 1, {12, 4, 8}, Mode::Magnifier},
+    {"MagRelStopParent", "mag-rel-stop-parent", Shape::RelStopParent, 1, {2, 2, 0}, Mode::Magnifier},
+    {"MagRelShort", "mag-rel-short", Shape::RelShort, 1, {2, 2, 0}, Mode::Magnifier},
+    {"MagRelSlippage", "mag-rel-slippage", Shape::RelSlippage, 1, {4, 0, 4}, Mode::Magnifier},
+    {"CoofRelBracketTp", "coof-rel-bracket-tp", Shape::RelBracketTp, 1, {0, 0, 0}, Mode::CalcOnOrderFills},
+    {"CoofRelTrailOffset", "coof-rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}, Mode::CalcOnOrderFills},
+    {"PoocRelBracketTp", "pooc-rel-bracket-tp", Shape::RelBracketTp, 1, {0, 0, 0}, Mode::ProcessOnClose},
+    {"PoocRelShort", "pooc-rel-short", Shape::RelShort, 1, {0, 0, 0}, Mode::ProcessOnClose},
+};
+
+#ifdef PINEFORGE_R4D_HARVEST
+
+void harvest() {
+    std::printf("// harvested: paste between R4D_PINNED_DATA_BEGIN/END\n");
+    for (const Named& named : kShapes) {
+        scenario = named.name;
+        const Observed got = observe(named.shape, named.mode);
+        std::printf("constexpr Row k%s_rows[] = {\n", named.symbol);
+        for (const auto& r : got.rows) {
+            std::printf("    {%lldLL, %lldLL, %.17g, %.17g, %.17g, %.17g, %d, %d},\n",
+                        static_cast<long long>(r.entry_time),
+                        static_cast<long long>(r.exit_time),
+                        r.entry_price, r.exit_price, r.qty, r.pnl, r.is_long, r.open_at_end);
+        }
+        std::printf("};\nconstexpr Pinned k%s = {k%s_rows, %zu, %.17g, %.17g, %.17g, %.17g, "
+                    "0x%016llxULL};\n\n",
+                    named.symbol, named.symbol, got.rows.size(), got.final_equity,
+                    got.max_drawdown, got.max_runup, got.position_units,
+                    static_cast<unsigned long long>(got.book));
+    }
+}
+
+#else
+
+struct Pinned {
+    const Row* rows;
+    std::size_t rows_len;
+    double final_equity;
+    double max_drawdown;
+    double max_runup;
+    double position_units;
+    std::uint64_t book;
+};
+
+// R4D_PINNED_DATA_BEGIN — harvested on 577315a, unchanged adapter.
+constexpr Row kRelBracketTp_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kRelBracketTp = {kRelBracketTp_rows, 1, 10005, 0, 0, 0, 0xbbefba563f16c3aeULL};
+
+constexpr Row kRelBracketSl_rows[] = {
+    {1700000060000LL, 1700000480000LL, 100, 98.5, 2, -3, 1, 0},
+};
+constexpr Pinned kRelBracketSl = {kRelBracketSl_rows, 1, 9997, 10.5, 0, 0, 0xceca690bb7e934a6ULL};
+
+constexpr Row kRelBracketEveryBar_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kRelBracketEveryBar = {kRelBracketEveryBar_rows, 1, 10005, 0, 0, 0, 0xb2ecb9b0e0661bdbULL};
+
+constexpr Row kRelExitBeforeEntry_rows[] = {
+    {1700000180000LL, 1700000300000LL, 100.75, 103.75, 2, 6, 1, 0},
+    {1700000660000LL, 1700000720000LL, 97.5, 100.5, 2, 6, 1, 0},
+};
+constexpr Pinned kRelExitBeforeEntry = {kRelExitBeforeEntry_rows, 2, 10012, 0, 0, 0, 0x38323ef3655f7398ULL};
+
+constexpr Row kRelTrailOneShot_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kRelTrailOneShot = {kRelTrailOneShot_rows, 1, 10005, 0, 0, 0, 0x5bdd541ccbd85cd8ULL};
+
+constexpr Row kRelTrailOffset_rows[] = {
+    {1700000060000LL, 1700000360000LL, 100, 103, 2, 6, 1, 0},
+};
+constexpr Pinned kRelTrailOffset = {kRelTrailOffset_rows, 1, 10006, 1.5, 0, 0, 0x12d56ad14b30e01dULL};
+
+constexpr Row kRelTrailZero_rows[] = {
+    {1700000060000LL, 1700000120000LL, 100, 101, 2, 2, 1, 0},
+};
+constexpr Pinned kRelTrailZero = {kRelTrailZero_rows, 1, 10002, 0, 0, 0, 0x52337b68d4ef03e3ULL};
+
+constexpr Row kRelShort_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 101.5, 2, -3, 0, 0},
+};
+constexpr Pinned kRelShort = {kRelShort_rows, 1, 9997, 3, 0, 0, 0x8c12b97ed08064d4ULL};
+
+constexpr Row kRelThreeWay_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 103, 2, 6, 1, 0},
+    {1700000660000LL, 1700000720000LL, 97.5, 100.5, 2, 6, 1, 0},
+};
+constexpr Pinned kRelThreeWay = {kRelThreeWay_rows, 2, 10012, 0, 0, 0, 0x210c6f877fde3c48ULL};
+
+constexpr Row kRelLimitParent_rows[] = {
+    {1700000060000LL, 1700000180000LL, 99.75, 101.75, 2, 4, 1, 0},
+    {1700000480000LL, 1700000480000LL, 99.75, 98.75, 2, -2, 1, 0},
+};
+constexpr Pinned kRelLimitParent = {kRelLimitParent_rows, 2, 10002, 2, 0, 0, 0x9703ae6d927006dfULL};
+
+constexpr Row kRelParentCancel_rows[] = {
+    {1700000240000LL, 1700000240000LL, 101.75, 102.75, 2, 2, 1, 0},
+};
+constexpr Pinned kRelParentCancel = {kRelParentCancel_rows, 1, 10002, 0, 0, 0, 0xe109b35e14c45190ULL};
+
+constexpr Row kRelPyramid_rows[] = {
+    {1700000060000LL, 1700000300000LL, 100, 104, 2, 8, 1, 0},
+    {1700000180000LL, 1700000300000LL, 100.75, 104, 2, 6.5, 1, 0},
+};
+constexpr Pinned kRelPyramid = {kRelPyramid_rows, 2, 10014.5, 0, 0, 0, 0x7a228a3c3666f510ULL};
+
+constexpr Row kRelDeclined_rows[] = {
+    {1700000060000LL, 1700000300000LL, 100, 111, 100, 1100, 1, 0},
+};
+constexpr Pinned kRelDeclined = {kRelDeclined_rows, 1, 11100, 0, 0, 0, 0x088ba12fb3c43463ULL};
+
+constexpr Row kRelOcaName_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kRelOcaName = {kRelOcaName_rows, 1, 10005, 0, 0, 0, 0x6b6305edcca0d5b5ULL};
+
+constexpr Row kRelSlippage_rows[] = {
+    {1700000060000LL, 1700000060000LL, 100.02, 99.980000000000004, 2, -0.079999999999984084, 1, 0},
+    {1700000600000LL, 1700000600000LL, 97.519999999999996, 97.480000000000004, 2, -0.079999999999984084, 1, 0},
+};
+constexpr Pinned kRelSlippage = {kRelSlippage_rows, 2, 9999.8400000000001, 0.15999999999985448, 0, 0, 0x0514b30438e22e6cULL};
+
+constexpr Row kRelPartial_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 101.5, 1, 1.5, 1, 0},
+    {1700000060000LL, 1700000300000LL, 100, 103.5, 1, 3.5, 1, 0},
+};
+constexpr Pinned kRelPartial = {kRelPartial_rows, 2, 10005, 0, 0, 0, 0x303863dbc705f224ULL};
+
+constexpr Row kRelReversal_rows[] = {
+    {1700000060000LL, 1700000360000LL, 100, 103.75, 2, 7.5, 1, 0},
+    {1700000360000LL, 1700000480000LL, 103.75, 99.75, 2, 8, 0, 0},
+};
+constexpr Pinned kRelReversal = {kRelReversal_rows, 2, 10015.5, 0, 0, 0, 0x64ddf650a058a5b4ULL};
+
+constexpr Row kRelPyramidOtherId_rows[] = {
+    {1700000060000LL, 1700000300000LL, 100, 104, 2, 8, 1, 0},
+    {1700000180000LL, 1700000840000LL, 100.75, 103, 2, 4.5, 1, 1},
+};
+constexpr Pinned kRelPyramidOtherId = {kRelPyramidOtherId_rows, 2, 10012.5, 12.5, 11, 2, 0x52a8ad6e286b0628ULL};
+
+constexpr Row kRelOrderAdd_rows[] = {
+    {1700000060000LL, 1700000300000LL, 100, 104, 2, 8, 1, 0},
+    {1700000180000LL, 1700000840000LL, 100.75, 103, 1, 2.25, 1, 1},
+};
+constexpr Pinned kRelOrderAdd = {kRelOrderAdd_rows, 2, 10010.25, 6.25, 5.5, 1, 0x47a66cd880d50594ULL};
+
+constexpr Row kRelPartialClose_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 100.75, 1, 0.75, 1, 0},
+    {1700000060000LL, 1700000300000LL, 100, 104, 1, 4, 1, 0},
+};
+constexpr Pinned kRelPartialClose = {kRelPartialClose_rows, 2, 10004.75, 0, 0, 0, 0x14c100fceb1d86b8ULL};
+
+constexpr Row kRelDeclinedFlat_rows[] = {
+    {1700000300000LL, 1700000300000LL, 111, 104, 90.090090090090087, -630.63063063063055, 1, 0},
+};
+constexpr Pinned kRelDeclinedFlat = {kRelDeclinedFlat_rows, 1, 9369.3693693693695, 630.63063063063055, 0, 0, 0x361936b7d7c3e483ULL};
+
+constexpr Row kRelCancelAll_rows[] = {
+    {1700000240000LL, 1700000240000LL, 101.75, 102.75, 2, 2, 1, 0},
+};
+constexpr Pinned kRelCancelAll = {kRelCancelAll_rows, 1, 10002, 0, 0, 0, 0xe109b35e14c45190ULL};
+
+constexpr Row kRelCancelExitId_rows[] = {
+    {1700000060000LL, 1700000420000LL, 99.75, 103.25, 2, 7, 1, 0},
+};
+constexpr Pinned kRelCancelExitId = {kRelCancelExitId_rows, 1, 10007, 1, 0, 0, 0x810ffa74ed9bfcecULL};
+
+constexpr Row kRelStopParent_rows[] = {
+    {1700000120000LL, 1700000240000LL, 100.75, 102.25, 2, 3, 1, 0},
+};
+constexpr Pinned kRelStopParent = {kRelStopParent_rows, 1, 10003, 0, 0, 0, 0xd1a3df50aac3145fULL};
+
+constexpr Row kRelNegativeShort_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 101.5, 2, -3, 0, 0},
+};
+constexpr Pinned kRelNegativeShort = {kRelNegativeShort_rows, 1, 9997, 3, 0, 0, 0xde6a5338ca677394ULL};
+
+constexpr Row kRelTwoExits_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 101.5, 2, 3, 1, 0},
+};
+constexpr Pinned kRelTwoExits = {kRelTwoExits_rows, 1, 10003, 0, 0, 0, 0x413e42490dd2a9d4ULL};
+
+constexpr Row kRelGapFill_rows[] = {
+    {1700000420000LL, 1700000420000LL, 103.25, 103.45, 2, -0.40000000000000568, 0, 0},
+};
+constexpr Pinned kRelGapFill = {kRelGapFill_rows, 1, 9999.6000000000004, 0.3999999999996362, 0, 0, 0x0514b30438e22e6cULL};
+
+constexpr Row kRelShortTrail_rows[] = {
+    {1700000420000LL, 1700000540000LL, 103.25, 99, 2, 8.5, 0, 0},
+};
+constexpr Pinned kRelShortTrail = {kRelShortTrail_rows, 1, 10008.5, 1.5, 0, 0, 0x3784a5265850bf4cULL};
+
+constexpr Row kRelProfitOnly_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kRelProfitOnly = {kRelProfitOnly_rows, 1, 10005, 0, 0, 0, 0x854e44f39ba34322ULL};
+
+constexpr Row kRelQtyExplicit_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 1, 2.5, 1, 0},
+    {1700000060000LL, 1700000840000LL, 100, 103, 1, 3, 1, 1},
+};
+constexpr Pinned kRelQtyExplicit = {kRelQtyExplicit_rows, 2, 10005.5, 6.25, 5.5, 1, 0xdf9a7ea6263e0d46ULL};
+
+constexpr Row kRelReissueChanged_rows[] = {
+    {1700000540000LL, 1700000660000LL, 97.25, 99.25, 2, 4, 1, 0},
+};
+constexpr Pinned kRelReissueChanged = {kRelReissueChanged_rows, 1, 10004, 0, 0, 0, 0x5bd020efbd5159f8ULL};
+
+constexpr Row kRelSharedOca_rows[] = {
+    {1700000060000LL, 1700000180000LL, 100, 101.5, 2, 3, 1, 0},
+    {1700000540000LL, 1700000660000LL, 97.25, 98.25, 2, -2, 0, 0},
+};
+constexpr Pinned kRelSharedOca = {kRelSharedOca_rows, 2, 10001, 2, 0, 0, 0x6bb1d517dd594ebeULL};
+
+constexpr Row kRelBreakoutPair_rows[] = {
+    {1700000180000LL, 1700000240000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {1700000300000LL, 1700000360000LL, 102.75, 104.25, 2, 3, 1, 0},
+    {1700000420000LL, 1700000420000LL, 103.25, 102.25, 2, -2, 1, 0},
+    {1700000480000LL, 1700000480000LL, 101.25, 100.25, 2, -2, 1, 0},
+    {1700000540000LL, 1700000660000LL, 98.25, 99.25, 2, -2, 0, 0},
+    {1700000720000LL, 1700000720000LL, 99.25, 100.25, 2, -2, 0, 0},
+    {1700000780000LL, 1700000780000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {1700000840000LL, 1700000840000LL, 103, 103, 2, 0, 1, 1},
+};
+constexpr Pinned kRelBreakoutPair = {kRelBreakoutPair_rows, 8, 10001, 8, 3, 2, 0xdee6f9810220c7a0ULL};
+
+constexpr Row kRelBreakoutPairSetOnce_rows[] = {
+    {1700000180000LL, 1700000240000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {1700000480000LL, 1700000540000LL, 99.25, 97.75, 2, 3, 0, 0},
+};
+constexpr Pinned kRelBreakoutPairSetOnce = {kRelBreakoutPairSetOnce_rows, 2, 10006, 0, 0, 0, 0x157cc0001ede7376ULL};
+
+constexpr Row kMagRelBreakoutPair_rows[] = {
+    {420000LL, 540000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {600000LL, 720000LL, 102.75, 104.25, 2, 3, 1, 0},
+    {840000LL, 900000LL, 103.25, 102.25, 2, -2, 1, 0},
+    {960000LL, 1020000LL, 101.25, 100.25, 2, -2, 1, 0},
+    {1080000LL, 1380000LL, 98.25, 99.25, 2, -2, 0, 0},
+    {1440000LL, 1500000LL, 99.25, 100.25, 2, -2, 0, 0},
+    {1620000LL, 1620000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {1680000LL, 1680000LL, 103, 103, 2, 0, 1, 1},
+};
+constexpr Pinned kMagRelBreakoutPair = {kMagRelBreakoutPair_rows, 8, 10001, 8, 3, 2, 0x03474c49dca8bc04ULL};
+
+constexpr Row kMagRelBracketTp_rows[] = {
+    {120000LL, 540000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kMagRelBracketTp = {kMagRelBracketTp_rows, 1, 10005, 0, 0, 0, 0x577159c6dba2ac05ULL};
+
+constexpr Row kMagRelBracketSl_rows[] = {
+    {120000LL, 1020000LL, 100, 98.5, 2, -3, 1, 0},
+};
+constexpr Pinned kMagRelBracketSl = {kMagRelBracketSl_rows, 1, 9997, 10.5, 0, 0, 0xa65938a0103f1ccdULL};
+
+constexpr Row kMagRelTrailOffset_rows[] = {
+    {120000LL, 780000LL, 100, 103.5, 2, 7, 1, 0},
+};
+constexpr Pinned kMagRelTrailOffset = {kMagRelTrailOffset_rows, 1, 10007, 0.5, 0, 0, 0x61c23d6a28f0f142ULL};
+
+constexpr Row kMagRelTrailOneShot_rows[] = {
+    {120000LL, 540000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kMagRelTrailOneShot = {kMagRelTrailOneShot_rows, 1, 10005, 0, 0, 0, 0x83150528a91d732fULL};
+
+constexpr Row kMagRelLimitParent_rows[] = {
+    {120000LL, 420000LL, 99.75, 101.75, 2, 4, 1, 0},
+    {1020000LL, 1020000LL, 99.75, 98.75, 2, -2, 1, 0},
+};
+constexpr Pinned kMagRelLimitParent = {kMagRelLimitParent_rows, 2, 10002, 2, 0, 0, 0x24e46fd2675cf69fULL};
+
+constexpr Row kMagRelStopParent_rows[] = {
+    {300000LL, 540000LL, 100.75, 102.25, 2, 3, 1, 0},
+};
+constexpr Pinned kMagRelStopParent = {kMagRelStopParent_rows, 1, 10003, 0, 0, 0, 0x9288d52f3e3a8aabULL};
+
+constexpr Row kMagRelShort_rows[] = {
+    {120000LL, 420000LL, 100, 101.5, 2, -3, 0, 0},
+};
+constexpr Pinned kMagRelShort = {kMagRelShort_rows, 1, 9997, 3, 0, 0, 0x5ee3f00d56388cacULL};
+
+constexpr Row kMagRelSlippage_rows[] = {
+    {120000LL, 120000LL, 100.02, 99.990000000000009, 2, -0.059999999999973852, 1, 0},
+    {1200000LL, 1200000LL, 97.519999999999996, 97.490000000000009, 2, -0.059999999999973852, 1, 0},
+};
+constexpr Pinned kMagRelSlippage = {kMagRelSlippage_rows, 2, 9999.8799999999992, 0.12000000000080036, 0, 0, 0x0514b30438e22e6cULL};
+
+constexpr Row kCoofRelBracketTp_rows[] = {
+    {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kCoofRelBracketTp = {kCoofRelBracketTp_rows, 1, 10005, 0, 0, 0, 0x9b4c903337c72ec5ULL};
+
+constexpr Row kCoofRelTrailOffset_rows[] = {
+    {1700000060000LL, 1700000360000LL, 100, 103, 2, 6, 1, 0},
+};
+constexpr Pinned kCoofRelTrailOffset = {kCoofRelTrailOffset_rows, 1, 10006, 1.5, 0, 0, 0xdd3536b38dd5827fULL};
+
+constexpr Row kPoocRelBracketTp_rows[] = {
+    {1700000000000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
+};
+constexpr Pinned kPoocRelBracketTp = {kPoocRelBracketTp_rows, 1, 10005, 0, 0, 0, 0xdde82a3e625617dfULL};
+
+constexpr Row kPoocRelShort_rows[] = {
+    {1700000000000LL, 1700000180000LL, 100, 101.5, 2, -3, 0, 0},
+};
+constexpr Pinned kPoocRelShort = {kPoocRelShort_rows, 1, 9997, 3, 0, 0, 0x47a1401276fc97fcULL};
+// R4D_PINNED_DATA_END
+
+constexpr const Pinned* kPinned[] = {
+    &kRelBracketTp,
+    &kRelBracketSl,
+    &kRelBracketEveryBar,
+    &kRelExitBeforeEntry,
+    &kRelTrailOneShot,
+    &kRelTrailOffset,
+    &kRelTrailZero,
+    &kRelShort,
+    &kRelThreeWay,
+    &kRelLimitParent,
+    &kRelParentCancel,
+    &kRelPyramid,
+    &kRelDeclined,
+    &kRelOcaName,
+    &kRelSlippage,
+    &kRelPartial,
+    &kRelReversal,
+    &kRelPyramidOtherId,
+    &kRelOrderAdd,
+    &kRelPartialClose,
+    &kRelDeclinedFlat,
+    &kRelCancelAll,
+    &kRelCancelExitId,
+    &kRelStopParent,
+    &kRelNegativeShort,
+    &kRelTwoExits,
+    &kRelGapFill,
+    &kRelShortTrail,
+    &kRelProfitOnly,
+    &kRelQtyExplicit,
+    &kRelReissueChanged,
+    &kRelSharedOca,
+    &kRelBreakoutPair,
+    &kRelBreakoutPairSetOnce,
+    &kMagRelBreakoutPair,
+    &kMagRelBracketTp,
+    &kMagRelBracketSl,
+    &kMagRelTrailOffset,
+    &kMagRelTrailOneShot,
+    &kMagRelLimitParent,
+    &kMagRelStopParent,
+    &kMagRelShort,
+    &kMagRelSlippage,
+    &kCoofRelBracketTp,
+    &kCoofRelTrailOffset,
+    &kPoocRelBracketTp,
+    &kPoocRelShort,
+};
+static_assert(std::size(kPinned) == std::size(kShapes));
+
+void compare_all() {
+    for (std::size_t index = 0; index < std::size(kShapes); ++index) {
+        const Named& named = kShapes[index];
+        const Pinned& pinned = *kPinned[index];
+        scenario = named.name;
+        const Observed got = observe(named.shape, named.mode);
+        CHECK(got.rows.size() >= named.min_rows);
+        CHECK(got.rows.size() == pinned.rows_len);
+        const std::size_t n = got.rows.size() < pinned.rows_len ? got.rows.size()
+                                                                : pinned.rows_len;
+        for (std::size_t i = 0; i < n; ++i) {
+            const Row& left = got.rows[i];
+            const Row& right = pinned.rows[i];
+            CHECK(left.entry_time == right.entry_time);
+            CHECK(left.exit_time == right.exit_time);
+            CHECK(left.entry_price == right.entry_price);
+            CHECK(left.exit_price == right.exit_price);
+            CHECK(left.qty == right.qty);
+            CHECK(left.pnl == right.pnl);
+            CHECK(left.is_long == right.is_long);
+            CHECK(left.open_at_end == right.open_at_end);
+        }
+        CHECK(got.final_equity == pinned.final_equity);
+        CHECK(got.max_drawdown == pinned.max_drawdown);
+        CHECK(got.max_runup == pinned.max_runup);
+        CHECK(got.position_units == pinned.position_units);
+        std::printf("  %-24s anchored=%llu adopted=%llu withdrawn=%llu\n", named.name,
+                    static_cast<unsigned long long>(got.anchored),
+                    static_cast<unsigned long long>(got.adopted),
+                    static_cast<unsigned long long>(got.withdrawn));
+        CHECK(got.anchored == named.legs.anchored);
+        CHECK(got.adopted == named.legs.adopted);
+        CHECK(got.withdrawn == named.legs.withdrawn);
+        const bool same_book = got.book == pinned.book;
+        CHECK(same_book);
+        if (!same_book) {
+            // The digest names no bar; the trace does.
+            for (const auto& line : got.lines) std::printf("    %s\n", line.c_str());
+        }
+    }
+}
+
+#endif  // PINEFORGE_R4D_HARVEST
+
+}  // namespace r4d
+
 }  // namespace
 
 int main() {
-#ifdef PINEFORGE_R4_HARVEST
+#if defined(PINEFORGE_R4D_HARVEST)
+    r4d::harvest();
+    return failures == 0 ? 0 : 1;
+#elif defined(PINEFORGE_R4_HARVEST)
     std::printf("// harvested: paste between R4_PINNED_DATA_BEGIN/END\n");
     emit("FromEntryBracket", Shape::FromEntryBracket);
     emit("FromEntryStopout", Shape::FromEntryStopout);
@@ -447,6 +1468,7 @@ int main() {
 #else
     for (const Expected& pinned : kScenarios) compare(pinned);
     adapter_projects_the_tick_the_kernel_resolves_against();
+    r4d::compare_all();
     std::printf("adapter bracket/trail re-lowering: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;

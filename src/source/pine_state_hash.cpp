@@ -311,6 +311,30 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
     }
+    // R5 lane R4d: folded only while a leg is anchored, so every run that
+    // anchors none keeps its established hash.
+    if (!anchored_relative_legs_.empty() || anchored_relative_stats_.anchored != 0
+        || materializing_parent_.incarnation != 0) {
+        f.s("pineforge-source-anchored-legs/v1");
+        f.u(anchored_relative_stats_.anchored); f.u(anchored_relative_stats_.adopted);
+        f.u(anchored_relative_stats_.withdrawn); f.u(materializing_parent_.incarnation);
+        f.i(anchored_cohort_sequence_);
+        f.u(anchored_relative_legs_.size());
+        for (const auto& leg : anchored_relative_legs_) {
+            f.s(leg.exit_id); f.s(leg.from_entry); f.u(static_cast<std::uint64_t>(leg.family));
+            f.u(leg.handle.incarnation); f.u(leg.parent.incarnation); f.b(leg.parent_long);
+            f.d(leg.operand_ticks); f.d(leg.trail_offset);
+            hash_native_request(f, leg.request);
+            // hash_native_request predates anchors; an anchored leg's own
+            // spelling is folded here.
+            if (const auto* anchor = std::get_if<native_order::FromOwnerFill>(
+                    &leg.request.anchor)) {
+                f.d(anchor->offset); f.b(anchor->ticks);
+                f.u(static_cast<std::uint64_t>(anchor->rounding));
+            }
+            f.b(leg.armed); f.d(leg.installed_level);
+        }
+    }
     f.u(pending_coof_requests_.size());
     for (const auto& pending : pending_coof_requests_) {
         hash_native_request(f, pending.request); hash_placement(f, pending.snapshot);

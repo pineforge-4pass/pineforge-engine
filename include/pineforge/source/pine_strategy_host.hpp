@@ -272,6 +272,10 @@ public:
         const NativeMarginRequirementView&) const final;
     std::optional<double> resolve_margin_call_units(
         const NativeMarginCallView&) const final;
+    // R5 lane R4d: the kernel arms a relative strategy.exit leg at its
+    // parent's fill; TradingView's projection of that level is the adapter's.
+    std::optional<double> resolve_anchored_level(
+        const NativeAnchoredLevelView&) const final;
     // RULING A48: the source host owns per-lot excursion accounting (MFE/MAE)
     // on the switched route. It samples every completed source bar's H/L/C
     // with the owner's entry-bar masks, and supplies the closing row's two

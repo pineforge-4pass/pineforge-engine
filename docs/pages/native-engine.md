@@ -588,22 +588,44 @@ trigger alternative, and a retained best must still produce a representable
 level for the successor's offset; otherwise the replacement is rejected and
 the predecessor stays live.
 
-What the Pine adapter takes from this set is the tick spelling: a source
-`trail_offset` is a tick count, so `exit()` hands the kernel a `TrailTicks`
-and the acceptance path resolves it against the run's `price_tick` — the very
-`syminfo.mintick` the adapter projects — instead of multiplying the count by
-the tick itself. The remaining TradingView rules stay adapter policy because
-no kernel primitive expresses them: the legacy broker rides the
-*tick-quantized* running best, which the adapter still spells as a
-half-a-tick trailing distance (now `TrailTicks{0.5}`) rather than the
-kernel's raw-best zero offset; a relative bracket leg's level is not the
-anchored `fill + offset` a `FromOwnerFill` installs but that value projected
-twice more, onto the instrument grid and then onto the half-tick arm
-threshold the quantized bar is tested against, and the leg's quantity,
-reservation and birth are facts of the fill point, not of the call; and an
-offset-only trail re-issue keeps the live request rather than replacing it,
-so `ReplaceOptions{retain_trigger_state}` has no adapter consumer. See
-`docs/design/native-feature-parity.md` §1.2 B3 and A.6.
+What the Pine adapter takes from this set is the tick spelling and the
+anchored child. A source `trail_offset` is a tick count, so `exit()` hands the
+kernel a `TrailTicks` and the acceptance path resolves it against the run's
+`price_tick` — the very `syminfo.mintick` the adapter projects — instead of
+multiplying the count by the tick itself. A relative bracket leg — a
+`strategy.exit(from_entry=…, profit=…, loss=…, trail_points=…)` operand
+queued while its parent entry has not filled — is the anchored child above:
+at the end of the source evaluation in which the queued exit and its live
+parent both exist, `anchor_relative_exits` submits each such leg as
+`Reduce{OwnerOpenedUnits}` under `WaitForApplied{parent, PendingUntilArmed}`
+with a tick-spelled `FromOwnerFill{±ticks, true, Directional}` anchor in the
+exit's own OCA group, and `resolve_anchored_level` restates TradingView's
+projection at the arm (`directional_tick`, the price-grid spelling, the
+half-tick trigger threshold of the quantized bar; `trail_points` against the
+position's average price). The parent's fill point still runs the source
+`exit()` pipeline, because the leg's reservation, birth reach, L4C policy and
+same-bar ordering are facts of that point and have no kernel analogue; what
+changed is that it *adopts* the armed child instead of submitting whenever
+that child is bit for bit the trigger and OCA group it was about to submit,
+for the whole of a one-lot position. Otherwise the children are withdrawn
+before the path resumes and the fill point submits as it always did: a
+partial or explicit quantity, a sibling exit's reservation, a parent that
+adds to or reverses a live book, `calc_on_order_fills`,
+`process_orders_on_close` and stream runs (their fill point re-decides the
+trigger kind or stages the leg), and a level already inside its region at
+the parent's raw fill print, where a callback-born request starts after that
+print and an armed child may match at it. The queued definition and its
+shadow row therefore stay: the definition outlives parents (it may be
+declared before any entry exists and is re-anchored when a parent is
+replaced), and the shadow row is the source projection of a child the kernel
+deliberately does not list. The remaining TradingView rules stay adapter
+policy because no kernel primitive expresses them: the legacy broker rides
+the *tick-quantized* running best, which the adapter still spells as a
+half-a-tick trailing distance (`TrailTicks{0.5}`) rather than the kernel's
+raw-best zero offset, and an offset-only trail re-issue keeps the live
+request rather than replacing it, so `ReplaceOptions{retain_trigger_state}`
+has no adapter consumer. See `docs/design/native-feature-parity.md` §1.2 B3
+and A.6.
 
 ### From strategy.exit to submit_bracket
 

@@ -625,6 +625,11 @@ std::optional<double> source::PineStrategyHost::resolve_margin_call_units(
     return adapter_.resolve_margin_call_units(view);
 }
 
+std::optional<double> source::PineStrategyHost::resolve_anchored_level(
+        const NativeAnchoredLevelView& view) const {
+    return adapter_.resolve_anchored_level(view);
+}
+
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
     // ab9714be pine_fills.cpp:5741: the exit-bar path prefix belongs to the
@@ -1706,6 +1711,10 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     adapter_.flush_pending_closes();
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
+    // After every command of this evaluation is in the kernel: a queued
+    // relative strategy.exit whose parent entry is now a live request becomes
+    // that parent's anchored bracket child.
+    adapter_.anchor_relative_exits();
     if (advance_source_index) {
         scheduler_mark_report_point(bar.timestamp);
         prev_bar_timestamp_ = bar.timestamp;

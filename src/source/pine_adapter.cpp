@@ -325,6 +325,18 @@ double source_level_on_price_grid(double level, double tick) noexcept {
     return level;
 }
 
+// A relative strategy.exit level: `ticks` from the parent's fill, toward
+// profit for the limit and toward loss for the stop, snapped to the grid on
+// the side that keeps the level at least that far away. One spelling for the
+// fill-point materialization and for the kernel's arm hook.
+double relative_limit_level(double fill, double profit_ticks, double tick, bool is_long) noexcept {
+    return directional_tick(fill + (is_long ? 1.0 : -1.0) * profit_ticks * tick, tick, is_long);
+}
+
+double relative_stop_level(double fill, double loss_ticks, double tick, bool is_long) noexcept {
+    return directional_tick(fill - (is_long ? 1.0 : -1.0) * loss_ticks * tick, tick, !is_long);
+}
+
 double source_trigger_threshold(double level, double tick,
                                 bool is_buy, bool is_limit) noexcept {
     if (!std::isfinite(level) || !finite_positive(tick)) return level;
@@ -1280,6 +1292,9 @@ void PineExecutionAdapter::reset_for_run() {
     source_shadow_pending_.clear();
     pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
+    anchored_relative_legs_.clear();
+    anchored_relative_stats_ = {};
+    anchored_cohort_sequence_ = 0;
     pending_coof_requests_.clear();
     pending_margin_revivals_.clear();
     live_handles_.clear();
@@ -2524,6 +2539,68 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         // a distinct member of it, including replacement incarnations.
         member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
     }
+    if (!accepted && materializing_relative_ && !opening) {
+        // R5 lane R4d: the kernel already armed this leg at the parent's
+        // fill. When the request this fill point builds is that very trigger
+        // on that very group, the armed child IS the accepted request and
+        // nothing is submitted; every source fact of the snapshot stays the
+        // fill point's own.
+        const auto armed = std::find_if(
+            anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+            [&](const AnchoredRelativeLeg& leg) {
+                return leg.armed && leg.parent == materializing_parent_
+                    && leg.family == snapshot.family
+                    && leg.exit_id == snapshot.source_id
+                    && leg.from_entry == snapshot.from_entry;
+            });
+        if (armed != anchored_relative_legs_.end()) {
+            const auto same_trigger = [&] {
+                const auto& mine = armed->request.trigger;
+                if (mine.index() != request.trigger.index()) return false;
+                if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
+                    return same_double_bits(limit->price, armed->installed_level)
+                        && limit->fill_through
+                            == std::get<native_order::Limit>(mine).fill_through;
+                }
+                if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger))
+                    return same_double_bits(stop->price, armed->installed_level);
+                if (const auto* trail = std::get_if<native_order::Trail>(&request.trigger)) {
+                    const auto& anchored = std::get<native_order::Trail>(mine);
+                    return trail->arm_price && trail->ticks && anchored.ticks
+                        && same_double_bits(*trail->arm_price, armed->installed_level)
+                        && same_double_bits(trail->ticks->ticks, anchored.ticks->ticks)
+                        && trail->offset == 0.0;
+                }
+                return false;
+            }();
+            const auto* mine_group = std::get_if<native_order::Member>(&armed->request.group);
+            const auto* group = std::get_if<native_order::Member>(&request.group);
+            const bool same_group = mine_group && group && mine_group->group == group->group
+                && mine_group->effect == group->effect;
+            const auto* sized = std::get_if<native_order::HostSized>(&request.intent);
+            // The kernel sized the child with the units its parent opened.
+            // That is this leg's quantity only when the fill point reserves
+            // the whole of a one-lot position for it (a sibling exit's share,
+            // an explicit quantity or a percentage keeps the source sizing).
+            // A reservation the source pins at placement (another entry id
+            // still pending) is that same whole lot, pinned the same way.
+            const double held = std::abs(physical.signed_units);
+            const bool whole_lot = sized && sized->kind == native_order::HostSizedKind::Close
+                && !sized->side && std::isnan(snapshot.requested_qty)
+                && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0 - 1e-9)
+                && (!std::isfinite(snapshot.projection_remaining_qty)
+                    || snapshot.projection_remaining_qty >= held - internal::kQtyEpsilon)
+                && physical.lot_count == 1U
+                && (std::holds_alternative<native_order::Independent>(request.owner)
+                    || std::holds_alternative<native_order::BindCohort>(request.owner))
+                && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity);
+            if (same_trigger && same_group && whole_lot) {
+                accepted = armed->handle;
+                anchored_relative_legs_.erase(armed);
+                ++anchored_relative_stats_.adopted;
+            }
+        }
+    }
     if (!accepted) {
         const auto result = host.submit(request);
         if (result.status != native_order::SubmitStatus::Accepted || !result.handle) return std::nullopt;
@@ -3546,6 +3623,7 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
                                           : row.from_entry == from_entry;
             }),
         pending_relative_exits_.end());
+    if (!from_entry.empty()) withdraw_anchored_relative_legs(nullptr, &from_entry);
 
     std::vector<native_order::RequestHandle> handles;
     for (const auto& handle : live_handles_) {
@@ -3728,6 +3806,17 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
                           || std::is_same_v<Event, native_order::CancelledEvent>
                           || std::is_same_v<Event, native_order::NoEffectEvent>) {
+                // An anchored relative leg whose parent ended without a fill
+                // left with it (OwnerGone); its queued definition waits for
+                // the next parent of that id exactly as before.
+                const auto ended = std::remove_if(
+                    anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                    [&](const AnchoredRelativeLeg& leg) {
+                        return leg.handle == event.handle();
+                    });
+                anchored_relative_stats_.withdrawn += static_cast<std::uint64_t>(
+                    std::distance(ended, anchored_relative_legs_.end()));
+                anchored_relative_legs_.erase(ended, anchored_relative_legs_.end());
                 const auto placement = placement_.find(event.handle().incarnation);
                 if (placement != placement_.end()) {
                     if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>) {
@@ -6956,8 +7045,25 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
         });
-        if (existing == pending_relative_exits_.end()) pending_relative_exits_.push_back(std::move(pending));
-        else *existing = std::move(pending);
+        if (existing == pending_relative_exits_.end()) {
+            pending_relative_exits_.push_back(std::move(pending));
+        } else {
+            const auto same = [](double left, double right) {
+                return same_double_bits(left, right) || (std::isnan(left) && std::isnan(right));
+            };
+            const bool unchanged = same(existing->trail_points, pending.trail_points)
+                && same(existing->trail_offset, pending.trail_offset)
+                && same(existing->trail_price, pending.trail_price)
+                && same(existing->qty_percent, pending.qty_percent)
+                && same(existing->qty, pending.qty)
+                && same(existing->profit_ticks, pending.profit_ticks)
+                && same(existing->loss_ticks, pending.loss_ticks)
+                && existing->comment == pending.comment
+                && existing->oca_name == pending.oca_name;
+            // The kernel child carries the definition it was anchored from.
+            if (!unchanged) withdraw_anchored_relative_legs(&exit_id, &from_entry);
+            *existing = std::move(pending);
+        }
         source_shadow_pending_.erase(
             std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
                 [&](const SourceShadowPending& row) {
@@ -9178,7 +9284,12 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
 
 void PineExecutionAdapter::materialize_relative_exits(
         PlacementSnapshot opening, const native_order::ExecutionAppliedEvent& event) {
-    if (pending_relative_exits_.empty() || !finite_positive(staged_.syminfo.mintick)) return;
+    if (pending_relative_exits_.empty() || !finite_positive(staged_.syminfo.mintick)) {
+        // No queued definition is served by this fill, so no child the
+        // kernel armed on it has a source request to become.
+        withdraw_anchored_relative_legs(nullptr, &opening.source_id);
+        return;
+    }
     std::vector<PendingRelativeExit> pending;
     for (auto it = pending_relative_exits_.begin(); it != pending_relative_exits_.end();) {
         if (it->from_entry == opening.source_id) {
@@ -9188,36 +9299,378 @@ void PineExecutionAdapter::materialize_relative_exits(
             ++it;
         }
     }
+    // Decided once for the whole parent: either every armed child is the
+    // request this fill point submits, or all of them leave first and the
+    // re-run below is the unchanged source pipeline.
+    if (!armed_relative_legs_adoptable(opening, event, pending))
+        withdraw_anchored_relative_legs(nullptr, &opening.source_id);
     const double tick = staged_.syminfo.mintick;
     for (const auto& value : pending) {
         double limit = kNaN;
         double stop = kNaN;
         double offset = value.trail_offset;
         if (finite_positive(value.profit_ticks)) {
-            limit = event.resolved_price + (opening.is_long ? 1.0 : -1.0)
-                * value.profit_ticks * tick;
-            limit = directional_tick(limit, tick, opening.is_long);
+            limit = relative_limit_level(event.resolved_price, value.profit_ticks, tick,
+                                         opening.is_long);
         }
         if (finite_positive(value.loss_ticks)) {
-            stop = event.resolved_price - (opening.is_long ? 1.0 : -1.0)
-                * value.loss_ticks * tick;
-            stop = directional_tick(stop, tick, !opening.is_long);
+            stop = relative_stop_level(event.resolved_price, value.loss_ticks, tick,
+                                       opening.is_long);
         }
         // An omitted trail_offset is a one-shot activation leg in Pine.  Do
         // not synthesize a trailing distance from trail_points here; an
         // explicit zero/sub-tick offset remains distinguishable and is
         // lowered by exit()'s native sentinel policy.
         materializing_relative_ = true;
+        materializing_parent_ = event.handle();
         try {
             exit(value.exit_id, value.from_entry, limit, stop, value.trail_points, offset,
                  value.trail_price, value.qty_percent, value.comment, value.qty, value.oca_name,
                  kNaN, kNaN);
         } catch (...) {
             materializing_relative_ = false;
+            materializing_parent_ = {};
             throw;
         }
         materializing_relative_ = false;
+        materializing_parent_ = {};
     }
+    // Structural, not counted: no child armed on this parent outlives the
+    // parent's own fill notification. One the re-run did not adopt is not the
+    // request this fill point asks for (another trigger, a staged or refused
+    // leg), the source pipeline above already did what it does, and a kernel
+    // request without a placement row must never reach a match.
+    withdraw_anchored_relative_legs(nullptr, &opening.source_id);
+}
+
+void PineExecutionAdapter::withdraw_anchored_relative_legs(
+        const SourceId* exit_id, const SourceId* from_entry) {
+    for (std::size_t index = 0; index < anchored_relative_legs_.size();) {
+        const auto& leg = anchored_relative_legs_[index];
+        if ((exit_id && leg.exit_id != *exit_id)
+            || (from_entry && leg.from_entry != *from_entry)) {
+            ++index;
+            continue;
+        }
+        // Cancel first: a host that refuses the command throws, and the
+        // record of a child that may still be live must survive that.
+        const native_order::RequestHandle handle = leg.handle;
+        (void)require_host().cancel(handle);
+        anchored_relative_legs_.erase(anchored_relative_legs_.begin()
+                                      + static_cast<std::ptrdiff_t>(index));
+        ++anchored_relative_stats_.withdrawn;
+    }
+}
+
+bool PineExecutionAdapter::anchorable_relative_exit(
+        const PendingRelativeExit& value, native_order::RequestHandle& parent,
+        bool& parent_long) const {
+    // The kernel's arm binds the child to the lot its parent opened and sizes
+    // it with that lot's units. That is this adapter's fill-point leg only
+    // for the whole of a named parent's own lot, opened from a flat book.
+    if (value.from_entry.empty() || !std::isnan(value.qty)
+        || (std::isfinite(value.qty_percent) && value.qty_percent < 100.0 - 1e-9)) {
+        return false;
+    }
+    if (config_.calc_on_order_fills || config_.process_orders_on_close || stream_mode_
+        || coof_recalc_active_ || !finite_positive(staged_.syminfo.mintick)) {
+        return false;
+    }
+    if (require_host().physical_position().signed_units != 0.0) return false;
+    const auto staged_same_id = [&](const PlacementSnapshot& row) {
+        return row.opening && row.source_id == value.from_entry;
+    };
+    for (const auto& row : pending_same_bar_commands_)
+        if (staged_same_id(row.snapshot)) return false;
+    for (const auto& row : pending_entries_)
+        if (staged_same_id(row.snapshot)) return false;
+    for (const auto& row : pending_coof_requests_)
+        if (staged_same_id(row.snapshot)) return false;
+    for (const auto& row : delayed_market_orders_)
+        if (staged_same_id(row.snapshot)) return false;
+    std::size_t parents = 0;
+    native_order::RequestHandle only{};
+    bool only_long = true;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end() || !found->second.opening
+            || found->second.source_id != value.from_entry) {
+            continue;
+        }
+        if (found->second.family != PineOrderFamily::Entry) return false;
+        only = handle;
+        only_long = found->second.is_long;
+        ++parents;
+    }
+    if (parents != 1) return false;
+    parent = only;
+    parent_long = only_long;
+    return true;
+}
+
+std::vector<PineExecutionAdapter::RelativeLegShape>
+PineExecutionAdapter::relative_leg_shapes(const PendingRelativeExit& value,
+                                          bool parent_long) const {
+    // The legs exit() emits for the relative operands once they resolve, in
+    // its own order (limit, stop, trail), each spelled as an anchored trigger:
+    // the level placeholder the kernel fills at the arm and the signed tick
+    // distance from the parent's fill.
+    std::vector<RelativeLegShape> shapes;
+    const double side = parent_long ? 1.0 : -1.0;
+    if (finite_positive(value.profit_ticks)) {
+        shapes.push_back({PineOrderFamily::ExitLimit, native_order::Limit{0.0},
+                          side * value.profit_ticks, value.profit_ticks});
+    }
+    if (finite_positive(value.loss_ticks)) {
+        shapes.push_back({PineOrderFamily::ExitStop, native_order::Stop{0.0},
+                          -side * value.loss_ticks, value.loss_ticks});
+    }
+    if (std::isfinite(value.trail_points) && !finite_positive(value.trail_price)) {
+        const double trail_ticks = std::ceil(value.trail_points - 5e-5);
+        const bool has_offset = std::isfinite(value.trail_offset) && value.trail_offset >= 0.0;
+        const double offset_ticks = has_offset ? std::floor(value.trail_offset) : kNaN;
+        if (trail_ticks >= 1.0 && has_offset && offset_ticks >= 1.0) {
+            shapes.push_back({PineOrderFamily::ExitTrail,
+                              native_order::Trail{0.0, 0.0,
+                                                  native_order::TrailTicks{offset_ticks}},
+                              side * trail_ticks, trail_ticks});
+        } else if (trail_ticks >= 1.0 && (has_offset || !std::isfinite(value.trail_offset))) {
+            // Omitted or explicit-zero offset: the one-shot activation touch,
+            // a fill-through limit when the zero shape slips.
+            shapes.push_back({PineOrderFamily::ExitTrail,
+                              native_order::Limit{0.0, has_offset && config_.slippage > 0},
+                              side * trail_ticks, trail_ticks});
+        }
+    }
+    return shapes;
+}
+
+void PineExecutionAdapter::anchor_relative_exits() {
+    if (anchored_relative_legs_.empty() && pending_relative_exits_.empty()) return;
+    // An armed child is adopted or withdrawn inside its parent's own fill
+    // notification. One that is still here was armed by a fill this adapter
+    // never materialized, and a kernel request without a placement row must
+    // never reach a match.
+    for (std::size_t index = 0; index < anchored_relative_legs_.size();) {
+        if (!anchored_relative_legs_[index].armed) { ++index; continue; }
+        const SourceId exit_id = anchored_relative_legs_[index].exit_id;
+        const SourceId from_entry = anchored_relative_legs_[index].from_entry;
+        withdraw_anchored_relative_legs(&exit_id, &from_entry);
+        index = 0;
+    }
+    // A child whose definition is gone waits for nothing.
+    for (std::size_t index = 0; index < anchored_relative_legs_.size();) {
+        const auto& leg = anchored_relative_legs_[index];
+        const bool queued = std::any_of(
+            pending_relative_exits_.begin(), pending_relative_exits_.end(),
+            [&](const PendingRelativeExit& value) {
+                return value.exit_id == leg.exit_id && value.from_entry == leg.from_entry;
+            });
+        if (queued) { ++index; continue; }
+        const SourceId exit_id = leg.exit_id;
+        const SourceId from_entry = leg.from_entry;
+        withdraw_anchored_relative_legs(&exit_id, &from_entry);
+        index = 0;
+    }
+    if (pending_relative_exits_.empty()) return;
+    // One decision per parent id: the armed children of a fill are adopted
+    // together or not at all, so every queued exit of that id must be
+    // expressible, or none is anchored and the fill point submits them all.
+    std::vector<SourceId> parents;
+    for (const auto& value : pending_relative_exits_) {
+        if (std::find(parents.begin(), parents.end(), value.from_entry) == parents.end())
+            parents.push_back(value.from_entry);
+    }
+    for (const auto& from_entry : parents) {
+        native_order::RequestHandle parent{};
+        bool parent_long = true;
+        bool anchorable = true;
+        for (const auto& value : pending_relative_exits_) {
+            if (value.from_entry != from_entry) continue;
+            anchorable = anchorable && anchorable_relative_exit(value, parent, parent_long);
+        }
+        const bool anchored = std::any_of(
+            anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+            [&](const AnchoredRelativeLeg& leg) { return leg.from_entry == from_entry; });
+        if (anchored) {
+            // A changed definition already withdrew its legs in exit(); what
+            // is left here waits on this parent or on a parent that is gone.
+            const bool complete = anchorable && std::all_of(
+                pending_relative_exits_.begin(), pending_relative_exits_.end(),
+                [&](const PendingRelativeExit& value) {
+                    if (value.from_entry != from_entry) return true;
+                    const auto shapes = relative_leg_shapes(value, parent_long);
+                    const auto legs = static_cast<std::size_t>(std::count_if(
+                        anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                        [&](const AnchoredRelativeLeg& leg) {
+                            return leg.exit_id == value.exit_id
+                                && leg.from_entry == from_entry && leg.parent == parent;
+                        }));
+                    return legs == shapes.size();
+                });
+            if (complete) continue;
+            withdraw_anchored_relative_legs(nullptr, &from_entry);
+        }
+        if (!anchorable) continue;
+        for (const auto& value : pending_relative_exits_) {
+            if (value.from_entry != from_entry) continue;
+            const SourceId group_name = value.oca_name.empty()
+                ? value.exit_id + "\x1f" + value.from_entry : value.oca_name;
+            for (auto& shape : relative_leg_shapes(value, parent_long)) {
+                AnchoredRelativeLeg leg;
+                leg.exit_id = value.exit_id;
+                leg.from_entry = value.from_entry;
+                leg.family = shape.family;
+                leg.parent = parent;
+                leg.parent_long = parent_long;
+                leg.operand_ticks = shape.operand_ticks;
+                leg.trail_offset = value.trail_offset;
+                leg.request.intent = native_order::Reduce{native_order::OwnerOpenedUnits{}};
+                leg.request.label = value.exit_id;
+                leg.request.comment = value.comment;
+                leg.request.trigger = std::move(shape.trigger);
+                leg.request.owner = native_order::WaitForApplied{
+                    parent, native_order::NativeArmVisibility::PendingUntilArmed};
+                leg.request.group = group_for(group_name, 1,
+                                              static_cast<std::int64_t>(shape.family));
+                if (auto* member = std::get_if<native_order::Member>(&leg.request.group)) {
+                    // The kernel tells OCA siblings apart by cohort, so every
+                    // member needs its own. A submitted sibling carries its
+                    // source sequence (counting up from one); an anchored one
+                    // counts down from minus one.
+                    if (anchored_cohort_sequence_
+                        == std::numeric_limits<std::int64_t>::max()) {
+                        throw std::overflow_error("Pine anchored OCA member sequence exhausted");
+                    }
+                    member->cohort = -(++anchored_cohort_sequence_);
+                }
+                leg.request.anchor = native_order::FromOwnerFill{
+                    shape.signed_ticks, true, native_order::NativeAnchorRounding::Directional};
+                const auto result = require_host().submit(leg.request);
+                if (result.status != native_order::SubmitStatus::Accepted || !result.handle)
+                    continue;
+                leg.handle = *result.handle;
+                anchored_relative_legs_.push_back(std::move(leg));
+                ++anchored_relative_stats_.anchored;
+            }
+        }
+    }
+}
+
+bool PineExecutionAdapter::armed_relative_legs_adoptable(
+        const PlacementSnapshot& opening, const native_order::ExecutionAppliedEvent& event,
+        const std::vector<PendingRelativeExit>& pending) const {
+    // The fill-point re-run submits exactly the queued legs, at once, only
+    // when nothing it would stage them behind is waiting.
+    if (!pending_entries_.empty() || !pending_same_bar_commands_.empty()
+        || !delayed_market_orders_.empty() || !pending_coof_requests_.empty()
+        || coof_recalc_active_) {
+        return false;
+    }
+    // The print the kernel's path cursor stands on: the parent's raw fill
+    // print, not the slipped price it booked.
+    const double print = event.raw_price;
+    if (!std::isfinite(print)) return false;
+    // The kernel bound each child to the lot this fill opened and sized it
+    // with that lot's units; the source leg is that only on a one-lot book.
+    if (require_host().physical_position().lot_count != 1U) return false;
+    // Leg for leg: every shape of every queued definition has its own armed
+    // child on this parent, and this parent carries no other child.
+    std::size_t expected = 0;
+    for (const auto& value : pending) {
+        for (const auto& shape : relative_leg_shapes(value, opening.is_long)) {
+            const auto children = std::count_if(
+                anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                [&](const AnchoredRelativeLeg& leg) {
+                    return leg.exit_id == value.exit_id && leg.from_entry == value.from_entry
+                        && leg.family == shape.family
+                        && leg.request.trigger.index() == shape.trigger.index();
+                });
+            if (children != 1) return false;
+            ++expected;
+        }
+    }
+    std::size_t armed = 0;
+    for (const auto& leg : anchored_relative_legs_) {
+        if (leg.from_entry != opening.source_id) continue;
+        if (leg.parent != event.handle() || !leg.armed || leg.parent_long != opening.is_long
+            || !std::isfinite(leg.installed_level)) {
+            return false;
+        }
+        // A request born in this fill's callback starts AFTER the fill print
+        // (the kernel's born-on-the-remaining-path rule), whereas a child
+        // armed by the fill may match AT it. The two only differ when the
+        // level is already inside its region at this cursor.
+        const bool exit_is_buy = !leg.parent_long;
+        const bool region_below = std::holds_alternative<native_order::Stop>(leg.request.trigger)
+            ? !exit_is_buy : exit_is_buy;
+        if (region_below ? print <= leg.installed_level : print >= leg.installed_level)
+            return false;
+        ++armed;
+    }
+    return armed == expected && armed != 0;
+}
+
+std::optional<double> PineExecutionAdapter::resolve_anchored_level(
+        const NativeAnchoredLevelView& view) const {
+    const auto found = std::find_if(
+        anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+        [&](const AnchoredRelativeLeg& leg) { return leg.handle == view.leg; });
+    if (found == anchored_relative_legs_.end()) return std::nullopt;
+    auto& leg = *found;
+    const double tick = staged_.syminfo.mintick;
+    leg.armed = true;
+    leg.installed_level = kNaN;
+    // Without a usable tick there is no projection to restate; the kernel
+    // keeps its own level and the fill point withdraws the child.
+    if (!finite_positive(tick)) return std::nullopt;
+    const bool is_long = leg.parent_long;
+    const bool exit_is_buy = !is_long;
+    const double side = is_long ? 1.0 : -1.0;
+    double installed = kNaN;
+    if (leg.family == PineOrderFamily::ExitLimit) {
+        // materialize_relative_exits + exit(): the fill-relative limit on the
+        // grid, then the half-tick arm threshold of the tick-quantized bar.
+        const double limit = source_level_on_price_grid(
+            relative_limit_level(view.owner_fill_price, leg.operand_ticks, tick, is_long), tick);
+        installed = source_trigger_threshold(limit, tick, exit_is_buy, true);
+    } else if (leg.family == PineOrderFamily::ExitStop) {
+        const double stop = source_level_on_price_grid(
+            relative_stop_level(view.owner_fill_price, leg.operand_ticks, tick, is_long), tick);
+        installed = source_trigger_threshold(stop, tick, exit_is_buy, false);
+    } else {
+        // exit() resolves trail_points against the live position's average
+        // price, which the parent's own fill has already moved.
+        const double entry_price = require_host().position_avg_price();
+        const double trail_price = directional_tick(
+            entry_price + side * leg.operand_ticks * tick, tick, is_long);
+        if (std::holds_alternative<native_order::Trail>(leg.request.trigger)) {
+            installed = trail_price;
+        } else {
+            double one_shot = trail_price;
+            if (!std::isfinite(leg.trail_offset)) {
+                const double slipped = one_shot
+                    + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
+                one_shot = directional_tick(slipped, tick, exit_is_buy);
+            }
+            if (!exit_is_buy) one_shot = source_level_on_price_grid(one_shot, tick);
+            installed = source_trigger_threshold(one_shot, tick, exit_is_buy, true);
+        }
+    }
+    // The kernel refuses a level its trigger cannot hold and fails the run.
+    // A projection that lands there (a short's relative level below zero) is
+    // never the request the fill-point re-run submits, so the child is armed
+    // on a representable placeholder. That is safe for one reason only: its
+    // NaN installed level makes it unadoptable, and materialize_relative_exits
+    // withdraws every unadopted child inside this same fill notification,
+    // before the path resumes.
+    const bool trail_arm = std::holds_alternative<native_order::Trail>(leg.request.trigger);
+    if (!(trail_arm ? finite_positive(installed) : finite_non_negative(installed))) {
+        leg.installed_level = kNaN;
+        return tick;
+    }
+    leg.installed_level = installed;
+    return installed;
 }
 
 void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
@@ -9228,6 +9681,7 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         [&](const PendingRelativeExit& value) {
             return value.exit_id == exit_id && value.from_entry == from_entry;
         }), pending_relative_exits_.end());
+    if (!materializing_relative_) withdraw_anchored_relative_legs(&exit_id, &from_entry);
     pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.family_key == key; }), pending_bracket_legs_.end());
     // Cancellation can synchronously change source state. Copy the family
@@ -9278,6 +9732,8 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     pending_relative_exits_.erase(std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
         [&](const PendingRelativeExit& value) { return value.exit_id == id || value.from_entry == id; }),
         pending_relative_exits_.end());
+    withdraw_anchored_relative_legs(&id, nullptr);
+    withdraw_anchored_relative_legs(nullptr, &id);
     pending_entries_.erase(std::remove_if(pending_entries_.begin(), pending_entries_.end(),
         [&](const PendingEntry& entry) { return entry.snapshot.source_id == id; }), pending_entries_.end());
     pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
@@ -9309,6 +9765,7 @@ void PineExecutionAdapter::cancel_all() {
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
+    withdraw_anchored_relative_legs(nullptr, nullptr);
 }
 
 void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
@@ -9537,6 +9994,30 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
 }
 
 native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
+        const NativeExecutionTermsFacts& facts) const {
+    native_order::ExecutionTerms result = resolve_source_terms(facts);
+    // R5 lane R4d: an adopted anchored leg is sized by the kernel (the units
+    // its parent opened, bound at the arm), so its quantity is resolved and
+    // the host answers the price alone.
+    if (facts.definition && anchored_relative_request(facts.definition->request)) {
+        result.units.reset();
+        result.grid_policy = native_order::ExecutionGridPolicy::SnapToGrid;
+    }
+    return result;
+}
+
+bool PineExecutionAdapter::anchored_relative_request(
+        const native_order::Request& request) noexcept {
+    // The spelling anchor_relative_exits alone writes, and the arm leaves the
+    // owner relation of a definition untouched: a PendingUntilArmed child
+    // sized with the units its parent opened.
+    const auto* wait = std::get_if<native_order::WaitForApplied>(&request.owner);
+    const auto* reduce = std::get_if<native_order::Reduce>(&request.intent);
+    return wait && wait->visibility == native_order::NativeArmVisibility::PendingUntilArmed
+        && reduce && std::holds_alternative<native_order::OwnerOpenedUnits>(reduce->size);
+}
+
+native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const NativeExecutionTermsFacts& facts) const {
     native_order::ExecutionTerms result{facts.default_resolved_price, std::nullopt,
                                         native_order::OpeningShape::Transact};
@@ -9979,7 +10460,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     // literal transaction, a reversal target -- takes the explicit path.
     const bool core_sized = std::holds_alternative<native_order::Sized>(
         facts.definition->request.intent);
-    if (!core_sized
+    // R5 lane R4d: an adopted anchored leg is a core-sized CLOSE in the same
+    // sense -- the kernel bound its units at the arm (OwnerOpenedUnits), the
+    // source still owns its fill price.
+    const bool core_sized_close = anchored_relative_request(facts.definition->request);
+    if (!core_sized && !core_sized_close
         && !std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
         if (std::holds_alternative<native_order::Market>(trigger)) {
             result.resolved_price = source_bar_fill();
