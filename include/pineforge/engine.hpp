@@ -489,9 +489,8 @@ protected:
     // bar). A historical run holds its whole feed, and the calendar
     // aggregator uses the hint to finalize a D/W/M bucket on the period's
     // actual last chart bar -- early closes and exchange holidays included
-    // (TimeframeAggregator::feed(bar, next_input_ms)). Set by the run loops
-    // per input bar, per auxiliary bar on the split-feed path, per sub-bar
-    // under the magnifier; never by the stream path.
+    // (TimeframeAggregator::feed(bar, next_input_ms)). Set by whoever pumps
+    // the evaluators, for each bar it feeds; never for a stream's live input.
     int64_t security_next_input_ms_ = 0;
     uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
@@ -1812,7 +1811,7 @@ protected:
     // duration of the dispatch. `bar_index` is the 0-based index of the
     // requested-context bar being evaluated — the just-completed bucket for a
     // complete evaluation (eval_complete_count - 1), the in-progress bucket
-    // for a partial/lookahead one (eval_complete_count) — so every
+    // for a partial one (eval_complete_count) — so every
     // compute()/recompute() dispatch of one requested bar rewrites the same
     // ring slot, and a conditional window call inside the security expression
     // is addressed exactly like TradingView addresses it.

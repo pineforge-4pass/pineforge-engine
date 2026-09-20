@@ -1,5 +1,9 @@
 /*
- * engine_security.cpp — request.security registration + per-eval state feeding
+ * engine_security.cpp — the generic higher-timeframe evaluator: registration,
+ * the aggregate / substitute / dispatch step, the dispatch into
+ * evaluate_security(). Publication semantics are not here: a native
+ * subscription's are the consumer's delivery rules, TradingView's are the
+ * source host's (src/source/pine_security_eval.cpp).
  */
 
 #include "engine_internal.hpp"

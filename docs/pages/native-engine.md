@@ -1376,6 +1376,31 @@ ones.
 emulated. Only the run's own symbol is addressable; there is no
 auxiliary-symbol feed and no chart-slice mapping.
 
+**What the kernel keeps, and what it does not.** The machinery a subscription
+runs on is the kernel's and is generic: the evaluator registry
+(`BacktestEngine::SecurityEvalState` — series id, timeframe, its
+`TimeframeAggregator`, the current bucket, the feed / evaluation counters and
+the native-feed routing), `register_security_eval(sec_id, tf, input_tf)`, the
+feed store (`set_native_security_feed`, `prepare_native_security_feeds`) and
+one evaluator step, `feed_security_eval_state(state, bar)`: aggregate the
+input, give a completed bucket the authoritative bar keyed to its period, and
+publish it. That step has no publication modes — `lookahead` and `gaps` above
+are the consumer's delivery rules, applied around it.
+
+TradingView's `request.security` semantics are **not** in the kernel. The
+`barmerge.lookahead_on` merge latch, `barmerge.gaps_on` and the
+calling-bar publication gates, `ticker.heikinashi` substitution, the KI-55
+range-start cut with its OTC-daily pins, the historical lookahead projection,
+`request.security_lower_tf` emulation, the deferred auxiliary chart slice and
+the `validate_security_timeframes` diagnostics are state and code of the Pine
+source host (`source::PineStrategyHost`, `src/source/pine_security_eval.cpp`):
+a per-`sec_id` table, `source::PineSecurityEvalState`, kept beside the generic
+state of the same id and folded into the source hash extension under its own
+domain (`pineforge-source-security/vN`, only when a site is registered). The
+source host composes its own evaluator step from the same kernel primitives;
+the kernel never calls into it. A native host therefore cannot reach any of
+those rules, and none of them can change a subscription's buckets.
+
 ## Batch OHLCV vs ticks vs quiet
 
 Two driver models only: confirmed OHLCV and observed ticks. Mixing them on

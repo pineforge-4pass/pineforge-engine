@@ -1,5 +1,6 @@
 /*
- * engine_aux_security.cpp — native-chart / request.security feed separation
+ * engine_aux_security.cpp — the native higher-timeframe feed store and its
+ * routing into the evaluators' buckets
  */
 
 #include "engine_internal.hpp"
@@ -12,38 +13,6 @@
 #include <vector>
 
 namespace pineforge {
-
-#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-
-
-
-
-
-
-
-
-
-
-// The calling chart bar's nominal close -- TradingView's time_close of the
-// native bar this slice belongs to: a calendar chart bar closes at its
-// period's nominal (last traded session-day) close whatever the slice holds
-// -- Fri 17:00 ET for OANDA:XAUUSD's 07-03-stamped daily bar although its
-// data ends 12:45 -- and an intraday chart bar at its grid end. An OTC
-// calendar bucket the next auxiliary bar leaves completes on the slice's
-// last bar exactly when this close reaches the period's
-// (TimeframeAggregator::feed(bar, next_input_ms, calling_close_ms); lab tv
-// oanda1d pin, 2026-09-05). current_bar_ is the native chart bar the run
-// loop set before calling here.
-
-
-
-
-
-
-
-
-#endif  // PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-
 
 // ---- native higher-timeframe request.security feeds -------------------------
 //
@@ -366,10 +335,10 @@ bool BacktestEngine::substitute_native_security_bar(SecurityEvalState& state,
                                                     Bar& bar,
                                                     bool count_miss) {
     if (state.native_feed_index < 0) return false;
-    // The completion path hands a bucket already stamped with its label; the
-    // historical lookahead projection hands the raw first-child timestamp
-    // (prepare_historical_security_lookahead_projections), the label only
-    // when that child traded at the period's day stamp. Both read one key.
+    // The completion path hands a bucket already stamped with its label; a
+    // host that resolves a bucket ahead of its completion hands the raw
+    // timestamp of a bar inside it, the label only when that bar traded at
+    // the period's day stamp. Both read one key.
     const int64_t label = state.aggregator.bar_label_ms(bar.timestamp);
     const auto found = state.native_bars_by_label.find(label);
     if (found == state.native_bars_by_label.end()) {

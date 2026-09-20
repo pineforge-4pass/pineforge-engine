@@ -44,8 +44,8 @@ The runtime resolves them in order:
    If empty, defaults to the resolved `input_tf`.
 3. If `script_tf > input_tf`, the runtime aggregates input bars up to
    script-TF parents before each `on_bar` dispatch. The two timeframes
-   are concatenated by an aggregator (ratio or calendar — see
-   `src/engine_security.cpp`).
+   are concatenated by an aggregator (ratio or calendar —
+   `TimeframeAggregator`, `src/timeframe.cpp`).
 
 The report exposes the resolved values and the ratio:
 
@@ -101,7 +101,7 @@ The lower-TF builtin returns an array of one value per synthesized
 sub-bar. The codegen pattern in `generated.cpp` is:
 
 ```cpp
-class GeneratedStrategy : public BacktestEngine {
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
 public:
     // Accumulator vector for the sub-bar values.
     std::vector<double> _req_sec_lower_tf_0{};
@@ -122,7 +122,7 @@ public:
         _req_sec_lower_tf_0.push_back(bar.close);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         // _req_sec_lower_tf_0 is the Pine array returned by
         // request.security_lower_tf(sym, "1", close).
         // ... compute on it ...
@@ -130,10 +130,20 @@ public:
 };
 ```
 
+`register_security_eval`, `register_security_lower_tf_eval`,
+`security_lower_tf_sub_bar_index` and `security_series_slot_is_new` are the
+Pine source host's (`source::PineStrategyHost`,
+`src/source/pine_security_eval.cpp`). The kernel underneath registers a plain
+aggregating evaluator and keeps the feed store; every `request.security`
+rule on this page — lookahead and gaps publication, Heikin-Ashi, the
+lower-timeframe emulation, the diagnostics below — is source-host state kept
+per `sec_id` beside it.
+
 ### Validation rules
 
-When `configure_security_evaluators` runs, the engine validates each
-registered lower-TF site against `input_tf_`:
+When the run begins, the source host validates each registered lower-TF
+site against the run's evaluator input timeframe
+(`validate_security_timeframes`):
 
 - The target TF must be **strictly finer** than the resolved input TF.
 - The input TF (in seconds) must be an **integer multiple** of the
