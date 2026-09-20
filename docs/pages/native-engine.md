@@ -2426,12 +2426,36 @@ subscriptions, and L9's generic risk limits — travel in
 `pf_native_run_spec_ext_v1`, passed together with the base spec to
 `strategy_configure_native_ext_v1`. It replaces
 `strategy_configure_native_v1` rather than following it, because the kernel
-configures a host exactly once and fails it on a second attempt. Not
-representable in ext v1, and left at their defaults: the intrabar path, the
-slot-label policy, legacy tolerance, the forced path order and abort
-reporting.
+configures a host exactly once and fails it on a second attempt. The one
+field of `NativeRunSpec` it deliberately does not carry is `identity`, which
+the base spec owns.
 
-The risk block (`PF_NATIVE_SPEC_EXT_RISK`) is the one **additive tail** in
+`pf_native_run_spec_ext_v1` now has **three** published lengths and the
+runtime accepts any of them: the layout the lane first shipped
+(`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), that plus L9's risk tail
+(`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), and the current one, which appends
+what the header used to list as unrepresentable — the retained intrabar path
+(`PF_NATIVE_SPEC_EXT_INTRABAR`), the four feed-shape and presentation
+policies (`PF_NATIVE_SPEC_EXT_FEED_POLICY`: slot labels, feed tolerance, the
+forced path order, abort reporting), and the margin model's remaining knobs
+(equity basis, level base, the liquidation ticket strings, and
+`NativeLiquidationCheck::PathAdverseExtremeMark`, which had no C value at
+all). A caller sending an earlier length cannot set a mask bit its struct has
+no fields for: that is `PF_NATIVE_E_STRUCT`, exactly as the risk bit already
+was.
+
+The intrabar block is also what makes `on_sub_bar` reachable: only
+`PF_NATIVE_INTRABAR_LOWER_TF` retains a finer feed, and only a retained feed
+has sub-bars of its own. A `PF_NATIVE_SLOT_LABEL_FEED_TOLERANT` run keeps the
+caller's own labels and delivers none.
+
+`pf_native_request_v1` likewise has three published lengths now — base, plus
+L7b's anchored-leg tail (`PF_NATIVE_REQUEST_V1_ANCHOR_SIZE`), plus L3b's
+sizing detail: `size_price` (`SizePrice`: `RESOLVED`, `SIGNAL`,
+`SIGNAL_ON_TICK`) and `reduce_basis` (`ScopeBasis`: `AT_MATCH`,
+`AT_ACCEPTANCE`).
+
+The risk block (`PF_NATIVE_SPEC_EXT_RISK`) was the first **additive tail** in
 this header. It appends `risk_*` fields — the two loss limits as a value plus
 a percent flag, the two counts, the day basis and the breach action, each
 limit opt-in through its own `has_` flag — past `reserved0`, so

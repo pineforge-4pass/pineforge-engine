@@ -79,7 +79,7 @@ static_assert(static_cast<int>(pineforge::NativeRiskAction::FlattenAndBlock)
 /* The risk tail is append-only: the base layout must still end exactly where
  * PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE says, and the tail must be the twelve
  * fields below it and nothing else. */
-static_assert(sizeof(pf_native_run_spec_ext_v1)
+static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE + 10u * sizeof(std::uint32_t)
                          + 2u * sizeof(double),
               "the pf_native_run_spec_ext_v1 risk tail moved");
@@ -98,12 +98,45 @@ static_assert(static_cast<int>(no::NativeArmVisibility::Working)
                   && static_cast<int>(no::NativeArmVisibility::PendingUntilArmed)
                          == PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED,
               "NativeArmVisibility drifted");
-/* The anchored-leg tail is append-only: the base layout must still end
- * exactly where PF_NATIVE_REQUEST_V1_BASE_SIZE says, and the tail must be
- * the two fields below it and nothing else. */
-static_assert(sizeof(pf_native_request_v1)
+/* Both request tails are append-only: each published layout must still end
+ * exactly where its size constant says, and each tail must be the two fields
+ * below it and nothing else. */
+static_assert(PF_NATIVE_REQUEST_V1_ANCHOR_SIZE
                   == PF_NATIVE_REQUEST_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_request_v1 anchored-leg tail moved");
+static_assert(sizeof(pf_native_request_v1)
+                  == PF_NATIVE_REQUEST_V1_ANCHOR_SIZE + 2u * sizeof(std::uint32_t),
+              "the pf_native_request_v1 sizing-detail tail moved");
+static_assert(static_cast<int>(no::SizePrice::SignalOnTick)
+                  == PF_NATIVE_SIZE_PRICE_SIGNAL_ON_TICK, "SizePrice drifted");
+static_assert(static_cast<int>(no::ScopeBasis::AtAcceptance)
+                  == PF_NATIVE_SCOPE_BASIS_AT_ACCEPTANCE, "ScopeBasis drifted");
+static_assert(static_cast<int>(pineforge::NativeLiquidationCheck::PathAdverseExtremeMark)
+                  == PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME_MARK,
+              "NativeLiquidationCheck drifted");
+static_assert(static_cast<int>(pineforge::NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission)
+                  == PF_NATIVE_MARGIN_EQUITY_BEFORE_OPEN_COMMISSION,
+              "NativeMarginEquityBasis drifted");
+static_assert(static_cast<int>(pineforge::NativeLiquidationLevelBase::RealizedOnly)
+                  == PF_NATIVE_MARGIN_LEVEL_REALIZED_ONLY, "NativeLiquidationLevelBase drifted");
+static_assert(static_cast<int>(pineforge::NativeSlotLabelPolicy::FeedTolerant)
+                  == PF_NATIVE_SLOT_LABEL_FEED_TOLERANT, "NativeSlotLabelPolicy drifted");
+static_assert(static_cast<int>(pineforge::NativeFeedTolerance::WarmupNonNegativeOHLC)
+                  == PF_NATIVE_FEED_TOLERANCE_WARMUP_NONNEGATIVE, "NativeFeedTolerance drifted");
+static_assert(static_cast<int>(pineforge::NativePathOrder::LowFirst)
+                  == PF_NATIVE_PATH_ORDER_LOW_FIRST, "NativePathOrder drifted");
+static_assert(static_cast<int>(pineforge::NativeAbortReporting::Quiet)
+                  == PF_NATIVE_ABORT_QUIET, "NativeAbortReporting drifted");
+static_assert(static_cast<int>(pineforge::IntrabarPath::SampleEligibility::DistributionSamples)
+                  == PF_NATIVE_SAMPLE_DISTRIBUTION_SAMPLES, "SampleEligibility drifted");
+static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)
+                  == PF_MAGNIFIER_BACK_LOADED, "MagnifierDistribution drifted");
+/* The N8 tail is append-only in the same way: fourteen words and four
+ * pointers past the layout L9 left. */
+static_assert(sizeof(pf_native_run_spec_ext_v1)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE + 14u * sizeof(std::uint32_t)
+                         + 4u * sizeof(const char*),
+              "the pf_native_run_spec_ext_v1 intrabar/policy tail moved");
 static_assert(static_cast<int>(no::SizeTime::AtAcceptance) == PF_NATIVE_SIZE_AT_ACCEPTANCE,
               "SizeTime drifted");
 static_assert(static_cast<int>(no::ExecutionGridPolicy::ExplicitUnits)
@@ -609,7 +642,8 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
 
 /* ── C POD → C++ value ──────────────────────────────────────────── */
 
-int translate_intent(const pf_native_request_v1& in, no::OrderIntent& out) {
+int translate_intent(const pf_native_request_v1& in, bool has_sizing_tail,
+                     no::OrderIntent& out) {
     switch (in.intent) {
     case PF_NATIVE_INTENT_FLATTEN:
         out = no::Flatten{};
@@ -641,6 +675,17 @@ int translate_intent(const pf_native_request_v1& in, no::OrderIntent& out) {
                 fraction.claim = no::ScopeClaim::NetOfSiblings;
                 break;
             default: return PF_NATIVE_E_TAG;
+            }
+            if (has_sizing_tail) {
+                switch (in.reduce_basis) {
+                case PF_NATIVE_SCOPE_BASIS_AT_MATCH:
+                    fraction.basis = no::ScopeBasis::AtMatch;
+                    break;
+                case PF_NATIVE_SCOPE_BASIS_AT_ACCEPTANCE:
+                    fraction.basis = no::ScopeBasis::AtAcceptance;
+                    break;
+                default: return PF_NATIVE_E_TAG;
+                }
             }
             reduce.size = fraction;
             break;
@@ -677,6 +722,16 @@ int translate_intent(const pf_native_request_v1& in, no::OrderIntent& out) {
             sized.grid_policy = no::ExecutionGridPolicy::ExplicitUnits;
             break;
         default: return PF_NATIVE_E_TAG;
+        }
+        if (has_sizing_tail) {
+            switch (in.size_price) {
+            case PF_NATIVE_SIZE_PRICE_RESOLVED: sized.price = no::SizePrice::Resolved; break;
+            case PF_NATIVE_SIZE_PRICE_SIGNAL: sized.price = no::SizePrice::Signal; break;
+            case PF_NATIVE_SIZE_PRICE_SIGNAL_ON_TICK:
+                sized.price = no::SizePrice::SignalOnTick;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
         }
         if (in.reserve_percent_fee > 1u) return PF_NATIVE_E_TAG;
         sized.reserve_percent_fee = in.reserve_percent_fee != 0u;
@@ -760,15 +815,20 @@ int translate_owner(const pf_native_request_v1& in, const no::RunIdentity& run,
 
 int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run,
                       no::Request& out) {
-    /* Two published layouts: the base one the L13 lane first shipped and the
-     * current one with the L7b anchored-leg tail. A base-sized caller's tail
-     * is never read; it gets the tail's defaults. */
-    const bool has_anchor_tail = in.struct_size == sizeof(pf_native_request_v1);
+    /* Three published layouts: the base one the L13 lane first shipped, that
+     * plus L7b's anchored-leg tail, and the current one with L3b's sizing
+     * detail. An earlier caller's later tails are never read; it gets their
+     * defaults. */
+    const bool has_sizing_tail = in.struct_size == sizeof(pf_native_request_v1);
+    const bool has_anchor_tail =
+        has_sizing_tail || in.struct_size == PF_NATIVE_REQUEST_V1_ANCHOR_SIZE;
     if ((!has_anchor_tail && in.struct_size != PF_NATIVE_REQUEST_V1_BASE_SIZE)
         || in.version != PF_NATIVE_API_VERSION) {
         return PF_NATIVE_E_STRUCT;
     }
-    if (int rc = translate_intent(in, out.intent); rc != PF_NATIVE_OK) return rc;
+    if (int rc = translate_intent(in, has_sizing_tail, out.intent); rc != PF_NATIVE_OK) {
+        return rc;
+    }
     if (int rc = translate_trigger(in, out.trigger); rc != PF_NATIVE_OK) return rc;
     if (int rc = translate_owner(in, run, out.owner); rc != PF_NATIVE_OK) return rc;
 
@@ -1022,6 +1082,75 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
 /* `has_risk_tail` is false for a caller compiled against the base layout of
  * pf_native_run_spec_ext_v1 (PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE): its struct
  * stops at `reserved0`, so the risk fields must not be read at all. */
+/* The retained intrabar execution path. NONE keeps the whole default
+ * surface; the two sampled alternatives share their sampler knobs and differ
+ * in whether a finer feed is retained, which is also what decides whether
+ * on_sub_bar is ever delivered. */
+int translate_intrabar(const pf_native_run_spec_ext_v1& ext, pineforge::IntrabarPath& out) {
+    if (ext.intrabar_volume_weighted > 1u) return PF_NATIVE_E_TAG;
+    pineforge::MagnifierDistribution distribution;
+    switch (ext.intrabar_distribution) {
+    case PF_MAGNIFIER_UNIFORM: distribution = pineforge::MagnifierDistribution::UNIFORM; break;
+    case PF_MAGNIFIER_COSINE: distribution = pineforge::MagnifierDistribution::COSINE; break;
+    case PF_MAGNIFIER_TRIANGLE: distribution = pineforge::MagnifierDistribution::TRIANGLE; break;
+    case PF_MAGNIFIER_ENDPOINTS:
+        distribution = pineforge::MagnifierDistribution::ENDPOINTS;
+        break;
+    case PF_MAGNIFIER_FRONT_LOADED:
+        distribution = pineforge::MagnifierDistribution::FRONT_LOADED;
+        break;
+    case PF_MAGNIFIER_BACK_LOADED:
+        distribution = pineforge::MagnifierDistribution::BACK_LOADED;
+        break;
+    default: return PF_NATIVE_E_TAG;
+    }
+    switch (ext.intrabar_kind) {
+    case PF_NATIVE_INTRABAR_NONE:
+        out = pineforge::IntrabarPath{};
+        return PF_NATIVE_OK;
+    case PF_NATIVE_INTRABAR_SYNTHESIZED: {
+        pineforge::IntrabarPath::synthesized path;
+        path.samples = ext.intrabar_samples;
+        path.distribution = distribution;
+        path.volume_weighted = ext.intrabar_volume_weighted != 0u;
+        path.volume_weighted_min_samples = ext.intrabar_volume_weighted_min_samples;
+        path.volume_weighted_max_samples = ext.intrabar_volume_weighted_max_samples;
+        out.value = std::move(path);
+        return PF_NATIVE_OK;
+    }
+    case PF_NATIVE_INTRABAR_LOWER_TF: {
+        if (!ext.intrabar_tf) return PF_NATIVE_E_ARGUMENT;
+        if (ext.intrabar_n < 0 || (ext.intrabar_n > 0 && !ext.intrabar_bars)) {
+            return PF_NATIVE_E_ARGUMENT;
+        }
+        pineforge::IntrabarPath::lower_tf path;
+        path.tf = ext.intrabar_tf;
+        const auto* bars = reinterpret_cast<const Bar*>(ext.intrabar_bars);
+        path.bars.assign(bars, bars + ext.intrabar_n);
+        path.samples = ext.intrabar_samples;
+        path.distribution = distribution;
+        path.volume_weighted = ext.intrabar_volume_weighted != 0u;
+        path.volume_weighted_min_samples = ext.intrabar_volume_weighted_min_samples;
+        path.volume_weighted_max_samples = ext.intrabar_volume_weighted_max_samples;
+        switch (ext.intrabar_sample_eligibility) {
+        case PF_NATIVE_SAMPLE_CONTINUOUS_SEGMENTS:
+            path.sample_eligibility =
+                pineforge::IntrabarPath::SampleEligibility::ContinuousSegments;
+            break;
+        case PF_NATIVE_SAMPLE_DISTRIBUTION_SAMPLES:
+            path.sample_eligibility =
+                pineforge::IntrabarPath::SampleEligibility::DistributionSamples;
+            break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        out.value = std::move(path);
+        return PF_NATIVE_OK;
+    }
+    default:
+        return PF_NATIVE_E_TAG;
+    }
+}
+
 /* One subscription list, shared by the configure-time block and the
  * begin-time declaration so both read a row the same way. */
 int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t n,
@@ -1052,8 +1181,8 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
 }
 
 int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
-                   bool has_risk_tail) {
-    if (ext.present_mask & ~0x7fu) return PF_NATIVE_E_TAG;
+                   bool has_risk_tail, bool has_policy_tail) {
+    if (ext.present_mask & ~0x1ffu) return PF_NATIVE_E_TAG;
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) && !has_risk_tail) {
         return PF_NATIVE_E_STRUCT;
     }
@@ -1117,11 +1246,47 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
         margin.shortfall_multiple = ext.margin_shortfall_multiple;
         if (ext.margin_has_min_units) margin.liquidation_min_units = ext.margin_min_units;
         switch (ext.margin_check) {
-        case 0: margin.check = pineforge::NativeLiquidationCheck::PathAdverseExtreme; break;
-        case 1: margin.check = pineforge::NativeLiquidationCheck::CalculationOnly; break;
+        case PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME:
+            margin.check = pineforge::NativeLiquidationCheck::PathAdverseExtreme;
+            break;
+        case PF_NATIVE_LIQUIDATION_CALCULATION_ONLY:
+            margin.check = pineforge::NativeLiquidationCheck::CalculationOnly;
+            break;
+        case PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME_MARK:
+            margin.check = pineforge::NativeLiquidationCheck::PathAdverseExtremeMark;
+            break;
         default: return PF_NATIVE_E_TAG;
         }
+        if (has_policy_tail) {
+            switch (ext.margin_equity_basis) {
+            case PF_NATIVE_MARGIN_EQUITY_MARKED:
+                margin.basis = pineforge::NativeMarginEquityBasis::MarkedEquity;
+                break;
+            case PF_NATIVE_MARGIN_EQUITY_BEFORE_OPEN_COMMISSION:
+                margin.basis =
+                    pineforge::NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
+            switch (ext.margin_level_base) {
+            case PF_NATIVE_MARGIN_LEVEL_MARKED_EQUITY:
+                margin.level_base = pineforge::NativeLiquidationLevelBase::MarkedEquity;
+                break;
+            case PF_NATIVE_MARGIN_LEVEL_REALIZED_ONLY:
+                margin.level_base = pineforge::NativeLiquidationLevelBase::RealizedOnly;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
+            if (ext.margin_liquidation_label) margin.liquidation_label = ext.margin_liquidation_label;
+            if (ext.margin_liquidation_comment) {
+                margin.liquidation_comment = ext.margin_liquidation_comment;
+            }
+        }
         spec.margin = margin;
+    }
+    if ((ext.present_mask & (PF_NATIVE_SPEC_EXT_INTRABAR | PF_NATIVE_SPEC_EXT_FEED_POLICY))
+        && !has_policy_tail) {
+        return PF_NATIVE_E_STRUCT;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) {
         pineforge::NativeRiskLimits risk;
@@ -1166,6 +1331,45 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
                                              spec.subscriptions);
             rc != PF_NATIVE_OK) {
             return rc;
+        }
+    }
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_INTRABAR) {
+        if (int rc = translate_intrabar(ext, spec.intrabar); rc != PF_NATIVE_OK) return rc;
+    }
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_FEED_POLICY) {
+        switch (ext.slot_label_policy) {
+        case PF_NATIVE_SLOT_LABEL_CANONICAL:
+            spec.slot_label_policy = pineforge::NativeSlotLabelPolicy::Canonical;
+            break;
+        case PF_NATIVE_SLOT_LABEL_FEED_TOLERANT:
+            spec.slot_label_policy = pineforge::NativeSlotLabelPolicy::FeedTolerant;
+            break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        /* A bit mask, not an enumerator: any bit outside the published set
+         * is a value this version cannot represent. */
+        constexpr std::uint32_t kTolerance = PF_NATIVE_FEED_TOLERANCE_BATCH_STRUCTURAL
+                                           | PF_NATIVE_FEED_TOLERANCE_WARMUP_NONNEGATIVE;
+        if (ext.feed_tolerance & ~kTolerance) return PF_NATIVE_E_TAG;
+        spec.legacy_tolerance = static_cast<pineforge::NativeFeedTolerance>(ext.feed_tolerance);
+        switch (ext.path_order) {
+        case PF_NATIVE_PATH_ORDER_AUTO: spec.path_order = pineforge::NativePathOrder::Auto; break;
+        case PF_NATIVE_PATH_ORDER_HIGH_FIRST:
+            spec.path_order = pineforge::NativePathOrder::HighFirst;
+            break;
+        case PF_NATIVE_PATH_ORDER_LOW_FIRST:
+            spec.path_order = pineforge::NativePathOrder::LowFirst;
+            break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        switch (ext.abort_reporting) {
+        case PF_NATIVE_ABORT_ERROR:
+            spec.abort_reporting = pineforge::NativeAbortReporting::Error;
+            break;
+        case PF_NATIVE_ABORT_QUIET:
+            spec.abort_reporting = pineforge::NativeAbortReporting::Quiet;
+            break;
+        default: return PF_NATIVE_E_TAG;
         }
     }
     return PF_NATIVE_OK;
@@ -1647,10 +1851,13 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!base || !ext) return PF_NATIVE_E_ARGUMENT;
         if (base->struct_size != sizeof(pf_native_run_spec_v1)) return PF_NATIVE_E_STRUCT;
-        /* Two published layouts, and only two: the base one the lane first
-         * shipped and the current one with the risk tail. Anything else is a
-         * caller this runtime cannot read. */
-        const bool has_risk_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        /* Three published layouts, and only three: the base one the lane
+         * first shipped, that plus L9's risk tail, and the current one with
+         * N8's intrabar / policy tail. Anything else is a caller this runtime
+         * cannot read. */
+        const bool has_policy_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        const bool has_risk_tail =
+            has_policy_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE;
         if ((!has_risk_tail && ext->struct_size != PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE)
             || ext->version != PF_NATIVE_API_VERSION) {
             return PF_NATIVE_E_STRUCT;
@@ -1664,7 +1871,10 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         }
         pineforge::NativeRunSpec spec;
         if (int rc = translate_base_spec(*base, spec); rc != PF_NATIVE_OK) return rc;
-        if (int rc = apply_spec_ext(spec, *ext, has_risk_tail); rc != PF_NATIVE_OK) return rc;
+        if (int rc = apply_spec_ext(spec, *ext, has_risk_tail, has_policy_tail);
+            rc != PF_NATIVE_OK) {
+            return rc;
+        }
         return host->configure_native(spec).status == pineforge::NativeSetupStatus::Applied
             ? PF_NATIVE_OK
             : PF_NATIVE_E_ARGUMENT;

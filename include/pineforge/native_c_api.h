@@ -377,8 +377,113 @@ typedef enum pf_native_spec_ext_mask_e {
     /** L9's generic risk limits. Only a caller whose
      *  pf_native_run_spec_ext_v1 carries the risk tail may set this bit; a
      *  caller sending the base layout is refused with PF_NATIVE_E_STRUCT. */
-    PF_NATIVE_SPEC_EXT_RISK          = 1u << 6
+    PF_NATIVE_SPEC_EXT_RISK          = 1u << 6,
+    /** The retained intrabar execution path. Needs the N8 tail. */
+    PF_NATIVE_SPEC_EXT_INTRABAR      = 1u << 7,
+    /** The four feed-shape and presentation policies: slot labels, feed
+     *  tolerance, the forced path order and abort reporting. Needs the N8
+     *  tail. */
+    PF_NATIVE_SPEC_EXT_FEED_POLICY   = 1u << 8
 } pf_native_spec_ext_mask_t;
+
+/** WHICH price a kernel-sized basis converts at — `native_order::SizePrice`
+ *  (L3b). RESOLVED is the established behaviour: the price the kernel would
+ *  otherwise settle at. SIGNAL is the decision-point price at placement,
+ *  carried to the expected fill by the side's slippage and rounded onto the
+ *  run's fill grid. SIGNAL_ON_TICK is that same rule measured on the
+ *  INSTRUMENT's own tick ladder (`price_tick`) instead of the fill grid,
+ *  rounded before the slippage as well as after. */
+typedef enum pf_native_size_price_e {
+    PF_NATIVE_SIZE_PRICE_RESOLVED       = 0,
+    PF_NATIVE_SIZE_PRICE_SIGNAL         = 1,
+    PF_NATIVE_SIZE_PRICE_SIGNAL_ON_TICK = 2
+} pf_native_size_price_t;
+
+/** WHICH measurement of the bound scope a fractional reduce takes its
+ *  fraction of — `native_order::ScopeBasis`. AT_MATCH reads the scope as it
+ *  stands at the matching candidate. AT_ACCEPTANCE freezes the scope SIZE
+ *  when the request is accepted, so two 50 % siblings on one 10-unit lot both
+ *  claim 5 under GROSS even after the first has executed. */
+typedef enum pf_native_scope_basis_e {
+    PF_NATIVE_SCOPE_BASIS_AT_MATCH      = 0,
+    PF_NATIVE_SCOPE_BASIS_AT_ACCEPTANCE = 1
+} pf_native_scope_basis_t;
+
+/** When the kernel tests the maintenance requirement —
+ *  `NativeLiquidationCheck`, the `margin_check` field of
+ *  #pf_native_run_spec_ext_v1. */
+typedef enum pf_native_liquidation_check_e {
+    PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME      = 0, /**< Solve and rest at the level. */
+    PF_NATIVE_LIQUIDATION_CALCULATION_ONLY          = 1, /**< Test the mark; rest nothing. */
+    PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME_MARK = 2  /**< Rest AT the adverse mark. */
+} pf_native_liquidation_check_t;
+
+/** Which equity the maintenance requirement is tested against —
+ *  `NativeMarginEquityBasis`. */
+typedef enum pf_native_margin_equity_basis_e {
+    PF_NATIVE_MARGIN_EQUITY_MARKED                 = 0,
+    PF_NATIVE_MARGIN_EQUITY_BEFORE_OPEN_COMMISSION = 1
+} pf_native_margin_equity_basis_t;
+
+/** Which base the liquidation level is solved from —
+ *  `NativeLiquidationLevelBase`. */
+typedef enum pf_native_margin_level_base_e {
+    PF_NATIVE_MARGIN_LEVEL_MARKED_EQUITY = 0,
+    PF_NATIVE_MARGIN_LEVEL_REALIZED_ONLY = 1
+} pf_native_margin_level_base_t;
+
+/** Which intrabar execution path the run retains — the alternative of
+ *  `IntrabarPath`. NONE is the whole default surface. LOWER_TF retains the
+ *  caller's own finer bars (and is the one mode that delivers
+ *  #pf_native_callbacks_v1::on_sub_bar). SYNTHESIZED samples each script
+ *  bar's own OHLC path through the generic sampler and retains no feed. */
+typedef enum pf_native_intrabar_kind_e {
+    PF_NATIVE_INTRABAR_NONE        = 0,
+    PF_NATIVE_INTRABAR_LOWER_TF    = 1,
+    PF_NATIVE_INTRABAR_SYNTHESIZED = 2
+} pf_native_intrabar_kind_t;
+
+/** Whether matching stays continuous between generated samples —
+ *  `IntrabarPath::SampleEligibility`. LOWER_TF only; a synthesized path's
+ *  point-only eligibility is inherent to that mode. */
+typedef enum pf_native_sample_eligibility_e {
+    PF_NATIVE_SAMPLE_CONTINUOUS_SEGMENTS   = 0,
+    PF_NATIVE_SAMPLE_DISTRIBUTION_SAMPLES  = 1
+} pf_native_sample_eligibility_t;
+
+/** Whether a confirmed bar must name a canonical input slot —
+ *  `NativeSlotLabelPolicy`. A feed-shape policy, not a source-language one;
+ *  the two modes never share a continuation. */
+typedef enum pf_native_slot_label_e {
+    PF_NATIVE_SLOT_LABEL_CANONICAL     = 0,
+    PF_NATIVE_SLOT_LABEL_FEED_TOLERANT = 1
+} pf_native_slot_label_t;
+
+/** Opt-in admission exceptions for a tolerated input-feed shape —
+ *  `NativeFeedTolerance`. A BIT MASK, not an enumerator: the values combine,
+ *  and any bit outside this set is PF_NATIVE_E_TAG. */
+typedef enum pf_native_feed_tolerance_e {
+    PF_NATIVE_FEED_TOLERANCE_NONE               = 0,
+    /** Finite OHLC need not be positive; NaN volume means unavailable. */
+    PF_NATIVE_FEED_TOLERANCE_BATCH_STRUCTURAL   = 1u << 0,
+    /** Stream warmups admit finite, non-negative interim OHLC. */
+    PF_NATIVE_FEED_TOLERANCE_WARMUP_NONNEGATIVE = 1u << 1
+} pf_native_feed_tolerance_t;
+
+/** Generic ordering for a modeled OHLC path — `NativePathOrder`. AUTO keeps
+ *  the open-proximity rule; the forced modes make the first excursion
+ *  explicit for replay and live hosts. */
+typedef enum pf_native_path_order_e {
+    PF_NATIVE_PATH_ORDER_AUTO       = 0,
+    PF_NATIVE_PATH_ORDER_HIGH_FIRST = 1,
+    PF_NATIVE_PATH_ORDER_LOW_FIRST  = 2
+} pf_native_path_order_t;
+
+/** How a cooperative abort is presented — `NativeAbortReporting`. */
+typedef enum pf_native_abort_reporting_e {
+    PF_NATIVE_ABORT_ERROR = 0,
+    PF_NATIVE_ABORT_QUIET = 1
+} pf_native_abort_reporting_t;
 
 /** Why the kernel is asking the host to calculate — `NativeCalculationReason`
  *  (L5), the `reason` argument of #pf_native_callbacks_v1::on_recalculate.
@@ -677,13 +782,15 @@ typedef struct pf_native_risk_state_v1 {
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
  *  set only the fields the chosen `intent` and `trigger` document.
  *
- *  This struct has TWO published layouts and the runtime accepts either: the
- *  base layout the L13 lane first shipped, whose length is
- *  #PF_NATIVE_REQUEST_V1_BASE_SIZE, and the current one, which appends the
- *  L7b anchored-leg tail (`anchor_rounding`). A caller compiled against the
- *  base layout keeps working unchanged and simply gets the tail's defaults
- *  (RAW). Any other `struct_size` is PF_NATIVE_E_STRUCT. The tail is
- *  append-only: nothing above it moved. */
+ *  This struct has THREE published layouts and the runtime accepts any of
+ *  them: the base layout the L13 lane first shipped
+ *  (#PF_NATIVE_REQUEST_V1_BASE_SIZE), that layout plus L7b's anchored-leg
+ *  tail (#PF_NATIVE_REQUEST_V1_ANCHOR_SIZE), and the current one, which
+ *  appends L3b's sizing detail (`size_price`, `reduce_basis`). A caller
+ *  compiled against an earlier layout keeps working unchanged and simply gets
+ *  the later tails' defaults (RAW, WORKING, RESOLVED, AT_MATCH). Any other
+ *  `struct_size` is PF_NATIVE_E_STRUCT. Both tails are append-only: nothing
+ *  above them moved. */
 typedef struct pf_native_request_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_request_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
@@ -737,6 +844,13 @@ typedef struct pf_native_request_v1 {
      * `comment` above and gets every default (RAW, WORKING). ── */
     uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_e, FROM_OWNER_FILL only. */
     uint32_t visibility;          /**< #pf_native_arm_visibility_e, WAIT_FOR_APPLIED only. */
+
+    /* ── The additive sizing-detail tail (L3b). Read only when `struct_size`
+     * is the current sizeof; a caller sending either earlier layout stops
+     * above and gets both defaults (RESOLVED, AT_MATCH), which is what every
+     * request accepted before this tail already resolved as. ── */
+    uint32_t size_price;          /**< #pf_native_size_price_e, SIZED only. */
+    uint32_t reduce_basis;        /**< #pf_native_scope_basis_e, SCOPE_FRACTION only. */
 } pf_native_request_v1;
 
 /** Byte length of #pf_native_request_v1 as the L13 lane first published it,
@@ -747,6 +861,13 @@ typedef struct pf_native_request_v1 {
  *  layout break. */
 #define PF_NATIVE_REQUEST_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_request_v1, anchor_rounding))
+
+/** Byte length of #pf_native_request_v1 with L7b's anchored-leg tail but
+ *  without L3b's sizing-detail tail — the second of its three published
+ *  layouts. Defined as the offset of the first field appended after it, for
+ *  the same reason #PF_NATIVE_REQUEST_V1_BASE_SIZE is. */
+#define PF_NATIVE_REQUEST_V1_ANCHOR_SIZE \
+    ((uint32_t)offsetof(pf_native_request_v1, size_price))
 
 /** One declared higher-timeframe series of #pf_native_run_spec_ext_v1.
  *
@@ -778,17 +899,20 @@ typedef struct pf_native_subscription_v1 {
  *  keeps the kernel's own default, so an all-zero mask configures exactly
  *  what #strategy_configure_native_v1 would have.
  *
- *  Not represented in ext v1: the intrabar path, the slot-label policy, legacy
- *  tolerance, the forced path order and abort reporting. They keep their
- *  defaults.
+ *  Every field of NativeRunSpec that is not fixed by
+ *  #pf_native_run_spec_v1 now travels here. The one deliberate omission is
+ *  `identity`, which the base spec owns.
  *
- *  This struct has TWO published layouts and the runtime accepts either: the
- *  base layout the L13 lane first shipped, whose length is
- *  #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE, and the current one, which appends
- *  the `risk_*` tail L9's limits need. A caller compiled against the base
- *  layout keeps working unchanged and simply cannot set
- *  #PF_NATIVE_SPEC_EXT_RISK. Any other `struct_size` is PF_NATIVE_E_STRUCT.
- *  The tail is append-only: nothing above it moved. */
+ *  This struct has THREE published layouts and the runtime accepts any of
+ *  them: the base layout the L13 lane first shipped
+ *  (#PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE), that layout plus L9's `risk_*`
+ *  tail (#PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE), and the current one, which
+ *  appends the intrabar path, the four feed-shape and presentation policies,
+ *  and the margin model's equity basis, level base and liquidation strings.
+ *  A caller compiled against an earlier layout keeps working unchanged and
+ *  simply cannot set the mask bits its struct has no fields for: doing so is
+ *  PF_NATIVE_E_STRUCT. Any other `struct_size` is PF_NATIVE_E_STRUCT too.
+ *  Both tails are append-only: nothing above them moved. */
 typedef struct pf_native_run_spec_ext_v1 {
     uint32_t struct_size;    /**< sizeof(pf_native_run_spec_ext_v1). */
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
@@ -806,7 +930,7 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t open_bar_view;   /**< NativeOpenBarView. */
 
     uint32_t margin_sizing;   /**< NativeLiquidationSizing. */
-    uint32_t margin_check;    /**< NativeLiquidationCheck. */
+    uint32_t margin_check;    /**< #pf_native_liquidation_check_e. */
     uint32_t margin_has_maintenance_long;
     uint32_t margin_has_maintenance_short;
     uint32_t margin_has_min_units;
@@ -846,6 +970,37 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t risk_max_fills_per_day;         /**< Applied fills, when the flag is 1. */
     uint32_t risk_day_basis;                 /**< #pf_native_risk_day_e. */
     uint32_t risk_action;                    /**< #pf_native_risk_action_e. */
+
+    /* ── The additive intrabar / policy tail (N8). Read only when
+     * `struct_size` is the current sizeof; a caller sending either earlier
+     * layout stops at `risk_action` above and keeps every kernel default.
+     * The two blocks below have mask bits of their own; the four margin
+     * fields at the end extend the EXISTING PF_NATIVE_SPEC_EXT_MARGIN block
+     * and are read only when that bit is set AND this tail is present. ── */
+    uint32_t intrabar_kind;          /**< #pf_native_intrabar_kind_e. */
+    int32_t  intrabar_samples;       /**< Samples per script bar; LOWER_TF and SYNTHESIZED. */
+    uint32_t intrabar_distribution;  /**< #pf_magnifier_distribution_t. */
+    uint32_t intrabar_volume_weighted;             /**< 0/1. */
+    int32_t  intrabar_volume_weighted_min_samples;
+    int32_t  intrabar_volume_weighted_max_samples;
+    uint32_t intrabar_sample_eligibility; /**< #pf_native_sample_eligibility_e, LOWER_TF only. */
+    int32_t  intrabar_n;             /**< Length of `intrabar_bars`; LOWER_TF only. */
+    const char* intrabar_tf;         /**< The finer timeframe; LOWER_TF only, non-NULL. */
+    const pf_bar_t* intrabar_bars;   /**< The finer feed; borrowed for the call, copied. */
+
+    uint32_t slot_label_policy;   /**< #pf_native_slot_label_e. FEED_TOLERANT keeps
+                                   *   the caller's own labels, and a
+                                   *   #PF_NATIVE_INTRABAR_LOWER_TF path then
+                                   *   delivers no sub-bar: its bars are not
+                                   *   keyed to canonical input slots. */
+    uint32_t feed_tolerance;      /**< #pf_native_feed_tolerance_e bits. */
+    uint32_t path_order;          /**< #pf_native_path_order_e. */
+    uint32_t abort_reporting;     /**< #pf_native_abort_reporting_e. */
+
+    uint32_t margin_equity_basis; /**< #pf_native_margin_equity_basis_e. */
+    uint32_t margin_level_base;   /**< #pf_native_margin_level_base_e. */
+    const char* margin_liquidation_label;   /**< Ticket of a kernel liquidation; NULL is "". */
+    const char* margin_liquidation_comment; /**< Comment of the same; NULL is "". */
 } pf_native_run_spec_ext_v1;
 
 /** Byte length of #pf_native_run_spec_ext_v1 as the L13 lane first published
@@ -856,6 +1011,11 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  layout break. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, risk_has_max_drawdown))
+
+/** Byte length of #pf_native_run_spec_ext_v1 with L9's risk tail but without
+ *  N8's intrabar / policy tail — the second of its three published layouts. */
+#define PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE \
+    ((uint32_t)offsetof(pf_native_run_spec_ext_v1, intrabar_kind))
 
 /** The C host's strategy logic.
  *

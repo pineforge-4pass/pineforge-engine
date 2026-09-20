@@ -1880,6 +1880,543 @@ static void check_callback_tail_layouts(void) {
           "a third callback-table length was accepted");
 }
 
+/* ── The two additive spec / request tails ───────────────────────
+ *
+ * pf_native_request_v1 gains L3b's sizing detail and pf_native_run_spec_ext_v1
+ * gains the intrabar path, the four feed-shape policies and the margin
+ * model's remaining knobs. Both are third published layouts. */
+
+/* A falling feed, so a resting limit fills at a price the signal is not. */
+#define FALL_BARS 24
+static pf_bar_t fall_bars[FALL_BARS];
+static int fall_ready = 0;
+
+static const pf_bar_t* falling_feed(int* n) {
+    if (!fall_ready) {
+        int i;
+        for (i = 0; i < FALL_BARS; ++i) {
+            const double open = 200.0 - (double)i;
+            fall_bars[i].open = open;
+            fall_bars[i].high = open + 1.0;
+            fall_bars[i].low = open - 2.0;
+            fall_bars[i].close = open - 1.0;
+            fall_bars[i].volume = 5.0;
+            fall_bars[i].timestamp = (int64_t)i * 300000;
+        }
+        fall_ready = 1;
+    }
+    if (n) *n = FALL_BARS;
+    return fall_bars;
+}
+
+#define SIZED_CASH        900.0
+#define SIZED_SUBMIT_BAR  4
+#define SIZED_SLIPPAGE    10u
+#define SIZED_TICK        0.01
+
+typedef struct tail_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    uint32_t size_price;
+    double   signal_reference;
+    double   filled_units;
+    int      sub_bars;
+    int      sub_bar_partial_ok;
+} tail_state;
+
+static int sized_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    tail_state* state = (tail_state*)user;
+    (void)at;
+    if (state->filled_units == 0.0) state->filled_units = applied->opened_units;
+    return 0;
+}
+
+static int sized_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    tail_state* state = (tail_state*)user;
+    pf_native_request_v1 request;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations != SIZED_SUBMIT_BAR) return 0;
+    /* The decision price the Signal rule freezes, carried to the expected
+     * market fill by the side's own tick slippage. */
+    state->signal_reference = bar->close + (double)SIZED_SLIPPAGE * SIZED_TICK;
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_SIZED;
+    request.side = PF_NATIVE_SIDE_LONG;
+    request.size_basis = PF_NATIVE_SIZE_BASIS_CASH;
+    request.intent_value = SIZED_CASH;
+    request.size_time = PF_NATIVE_SIZE_AT_MATCH;
+    request.size_price = state->size_price;   /* the arm under test */
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.p1 = bar->close - 20.0;   /* reached several bars down the fall */
+    request.label = "sized-entry";
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "the sized entry was refused");
+    return 0;
+}
+
+static void run_sized_price(uint32_t size_price, tail_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->size_price = size_price;
+    table = blank_callbacks(state);
+    table.on_bar = sized_on_bar;
+    table.on_applied = sized_on_applied;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "sized-price host create failed");
+    if (!state->host) return;
+    spec.initial_capital = 100000.0;
+    spec.slippage_ticks = SIZED_SLIPPAGE;
+    spec.price_tick = SIZED_TICK;
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "sized-price configure");
+    bars = falling_feed(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, n, NULL), PF_NATIVE_OK,
+                 "the sized-price run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback sized-price rows failed");
+}
+
+static void check_request_sizing_tail(void) {
+    pf_native_request_v1 request;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_strategy_t host;
+    tail_state resolved;
+    tail_state signal;
+
+    /* Three published request layouts. */
+    CHECK(PF_NATIVE_REQUEST_V1_BASE_SIZE < PF_NATIVE_REQUEST_V1_ANCHOR_SIZE,
+          "the anchored-leg tail is not past the base layout");
+    CHECK(PF_NATIVE_REQUEST_V1_ANCHOR_SIZE < (uint32_t)sizeof(pf_native_request_v1),
+          "the sizing tail is not past the anchored-leg layout");
+
+    table = blank_callbacks(NULL);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "sizing-tail host create failed");
+    if (!host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "sizing-tail configure");
+
+    /* An unknown sizing-detail tag is refused, and only from a caller whose
+     * struct carries the tail. */
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_SIZED;
+    request.intent_value = 100.0;
+    request.size_price = 9u;
+    CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                 "an unknown size_price was accepted");
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_SCOPE_FRACTION;
+    request.intent_value = 0.5;
+    request.reduce_basis = 9u;
+    CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                 "an unknown reduce_basis was accepted");
+    /* The anchored-leg layout has no such fields, so the same bytes are not
+     * even looked at: the request is refused for its own reason, never for a
+     * tail its caller does not have. */
+    request = blank_request();
+    request.struct_size = PF_NATIVE_REQUEST_V1_ANCHOR_SIZE;
+    request.intent = PF_NATIVE_INTENT_SIZED;
+    request.intent_value = 100.0;
+    request.size_price = 9u;
+    CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_STATE,
+                 "an anchored-layout caller was judged on a tail it does not carry");
+    strategy_native_host_free(host);
+
+    /* The two sizing prices resolve different unit counts on a falling feed,
+     * where the signal the request was born on is not the price it fills at. */
+    run_sized_price(PF_NATIVE_SIZE_PRICE_RESOLVED, &resolved);
+    run_sized_price(PF_NATIVE_SIZE_PRICE_SIGNAL, &signal);
+    if (!resolved.host || !signal.host) return;
+    CHECK(resolved.filled_units > 0.0, "the RESOLVED arm never filled");
+    CHECK(signal.filled_units > 0.0, "the SIGNAL arm never filled");
+    CHECK(resolved.filled_units != signal.filled_units,
+          "size_price did not change what the basis converted at");
+    CHECK(fabs(signal.filled_units - SIZED_CASH / signal.signal_reference) < 1e-9,
+          "the SIGNAL arm did not size against the frozen decision price");
+    strategy_native_host_free(resolved.host);
+    strategy_native_host_free(signal.host);
+}
+
+/* --- the frozen scope basis --- */
+
+typedef struct scope_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    uint32_t basis;
+    uint64_t entry;
+    int64_t  cycle;
+    double   final_units;
+} scope_state;
+
+static int scope_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    scope_state* state = (scope_state*)user;
+    (void)at;
+    if (applied->opened_units > 0.0) state->cycle = applied->cycle_after;
+    return 0;
+}
+
+static int scope_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    scope_state* state = (scope_state*)user;
+    pf_native_request_v1 request;
+    uint64_t owner[1];
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == 3) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 10.0;
+        request.label = "scope-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->entry, NULL)
+                          == PF_NATIVE_OK, "the scope entry was refused");
+        return 0;
+    }
+    if (state->calculations != 6) return 0;
+    owner[0] = state->entry;
+    /* Two siblings, both half the bound scope, accepted together and matched
+     * in order at the next point. */
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_SCOPE_FRACTION;
+    request.reduce_claim = PF_NATIVE_SCOPE_GROSS;
+    request.reduce_basis = state->basis;
+    request.intent_value = 0.5;
+    request.owner = PF_NATIVE_OWNER_BIND_OPENING;
+    request.owner_incarnations = owner;
+    request.owner_n = 1u;
+    request.owner_cycle = state->cycle;
+    request.label = "scope-a";
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "scope-a was refused");
+    request.label = "scope-b";
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "scope-b was refused");
+    return 0;
+}
+
+static void run_scope_basis(uint32_t basis, scope_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->basis = basis;
+    table = blank_callbacks(state);
+    table.on_bar = scope_on_bar;
+    table.on_applied = scope_on_applied;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "scope host create failed");
+    if (!state->host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "scope configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, n, NULL), PF_NATIVE_OK,
+                 "the scope run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback scope rows failed");
+    CHECK_EQ_INT(strategy_native_position_v1(state->host, &state->final_units, NULL, NULL),
+                 PF_NATIVE_OK, "the scope position was refused");
+}
+
+static void check_scope_basis_tail(void) {
+    scope_state at_match;
+    scope_state at_acceptance;
+
+    run_scope_basis(PF_NATIVE_SCOPE_BASIS_AT_MATCH, &at_match);
+    run_scope_basis(PF_NATIVE_SCOPE_BASIS_AT_ACCEPTANCE, &at_acceptance);
+    if (!at_match.host || !at_acceptance.host) return;
+    /* AT_MATCH reads the scope as it stands: 5 then half of what is left.
+     * AT_ACCEPTANCE froze it at 10, so both siblings claim 5. */
+    CHECK(fabs(at_match.final_units - 2.5) < 1e-9,
+          "AT_MATCH did not re-read the scope at the second candidate");
+    CHECK(fabs(at_acceptance.final_units - 0.0) < 1e-9,
+          "AT_ACCEPTANCE did not freeze the scope at acceptance");
+    strategy_native_host_free(at_match.host);
+    strategy_native_host_free(at_acceptance.host);
+}
+
+/* --- the intrabar path, and with it the sub-bar hook --- */
+
+#define SUB_PER_BAR 5
+static pf_bar_t lower_bars[TWIN_BARS * SUB_PER_BAR];
+static int lower_ready = 0;
+
+/* Five 1m bars that aggregate EXACTLY to each 5m twin bar: same open, same
+ * high, same low, same close, same total volume. */
+static const pf_bar_t* lower_feed(int* n) {
+    if (!lower_ready) {
+        int i;
+        for (i = 0; i < TWIN_BARS; ++i) {
+            const double open = 100.0 + (double)i;
+            const double high = open + 2.0;
+            const double low = open - 1.0;
+            const double close = open + 1.0;
+            const double points[SUB_PER_BAR + 1] = {open, open, high, high, low, close};
+            int j;
+            for (j = 0; j < SUB_PER_BAR; ++j) {
+                pf_bar_t* row = &lower_bars[i * SUB_PER_BAR + j];
+                const double a = points[j];
+                const double b = points[j + 1];
+                row->open = a;
+                row->close = b;
+                row->high = a > b ? a : b;
+                row->low = a < b ? a : b;
+                row->volume = 1.0;
+                row->timestamp = (int64_t)i * 300000 + (int64_t)j * 60000;
+            }
+        }
+        lower_ready = 1;
+    }
+    if (n) *n = TWIN_BARS * SUB_PER_BAR;
+    return lower_bars;
+}
+
+static int intrabar_on_sub_bar(void* user, const pf_bar_t* sub,
+                               const pf_native_decision_v1* at) {
+    tail_state* state = (tail_state*)user;
+    pf_bar_t partial;
+    (void)at;
+    ++state->sub_bars;
+    if (sub->high < sub->low) LCHECK(state, 0, "a sub-bar arrived inverted");
+    /* A sub-bar is inside the script bar's path walk, so the bar so far
+     * exists there too. */
+    memset(&partial, 0, sizeof(partial));
+    if (strategy_native_partial_bar_v1(state->host, &partial) == PF_NATIVE_OK) {
+        state->sub_bar_partial_ok = 1;
+    }
+    return 0;
+}
+
+static int intrabar_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    tail_state* state = (tail_state*)user;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    return 0;
+}
+
+static void check_intrabar_and_policies(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    tail_state state;
+    pf_strategy_t probe;
+    const pf_bar_t* bars;
+    const pf_bar_t* lower;
+    int n = 0;
+    int lower_n = 0;
+
+    /* Three published extension layouts. */
+    CHECK(PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE < PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE,
+          "the risk tail is not past the base extension layout");
+    CHECK(PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE < (uint32_t)sizeof(pf_native_run_spec_ext_v1),
+          "the intrabar/policy tail is not past the risk layout");
+
+    /* The two new blocks need the tail their fields live in. */
+    table = blank_callbacks(NULL);
+    probe = strategy_native_host_create_v1(&table);
+    CHECK(probe != NULL, "intrabar probe host create failed");
+    if (!probe) return;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE;
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(probe, &spec, &ext), PF_NATIVE_E_STRUCT,
+                 "the intrabar block was accepted from a risk-layout extension");
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE;
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_FEED_POLICY;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(probe, &spec, &ext), PF_NATIVE_E_STRUCT,
+                 "the feed-policy block was accepted from a base-layout extension");
+    /* Unknown enumerators in either block. */
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR;
+    ext.intrabar_kind = 7u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(probe, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unknown intrabar kind was accepted");
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_FEED_POLICY;
+    ext.feed_tolerance = 1u << 5;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(probe, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unpublished feed-tolerance bit was accepted");
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR;
+    ext.intrabar_kind = PF_NATIVE_INTRABAR_LOWER_TF;
+    ext.intrabar_tf = NULL;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(probe, &spec, &ext), PF_NATIVE_E_ARGUMENT,
+                 "a lower-timeframe path without a timeframe was accepted");
+    /* None of those refusals touched the handle. */
+    CHECK_EQ_INT(strategy_native_partial_bar_v1(probe, &lower_bars[0]), PF_NATIVE_ABSENT,
+                 "a refused extension started a run");
+    strategy_native_host_free(probe);
+
+    /* A real retained lower feed: five 1m bars per 5m script bar, so every
+     * script bar has sub-bars of its own and on_sub_bar is delivered. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = intrabar_on_bar;
+    table.on_sub_bar = intrabar_on_sub_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "intrabar host create failed");
+    if (!state.host) return;
+
+    lower = lower_feed(&lower_n);
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR | PF_NATIVE_SPEC_EXT_FEED_POLICY;
+    ext.intrabar_kind = PF_NATIVE_INTRABAR_LOWER_TF;
+    ext.intrabar_tf = "1";
+    ext.intrabar_bars = lower;
+    ext.intrabar_n = lower_n;
+    ext.intrabar_samples = 4;
+    ext.intrabar_distribution = PF_MAGNIFIER_ENDPOINTS;
+    ext.intrabar_volume_weighted = 0u;
+    ext.intrabar_volume_weighted_min_samples = 2;
+    ext.intrabar_volume_weighted_max_samples = 64;
+    ext.intrabar_sample_eligibility = PF_NATIVE_SAMPLE_CONTINUOUS_SEGMENTS;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the intrabar block was refused");
+
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the intrabar run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback intrabar rows failed");
+    CHECK_EQ_INT(state.calculations, n, "the intrabar run did not calculate every bar");
+    CHECK(state.sub_bars > 0, "a retained lower feed delivered no sub-bar");
+    CHECK(state.sub_bar_partial_ok, "the bar so far was absent inside a sub-bar");
+    strategy_native_host_free(state.host);
+
+    /* A synthesized path retains no feed of its own, so it has no sub-bars
+     * to deliver — the C spelling of the same C++ contract. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = intrabar_on_bar;
+    table.on_sub_bar = intrabar_on_sub_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "synthesized host create failed");
+    if (!state.host) return;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_INTRABAR;
+    ext.intrabar_kind = PF_NATIVE_INTRABAR_SYNTHESIZED;
+    ext.intrabar_samples = 4;
+    ext.intrabar_distribution = PF_MAGNIFIER_ENDPOINTS;
+    ext.intrabar_volume_weighted_min_samples = 2;
+    ext.intrabar_volume_weighted_max_samples = 64;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the synthesized intrabar path was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the synthesized run did not complete");
+    CHECK_EQ_INT(state.sub_bars, 0, "a synthesized path delivered a sub-bar");
+    strategy_native_host_free(state.host);
+}
+
+/* The four feed-shape and presentation policies. They are declarations, not
+ * callbacks, so what proves they were READ rather than merely accepted is the
+ * run's own continuation identity: the spec digest folds them, so a run that
+ * declares them cannot share an identity with one that does not. */
+static uint64_t policy_run_hash(int declare) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    tail_state state;
+    const pf_bar_t* bars;
+    uint64_t hash = 0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = intrabar_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "policy host create failed");
+    if (!state.host) return 0;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    if (declare) {
+        ext.present_mask = PF_NATIVE_SPEC_EXT_FEED_POLICY;
+        ext.slot_label_policy = PF_NATIVE_SLOT_LABEL_FEED_TOLERANT;
+        ext.feed_tolerance = PF_NATIVE_FEED_TOLERANCE_BATCH_STRUCTURAL
+                           | PF_NATIVE_FEED_TOLERANCE_WARMUP_NONNEGATIVE;
+        ext.path_order = PF_NATIVE_PATH_ORDER_LOW_FIRST;
+        ext.abort_reporting = PF_NATIVE_ABORT_QUIET;
+    }
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the feed-policy block was refused");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the feed-policy run did not complete");
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.host, &hash), PF_NATIVE_OK,
+                 "the feed-policy continuation hash was refused");
+    strategy_native_host_free(state.host);
+    return hash;
+}
+
+static void check_feed_policies(void) {
+    const uint64_t plain = policy_run_hash(0);
+    const uint64_t declared = policy_run_hash(1);
+    CHECK(plain != 0u && declared != 0u, "a policy run reported no continuation hash");
+    CHECK(plain != declared,
+          "declaring the four feed-shape policies left the continuation identity unmoved");
+    CHECK(policy_run_hash(1) == declared, "the declared policy run is not reproducible");
+}
+
+/* --- the margin model's remaining knobs --- */
+
+static void check_margin_tail_fields(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    pf_strategy_t host;
+
+    table = blank_callbacks(NULL);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "margin-tail host create failed");
+    if (!host) return;
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_MARGIN;
+    ext.margin_has_maintenance_long = 1u;
+    ext.margin_maintenance_long = PROBE_MAINTENANCE;
+    ext.margin_has_maintenance_short = 1u;
+    ext.margin_maintenance_short = PROBE_MAINTENANCE;
+    ext.margin_shortfall_multiple = 1.0;
+    ext.margin_sizing = 0u;
+    ext.margin_equity_basis = 9u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unknown margin equity basis was accepted");
+    ext.margin_equity_basis = PF_NATIVE_MARGIN_EQUITY_BEFORE_OPEN_COMMISSION;
+    ext.margin_level_base = 9u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unknown margin level base was accepted");
+    ext.margin_level_base = PF_NATIVE_MARGIN_LEVEL_REALIZED_ONLY;
+    /* The third liquidation check had no C value at all before this lane. */
+    ext.margin_check = PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME_MARK;
+    ext.margin_liquidation_label = "n8-liq";
+    ext.margin_liquidation_comment = "n8 margin call";
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the margin tail fields were refused");
+    strategy_native_host_free(host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -1895,5 +2432,10 @@ int pf_native_c_api_checks(void) {
     check_recalculation_hook();
     check_margin_hooks();
     check_excursion_hook();
+    check_request_sizing_tail();
+    check_scope_basis_tail();
+    check_intrabar_and_policies();
+    check_feed_policies();
+    check_margin_tail_fields();
     return failures;
 }
