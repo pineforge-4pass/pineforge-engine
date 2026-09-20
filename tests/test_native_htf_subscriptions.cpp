@@ -13,8 +13,11 @@
 //      Pine request.security path produces for the same bars (the twin drives
 //      source::PineStrategyHost exactly as tests/test_native_wm_buckets.cpp
 //      does: register_security_eval + evaluate_security);
-//   6. a spec that declares no series hashes to the pre-subscription
-//      continuation constant, pinned from a clean 73817c1 build.
+//   6. a spec that declares no series folds nothing new into the continuation
+//      identity: its native_run_spec_digest (the consumer's spec fold, without
+//      the machine-specific timezone resources a raw continuation hash carries)
+//      is pinned, is unchanged when the empty series list is stated outright,
+//      and moves as soon as one series is declared.
 
 #include <pineforge/native_host.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -491,19 +494,25 @@ void test_weekly_matches_the_pine_path() {
 
 // ---- 6. a spec without subscriptions keeps its continuation identity -------
 
-// Pinned from a clean 73817c1 build running this same spec and batch through
-// NativeStrategyHost (no subscriptions declared, so hash_spec folds exactly
-// the pre-subscription fields and nothing else).
-constexpr std::uint64_t kNeutralContinuationHash = 11289448357493499084ull;
+// The portable pin of that identity. A raw native_continuation_hash() constant
+// is not portable — the consumer folds the resolved timezone identity, whose
+// zoneinfo root and zone file paths belong to the machine that ran it, so the
+// same run hashes differently here and on each CI runner.
+// native_run_spec_digest() is exactly the consumer's run-spec fold and nothing
+// else, so it is the same number everywhere. Observed on this tree for
+// base_spec("15", "15", "native-htf-neutral"); it guards the fold's field list
+// and order, while the neutrality itself is the equality below (a spec whose
+// `subscriptions` vector is empty hashes as it did before the field existed,
+// and declaring one series moves it).
+constexpr std::uint64_t kNeutralSpecDigest = 4124988313390852746ull;
 
 class SilentHost final : public NativeStrategyHost {
 public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 };
 
-std::uint64_t neutral_continuation_hash() {
+std::uint64_t neutral_continuation_hash(const NativeRunSpec& spec) {
     const std::vector<Bar> bars = quarter_hour_bars(8);
-    NativeRunSpec spec = base_spec("15", "15", "native-htf-neutral");
     SilentHost host;
     host.configure_native(spec);
     host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
@@ -513,21 +522,35 @@ std::uint64_t neutral_continuation_hash() {
 
 void test_hash_neutrality() {
     scenario = "hash neutrality";
-    const std::uint64_t hash = neutral_continuation_hash();
-    if (hash != kNeutralContinuationHash) {
-        std::printf("  continuation hash %llu, pinned %llu\n",
-                    static_cast<unsigned long long>(hash),
-                    static_cast<unsigned long long>(kNeutralContinuationHash));
-    }
-    CHECK(hash == kNeutralContinuationHash);
-
-    // The digest is folded only when the series exist, so the two specs above
-    // cannot share a continuation once one declares any.
     NativeRunSpec plain = base_spec("15", "15", "native-htf-neutral");
+    const std::uint64_t digest = native_run_spec_digest(plain);
+    if (digest != kNeutralSpecDigest) {
+        std::printf("  spec digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kNeutralSpecDigest));
+    }
+    CHECK(digest == kNeutralSpecDigest);
+
+    // Stating the field at its default — an empty series list — folds nothing.
+    NativeRunSpec stated = plain;
+    stated.subscriptions.clear();
+    CHECK(native_run_spec_digest(stated) == kNeutralSpecDigest);
+
+    // The run itself keeps its identity too: continuation hashes are compared
+    // between two runs in this process, never against a constant, because a
+    // continuation hash also folds this machine's timezone resources. Stating
+    // the empty series list explicitly drives the batch to the same identity.
+    const std::uint64_t hash = neutral_continuation_hash(plain);
+    CHECK(neutral_continuation_hash(stated) == hash);
+
+    // The subscriptions digest is folded only when the series exist, so the two
+    // specs cannot share a spec fold — nor a continuation — once one declares
+    // any.
     NativeRunSpec declared = plain;
     NativeTimeframeSubscription hourly;
     hourly.tf = "60";
     declared.subscriptions.push_back(hourly);
+    CHECK(native_run_spec_digest(declared) != kNeutralSpecDigest);
     const std::vector<Bar> bars = quarter_hour_bars(8);
     SeriesHost with_series;
     CHECK(with_series.configure_native(declared).status == NativeSetupStatus::Applied);

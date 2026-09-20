@@ -33,6 +33,25 @@ DRIVER_FORWARD = (
     "inline namespace native_run_spec_v3 { struct NativeRunSpec; }"
 )
 
+# The portable run-spec digest is declared in native_run_spec_v3 and defined in
+# the consumer translation unit, the only place that owns `hash_spec`, so the
+# digest can never drift from the fields the continuation identity folds for a
+# spec. That is one sibling inline-namespace block inside the consumer's
+# `namespace pineforge`, outside engine_script_run_v18; pin it whole so it stays
+# exactly the spec fold seeded as continuation_hash() seeds it, and compare
+# epoch ownership as if the allowed block were absent.
+CONSUMER_SPEC_DIGEST = """inline namespace native_run_spec_v3 {
+
+uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec);
+    return f.h;
+}
+
+}  // inline namespace native_run_spec_v3
+"""
+
 TYPE_DEF = r'\b(?:enum\s+class|class|struct)\s+(\w+)\s*(?::[^;{]+)?\{'
 ALIAS_DEF = r'\busing\s+(\w+)\s*='
 METHOD_DEF = r'\b(\w+::[~\w]+)\s*\('
@@ -116,6 +135,27 @@ def versioned(text, outer, version):
             and not re.findall(METHOD_DEF, value)):
         raise ValueError(version + " cannot be empty or comment-only")
     return value
+
+
+def consumer_epoch_source(files):
+    """The consumer's engine-epoch scope, with the one allowed sibling block out.
+
+    `native_run_spec_digest` is declared in native_run_spec_v3 and defined in
+    this translation unit, next to the `hash_spec` fold it reuses, so it must be
+    defined in a native_run_spec_v3 block of its own. Pin that block whole and
+    compare epoch ownership as if it were absent (the DRIVER_FORWARD precedent).
+    """
+    text = files["src/native_execution_consumer.cpp"]
+    if text.count(CONSUMER_SPEC_DIGEST) != 1:
+        raise ValueError("native_run_spec_digest must be defined in the consumer exactly as the "
+                         "native_run_spec_v3 spec fold, seeded like continuation_hash()")
+    if "native_run_spec_digest" not in files["include/pineforge/native_run_spec.hpp"]:
+        raise ValueError("native_run_spec_digest must be declared in native_run_spec_v3")
+    epoch = versioned(text.replace(CONSUMER_SPEC_DIGEST, "", 1),
+                      "pineforge", "engine_script_run_v18")
+    if "native_run_spec_digest" in epoch:
+        raise ValueError("native_run_spec_digest does not belong to engine_script_run_v18")
+    return epoch
 
 
 def check_native_fx_curve(files):
@@ -456,7 +496,7 @@ def check_texts(files):
         if token not in driver_src:
             raise ValueError('native driver omits legacy-compatible preflight token: ' + token)
 
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v18")
+    consumer_src = consumer_epoch_source(files)
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
                  'f.u(static_cast<uint64_t>(spec.abort_reporting));',
@@ -603,7 +643,7 @@ def check_texts(files):
     consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v18")
     require(consumer, ("NativeExecutionConsumer",),
             "engine_script_run_v18", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v18")
+    consumer_src = consumer_epoch_source(files)
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events",

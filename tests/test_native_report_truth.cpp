@@ -19,14 +19,24 @@ using namespace r4_test;
 
 namespace {
 
-// ── Pre-change constants ────────────────────────────────────────────────
-// Observed on a clean build of engine main (73817c1 sources, this tree's
-// parent commit) by a scratch probe carrying the scenario and digest below
-// verbatim. They are the neutrality pins of §3.1a: a defaulted report block
-// may not move one bit of an existing continuation or report.
-constexpr std::uint64_t kMainConfiguredSpecHash = 7369771591143894852ull;
+// ── Pinned constants ────────────────────────────────────────────────
+// The report digest is observed on a clean build of engine main (73817c1
+// sources, this tree's parent commit) by a scratch probe carrying the scenario
+// and digest below verbatim. It is the neutrality pin of §3.1a: a defaulted
+// report block may not move one bit of an existing report.
 constexpr std::uint64_t kMainHostRecordedReportDigest = 11554093071070742013ull;
-constexpr std::uint64_t kMainHostRecordedRunHash = 1579094747101106869ull;
+
+// The portable spec-fold pin. A raw native_continuation_hash() constant is NOT
+// portable: the consumer folds the resolved timezone identity — the zoneinfo
+// root and the zone file paths of the machine that ran it — so the same run
+// hashes differently on this tree, on CI's macOS runner and on CI's ubuntu
+// runner. native_run_spec_digest() is exactly the consumer's spec fold and
+// nothing else, so it is a machine-independent value a test may pin. This one
+// is observed on THIS tree for report_spec("l2-report-truth"); it guards the
+// spec fold's field list and order against a future change. The neutrality
+// claim itself does not rest on the constant: it is the in-process equalities
+// below (explicit defaults hash exactly like implicit ones).
+constexpr std::uint64_t kSpecDigest = 9134795103255102476ull;
 
 // Any fixed execution hash: it factors the continuation out of
 // broker_state_hash_from_execution_hash so two runs can be compared on their
@@ -256,7 +266,22 @@ void host_recorded_default_is_unchanged() {
     CHECK(report.c.trades_len == 2);
     CHECK(report.c.script_bars_processed == 60);
     CHECK(report_digest(report.c) == kMainHostRecordedReportDigest);
-    CHECK(host.native_continuation_hash() == kMainHostRecordedRunHash);
+
+    // The run's continuation identity cannot be pinned as a constant (it folds
+    // this machine's timezone resources); the spec half of it is pinned in
+    // spec_hash_is_neutral_by_default. Here the neutrality is proved in
+    // process: spelling the report block out at its defaults drives the same
+    // feed to the same report and the same continuation identity.
+    auto stated = report_spec("l2-report-truth");
+    stated.report_policy = NativeReportPolicy::HostRecorded;
+    stated.report_open_position_at_end = false;
+    Host restated;
+    restated.calculation = round_trip_rule;
+    run_feed(restated, stated, feed(60));
+    completed(restated);
+    Report restated_report(restated);
+    CHECK(report_digest(restated_report.c) == kMainHostRecordedReportDigest);
+    CHECK(restated.native_continuation_hash() == host.native_continuation_hash());
 }
 
 // 2. KernelRecorded: one point per script bar, all finite, and the reported
@@ -401,27 +426,45 @@ void twin_native_and_adapter_agree() {
           == adapter_report.c.metrics.equity.max_equity_runup);
 }
 
-// 5. Continuation neutrality: a spec whose report block is defaulted hashes to
-//    the constant a clean main build produced, and spelling the default out
-//    changes nothing. Asking for kernel recording is what moves the identity.
+// 5. Continuation neutrality, stated portably: the spec fold the continuation
+//    identity applies to a run spec is pinned through native_run_spec_digest,
+//    spelling the report block's defaults out changes nothing, and asking for
+//    kernel recording is what moves it. The configured hosts witness the same
+//    three facts at run level, compared against each other rather than against
+//    a machine-dependent constant.
 void spec_hash_is_neutral_by_default() {
-    Host implicit;
-    REQUIRE(implicit.configure_native(report_spec("l2-report-truth")).status
-            == NativeSetupStatus::Applied);
-    CHECK(implicit.native_continuation_hash() == kMainConfiguredSpecHash);
+    const auto implicit_digest = native_run_spec_digest(report_spec("l2-report-truth"));
+    CHECK(implicit_digest == kSpecDigest);
 
     auto stated = report_spec("l2-report-truth");
     stated.report_policy = NativeReportPolicy::HostRecorded;
     stated.report_open_position_at_end = false;
-    Host explicit_default;
-    REQUIRE(explicit_default.configure_native(stated).status == NativeSetupStatus::Applied);
-    CHECK(explicit_default.native_continuation_hash() == kMainConfiguredSpecHash);
+    CHECK(native_run_spec_digest(stated) == kSpecDigest);
 
     auto kernel = report_spec("l2-report-truth");
     kernel.report_policy = NativeReportPolicy::KernelRecorded;
+    CHECK(native_run_spec_digest(kernel) != kSpecDigest);
+
+    // The range-end flag is folded with the policy, so on its own — with the
+    // kernel left out of the report — it is not a behaviour and folds nothing.
+    auto flag_only = report_spec("l2-report-truth");
+    flag_only.report_open_position_at_end = true;
+    CHECK(native_run_spec_digest(flag_only) == kSpecDigest);
+    auto kernel_row = kernel;
+    kernel_row.report_open_position_at_end = true;
+    CHECK(native_run_spec_digest(kernel_row) != native_run_spec_digest(kernel));
+
+    Host implicit;
+    REQUIRE(implicit.configure_native(report_spec("l2-report-truth")).status
+            == NativeSetupStatus::Applied);
+
+    Host explicit_default;
+    REQUIRE(explicit_default.configure_native(stated).status == NativeSetupStatus::Applied);
+    CHECK(explicit_default.native_continuation_hash() == implicit.native_continuation_hash());
+
     Host recorded;
     REQUIRE(recorded.configure_native(kernel).status == NativeSetupStatus::Applied);
-    CHECK(recorded.native_continuation_hash() != kMainConfiguredSpecHash);
+    CHECK(recorded.native_continuation_hash() != implicit.native_continuation_hash());
 
     // An unknown policy is rejected as a typed fact, like every other run-spec
     // policy enum, and never reaches a run.

@@ -87,6 +87,21 @@ allocation-free `context`). Cause/recipient/cursor facts use
 A foreign run is dropped, not relabeled. Failure copy/move does not allocate.
 See `NativeFailureCode` / `NativeFailureOperation` in `native_host.hpp`.
 
+`native_continuation_hash()` is a **local** identity: it folds the resolved
+timezone identity of the run, whose `zoneinfo_root` and zone file paths are
+absolute paths on the machine that ran it (`/usr/share/zoneinfo` on a glibc
+host, a tzdata-versioned path such as
+`/private/var/db/timezone/tz/2026c.1.0/zoneinfo` on macOS), so the same spec
+over the same bars hashes differently on two machines even for `"UTC"`. Compare
+it between runs in one process — to prove that stating a field at its default
+changes nothing, or that opting in moves the identity — and never pin it as a
+constant. For a portable constant use `native_run_spec_digest(spec)`
+(`native_run_spec.hpp`): exactly the fields the consumer folds into the
+continuation identity for a run spec and nothing else, seeded as the consumer
+seeds them, so two specs with equal digests drive identical continuation
+identities on every machine with the same timezone resources. It is not a
+continuation hash and is never comparable with one.
+
 ## NativeRunSpec
 
 `NativeRunSpec` defaults are **incomplete**. Empty required strings and zero

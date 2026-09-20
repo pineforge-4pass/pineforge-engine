@@ -6755,4 +6755,21 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
 }
 
 }  // inline namespace engine_script_run_v18
+
+// The portable run-spec digest lives here, in the one translation unit that
+// owns `hash_spec` (see its definition above, beside the continuation fold),
+// so the digest cannot drift from the fields the continuation identity folds
+// for a spec. It is declared in native_run_spec_v3 and so must be defined
+// there: a sibling inline namespace of pineforge, not a nested scope of the
+// engine epoch. Nothing else belongs in this block.
+inline namespace native_run_spec_v3 {
+
+uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec);
+    return f.h;
+}
+
+}  // inline namespace native_run_spec_v3
 }  // namespace pineforge

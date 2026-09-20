@@ -1,9 +1,13 @@
 // R5 L8: the generic instrument price grid (NativeRunSpec::price_grid).
-// Every NativePriceGrid::None expectation is a clean-main witness captured
+// Every NativePriceGrid::None fill expectation is a clean-main witness captured
 // from a 7daa511 build of these exact scenarios, so the default path is
-// pinned bit-for-bit while the opt-in modes carry the new behaviour. The
-// adapter twin at the end keeps TradingView's own tick rule: it is the
-// identity diff that proves the kernel grid never reached src/source.
+// pinned bit-for-bit while the opt-in modes carry the new behaviour. Its
+// hash-neutrality guard is portable by construction: the spec fold is pinned
+// through native_run_spec_digest and every continuation hash is compared
+// between two runs in this process, never against a constant (a continuation
+// hash folds the machine's resolved timezone resources). The adapter twin at
+// the end keeps TradingView's own tick rule: it is the identity diff that
+// proves the kernel grid never reached src/source.
 #include "l4a_native_route_guard.hpp"
 
 #include <pineforge/native_host.hpp>
@@ -124,12 +128,19 @@ std::uint64_t empty_run_hash(const NativeRunSpec& s) {
     return h.native_continuation_hash();
 }
 
+// The continuation-hash column this row carried is gone: a raw
+// native_continuation_hash() constant folds the machine's resolved timezone
+// resources (zoneinfo root and zone file paths) and so can never be portable —
+// it passed locally and failed on both of PR #260's CI runners (macOS and
+// ubuntu), which is what retired it. The default path's identity is now
+// witnessed by the fills below plus, in L8-1 and L8-6, in-process hash equality
+// against the same spec with the grid spelled out at its defaults, and the spec
+// fold itself is pinned through native_run_spec_digest.
 struct Row {
     const char* key;
     no::Request request;
     double raw;
     double resolved;
-    std::uint64_t hash;
 };
 
 std::vector<double> check_rows(const NativeRunSpec& base, const std::vector<Row>& rows,
@@ -149,7 +160,6 @@ std::vector<double> check_rows(const NativeRunSpec& base, const std::vector<Row>
         CHECK(same_bits(out.raw[0], row.raw));
         CHECK(same_bits(out.resolved[0], row.resolved));
         CHECK(on_grid(out.resolved[0]) == expect_on_grid);
-        if (row.hash) CHECK(out.hash == row.hash);
         booked.push_back(out.resolved[0]);
     }
     return booked;
@@ -158,13 +168,35 @@ std::vector<double> check_rows(const NativeRunSpec& base, const std::vector<Row>
 // --- 1. the default grid is the clean-main path ---------------------------
 void grid_none_is_clean_main() {
     scenario = "L8-1 None keeps the clean-main fills";
-    check_rows(spec(""), {
-        {"g-market",     tx(1, "market"),                100.10, 100.10, 14125007403465094750ULL},
-        {"g-buy-limit",  limit(1, 99.80, "buy-limit"),     99.80,  99.80,  3140672069948710939ULL},
-        {"g-sell-limit", limit(-1, 100.30, "sell-limit"), 100.30, 100.30, 14574835912580645344ULL},
-        {"g-buy-stop",   stop(1, 100.30, "buy-stop"),     100.30, 100.30,  2927666990158715397ULL},
-        {"g-sell-stop",  stop(-1, 99.70, "sell-stop"),     99.70,  99.70, 11741635604452854407ULL},
-    }, /*expect_on_grid=*/false);
+    const std::vector<Row> rows = {
+        {"g-market",     tx(1, "market"),                100.10, 100.10},
+        {"g-buy-limit",  limit(1, 99.80, "buy-limit"),     99.80,  99.80},
+        {"g-sell-limit", limit(-1, 100.30, "sell-limit"), 100.30, 100.30},
+        {"g-buy-stop",   stop(1, 100.30, "buy-stop"),     100.30, 100.30},
+        {"g-sell-stop",  stop(-1, 99.70, "sell-stop"),     99.70,  99.70},
+    };
+    check_rows(spec(""), rows, /*expect_on_grid=*/false);
+
+    // Each of those runs is byte-identical to the same run with the grid
+    // spelled out at its defaults: same booked price, same continuation
+    // identity. This is the in-process form of the neutrality the removed
+    // per-row hash constants pinned (see the Row comment above).
+    for (const auto& row : rows) {
+        auto defaulted = spec(row.key);
+        defaulted.price_grid = NativePriceGrid::None;
+        defaulted.grid_rounding = NativeGridRounding::HalfUp;
+        auto implicit_spec = spec(row.key);
+        const auto implied = execute(implicit_spec, row.request, kBar);
+        const auto restated = execute(defaulted, row.request, kBar);
+        CHECK(native_run_spec_digest(defaulted) == native_run_spec_digest(implicit_spec));
+        CHECK(restated.resolved.size() == implied.resolved.size());
+        if (restated.resolved.size() != implied.resolved.size()) continue;
+        for (std::size_t i = 0; i < implied.resolved.size(); ++i) {
+            CHECK(same_bits(restated.raw[i], implied.raw[i]));
+            CHECK(same_bits(restated.resolved[i], implied.resolved[i]));
+        }
+        CHECK(restated.hash == implied.hash);
+    }
 
     // Slippage is whole ticks carried on the raw, unquantized basis.
     auto slipped = spec("g-slip");
@@ -172,14 +204,12 @@ void grid_none_is_clean_main() {
     const auto out = execute(slipped, tx(1, "market"), kBar);
     CHECK(out.resolved.size() == 1);
     if (out.resolved.size() == 1) CHECK(same_bits(out.resolved[0], 100.60));
-    CHECK(out.hash == 15244465367648976717ULL);
 
     // A stop above the raw high is not reached without the quantized path.
     const auto unreachable =
         execute(spec("g-half-tick"), stop(1, 100.50, "half-tick-stop"), kHalfTickBar);
     CHECK(unreachable.error.empty());
     CHECK(unreachable.resolved.empty());
-    CHECK(unreachable.hash == 3094959961021854686ULL);
 }
 
 // --- 2. QuantizeFills, nearest tick ---------------------------------------
@@ -188,11 +218,11 @@ void quantize_fills_half_up() {
     // A sell limit whose nearest tick sits below its level keeps limit-or-
     // better: the protection cap is the tick on the order's own side.
     check_rows(grid_spec("", NativePriceGrid::QuantizeFills), {
-        {"h-market",     tx(1, "market"),                100.10, 100.00, 0},
-        {"h-buy-limit",  limit(1, 99.80, "buy-limit"),     99.80,  99.75, 0},
-        {"h-sell-limit", limit(-1, 100.30, "sell-limit"), 100.30, 100.50, 0},
-        {"h-buy-stop",   stop(1, 100.30, "buy-stop"),     100.30, 100.25, 0},
-        {"h-sell-stop",  stop(-1, 99.70, "sell-stop"),     99.70,  99.75, 0},
+        {"h-market",     tx(1, "market"),                100.10, 100.00},
+        {"h-buy-limit",  limit(1, 99.80, "buy-limit"),     99.80,  99.75},
+        {"h-sell-limit", limit(-1, 100.30, "sell-limit"), 100.30, 100.50},
+        {"h-buy-stop",   stop(1, 100.30, "buy-stop"),     100.30, 100.25},
+        {"h-sell-stop",  stop(-1, 99.70, "sell-stop"),     99.70,  99.75},
     }, /*expect_on_grid=*/true);
 
     // Hand-rounded: nearest tick, ties away from zero.
@@ -225,12 +255,12 @@ void quantize_fills_directional() {
     scenario = "L8-3 Directional rounds toward each order's own region";
     const auto base = grid_spec("", NativePriceGrid::QuantizeFills, NativeGridRounding::Directional);
     const auto booked = check_rows(base, {
-        {"d-buy-market",  tx(1, "market"),                100.10, 100.25, 0},
-        {"d-sell-market", tx(-1, "market"),               100.10, 100.00, 0},
-        {"d-buy-limit",   limit(1, 99.80, "buy-limit"),     99.80,  99.75, 0},
-        {"d-sell-limit",  limit(-1, 100.30, "sell-limit"), 100.30, 100.50, 0},
-        {"d-buy-stop",    stop(1, 100.30, "buy-stop"),     100.30, 100.50, 0},
-        {"d-sell-stop",   stop(-1, 99.70, "sell-stop"),     99.70,  99.50, 0},
+        {"d-buy-market",  tx(1, "market"),                100.10, 100.25},
+        {"d-sell-market", tx(-1, "market"),               100.10, 100.00},
+        {"d-buy-limit",   limit(1, 99.80, "buy-limit"),     99.80,  99.75},
+        {"d-sell-limit",  limit(-1, 100.30, "sell-limit"), 100.30, 100.50},
+        {"d-buy-stop",    stop(1, 100.30, "buy-stop"),     100.30, 100.50},
+        {"d-sell-stop",   stop(-1, 99.70, "sell-stop"),     99.70,  99.50},
     }, /*expect_on_grid=*/true);
     // The same fills as relations: a limit rounds to its own favourable side,
     // a stop and a market fill to the adverse one.
@@ -347,17 +377,41 @@ void grid_requires_a_tick() {
 // --- 6. hash neutrality ----------------------------------------------------
 void hash_folds_only_when_set() {
     scenario = "L8-6 the grid folds into the spec hash only when set";
-    constexpr std::uint64_t kCleanMain = 11136844009055565705ULL;
-    CHECK(empty_run_hash(spec("g-empty")) == kCleanMain);
-    // A rounding policy alone is not a behaviour: an unset grid folds nothing.
+    // Pinned on this tree, not on clean main: native_run_spec_digest is exactly
+    // the consumer's run-spec fold and nothing else, so unlike a raw
+    // continuation hash (which folds this machine's zoneinfo root and zone file
+    // paths) it is the same number on every machine. The constant guards the
+    // fold's field list and order; the neutrality claim is the equalities.
+    constexpr std::uint64_t kSpecDigest = 3103595961916934085ULL;
+    CHECK(native_run_spec_digest(spec("g-empty")) == kSpecDigest);
+    // Spelling both grid fields out at their defaults folds nothing new, and a
+    // rounding policy alone is not a behaviour: an unset grid folds nothing.
+    CHECK(native_run_spec_digest(grid_spec("g-empty", NativePriceGrid::None)) == kSpecDigest);
+    CHECK(native_run_spec_digest(grid_spec("g-empty", NativePriceGrid::None,
+                                           NativeGridRounding::Directional)) == kSpecDigest);
+    const auto half_digest =
+        native_run_spec_digest(grid_spec("g-empty", NativePriceGrid::QuantizeFills));
+    const auto directional_digest = native_run_spec_digest(
+        grid_spec("g-empty", NativePriceGrid::QuantizeFills, NativeGridRounding::Directional));
+    const auto triggers_digest = native_run_spec_digest(
+        grid_spec("g-empty", NativePriceGrid::QuantizeFillsAndTriggers));
+    CHECK(half_digest != kSpecDigest);
+    CHECK(half_digest != directional_digest);
+    CHECK(half_digest != triggers_digest);
+    CHECK(directional_digest != triggers_digest);
+
+    // The same three facts at run level, compared in process so no constant is
+    // needed: an opted-in grid moves the continuation identity, a defaulted one
+    // leaves it exactly where an unstated grid did.
+    const auto clean = empty_run_hash(spec("g-empty"));
     CHECK(empty_run_hash(grid_spec("g-empty", NativePriceGrid::None,
-                                   NativeGridRounding::Directional)) == kCleanMain);
+                                   NativeGridRounding::Directional)) == clean);
     const auto half = empty_run_hash(grid_spec("g-empty", NativePriceGrid::QuantizeFills));
     const auto directional = empty_run_hash(
         grid_spec("g-empty", NativePriceGrid::QuantizeFills, NativeGridRounding::Directional));
     const auto triggers = empty_run_hash(
         grid_spec("g-empty", NativePriceGrid::QuantizeFillsAndTriggers));
-    CHECK(half != kCleanMain);
+    CHECK(half != clean);
     CHECK(half != directional);
     CHECK(half != triggers);
 }

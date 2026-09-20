@@ -356,6 +356,24 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
 std::uint64_t native_timeframe_subscriptions_digest(
         const std::vector<NativeTimeframeSubscription>& subscriptions) noexcept;
 
+// Machine-independent digest of a run spec: exactly the fields the consumer
+// folds into the continuation identity for the spec, and nothing else — no
+// timezone resources, no session identity beyond the spec's own. Two specs
+// with equal digests drive identical continuation identities on every machine
+// with the same tz resources.
+//
+// It is the consumer's own spec fold (`hash_spec`) over a freshly seeded
+// accumulator: the same FNV-1a offset basis `continuation_hash()` starts from,
+// with nothing folded before the spec (no semantic-version markers, no state)
+// and the relative-generation base set to `spec.identity.run_number`, exactly
+// as the consumer seeds it for the run this spec describes. The folded
+// generation distance is therefore zero and the digest is a property of the
+// spec value alone. It is NOT a continuation hash and never comparable with
+// one: a raw continuation hash also folds the resolved timezone resources
+// (zoneinfo root and zone file paths), which differ per machine, so only this
+// digest is portable enough to pin as a constant.
+std::uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept;
+
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);
 static_assert(std::is_nothrow_move_assignable_v<NativeRunSpec>);
