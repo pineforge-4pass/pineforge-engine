@@ -6,9 +6,13 @@
 //      OHLCV equal a hand aggregation of each 4-bar group, each delivered on
 //      the group's 4th input bar and BEFORE that bar's on_native_bar;
 //   2. lookahead = true delivers the same buckets on each group's FIRST bar;
+//   2b. two "60" series over one 15-minute input are two INSTANCES: the same
+//      buckets are delivered twice, each under its own index, and
+//      native_series_bar answers each independently (also "60"/"60"/"240");
 //   3. authoritative_bars replace the aggregated OHLCV of completed buckets;
 //   4. a series finer than the input is refused at configure with its own
-//      named reason;
+//      named reason, while two series of one period are accepted unless they
+//      declare different authoritative bars;
 //   5. a "W" series over a daily input reproduces, bucket for bucket, what the
 //      Pine request.security path produces for the same bars (the twin drives
 //      source::PineStrategyHost exactly as tests/test_native_wm_buckets.cpp
@@ -26,6 +30,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,6 +114,11 @@ public:
     std::vector<std::string> log;
     std::vector<Delivery> deliveries;
     int bars_seen = 0;
+    // Optional per-calculation probe: what native_series_bar(i) answered at
+    // each script bar, for every i < probes. Zero — the default — records
+    // nothing, so every scenario that does not ask for it is unchanged.
+    std::size_t probes = 0;
+    std::vector<std::vector<std::optional<Bar>>> series_at_bar;
 
     void on_native_input(const Bar& bar, const NativeInputContext& context) override {
         log.push_back("input:" + std::to_string(context.input_index) + "@"
@@ -134,6 +144,12 @@ public:
 
     void on_native_bar(const Bar& bar, const NativeDecisionContext&) override {
         ++bars_seen;
+        if (probes > 0) {
+            std::vector<std::optional<Bar>> row;
+            row.reserve(probes);
+            for (std::size_t i = 0; i < probes; ++i) row.push_back(native_series_bar(i));
+            series_at_bar.push_back(std::move(row));
+        }
         log.push_back("bar@" + std::to_string(bar.timestamp));
     }
 };
@@ -322,6 +338,92 @@ void test_hourly_lookahead() {
     CHECK(host.log == want_log);
 }
 
+// ---- 2b. several instances of one timeframe -------------------------------
+//
+// A subscription is a series INSTANCE: two "60" series over the same 15m
+// input are two evaluators with their own bucket state, delivered under their
+// own index, and the accessor answers each independently.
+
+void test_same_timeframe_instances() {
+    scenario = "two instances of one timeframe";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    NativeRunSpec spec = base_spec("15", "15", "native-htf-instances");
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+    spec.subscriptions.push_back(hourly);
+    spec.subscriptions.push_back(hourly);
+
+    SeriesHost host;
+    host.probes = 2;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+
+    CHECK(host.deliveries.size() == 8);
+    if (host.deliveries.size() != 8) return;
+    const std::int64_t origin = bars.front().timestamp;
+    for (std::size_t k = 0; k < 4; ++k) {
+        const Bar want = hand_aggregate(bars, static_cast<int>(k) * 4, 4,
+                                        origin + static_cast<std::int64_t>(k) * kHour);
+        for (std::size_t instance = 0; instance < 2; ++instance) {
+            const Delivery& delivery = host.deliveries[k * 2 + instance];
+            check_bucket(delivery.bar, want, "instance bucket");
+            CHECK(delivery.subscription == instance);
+            CHECK(delivery.accessor_matches);
+            CHECK(delivery.bars_before == static_cast<int>(k) * 4 + 3);
+            CHECK(delivery.context.delivered_at_ms == bars[k * 4 + 3].timestamp);
+            CHECK(delivery.context.completion == NativeCompletionKind::Confirmed);
+            CHECK(delivery.context.interval.open_ms
+                  == origin + static_cast<std::int64_t>(k) * kHour);
+        }
+    }
+    // Both accessors answer, bar for bar, with the same series: nothing about
+    // one instance's delivery reaches the other's slot.
+    CHECK(host.series_at_bar.size() == 16);
+    for (std::size_t i = 0; i < host.series_at_bar.size(); ++i) {
+        const auto& row = host.series_at_bar[i];
+        CHECK(row.size() == 2);
+        if (row.size() != 2) continue;
+        CHECK(row[0].has_value() == row[1].has_value());
+        CHECK(row[0].has_value() == (i >= 3));
+        if (!row[0] || !row[1]) continue;
+        check_bucket(*row[1], *row[0], "instance accessor");
+    }
+
+    // Three instances, two of them sharing a period, the third coarser.
+    NativeRunSpec mixed = base_spec("15", "15", "native-htf-instances-3");
+    mixed.subscriptions.push_back(hourly);
+    mixed.subscriptions.push_back(hourly);
+    NativeTimeframeSubscription four_hourly;
+    four_hourly.tf = "240";
+    mixed.subscriptions.push_back(four_hourly);
+
+    SeriesHost third;
+    const auto mixed_setup = third.configure_native(mixed);
+    CHECK(mixed_setup.status == NativeSetupStatus::Applied);
+    third.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    CHECK(third.last_error().empty());
+    if (!third.last_error().empty()) std::printf("  error: %s\n", third.last_error().c_str());
+
+    // 4 hourly buckets twice, and one four-hourly bucket over the same 16 bars.
+    CHECK(third.deliveries.size() == 9);
+    if (third.deliveries.size() != 9) return;
+    std::vector<std::size_t> want_indexes{0, 1, 0, 1, 0, 1, 0, 1, 2};
+    std::vector<std::size_t> got_indexes;
+    for (const Delivery& delivery : third.deliveries) {
+        got_indexes.push_back(delivery.subscription);
+    }
+    CHECK(got_indexes == want_indexes);
+    const Delivery& coarse = third.deliveries.back();
+    check_bucket(coarse.bar, hand_aggregate(bars, 0, 16, origin), "four-hourly bucket");
+    CHECK(coarse.context.delivered_at_ms == bars[15].timestamp);
+    CHECK(coarse.accessor_matches);
+}
+
 // ---- 3. authoritative bars replace the aggregate --------------------------
 
 void test_authoritative_bars_override() {
@@ -395,6 +497,9 @@ void test_finer_than_input_is_refused() {
     CHECK(broken_setup.validation.error
           == NativeRunSpecError::InvalidSubscriptionTimeframe);
 
+    // Two series of one period are two instances and are accepted; only two
+    // DIFFERENT authoritative feeds for that one period are refused, because
+    // the feed store is keyed by the period's duration.
     NativeRunSpec duplicated = base_spec("15", "15", "native-htf-dup");
     NativeTimeframeSubscription daily;
     daily.tf = "D";
@@ -404,9 +509,25 @@ void test_finer_than_input_is_refused() {
     duplicated.subscriptions.push_back(same_period);
     SeriesHost third;
     const auto duplicate_setup = third.configure_native(duplicated);
-    CHECK(duplicate_setup.status == NativeSetupStatus::Failed);
-    CHECK(duplicate_setup.validation.error
+    CHECK(duplicate_setup.status == NativeSetupStatus::Applied);
+
+    NativeRunSpec shared_feed = duplicated;
+    shared_feed.identity = {"native-htf-dup-shared", 1};
+    shared_feed.subscriptions[0].authoritative_bars = {Bar{1, 1, 1, 1, 1, 1000}};
+    shared_feed.subscriptions[1].authoritative_bars =
+        shared_feed.subscriptions[0].authoritative_bars;
+    SeriesHost shared;
+    CHECK(shared.configure_native(shared_feed).status == NativeSetupStatus::Applied);
+
+    NativeRunSpec conflicting = shared_feed;
+    conflicting.identity = {"native-htf-dup-conflict", 1};
+    conflicting.subscriptions[1].authoritative_bars = {Bar{2, 2, 2, 2, 2, 1000}};
+    SeriesHost conflicted;
+    const auto conflict_setup = conflicted.configure_native(conflicting);
+    CHECK(conflict_setup.status == NativeSetupStatus::Failed);
+    CHECK(conflict_setup.validation.error
           == NativeRunSpecError::DuplicateSubscriptionTimeframe);
+    CHECK(conflict_setup.validation.field == NativeRunSpecField::SubscriptionBars);
 
     NativeRunSpec unordered = base_spec("15", "15", "native-htf-unordered");
     NativeTimeframeSubscription hourly;
@@ -565,6 +686,7 @@ void test_hash_neutrality() {
 int main() {
     test_hourly_over_quarter_hour();
     test_hourly_lookahead();
+    test_same_timeframe_instances();
     test_authoritative_bars_override();
     test_finer_than_input_is_refused();
     test_weekly_matches_the_pine_path();

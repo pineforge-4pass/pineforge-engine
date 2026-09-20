@@ -392,6 +392,13 @@ struct IntrabarPath {
 // aggregates the accepted input into `tf` buckets and delivers each completed
 // bucket to the host; nothing here configures a source language.
 //
+// A subscription is a series INSTANCE, not a period: several may declare the
+// same `tf`, each gets its own evaluator and bucket state, and each is
+// identified — in NativeTimeframeBarContext::subscription and in
+// native_series_bar() — by its own index in NativeRunSpec::subscriptions.
+// The one thing same-period instances cannot each own is a different
+// `authoritative_bars` feed; see DuplicateSubscriptionTimeframe.
+//
 // `tf` must pair with NativeRunSpec::input_tf exactly as script_tf does
 // (native_calendar::compatibility) and may not be strictly finer than the
 // input: a lower-timeframe array is a different contract.
@@ -563,8 +570,11 @@ enum class NativeRunSpecError : std::uint8_t {
     // A declared series strictly finer than input_tf. Lower-timeframe arrays
     // are a separate contract; this is never silently promoted.
     SubscriptionFinerThanInput,
-    // Two declared series of the same period. The feed store is keyed by the
-    // timeframe's duration, so duplicates could not own their own bars.
+    // Two declared series of the same period whose `authoritative_bars`
+    // differ. Same-period series are otherwise independent instances, but the
+    // feed store is keyed by the timeframe's duration, so they could not own
+    // their own conflicting bars. Declaring the same bars twice, or leaving
+    // one (or both) empty, is accepted.
     DuplicateSubscriptionTimeframe,
     // Authoritative bars that are not strictly increasing in time.
     UnorderedSubscriptionBars,

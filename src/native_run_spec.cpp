@@ -150,10 +150,11 @@ bool valid_grid_rounding(NativeGridRounding rounding) noexcept {
 
 // The native security feed store keys one feed per timeframe DURATION, and
 // treats every monthly literal as one calendar period (tf_to_seconds returns
-// -1 for any "*M"). Two declared series that share this key could not own
-// their own authoritative bars, so the spec refuses them. Overflow-safe: a
-// count whose duration is not representable answers 0, which never matches a
-// valid key and leaves the pairing check to name the failure.
+// -1 for any "*M"). Two declared series that share this key are independent
+// evaluator instances, but they cannot own DIFFERENT authoritative bars, so
+// the spec refuses exactly that conflict. Overflow-safe: a count whose
+// duration is not representable answers 0, which never matches a valid key
+// and leaves the pairing check to name the failure.
 std::int64_t subscription_period_key(const native_calendar::Timeframe& tf) noexcept {
     if (!tf.valid()) return 0;
     std::int64_t unit_seconds = 0;
@@ -170,6 +171,32 @@ std::int64_t subscription_period_key(const native_calendar::Timeframe& tf) noexc
         return 0;
     }
     return count * unit_seconds;
+}
+
+// Bitwise bar equality: two same-period series may share one feed, so the
+// question is only whether the bars they declare are the same value. Compared
+// by representation so a feed carrying a NaN still equals its own copy.
+bool same_bar_bits(const Bar& left, const Bar& right) noexcept {
+    const auto bits = [](double value) noexcept {
+        std::uint64_t raw = 0;
+        std::memcpy(&raw, &value, sizeof raw);
+        return raw;
+    };
+    return left.timestamp == right.timestamp
+        && bits(left.open) == bits(right.open) && bits(left.high) == bits(right.high)
+        && bits(left.low) == bits(right.low) && bits(left.close) == bits(right.close)
+        && bits(left.volume) == bits(right.volume);
+}
+
+// Two declared feeds of one period conflict when both are stated and they are
+// not the same bars. An empty feed states nothing and never conflicts.
+bool conflicting_bars(const std::vector<Bar>& left, const std::vector<Bar>& right) noexcept {
+    if (left.empty() || right.empty()) return false;
+    if (left.size() != right.size()) return true;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (!same_bar_bits(left[i], right[i])) return true;
+    }
+    return false;
 }
 
 bool valid_liquidation_sizing(NativeLiquidationSizing sizing) noexcept {
@@ -535,10 +562,18 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
                 default:
                     return {Error::InvalidSubscriptionTimeframe, active_field};
                 }
+                // A subscription is a series instance, not a period: several
+                // may share one timeframe, each with its own evaluator, bucket
+                // state and delivery index. Only their feeds are shared, so
+                // the one refusal left is two same-period series declaring
+                // DIFFERENT authoritative bars.
                 const std::int64_t key = subscription_period_key(*requested);
-                for (const std::int64_t seen : keys) {
-                    if (seen == key) {
-                        return {Error::DuplicateSubscriptionTimeframe, active_field};
+                for (std::size_t seen = 0; seen < keys.size(); ++seen) {
+                    if (keys[seen] != key) continue;
+                    if (conflicting_bars(spec.subscriptions[seen].authoritative_bars,
+                                         subscription.authoritative_bars)) {
+                        return {Error::DuplicateSubscriptionTimeframe,
+                                Field::SubscriptionBars};
                     }
                 }
                 keys.push_back(key);

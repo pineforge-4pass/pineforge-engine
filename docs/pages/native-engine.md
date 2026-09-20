@@ -1088,6 +1088,17 @@ for a spec that declares none: no evaluator is registered, no feed is
 prepared, `on_native_timeframe_bar` is never called, and the run's
 continuation hash is the pre-subscription one.
 
+**A subscription is a series instance, not a period.** Several may declare the
+same `tf`; each gets its own evaluator and bucket state, and each is
+identified by its own index — in `NativeTimeframeBarContext::subscription` and
+in `native_series_bar(index)`. Two `"60"` series over a 15-minute input
+deliver the same buckets twice, once per index, in declaration order. The one
+thing same-period instances cannot each own is a different
+`authoritative_bars` feed: the feed store is keyed by the period's duration,
+so declaring two conflicting feeds for one period is refused
+(`DuplicateSubscriptionTimeframe`), while declaring the same bars twice — or
+leaving one, or both, empty — is accepted.
+
 **Validation (at `configure_native`).** Each `tf` must parse and must pair
 with `input_tf` exactly as `script_tf` does. Named refusals:
 
@@ -1095,7 +1106,7 @@ with `input_tf` exactly as `script_tf` does. Named refusals:
 | --- | --- |
 | `InvalidSubscriptionTimeframe` | unparseable literal, or a pairing `script_tf` would not accept |
 | `SubscriptionFinerThanInput` | strictly finer than `input_tf` — a lower-timeframe array is a different contract and is not promoted |
-| `DuplicateSubscriptionTimeframe` | two series of the same period (the feed store is keyed by duration, and every monthly literal is one period) |
+| `DuplicateSubscriptionTimeframe` | two series of the same period declaring **different** `authoritative_bars` (the feed store is keyed by duration, and every monthly literal is one period, so they cannot each own one) |
 | `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
 | `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
 
