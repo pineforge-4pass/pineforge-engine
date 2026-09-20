@@ -1,5 +1,9 @@
 /*
- * engine_lower_tf.cpp — lower-timeframe emulation helpers (request.security on a finer TF)
+ * engine_lower_tf.cpp — finer-timeframe sub-bar synthesis: fixed intraday
+ * timeframe parsing, the input : requested ratio, and evenly sampled
+ * sub-bars carved from one input bar. Which flag combinations a source
+ * language admits on such a request is that language's policy and lives with
+ * its evaluator (src/source/pine_security_eval.cpp), not here.
  */
 
 #include "engine_internal.hpp"
@@ -7,7 +11,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <stdexcept>
 #include <unordered_set>
 
 namespace pineforge {
@@ -68,15 +71,6 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
         *out_requested_seconds = requested_seconds;
     }
     return true;
-}
-
-
-void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
-    if (lookahead_on || gaps_on) {
-        throw std::runtime_error(
-            "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off"
-        );
-    }
 }
 
 

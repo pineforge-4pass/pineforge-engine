@@ -190,7 +190,11 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
 void fill_bar_path_points_ordered(const Bar& bar, bool high_first, double path[4]);
 
 
-// ── Lower-TF emulation helpers (defined in engine_lower_tf.cpp) ──
+// ── Finer-timeframe sub-bar synthesis (defined in engine_lower_tf.cpp) ──
+// Generic primitives: a fixed intraday timeframe parser, the integer
+// input : requested ratio, and sub-bars sampled evenly along one input
+// bar's path. A source language's own admission rules for such a request
+// live with its evaluator, not here.
 
 
 bool is_fixed_intraday_minute_tf(const std::string& tf);
@@ -200,9 +204,6 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
                                         const std::string& requested_tf,
                                         int* out_ratio,
                                         int* out_requested_seconds);
-
-
-void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on);
 
 
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,

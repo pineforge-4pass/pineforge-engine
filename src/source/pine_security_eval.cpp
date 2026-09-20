@@ -26,6 +26,24 @@ namespace pineforge {
 
 using namespace internal;
 
+namespace {
+
+// TradingView's request.security_lower_tf accepts only the default merge
+// flags: lookahead_on and gaps_on are refused at validation. This is a rule
+// of the source language, not of the kernel's sub-bar synthesis, so it lives
+// here beside the evaluator that applies it (R5 lane N14: it used to be
+// internal::ensure_supported_lower_tf_emulation_flags in engine_lower_tf.cpp;
+// the message and the refusal are unchanged).
+void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
+    if (lookahead_on || gaps_on) {
+        throw std::runtime_error(
+            "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off"
+        );
+    }
+}
+
+}  // namespace
+
 
 // --- register_security_eval ---
 void source::PineStrategyHost::register_security_eval(
