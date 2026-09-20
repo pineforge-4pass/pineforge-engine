@@ -365,7 +365,7 @@ Union of F §2.vi (9), O §2.vi (5 + 1) and S §2.6 (7), deduplicated. S had no 
 | L6 | `NativeTimeframeSubscription`, `on_native_timeframe_bar`, `native_series_bar` → A.5, §2.iv | `subscriptions` empty for the adapter; registration-gated pump; `engine_security.cpp` and pine_strategy_host.cpp:1316-1400 untouched; corpus diff before / after (O: highest parity risk of any lane) | HTF-filter probe on a 24x7 symbol: exact (F); `"D"` over a 15m feed equals a `TimeframeAggregator` baseline bar for bar (O); installed-feed and no-feed cases (S) |
 | L7 | `native_working_requests()`, `cancel_all()`, `cancel_where(label)`, `TriggerAnchor`, `TrailTicks`, zero offset, `ReplaceOptions`; toolkit `submit_bracket`, `OrderBook` → A.6 | new kinds unused by the adapter; anchor defaults to `Absolute`; the adapter's `tick * 0.5` sentinel keeps working | bracket + trailing probe through the builder: exact where TR5 / FP7 are inactive (on-grid levels) (F); the zero-offset trail test asserts the run no longer fails (O); parent-limit + stop sibling, parent rejection, replacement, parent-cycle revival (S) |
 | L8 | `NativePriceGrid { None, QuantizeFills, QuantizeFillsAndTriggers }`, `NativeGridRounding` → A.7 | `None` for the adapter, permanently | a host with `QuantizeFills` books on-grid prices; a second test pins that `QuantizeFillsAndTriggers` still differs from TV's half-tick threshold (FP5) (O) |
-| L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:633-660) untouched | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
+| L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:650-675) untouched — **retained after measurement, audit lane N12: §3.6** | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
 | L10 | `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` (§2.v) | build-only | the examples run in ctest; the independence checker compiles the relocated examples |
 | L11 | — (renames / moves, §2.ii a-i) | rename / move only; hashed enumerator values pinned; sweep unchanged | — |
 | L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (`"pineforge-broker-state/v17"` engine_state_hash.cpp:23, pinned to one occurrence by check_broker_state_hash_coverage.py:205) | trades identical, hashes re-baselined once |
@@ -399,6 +399,77 @@ Flagged:
 | Wanted with v1, not blocking | L11 a, d | removes the last `source::` name from kernel signatures and the orphaned TV commentary (F) |
 | In scope, 1.x | L9 | R5-9; a toolkit stand-in is acceptable meanwhile (F) |
 | Post-v1 | L11 rest, L12, L13 | L12 is required before claiming the adapter is a *thin optional layer* rather than a runtime-dependent sibling (S); L13 only if the promise is widened to C hosts (U2) |
+
+### 3.6 Audit lane N12 — the TradingView risk rules against `NativeRunSpec::risk` (measured, retained)
+
+The independent R5 audit (§6, lane N12) found that no adapter run declares
+`spec.risk` (`rg 'spec\.risk|NativeRiskLimits' src/source/` = 0 hits) while
+`update_risk_state`, `SourceDayLedger`, `submit_intraday_loss_close` and the
+`compat/pine` intraday cap stay the live path, and that the only artefact was
+a twin (`tests/test_native_risk_limits.cpp` `twin_of_adapter_risk_halts`) that
+itemized differences without a ruling. This section is the ruling, with the
+measurement that decides it: **every `strategy.risk.*` rule stays in the
+adapter; `project()` keeps `risk` unset.** No kernel or adapter source
+changed; the measurement lives in `tests/test_adapter_risk_relower.cpp`
+(nine paired scenarios, each run through the adapter and through a bare
+`NativeStrategyHost` on the same tape, the adapter half harvested from main
+683a82f, the kernel half pinned) and in the seeded corpus experiment below.
+
+**The structural reason, common to all four rules.** Pine's
+`strategy.risk.*` calls are script statements: the transpiler emits them
+inside the per-bar body (corpus 442d497,
+`ta-closedtrades-risk-introspection-01/generated.cpp` `on_source_bar` →
+`set_pine_risk_max_drawdown(20, true)`; `cap-risk-gates-allow-max-intraday-01`
+`set_pine_risk_direction(1)` / `set_pine_risk_max_position_size(2)` /
+`set_pine_risk_max_intraday_filled_orders(3)`), so the adapter first sees a
+limit on script bar 0, from `PineStrategyHost::set_pine_risk_*`
+(pine_strategy_host.cpp:866-888) — after `prepare_native_begin` has already
+projected the spec (pine_strategy_host.cpp:314) and `configure_native` has
+folded it into the continuation digest. Measured: an env-gated probe printing
+the adapter's risk configuration inside `project()` on the corpus reads
+`max_drawdown=0 cap.active=0` for every risk probe. `NativeRunSpec::risk` is a
+begin-time declaration (`native_run_spec.hpp:294-301,504`, folded at
+native_execution_consumer.cpp:175-176); a statement-time limit has nowhere to
+land. Routing any rule needs either the transpiler to hoist constant risk
+statements into the constructor (out of this repository) or a kernel
+re-declaration API mid-run (a hash-visible mutation of a digested field: an
+epoch decision the audit lane does not budget). The witness is the `SW`
+check of the test: under every rule the adapter host's kernel ledger stays
+inert (`native_risk_state()` has no day, no peak, no block) while the
+adapter's own rule acts.
+
+**Per rule (STEP 1), assuming the values were known at begin time.** Adapter
+line numbers are this tree's (683a82f); kernel semantics are
+`native_run_spec.hpp:238-301` and native_execution_consumer.cpp:3079-3260
+(evaluated at the script bar's open :6213/:6437, its close calculation
+:6163, and after each applied drain :5924; fills counted at :4571; the block
+refuses `would_open` at :2518).
+
+| Pine rule | adapter mechanism | kernel counterpart | class | measured divergence (test scenario) | ruling |
+|---|---|---|---|---|---|
+| `strategy.risk.allow_entry_in` | `risk_.direction`; `project()` already declares `spec.allowed_open_directions` (pine_adapter.cpp:1508); the forbidden opposite entry is reshaped to `CloseOpposite` in `resolve_execution_terms` (:10509-10523) | per-opening cap `allowed_open_directions` | (i)+(ii), **already re-lowered** | none to measure: the cap is the kernel's, the close-only reshaping is the retained TV policy | done before N12; nothing to move |
+| `strategy.risk.max_position_size` | precommit refuses a flat/same-side ENTRY at its fill when the LIVE book already holds ≥ the limit (:11572-11575, legacy pine_risk.cpp:115) | `max_abs_units`: refuses a fill whose RESULTING book would exceed it (:2531) | (iv) | `PS`: two-unit entries against 3 — adapter admits the second (live 2 < 3, book 4) and refuses the third; kernel refuses the second (`MaxAbsUnits` at bars 1, 2), book 2 | retained: a pre-fill-book gate is a TV emulation fact, not a generic cap |
+| `strategy.risk.max_drawdown` | `update_risk_state(bar.close)` once per script bar at the close mark (:14918, :12158-12185): peak / running max drawdown at close marks, `>=` exact, percent of the current peak; the latch `risk_.halted` gates flat/same-side entries at precommit (:11565), never an opposite entry | `max_drawdown`: current drawdown vs percent-of-peak, at all three points; `BlockOpenings` refuses every opening | (ii) cadence + (iv) scope | `MG10-a`: bar 1 opens 600 under the entry and closes 100 under — kernel breaches at the open mark and refuses bar 2's add (book 100), adapter admits it (book 200). `MG10-b`: latched at bar 1's close, the adapter still reverses twice (`L→S` −600, `S→L`), the kernel refuses both reversals (`RiskLimit` at bars 2, 3) and holds. Corpus: `ta-closedtrades-risk-introspection-01` (20 % of peak) identical 1502/1502 rows with the kernel seeded — the rule never fires there | retained: the latched-reversal exemption cannot be composed on a kernel block; a close-only cadence knob alone would not close it |
+| `strategy.risk.max_cons_loss_days` | `SourceDayLedger` (pine_adapter.hpp:650-658): +1 per losing TRADE on a new chart day, reset to 0 by any winning trade at its fill (:16075-16095); gated immediately at precommit (:11566-11569) and latched at the close (:12181-12184) | `max_consecutive_loss_days`: a day's NET realized result settles the streak when the next day opens | (iv) | `MG11-a` (loss; win then loss; loss): adapter latches at day 3's first loss (4 rows), kernel's netted streak never reaches 2 (6 rows, no event). `MG11-b` (loss then smaller win, twice): adapter resets daily (5 rows), kernel blocks at day 3's open (4 rows, one event). No corpus probe declares the rule | retained: an order-dependent per-trade streak is not a generic day result |
+| `strategy.risk.max_intraday_loss` | day-open equity at the day's first bar (:14487-14492); checked at the bar open (:14589), along the bar's PATH at its adverse extreme with a resting `Stop` flatten (:14590, :13235-13275), and at a closing fill with that fill's own P&L unbooked (:15249-15266); epsilon `1e-9·max(1,|limit|)`; ticket `"Close Position (Max intraday Loss)"` → `CloseCause::RiskLimit`; the block refuses ALL placements for the chart day (`entry`/`order`/`close`/`close_all`/`exit`, :4325, :5980, :6702, :6830, :9774) and `cancel_all()` withdraws the working book (:16165-16168) | `max_intraday_loss` at the three points; `FlattenAndBlock` closes `AsPresented` under `"__kernel_risk__"` / `"Risk limit"`, blocks openings only, leaves working orders | (ii) ticket, day basis + (iv) path check, placement scope, unbooked fill, epsilon | `MG12-a`: day 2's first bar 100→85→95 — adapter closes at the extreme (85, −1500, cause 4) and refuses the day's later entry, kernel measures 0 at the open and 500 at the close, never breaches, ends with 300 units. `MG12-b`: breach at a bar open inside the day — same money on both sides (100 @ 88, −1200) under different tickets; the adapter withdraws a resting limit entry, the kernel leaves it working and it fills on day 3. Both sides mark the day's opening equity at its first bar: a gap there is not an intraday loss for either | retained: the path-extreme check is the rule's substance and the kernel has no path evaluation point; a risk ticket field and a `PathAdverseExtreme` check kind would be generic additions (mirroring `NativeMarginModel`) but would still leave the placement scope, the unbooked fill and the epsilon |
+| `strategy.risk.max_intraday_filled_orders` | `compat::pine::IntradayCap` + `IntradayOrderBudget` (243 + 94 lines): charged slots per risk day, quota transfer, POOC deferral, noop-market skip, the close at the fill price or the bar's better extreme (`post_dispatch`), latch → all placements denied (`cap_placement_denied` :12150); ticket `"Close Position (Max number of filled orders in one day)"` → `CloseCause::FillCap`; day = `session_trading_day_index` for a `HHMM-HHMM` session, else the chart day (`chart_day_key` :12052-12077, `mday·100+month` in the CHART timezone) | `max_fills_per_day`: applied fills counted as they settle, evaluated at the three points; `FlattenAndBlock` at the drain's cursor; `SessionDay` / `CalendarDayInTimezone` on the SPEC timezone | (i) count + (ii) ticket + (iv) close price, charged-slot budget, placement scope, chart-day key | `MG13`: the second fill reaches the cap on a bar that closes above its open — adapter closes at that bar's HIGH (103) under its ticket, kernel at the close (101) under its own. `MG14`: chart timezone `America/New_York` over a UTC symbol — bar 4 (04:00 UTC) is a new chart day for the adapter and the same UTC day for the kernel. Corpus, kernel seeded with the declared cap: `cap-risk-gates-allow-max-intraday-01` identical 1464/1464 (the third fill of each day flattens the book, so block and latch coincide); `cap-max-intraday-filled-orders-isolate-01` 3840 of 3916 rows differ from row 77 (2025-04-08); `cap-gatekeeper-intraday-risk-01` 312 of 604 differ from row 293 (2025-10-25); `composite-bracket-cap-range-pending-stop-01` 2370 of 2384 differ from row 17 (2025-04-02 02:45), two extra rows | retained: the count alone is expressible, but the kernel's block would refuse fills the transfer admits and the close price is TV's; a report-only action would give the adapter a count it cannot use (charged slots ≠ applied fills) |
+
+**Proposed generic additions (not implemented — no consumer today).** A
+risk ticket (`label` / `comment` on `NativeRiskLimits`, folded only when set,
+exactly as `NativeMarginModel::liquidation_label`); a `NativeRiskDay`
+timezone override for a host that reports by a wall-clock other than the
+spec's; a `PathAdverseExtreme` check kind for the intraday limit mirroring
+`NativeLiquidationCheck`; a report-only action. Each is generic on its own
+merits, none unblocks a rule above while the statement-time delivery stands,
+and adding them now would be the dead weight the same audit rules against
+(G2). The order in which they would matter, if the transpiler ever hoists
+the statements: ticket → day timezone → path check.
+
+**Acceptance evidence.** `tests/test_adapter_risk_relower.cpp`: 62 checks,
+the adapter half reproduced bit for bit against the 683a82f harvest, the
+kernel half pinned; corpus byte-identity not applicable (no `src/` or
+`include/` change); the five corpus risk probes measured as above with the
+kernel seeded in an uncommitted, env-gated experiment.
 
 ---
 

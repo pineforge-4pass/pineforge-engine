@@ -1050,9 +1050,27 @@ whether openings are blocked and why, the current risk day, the fills counted
 in it, the consecutive-loss streak, the running peak equity and the day's
 opening equity.
 
-TradingView's `strategy.risk.*` is **not** this model: its chart-day key, its
-cancel-pending forced close, its threshold epsilon and its unbooked closing
-fill stay in the Pine adapter, which never sets `risk`.
+**TradingView's `strategy.risk.*` is not this model, and stays in the Pine
+adapter (audit lane N12).** The adapter never sets `risk`, for a structural
+reason first: Pine's risk calls are per-bar script statements, so the adapter
+learns a limit on the first script bar, after `configure_native` has fixed
+and digested the spec — a begin-time declaration has nowhere to receive it.
+Measured against the kernel on the same tapes, each rule also differs in
+substance: the drawdown latch samples once per bar at the close and still
+admits a reversal while latched (the kernel measures at the open, the close
+and after each drain, and refuses every opening); the consecutive-loss streak
+counts one losing trade per chart day and resets on any winning fill (the
+kernel settles a day's net result at the next day's open); the intraday loss
+is checked along the bar's path and closes at the adverse extreme, then
+refuses every placement for the day and withdraws the working book (the
+kernel checks at its three points, closes at that point under its own ticket
+and blocks openings only); the filled-orders cap charges slots, transfers
+quota, closes at the fill or the bar's better extreme and keys its day on the
+chart timezone (the kernel counts settled fills, closes at the evaluation
+point and keys on the spec timezone). Every difference is pinned, with the
+adapter's rows harvested before the lane, in
+`tests/test_adapter_risk_relower.cpp`; the rulings and the corpus measurement
+are in `docs/design/native-feature-parity.md` §3.6.
 
 ## Calculation timing
 
