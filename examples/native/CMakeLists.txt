@@ -13,6 +13,7 @@ set(PINEFORGE_NATIVE_EXAMPLES
     hello_kernel
     native_market_strategy
     native_selected_strategy
+    native_bracket_strategy
 )
 
 # The same host written against the C API (R5 lane L13). It is a separate
@@ -66,6 +67,7 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME example_${example} COMMAND example_${example})
         set_tests_properties(example_${example} PROPERTIES TIMEOUT 60)
     endforeach()
-    set_tests_properties(example_hello_kernel example_hello_kernel_c PROPERTIES
+    set_tests_properties(example_hello_kernel example_hello_kernel_c
+        example_native_bracket_strategy PROPERTIES
         PASS_REGULAR_EXPRESSION "closed trades: [1-9]")
 endif()

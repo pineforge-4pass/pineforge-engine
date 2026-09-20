@@ -38,12 +38,14 @@ ROOT_HEADERS = (
 # the minimal host; native_market_example is exercised by
 # test_native_example_batch and native_live_startup_e2e; native_selected_example
 # is the R4-B second native host example. Both of the latter are also built as
-# the live runner's MODULE targets. runner/examples/strategy.cpp is
+# the live runner's MODULE targets. native_bracket_strategy is the L7b
+# anchored-bracket host (a standalone program only). runner/examples/strategy.cpp is
 # intentionally legacy/source-bound after L1.
 NATIVE_EXAMPLES = (
     ("hello-kernel", "examples/native/hello_kernel.cpp"),
     ("native-market", "examples/native/native_market_strategy.cpp"),
     ("native-selected", "examples/native/native_selected_strategy.cpp"),
+    ("native-bracket", "examples/native/native_bracket_strategy.cpp"),
 )
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")

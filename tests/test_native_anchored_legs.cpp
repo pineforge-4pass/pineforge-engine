@@ -24,11 +24,14 @@
 
 #include "native_current_fixture.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -1037,6 +1040,444 @@ void facts_resolve_at_the_arm() {
     }
 }
 
+// ── 5. TWIN: the R4 bracket scenarios through anchored legs ─────────────
+// A native host places a Market parent with two anchored legs through
+// submit_bracket on the 0.01 grid, rounding Directional, and implements the
+// adapter's trigger projection inside the arm hook and its fill booking
+// inside resolve_execution_terms. The expected rows are the R4 harness's
+// R4_PINNED_DATA (tests/test_adapter_brackets_relower.cpp on branch
+// r5/R4-adapter-brackets, harvested from the unchanged adapter on engine main
+// 04330d4 with -DPINEFORGE_R4_HARVEST), re-harvested identically on this
+// tree's parent 3f6fd57 before this lane. Times are compared by bar index.
+//
+// Adapter policy copied verbatim as TEST policy (never kernel options):
+//   directional_tick          src/source/pine_adapter.cpp:297-301
+//   source_bar_fill_tick / nearest_tick are not needed on these on-grid levels
+//   source_trigger_threshold  src/source/pine_adapter.cpp:328-375
+//   the fill booking          src/source/pine_adapter.cpp:9907-9926 (an
+//                             ExitLimit books directional_tick(resolved,
+//                             !is_buy) clamped to its level; an ExitStop /
+//                             ExitTrail books directional_tick(resolved,
+//                             is_buy)), i.e. the grid level for a half-tick
+//                             shifted threshold crossed intrabar.
+namespace twin_policy {
+
+bool finite_positive(double v) { return std::isfinite(v) && v > 0.0; }
+
+// src/source/pine_adapter.cpp:297-301
+double directional_tick(double value, double tick, bool upward) noexcept {
+    if (!std::isfinite(value) || !finite_positive(tick)) return value;
+    const double scaled = value / tick;
+    return (upward ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9)) * tick;
+}
+
+// src/source/pine_adapter.cpp:280-289 (source_bar_fill_tick), needed by the
+// threshold's on-grid test below.
+double source_bar_fill_tick(double price, double tick) noexcept {
+    if (!std::isfinite(price) || !finite_positive(tick)) return price;
+    return std::floor(price / tick + 0.5) * tick;
+}
+
+// src/source/pine_adapter.cpp:328-375
+double source_trigger_threshold(double level, double tick, bool is_buy, bool is_limit) noexcept {
+    if (!std::isfinite(level) || !finite_positive(tick)) return level;
+    if (level <= 0.0) return 0.0;
+    const bool upward = is_limit ? !is_buy : is_buy;
+    double scaled = level / tick;
+    const double inverse = 1.0 / tick;
+    const double integral_inverse = std::floor(inverse + 0.5);
+    if (integral_inverse > 0.0
+        && std::abs(inverse - integral_inverse) <= 1e-6 * integral_inverse) {
+        scaled = level * integral_inverse;
+        const double nearest_index = std::floor(scaled + 0.5);
+        if (source_bar_fill_tick(level, tick) == level) scaled = nearest_index;
+    }
+    const double target_index = upward ? std::ceil(scaled - 1e-12) : std::floor(scaled + 1e-12);
+    const double grid = target_index * tick;
+    double threshold = grid + (upward ? -0.5 : 0.5) * tick;
+    const auto reaches_target = [&](double price) {
+        const double rounded_index = std::floor(price / tick + 0.5);
+        return upward ? rounded_index >= target_index : rounded_index <= target_index;
+    };
+    for (int i = 0; i < 16 && !reaches_target(threshold); ++i) {
+        threshold = std::nextafter(threshold, upward
+            ? std::numeric_limits<double>::infinity()
+            : -std::numeric_limits<double>::infinity());
+    }
+    for (int i = 0; i < 16; ++i) {
+        const double candidate = std::nextafter(threshold, upward
+            ? -std::numeric_limits<double>::infinity()
+            : std::numeric_limits<double>::infinity());
+        if (!reaches_target(candidate)) break;
+        threshold = candidate;
+    }
+    return threshold;
+}
+
+}  // namespace twin_policy
+
+enum class TwinShape {
+    FromEntryBracket,
+    FromEntryStopout,
+    TrailReissue,
+    TrailZeroOffset,
+    ParentRejection,
+    CycleRevival,
+};
+
+struct TwinRow {
+    int entry_bar;
+    int exit_bar;
+    double entry_price;
+    double exit_price;
+    double qty;
+    double pnl;
+    int is_long;
+    int open_at_end;
+};
+
+struct TwinObserved {
+    std::vector<TwinRow> rows;
+    double final_equity = 0.0;
+    double max_drawdown = 0.0;
+    double max_runup = 0.0;
+    double position_units = 0.0;
+    std::string error;
+};
+
+// The R4 rows, harness times converted to bar indexes ((t - 1700000000000) / 60000).
+struct TwinExpected {
+    const char* name;
+    TwinShape shape;
+    std::vector<TwinRow> rows;
+    double final_equity;
+    double max_drawdown;
+    double max_runup;
+    double position_units;
+};
+
+const std::vector<TwinExpected>& twin_expected() {
+    static const std::vector<TwinExpected> rows = {
+        {"from-entry-bracket", TwinShape::FromEntryBracket,
+         {{1, 4, 100.0, 102.5, 2.0, 5.0, 1, 0}}, 10005.0, 0.0, 0.0, 0.0},
+        {"from-entry-stopout", TwinShape::FromEntryStopout,
+         {{1, 8, 100.0, 98.5, 2.0, -3.0, 1, 0}}, 9997.0, 10.5, 0.0, 0.0},
+        {"trail-reissue", TwinShape::TrailReissue,
+         {{1, 6, 100.0, 102.0, 2.0, 4.0, 1, 0}}, 10004.0, 3.5, 0.0, 0.0},
+        {"trail-zero-offset", TwinShape::TrailZeroOffset,
+         {{1, 6, 100.0, 103.75, 2.0, 7.5, 1, 0}}, 10007.5, 0.0, 0.0, 0.0},
+        {"parent-rejection", TwinShape::ParentRejection,
+         {{1, 6, 100.0, 108.0, 100.0, 800.0, 1, 0}}, 10800.0, 300.0, 0.0, 0.0},
+        {"cycle-revival", TwinShape::CycleRevival,
+         {{1, 4, 100.0, 103.0, 2.0, 6.0, 1, 0}, {12, 12, 99.25, 99.0, 2.0, -0.5, 1, 0}},
+         10005.5, 0.5, 0.0, 0.0},
+    };
+    return rows;
+}
+
+// The R4 harness's parent-rejection tape (KI-54 decline fixture).
+std::vector<Bar> rejection_tape() {
+    std::vector<Bar> bars;
+    auto push = [&](double o, double h, double l, double c) {
+        bars.push_back(ohlc(static_cast<int>(bars.size()), o, h, l, c));
+    };
+    push(100.0, 100.0, 100.0, 100.0);
+    push(100.0, 100.0, 100.0, 100.0);   // L fills @100
+    push(100.0, 112.0,  99.0, 110.0);   // X + S queued
+    push(111.0, 112.0, 104.0, 111.0);   // S declined; 105 touched
+    push(111.0, 111.0, 111.0, 111.0);
+    push(111.0, 111.0, 104.0, 111.0);   // re-issue arms 108
+    push(109.0, 109.0, 100.0, 101.0);   // the fresh 108 stop settles
+    push(101.0, 101.0, 101.0, 101.0);
+    return bars;
+}
+
+class TwinHost final : public NativeStrategyHost {
+public:
+    explicit TwinHost(TwinShape shape) : shape_(shape) {}
+    std::string first_error;
+
+private:
+    TwinShape shape_;
+    int bar_ = -1;
+    double bar_open_ = 0.0;
+    no::RequestHandle parent_;
+    std::optional<std::int64_t> cycle_;
+    std::optional<double> fill_;
+    std::optional<no::RequestHandle> trail_;
+    std::optional<no::RequestHandle> stop_;
+    // The adapter's placement snapshot: the grid level per leg (what the
+    // threshold was projected from) and, for the trail re-issue, the
+    // retained best and the new distance.
+    std::map<std::uint64_t, double> grid_level_;
+    std::map<std::uint64_t, bool> leg_is_limit_;
+    std::optional<double> zero_trail_;      // handle of the explicit-zero trail
+    bool zero_trail_set_ = false;
+
+    tk::BracketSpec bracket(double profit_ticks, double loss_ticks) {
+        auto spec_rows = anchored_bracket(parent_, profit_ticks, loss_ticks);
+        spec_rows.anchor_rounding = no::NativeAnchorRounding::Directional;
+        spec_rows.visibility = no::NativeArmVisibility::PendingUntilArmed;
+        return spec_rows;
+    }
+
+    void on_native_bar_open(const Bar& bar, const NativeDecisionContext&) override {
+        bar_open_ = bar.open;
+    }
+
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const NativeDecisionContext&) override {
+        if (event.definition && event.definition->handle == parent_ && event.opened_units != 0.0) {
+            cycle_ = event.cycle_after;
+            fill_ = event.resolved_price;
+        }
+    }
+
+    // The adapter's trigger projection, applied to the kernel level (which is
+    // already directional_tick's value: the kernel's Directional rounding is
+    // the same arithmetic).
+    std::optional<double> resolve_anchored_level(const NativeAnchoredLevelView& view) const override {
+        const bool is_limit = view.trigger != NativeAnchoredTrigger::Stop;
+        const bool is_buy = view.leg_side == no::Side::Long;
+        auto* self = const_cast<TwinHost*>(this);
+        self->grid_level_[view.leg.incarnation] = view.kernel_level;
+        self->leg_is_limit_[view.leg.incarnation] = is_limit;
+        return twin_policy::source_trigger_threshold(view.kernel_level, view.price_tick,
+                                                     is_buy, is_limit);
+    }
+
+    // The adapter's fill booking: an exit crossed intrabar at a half-tick
+    // threshold books the grid level (pine_adapter.cpp:9907-9926); the
+    // explicit-zero trail books the next open (resolve_terms
+    // explicit_zero_trail, pine_adapter.cpp:9466-9476 and its
+    // zero_trail_policy_price).
+    no::ExecutionTerms resolve_execution_terms(const NativeExecutionTermsFacts& facts) const override {
+        no::ExecutionTerms terms{facts.default_resolved_price, std::nullopt,
+                                 no::OpeningShape::Transact};
+        const double tick = 0.01;
+        const auto grid = grid_level_.find(facts.target.incarnation);
+        if (grid != grid_level_.end() && facts.trigger_level
+            && facts.cursor.point.path_phase != NativePathPhase::Open) {
+            const bool is_limit = leg_is_limit_.at(facts.target.incarnation);
+            double booked = twin_policy::directional_tick(
+                    facts.default_resolved_price, tick, is_limit ? !facts.is_buy : facts.is_buy);
+            if (is_limit) booked = facts.is_buy ? std::min(booked, grid->second)
+                                                : std::max(booked, grid->second);
+            terms.resolved_price = booked;
+            return terms;
+        }
+        if (zero_trail_set_ && trail_ && facts.target == *trail_) {
+            terms.resolved_price = bar_open_;
+            return terms;
+        }
+        return terms;
+    }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++bar_;
+        const int bar = bar_;
+        auto entry = [&](double units) {
+            const auto placed = submit({no::Transact{units}, "L", ""});
+            if (placed.status == no::SubmitStatus::Accepted && placed.handle) {
+                parent_ = *placed.handle;
+            } else if (first_error.empty()) {
+                first_error = "entry rejected";
+            }
+        };
+        // A leg placed after the fill closes the lot the parent opened:
+        // OwnerOpenedUnits is a waiting child's spelling, so the bound leg
+        // claims the whole lot as a ScopeFraction (qty_percent = 100).
+        auto bound_close = [&](const char* label) {
+            no::Request request{no::Reduce{no::ScopeFraction{1.0}}, label, "bracket"};
+            if (cycle_) request.owner = no::BindOpening{parent_, *cycle_};
+            return request;
+        };
+        switch (shape_) {
+        case TwinShape::FromEntryBracket:
+            if (bar == 0) {
+                entry(2.0);
+                tk::submit_bracket(*this, bracket(250.0, 250.0));
+            }
+            break;
+        case TwinShape::FromEntryStopout:
+            if (bar == 0) {
+                entry(2.0);
+                tk::submit_bracket(*this, bracket(800.0, 150.0));
+            }
+            break;
+        case TwinShape::TrailReissue:
+            // strategy.exit("T","L", trail_points=300, trail_offset=100 then
+            // 200 from bar 5): a Trail on the open position, re-issued at the
+            // new distance with the running extreme retained.
+            if (bar == 0) entry(2.0);
+            if (bar >= 1 && fill_ && cycle_) {
+                auto request = bound_close("T");
+                request.trigger = no::Trail{(bar < 5 ? 100.0 : 200.0) * 0.01, *fill_ + 3.0};
+                if (!trail_) {
+                    const auto placed = submit(request);
+                    if (placed.status == no::SubmitStatus::Accepted) trail_ = placed.handle;
+                    else if (first_error.empty()) first_error = "trail rejected";
+                } else if (bar == 5) {
+                    const auto replaced = replace(*trail_, request, no::ReplaceOptions{true});
+                    if (replaced.status == no::ReplaceStatus::Replaced) trail_ = replaced.successor;
+                    else if (first_error.empty()) first_error = "trail re-issue rejected";
+                }
+            }
+            break;
+        case TwinShape::TrailZeroOffset:
+            // strategy.exit("T","L", trail_points=100, trail_offset=0) from
+            // bar 5: the adapter's half-tick sentinel (0.5 tick) on a live
+            // Trail whose activation is already reached.
+            if (bar == 0) entry(2.0);
+            if (bar >= 5 && fill_ && cycle_ && !trail_) {
+                auto request = bound_close("T");
+                request.trigger = no::Trail{0.0, *fill_ + 1.0, no::TrailTicks{0.5}};
+                const auto placed = submit(request);
+                if (placed.status == no::SubmitStatus::Accepted) {
+                    trail_ = placed.handle;
+                    zero_trail_set_ = true;
+                } else if (first_error.empty()) {
+                    first_error = "zero trail rejected";
+                }
+            }
+            break;
+        case TwinShape::ParentRejection:
+            // 100 % of equity long; at bar 2 a priced stop at 105 and a
+            // reversal that the account cannot afford at the +1 gap open.
+            if (bar == 0) {
+                no::Request sized{no::Sized{no::Side::Long, no::EquityFraction{1.0}}, "L", ""};
+                const auto placed = submit(sized);
+                if (placed.status == no::SubmitStatus::Accepted && placed.handle) parent_ = *placed.handle;
+            }
+            if (bar == 2 && cycle_) {
+                auto stop = bound_close("X");
+                stop.trigger = no::Stop{twin_policy::source_trigger_threshold(105.0, 0.01, false, false)};
+                const auto placed = submit(stop);
+                if (placed.status == no::SubmitStatus::Accepted) stop_ = placed.handle;
+                grid_level_[stop_ ? stop_->incarnation : 0] = 105.0;
+                leg_is_limit_[stop_ ? stop_->incarnation : 0] = false;
+                (void)submit({no::ReverseTo{-100.0}, "S", ""});
+            }
+            if (bar == 5 && stop_) {
+                auto stop = bound_close("X");
+                stop.trigger = no::Stop{twin_policy::source_trigger_threshold(108.0, 0.01, false, false)};
+                const auto replaced = replace(*stop_, stop);
+                if (replaced.status == no::ReplaceStatus::Replaced && replaced.successor) {
+                    stop_ = replaced.successor;
+                    grid_level_[stop_->incarnation] = 108.0;
+                    leg_is_limit_[stop_->incarnation] = false;
+                }
+            }
+            break;
+        case TwinShape::CycleRevival:
+            // One bracket definition (103 / 99 absolute) across two cycles:
+            // the second lot arms fresh legs from its own fill of 99.25
+            // (103 = +375 ticks, 99 = -25 ticks).
+            if (bar == 0) {
+                entry(2.0);
+                tk::submit_bracket(*this, bracket(300.0, 100.0));
+            }
+            if (bar == 11) {
+                entry(2.0);
+                tk::submit_bracket(*this, bracket(375.0, 25.0));
+            }
+            break;
+        }
+    }
+};
+
+TwinObserved twin_observe(TwinShape shape) {
+    TwinObserved out;
+    TwinHost host(shape);
+    auto s = bracket_spec("l7b-twin");
+    if (shape == TwinShape::ParentRejection) s.initial_margin_fraction = 1.0;
+    if (host.configure_native(s).status != NativeSetupStatus::Applied) {
+        out.error = "configure: " + host.last_error();
+        return out;
+    }
+    const auto bars = shape == TwinShape::ParentRejection ? rejection_tape() : staircase();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    out.error = host.last_error();
+    if (out.error.empty() && !host.first_error.empty()) out.error = host.first_error;
+    const Report report(host);
+    for (int i = 0; i < report.c.trades_len; ++i) {
+        const TradeC& t = report.c.trades[i];
+        out.rows.push_back({static_cast<int>((t.entry_time - kT) / 60000),
+                            static_cast<int>((t.exit_time - kT) / 60000),
+                            t.entry_price, t.exit_price, t.qty, t.pnl, t.is_long, t.open_at_end});
+    }
+    out.final_equity = report.c.equity_curve_len > 0
+        ? report.c.equity_curve[report.c.equity_curve_len - 1].equity : 0.0;
+    out.max_drawdown = report.c.metrics.equity.max_equity_drawdown;
+    out.max_runup = report.c.metrics.equity.max_equity_runup;
+    out.position_units = host.physical_position().signed_units;
+    return out;
+}
+
+// One line per divergence; the first one is the mechanism to report.
+std::vector<std::string> twin_diff(const TwinExpected& want, const TwinObserved& got) {
+    std::vector<std::string> out;
+    char line[256];
+    auto row_diff = [&](const char* field, std::size_t i, double a, double b) {
+        if (std::memcmp(&a, &b, sizeof(double)) == 0) return;
+        std::snprintf(line, sizeof line, "row %zu %s: got %.17g want %.17g", i, field, a, b);
+        out.emplace_back(line);
+    };
+    if (!got.error.empty()) out.push_back("run error: " + got.error);
+    if (got.rows.size() != want.rows.size()) {
+        std::snprintf(line, sizeof line, "row count: got %zu want %zu", got.rows.size(),
+                      want.rows.size());
+        out.emplace_back(line);
+    }
+    const std::size_t n = std::min(got.rows.size(), want.rows.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& a = got.rows[i];
+        const auto& b = want.rows[i];
+        if (a.entry_bar != b.entry_bar) {
+            std::snprintf(line, sizeof line, "row %zu entry bar: got %d want %d", i, a.entry_bar,
+                          b.entry_bar);
+            out.emplace_back(line);
+        }
+        if (a.exit_bar != b.exit_bar) {
+            std::snprintf(line, sizeof line, "row %zu exit bar: got %d want %d", i, a.exit_bar,
+                          b.exit_bar);
+            out.emplace_back(line);
+        }
+        row_diff("entry_price", i, a.entry_price, b.entry_price);
+        row_diff("exit_price", i, a.exit_price, b.exit_price);
+        row_diff("qty", i, a.qty, b.qty);
+        row_diff("pnl", i, a.pnl, b.pnl);
+        if (a.is_long != b.is_long) out.push_back("row is_long differs");
+        if (a.open_at_end != b.open_at_end) out.push_back("row open_at_end differs");
+    }
+    row_diff("final_equity", 0, got.final_equity, want.final_equity);
+    row_diff("max_drawdown", 0, got.max_drawdown, want.max_drawdown);
+    row_diff("max_runup", 0, got.max_runup, want.max_runup);
+    row_diff("position_units", 0, got.position_units, want.position_units);
+    return out;
+}
+
+void twin_of_the_r4_bracket_scenarios() {
+    for (const auto& want : twin_expected()) {
+        const auto got = twin_observe(want.shape);
+        const auto diff = twin_diff(want, got);
+        std::printf("    twin %-20s rows=%zu final_equity=%.17g dd=%.17g runup=%.17g: %s\n",
+                    want.name, got.rows.size(), got.final_equity, got.max_drawdown,
+                    got.max_runup, diff.empty() ? "MATCH" : "DIVERGES");
+        for (const auto& row : got.rows) {
+            std::printf("      row entry_bar=%d exit_bar=%d entry=%.17g exit=%.17g qty=%.17g pnl=%.17g\n",
+                        row.entry_bar, row.exit_bar, row.entry_price, row.exit_price, row.qty,
+                        row.pnl);
+        }
+        for (const auto& line : diff) std::printf("      - %s\n", line.c_str());
+        const bool expected_to_match = want.shape == TwinShape::FromEntryBracket
+            || want.shape == TwinShape::FromEntryStopout
+            || want.shape == TwinShape::TrailZeroOffset
+            || want.shape == TwinShape::CycleRevival;
+        if (expected_to_match) CHECK(diff.empty());
+    }
+}
+
 #endif  // PINEFORGE_L7B_HARVEST
 
 }  // namespace
@@ -1056,6 +1497,7 @@ int main() {
     test("visibility folds only when set", visibility_folds_only_when_set);
     test("C API working list agrees", c_api_working_list_agrees);
     test("facts resolve at the arm", facts_resolve_at_the_arm);
+    test("twin of the R4 bracket scenarios", twin_of_the_r4_bracket_scenarios);
     std::printf("L7b native anchored legs: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 #endif

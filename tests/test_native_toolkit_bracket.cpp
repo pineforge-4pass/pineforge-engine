@@ -152,11 +152,82 @@ void order_book_submit_or_replace_and_cancel() {
     completed(host);
 }
 
+// L7b: the builder's two anchored-leg knobs, and an OrderBook key bound to a
+// PendingUntilArmed child, which is out of the working enumeration before its
+// arm and must still be re-priced in place rather than duplicated.
+void bracket_knobs_and_pending_order_book() {
+    Host host;
+    tk::BracketReceipt receipt;
+    no::RequestHandle parent;
+    std::optional<no::RequestHandle> keyed_first, keyed_second;
+    std::size_t listed_at_submit = 0;
+    no::CancelStatus keyed_cancel = no::CancelStatus::InvalidHandle;
+    std::optional<tk::OrderBook<std::string>> book;
+    host.beginning = [&](Host& base) {
+        parent = put(base, tx(1.0, "entry"));
+        tk::BracketSpec spec_rows;
+        spec_rows.parent = parent;
+        no::Request take_profit{no::Reduce{no::OwnerOpenedUnits{}}, "tp", "bracket"};
+        take_profit.trigger = no::Limit{0.0};
+        take_profit.anchor = no::FromOwnerFill{10.0, true};
+        no::Request stop_loss{no::Reduce{no::OwnerOpenedUnits{}}, "sl", "bracket"};
+        stop_loss.trigger = no::Stop{0.0};
+        stop_loss.anchor = no::FromOwnerFill{-10.0, true, no::NativeAnchorRounding::HalfUp};
+        spec_rows.take_profit = take_profit;
+        spec_rows.stop_loss = stop_loss;
+        spec_rows.anchor_rounding = no::NativeAnchorRounding::Directional;
+        spec_rows.visibility = no::NativeArmVisibility::PendingUntilArmed;
+        receipt = tk::submit_bracket(base, spec_rows);
+
+        // An OrderBook key bound to a pending child: re-pricing replaces in
+        // place (no second live leg), cancelling addresses it by handle.
+        book.emplace(base);
+        no::Request keyed{no::Reduce{no::OwnerOpenedUnits{}}, "keyed", "bracket"};
+        keyed.trigger = no::Stop{0.0};
+        keyed.anchor = no::FromOwnerFill{-20.0, true};
+        keyed.owner = no::WaitForApplied{parent, no::NativeArmVisibility::PendingUntilArmed};
+        keyed_first = book->submit_or_replace("keyed", keyed);
+        keyed.anchor = no::FromOwnerFill{-30.0, true};
+        keyed_second = book->submit_or_replace("keyed", keyed);
+        listed_at_submit = base.native_working_requests().size();
+        keyed_cancel = book->cancel("keyed");
+    };
+
+    run(host, spec("l7b-toolkit-knobs"), {100.0});
+    REQUIRE(receipt.take_profit && receipt.stop_loss);
+    // Only the parent is enumerated before the fill: every child is pending.
+    CHECK(listed_at_submit == 1);
+    REQUIRE(keyed_first && keyed_second);
+    CHECK(*keyed_first != *keyed_second);
+    CHECK(keyed_cancel == no::CancelStatus::Cancelled);
+    const auto replaced = events<no::ReplacedEvent>(host);
+    REQUIRE(replaced.size() == 1);
+    CHECK(replaced[0].predecessor() == *keyed_first);
+    CHECK(replaced[0].successor() == *keyed_second);
+    CHECK(events<no::NotWorkingEvent>(host).empty());
+    // The builder wrote the knobs: both legs pending, the rounding on both
+    // anchors (the stop's own HalfUp overwritten by the spec's Directional).
+    for (const auto& row : events<no::AcceptedEvent>(host)) {
+        const auto& request = row.request();
+        const auto* owner = std::get_if<no::WaitForApplied>(&request.owner);
+        if (!owner || row.handle() == *keyed_first || row.handle() == *keyed_second) continue;
+        CHECK(owner->visibility == no::NativeArmVisibility::PendingUntilArmed);
+        const auto* anchor = std::get_if<no::FromOwnerFill>(&request.anchor);
+        REQUIRE(anchor != nullptr);
+        CHECK(anchor->rounding == no::NativeAnchorRounding::Directional);
+    }
+    // Both legs armed at the fill and are working from then on.
+    CHECK(events<no::ArmedEvent>(host).size() == 2);
+    CHECK(host.native_working_requests().size() == 2);
+    completed(host);
+}
+
 }  // namespace
 
 int main() {
     test("bracket emits owner and group shapes", bracket_emits_owner_and_group_shapes);
     test("order book submit_or_replace and cancel", order_book_submit_or_replace_and_cancel);
+    test("bracket knobs and pending order book", bracket_knobs_and_pending_order_book);
     std::printf("L7 native toolkit: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
