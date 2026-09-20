@@ -124,10 +124,18 @@ surface (`resolve_margin_call_units`, `on_native_margin_call`,
 `native_liquidation_price`) R5 L5's calculation-timing surface
 (`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`) and R5
 L7b's anchored-leg hook (`resolve_anchored_level` over
-`NativeAnchoredLevelView`), and the
+`NativeAnchoredLevelView`) and R5 N5's generic host hash extension
+(`BacktestEngine::hash_host_extension`, with `BrokerStateHashSink` now a
+complete public type and `hash_source_extension` kept as the deprecated
+spelling the default forwards to), and the
 host capability macro
-is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
-order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
+is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. N5 lands inside v18 rather than
+opening an epoch: v18 has not shipped in a release, its frozen predecessor is
+still `host-ab9714b` (v16), and the v16→v18 relocation manifest is the live
+transition it extends. It moves no fingerprint: a host that overrides nothing
+folds the same `"source:none"` marker, and the source host folds the same
+bytes through the generic hook. L3b removes the source compatibility
+order type; `pineforge-source-adapter/v3` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v6`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
@@ -145,7 +153,7 @@ so no established continuation hash moves.
 | Live engine/host library | `engine_script_run_v18` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` |
 | `host-ab9714b` immutable provider | `engine_script_run_v16` |
-| Source extension | `pineforge-source-adapter/v2` |
+| Source extension | `pineforge-source-adapter/v3` |
 
 The verifier prepares six immutable historical archives with the profile's
 compiler/settings and authenticates every receipt against the real archive and
@@ -204,8 +212,8 @@ its creating strategy module. A fully self-contained old module can still use
 its own matching runtime; this check does not turn it into a v11 module.
 
 The current integrated representation uses generic broker fingerprint domain
-`pineforge-broker-state/v17` and stream fingerprint version 17; the source
-extension begins with `pineforge-source-adapter/v2`. Native consumer identity
+`pineforge-broker-state/v18` and stream fingerprint version 18; the source
+extension begins with `pineforge-source-adapter/v3`. Native consumer identity
 is `native-consumer/v7`, driver values own `native_driver_v5`, and run specs own
 `native_run_spec_v3`. Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v6`.

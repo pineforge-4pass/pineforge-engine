@@ -1181,6 +1181,28 @@ curve is identical with and without an intrabar path. The result is one point
 per script bar, a finite drawdown/run-up walk, and metrics computed over a
 real series.
 
+The per-bar **broker-state hash** is a row of that same report, so
+`KernelRecorded` records it too. It stays behind the recording switch it
+always had — `set_broker_state_hash_recording(true)`
+(`engine.hpp:2867`; C: `strategy_set_broker_state_hash_recording`), off by
+default, set while no run is active — because each row is a full
+`broker_state_hash()` over the lots and the closed rows. With the switch on,
+one row follows each point, after the extremes that point just folded
+(`record_script_report_point`, `native_execution_consumer.cpp:6519`), so
+
+```text
+broker_state_hash_len == equity_curve_len == script_bars_processed
+```
+
+in batch and across a stream's warmup and realtime legs alike. A row is a
+function of the run's past only: the row after bar *k* equals the last row of
+a run that ended at bar *k*, which is what makes the array a replay check.
+Recording is reporting — the switch is not continuation state and no row is
+ever read back, so a run records the same trades, curve, continuation and
+broker state with it on or off. Under `HostRecorded` the report is the host's
+and the kernel appends nothing; a C++ host that records its own report
+appends its own rows.
+
 `NativeReportPolicy::KernelRecordedAtHostMarks` records the very same series
 at the points the host marks, for a host whose report cadence is not one point
 per calculation. The consumer never records on its own initiative under it:
@@ -1194,7 +1216,9 @@ tail advances source history, and marks, without running generated code at
 all. The point also has to land inside the callback, before the adapter takes
 that bar's broker-state hash and before its range-end rows re-mark the curve's
 last point. Under this policy the kernel owns what a report point is and the
-host owns only when.
+host owns only when. The marking host also appends its own broker-state hash
+row — the adapter's row has to follow a continuation snapshot only it can
+name — so the kernel appends none under this policy.
 
 `report_open_position_at_end` (`KernelRecorded` only) adds the rows a close of
 the still-open position at the last bar's close would record — one per
@@ -1218,6 +1242,49 @@ extremes it folds are durable engine state.
 Per-trade reads: `closed_trade_count()` / `closed_trade(i)` return the closed
 rows this run booked; `report_trade_count()` / `get_report_trade(i)` span those
 rows followed by the range-end rows, in the order `fill_report` lays them out.
+
+### Folding host state into the broker-state hash
+
+`broker_state_hash()` folds the kernel's own broker state: the execution
+continuation, the position and its lots, the realized sums, the equity
+extremes, the closed rows. A host whose next decision also depends on state
+the kernel does not own — a regime, a counter, a model — folds that state in
+through one generic hook, so a replay that diverges there diverges in the
+hash:
+
+```cpp
+struct RegimeHost : pineforge::NativeStrategyHost {
+    std::int64_t regime = 0;
+    void hash_host_extension(pineforge::BrokerStateHashSink& sink) const override {
+        sink.s("regime-host/v1");   // your own domain tag first
+        sink.i(regime);             // then each durable value, in a fixed order
+    }
+    // on_native_bar(...) reads and moves `regime`
+};
+```
+
+- `hash_host_extension` (`engine.hpp:380`, protected virtual on
+  `BacktestEngine`) is called exactly once per hash, last, after the kernel's
+  fold. What it writes is part of the scalar `broker_state_hash()`, of every
+  per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
+- `BrokerStateHashSink` (`engine.hpp:326`) is a complete public type: FNV-1a
+  over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
+  NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
+- An override **replaces** the default. A host that overrides nothing folds
+  the marker `"source:none"`, exactly the bytes it folded before the hook
+  existed; call `BacktestEngine::hash_host_extension(sink)` first to keep the
+  marker and append to it.
+- The extension is input to the hash only. It moves no fill and is not part
+  of `native_continuation_hash()`: two hosts that trade identically keep
+  identical trades and continuations however their own folded state differs.
+- `hash_source_extension` is the deprecated spelling of the same seam, from
+  before a bare host could extend the fold. The generic default forwards to
+  it, so a subclass still written against it compiles and hashes unchanged;
+  new hosts override `hash_host_extension`. The Pine adapter folds its own
+  state through the generic hook like any other host.
+- The C callback table carries no hash hook, so a C host's broker-state hash
+  is the kernel's own fold (`native_c_api.h`, "not exposed"). The per-bar rows
+  need no hook and are available to a C host as described above.
 
 ## Calendar, session, timeframes, warmup
 
