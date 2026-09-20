@@ -1338,6 +1338,41 @@ first input closed it. `interval` is the calendar span of the bucket's first
 contributing input bar; `delivered_at_ms` is the input bar the delivery rides
 on. A bucket still open at the end of the input is never delivered.
 
+**Chronology against the script interval.** The pump is ordered against the
+*script* interval, not the raw input. With `script_tf` coarser than
+`input_tf`, a script bar can still be open when the first input of a later
+interval arrives: a session close clipped it short of its nominal end — the
+last `"60"` bar of a 09:30–16:00 session, every `"D"` bar over an intraday
+input — or the feed has a hole over its last slot. That input seals it
+**lazily** (its calculation's coordinate says `LazyComplete`), and the kernel
+runs, in this order and no other:
+
+1. `on_native_input` for input *i+1*;
+2. the lazily sealed calculation of script bar *k*, reading every series
+   exactly as bar *k*'s own contributing inputs left it;
+3. the deliveries riding on input *i+1*: a bucket it completes, a boundary it
+   closes, the clear of a `gaps` series it delivers nothing on, a `lookahead`
+   bucket it opens;
+4. input *i+1*'s own aggregation, matching and calculation point.
+
+`seal(k) → deliver(i+1) → calc(i+1)`: a host never calculates a bar against a
+bucket that already holds a later input. One consequence: a bucket the kernel
+only learns is complete from input *i+1* (`LazyComplete`) reaches the host
+after bar *k*'s calculation even when every one of its inputs lies inside
+bar *k* — the same input that closes the bucket is the one that seals the bar.
+
+Before R5 lane L6d the pump ran ahead of the lazy seal, so that calculation
+could read a bucket holding input *i+1* — on a session-clipped chart, the
+next session's first bar. The change reaches only a bare host that combines
+`subscriptions` with a lazily sealed script interval. A run without
+subscriptions is untouched, and so is every run whose `input_tf` equals its
+`script_tf`: each input seals its own interval there, no script bar is ever
+sealed lazily, and the order is the one under **Delivery** above. The Pine
+adapter is untouched as well: a `request.security` site reaches the kernel's
+pump only at `input_tf == script_tf`, and on an aggregated chart the adapter
+keeps its own drive, which already defers the next input past the lazily
+sealed calculation — this same ordering.
+
 **Authoritative bars.** `authoritative_bars` are the exchange's own bars of
 that timeframe. A completed bucket takes its OHLCV from the bar keyed to the
 same period; the aggregator still decides *when* the bucket completes.
