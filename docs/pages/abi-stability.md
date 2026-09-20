@@ -121,8 +121,10 @@ private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
 `engine_script_run_v18` for the native higher-timeframe host surface
 (`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
-`native_liquidation_price`) and R5 L5's calculation-timing surface
-(`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`), and the
+`native_liquidation_price`) R5 L5's calculation-timing surface
+(`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`) and R5
+L7b's anchored-leg hook (`resolve_anchored_level` over
+`NativeAnchoredLevelView`), and the
 host capability macro
 is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state

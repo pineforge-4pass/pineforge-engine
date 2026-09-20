@@ -431,6 +431,90 @@ stop.trigger = native_order::Stop{0.0};
 stop.anchor = native_order::FromOwnerFill{-10.0, /*ticks=*/true};  // ten ticks under the fill
 ```
 
+#### Anchored legs as bracket children (L7b)
+
+An anchored leg is hostable as a first-class bracket child through three
+opt-in knobs, each defaulting to the behaviour above, and one measured
+fact. The kernel owns the mechanism — the arm, the once-only
+materialization, representability, the `ArmedEvent`, visibility, matching —
+and the host supplies policy through a hook, exactly as
+`resolve_execution_terms` owns the fill price.
+
+- **Rounding.** `FromOwnerFill{offset, ticks, rounding}`: `rounding` is a
+  `NativeAnchorRounding` — `Raw` (default: `fill + offset` exactly), `HalfUp`
+  (nearest tick, ties away from zero) or `Directional` (toward the region the
+  leg needs, relative to its own trigger kind and side exactly as
+  `NativeGridRounding` documents: a buy limit down, a sell limit up, a stop the
+  other way; a trail arm threshold is reached from the favourable side and
+  rounds like a limit). The ladder is `NativeRunSpec::price_tick` and the
+  arithmetic is the L8 grid's own. A non-`Raw` rounding needs a positive tick
+  at acceptance (`InvalidTrigger` otherwise, like a tick spelling). It is a
+  generic instrument grid; a source language's trigger projection is not a
+  kernel option.
+- **The arm hook.** `resolve_anchored_level(const NativeAnchoredLevelView&)`
+  is consulted exactly once per materialization, before the `ArmedEvent` is
+  built. The view is read-only: the owner (handle, its fill's ordinal, the lot
+  it opened, its resolved price and cursor), the leg (handle, side — a closing
+  leg trades against the lot the fill opened — and trigger kind), the
+  resolved offset in price units, the run's price tick and `kernel_level`,
+  the level the kernel would install after the rounding. `nullopt` keeps the
+  kernel level; a returned value is installed, still subject to the kernel's
+  representability check, whose failure is the existing `PreparationError`
+  path (`NonrepresentableQuantity`, reported as a settlement failure). A
+  throwing hook latches `CallbackException`. TradingView's half-tick arm and
+  its ULP walk are a quirk the Pine adapter applies inside this hook, never a
+  kernel option.
+- **Visibility.** `WaitForApplied{parent, visibility}` — the one owner
+  relation that arms — takes a `NativeArmVisibility`: `Working` (default) or
+  `PendingUntilArmed`, under which an unarmed leg is not a working order. It
+  is a live, accepted request the whole time; visibility governs
+  enumeration, not addressing.
+- **Facts at the arm (measured).** `Reduce{OwnerOpenedUnits{}}` is bound at
+  the arm to what the owner opened (`QuantityBoundEvent`); a
+  `ScopeFraction` with the default `AtMatch` basis resolves at the candidate
+  against the owner's lot; `PointBudget` is fixed at submit and metered per
+  point after the arm; the group identity is fixed at submit and its effect
+  runs at the filling member's fill, after the common arm; a rejected owner
+  ends its waiting children (`OwnerGone`). Two rows do not fit a bracket
+  child and are recorded, not repaired: a `Sized` intent is never a child
+  (`InvalidOwner`), and a `ScopeFraction{AtAcceptance}` freezes the pre-fill
+  book at submit. No `SizeTime::AtArm` exists; `OwnerOpenedUnits` already is
+  the arm-time size.
+
+The arm chronology of one leg:
+
+1. `submit` — accepted with `Wait` authority (`AcceptedEvent`). Under
+   `PendingUntilArmed` it is absent from `native_working_requests()`.
+2. The owner fills — its `ExecutionAppliedEvent` seeds the arm drain.
+3. Materialization, once: `fill + offset` → the rounding → the hook →
+   representability → the level is written into the leg's trigger and the
+   anchor becomes `Absolute`.
+4. `ArmedEvent` — carries the materialized definition; every later reader
+   (the live book, the C working rows, matching) sees that level.
+5. Matching from the owner fill's remaining path on (suffix eligibility): a
+   waiting leg never matches before its arm under either visibility.
+
+What each reader of the live book sees under `PendingUntilArmed`:
+
+| Reader | Before the arm | From the `ArmedEvent` on |
+| --- | --- | --- |
+| matching | never matches (waiting), under either value | matches |
+| `native_working_requests()`, C `strategy_native_working_*` | hidden | listed |
+| `replace` / `cancel` / `trail_state` (by handle) | address it | address it |
+| `cancel_all` / `cancel_where` | cancel and count it | same |
+| reservation / admission / projected-pending | none in the kernel for a resting request (sibling claims filter by reduction scope; admission reads the physical lots) | same |
+| report / trade accessors | settled trades only, no request rows | same |
+| continuation / broker-state hash | folded (the visibility folds only when set) | same |
+| stream mode | the same consumer and book | same |
+| `native_events` | the `AcceptedEvent` is there; the history is not the working book | plus the `ArmedEvent` |
+
+The chosen enumeration semantics are *hidden*, not *flagged*: it is the
+knob's definition, it is the shadow-row behaviour a broker that shows no
+working child before the parent fills needs, and it keeps the C API's
+working rows the same enumeration with no layout change. A
+`native_toolkit::OrderBook` key bound to a pending child is re-priced by
+handle rather than through the enumeration.
+
 Trailing offsets accept the same two spellings. `Trail::ticks` is a
 `TrailTicks{n}` offset resolved against the run's price tick at acceptance:
 the accepted request carries the resolved price distance and no spelling, so
@@ -491,6 +575,16 @@ trail order. That is exactly the owner/group shape a host would write by
 hand, and the legs' own intent, trigger and anchor are left untouched. The
 receipt reports the handle each leg was accepted under; a rejected leg stays
 empty and the others are still submitted.
+
+Two more knobs cover anchored legs, both defaulting to "leave the leg as
+written": `bracket.anchor_rounding` (an optional `NativeAnchorRounding`,
+written onto every present leg whose anchor is `FromOwnerFill`) and
+`bracket.visibility` (a `NativeArmVisibility`, written into the owner
+relation the builder creates). A `strategy.exit(from_entry="e",
+profit=…, loss=…)` therefore becomes tick-spelled `FromOwnerFill` legs with
+`Directional` rounding and `PendingUntilArmed`, and the host's own trigger
+projection, if it has one, lives in `resolve_anchored_level`.
+`examples/native/native_bracket_strategy.cpp` is that shape end to end.
 
 `tk::OrderBook<Key>` is the id bookkeeping a strategy would otherwise write
 itself: `submit_or_replace(key, request)` re-prices the key's own request
@@ -1852,7 +1946,9 @@ if (fx.status != pineforge::NativeSetupStatus::Applied) {
 ### Examples and the export macro {#native_engine_examples}
 
 Both hosts on this page are built sources, not listings. They live under
-`examples/native/`, alongside a minimal `hello_kernel.cpp`:
+`examples/native/`, alongside a minimal `hello_kernel.cpp` and the L7b
+`native_bracket_strategy.cpp` (a market entry with two anchored legs on a
+quarter-point ladder, `Directional` rounding, `PendingUntilArmed`):
 
 ```bash
 cmake -S . -B build -DPINEFORGE_BUILD_EXAMPLES=ON
@@ -1938,7 +2034,12 @@ failure.
 (`Market` / `Limit` with `fill_through` / `Stop` / `StopLimit` / `Trail`, with
 the tick spellings and the arm price), L7's `FromOwnerFill` anchor, the
 capacity, the owner relation with its incarnations and cycle, the group and
-its effect, and the label and comment. `PF_NATIVE_INTENT_HOST_SIZED` is
+its effect, and the label and comment. L7b's two anchored-leg knobs ride an
+additive tail behind `PF_NATIVE_REQUEST_V1_BASE_SIZE` (`anchor_rounding`,
+`visibility`): the runtime accepts both lengths, so a caller compiled against
+the base layout keeps working and gets the defaults. The arm hook itself is
+not exposed (the callback table carries no answering hook); a C host's
+anchored leg is armed at the kernel level. `PF_NATIVE_INTENT_HOST_SIZED` is
 deliberately refused with `PF_NATIVE_E_UNSUPPORTED`: `HostSized` is the
 adapter's sizing seam, and a C host sizes with `Sized`.
 
