@@ -247,6 +247,32 @@ never sets it, so Pine-compatible runs are unchanged.
   excluded), so a `close_execution = AfterCalculation` leg reissued at the
   close and reached by that close's print fills at the next open
   (tests/test_native_price_grid.cpp, sections L8b-1 to L8b-4).
+- The Pine adapter's grid re-lowering is waived: measured-infeasible (R5 gap
+  lane N13, the re-run of lane R7's trial after L8b). The trial has the
+  adapter submit raw levels (`source_trigger_threshold` answering the level
+  itself) and `project()` declare `QuantizeFillsAndTriggers` with `HalfUp`.
+  L8b closed the first blocker: no run aborts any more (R7 measured nine
+  NYSE:F / AAPL zero-offset-trail tapes and six `process_orders_on_close`
+  panels failing with "native working-request preparation failed"; now
+  `test_zero_offset_trail_rides_l4c` is 449 of 450 and
+  `test_pooc_short_close_tick_l4d` 183 of 183). The second blocker is what is
+  left and it has no adapter-side remedy: TradingView quantizes per order
+  kind, the grid is one rule for the run. It still moves 30 pinned checks in
+  four units — 24 in `test_coof_market_limit_recross_l4c` (an on-grid exit
+  limit stays raw under `calc_on_order_fills`), 3 in
+  `test_stop_tick_rounding_l4d` (a stop booked 14.01 on another bar where
+  TradingView books 13.98), 2 in `test_adapter_grid_relower` (the trail stop
+  one ULP under its ladder point exits a bar early) and 1 in
+  `test_zero_offset_trail_rides_l4c` (the quantized running best) — plus 12
+  checks with an adapter-side cause (the grid pre-rounds
+  `default_resolved_price`, 196.135 booking 196.14 for TradingView's 196.13;
+  a rounded-money liquidation twin; eight pending-book digests where a
+  bit-equal re-issue keeps a request the adapter replaces today). The corpus
+  cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid feed, and
+  under the trial 5 of them differ only in the engine-only entry-incarnation
+  column. No class of triggers is byte-identical on its own, because the
+  grid is a run-wide switch and a per-kind mask is not generic; the adapter
+  stays on `None` and keeps `source_trigger_threshold`.
 
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
@@ -537,6 +563,35 @@ and the host supplies policy through a hook, exactly as
   `PendingUntilArmed`, under which an unarmed leg is not a working order. It
   is a live, accepted request the whole time; visibility governs
   enumeration, not addressing.
+- **First match.** `WaitForApplied{parent, visibility, first_match}` takes a
+  `NativeArmFirstMatch`. The arm happens inside the owner's fill settlement,
+  at the owner's fill print. `AtArmPrint` (default) is the established book:
+  the armed leg is a candidate at that very cursor, so a level the fill print
+  already satisfies matches at the print. `AfterArmPrint` gives it the birth
+  rule of a request submitted from the owner's fill callback: on the driver
+  point that armed it the print is consumed — a level already reached does
+  not match there, a later crossing on that point still does — and from the
+  next driver point on it is an ordinary working request. It governs the
+  level test of a priced trigger; a market trigger has no level. Both are
+  broker models (a contingent child that enters the book after its parent's
+  trade cannot trade on that print; a simulated bracket commonly may), and a
+  leg under `AfterArmPrint` is, trade for trade, the leg a host would submit
+  from `on_native_applied`.
+- **Scope.** `WaitForApplied{parent, visibility, first_match, scope}` takes a
+  `NativeArmScope`, which names what an armed *closing* leg closes.
+  `OwnerLot` (default) is the established relation: the lot the owner's fill
+  opened, and nothing a later add brings. `Book` binds the leg, at the arm,
+  to the whole position that fill left — its `ArmedEvent` carries a
+  `BookClose` for that cycle and side, bound at the fill's cursor, the very
+  authority an `Independent` close acquires — so a protective leg placed with
+  its entry also covers later adds and settles through the book like any
+  other close. A `HostSized` close may wait for its owner only under `Book`
+  (the owner-lot relation sizes from the units the owner opened; a book close
+  is sized by `resolve_execution_terms` at the match); under `OwnerLot` it is
+  still `InvalidOwner`. A waiting transaction closes nothing and must keep
+  `OwnerLot`. Both fields fold into the continuation identity only when set,
+  each under its own tag, and an unknown value is refused, never read as the
+  default. The C request does not expose them (`native_c_api.h`).
 - **Facts at the arm (measured).** `Reduce{OwnerOpenedUnits{}}` is bound at
   the arm to what the owner opened (`QuantityBoundEvent`); a
   `ScopeFraction` with the default `AtMatch` basis resolves at the candidate
@@ -608,29 +663,46 @@ multiplying the count by the tick itself. A relative bracket leg — a
 `strategy.exit(from_entry=…, profit=…, loss=…, trail_points=…)` operand
 queued while its parent entry has not filled — is the anchored child above:
 at the end of the source evaluation in which the queued exit and its live
-parent both exist, `anchor_relative_exits` submits each such leg as
-`Reduce{OwnerOpenedUnits}` under `WaitForApplied{parent, PendingUntilArmed}`
-with a tick-spelled `FromOwnerFill{±ticks, true, Directional}` anchor in the
-exit's own OCA group, and `resolve_anchored_level` restates TradingView's
-projection at the arm (`directional_tick`, the price-grid spelling, the
-half-tick trigger threshold of the quantized bar; `trail_points` against the
-position's average price). The parent's fill point still runs the source
+parent both exist, `anchor_relative_exits` submits each such leg as the very
+request `exit()` submits at the parent's fill, placed ahead of it: a
+`HostSized` close under `WaitForApplied{parent, PendingUntilArmed,
+AfterArmPrint, Book}` with a tick-spelled `FromOwnerFill{±ticks, true,
+Directional}` anchor in the exit's own OCA group. The kernel computes the
+level (`fill ± ticks` on the tick ladder); `resolve_anchored_level` restates
+only TradingView's spelling of that ladder point and its trigger projection —
+the half-tick threshold of the quantized bar, a raw on-grid limit under
+`calc_on_order_fills`, the one-shot trail touch — through the same two
+functions `exit()` uses. The parent's fill point still runs the source
 `exit()` pipeline, because the leg's reservation, birth reach, L4C policy and
-same-bar ordering are facts of that point and have no kernel analogue; what
-changed is that it *adopts* the armed child instead of submitting whenever
-that child is bit for bit the trigger and OCA group it was about to submit,
-for the whole of a one-lot position. Otherwise the children are withdrawn
-before the path resumes and the fill point submits as it always did: a
-partial or explicit quantity, a sibling exit's reservation, a parent that
-adds to or reverses a live book, `calc_on_order_fills`,
-`process_orders_on_close` and stream runs (their fill point re-decides the
-trigger kind or stages the leg), and a level already inside its region at
-the parent's raw fill print, where a callback-born request starts after that
-print and an armed child may match at it. The queued definition and its
-shadow row therefore stay: the definition outlives parents (it may be
-declared before any entry exists and is re-anchored when a parent is
-replaced), and the shadow row is the source projection of a child the kernel
-deliberately does not list. The remaining TradingView rules stay adapter
+same-bar ordering are facts of that point and have no kernel analogue; it
+*adopts* the armed child instead of submitting whenever that child is the
+request it was about to submit: the same trigger bits, the same OCA group, a
+host-sized close of the book. Because the child is host-sized and
+book-scoped, that holds for every quantity the source resolves at the match
+(a percentage, a sibling's remainder) and for every book the parent's fill
+leaves (flat, a reversal, a later same-id add), under `calc_on_order_fills`
+and `process_orders_on_close` as well; and because it is `AfterArmPrint`, a
+level the fill print already satisfies behaves as the callback-born leg
+does. Otherwise the children are withdrawn before the path resumes and the
+fill point submits as it always did. What stays off the kernel path, each
+with its measurement (`tests/test_adapter_brackets_relower.cpp`):
+
+| Shape | `{anchored, adopted, withdrawn}` | Why |
+| --- | --- | --- |
+| explicit `qty=` (`rel-qty-explicit`) | `{0,0,0}` | `exit()` stages an explicit quantity per origin (`pending_bracket_legs_`) and submits it at a later flush: the fill point has no request for a child to be |
+| `strategy.cancel(exit id)` in the same evaluation (`rel-cancel-exit-id`) | `{0,0,0}` | the definition is gone before the evaluation ends: no leg exists |
+| `close_entries_rule = "ANY"`, stream runs | not anchored | the fill-point leg is cohort-bound (`BindCohort`), a scope the arm does not spell; a stream's fill point stages the leg |
+| a parent re-issued, cancelled or declined (`rel-limit-parent` `{12,4,8}`, `rel-reissue-changed` `{18,2,16}`, `rel-breakout-pair` `{40,14,24}`, `rel-declined` `{2,0,2}`) | withdrawn | the kernel ends a waiting child with its parent (`OwnerGone`), a replaced parent included; keeping the children across a replace needs a re-parent transition in the event log, which is an epoch decision |
+| a sibling with no capacity left (`rel-two-exits` `{4,2,2}`), a level below zero (`rel-negative-short` `{2,1,1}`) | withdrawn | the fill point submits nothing for that leg |
+
+Over the 47 pending-parent scenarios R4d pinned, the split moved from
+`{203, 98, 105}` to `{216, 119, 93}` (`{220, 123, 93}` with the two
+same-id-add scenarios this lane added), and every formerly `{0,0,0}` shape
+but the two recorded above runs on the kernel. The queued definition and its
+shadow row stay: the definition outlives parents (it may be declared before
+any entry exists and is re-anchored when a parent is replaced) and is what
+the fallback re-runs, and the shadow row is the source projection of a child
+the kernel deliberately does not list. The remaining TradingView rules stay adapter
 policy because no kernel primitive expresses them: the legacy broker rides
 the *tick-quantized* running best, which the adapter still spells as a
 half-a-tick trailing distance (`TrailTicks{0.5}`) rather than the kernel's
