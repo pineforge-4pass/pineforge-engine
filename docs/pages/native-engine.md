@@ -212,14 +212,41 @@ never sets it, so Pine-compatible runs are unchanged.
   two-decimal feed, and the grid then fires it a tick early where TradingView
   holds (tests/test_adapter_grid_relower.cpp). A per-kind grid mask would
   spell that inconsistency into the kernel and is not generic.
-- Known limit of `QuantizeFillsAndTriggers` on a sub-tick feed: a cursor print
-  that is inside the quantized region but short of the raw level (a bar
-  opening at 100.40 under a buy stop at 100.50 on a 0.25 ladder) is reported
-  by the matcher and then refused by the core's raw activation check, so the
-  run fails closed with `native working-request preparation failed` instead
-  of filling. The same witness pins the reproducer; until an activation's
-  reached price is ruled on, use the trigger mode on feeds already on the
-  ladder, or `QuantizeFills` alone.
+- The reached rule (R5 lane L8b). Under `QuantizeFillsAndTriggers` the
+  tick-quantized print **is** the reached price. The matcher's verdict is
+  authoritative, and the core re-validates every activation — stop,
+  stop-limit, trail arm, trail stop — on the same ladder with the same
+  arithmetic: the consumer hands `native_order::ActivationGrid` to
+  `prepare_trigger` the way acceptance receives `CommandContext::price_tick`,
+  so a hit the matcher reports is never refused. Reached means the level
+  itself (a crossing hit books the level) or a print inside the quantized
+  region: its nearest tick under `HalfUp`, its enclosing tick on the region's
+  side under `Directional`, at or past the level's own ladder point. The
+  activation's recorded `reached_price` is that quantized print. A limit has
+  no core re-validation; its gate is limit-or-better on the resolved price,
+  which the grid's cap keeps. One rule for every kind: a trail's running best
+  is the quantized print too (nearest under `HalfUp`, the favourable enclosing
+  tick under `Directional`), `best - offset` is tested by the same rule, and a
+  zero-offset ride exits on the first print strictly past the best on the
+  ladder. TradingView's per-kind split (a raw best and a raw trail stop next
+  to quantized stop and limit legs) is not spelled here; the adapter keeps it
+  on `None`. The fill books where the mode already says a fill books: the
+  level, or the gapped open, then the fill rounding, then
+  `resolve_execution_terms`. Example: a buy stop at 100.50 on a 0.25 ladder
+  with the bar opening at 100.40 activates at the open and books 100.50; under
+  `None` and `QuantizeFills` the raw open never reaches it and nothing fills.
+- Scope per mode. `None` and `QuantizeFills` keep the raw compare on the raw
+  print for every activation, bit for bit (`QuantizeFills` quantizes fills
+  only). Only `QuantizeFillsAndTriggers` tests and re-validates on the ladder.
+  The alternative reading — the raw print stays authoritative and the matcher
+  must not accept a quantized touch at a resting cursor — was rejected: an
+  intrabar crossing already books a quantized touch at the level, so it would
+  make a gapped open second-class for no reason but the core's compare, and
+  it would collapse the trigger mode toward `QuantizeFills`. A leg born at a
+  bar's calculation is first tested at the next point (its own birth print is
+  excluded), so a `close_execution = AfterCalculation` leg reissued at the
+  close and reached by that close's print fills at the next open
+  (tests/test_native_price_grid.cpp, sections L8b-1 to L8b-4).
 
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
