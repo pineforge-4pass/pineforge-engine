@@ -1292,4 +1292,12 @@ PF_API const char* pf_version_string(void);
 } /* extern "C" */
 #endif
 
+/* The C-level native host API (R5 lane L13). Included last, after the PODs
+ * it builds on (pf_bar_t, pf_report_t, pf_strategy_t) and outside this
+ * header's `extern "C"` block, which it opens for itself. Both headers guard
+ * their own include, so either include order resolves. Its PF_API symbols are
+ * pinned separately by scripts/check_c_abi_runtime.py, which is why they do
+ * not move this header's own declaration count. */
+#include <pineforge/native_c_api.h>
+
 #endif /* PINEFORGE_H */

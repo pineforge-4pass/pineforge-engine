@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""CI guardrail: runtime-side PF_API implementations in c_abi.cpp stay documented.
+"""CI guardrail: runtime-side PF_API implementations stay documented.
 
-The header lists the harness-facing symbols; only those in EXPECTED_RUNTIME are
-defined in the static runtime — the rest are emitted per-strategy by the
-transpiler (see comment in src/c_abi.cpp). If that split changes, update
-EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
+Two inventories, pinned independently so neither can drift into the other:
+
+  1. The compiled-strategy surface. include/pineforge/pineforge.h lists the
+     harness-facing symbols; only those in EXPECTED_RUNTIME are defined in the
+     static runtime (src/c_abi.cpp) — the rest are emitted per-strategy by the
+     transpiler (see comment in src/c_abi.cpp). If that split changes, update
+     EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
+
+  2. The C-level native host API (R5 lane L13). Its declarations live in
+     include/pineforge/native_c_api.h and its implementations in
+     src/native_c_host.cpp, so they do not move the counts above; they are
+     pinned by EXPECTED_NATIVE_C_API instead. Adding or removing a symbol
+     there without updating that list fails every CI matrix job at the "C ABI
+     runtime source check" step, exactly as it does for c_abi.cpp.
 """
 
 from __future__ import annotations
@@ -78,6 +88,34 @@ EXPECTED_RUNTIME = frozenset({
 EXPECTED_PUBLIC_DECLARATIONS = 65
 EXPECTED_RUNTIME_IMPLEMENTATIONS = 57
 
+# The C-level native host API. Additive to the 57 above: every symbol here is
+# declared in include/pineforge/native_c_api.h and implemented in
+# src/native_c_host.cpp, and neither file contributes to the two counts above.
+EXPECTED_NATIVE_C_API = frozenset({
+    "strategy_native_api_version",
+    "strategy_native_host_create_v1",
+    "strategy_native_host_free",
+    "strategy_native_run_v1",
+    "strategy_native_report_free_v1",
+    "strategy_native_submit_v1",
+    "strategy_native_replace_v1",
+    "strategy_native_cancel_v1",
+    "strategy_native_cancel_all_v1",
+    "strategy_native_execute_current_v1",
+    "strategy_native_position_v1",
+    "strategy_native_working_len_v1",
+    "strategy_native_working_get_v1",
+    "strategy_native_events_v1",
+    "strategy_native_state_v1",
+    "strategy_native_cohort_open_v1",
+    "strategy_native_cohort_add_v1",
+    "strategy_native_cohort_remove_v1",
+    "strategy_configure_native_ext_v1",
+})
+
+EXPECTED_NATIVE_C_API_DECLARATIONS = 19
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 19
+
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 
 
@@ -147,6 +185,75 @@ def main() -> int:
         print(
             "check_c_abi_runtime: c_abi.cpp implements PF_API symbols "
             f"not declared in pineforge.h: {sorted(abi_set - hdr_set)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    return _check_native_c_api(hdr_set, abi_set)
+
+
+def _check_native_c_api(hdr_set: set[str], abi_set: set[str]) -> int:
+    """Pin the L13 C-level native host API, the second runtime inventory."""
+    header = ROOT / "include" / "pineforge" / "native_c_api.h"
+    impl = ROOT / "src" / "native_c_host.cpp"
+    if not header.is_file() or not impl.is_file():
+        print("check_c_abi_runtime: missing native_c_api.h or native_c_host.cpp",
+              file=sys.stderr)
+        return 2
+
+    if len(EXPECTED_NATIVE_C_API) != EXPECTED_NATIVE_C_API_DECLARATIONS:
+        print(
+            "check_c_abi_runtime: EXPECTED_NATIVE_C_API count "
+            f"{len(EXPECTED_NATIVE_C_API)} != {EXPECTED_NATIVE_C_API_DECLARATIONS}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if EXPECTED_NATIVE_C_API_DECLARATIONS != EXPECTED_NATIVE_C_API_IMPLEMENTATIONS:
+        print(
+            "check_c_abi_runtime: every native C API declaration must be "
+            "implemented in the runtime",
+            file=sys.stderr,
+        )
+        return 1
+
+    header_funcs = _pf_api_names(header)
+    impl_funcs = _pf_api_names(impl)
+    header_names = set(header_funcs)
+    impl_names = set(impl_funcs)
+
+    if len(header_funcs) != len(header_names):
+        print("check_c_abi_runtime: duplicate PF_API lines in native_c_api.h", file=sys.stderr)
+        return 1
+
+    if len(impl_funcs) != len(impl_names):
+        print("check_c_abi_runtime: duplicate PF_API lines in native_c_host.cpp",
+              file=sys.stderr)
+        return 1
+
+    if header_names != EXPECTED_NATIVE_C_API:
+        print(
+            f"check_c_abi_runtime: native_c_api.h PF_API set {sorted(header_names)} "
+            f"!= expected {sorted(EXPECTED_NATIVE_C_API)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if impl_names != EXPECTED_NATIVE_C_API:
+        print(
+            f"check_c_abi_runtime: native_c_host.cpp PF_API set {sorted(impl_names)} "
+            f"!= expected {sorted(EXPECTED_NATIVE_C_API)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # The two inventories are disjoint by construction: the native C API is
+    # additive, so it may never redefine or shadow a compiled-strategy symbol.
+    overlap = EXPECTED_NATIVE_C_API & (hdr_set | abi_set)
+    if overlap:
+        print(
+            "check_c_abi_runtime: native C API symbols also appear in the "
+            f"compiled-strategy surface: {sorted(overlap)}",
             file=sys.stderr,
         )
         return 1

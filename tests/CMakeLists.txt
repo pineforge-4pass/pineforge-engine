@@ -1388,6 +1388,32 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
 
+# R5 L13: the C-level native host API. One ctest row, two translation units.
+# test_native_c_api.c is compiled by the C compiler, so any C++ syntax leaking
+# into <pineforge/native_c_api.h> is a hard build failure and the "pure-C
+# consumer" claim is executed rather than asserted; the .cpp half drives
+# NativeStrategyHost directly and compares the two runs field by field.
+# Neither TU reaches a source or compat header, so both survive the
+# kernel-only profile.
+add_executable(test_native_c_api
+    test_native_c_api_twin.cpp
+    test_native_c_api.c)
+target_link_libraries(test_native_c_api PRIVATE pineforge)
+target_compile_options(test_native_c_api PRIVATE -UNDEBUG -ffp-contract=off)
+
+# The frozen v1 header closure, compiled against the current runtime.
+add_executable(test_native_c_api_frozen_header test_native_c_api_frozen_header.cpp)
+target_link_libraries(test_native_c_api_frozen_header PRIVATE pineforge)
+target_compile_options(test_native_c_api_frozen_header PRIVATE -UNDEBUG -ffp-contract=off)
+
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_native_c_api PRIVATE ${_pf_cov_test_flags})
+    target_compile_options(test_native_c_api_frozen_header PRIVATE ${_pf_cov_test_flags})
+endif()
+
+pineforge_add_twin_test(test_native_c_api test_native_c_api)
+pineforge_add_twin_test(test_native_c_api_frozen_header test_native_c_api_frozen_header)
+
 add_test(NAME test_market_admission_schema COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/check_market_admission_schema.py)
 add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABLE}

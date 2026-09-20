@@ -1,0 +1,12 @@
+{
+  "fixture": "native-c-api-v1",
+  "describes": "include/pineforge/native_c_api.h",
+  "api_version": 1,
+  "files": {
+    "native_c_api.h": {
+      "sha256": "f7484fa81d8d43e856ae94302edd52d3e470ba0d0f665fd37257c34bb61869ca",
+      "git_blob": "645037c5c810ae942695af3878096496ed3927a2",
+      "bytes": 36931
+    }
+  }
+}

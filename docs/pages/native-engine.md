@@ -1633,6 +1633,101 @@ references `pf_abi_version()` so a static link retains it. The host class must
 derive from `NativeStrategyHost` and must not be `final`: the macro wraps it in
 one derived class so the C boundary can write the presentation error string.
 
+### Driving the kernel from C
+
+A host that is not written in C++ does not subclass `NativeStrategyHost`: it
+hands the runtime a callback table and gets the same kernel back.
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
+19 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+`CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
+virtual to the table. No new virtual, no epoch bump, and nothing about the
+established C ABI moves: the 57 compiled-strategy runtime symbols and their
+counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
+a second, disjoint inventory.
+
+```c
+#include <pineforge/pineforge.h>
+
+static int on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    struct host_state* state = user;
+    pf_native_request_v1 request = {0};
+    request.struct_size = (uint32_t)sizeof(request);
+    request.version = PF_NATIVE_API_VERSION;
+    request.intent = PF_NATIVE_INTENT_TRANSACT;   /* or SIZED, REDUCE, REVERSE_TO, FLATTEN */
+    request.intent_value = 1.0;
+    request.label = "hello-long";
+    return strategy_native_submit_v1(state->handle, &request, NULL, NULL) < 0 ? 0 : 0;
+}
+```
+
+The complete host is `examples/native/hello_kernel_c.c`, the C twin of
+`hello_kernel.cpp`; it is built and registered as a CTest row under
+`-DPINEFORGE_BUILD_EXAMPLES=ON` and prints the same `closed trades: 1`.
+
+**Lifecycle.** `strategy_native_host_create_v1` returns an ordinary
+`pf_strategy_t`: `strategy_configure_native_v1`, the whole `strategy_stream_*`
+family, `strategy_get_last_error` and the read-only accessors all take it
+unchanged, which is why streaming needs no new symbol. Release it with
+`strategy_native_host_free` — not `strategy_free`, which does not own this
+allocation. A batch run is `strategy_native_run_v1`; its report is released
+with `strategy_native_report_free_v1`, because the unprefixed `report_free` is
+one of the eight per-strategy exports the transpiler emits and is absent from
+a runtime a C host links on its own.
+
+**Commands.** `strategy_native_submit_v1`, `_replace_v1`, `_cancel_v1`,
+`_cancel_all_v1` and `_execute_current_v1` follow the kernel's existing
+legality rule: inside a callback, or between realtime inputs. A command issued
+anywhere else answers `PF_NATIVE_E_STATE` and changes nothing — the kernel
+throws there, and the C boundary contains that throw rather than letting it
+unwind through the C frame. `strategy_native_position_v1`,
+`_working_len_v1` / `_working_get_v1` (L7's working view, copied out) and
+`_events_v1` read the run back; `_state_v1` reads the lifecycle and its typed
+failure.
+
+**The request.** `pf_native_request_v1` is translated field by field into
+`native_order::Request` and is never cast onto it. It carries the intent
+(including L3's `Sized`, with basis, side, time and grid policy), the trigger
+(`Market` / `Limit` with `fill_through` / `Stop` / `StopLimit` / `Trail`, with
+the tick spellings and the arm price), L7's `FromOwnerFill` anchor, the
+capacity, the owner relation with its incarnations and cycle, the group and
+its effect, and the label and comment. `PF_NATIVE_INTENT_HOST_SIZED` is
+deliberately refused with `PF_NATIVE_E_UNSUPPORTED`: `HostSized` is the
+adapter's sizing seam, and a C host sizes with `Sized`.
+
+**The run specification.** `strategy_configure_native_v1` still takes the v1
+spec. The fields lanes L2-L8 added — report policy and the open-position row,
+the price grid and its rounding, calculation timing and its recalculation
+bound, the open-bar view, the generic margin model, and higher-timeframe
+subscriptions — travel in `pf_native_run_spec_ext_v1`, passed together with
+the base spec to `strategy_configure_native_ext_v1`. It replaces
+`strategy_configure_native_v1` rather than following it, because the kernel
+configures a host exactly once and fails it on a second attempt. Not
+representable in ext v1, and left at their defaults: the intrabar path, the
+slot-label policy, legacy tolerance, the forced path order and abort
+reporting.
+
+**Errors and hardening.** Every struct is tagged and size-prefixed
+(`struct_size`, `version`); a mismatch is `PF_NATIVE_E_STRUCT`, an enumerator
+outside its enumeration is `PF_NATIVE_E_TAG`, and neither mutates anything.
+A C callback must not unwind; returning non-zero latches
+`NativeFailureCode::CallbackException` (`PF_NATIVE_FAILURE_CALLBACK`, 5) and
+the run ends `Failed`, readable through `strategy_native_state_v1`.
+`tests/test_native_c_api_frozen_header.cpp` compiles a fixture against the
+byte-frozen v1 copy of the header in `tests/fixtures/native_c_api/v1/` and
+links it against the current runtime, so an unnoticed layout change shows up
+as the refusal the header promises rather than as silent misreading.
+
+**Events.** `strategy_native_events_v1` flattens `native_events()` into one
+tagged POD: the eighteen `CommandEvent` alternatives, plus the driver point
+and the account observation. Two kinds named in the design are **not**
+represented and never appear: a completed higher-timeframe bucket, which is
+delivered through the `on_timeframe_bar` callback and never recorded in the
+event history, and a risk-limit event, which the kernel does not have yet (the
+L9 lane has not landed). Ordinals are non-decreasing rather than strictly
+increasing — an applied execution and the account observation it produced
+share one — so a page never ends in the middle of such a group and a poller
+can advance by the last returned ordinal.
+
 ### Known limits
 
 The test-only Pine oracle is a comparison aid and earns no native-independence

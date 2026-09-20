@@ -109,6 +109,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
 # PineForge::kernel.
 set(PINEFORGE_KERNEL_SOURCES
     src/c_abi.cpp
+    src/native_c_host.cpp
     src/engine_aux_security.cpp
     src/engine_lower_tf.cpp
     src/engine_metrics.cpp

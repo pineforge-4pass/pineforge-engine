@@ -307,6 +307,35 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 | `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` | ABI v4: per-closed-trade id/comment strings and a `close_cause` enum (`SCRIPT`/`BRACKET`/`MARGIN_CALL`/`INTRADAY_LOSS_CAP`/`INTRADAY_FILL_CAP`/`RANGE_END`), indexed like `strategy_closed_trade_entry_incarnation` |
 | `strategy_current_equity` / `strategy_script_bars_processed` | ABI v4: `initial_capital + netprofit` (not Pine's `strategy.equity`, which also adds open profit); total script bars dispatched by the most recent run |
 
+### Driving the kernel from C
+
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **19 further
+`PF_API` functions** for the other direction: a host that is not written in
+C++ hands the runtime a callback table and drives the kernel itself — submit,
+replace, cancel, execute, read the book — instead of loading a compiled
+strategy. They are additive; no symbol, struct or behaviour above changes, and
+`scripts/check_c_abi_runtime.py` pins them as a second, disjoint inventory.
+
+| Symbol | Role |
+|---|---|
+| `strategy_native_host_create_v1` / `strategy_native_host_free` | Allocate / release a host backed by a `pf_native_callbacks_v1` table |
+| `strategy_native_run_v1` / `strategy_native_report_free_v1` | Run a batch of bars into a `pf_report_t`; release its arrays (the runtime's own `report_free`, which is otherwise a per-strategy export) |
+| `strategy_native_submit_v1` / `_replace_v1` / `_cancel_v1` / `_cancel_all_v1` | The order commands, legal inside a callback or between realtime inputs |
+| `strategy_native_execute_current_v1` | Execute one live request at the current execution point |
+| `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book |
+| `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
+| `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters for cohort-bound requests |
+| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions) |
+| `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
+
+Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
+size, version or enumerator is refused with a documented negative status and
+mutates nothing. A callback that returns non-zero latches
+`NativeFailureCode::CallbackException` and ends the run `Failed`. Streaming
+needs no new symbol: the `strategy_stream_*` family takes these handles
+unchanged. Worked example: [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c);
+reference: [`docs/pages/native-engine.md`](docs/pages/native-engine.md).
+
 POD types `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`, `pf_pending_order_v1_t`, `pf_field_desc_t` and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 added computed trading metrics and a per-bar equity curve; ABI v3 added `pf_trade_t::open_at_end`, TradingView's range-end close of a position still open after the last bar; ABI v4 added the live-runtime accessors above plus `pf_report_t::broker_state_hash` / `broker_state_hash_len` (a per-script-bar broker-state hash array, appended after `equity_curve_len`, NULL/0-length unless `strategy_set_broker_state_hash_recording` is on) and the `pf_pending_order_v1_t` generated POD mirror of the engine's resting-order record. Check `pf_abi_version()` before running: the report struct is caller-allocated.
 
 Full flag semantics, string lifetimes and the three L0 evidence lanes behind the ABI v4 live surface: [`docs/pages/live-surface.md`](docs/pages/live-surface.md).
