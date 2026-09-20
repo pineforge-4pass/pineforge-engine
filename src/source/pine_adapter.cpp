@@ -1493,7 +1493,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // generic initial-margin gate only sees the later fill-time FX rate, so
     // source admission is reproduced in validate_precommit instead: every
     // opening verdict below is AdmitWithHostMargin, which is what keeps the
-    // model's own per-side initial fraction out of the admission decision.
+    // kernel's own initial-margin requirement out of the CANDIDATE decision.
+    // The declared model is maintenance-only (zero per-side initial, below),
+    // which is what keeps it out of L3b's PLACEMENT decision, where a
+    // candidate verdict does not exist yet. The two together are the whole
+    // statement "the source owns opening admission".
     // R5: the broker model itself is the kernel's. TradingView's two margin
     // percents ARE the maintenance fractions (strategy(margin_long=,
     // margin_short=) is the fraction of the position's value the account must
@@ -1511,8 +1515,20 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         && std::isfinite(margin_long_fraction) && margin_long_fraction > 0.0
         && std::isfinite(margin_short_fraction) && margin_short_fraction > 0.0) {
         NativeMarginModel margin;
-        margin.initial_long = margin_long_fraction;
-        margin.initial_short = margin_short_fraction;
+        // Wave-4 ruling: opening admission and liquidation are two different
+        // broker functions, and this adapter takes only the second one from
+        // the kernel. Its own pre-trade check is TradingView's
+        // ten-significant-digit money admission against the signal-time
+        // tuple, answered as AdmitWithHostMargin at every opening candidate
+        // (validate_precommit below), so the model is declared
+        // MAINTENANCE-ONLY: zero per-side initial means the kernel enforces
+        // no opening requirement -- at the candidate gate and at L3b's
+        // placement gate alike -- while the maintenance fractions keep the
+        // kernel's liquidation. A positive initial here would re-run the
+        // kernel's raw-double requirement over a quantity the source's money
+        // rule has already admitted, and decline openings TradingView takes.
+        margin.initial_long = 0.0;
+        margin.initial_short = 0.0;
         margin.maintenance_long = margin_long_fraction;
         margin.maintenance_short = margin_short_fraction;
         margin.sizing = NativeLiquidationSizing::ShortfallMultiple;

@@ -2493,6 +2493,10 @@ bool NativeExecutionConsumer::admit_opening_inspect(
     // L4: a declared margin model replaces the one-scalar gate for this run
     // with its own per-side initial fraction. The two spellings are mutually
     // exclusive by configure, so exactly one of these branches can apply.
+    // A model's per-side fraction of ZERO is the maintenance-only spelling:
+    // the side enforces no opening requirement here (the host owns opening
+    // admission) and keeps only its liquidation. That is the `> 0.0` below,
+    // which is also what the placement gate reads through this same function.
     const double fraction = spec->margin
         ? (inspect.incoming_short ? spec->margin->initial_short : spec->margin->initial_long)
         : (spec->initial_margin_fraction ? *spec->initial_margin_fraction : 0.0);

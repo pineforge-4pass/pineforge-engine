@@ -536,7 +536,11 @@ void mutually_exclusive_configuration() {
     MarginHost b;
     CHECK(b.configure_native(only_model).status == NativeSetupStatus::Applied);
 
-    // A margin model with a nonpositive per-side fraction is refused.
+    // A margin-model side that declares NEITHER broker function is refused.
+    // (Wave-4 ruling: a zero per-side fraction on its own is the
+    // maintenance-only spelling, so this refusal is named for what is missing
+    // -- the side states no requirement at all -- and no longer for the
+    // number, which is a legal zero.)
     auto bad = margin_spec("l4-bad");
     auto bad_model = model(0.5, 0.5, std::nullopt);
     bad_model.initial_long = 0.0;
@@ -544,8 +548,161 @@ void mutually_exclusive_configuration() {
     MarginHost c;
     const auto refused = c.configure_native(bad);
     CHECK(refused.status == NativeSetupStatus::Failed);
-    CHECK(refused.validation.error == NativeRunSpecError::NotFinitePositive);
+    CHECK(refused.validation.error == NativeRunSpecError::MarginSideUndeclared);
     CHECK(refused.validation.field == NativeRunSpecField::MarginInitial);
+}
+
+// --------------------------------------------------------------- WAVE-4
+// Opening admission and liquidation are two different broker functions, and
+// a side may declare either without the other. `initial_<side> == 0.0` is the
+// maintenance-only spelling: the kernel enforces no opening requirement on
+// that side -- at the candidate gate AND at L3b's placement gate, which is
+// the site a candidate verdict cannot reach -- while the side keeps the
+// kernel's liquidation in full.
+no::Request sized_long(no::SizeBasis basis, const char* label) {
+    no::Sized sized;
+    sized.side = no::Side::Long;
+    sized.basis = basis;
+    sized.time = no::SizeTime::AtAcceptance;
+    sized.price = no::SizePrice::Signal;
+    no::Request out;
+    out.intent = sized;
+    out.label = label;
+    return out;
+}
+
+void finished(const Host& host) {
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+}
+
+void maintenance_only_model() {
+    // 2 000 of notional on 1 000 of equity. A full per-side initial refuses
+    // the frozen quantity at PLACEMENT: Sized{AtAcceptance} resolves its
+    // units before any candidate exists, so AdmitWithHostMargin -- which is
+    // a candidate verdict -- cannot reach this gate.
+    auto gated = margin_spec("l4-mo-gated");
+    gated.margin = model(1.0, 1.0, 0.25);
+    Host refused;
+    bool reached_refusal = false;
+    auto status = no::SubmitStatus::Accepted;
+    std::optional<no::RequestRejectReason> reason;
+    refused.calculation = [&](Host& h) {
+        if (reached_refusal) return;
+        reached_refusal = true;
+        const auto out = h.submit(sized_long(no::CashValue{2000.0}, "entry"));
+        status = out.status;
+        reason = out.reason;
+    };
+    run(refused, gated, {100.0, 100.0});
+    finished(refused);
+    CHECK(reached_refusal);
+    CHECK(status == no::SubmitStatus::Rejected);
+    REQUIRE(reason.has_value());
+    CHECK(*reason == no::RequestRejectReason::PlacementAdmission);
+    CHECK(events<no::ExecutionAppliedEvent>(refused).empty());
+
+    // The same opening under the maintenance-only spelling is placed and
+    // applied. Nothing else about the spec moves: same capital, same price,
+    // same maintenance fraction.
+    auto owned = margin_spec("l4-mo-owned");
+    owned.margin = model(0.0, 0.0, 0.25);
+    Host admitted;
+    bool reached_opening = false;
+    double opened = 0.0;
+    admitted.calculation = [&](Host& h) {
+        if (reached_opening) return;
+        reached_opening = true;
+        const auto out = h.submit(sized_long(no::CashValue{2000.0}, "entry"));
+        CHECK(out.status == no::SubmitStatus::Accepted);
+        REQUIRE(out.handle.has_value());
+        opened = apply(h, *out.handle).opened_units;
+    };
+    run(admitted, owned, {100.0, 100.0});
+    finished(admitted);
+    CHECK(reached_opening);
+    near(opened, 20.0);
+    near(admitted.physical_position().signed_units, 20.0);
+    CHECK(events<no::ExecutionAppliedEvent>(admitted).size() == 1);
+
+    // The liquidation mechanism is untouched. The same tape, the same
+    // maintenance fraction and the same sizing policy liquidate on the same
+    // bar, at the same level, for the same units, whether the model states a
+    // positive opening requirement or waives it.
+    auto with_gate = margin_spec("l4-mo-twin");
+    with_gate.margin = model(0.5, 0.5, 0.5, NativeLiquidationSizing::ShortfallMultiple, 4.0);
+    MarginHost gated_twin;
+    gated_twin.open_units = 20.0;
+    drive(gated_twin, with_gate, twin_tape());
+
+    auto without_gate = margin_spec("l4-mo-twin");
+    without_gate.margin = model(0.0, 0.0, 0.5, NativeLiquidationSizing::ShortfallMultiple, 4.0);
+    MarginHost maintenance_twin;
+    maintenance_twin.open_units = 20.0;
+    drive(maintenance_twin, without_gate, twin_tape());
+
+    const auto gated_rows = liquidations(gated_twin);
+    const auto waived_rows = liquidations(maintenance_twin);
+    REQUIRE(gated_rows.size() == 1);
+    REQUIRE(waived_rows.size() == 1);
+    CHECK(waived_rows[0].cursor.point.interval_index
+          == gated_rows[0].cursor.point.interval_index);
+    near(waived_rows[0].closed_units, gated_rows[0].closed_units);
+    near(waived_rows[0].resolved_price, gated_rows[0].resolved_price);
+    near(maintenance_twin.physical_position().signed_units,
+         gated_twin.physical_position().signed_units);
+    // The solved level itself, sampled at every bar open and every
+    // calculation, and the applied/margin interleaving around it.
+    CHECK(maintenance_twin.level_at_bar_open == gated_twin.level_at_bar_open);
+    CHECK(maintenance_twin.level_at_calculation == gated_twin.level_at_calculation);
+    CHECK(maintenance_twin.order == gated_twin.order);
+    CHECK(maintenance_twin.margin_calls.size() == gated_twin.margin_calls.size());
+    CHECK(events<no::ExecutionAppliedEvent>(maintenance_twin).size()
+          == events<no::ExecutionAppliedEvent>(gated_twin).size());
+
+    // One side maintenance-only and the other fully margined is legal: the
+    // two sides are independent declarations.
+    auto mixed = margin_spec("l4-mo-mixed");
+    mixed.margin = model(0.0, 0.5, 0.5);
+    MarginHost mixed_host;
+    CHECK(mixed_host.configure_native(mixed).status == NativeSetupStatus::Applied);
+
+    // A side with neither function is still refused, and named for it, even
+    // when the other side declares both.
+    auto undeclared = margin_spec("l4-mo-undeclared");
+    auto one_sided = model(0.0, 0.5, std::nullopt);
+    one_sided.maintenance_short = 0.5;
+    undeclared.margin = one_sided;
+    MarginHost undeclared_host;
+    const auto side_refusal = undeclared_host.configure_native(undeclared);
+    CHECK(side_refusal.status == NativeSetupStatus::Failed);
+    CHECK(side_refusal.validation.error == NativeRunSpecError::MarginSideUndeclared);
+    CHECK(side_refusal.validation.field == NativeRunSpecField::MarginInitial);
+
+    // A STATED initial is still a number: negative or non-finite is the
+    // numeric refusal it always was, not the maintenance-only spelling.
+    auto negative = margin_spec("l4-mo-negative");
+    auto negative_model = model(0.5, 0.5, 0.5);
+    negative_model.initial_long = -0.5;
+    negative.margin = negative_model;
+    MarginHost negative_host;
+    const auto numeric_refusal = negative_host.configure_native(negative);
+    CHECK(numeric_refusal.status == NativeSetupStatus::Failed);
+    CHECK(numeric_refusal.validation.error == NativeRunSpecError::NotFinitePositive);
+    CHECK(numeric_refusal.validation.field == NativeRunSpecField::MarginInitial);
+
+    // Zero is a value the fold sees, not an absence: the two spellings are
+    // different specs, and restating a positive initial changes nothing.
+    auto folded = margin_spec("l4-mo-fold");
+    folded.margin = model(0.5, 0.5, 0.5);
+    auto waived = folded;
+    waived.margin->initial_long = 0.0;
+    waived.margin->initial_short = 0.0;
+    CHECK(native_run_spec_digest(waived) != native_run_spec_digest(folded));
+    auto restated = folded;
+    restated.margin->initial_long = 0.5;
+    restated.margin->initial_short = 0.5;
+    CHECK(native_run_spec_digest(restated) == native_run_spec_digest(folded));
 }
 
 // ------------------------------------------------------------------ TWIN
@@ -597,6 +754,7 @@ int main() {
     test("margin-call-order", margin_call_follows_applied);
     test("calculation-only", calculation_only_never_fills_mid_path);
     test("configuration-conflict", mutually_exclusive_configuration);
+    test("maintenance-only-model", maintenance_only_model);
     test("twin-adapter-margin-call", twin_of_adapter_margin_call);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

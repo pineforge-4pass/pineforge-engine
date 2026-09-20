@@ -58,6 +58,7 @@ Result validate_string(std::string_view value, Field field, bool required) noexc
 }
 
 bool positive(double value) noexcept { return std::isfinite(value) && value > 0.0; }
+bool nonnegative(double value) noexcept { return std::isfinite(value) && value >= 0.0; }
 
 bool valid_distribution(MagnifierDistribution distribution) noexcept {
     switch (distribution) {
@@ -310,7 +311,13 @@ Result validate_margin(const NativeRunSpec& spec) noexcept {
         return {Error::MarginModelConflict, Field::MarginModel};
     }
     const auto& margin = *spec.margin;
-    if (!positive(margin.initial_long) || !positive(margin.initial_short)) {
+    // Opening admission and liquidation are two different broker functions,
+    // and a side may declare either, or both. A stated initial fraction is
+    // still finite and never negative; ZERO is the maintenance-only spelling
+    // (the kernel enforces no opening requirement on that side -- the host
+    // owns the pre-trade check -- while the kernel keeps the side's
+    // liquidation), so it is not an invalid number here.
+    if (!nonnegative(margin.initial_long) || !nonnegative(margin.initial_short)) {
         return {Error::NotFinitePositive, Field::MarginInitial};
     }
     if (margin.maintenance_long && !positive(*margin.maintenance_long)) {
@@ -318,6 +325,14 @@ Result validate_margin(const NativeRunSpec& spec) noexcept {
     }
     if (margin.maintenance_short && !positive(*margin.maintenance_short)) {
         return {Error::NotFinitePositive, Field::MarginMaintenance};
+    }
+    // A side that waives the opening requirement must state what it does
+    // enforce. Zero initial AND no maintenance is a side that declares
+    // nothing at all, which is a configuration mistake, never a silent
+    // "unlimited leverage, never liquidated".
+    if ((margin.initial_long == 0.0 && !margin.maintenance_long)
+        || (margin.initial_short == 0.0 && !margin.maintenance_short)) {
+        return {Error::MarginSideUndeclared, Field::MarginInitial};
     }
     if (!valid_liquidation_sizing(margin.sizing)) {
         return {Error::UnknownLiquidationSizing, Field::MarginSizing};

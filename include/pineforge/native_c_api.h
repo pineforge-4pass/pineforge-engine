@@ -594,8 +594,11 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t margin_has_maintenance_long;
     uint32_t margin_has_maintenance_short;
     uint32_t margin_has_min_units;
-    double   margin_initial_long;
-    double   margin_initial_short;
+    double   margin_initial_long;   /**< 0 = maintenance-only side: no kernel
+                                         opening requirement, host owns
+                                         admission; legal only with that
+                                         side's maintenance set. */
+    double   margin_initial_short;  /**< 0 = maintenance-only; see above. */
     double   margin_maintenance_long;
     double   margin_maintenance_short;
     double   margin_shortfall_multiple;

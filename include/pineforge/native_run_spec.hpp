@@ -174,7 +174,19 @@ enum class NativeLiquidationLevelBase : std::uint32_t {
 //
 // `initial_long` / `initial_short` are the opening-admission fractions (not
 // percents) applied to the resulting absolute notional of an opening, per
-// side. Both must be finite and positive.
+// side. Both must be finite and never negative.
+//
+// ZERO is the MAINTENANCE-ONLY spelling for that side: the kernel enforces no
+// opening requirement on it, at the candidate gate and at placement alike, and
+// the HOST owns opening admission there. Opening admission and liquidation are
+// two different broker functions: a host that runs its own pre-trade check
+// (and says so at the candidate gate by answering
+// NativePrecommitVerdict::AdmitWithHostMargin) still wants the kernel's
+// liquidation mechanism, and this is how it asks for one without the other.
+// A side may waive either function but not both: `initial_* == 0.0` is legal
+// only where that side's `maintenance_*` is set (and positive), and a side
+// with neither is refused as MarginSideUndeclared. A model whose `initial_*`
+// are positive behaves exactly as it always has.
 //
 // `maintenance_long` / `maintenance_short` are the liquidation fractions.
 // Absent means that side never liquidates. Present means the kernel solves
@@ -606,6 +618,12 @@ enum class NativeRunSpecError : std::uint8_t {
     // "no fill at all" is a blocked run, never a threshold, so it is named
     // rather than silently enforced.
     ZeroRiskLimit,
+    // A margin-model side that declares neither an opening requirement
+    // (`initial_*` is zero) nor a liquidation one (`maintenance_*` is unset).
+    // The two are separate broker functions and a side may waive either, but
+    // waiving both states nothing at all, so it is named rather than read as
+    // "unlimited leverage, never liquidated".
+    MarginSideUndeclared,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.

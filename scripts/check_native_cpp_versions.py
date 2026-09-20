@@ -467,7 +467,8 @@ def check_texts(files):
                   'UnknownLiquidationSizing', 'UnknownLiquidationCheck',
                   'UnknownMarginEquityBasis', 'UnknownLiquidationLevelBase',
                   'UnknownCalculationTrigger', 'UnknownOpenBarView',
-                  'UnknownRiskDay', 'UnknownRiskAction', 'ZeroRiskLimit'):
+                  'UnknownRiskDay', 'UnknownRiskAction', 'ZeroRiskLimit',
+                  'MarginSideUndeclared'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src

@@ -519,7 +519,7 @@ declaring both fails validation with `MarginModelConflict`.
 
 ```cpp
 NativeMarginModel margin;
-margin.initial_long   = 0.5;   // fractions, not percents; both > 0
+margin.initial_long   = 0.5;   // fractions, not percents; >= 0, 0 = host's
 margin.initial_short  = 0.5;
 margin.maintenance_long  = 0.25;   // absent = that side never liquidates
 margin.maintenance_short = 0.25;
@@ -555,6 +555,22 @@ replace the single scalar for that run: an opening is refused with
 `resulting_abs_notional × initial_<side> > marked_equity − ticket`. A host
 that answers `AdmitWithHostMargin` from `validate_execution_precommit` still
 takes that one check over, exactly as before.
+
+**Opening admission and liquidation are two separate broker functions, and a
+side may declare either without the other.** `initial_<side> == 0.0` is the
+maintenance-only spelling: the kernel enforces no opening requirement on that
+side and the HOST owns opening admission there, while the kernel keeps the
+side's liquidation mechanism in full. This matters because the opening gate
+has two sites, not one — the candidate gate, where a host opts out per
+opening by answering `AdmitWithHostMargin`, and the placement gate that
+freezes a `Sized{SizeTime::AtAcceptance}` quantity, where no candidate verdict
+exists yet. A zero initial is the only spelling that covers both, so it is the
+one a host with its own pre-trade money rule uses; the Pine adapter is exactly
+that host, and declares its TradingView margin percents as maintenance only.
+A side may waive either function but not both: a zero `initial_<side>` is
+legal only where that side's `maintenance_<side>` is set, and a side with
+neither is refused at configure with `MarginSideUndeclared`. A model whose
+`initial_*` are positive is unchanged, bit for bit.
 
 **The liquidation level.** With a maintenance fraction for the live side, the
 kernel solves the one price where the marked equity meets the maintenance
