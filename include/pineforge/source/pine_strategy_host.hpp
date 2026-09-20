@@ -355,6 +355,12 @@ protected:
     // required" error for ``request.security_lower_tf``).
     void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
                                          const std::string& input_tf);
+    // TradingView's request.security / request.security_lower_tf timeframe
+    // rules for the registered sites against the run's evaluator input
+    // timeframe: the diagnostics a script author reads, the lower-timeframe
+    // emulation each array site selects, and the publication gates a
+    // finer-than-chart site runs under.
+    void validate_security_timeframes(const std::string& input_tf);
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
     void hash_source_extension(BrokerStateHashSink&) const override;
 

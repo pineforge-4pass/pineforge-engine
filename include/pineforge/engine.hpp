@@ -2063,7 +2063,6 @@ protected:
     // synthesis loop. Used by codegen to clear its per-call vector at
     // sub-bar 0 and push one element per sub-bar after.
     int security_lower_tf_sub_bar_index(int sec_id) const;
-    void validate_security_timeframes(const std::string& input_tf);
     bool security_series_slot_is_new(int sec_id) const;
     // The one path to evaluate_security(): installs the requested context's
     // bar index for the evaluator's TA members (ta::bar_context()) for the
