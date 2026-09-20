@@ -5,10 +5,12 @@
 // hash-neutrality guard is portable by construction: the spec fold is pinned
 // through native_run_spec_digest and every continuation hash is compared
 // between two runs in this process, never against a constant (a continuation
-// hash folds the machine's resolved timezone resources). The adapter twin at
-// the end keeps TradingView's own tick rule: it is the identity diff that
-// proves the kernel grid never reached src/source.
-#include "l4a_native_route_guard.hpp"
+// hash folds the machine's resolved timezone resources). The adapter twin
+// (tests/test_native_price_grid_twin.cpp, source-bound) keeps TradingView's
+// own tick rule: it is the identity diff that proves the kernel grid never
+// reached src/source. This TU is source-free and runs in the kernel-only
+// profile.
+#include "native_price_grid_fixture.hpp"
 
 #include <pineforge/native_host.hpp>
 
@@ -28,22 +30,7 @@ using namespace pineforge;
 namespace no = pineforge::native_order;
 
 namespace {
-int checks = 0, failures = 0;
-const char* scenario = "setup";
-#define CHECK(x) do { ++checks; if (!(x)) { ++failures; \
-    std::printf("FAIL %s:%d %s\n", scenario, __LINE__, #x); } } while (0)
-
-constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr std::int64_t T = 1736121600000LL;
-constexpr double kTick = 0.25;
-
-// Clean-main witnesses are compared bit-for-bit: a quantization that leaked
-// into the default path would move a low bit long before a printed decimal.
-bool same_bits(double actual, double expected) {
-    if (native_matching::double_bits(actual) == native_matching::double_bits(expected)) return true;
-    std::printf("  actual=%.17g expected=%.17g\n", actual, expected);
-    return false;
-}
+using namespace l8_fixture;
 
 bool on_grid(double price) { return price == std::round(price / kTick) * kTick; }
 
@@ -418,64 +405,6 @@ void hash_folds_only_when_set() {
     CHECK(half != clean);
     CHECK(half != directional);
     CHECK(half != triggers);
-}
-
-// --- twin: one adapter-driven probe through the native lowering ------------
-source::PineStrategyConfig cfg() {
-    source::PineStrategyConfig c;
-    c.initial_capital = 1000000;
-    c.default_qty_type = (int)QtyType::FIXED;
-    c.default_qty_value = 1;
-    c.pyramiding = 1;
-    c.process_orders_on_close = false;
-    c.commission_value = 0.0;
-    c.commission_type = (int)CommissionType::PERCENT;
-    c.slippage = 0;
-    return c;
-}
-
-class MidBarStop final : public source::PineStrategyHost {
-public:
-    MidBarStop() { configure_pine_strategy(cfg()); set_syminfo_mintick(0.01); }
-    void on_source_bar(const Bar& bar) override {
-        if (placed_) return;
-        strategy_entry("L", true, kNaN, kNaN, 1.0, "entry long");
-        strategy_exit("X", "L", kNaN, (bar.open + bar.high) * 0.5, kNaN, kNaN, kNaN, 100.0,
-                      "mid-bar stop");
-        placed_ = true;
-    }
-private:
-    bool placed_ = false;
-};
-
-void adapter_twin_is_untouched() {
-    scenario = "L8-twin the adapter keeps its own tick rule";
-    const std::vector<Bar> bars = {
-        {1804.00, 1813.014, 1803.33, 1811.96, 49634.773, 1743397200000LL},
-        {1811.96, 1812.000, 1801.08, 1808.93, 51943.482, 1743398100000LL},
-        {1801.93, 1807.960, 1800.92, 1806.37, 37418.258, 1743420600000LL},
-        {1806.37, 1819.000, 1805.97, 1812.52, 92807.927, 1743421500000LL},
-        {1812.51, 1815.000, 1809.24, 1809.48, 39810.958, 1743422400000LL},
-        {1809.49, 1818.800, 1808.15, 1816.41, 45388.380, 1743423300000LL},
-    };
-    MidBarStop host;
-    host.run(bars.data(), (int)bars.size(), "15", "15");
-    CHECK(host.last_error().empty());
-    CHECK(host.trade_count() == 1);
-    if (host.trade_count() != 1) return;
-    const auto& t = host.get_trade(0);
-    // Diffed by identity against the clean-main witness, not by trade number.
-    CHECK(t.is_long);
-    CHECK(same_bits(t.qty, 1.0));
-    CHECK(t.entry_time == 1743398100000LL);
-    CHECK(same_bits(t.entry_price, 1811.96));
-    CHECK(t.exit_time == 1743398100000LL);
-    // The raw stop level is 1808.507. The adapter floors a long's protective
-    // stop onto its own 0.01 ladder; a kernel grid leaking into this path
-    // would book the nearest tick, 1808.51, so this price is the identity
-    // diff that keeps the two layers apart.
-    CHECK(same_bits(t.exit_price, 1808.50));
-    CHECK(same_bits(t.pnl, -3.4600000000000364));
 }
 
 // --- 7. L8b: the activation rule under the grid ----------------------------
@@ -1094,7 +1023,6 @@ int main() {
     quantize_triggers();
     grid_requires_a_tick();
     hash_folds_only_when_set();
-    adapter_twin_is_untouched();
     activation_reproducer();
     per_kind_matrix();
     zero_offset_tapes_natively();
