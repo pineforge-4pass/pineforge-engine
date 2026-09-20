@@ -2,12 +2,12 @@
 // report only when its run spec asks for one: the HostRecorded default is
 // unchanged to the byte, and NativeReportPolicy::KernelRecorded adds an equity
 // curve, finite equity metrics and — with report_open_position_at_end — a
-// mark-to-market row for a position the feed ended with. The last scenario is
-// the §3.1b twin: one rule through the bare host and through the adapter.
-#include "native_current_fixture.hpp"
+// mark-to-market row for a position the feed ended with. Source-free: it runs
+// in the kernel-only profile. The §3.1b twin (one rule through the bare host
+// and through the adapter) is tests/test_native_report_truth_twin.cpp.
+#include "native_report_truth_fixture.hpp"
 
 #include <pineforge/pineforge.h>
-#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -16,6 +16,7 @@
 #include <vector>
 
 using namespace r4_test;
+using namespace l2_fixture;
 
 namespace {
 
@@ -43,49 +44,6 @@ constexpr std::uint64_t kSpecDigest = 9134795103255102476ull;
 // broker state alone.
 constexpr std::uint64_t kProbeExecutionHash = 0x5eed1234abcd0001ull;
 
-// ── Feed and spec ───────────────────────────────────────────────────────
-// A triangular wave in exact binary fractions: every price and every equity
-// point is reproducible to the bit on any platform.
-double price_at(int index) {
-    const int phase = index % 20;
-    const int triangle = phase < 10 ? phase : 20 - phase;
-    return 100.0 + 0.5 * triangle + 0.25 * (index % 3);
-}
-
-std::vector<Bar> feed(int n) {
-    std::vector<Bar> bars;
-    bars.reserve(static_cast<std::size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        const double p = price_at(i);
-        bars.push_back({p, p, p, p, 1.0, T + static_cast<std::int64_t>(i) * 60000});
-    }
-    return bars;
-}
-
-NativeRunSpec report_spec(const char* key) {
-    NativeRunSpec spec;
-    spec.identity = {key, 1};
-    spec.input_tf = "1";
-    spec.script_tf = "1";
-    spec.tickerid = "TEST:R5L2";
-    spec.timezone = "UTC";
-    spec.session = "24x7";
-    spec.initial_capital = 10000.0;
-    spec.point_value = 1.0;
-    spec.account_fx = 1.0;
-    spec.price_tick = 0.01;
-    spec.fee_kind = NativeFeeKind::CashPerExecution;
-    spec.fee_value = 2.0;
-    return spec;
-}
-
-no::Request market(double units, const char* label) {
-    no::Request request;
-    request.intent = no::Transact{units};
-    request.label = label;
-    return request;
-}
-
 // Enter long at bar 10, flatten at bar 30, enter short at bar 40, flatten at
 // bar 55: two closed rows, flat at the end. The fixture host increments
 // `calculations` before the hook runs, so index == calculations - 1.
@@ -102,11 +60,6 @@ void round_trip_rule(Host& host) {
 // Enter long at bar 10 and never exit: the feed ends with an open position.
 void ends_long_rule(Host& host) {
     if (host.calculations - 1 == 10) host.submit(market(2.0, "enter-long"));
-}
-
-void run_feed(Host& host, const NativeRunSpec& spec, const std::vector<Bar>& bars) {
-    REQUIRE(host.configure_native(spec).status == NativeSetupStatus::Applied);
-    host.run(bars.data(), static_cast<int>(bars.size()));
 }
 
 // ── Report digest ───────────────────────────────────────────────────────
@@ -175,15 +128,6 @@ std::uint64_t report_digest(const ReportC& report) {
     return f.h;
 }
 
-// Owning report view: fill_report allocates, free_report releases.
-struct Report {
-    ReportC c{};
-    explicit Report(const BacktestEngine& engine) { engine.fill_report(&c); }
-    ~Report() { BacktestEngine::free_report(&c); }
-    Report(const Report&) = delete;
-    Report& operator=(const Report&) = delete;
-};
-
 // The walk engine_metrics.cpp performs, written out independently here so the
 // reported drawdown/run-up are checked against the recorded curve rather than
 // against a literal.
@@ -212,41 +156,6 @@ struct BrokerStateHost : Host {
         return broker_state_hash_from_execution_hash(execution_hash);
     }
 };
-
-// ── Adapter twin ────────────────────────────────────────────────────────
-// The same rule expressed in source commands. Nothing here configures a
-// native report policy: the adapter keeps HostRecorded and records the curve
-// itself, which is exactly what the twin has to show is equivalent.
-class TwinAdapterProbe final : public pineforge::source::PineStrategyHost {
-public:
-    TwinAdapterProbe() {
-        pineforge::source::PineStrategyConfig config;
-        config.initial_capital = 10000.0;
-        config.default_qty_type = static_cast<int>(QtyType::FIXED);
-        config.default_qty_value = 2.0;
-        config.pyramiding = 1;
-        config.slippage = 0;
-        config.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
-        config.commission_value = 2.0;
-        configure_pine_strategy(config);
-    }
-    void on_source_bar(const Bar&) override {
-        const int index = seen_++;
-        if (index == 10) strategy_entry("L", true, na<double>(), na<double>(), 2.0);
-        else if (index == 30) strategy_close("L");
-    }
-
-private:
-    int seen_ = 0;
-};
-
-void twin_native_rule(Host& host) {
-    switch (host.calculations - 1) {
-    case 10: host.submit(market(2.0, "twin-enter")); break;
-    case 30: host.submit(market(-2.0, "twin-exit")); break;
-    default: break;
-    }
-}
 
 // ── Scenarios ───────────────────────────────────────────────────────────
 
@@ -374,56 +283,6 @@ void open_position_row_at_range_end() {
     // from one fixed execution hash, the two books are identical.
     CHECK(without.broker_state_from(kProbeExecutionHash)
           == with.broker_state_from(kProbeExecutionHash));
-}
-
-// 4. §3.1b twin: one rule, two hosts. The bare native host recording its own
-//    report must produce the adapter's closed row and the adapter's curve.
-void twin_native_and_adapter_agree() {
-    const auto bars = feed(60);
-
-    auto spec = report_spec("l2-report-truth-twin");
-    spec.report_policy = NativeReportPolicy::KernelRecorded;
-    Host native;
-    native.calculation = twin_native_rule;
-    run_feed(native, spec, bars);
-    completed(native);
-
-    TwinAdapterProbe adapter;
-    adapter.run(bars.data(), static_cast<int>(bars.size()));
-    CHECK(adapter.last_error().empty());
-
-    Report native_report(native);
-    Report adapter_report(adapter);
-
-    REQUIRE(native_report.c.trades_len == 1);
-    REQUIRE(adapter_report.c.trades_len == native_report.c.trades_len);
-    for (int i = 0; i < native_report.c.trades_len; ++i) {
-        const TradeC& left = native_report.c.trades[i];
-        const TradeC& right = adapter_report.c.trades[i];
-        CHECK(left.entry_time == right.entry_time);
-        CHECK(left.exit_time == right.exit_time);
-        CHECK(left.entry_price == right.entry_price);
-        CHECK(left.exit_price == right.exit_price);
-        CHECK(left.qty == right.qty);
-        CHECK(left.pnl == right.pnl);
-        CHECK(left.commission == right.commission);
-        CHECK(left.is_long == right.is_long);
-    }
-
-    REQUIRE(native_report.c.equity_curve_len == 60);
-    REQUIRE(adapter_report.c.equity_curve_len == native_report.c.equity_curve_len);
-    for (std::int64_t i = 0; i < native_report.c.equity_curve_len; ++i) {
-        CHECK(native_report.c.equity_curve[i].time_ms
-              == adapter_report.c.equity_curve[i].time_ms);
-        CHECK(native_report.c.equity_curve[i].equity
-              == adapter_report.c.equity_curve[i].equity);
-        CHECK(native_report.c.equity_curve[i].open_profit
-              == adapter_report.c.equity_curve[i].open_profit);
-    }
-    CHECK(native_report.c.metrics.equity.max_equity_drawdown
-          == adapter_report.c.metrics.equity.max_equity_drawdown);
-    CHECK(native_report.c.metrics.equity.max_equity_runup
-          == adapter_report.c.metrics.equity.max_equity_runup);
 }
 
 // 5. Continuation neutrality, stated portably: the spec fold the continuation
@@ -620,7 +479,6 @@ int main() {
     test("host_recorded_default_is_unchanged", host_recorded_default_is_unchanged);
     test("kernel_recorded_curve_and_metrics", kernel_recorded_curve_and_metrics);
     test("open_position_row_at_range_end", open_position_row_at_range_end);
-    test("twin_native_and_adapter_agree", twin_native_and_adapter_agree);
     test("spec_hash_is_neutral_by_default", spec_hash_is_neutral_by_default);
     test("kernel_recorded_broker_hash_per_script_bar",
          kernel_recorded_broker_hash_per_script_bar);
