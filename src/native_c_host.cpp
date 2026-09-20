@@ -1282,6 +1282,126 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out) {
     });
 }
 
+PF_API int strategy_native_partial_bar_v1(pf_strategy_t s, pf_bar_t* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        const auto bar = host->current_partial_bar();
+        if (!bar) return PF_NATIVE_ABSENT;
+        std::memcpy(out, &*bar, sizeof(pf_bar_t));
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_recalculations_v1(pf_strategy_t s, uint64_t* driven,
+                                             uint64_t* skipped) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (driven) *driven = host->native_recalculation_count();
+        if (skipped) *skipped = host->native_recalculations_skipped();
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_trail_state_v1(pf_strategy_t s, uint64_t incarnation,
+                                          pf_native_trail_state_v1* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        if (out->struct_size != sizeof(pf_native_trail_state_v1)) return PF_NATIVE_E_STRUCT;
+        const auto* run = run_identity(*host);
+        if (!run) return PF_NATIVE_E_STATE;
+        const auto state = host->trail_state(no::RequestHandle{*run, incarnation});
+        if (!state) return PF_NATIVE_ABSENT;
+        const std::uint32_t struct_size = out->struct_size;
+        std::memset(out, 0, sizeof(*out));
+        out->struct_size = struct_size;
+        out->version = PF_NATIVE_API_VERSION;
+        out->activated = state->activated ? 1u : 0u;
+        out->best_price = state->best_price;
+        out->current_level = state->current_level;
+        out->activation_ordinal = state->activation_ordinal;
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_series_bar_v1(pf_strategy_t s, uint32_t subscription,
+                                         pf_bar_t* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        const auto bar = host->native_series_bar(static_cast<std::size_t>(subscription));
+        if (!bar) return PF_NATIVE_ABSENT;
+        std::memcpy(out, &*bar, sizeof(pf_bar_t));
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_marked_equity_v1(pf_strategy_t s, double mark, double* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        *out = host->native_marked_equity(mark);
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        const auto price = host->native_liquidation_price();
+        if (!price) {
+            *out = kNaN;
+            return PF_NATIVE_ABSENT;
+        }
+        *out = *price;
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v1* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        if (out->struct_size != sizeof(pf_native_risk_state_v1)) return PF_NATIVE_E_STRUCT;
+        const auto state = host->native_risk_state();
+        const std::uint32_t struct_size = out->struct_size;
+        std::memset(out, 0, sizeof(*out));
+        out->struct_size = struct_size;
+        out->version = PF_NATIVE_API_VERSION;
+        out->blocked = state.blocked ? 1u : 0u;
+        if (state.reason) {
+            out->has_reason = 1u;
+            out->reason = static_cast<std::uint32_t>(*state.reason);
+        }
+        out->has_day = state.has_day ? 1u : 0u;
+        out->consecutive_loss_days = state.consecutive_loss_days;
+        out->day_ordinal = state.day_ordinal;
+        out->fills_today = state.fills_today;
+        out->peak_equity = state.peak_equity;
+        out->day_open_equity = state.day_open_equity;
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_continuation_hash_v1(pf_strategy_t s, uint64_t* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        *out = host->native_continuation_hash();
+        return PF_NATIVE_OK;
+    });
+}
+
 PF_API int strategy_native_cohort_open_v1(pf_strategy_t s, uint64_t* cohort) {
     return guarded([&] {
         auto* host = host_of(s);

@@ -892,6 +892,414 @@ static void check_risk_event(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── The read-only accessors the C++ host has answered all along ──
+ *
+ * Eight of them are optionals in C++; PF_NATIVE_ABSENT is the C spelling of
+ * that empty, and these two scenarios execute BOTH sides of every one that
+ * has two. */
+
+typedef struct probe_state {
+    pf_strategy_t host;
+    int           calculations;
+    int           applied;
+    int           failures;
+    int           absent_partial_at_close;
+    int           present_partial_at_applied;
+    int           absent_series_before_delivery;
+    int           present_series_after_delivery;
+    int           absent_liquidation_when_flat;
+    double        liquidation_price;
+    double        position_units;
+    double        position_avg;
+    double        marked_equity_probe;
+    double        marked_equity_mark;
+    uint64_t      trail;
+    int           trail_unarmed_seen;
+    int           trail_armed_seen;
+    double        trail_best;
+    double        trail_level;
+    uint64_t      risk_fills_today;
+    uint32_t      risk_blocked;
+} probe_state;
+
+static int plain_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    probe_state* state = (probe_state*)user;
+    pf_bar_t partial;
+    pf_native_trail_state_v1 trail;
+    pf_native_risk_state_v1 risk;
+    double price = 0.0;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations != 3) return 0;
+
+    /* The bar's own close calculation is outside the path walk. */
+    memset(&partial, 0, sizeof(partial));
+    if (strategy_native_partial_bar_v1(state->host, &partial) == PF_NATIVE_ABSENT) {
+        state->absent_partial_at_close = 1;
+    }
+    /* A run that declared no subscription has no series at any index. */
+    if (strategy_native_series_bar_v1(state->host, 0u, &partial) == PF_NATIVE_ABSENT) {
+        state->absent_series_before_delivery = 1;
+    }
+    /* No margin model and a flat book: no level to solve. */
+    price = 1.0;
+    if (strategy_native_liquidation_price_v1(state->host, &price) == PF_NATIVE_ABSENT
+        && price != price) {
+        state->absent_liquidation_when_flat = 1;
+    }
+    /* An incarnation this run never issued is not a live trail. */
+    memset(&trail, 0, sizeof(trail));
+    trail.struct_size = (uint32_t)sizeof(trail);
+    LCHECK(state, strategy_native_trail_state_v1(state->host, 4242u, &trail)
+                      == PF_NATIVE_ABSENT,
+           "an unissued incarnation answered a trail state");
+    /* A run with no risk block reports the zero ledger, not a refusal. */
+    memset(&risk, 0, sizeof(risk));
+    risk.struct_size = (uint32_t)sizeof(risk);
+    LCHECK(state, strategy_native_risk_state_v1(state->host, &risk) == PF_NATIVE_OK,
+           "the zero risk ledger was refused");
+    LCHECK(state, risk.blocked == 0u && risk.has_reason == 0u && risk.fills_today == 0u
+                      && risk.consecutive_loss_days == 0u && risk.peak_equity == 0.0
+                      && risk.day_open_equity == 0.0,
+           "a run without a risk block reported a nonzero ledger");
+    return 0;
+}
+
+static void check_absent_accessors(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_native_trail_state_v1 trail;
+    pf_native_risk_state_v1 risk;
+    probe_state state;
+    const pf_bar_t* bars;
+    pf_bar_t bar;
+    uint64_t driven = 0xffffffffu;
+    uint64_t skipped = 0xffffffffu;
+    uint64_t first_hash = 0;
+    uint64_t second_hash = 0;
+    double value = 0.0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = plain_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "absent-accessor host create failed");
+    if (!state.host) return;
+
+    /* Every accessor refuses a NULL output before it reads the kernel. */
+    CHECK_EQ_INT(strategy_native_partial_bar_v1(state.host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "partial_bar accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_series_bar_v1(state.host, 0u, NULL), PF_NATIVE_E_ARGUMENT,
+                 "series_bar accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_liquidation_price_v1(state.host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "liquidation_price accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_marked_equity_v1(state.host, 100.0, NULL),
+                 PF_NATIVE_E_ARGUMENT, "marked_equity accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "continuation_hash accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_risk_state_v1(state.host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "risk_state accepted a NULL output");
+    CHECK_EQ_INT(strategy_native_trail_state_v1(state.host, 1u, NULL), PF_NATIVE_E_ARGUMENT,
+                 "trail_state accepted a NULL output");
+    /* Both counters are optional; asking for neither is still legal. */
+    CHECK_EQ_INT(strategy_native_recalculations_v1(state.host, NULL, NULL), PF_NATIVE_OK,
+                 "recalculations refused two NULL counters");
+
+    /* The two size-prefixed outputs enforce their prefix. */
+    memset(&trail, 0, sizeof(trail));
+    trail.struct_size = (uint32_t)sizeof(trail) - 4u;
+    CHECK_EQ_INT(strategy_native_trail_state_v1(state.host, 1u, &trail), PF_NATIVE_E_STRUCT,
+                 "a mis-sized trail state was not refused");
+    memset(&risk, 0, sizeof(risk));
+    risk.struct_size = (uint32_t)sizeof(risk) - 4u;
+    CHECK_EQ_INT(strategy_native_risk_state_v1(state.host, &risk), PF_NATIVE_E_STRUCT,
+                 "a mis-sized risk state was not refused");
+
+    /* A handle this API did not create is refused by every accessor. */
+    CHECK_EQ_INT(strategy_native_partial_bar_v1(NULL, &bar), PF_NATIVE_E_HANDLE,
+                 "partial_bar accepted a NULL handle");
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(NULL, &first_hash), PF_NATIVE_E_HANDLE,
+                 "continuation_hash accepted a NULL handle");
+
+    /* Before configure there is no run identity for a handle to name. */
+    memset(&trail, 0, sizeof(trail));
+    trail.struct_size = (uint32_t)sizeof(trail);
+    CHECK_EQ_INT(strategy_native_trail_state_v1(state.host, 1u, &trail), PF_NATIVE_E_STATE,
+                 "trail_state answered before the run had an identity");
+
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "absent-accessor configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the absent-accessor run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback absent-accessor rows failed");
+    CHECK(state.absent_partial_at_close,
+          "current_partial_bar answered inside the bar's own close calculation");
+    CHECK(state.absent_series_before_delivery,
+          "an undeclared subscription index answered a series bar");
+    CHECK(state.absent_liquidation_when_flat,
+          "a flat book with no margin model answered a liquidation price");
+
+    /* The counters measure RE-calculations: the script bar's own close
+     * calculation is not one, so a BarClose run drives none and suppresses
+     * none however many bars it calculated. check_live_accessors() is the
+     * other side of this, under BarCloseAndFills. */
+    CHECK(state.calculations == n, "the plain run did not calculate every bar");
+    CHECK_EQ_INT(strategy_native_recalculations_v1(state.host, &driven, &skipped),
+                 PF_NATIVE_OK, "recalculation counters refused");
+    CHECK_EQ_INT((int)driven, 0, "a BarClose run drove a recalculation");
+    CHECK_EQ_INT((int)skipped, 0, "an unbudgeted BarClose run suppressed a calculation");
+
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.host, &first_hash), PF_NATIVE_OK,
+                 "continuation hash refused");
+    CHECK(first_hash != 0u, "a completed run reported a zero continuation hash");
+
+    /* Marked equity is answerable after the run: a flat book marks at the
+     * capital the run started with, whatever the mark. */
+    CHECK_EQ_INT(strategy_native_marked_equity_v1(state.host, 1000.0, &value), PF_NATIVE_OK,
+                 "marked_equity refused");
+    CHECK(value == spec.initial_capital,
+          "a flat book did not mark at the initial capital");
+    strategy_native_host_free(state.host);
+
+    /* The identity is a function of the declarations and the inputs, so the
+     * same run answers the same hash. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = plain_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "second absent-accessor host create failed");
+    if (!state.host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "second configure");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the second run did not complete");
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.host, &second_hash), PF_NATIVE_OK,
+                 "second continuation hash refused");
+    CHECK(first_hash == second_hash,
+          "two identical runs answered different continuation hashes");
+    strategy_native_host_free(state.host);
+}
+
+/* The present side: a run that declares a margin model, a risk limit, a
+ * higher-timeframe series and the fill-cascade trigger, so every accessor
+ * that can answer does. */
+
+#define PROBE_ENTRY_BAR 3
+#define PROBE_TRAIL_BAR 6
+#define PROBE_READ_BAR  12
+#define PROBE_CAPITAL   100.0
+#define PROBE_UNITS     2.0
+#define PROBE_MAINTENANCE 0.25
+#define PROBE_TRAIL_OFFSET 5.0
+
+static int probe_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    probe_state* state = (probe_state*)user;
+    pf_bar_t partial;
+    (void)applied;
+    (void)at;
+    ++state->applied;
+    if (state->applied != 1) return 0;
+    /* An applied fill sits inside the script bar's path walk, which is
+     * exactly where the bar so far exists. */
+    memset(&partial, 0, sizeof(partial));
+    if (strategy_native_partial_bar_v1(state->host, &partial) == PF_NATIVE_OK) {
+        state->present_partial_at_applied =
+            (partial.high >= partial.close && partial.low <= partial.close) ? 1 : 0;
+    }
+    return 0;
+}
+
+static int probe_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    probe_state* state = (probe_state*)user;
+    pf_native_request_v1 request;
+    pf_native_trail_state_v1 trail;
+    pf_native_risk_state_v1 risk;
+    pf_bar_t series;
+    double price = 0.0;
+    uint64_t incarnation = 0;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+
+    if (state->calculations == PROBE_ENTRY_BAR) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = PROBE_UNITS;
+        request.label = "probe-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "the probe entry was refused");
+        return 0;
+    }
+    if (state->calculations == PROBE_TRAIL_BAR) {
+        /* A protective sell trail on the long, armed just above the entry.
+         * The feed only rises, so it arms and tracks without ever firing. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+        request.intent_value = PROBE_UNITS;
+        request.trigger = PF_NATIVE_TRIGGER_TRAIL;
+        request.p1 = PROBE_TRAIL_OFFSET;
+        request.trail_has_arm_price = 1;
+        request.p2 = bar->close + 1.0;
+        request.label = "probe-trail";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &incarnation, NULL)
+                          == PF_NATIVE_OK, "the probe trail was refused");
+        state->trail = incarnation;
+        memset(&trail, 0, sizeof(trail));
+        trail.struct_size = (uint32_t)sizeof(trail);
+        LCHECK(state, strategy_native_trail_state_v1(state->host, state->trail, &trail)
+                          == PF_NATIVE_OK, "a live trail answered no state");
+        state->trail_unarmed_seen = (trail.activated == 0u && trail.best_price == 0.0
+                                     && trail.current_level == 0.0
+                                     && trail.activation_ordinal == 0u) ? 1 : 0;
+        return 0;
+    }
+    if (state->calculations != PROBE_READ_BAR) return 0;
+
+    /* The trail has long since armed and is riding the running best. */
+    memset(&trail, 0, sizeof(trail));
+    trail.struct_size = (uint32_t)sizeof(trail);
+    LCHECK(state, strategy_native_trail_state_v1(state->host, state->trail, &trail)
+                      == PF_NATIVE_OK, "the armed trail answered no state");
+    state->trail_armed_seen = (trail.activated != 0u && trail.activation_ordinal != 0u) ? 1 : 0;
+    state->trail_best = trail.best_price;
+    state->trail_level = trail.current_level;
+
+    /* The "15" series over a "5" input has delivered completed buckets. */
+    memset(&series, 0, sizeof(series));
+    if (strategy_native_series_bar_v1(state->host, 0u, &series) == PF_NATIVE_OK) {
+        state->present_series_after_delivery =
+            (series.high >= series.low && series.timestamp >= 0) ? 1 : 0;
+    }
+    /* An index past the declared list stays absent. */
+    LCHECK(state, strategy_native_series_bar_v1(state->host, 4u, &series) == PF_NATIVE_ABSENT,
+           "an undeclared subscription index answered");
+
+    /* A carried long under a maintenance-only model has a solvable level. */
+    LCHECK(state, strategy_native_position_v1(state->host, &state->position_units,
+                                              &state->position_avg, NULL) == PF_NATIVE_OK,
+           "the probe position was refused");
+    price = 0.0;
+    if (strategy_native_liquidation_price_v1(state->host, &price) == PF_NATIVE_OK) {
+        state->liquidation_price = price;
+    }
+    state->marked_equity_mark = state->position_avg + 10.0;
+    LCHECK(state, strategy_native_marked_equity_v1(state->host, state->marked_equity_mark,
+                                                   &state->marked_equity_probe)
+                      == PF_NATIVE_OK, "marked equity was refused mid-run");
+
+    memset(&risk, 0, sizeof(risk));
+    risk.struct_size = (uint32_t)sizeof(risk);
+    LCHECK(state, strategy_native_risk_state_v1(state->host, &risk) == PF_NATIVE_OK,
+           "the live risk ledger was refused");
+    state->risk_fills_today = risk.fills_today;
+    state->risk_blocked = risk.blocked;
+    LCHECK(state, risk.has_day != 0u, "a live risk ledger reported no day");
+    LCHECK(state, risk.peak_equity > 0.0, "a live risk ledger reported no equity peak");
+    return 0;
+}
+
+static void check_live_accessors(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_subscription_v1 series;
+    pf_native_callbacks_v1 table;
+    probe_state state;
+    const pf_bar_t* bars;
+    uint64_t driven = 0;
+    uint64_t skipped = 0;
+    double expected = 0.0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = probe_on_bar;
+    table.on_applied = probe_on_applied;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "live-accessor host create failed");
+    if (!state.host) return;
+
+    spec.initial_capital = PROBE_CAPITAL;
+
+    memset(&series, 0, sizeof(series));
+    series.struct_size = (uint32_t)sizeof(series);
+    series.tf = "15";
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_MARGIN | PF_NATIVE_SPEC_EXT_RISK
+                     | PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS | PF_NATIVE_SPEC_EXT_CALCULATION;
+    /* Maintenance-only: no kernel opening requirement, so the host owns
+     * admission and the leveraged probe position is legal. */
+    ext.margin_initial_long = 0.0;
+    ext.margin_initial_short = 0.0;
+    ext.margin_has_maintenance_long = 1u;
+    ext.margin_maintenance_long = PROBE_MAINTENANCE;
+    ext.margin_has_maintenance_short = 1u;
+    ext.margin_maintenance_short = PROBE_MAINTENANCE;
+    ext.margin_sizing = 2u;   /* Flatten */
+    /* Every field of a PRESENT block is read, so the multiple carries the
+     * kernel's own 1.0 even under a sizing policy that never scales. */
+    ext.margin_shortfall_multiple = 1.0;
+    ext.margin_check = 0u;    /* PathAdverseExtreme */
+    ext.risk_has_max_fills_per_day = 1u;
+    ext.risk_max_fills_per_day = 1u;
+    ext.risk_day_basis = 0u;  /* SessionDay */
+    ext.risk_action = 0u;     /* BlockOpenings */
+    ext.subscriptions = &series;
+    ext.subscriptions_n = 1u;
+    ext.calculation = 1u;     /* BarCloseAndFills */
+    ext.max_recalculations_per_point = 4u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the live-accessor extension was refused");
+
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the live-accessor run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback live-accessor rows failed");
+
+    CHECK(state.present_partial_at_applied,
+          "current_partial_bar answered nothing at an applied fill");
+    CHECK(state.present_series_after_delivery,
+          "a delivered 15m series answered no bar");
+    CHECK(state.trail_unarmed_seen,
+          "a trail before its arm did not report the zero projection");
+    CHECK(state.trail_armed_seen, "an armed trail did not report activation");
+    CHECK(state.trail_best > 0.0 && state.trail_level > 0.0,
+          "an armed trail reported no best or level");
+    /* The level rides exactly the declared offset behind the running best. */
+    CHECK(fabs((state.trail_best - state.trail_level) - PROBE_TRAIL_OFFSET) < 1e-9,
+          "the trail level is not the offset behind the best");
+
+    /* equity(P) = capital + units * (P - avg); the level is where it meets
+     * maintenance * units * P. Both are re-derived from what the run booked,
+     * so this pins the accessor, not a hard-coded price. */
+    CHECK(state.position_units == PROBE_UNITS, "the probe did not carry its units");
+    expected = (PROBE_UNITS * state.position_avg - PROBE_CAPITAL)
+             / (PROBE_UNITS * (1.0 - PROBE_MAINTENANCE));
+    CHECK(state.liquidation_price > 0.0, "a carried long answered no liquidation price");
+    CHECK(fabs(state.liquidation_price - expected) < 1e-9,
+          "the liquidation price is not the maintenance solve of what was booked");
+
+    expected = PROBE_CAPITAL + PROBE_UNITS * (state.marked_equity_mark - state.position_avg);
+    CHECK(fabs(state.marked_equity_probe - expected) < 1e-9,
+          "marked equity is not the capital plus the open profit at the mark");
+
+    /* One fill was budgeted and one was taken, so the ledger is at its cap
+     * and openings are blocked for the rest of the risk day. */
+    CHECK_EQ_INT((int)state.risk_fills_today, 1, "the risk ledger miscounted the fills");
+    CHECK_EQ_INT((int)state.risk_blocked, 1, "the fills-per-day cap did not block");
+
+    /* BarCloseAndFills adds one calculation at the applied cursor. */
+    CHECK_EQ_INT(strategy_native_recalculations_v1(state.host, &driven, &skipped),
+                 PF_NATIVE_OK, "live recalculation counters refused");
+    CHECK(driven >= 1u, "BarCloseAndFills drove no recalculation");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -900,5 +1308,7 @@ int pf_native_c_api_checks(void) {
     check_callback_failure_latch();
     check_event_polling();
     check_risk_event();
+    check_absent_accessors();
+    check_live_accessors();
     return failures;
 }

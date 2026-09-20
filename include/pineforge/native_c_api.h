@@ -103,6 +103,14 @@ extern "C" {
 #define PF_NATIVE_E_INVALID_TARGET -10   /**< The target handle was never issued by this run. */
 #define PF_NATIVE_E_RUN_FAILED     -11   /**< The run did not reach Completed; read the state. */
 #define PF_NATIVE_E_REFUSED        -12   /**< execute_current refused; see pf_native_refusal_e. */
+/** Non-negative outcome: the kernel HAS no answer here and the output was
+ *  left at its documented empty. It is not an error — the C++ spelling of
+ *  each accessor that returns it is a `std::optional`, whose empty is a
+ *  legitimate answer (no path walk, an unarmed trail, a series that has not
+ *  delivered, a run with no margin model). Only the accessors whose own
+ *  documentation names it can return it; #strategy_native_execute_current_v1
+ *  never does, its positive codes being #pf_native_execute_outcome_e. */
+#define PF_NATIVE_ABSENT             1
 /** @} */
 
 /** `NativeFailureCode::CallbackException` — the code latched when a C callback
@@ -519,6 +527,44 @@ typedef struct pf_native_state_v1 {
     uint32_t completion;       /**< NativeCompletion once Completed. */
 } pf_native_state_v1;
 
+/** The trail projection of #strategy_native_trail_state_v1 — the C spelling
+ *  of `NativeTrailState`. Before the arm is reached `activated` is 0 and
+ *  every other field is 0; once armed, `best_price` and `current_level` are
+ *  the exact raw matcher values and `activation_ordinal` identifies the
+ *  TrailArm event that began tracking. */
+typedef struct pf_native_trail_state_v1 {
+    uint32_t struct_size;        /**< sizeof(pf_native_trail_state_v1). */
+    uint32_t version;            /**< PF_NATIVE_API_VERSION. */
+    uint32_t activated;          /**< 0/1: the arm price has been reached. */
+    uint32_t reserved0;
+    double   best_price;         /**< Running best; 0 before the arm. */
+    double   current_level;      /**< The stop the best is riding; 0 before the arm. */
+    uint64_t activation_ordinal; /**< The TrailArm event; 0 before the arm. */
+} pf_native_trail_state_v1;
+
+/** The run's generic risk ledger — the C spelling of `NativeRiskState` (L9).
+ *
+ *  Every field is its zero for a run that declares no risk block, exactly as
+ *  the C++ value is. `blocked` is whether openings are refused right now and
+ *  `reason` names the limit that did it (valid only when `has_reason`);
+ *  `day_ordinal` is the risk day the ledger is on, on the spec's own day
+ *  basis, and is meaningful only when `has_day`. Observation only: reading it
+ *  moves nothing. */
+typedef struct pf_native_risk_state_v1 {
+    uint32_t struct_size;   /**< sizeof(pf_native_risk_state_v1). */
+    uint32_t version;       /**< PF_NATIVE_API_VERSION. */
+    uint32_t blocked;       /**< 0/1: openings are refused right now. */
+    uint32_t has_reason;    /**< 0/1: `reason` is meaningful. */
+    uint32_t reason;        /**< #pf_native_risk_limit_e that blocked. */
+    uint32_t has_day;       /**< 0/1: the ledger has reached a day. */
+    uint32_t consecutive_loss_days; /**< Days that closed with a realized loss. */
+    uint32_t reserved0;
+    int64_t  day_ordinal;   /**< The risk day, on the spec's day basis. */
+    uint64_t fills_today;   /**< Applied fills counted in that day. */
+    double   peak_equity;      /**< Running peak of the marked equity. */
+    double   day_open_equity;  /**< Equity the current day opened at. */
+} pf_native_risk_state_v1;
+
 /** One order request. Translated field by field into `native_order::Request`;
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
  *  set only the fields the chosen `intent` and `trigger` document.
@@ -663,7 +709,11 @@ typedef struct pf_native_run_spec_ext_v1 {
     double   margin_initial_short;  /**< 0 = maintenance-only; see above. */
     double   margin_maintenance_long;
     double   margin_maintenance_short;
-    double   margin_shortfall_multiple;
+    double   margin_shortfall_multiple; /**< The C++ default is 1.0, not 0: a
+                                         *   PRESENT block has every field read,
+                                         *   so a zero-filled struct must still
+                                         *   write it — including under a sizing
+                                         *   policy that never scales. */
     double   margin_min_units;
 
     const pf_native_subscription_v1* subscriptions; /**< Borrowed for the call. */
@@ -869,6 +919,63 @@ PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
  *  @p out is an in/out size prefix: set `out->struct_size` to
  *  `sizeof(pf_native_state_v1)` before the call. */
 PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out);
+
+/** The bar so far at the current cursor — `current_partial_bar()`.
+ *
+ *  Open of the script bar's first modeled point, running high/low, close at
+ *  the cursor; volume is the activity actually consumed so far. Valid in the
+ *  bar-open, applied, tick, sub-bar and recalculation callbacks.
+ *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT outside a
+ *  path walk — including in the bar's own close calculation, where the
+ *  callback already holds the complete bar — leaving @p out untouched. */
+PF_API int strategy_native_partial_bar_v1(pf_strategy_t s, pf_bar_t* out);
+
+/** How many recalculations the kernel drove, and how many it suppressed
+ *  because a point had spent its `max_recalculations_per_point` budget —
+ *  `native_recalculation_count()` / `native_recalculations_skipped()`.
+ *  Either pointer may be NULL. Observation only. */
+PF_API int strategy_native_recalculations_v1(pf_strategy_t s, uint64_t* driven,
+                                             uint64_t* skipped);
+
+/** The trail projection of one live request — `trail_state()`.
+ *
+ *  @p incarnation names a request this run issued.
+ *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT when the
+ *  handle is not a live Trail request (unknown, finished, or another
+ *  trigger), leaving @p out untouched. */
+PF_API int strategy_native_trail_state_v1(pf_strategy_t s, uint64_t incarnation,
+                                          pf_native_trail_state_v1* out);
+
+/** The latest completed bucket of a declared subscription —
+ *  `native_series_bar()`. @p subscription is the row's index in the
+ *  `subscriptions` array #strategy_configure_native_ext_v1 was given (or the
+ *  list #strategy_native_declare_subscriptions_v1 installed). Legal inside
+ *  every callback, `on_timeframe_bar` included.
+ *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT before the
+ *  series' first delivery, for an unknown index, and on every input bar a
+ *  `gaps = 1` series publishes nothing on — the empty that stands for na. */
+PF_API int strategy_native_series_bar_v1(pf_strategy_t s, uint32_t subscription,
+                                         pf_bar_t* out);
+
+/** The account's marked equity at @p mark — `native_marked_equity()`. */
+PF_API int strategy_native_marked_equity_v1(pf_strategy_t s, double mark, double* out);
+
+/** The price at which the marked equity falls below the run's maintenance
+ *  requirement for the live position's side — `native_liquidation_price()`.
+ *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT when the
+ *  run declares no margin model, the side has no maintenance fraction, the
+ *  book is flat, or no finite price solves the breach (a long at full
+ *  maintenance); @p out is then written NaN. */
+PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out);
+
+/** The run's generic risk ledger — `native_risk_state()`. Every field is its
+ *  zero for a run that declares no risk block. */
+PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v1* out);
+
+/** The run's continuation identity — `native_continuation_hash()`. Two runs
+ *  that folded the same declarations and the same inputs answer the same
+ *  value; it is the C spelling of the hash a stream resumes against. */
+PF_API int strategy_native_continuation_hash_v1(pf_strategy_t s, uint64_t* out);
 
 /** Open a cohort roster for PF_NATIVE_OWNER_BIND_COHORT. */
 PF_API int strategy_native_cohort_open_v1(pf_strategy_t s, uint64_t* cohort);

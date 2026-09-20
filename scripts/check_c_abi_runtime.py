@@ -108,14 +108,22 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_working_get_v1",
     "strategy_native_events_v1",
     "strategy_native_state_v1",
+    "strategy_native_partial_bar_v1",
+    "strategy_native_recalculations_v1",
+    "strategy_native_trail_state_v1",
+    "strategy_native_series_bar_v1",
+    "strategy_native_marked_equity_v1",
+    "strategy_native_liquidation_price_v1",
+    "strategy_native_risk_state_v1",
+    "strategy_native_continuation_hash_v1",
     "strategy_native_cohort_open_v1",
     "strategy_native_cohort_add_v1",
     "strategy_native_cohort_remove_v1",
     "strategy_configure_native_ext_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 20
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 20
+EXPECTED_NATIVE_C_API_DECLARATIONS = 28
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 28
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

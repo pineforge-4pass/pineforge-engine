@@ -2325,7 +2325,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-19 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+27 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -2374,6 +2374,22 @@ failure. `_cancel_where_v1` takes the text and a
 unknown selector is `PF_NATIVE_E_TAG` and a NULL text is
 `PF_NATIVE_E_ARGUMENT`, because `""` is the text every request carrying no
 such field matches.
+
+**Reading the kernel back.** Eight accessors answer what the C++ host reads
+off itself. Four of them are `std::optional` in C++, and `PF_NATIVE_ABSENT`
+(1, a non-negative *outcome*, not an error) is the C spelling of that empty:
+`strategy_native_partial_bar_v1` (`current_partial_bar()` — the bar so far at
+this cursor, absent in the bar's own close calculation, where the callback
+already holds the complete bar), `_series_bar_v1` (`native_series_bar()` — the
+latest completed bucket of a declared subscription, absent before its first
+delivery and on every bar a `gaps = 1` series publishes nothing on),
+`_trail_state_v1` (`trail_state()` — activation, running best, current level,
+absent when the handle is not a live trail) and `_liquidation_price_v1`
+(`native_liquidation_price()`, which also writes NaN when it is absent). The
+other four always answer: `_risk_state_v1` (L9's ledger, all zeros for a run
+that declares no risk block), `_marked_equity_v1`, `_recalculations_v1` (the
+driven and suppressed counts — the script bar's own close calculation is not
+a recalculation, so a `BarClose` run drives zero) and `_continuation_hash_v1`.
 
 **The request.** `pf_native_request_v1` is translated field by field into
 `native_order::Request` and is never cast onto it. It carries the intent
