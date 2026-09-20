@@ -47,12 +47,10 @@ inline constexpr double kOcaQtyEpsilon = 1e-12;
 //                      1e-9 of the open position counts as full. Same value
 //                      as kFullPercentEps by coincidence, conceptually
 //                      distinct — do not merge.
-//   kPathPosEps      — intra-bar path-position comparisons (segment + [0..1]).
 //   kSegmentDenomEps — degenerate path-segment denominator guard.
 //   kPathTimeEps     — magnifier t-value dedupe tolerance.
 inline constexpr double kFullPercentEps  = 1e-9;
 inline constexpr double kFullQtyEps      = 1e-9;
-inline constexpr double kPathPosEps      = 1e-12;
 inline constexpr double kSegmentDenomEps = 1e-15;
 inline constexpr double kPathTimeEps     = 1e-12;
 
@@ -74,67 +72,6 @@ enum class DualEntryStopPathWinner : int {
     LongFirst,
     ShortFirst,
     Tie,
-};
-
-// Kind of price-cross event on the synthesized OHLC path. Used by the
-// helpers in engine_path_resolve.cpp; exposed in this header purely so
-// the helpers' declarations compile — external code should not depend
-// on these values.
-enum class PathCrossKind { STOP, LIMIT, TRAIL };
-
-struct PathCrossEvent {
-    double price;
-    double path_pos;
-    PathCrossKind kind;
-};
-
-// Fixed-capacity event list: at most one STOP, one LIMIT, one TRAIL event
-// can exist per path segment. Replaces a heap vector in the innermost
-// fill-resolution loop.
-struct CrossEventList {
-    PathCrossEvent ev[3];
-    int n = 0;
-    const PathCrossEvent* begin() const { return ev; }
-    const PathCrossEvent* end() const { return ev + n; }
-};
-
-struct ExitPathFill {
-    bool should_fill = false;
-    double fill_price = std::numeric_limits<double>::quiet_NaN();
-    // True when the TRAIL leg produced the fill (vs stop/limit/gap-open).
-    // Consumers use it to reconstruct the trail's peak (fill +/- offset)
-    // for per-trade excursion reporting.
-    bool is_trail = false;
-    // True when the LIMIT leg produced the fill (intra-bar touch of the
-    // limit, or a gap-open beyond the limit). TradingView fills limit
-    // orders at limit-or-better with NO slippage (see apply_limit_fill in
-    // engine.hpp); the fill-application code needs to know which leg fired
-    // because price equality cannot distinguish a gap fill at the open.
-    bool is_limit = false;
-    // True when the fill is the RAW BAR OPEN (open-gap shortcut through a
-    // trail / stop / limit level) rather than a level. finding-446: the
-    // consumer nearest-tick rounds a bar-price fill (bar_fill_price) while a
-    // level fill keeps its directional snap; price equality cannot tell the
-    // two apart when a sub-tick open coincides with a level.
-    bool at_bar_open = false;
-    // True when an at_bar_open fill is the trail's LEVEL rather than the raw
-    // print: a one-shot (zero-offset) trail whose activation the open already
-    // sits past arms AT the open with best = open and fills at open -/+ 0 —
-    // a COMPUTED level, so the consumer snaps it directionally (sell floor,
-    // buy ceil) instead of nearest-rounding the bar print. `lab tv`
-    // NASDAQ:AAPL 15m (round 7 family G, scratchpad/r7/pins/scalper-trail-*):
-    // long exit at the 2025-04-22 13:30Z open 196.135 -> TV 196.13 (engine
-    // booked bar_fill_price = 196.14); short exit at the 05-23 13:30Z open
-    // 193.665 -> 193.67.
-    bool open_is_trail_level = false;
-    // Where the fill happened on the bar's 4-waypoint synthesized path, in
-    // first_touch_position units (0 = open, 1/2 = the extremes, 3 = close;
-    // fractional inside a segment). This is the fill's ACTUAL chronology,
-    // which for a TRAIL leg is not recoverable from the fill price alone —
-    // a trail's level is not a resting one, so its first path touch can
-    // precede the moment it arms and fires. finding-308's pre-exit
-    // margin-call slice compares this against the adverse extreme.
-    double path_position = std::numeric_limits<double>::quiet_NaN();
 };
 
 
@@ -218,11 +155,6 @@ void set_path_order_override(int mode);
 int path_order_override();
 
 
-// Returns: -1 = stop hit first, +1 = limit hit first, 0 = neither
-// Walks a 4-waypoint intra-bar price path to determine fill priority.
-int price_path_priority(const Bar& bar, double stop_level, double limit_level);
-
-
 // Return earliest path position (segment index + [0..1] interpolation) where
 // price level is crossed on OHLC path. Returns false if never crossed.
 bool first_touch_position(const Bar& bar, double level, double* out_pos);
@@ -232,8 +164,8 @@ bool first_touch_position(const Bar& bar, double level, double* out_pos);
 // walks the tick-quantized twin of a bar (BacktestEngine::broker_trigger_bar)
 // with the RAW bar's order, so a path coordinate produced here — the entry
 // cursor a same-bar bracket resumes from, a sibling / opposing-order
-// tie-break — lives in the same coordinate system as resolve_exit_path_fill's
-// walk. The single-bar forms derive the order from
+// tie-break — lives in the same coordinate system as the matcher's own walk
+// (src/native_matching.hpp). The single-bar forms derive the order from
 // the bar they are given (bar_path_uses_high_first) and are unchanged.
 bool first_touch_position(const Bar& bar, bool high_first, double level,
                           double* out_pos);
@@ -253,108 +185,9 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
                             bool is_long, double* out_pos);
 
 
-void fill_bar_path_points(const Bar& bar, double path[4]);
-
 // Same 4-waypoint path, but with the leg order chosen by the caller (so a
 // tick-quantized twin of a bar walks the raw bar's leg order).
 void fill_bar_path_points_ordered(const Bar& bar, bool high_first, double path[4]);
-
-
-int path_cross_kind_priority(PathCrossKind kind);
-
-
-void append_cross_event(CrossEventList* events,
-                               double from_price,
-                               double to_price,
-                               double level,
-                               PathCrossKind kind);
-
-
-CrossEventList collect_cross_events(double from_price,
-                                                        double to_price,
-                                                        double stop_level,
-                                                        double limit_level,
-                                                        double trail_level);
-
-// design-stop-tick-rounding: stop and limit crossings are taken on the
-// tick-quantized segment (tick_from -> tick_to), an ACTIVE trail's level
-// crossing on the raw segment (from -> to); the merged list keeps
-// collect_cross_events's order. design-trail-activation-tick-bar: a dormant
-// exit-at-activation trail's activation level (trail_activation_level, set
-// only when trail_level is NaN) is reached on the tick-quantized segment and
-// reported as the TRAIL event.
-CrossEventList collect_cross_events_split(double from_price,
-                                          double to_price,
-                                          double tick_from_price,
-                                          double tick_to_price,
-                                          double stop_level,
-                                          double limit_level,
-                                          double trail_level,
-                                          double trail_activation_level
-                                              = std::numeric_limits<double>::quiet_NaN());
-
-
-// fill_at_bar_point (optional) reports whether the returned fill price is a
-// RAW OHLC path point (the limit was already marketable there) rather than
-// the stop or limit level itself — the caller nearest-tick rounds bar-point
-// fills (finding-446) while level fills keep their limit-or-better snap.
-bool resolve_entry_stop_limit_fill(const Bar& bar,
-                                          bool is_long,
-                                          double stop_price,
-                                          double limit_price,
-                                          double* fill_price,
-                                          bool* activated,
-                                          bool* fill_at_bar_point = nullptr);
-
-
-// design-stop-tick-rounding: `tick_bar` is the bar the STOP / LIMIT legs are
-// tested against (the engine passes BacktestEngine::broker_trigger_bar(bar):
-// OHLC quantized to the tick, level raw); the TRAIL leg walks `bar` itself.
-// The two share the raw bar's leg order and segment cursor.
-ExitPathFill resolve_exit_path_fill(const Bar& bar,
-                                           const Bar& tick_bar,
-                                           PositionSide position_side,
-                                           double stop_price,
-                                           double limit_price,
-                                           double trail_points,
-                                           double trail_price,
-                                           double trail_offset,
-                                           double position_entry_price,
-                                           double trail_best_start,
-                                           bool is_entry_bar,
-                                           bool magnifier_active,
-                                           double syminfo_mintick,
-                                           bool cascade_wp_gap = false,
-                                           double path_start_position = 0.0);
-
-// Raw-only form (tick_bar == bar): every leg walks the raw bar.
-ExitPathFill resolve_exit_path_fill(const Bar& bar,
-                                           PositionSide position_side,
-                                           double stop_price,
-                                           double limit_price,
-                                           double trail_points,
-                                           double trail_price,
-                                           double trail_offset,
-                                           double position_entry_price,
-                                           double trail_best_start,
-                                           bool is_entry_bar,
-                                           bool magnifier_active,
-                                           double syminfo_mintick,
-                                           bool cascade_wp_gap = false,
-                                           double path_start_position = 0.0);
-
-
-// KI-67 exit cascade (Model S "R-cascade-gapjump"). Given the in-flight LEG
-// index seg_i (0 = O->W1, 1 = W1->W2, 2 = W2->C; supplied by the dispatch loop's
-// real cursor position), the full script bar, and the recalc price ap the
-// triggering fill landed on, returns true when the exit level lies inside the
-// in-flight remainder (ap -> leg-end waypoint W0 = path[seg_i+1]) in the trigger
-// direction on a NON-terminal leg — i.e. it gap-fills same-bar at W0 (limits
-// fill better than the level, stops worse). False for a terminal (seg_i>=2) or
-// off-path (seg_i<0) leg, and whenever the level is not swept in the remainder.
-bool cascade_exit_inflight_fires(const Bar& bar, double ap, int seg_i,
-                                 PositionSide position_side,
-                                 double stop_price, double limit_price);
 
 
 // ── Lower-TF emulation helpers (defined in engine_lower_tf.cpp) ──

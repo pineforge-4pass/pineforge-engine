@@ -1632,7 +1632,7 @@ protected:
     // re-deriving it from the fill price (ambiguous exactly at waypoints). -1 (or
     // >=3) outside a mid-bar historical recalc / at the terminal C tick.
     // KI-67 exit cascade: set by the gate immediately before evaluate_fill_price
-    // so resolve_exit_path_fill runs its open-gap shortcut on the in-flight
+    // so the exit fill evaluation runs its open-gap shortcut on the in-flight
     // leg-end waypoint POINT even when is_entry_bar (entry + exit share a bar).
     // Reset right after that evaluation; never set on the magnifier path.
     // Direct strategy.close / POOC fills can occur inside on_bar rather than
@@ -2801,7 +2801,7 @@ public:
     // materialize_relative_exit_prices_for_live_position (limit = entry +
     // dir * profit_ticks * mintick, stop = entry - dir * loss_ticks *
     // mintick, dir = +1 long / -1 short, level_on_price_grid) and
-    // resolve_exit_path_fill (activation = snap_trail_level_to_tick_grid(
+    // the trail activation rule (activation = snap_trail_level_to_tick_grid(
     // entry +/- ceil(trail_points - 5e-5) * mintick); trail_points wins
     // over trail_price when both are set). NaN for a leg that is unset or
     // unresolvable. Returns 0, or -1 on a bad index / null out-pointer.

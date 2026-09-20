@@ -1000,7 +1000,7 @@ PF_API int strategy_pending_order_level_resolved(pf_strategy_t s, int index);
  *  `level_on_price_grid`), and `trail_activation = entry +/- ceil(
  *  trail_points - 5e-5) * mintick` snapped to the tick grid
  *  (`trail_points` wins over `trail_price` when both are set, as in
- *  `resolve_exit_path_fill`). NaN for a leg that is unset or not yet
+ *  the trail activation rule). NaN for a leg that is unset or not yet
  *  resolvable. Returns 0; -1 with nothing written when @p s is NULL,
  *  @p index is out of range, or any out-pointer is NULL. */
 PF_API int strategy_pending_order_effective_levels(pf_strategy_t s, int index, double* stop,

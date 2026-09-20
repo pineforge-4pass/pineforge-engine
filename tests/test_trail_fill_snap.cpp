@@ -59,6 +59,7 @@
 #include <vector>
 
 #include "../src/engine_internal.hpp"
+#include "exit_path_resolver_oracle.hpp"
 
 using namespace pineforge;
 using namespace pineforge::internal;
