@@ -295,6 +295,34 @@ public:
     }
 };
 
+// MG-F3. The gridded shortfall, R5 N11. TradingView floors the restore onto
+// the lot grid BEFORE the multiple: 20 long at 100 on 1000 at 50 % margin on
+// a one-unit lot grid, a bar reaching 93.9:
+//   restore = (20*93.9*0.5 - (1000 + 20*(93.9-100))) / (93.9*0.5)
+//           = 1.2992545260915842
+//   TV      = floor(1.2992...) * 4 = 4 lots, floored again = 4
+// where the kernel's own ShortfallMultiple(4.0) would book floor(5.197) = 5.
+// The adapter's units hook is the sizing authority, so the run spec declares
+// no sizing knob at all (project()); this row is the measurement that the
+// number comes from the hook and from nothing the spec says.
+class GriddedShortfallLong final : public Probe {
+public:
+    GriddedShortfallLong() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 20.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_long_ = 50.0;
+        process_orders_on_close_ = true;
+        qty_step_ = 1.0;
+        syminfo_mintick_ = 0.01;
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L", true, kNaN, kNaN, 20.0);
+    }
+};
+
 // MG-K. set_margin_call_enabled(false) must still suppress every call: that is
 // the C setter's pinned semantics, whatever owns the model underneath.
 class DisabledLong final : public Probe {
@@ -322,6 +350,9 @@ std::vector<Bar> long_break_tape() {
 }
 std::vector<Bar> short_break_tape() {
     return {bar(0, 100.0, 100.0, 99.0, 100.0), bar(60000, 100.0, 105.0, 99.5, 104.0)};
+}
+std::vector<Bar> gridded_break_tape() {
+    return {bar(0, 100.0, 100.0, 100.0, 100.0), bar(60000, 100.0, 101.0, 93.9, 95.0)};
 }
 std::vector<Bar> quiet_tape() {
     return {bar(0, 100.0, 100.0, 100.0, 100.0), bar(60000, 100.0, 100.5, 100.0, 100.2)};
@@ -435,6 +466,7 @@ int main() {
     verify(kMoneyLong, run<MoneyLong>(eth_0421_tape()));
     verify(kRepeatedBreach, run<RepeatedBreach>(staircase_tape()));
     verify(kPostExitResizeShort, run<PostExitResizeShort>(post_exit_resize_tape()));
+    verify(kGriddedShortfallLong, run<GriddedShortfallLong>(gridded_break_tape()));
     verify(kDisabledLong, run<DisabledLong>(long_break_tape()));
     std::printf("%d checks, %d failures\n", passed + failed, failed);
     return failed == 0 ? 0 : 1;

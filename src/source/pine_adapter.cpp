@@ -1518,14 +1518,14 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // R5: the broker model itself is the kernel's. TradingView's two margin
     // percents ARE the maintenance fractions (strategy(margin_long=,
     // margin_short=) is the fraction of the position's value the account must
-    // keep, and the emulator liquidates the moment it cannot), the liquidation
-    // is four times the restore, the check is made at the remaining path's
-    // adverse mark and rests there, and the whole model is present exactly
-    // when the call is enabled -- which is how set_margin_call_enabled()
-    // keeps its C-ABI semantics without a second switch. The money rules
-    // TradingView layers on top (its equity basis, its ten-significant-digit
-    // requirement, its whole-drop band, its scheduling) are host policy and
-    // live in the three hooks below, never in this spec.
+    // keep, and the emulator liquidates the moment it cannot), the check is
+    // made at the remaining path's adverse mark and rests there, and the
+    // whole model is present exactly when the call is enabled -- which is how
+    // set_margin_call_enabled() keeps its C-ABI semantics without a second
+    // switch. The money rules TradingView layers on top (its equity basis,
+    // its ten-significant-digit requirement, its lot-floored 4x slice with
+    // the whole-drop band, its scheduling) are host policy and live in the
+    // three hooks below, never in this spec.
     const double margin_long_fraction = config.margin_long / 100.0;
     const double margin_short_fraction = config.margin_short / 100.0;
     if (source_margin_call_enabled_
@@ -1548,13 +1548,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         margin.initial_short = 0.0;
         margin.maintenance_long = margin_long_fraction;
         margin.maintenance_short = margin_short_fraction;
-        margin.sizing = NativeLiquidationSizing::ShortfallMultiple;
-        margin.shortfall_multiple = 4.0;
-        // The broker's minimum liquidation trade is the symbol's lot. The
-        // adapter's own whole-drop band answers through resolve_margin_call_units
-        // and keeps the last word over this flatten.
-        if (staged.quantity_grid && *staged.quantity_grid > 0.0)
-            margin.liquidation_min_units = *staged.quantity_grid;
+        // No sizing knob (R5 N11): resolve_margin_call_units answers every
+        // call, so sizing / shortfall_multiple / liquidation_min_units would
+        // be set only to be shadowed, and TradingView's slice (restore
+        // lot-floored BEFORE the 4x, floored again, one-contract whole-drop
+        // band) is no generic policy; check_adapter_spec_shadowing.py guards.
         // The slice belongs to the adverse waypoint it was measured at, not to
         // a solved level -- and a 1x long, whose slope solves no level at all,
         // still has to be checked.
@@ -1717,9 +1715,8 @@ double PineExecutionAdapter::default_sizing_lot_floor(double units) const noexce
 }
 
 // The core intent a default-quantity declaration spells: the source money as
-// the CashValue basis, the core's percentage fee reserve, the raw quotient
-// (ExplicitUnits) for the source lot floor, frozen at acceptance against the
-// signal rule.  A declaration with no money of its own has no shape.
+// the CashValue basis, the core's fee reserve, the raw quotient for the source
+// lot floor, frozen at acceptance against the signal rule.  No money, no shape.
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_shape(
         const PineSizingSnapshot& sizing) const noexcept {
     const double cash = default_sizing_cash(sizing);
@@ -1733,13 +1730,10 @@ std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_shape(
     return sized;
 }
 
-// The placement-time default quantity.  The source's own money band and
-// affordability gates consume this number before any request exists
-// (entry(): "The TV money band is a source policy"), so the source asks the
-// core for its conversion -- cash / (price * point value * fx) with the fee
-// reserve, the very arithmetic acceptance runs -- and floors it; the
-// conversion exists once (R5 N11).  A money the core cannot convert freezes
-// nothing.
+// The placement-time default quantity: the source's money band and
+// affordability gates consume it before any request exists (entry(): "The TV
+// money band is a source policy"), so the source asks the core for its own
+// conversion and floors it -- the arithmetic exists once (R5 N11).
 double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const {
     if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
     const auto sized = default_sizing_shape(sizing);
@@ -10907,11 +10901,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
     } else if (core_sized) {
         // The core resolved cash / (signal price * point value * fx) with the
-        // percentage fee reserve at acceptance and published the quotient as
-        // this request's remaining units; only the source lot floor is left.
+        // fee reserve at acceptance and published the quotient as this
+        // request's remaining units; only the source lot floor is left.
         // default_sizing_intent emits Sized only where that acceptance is
-        // resolvable, so a missing quotient is a broken invariant, not a
-        // case to fall back from.
+        // resolvable, so a missing quotient is a broken invariant (R5 N11).
         const auto* published = std::get_if<native_order::RemainingUnits>(&facts.remaining);
         if (!published) throw std::logic_error("core-sized quantity without the core's quotient");
         result.units = default_sizing_lot_floor(published->q);
@@ -12407,16 +12400,13 @@ std::optional<NativeMarginDecision> PineExecutionAdapter::resolve_margin_require
     return decision;
 }
 
-// TradingView's sizing (MG-F + MG-G), on the kernel's own facts. Answering a
-// value takes the last word over the run spec's ShortfallMultiple and over its
-// liquidation_min_units flatten, which is what the whole-drop band needs.
+// TradingView's sizing (MG-F + MG-G), on the kernel's own facts. This hook is
+// the whole sizing authority for every call the kernel makes on the adapter's
+// behalf, which is why project() declares no kernel sizing knob for the model.
 std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
         const NativeMarginCallView& view) const {
-    // Always an answer, never nullopt: nullopt would hand the slice back to
-    // the run spec's own ShortfallMultiple, and the adapter is the sizing
-    // authority for every call this kernel makes on its behalf. A
-    // non-positive answer is the kernel's documented refusal, which withdraws
-    // the reduction instead of booking one.
+    // Always an answer, never nullopt. A non-positive answer is the kernel's
+    // documented refusal, which withdraws the reduction instead of booking one.
     //
     // TradingView never takes the adverse-path slice on a 1x long: the
     // one-contract money call owns that book instead

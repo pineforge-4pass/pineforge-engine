@@ -1460,6 +1460,14 @@ add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABL
 add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_cancellation_hash_coverage.py)
 
+# R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
+# unconditionally shadowed by one of its own host hooks (audit D2), plus the
+# check's mutation self-test.
+add_test(NAME test_adapter_spec_shadowing COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/check_adapter_spec_shadowing.py)
+add_test(NAME test_adapter_spec_shadowing_mutations COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_adapter_spec_shadowing.py)
+
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256)

@@ -71,6 +71,16 @@ const Expected kRepeatedBreach{
 // -3.0952380952380953 and 3 trades.
 const Expected kPostExitResizeShort{"MG-I2", 0, kNone, kNone, "", -5.0, 2};
 
+// MG-F3: the gridded shortfall floors the restore before the multiple: 4 lots
+// at the adverse waypoint 93.9, where the kernel's ShortfallMultiple(4.0)
+// would have booked 5. Harvested the same way as the rows above, from
+// 683a82f (the tree before R5 N11 stopped declaring the kernel's sizing knobs
+// for this model).
+const double kGriddedShortfallUnits[1] = {4.0};
+const double kGriddedShortfallPrices[1] = {93.900000000000006};
+const Expected kGriddedShortfallLong{
+    "MG-F3", 1, kGriddedShortfallUnits, kGriddedShortfallPrices, kOneCall, 16.0, 2};
+
 // MG-K: the C setter still switches the whole call off.
 const Expected kDisabledLong{"MG-K", 0, kNone, kNone, "", 20.0, 1};
 

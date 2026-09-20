@@ -931,10 +931,18 @@ ticket digests as it did before they existed
 
 **The TradingView margin call is this model.** The Pine adapter sets `margin`
 from `strategy(margin_long=, margin_short=)` — the two percents are the
-maintenance fractions — with `ShortfallMultiple` 4.0, the symbol's lot as
-`liquidation_min_units`, `PathAdverseExtremeMark`, the equity basis its
+maintenance fractions — with `PathAdverseExtremeMark`, the equity basis its
 commission type implies, `RealizedOnly` for the reported level and
-`"__margin_call__"` / `"Margin call"` for the ticket. The kernel then solves,
+`"__margin_call__"` / `"Margin call"` for the ticket. It declares **no sizing
+knob**: `resolve_margin_call_units` answers every call the kernel makes on its
+behalf, so `sizing`, `shortfall_multiple` and `liquidation_min_units` would be
+set only to be shadowed, and TradingView's slice — the restore lot-floored
+*before* the 4×, floored again, and the one-contract whole-drop band for a
+sub-lot restore — is not a generic policy the kernel could spell (R5 N11;
+`scripts/check_adapter_spec_shadowing.py` fails the build if a shadowed field
+is ever declared again, and `tests/test_adapter_margin_relower.cpp` MG-F3 pins
+the gridded case where the two orders of floor and multiple part: 4 lots, not
+5). The kernel then solves,
 schedules, places, re-prices, books and reports every resting liquidation; the
 adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
