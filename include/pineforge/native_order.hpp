@@ -287,12 +287,48 @@ enum class NativeArmVisibility : std::uint8_t {
     PendingUntilArmed = 1,
 };
 
+// When an armed request may first match. The arm happens inside its owner's
+// fill settlement, at the owner's fill print. AtArmPrint (the default) is the
+// established book: the armed request is a candidate at that very cursor, so
+// a level the fill print already satisfies matches at the print. AfterArmPrint
+// gives the armed request the birth rule of a request submitted from the
+// owner's fill callback: on the driver point that armed it, it sees only the
+// path after the print -- a level the print already satisfies does not match
+// there, a later crossing on that point still does -- and from the next
+// driver point on it is an ordinary working request. It governs the level
+// test of a priced trigger (limit, stop, stop-limit, trail arm); a market
+// trigger has no level and is unaffected. Both are broker models: a
+// contingent child that enters the book after its parent's trade cannot
+// trade on that print, a simulated bracket commonly may.
+enum class NativeArmFirstMatch : std::uint8_t {
+    AtArmPrint = 0,
+    AfterArmPrint = 1,
+};
+
+// What an armed CLOSING request (Reduce, Flatten, a HostSized close) closes.
+// OwnerLot (the default) is the established relation: the lot its owner's
+// fill opened, and nothing a later add brings. Book binds it, at the arm, to
+// the whole position that fill left -- the very book authority an
+// Independent close submitted from the owner's fill callback acquires -- so
+// a protective leg placed with its entry covers later adds and settles
+// through the book like any other close. A HostSized close may wait for its
+// owner only under Book: the owner-lot relation sizes from the units the
+// owner opened, whereas a book close is sized by the host at the match.
+// A waiting transaction closes nothing, so it must keep OwnerLot.
+enum class NativeArmScope : std::uint8_t {
+    OwnerLot = 0,
+    Book = 1,
+};
+
 struct Independent {};
-// The one owner relation that arms (the ArmedEvent). `visibility` is
-// appended last so every existing {parent} initializer keeps its meaning.
+// The one owner relation that arms (the ArmedEvent). `visibility`, then
+// `first_match`, then `scope` are appended last so every existing {parent},
+// {parent, visibility} initializer keeps its meaning.
 struct WaitForApplied {
     RequestHandle parent;
     NativeArmVisibility visibility = NativeArmVisibility::Working;
+    NativeArmFirstMatch first_match = NativeArmFirstMatch::AtArmPrint;
+    NativeArmScope scope = NativeArmScope::OwnerLot;
 };
 struct BindOpening {
     RequestHandle opening;

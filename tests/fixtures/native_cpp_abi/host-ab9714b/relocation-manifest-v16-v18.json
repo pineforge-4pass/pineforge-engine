@@ -109,6 +109,10 @@
     "NativeAnchoredLevelView",
     "WaitForApplied::visibility",
     "NativeArmVisibility",
+    "WaitForApplied::first_match",
+    "NativeArmFirstMatch",
+    "WaitForApplied::scope",
+    "NativeArmScope",
     "BrokerStateHashSink"
   ],
   "addedVirtuals": [

@@ -1363,11 +1363,14 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     if ((reverse_to || sized) && !std::holds_alternative<Independent>(request.owner)) {
         return RequestRejectReason::InvalidOwner;
     }
+    // A HostSized close may wait for its owner only as a book close: the
+    // owner-lot relation has no host-sized quantity.
+    const auto* waits = std::get_if<WaitForApplied>(&request.owner);
     if (host_sized
         && ((host_sized->kind == HostSizedKind::Open
              && !std::holds_alternative<Independent>(request.owner))
-            || (host_sized->kind == HostSizedKind::Close
-                && std::holds_alternative<WaitForApplied>(request.owner)))) {
+            || (host_sized->kind == HostSizedKind::Close && waits
+                && waits->scope != NativeArmScope::Book))) {
         return RequestRejectReason::InvalidOwner;
     }
 
@@ -1383,6 +1386,21 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         // An unknown visibility is refused rather than read as Working.
         if (wait->visibility != NativeArmVisibility::Working
             && wait->visibility != NativeArmVisibility::PendingUntilArmed) {
+            return RequestRejectReason::InvalidOwner;
+        }
+        // Likewise an unknown first-match rule is refused, never AtArmPrint.
+        if (wait->first_match != NativeArmFirstMatch::AtArmPrint
+            && wait->first_match != NativeArmFirstMatch::AfterArmPrint) {
+            return RequestRejectReason::InvalidOwner;
+        }
+        // The arm scope names what a CLOSING child closes; a waiting
+        // transaction closes nothing and must not claim a book.
+        if (wait->scope != NativeArmScope::OwnerLot && wait->scope != NativeArmScope::Book) {
+            return RequestRejectReason::InvalidOwner;
+        }
+        const bool closing_child = as_reduce(request.intent) || flatten
+            || (host_sized && host_sized->kind == HostSizedKind::Close);
+        if (wait->scope == NativeArmScope::Book && !closing_child) {
             return RequestRejectReason::InvalidOwner;
         }
     } else if (const auto* bind = std::get_if<BindOpening>(&request.owner)) {
@@ -1543,6 +1561,10 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
             if (is_owner_opened(*reduce)) live.remaining = RemainingUnbound{};
             else if (fraction_size(*reduce)) live.remaining = RemainingDeferred{};
             else live.remaining = RemainingUnits{explicit_size(*reduce)->units};
+        } else if (as_host_sized(request.intent)) {
+            // Validated as a Book-scoped close: deferred to the host's terms
+            // exactly like an Independent HostSized close.
+            live.remaining = RemainingDeferred{};
         } else {
             live.remaining = RemainingFlattenAll{};
         }
@@ -3298,7 +3320,9 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     if (payload->ordinal <= live.birth().acceptance_ordinal) {
         return NoChange{NoChangeReason::NoTransition};
     }
-    const bool closing = as_reduce(live.request().intent) || as_flatten(live.request().intent);
+    const auto* host_close = as_host_sized(live.request().intent);
+    const bool closing = as_reduce(live.request().intent) || as_flatten(live.request().intent)
+        || (host_close && host_close->kind == HostSizedKind::Close);
     const bool opened = payload->opened_units != 0.0;
     if (closing && !opened && !payload->terminal) {
         return NoChange{NoChangeReason::StillWaiting};
@@ -3425,25 +3449,39 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         updated.remaining = remaining;
     }
 
-    OpeningClose close;
-    close.opening = payload->handle();
-    close.cycle = cycle;
-    close.side = side;
-    close.enrollment = EnrollmentFromApplied{applied, payload->cursor};
     const uint64_t arm_ord = owner_opened ? ordinal + 1 : ordinal;
     if (owner_opened) {
         if (arm_ord <= last_ordinal_ || arm_ord == 0) {
             throw std::invalid_argument("native timeline ordinal reused or regressed");
         }
     }
+    const EnrollmentFromApplied enrollment{applied, payload->cursor};
+    Authority armed_authority;
+    const auto* waits = std::get_if<WaitForApplied>(&live.request().owner);
+    if (waits && waits->scope == NativeArmScope::Book) {
+        // The arm is the binding: the position this fill left, at its cursor.
+        BookClose book;
+        book.cycle = cycle;
+        book.side = side;
+        book.binding_event = EventId{identity_, arm_ord};
+        book.binding_cursor = payload->cursor;
+        armed_authority = book;
+    } else {
+        OpeningClose close;
+        close.opening = payload->handle();
+        close.cycle = cycle;
+        close.side = side;
+        close.enrollment = enrollment;
+        armed_authority = close;
+    }
     ArmedEvent armed_event;
     armed_event.ordinal = arm_ord;
     armed_event.definition = armed_definition;
     armed_event.before = live.authority;
-    armed_event.after = close;
-    armed_event.enrollment = close.enrollment;
+    armed_event.after = armed_authority;
+    armed_event.enrollment = enrollment;
     armed_event.quantity_resolution = quantity_resolution;
-    updated.authority = close;
+    updated.authority = armed_authority;
     if (!owner_opened) {
         plan.events.emplace_back(std::move(armed_event));
     } else {

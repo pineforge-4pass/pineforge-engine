@@ -331,10 +331,24 @@ def check_texts(files):
     # R5 L7b: the arm visibility is appended last on WaitForApplied with a
     # Working default (the established book), so every {parent} initializer
     # keeps its meaning and every Working child keeps its digest.
+    # R5 N13: the first-match rule and the arm scope are appended after it
+    # with the established defaults (AtArmPrint, OwnerLot), so every {parent}
+    # and {parent, visibility} initializer keeps its meaning and every
+    # default child keeps its digest.
     wait = re.sub(r'\s+', '', body(order, r'struct\s+WaitForApplied\s*\{', 'wait-for-applied'))
     if wait != ('RequestHandleparent;'
-                'NativeArmVisibilityvisibility=NativeArmVisibility::Working;'):
-        raise ValueError('WaitForApplied must keep its member order and Working visibility default')
+                'NativeArmVisibilityvisibility=NativeArmVisibility::Working;'
+                'NativeArmFirstMatchfirst_match=NativeArmFirstMatch::AtArmPrint;'
+                'NativeArmScopescope=NativeArmScope::OwnerLot;'):
+        raise ValueError('WaitForApplied must keep its member order and its Working / '
+                         'AtArmPrint / OwnerLot defaults')
+    first_match = body(order, r'enum\s+class\s+NativeArmFirstMatch\s*:[^{]+\{', 'arm first match')
+    if re.findall(r'(\w+)\s*=\s*(\d+)', first_match) != [
+            ('AtArmPrint', '0'), ('AfterArmPrint', '1')]:
+        raise ValueError('NativeArmFirstMatch must keep AtArmPrint=0, AfterArmPrint=1')
+    arm_scope = body(order, r'enum\s+class\s+NativeArmScope\s*:[^{]+\{', 'arm scope')
+    if re.findall(r'(\w+)\s*=\s*(\d+)', arm_scope) != [('OwnerLot', '0'), ('Book', '1')]:
+        raise ValueError('NativeArmScope must keep OwnerLot=0, Book=1')
     visibility = body(order, r'enum\s+class\s+NativeArmVisibility\s*:[^{]+\{', 'arm visibility')
     if re.findall(r'(\w+)\s*=\s*(\d+)', visibility) != [
             ('Working', '0'), ('PendingUntilArmed', '1')]:
@@ -661,6 +675,11 @@ def check_texts(files):
                  'next_timeline_ordinal_, arm);',
                  'if (value.visibility != native_order::NativeArmVisibility::Working) {',
                  'f.u(static_cast<uint64_t>(value.visibility));',
+                 'if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {',
+                 'f.u(static_cast<uint64_t>(value.first_match));',
+                 'if (value.scope != native_order::NativeArmScope::OwnerLot) {',
+                 'f.u(static_cast<uint64_t>(value.scope));',
+                 '&& !armed_after_print_here(*live);',
                  'bool hidden_until_armed(const native_order::LiveRequest& live) noexcept {',
                  'if (hidden_until_armed(live)) continue;'):
         if fold not in consumer_src:

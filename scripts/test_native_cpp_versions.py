@@ -213,6 +213,33 @@ class NativeVersions(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.reject(FILES[10], before, after)
 
+    def test_arm_first_match_and_scope_are_pinned_folded_and_consumed(self):
+        # R5 N13: the first-match rule and the arm scope are appended last on
+        # WaitForApplied with the established defaults, folded only when set,
+        # and the matcher consults the first-match rule.
+        for before, after in (
+            ('enum class NativeArmFirstMatch : std::uint8_t {',
+             'enum class MissingArmFirstMatch : std::uint8_t {'),
+            ('    NativeArmFirstMatch first_match = NativeArmFirstMatch::AtArmPrint;\n', ''),
+            ('    AtArmPrint = 0,\n    AfterArmPrint = 1,', '    AfterArmPrint = 0,\n    AtArmPrint = 1,'),
+            ('enum class NativeArmScope : std::uint8_t {',
+             'enum class MissingArmScope : std::uint8_t {'),
+            ('    NativeArmScope scope = NativeArmScope::OwnerLot;\n', ''),
+            ('    OwnerLot = 0,\n    Book = 1,', '    Book = 0,\n    OwnerLot = 1,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[0], before, after)
+        for before, after in (
+            ('if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {',
+             'if (true) {'),
+            ('f.u(static_cast<uint64_t>(value.first_match));', ''),
+            ('if (value.scope != native_order::NativeArmScope::OwnerLot) {', 'if (true) {'),
+            ('f.u(static_cast<uint64_t>(value.scope));', ''),
+            ('&& !armed_after_print_here(*live);', ';'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_execution_grid_policy_is_explicit_hashed_and_consumed(self):
         self.reject(FILES[0], 'enum class ExecutionGridPolicy : std::uint8_t {',
                     'enum class MissingExecutionGridPolicy : std::uint8_t {')

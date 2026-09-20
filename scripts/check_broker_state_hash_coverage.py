@@ -283,6 +283,10 @@ def main(root: Path = ROOT) -> int:
             "f.u(static_cast<uint64_t>(anchor->rounding));",
             "if (value.visibility != native_order::NativeArmVisibility::Working) {",
             "f.u(static_cast<uint64_t>(value.visibility));",
+            "if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {",
+            "f.u(static_cast<uint64_t>(value.first_match));",
+            "if (value.scope != native_order::NativeArmScope::OwnerLot) {",
+            "f.u(static_cast<uint64_t>(value.scope));",
         ):
             require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
 

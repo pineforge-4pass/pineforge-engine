@@ -575,6 +575,17 @@ void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
             if (value.visibility != native_order::NativeArmVisibility::Working) {
                 f.u(static_cast<uint64_t>(value.visibility));
             }
+            // Likewise the first-match rule, under its own tag so it can
+            // never read as a visibility: every AtArmPrint child keeps the
+            // digest it had before the knob existed.
+            if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {
+                f.s("first_match");
+                f.u(static_cast<uint64_t>(value.first_match));
+            }
+            if (value.scope != native_order::NativeArmScope::OwnerLot) {
+                f.s("scope");
+                f.u(static_cast<uint64_t>(value.scope));
+            }
         } else if constexpr (std::is_same_v<T, native_order::BindOpening>) {
             hash_handle(f, value.opening);
             f.i(value.cycle);
@@ -4815,6 +4826,31 @@ void NativeExecutionConsumer::match_path(
             && point.coordinate.effective_time_ms >= live.birth().decision_time_lower_bound;
     };
 
+    // NativeArmFirstMatch::AfterArmPrint: on the driver point whose fill armed
+    // it, the request has the callback-born rule above -- the print that armed
+    // it is consumed, only a later crossing on this point matches. On a
+    // discrete point that is no match at all; the next point is ordinary.
+    auto armed_after_print_here = [&](const native_order::LiveRequest& live) {
+        const auto* wait = std::get_if<native_order::WaitForApplied>(&live.request().owner);
+        if (!wait || wait->first_match != native_order::NativeArmFirstMatch::AfterArmPrint) {
+            return false;
+        }
+        if (const auto* armed = std::get_if<native_order::ArmedTransaction>(&live.authority)) {
+            return armed->cause_cursor.point.ordinal == P;
+        }
+        if (const auto* opening = std::get_if<native_order::OpeningClose>(&live.authority)) {
+            if (const auto* from = std::get_if<native_order::EnrollmentFromApplied>(
+                    &opening->enrollment)) {
+                return from->cursor.point.ordinal == P;
+            }
+        }
+        // NativeArmScope::Book: the arm is the book binding.
+        if (const auto* book = std::get_if<native_order::BookClose>(&live.authority)) {
+            return book->binding_cursor.point.ordinal == P;
+        }
+        return false;
+    };
+
     auto needs_evaluation = [&](const native_order::LiveRequest& live,
                                 const native_order::EligibilityFacts& facts) {
         if (facts.needs_close_bind) return true;
@@ -4948,7 +4984,8 @@ void NativeExecutionConsumer::match_path(
                 // birth print. It may cross a later level on this suffix, but
                 // it does not inherit an already-consumed/equal crossing from
                 // the request that produced the callback.
-                const bool include_current = !born_on_remaining_path(*live);
+                const bool include_current = !born_on_remaining_path(*live)
+                    && !armed_after_print_here(*live);
                 const auto& trigger = live->request().trigger;
                 const auto& state = live->trigger_state;
                 std::optional<native_matching::GeometricHit> hit;

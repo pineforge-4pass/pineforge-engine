@@ -48,6 +48,12 @@ class Coverage(unittest.TestCase):
             ("if (value.visibility != native_order::NativeArmVisibility::Working) {",
              "if (false) {"),
             ("f.u(static_cast<uint64_t>(value.visibility));", ""),
+            # R5 N13: likewise the first-match rule and the arm scope.
+            ("if (value.first_match != native_order::NativeArmFirstMatch::AtArmPrint) {",
+             "if (false) {"),
+            ("f.u(static_cast<uint64_t>(value.first_match));", ""),
+            ("if (value.scope != native_order::NativeArmScope::OwnerLot) {", "if (false) {"),
+            ("f.u(static_cast<uint64_t>(value.scope));", ""),
         ):
             with self.subTest(before=before):
                 result, output = self.check((

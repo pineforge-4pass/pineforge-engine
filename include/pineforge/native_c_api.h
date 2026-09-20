@@ -30,6 +30,10 @@
  *   per-bar rows need no new symbol: `report_policy` = KernelRecorded with
  *   strategy_set_broker_state_hash_recording on fills
  *   pf_report_t::broker_state_hash, one row per script bar.
+ * ✗ WaitForApplied::first_match and WaitForApplied::scope are not exposed:
+ *   a WAIT_FOR_APPLIED child submitted here keeps the defaults (AtArmPrint,
+ *   OwnerLot). NativeArmScope::Book exists for a HostSized close, whose
+ *   units the unexposed terms hook answers.
  *
  * COVERAGE
  * ────────
