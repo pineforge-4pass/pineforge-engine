@@ -682,6 +682,7 @@ struct NativeMarginCheckPoint {
     NativePhysicalPosition position;
     double mark;
     native_order::MatchCursor cursor;  // cursor.point.path_phase is the waypoint
+    bool liquidation_resting;          // a slice is live from an earlier point
 };
 virtual bool margin_check_allowed(const NativeMarginCheckPoint&) const;  // true
 ```
@@ -689,7 +690,11 @@ virtual bool margin_check_allowed(const NativeMarginCheckPoint&) const;  // true
 Answering false suppresses the whole point: nothing is measured, the
 requirement hook is not reached, and nothing is re-armed or withdrawn — the
 margin state stays exactly as the last admitted point left it. A broker model
-whose own schedule is not the kernel's expresses that here. Every point the
+whose own schedule is not the kernel's expresses that here. `liquidation_resting`
+is what lets such a model tell its two cases apart: a point that only exists to
+RE-SIZE a slice already resting — because the book it was sized on has since
+shrunk — from a point that would take a new one. A host that admits every point
+(the default) never needs to look. Every point the
 run's check mode reaches is offered, the ones where the book is flat or the
 live side has no maintenance fraction included, because withdrawing a resting
 liquidation is part of the check; `CalculationOnly`, which rests nothing,
@@ -723,7 +728,12 @@ maintenance fractions — with `ShortfallMultiple` 4.0, the symbol's lot as
 commission type implies, `RealizedOnly` for the reported level and
 `"__margin_call__"` / `"Margin call"` for the ticket. The kernel then solves,
 schedules, places, re-prices, books and reports every resting liquidation; the
-adapter answers `margin_check_allowed` with TradingView's scheduling,
+adapter answers `margin_check_allowed` with TradingView's scheduling — which
+includes the post-exit re-size: when a priced bracket leg of the script bar
+fills, the slice resting at that bar's adverse extreme was sized on the
+pre-exit book, and the legacy broker cancelled and re-scheduled it there
+(`pine_scheduler.cpp:267-282`), so the adapter admits the kernel's own point
+for that driver point while (and only while) a slice rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
 fee-adjusted equity, `resolve_margin_call_units` with its lot-floored 4×
 restore and whole-drop band, and `resolve_execution_terms` with its

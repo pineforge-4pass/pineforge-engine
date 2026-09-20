@@ -256,6 +256,45 @@ public:
     }
 };
 
+// MG-I2. The post-exit re-size. A path slice rests at the bar's adverse
+// extreme, sized on the book standing at the bar open; a priced bracket leg
+// of the SAME script bar then fills and reduces that book before the extreme
+// is reached. ab9714be pine_scheduler.cpp:267-282 cancels the live slice at
+// that fill and re-schedules from the reduced book, so the slice sized on the
+// pre-exit position never executes: here the remainder is comfortably funded
+// at the remaining path's adverse mark, and the whole bar books NO margin row.
+//
+// Short 10 at 100 on 1050 of capital at 100 % margin, a stop-5 bracket leg at
+// 102, and a bar reaching 105. The capital puts the breach threshold at
+// (1050 + 1000) / 20 = 102.5, above the previous bar's high and above the
+// leg's own stop, so the ONLY breach on the tape is the last bar's extreme:
+//   bar open 100  required 1000 < equity 1050, no call;
+//   path slice    at 105: (10*105 - 1000)/105 * 4 = 1.9047619047619047 rests;
+//   leg fills     5 at 102, leaving 5 and a realized -10;
+//   re-size       at the remaining adverse 104: 5*104 = 520 < equity 1020 ->
+//                 the slice is withdrawn and nothing replaces it.
+// Without the re-size the stale slice reaches 105 and liquidates the
+// remainder (regression: stockhunter2025-btcusd-4h-ema-swing-strategy on
+// BINANCE:BTCUSDT@15, wave-4 sweep exp-r5-int4-wave4-20260920).
+class PostExitResizeShort final : public Probe {
+public:
+    PostExitResizeShort() {
+        initial_capital_ = 1050.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 10.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        syminfo_mintick_ = 0.01;
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 1) strategy_entry("S", false, kNaN, kNaN, 10.0);
+        if (pine_bar_index() == 2)
+            strategy_exit("X", "S", kNaN, 102.0, kNaN, kNaN, kNaN, kNaN, "leg", 5.0);
+    }
+};
+
 // MG-K. set_margin_call_enabled(false) must still suppress every call: that is
 // the C setter's pinned semantics, whatever owns the model underneath.
 class DisabledLong final : public Probe {
@@ -299,6 +338,12 @@ std::vector<Bar> eth_0421_tape() {
             bar(1745195400000LL, 1608.96, 1619.86, 1606.17, 1613.78),
             bar(1745196300000LL, 1613.78, 1620.0, 1608.08, 1609.49),
             bar(1745197200000LL, 1609.5, 1618.0, 1607.26, 1610.81)};
+}
+// The entry fills at bar 2's open, the bracket leg rests over bar 3, and bar
+// 3's high is the adverse extreme the path slice would be taken at.
+std::vector<Bar> post_exit_resize_tape() {
+    return {bar(0, 100.0, 100.0, 100.0, 100.0), bar(60000, 100.0, 100.0, 100.0, 100.0),
+            bar(120000, 100.0, 100.5, 99.5, 100.0), bar(180000, 100.0, 105.0, 99.5, 104.0)};
 }
 // A tape that keeps breaching, one script bar after another.
 std::vector<Bar> staircase_tape() {
@@ -389,6 +434,7 @@ int main() {
     verify(kRoundedMoneyLong, run<RoundedMoneyLong>(rounded_money_tape()));
     verify(kMoneyLong, run<MoneyLong>(eth_0421_tape()));
     verify(kRepeatedBreach, run<RepeatedBreach>(staircase_tape()));
+    verify(kPostExitResizeShort, run<PostExitResizeShort>(post_exit_resize_tape()));
     verify(kDisabledLong, run<DisabledLong>(long_break_tape()));
     std::printf("%d checks, %d failures\n", passed + failed, failed);
     return failed == 0 ? 0 : 1;

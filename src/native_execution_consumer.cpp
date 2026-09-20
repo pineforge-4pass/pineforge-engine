@@ -2607,6 +2607,8 @@ bool NativeExecutionConsumer::margin_check_admitted(
     point.position = position(engine);
     point.mark = mark;
     point.cursor = cursor;
+    point.liquidation_resting = margin_liquidation_.has_value()
+        && requests_.find_live(margin_liquidation_->handle) != nullptr;
     return host->margin_check_allowed(point);
 }
 

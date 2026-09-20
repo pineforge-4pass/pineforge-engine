@@ -1363,6 +1363,14 @@ private:
     // evidence in tests/test_adapter_report_relower.cpp) for a value that is
     // dead by the time the next one is taken.
     std::uint64_t kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
+    // The driver point ordinal at which the adapter re-sizes a RESTING kernel
+    // liquidation from the post-exit book (ab9714be pine_scheduler.cpp:267-282,
+    // the legacy cancel-and-reschedule after a priced bracket leg of this
+    // script bar fills). A point named here is admitted only while a slice
+    // actually rests, because the legacy broker did nothing at all when none
+    // did. Same hash argument as kernel_margin_path_point_ above: a strictly
+    // monotone ordinal compared only for equality with the current point's.
+    std::uint64_t kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
     // Close-time carried-POOC-short checkpoint deferred behind this bar's
     // market fills (ab9714be pine_scheduler.cpp:260 before :278).
     std::int64_t pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();

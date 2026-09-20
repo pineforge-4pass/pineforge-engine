@@ -1331,6 +1331,7 @@ void PineExecutionAdapter::reset_for_run() {
     position_open_priced_ = false;
     last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
     kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
+    kernel_margin_resize_point_ = std::numeric_limits<std::uint64_t>::max();
     pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
     signal_close_mc_position_cycle_ = 0;
@@ -11876,7 +11877,19 @@ bool PineExecutionAdapter::margin_check_allowed(
     // both points TradingView checks at -- schedule_margin_call_path is
     // called from on_bar_open and from on_applied -- so the admitted point is
     // named by the driver point the decision was taken at, not by its kind.
-    if (kernel_margin_path_point_ != point.cursor.point.ordinal) return false;
+    const std::uint64_t ordinal = point.cursor.point.ordinal;
+    if (kernel_margin_resize_point_ == ordinal) {
+        // The post-exit re-size point (on_applied, a priced bracket leg of
+        // this script bar). The legacy broker cancelled the live path slice
+        // there and re-scheduled from the reduced book, and did NOTHING when
+        // no slice was live -- so this point is TradingView's only while one
+        // rests. With one resting the kernel withdraws it and re-rests
+        // whatever schedule_margin_call_path armed on the reduced book; with
+        // the book flat the same admission withdraws it and rests nothing.
+        if (!point.liquidation_resting) return false;
+    } else if (kernel_margin_path_point_ != ordinal) {
+        return false;
+    }
     // The rounded-tie veto is re-read here rather than at the arming site: the
     // book it inspects is the one standing at the check point.
     return !source_margin_rounded_tie_veto();
@@ -15875,6 +15888,18 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 if (cancelled.status == native_order::CancelStatus::Cancelled)
                     retire(handle);
             }
+            if (after_exit.signed_units != 0.0)
+                (void)schedule_margin_call_path(policy_script_bar_, context);
+        } else if (!one_x_long) {
+            // R5: under the kernel margin model the live path slice is the
+            // kernel's, so there is no source row here to cancel and the
+            // scan above finds nothing. The re-size still has to happen --
+            // a slice sized on the pre-exit book must not survive the exit
+            // and execute against the remainder -- so admit the kernel's own
+            // check point for this driver point instead. Gated on a resting
+            // slice in margin_check_allowed, so a point where the legacy
+            // broker did nothing stays a point where nothing is done.
+            kernel_margin_resize_point_ = context.coordinate.ordinal;
             if (after_exit.signed_units != 0.0)
                 (void)schedule_margin_call_path(policy_script_bar_, context);
         }

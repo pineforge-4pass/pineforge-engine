@@ -355,6 +355,12 @@ struct NativeMarginCheckPoint {
     NativePhysicalPosition position;
     double mark = 0.0;
     native_order::MatchCursor cursor;
+    // Whether the model already holds a liquidation resting from an earlier
+    // admitted point. A host that suppresses points -- and therefore owns
+    // when a slice sized on a book that has since shrunk is re-sized -- needs
+    // to tell "re-size the live slice" from "take a new one" apart. The
+    // default host admits every point and never reads this.
+    bool liquidation_resting = false;
 };
 
 // Ephemeral factual view of the numbers the kernel is about to compare, at

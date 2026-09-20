@@ -61,6 +61,16 @@ const Expected kMoneyLong{
 const Expected kRepeatedBreach{
     "MG-I", 2, kRepeatedUnits, kRepeatedPrices, kTwoCalls,
     14.082503556187769, 3};
+// MG-I2: the post-exit re-size withdraws the slice sized on the pre-exit
+// book, so the bar books NO margin row at all. Harvested the same way as the
+// rows above, but from origin/main 3f6fd57 (the wave-3 sweep's engine) rather
+// than b0cec54 -- the scenario was added for the wave-4 integration
+// regression, so its "before" is the last tree that still had the legacy
+// cancel-and-reschedule. Against the wave-4 tip 0195464 this row fails with
+// 1.9047619047619047 liquidated at 105, a final position of
+// -3.0952380952380953 and 3 trades.
+const Expected kPostExitResizeShort{"MG-I2", 0, kNone, kNone, "", -5.0, 2};
+
 // MG-K: the C setter still switches the whole call off.
 const Expected kDisabledLong{"MG-K", 0, kNone, kNone, "", 20.0, 1};
 
