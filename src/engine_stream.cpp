@@ -13,66 +13,6 @@
 
 namespace pineforge {
 
-void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
-    ++diag_input_bars_processed_;
-    last_bar_time_ = bar.timestamp;
-
-    if (!diag_needs_aggregation_) {
-        for (auto& state : security_eval_states_) {
-            feed_security_eval_state(state, bar);
-        }
-        dispatch_source_stream_script_bar(bar, had_tick);
-        return;
-    }
-
-    // Feed the chart aggregator first so finer lookahead_on history receives
-    // the same real completion event that drives stream_dispatch_script_bar.
-    AggregatedBar ab = script_tf_agg_.feed(bar);
-    const bool completed_on_boundary = ab.is_complete
-        && tf_change(ab.bar.timestamp, bar.timestamp, script_tf_,
-                     syminfo_.timezone, syminfo_.session);
-    if (completed_on_boundary) {
-        for (auto& state : security_eval_states_) {
-            if (state.publish_gate_tf_seconds > 0) {
-                publish_security_eval_state_at_calling_boundary(state);
-            } else {
-                feed_security_eval_state(state, bar, ab.is_complete);
-            }
-        }
-
-        // The current input opened the next caller. Dispatch the completed
-        // caller while its actual final requested child is still visible,
-        // then evaluate the retained input for the next caller.
-        dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
-        stream_script_bar_had_tick_ = had_tick;
-        for (auto& state : security_eval_states_) {
-            if (state.publish_gate_tf_seconds > 0) {
-                feed_security_eval_state(
-                    state, bar, /*calling_bar_complete=*/false);
-            }
-        }
-        return;
-    }
-    for (auto& state : security_eval_states_) {
-        feed_security_eval_state(state, bar, ab.is_complete);
-    }
-    if (completed_on_boundary) {
-        // The current input bar opened the next bucket; the aggregator emitted
-        // the preceding partial bucket before retaining this bar as its new
-        // current state.
-        dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
-        stream_script_bar_had_tick_ = had_tick;
-    } else {
-        stream_script_bar_had_tick_ = stream_script_bar_had_tick_ || had_tick;
-        if (ab.is_complete) {
-            dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
-            stream_script_bar_had_tick_ = false;
-        }
-    }
-}
-
-
-
 void BacktestEngine::stream_observe_entry(const PyramidEntry& pe) {
     if (stream_action_sequence_ == std::numeric_limits<uint64_t>::max()) {
         throw std::runtime_error("stream action sequence overflow");

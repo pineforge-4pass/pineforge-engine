@@ -2582,8 +2582,6 @@ protected:
     virtual void source_stream_entry_comment(const PyramidEntry&, std::string&) const;
     void stream_observe_exit(size_t trade_index);
     void stream_refresh_action_metadata(size_t first_action, size_t first_trade);
-    void stream_feed_input_bar(const Bar& bar, bool had_tick);
-    virtual void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick);
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;

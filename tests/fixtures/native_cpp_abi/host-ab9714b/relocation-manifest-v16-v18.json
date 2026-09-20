@@ -82,7 +82,8 @@
     "validate_source_lifecycle",
     "preflight_source_lifecycle",
     "apply_source_pre_close_lifecycle",
-    "apply_source_pending_removals"
+    "apply_source_pending_removals",
+    "dispatch_source_stream_script_bar"
   ],
   "rejectionPairs": [
     [

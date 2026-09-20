@@ -135,10 +135,6 @@ double BacktestEngine::observe_trail_best_price_v1() const {
     return trail_best_price_;
 }
 
-void BacktestEngine::dispatch_source_stream_script_bar(const Bar&, bool) {
-    throw std::runtime_error("stream script dispatch requires a source scheduler hook");
-}
-
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
 bool BacktestEngine::set_aux_security_feed(const Bar*, int, const std::string&) {
     guard_native_mutation("set_aux_security_feed");
