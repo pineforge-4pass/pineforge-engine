@@ -2116,19 +2116,40 @@ if (fx.status != pineforge::NativeSetupStatus::Applied) {
 ### Examples and the export macro {#native_engine_examples}
 
 Both hosts on this page are built sources, not listings. They live under
-`examples/native/`, alongside a minimal `hello_kernel.cpp` and the L7b
-`native_bracket_strategy.cpp` (a market entry with two anchored legs on a
-quarter-point ladder, `Directional` rounding, `PendingUntilArmed`):
+`examples/native/` with one standalone, Pine-free host per feature family the
+kernel exposes. Each includes only `<pineforge/native_host.hpp>` (or the
+toolkit / module header over it), links `PineForge::kernel` and prints a
+`closed trades:` line last, after every check of its own has passed:
+
+| example | demonstrates | lane |
+|---|---|---|
+| `hello_kernel.cpp` | the smallest complete host: one market entry, one flatten | L10 |
+| `hello_kernel_c.c` | the same host from C, through `<pineforge/native_c_api.h>` | L13 |
+| `native_market_strategy.cpp` | batch and stream lifecycles; also the live runner's MODULE | L10 |
+| `native_selected_strategy.cpp` | `HostSized`, `BindOpening(s)`, `execute_current`, `ReverseTo`; also a MODULE | R4-A |
+| `native_bracket_strategy.cpp` | `submit_bracket` with `FromOwnerFill` legs on a tick ladder, `Directional`, `PendingUntilArmed` | L7b |
+| `native_sized_report_strategy.cpp` | `Sized{CashValue}` / `Sized{EquityFraction}` resolved by the kernel; `report_policy = KernelRecorded`, `report_open_position_at_end`, reading `fill_report` | L3, L2 |
+| `native_margin_strategy.cpp` | `NativeMarginModel` (initial gate, `native_liquidation_price`, kernel liquidation, `MarginCallEvent`); `margin_check_allowed`, `resolve_margin_requirement` | L4, L4b |
+| `native_calc_on_fills_strategy.cpp` | `NativeCalculationTrigger::BarCloseAndFills`, `on_native_recalculate`, `current_partial_bar`, `NativeOpenBarView::OpenOnly` | L5 |
+| `native_htf_strategy.cpp` | `declare_timeframe_subscriptions`, `on_native_timeframe_bar`, `native_series_bar`, `gaps`, a `LazyComplete` bucket | L6, L6c, L6d |
+| `native_trail_risk_strategy.cpp` | `Trail` with `TrailTicks`, `trail_state`, `native_working_requests`, `cancel_where`; `NativeRiskLimits::max_fills_per_day`, `native_risk_state`, `NativeRiskEvent` | L7, L9 |
 
 ```bash
 cmake -S . -B build -DPINEFORGE_BUILD_EXAMPLES=ON
 cmake --build build -j
 ./build/examples/native/hello_kernel
+ctest --test-dir build -R '^example_'
 ```
 
-`PINEFORGE_BUILD_EXAMPLES` builds each one as a standalone executable and
-registers it as a CTest row. The market and selected examples are also built,
-from the same sources, as the MODULE targets the live runner `dlopen`s.
+`PINEFORGE_BUILD_EXAMPLES` (default OFF) builds each one as a standalone
+executable and registers it as a CTest row whose assertion is that
+`closed trades: [1-9]` line. The `release` and `kernel` profiles of
+`scripts/ci_verify.py` turn the option on, so every `example_*` row runs in
+the gate both with and without the source layer compiled;
+`scripts/check_native_include_independence.py` compiles all ten sources
+against the installed headers with the source trees removed, the C one with
+the C compiler. The market and selected examples are also built, from the
+same sources, as the MODULE targets the live runner `dlopen`s.
 
 A host becomes such a module through one macro from
 `<pineforge/native_module.hpp>`:
@@ -2459,8 +2480,9 @@ mode only. Mixing modes is refused. Monthly `input_tf` is refused on this
 path before the process continues into the run.
 
 Other CMake options (unchanged defaults): `PINEFORGE_BUILD_TESTS` ON,
-`PINEFORGE_BUILD_TUTORIAL` ON, `PINEFORGE_BUILD_EXAMPLES` OFF,
-`PINEFORGE_ENABLE_SANITIZERS` OFF, `PINEFORGE_STRICT_WARNINGS` OFF. The
+`PINEFORGE_BUILD_TUTORIAL` ON, `PINEFORGE_BUILD_EXAMPLES` OFF (ON in the
+`release` and `kernel` CI profiles), `PINEFORGE_ENABLE_SANITIZERS` OFF,
+`PINEFORGE_STRICT_WARNINGS` OFF. The
 runner also needs SQLite3, libcurl 7.86+, and OpenSSL Crypto.
 
 The C ABI query `strategy_execution_contract` identifies `NativeMarketV1`; the
