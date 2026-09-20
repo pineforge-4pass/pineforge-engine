@@ -1215,7 +1215,8 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     } else if (sized) {
         if ((sized->side != Side::Long && sized->side != Side::Short)
             || (sized->time != SizeTime::AtMatch && sized->time != SizeTime::AtAcceptance)
-            || (sized->price != SizePrice::Resolved && sized->price != SizePrice::Signal)
+            || (sized->price != SizePrice::Resolved && sized->price != SizePrice::Signal
+                && sized->price != SizePrice::SignalOnTick)
             || (sized->grid_policy != ExecutionGridPolicy::SnapToGrid
                 && sized->grid_policy != ExecutionGridPolicy::ExplicitUnits)) {
             return RequestRejectReason::InvalidQuantity;
@@ -1424,7 +1425,7 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         if (native_sized->time == SizeTime::AtAcceptance) {
             live.sizing_units = context.sizing_units;
         }
-        if (native_sized->price == SizePrice::Signal) {
+        if (native_sized->price != SizePrice::Resolved) {
             live.sizing_price = context.sizing_price;
         }
     }

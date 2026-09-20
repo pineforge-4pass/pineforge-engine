@@ -674,7 +674,18 @@ bool names_identifier(const std::string& text, const std::string& name) {
     return false;
 }
 
-void the_source_layer_never_names_the_kernel_bases() {
+// R5 R2 retired the first half of this witness: the Pine adapter now emits
+// native_order::Sized for its declaration-level default quantity, so the
+// source layer does name the SIZING basis (Sized, CashValue, EquityFraction,
+// SizeTime, SizePrice) at exactly those sites, and tests/
+// test_adapter_sizing_relower.cpp is the positive witness for it.
+//
+// The REDUCTION basis is unchanged and still source-free: ScopeFraction
+// resolves units = scope * fraction, which is not TradingView's
+// scope * percent / 100, so a percentage exit keeps its host-resolved
+// quantity. This half of the witness therefore stands, and it is what makes
+// that ruling visible if anyone ever lowers a percentage exit onto it.
+void the_source_layer_never_names_the_scope_reduction_bases() {
 #ifdef PINEFORGE_SOURCE_LAYER_FILES
     std::vector<std::string> paths;
     {
@@ -691,8 +702,8 @@ void the_source_layer_never_names_the_kernel_bases() {
     }
     // A vacuous pass would be worse than a failure.
     REQUIRE(paths.size() >= 4);
-    const char* names[] = {"Sized", "ScopeFraction", "CashValue", "EquityFraction",
-                           "SizeBasis", "SizeTime", "ScopeClaim"};
+    const char* names[] = {"ScopeFraction", "ScopeClaim", "ScopeBasis",
+                           "ReductionSize"};
     for (const auto& path : paths) {
         std::ifstream input(path);
         REQUIRE(input.good());
@@ -729,7 +740,8 @@ int main() {
     test("scope basis chooses when the scope is measured",
          the_scope_basis_chooses_when_the_scope_is_measured);
     test("pending bracket parent", a_pending_parent_defers_the_fraction_until_the_parent_fills);
-    test("adapter neutrality", the_source_layer_never_names_the_kernel_bases);
+    test("adapter reduction neutrality",
+         the_source_layer_never_names_the_scope_reduction_bases);
     std::printf("R5 L3 sizing bases: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

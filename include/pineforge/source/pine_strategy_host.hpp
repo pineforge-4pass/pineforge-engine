@@ -52,6 +52,10 @@ public:
     bool owns_lot_excursions() const noexcept final { return true; }
     ClosedLotExcursion closed_lot_excursion(
         const ClosedLotExcursionFacts&) const final;
+    // The R5 R2 sizing classification of the adapter, for tests and for hosts
+    // that need to know whether the core or the source owns a default
+    // quantity at this point.
+    bool adapter_core_sizes_default_opening(bool is_long) const;
 
     virtual void on_source_bar(const Bar&) = 0;
     void configure_pine_strategy(const PineStrategyConfig&);

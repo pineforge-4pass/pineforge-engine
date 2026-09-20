@@ -1672,4 +1672,8 @@ execution::AccountEffectProjection source::PineStrategyHost::adapter_project_fla
         execution::Flatten{}, execution::Fill{price, id, comment, incarnation});
 }
 
+bool source::PineStrategyHost::adapter_core_sizes_default_opening(bool is_long) const {
+    return adapter_.core_sizes_default_opening(is_long);
+}
+
 } // namespace pineforge

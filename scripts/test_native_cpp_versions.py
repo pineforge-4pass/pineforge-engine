@@ -109,15 +109,18 @@ class NativeVersions(unittest.TestCase):
         # placement-time measurements are native_order_v6 members, each folded
         # into the continuation digest only where it is actually set.
         for before, after in (
-            ('enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1 };',
-             'enum class MissingSizePrice : std::uint8_t { Resolved = 0, Signal = 1 };'),
+            ('enum class SizePrice : std::uint8_t '
+             '{ Resolved = 0, Signal = 1, SignalOnTick = 2 };',
+             'enum class MissingSizePrice : std::uint8_t '
+             '{ Resolved = 0, Signal = 1, SignalOnTick = 2 };'),
             ('enum class ScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };',
              'enum class MissingScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };'),
             ('    SizePrice price = SizePrice::Resolved;', ''),
             ('    ScopeBasis basis = ScopeBasis::AtMatch;', ''),
             ('    std::optional<double> sizing_units;   // SizeTime::AtAcceptance', ''),
             ('    std::optional<double> sizing_scope;   // ScopeBasis::AtAcceptance', ''),
-            ('    std::optional<double> sizing_price;   // SizePrice::Signal', ''),
+            ('    std::optional<double> sizing_price;   '
+             '// SizePrice::Signal / SignalOnTick', ''),
             ('    bool sizing_admissible = true;', ''),
         ):
             with self.subTest(before=before, after=after):

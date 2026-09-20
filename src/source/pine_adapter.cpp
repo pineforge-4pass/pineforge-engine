@@ -1584,29 +1584,132 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     return snapshot;
 }
 
-double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const noexcept {
-    if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
+// The money a default-quantity declaration converts.  CASH is the declared
+// value itself; a percentage is taken of the equity the snapshot marked, on
+// the ten-significant-digit money grid whenever the instrument has a lot grid.
+// Which equity that is (ab9714be pine_fills.cpp:1411-1426, restated in
+// percent_commission_live_equity) and this rounding are source policy the
+// generic EquityFraction basis deliberately does not model, so the source
+// hands the core the money and the core converts it.  Any other declaration
+// has no money of its own and returns NaN.
+double PineExecutionAdapter::default_sizing_cash(
+        const PineSizingSnapshot& sizing) const noexcept {
     if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
-        const double denominator = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
-        return finite_positive(denominator)
-            ? floor_quantity_grid(config_.default_qty_value / denominator, staged_.quantity_grid)
-            : 0.0;
+        return config_.default_qty_value;
     }
     if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         || !finite_positive(sizing.equity)) {
-        return 0.0;
+        return kNaN;
     }
     const double equity = staged_.quantity_grid ? source_money_round(sizing.equity) : sizing.equity;
-    double cash = config_.default_qty_value / 100.0 * equity;
-    if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-        && config_.commission_value > 0.0) {
+    return config_.default_qty_value / 100.0 * equity;
+}
+
+// A percentage declaration reserves a percentage commission out of its own
+// money before converting; a cash declaration does not.  The divisor is the
+// exact inverse of the charge, which is what native_order::Sized spells as
+// reserve_percent_fee.
+bool PineExecutionAdapter::default_sizing_reserves_percent_fee() const noexcept {
+    return config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && config_.commission_value > 0.0;
+}
+
+// The source lot floor.  The two declarations do not share one: a percentage
+// quantity uses the money floor with its cent-grid case, a cash quantity the
+// ordinary grid helper with its proportional epsilon.  Neither is the core's
+// generic "largest grid multiple at or below the quotient", so the core hands
+// back the raw quotient (ExecutionGridPolicy::ExplicitUnits) and this runs on
+// top of it in resolve_terms.
+double PineExecutionAdapter::default_sizing_lot_floor(double units) const noexcept {
+    if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && staged_.quantity_grid) {
+        return source_money_floor_lot(units, staged_.quantity_grid);
+    }
+    return floor_quantity_grid(units, staged_.quantity_grid);
+}
+
+// The placement-time composition of the three.  The source's own money band
+// and affordability gates consume this number before any request exists
+// (entry(): "The TV money band is a source policy"), which is why the source
+// still computes it even where the core owns the quantity that settles.
+double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const noexcept {
+    if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
+    double cash = default_sizing_cash(sizing);
+    if (!std::isfinite(cash)) return 0.0;
+    if (default_sizing_reserves_percent_fee()) {
         cash /= 1.0 + config_.commission_value / 100.0;
     }
     const double denominator = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
     if (!finite_positive(denominator)) return 0.0;
-    const double units = cash / denominator;
-    return staged_.quantity_grid ? source_money_floor_lot(units, staged_.quantity_grid)
-                                 : floor_quantity_grid(units, staged_.quantity_grid);
+    return default_sizing_lot_floor(cash / denominator);
+}
+
+std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
+        const PineSizingSnapshot& sizing, bool is_long) const noexcept {
+    if (config_.default_qty_type != static_cast<int>(QtyType::CASH)
+        && config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
+        return std::nullopt;
+    }
+    // The core converts at the run's own point value and at the FX rate of the
+    // acceptance coordinate; the source samples its rate at the sub-bar open.
+    // The two are the same number only while the run carries no FX series, so
+    // a run that declares one keeps its host-resolved sizing.
+    if (!staged_.account_fx_effective_from_ms.empty()
+        || !finite_positive(staged_.account_fx) || sizing.fx != staged_.account_fx
+        || !finite_positive(sizing.price) || !finite_positive(staged_.syminfo.pointvalue)
+        || !finite_positive(staged_.syminfo.mintick)) {
+        return std::nullopt;
+    }
+    const double cash = default_sizing_cash(sizing);
+    if (!finite_positive(cash)) return std::nullopt;
+    native_order::Sized sized;
+    sized.side = is_long ? native_order::Side::Long : native_order::Side::Short;
+    sized.basis = native_order::CashValue{cash};
+    sized.time = native_order::SizeTime::AtAcceptance;
+    sized.price = native_order::SizePrice::SignalOnTick;
+    sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+    sized.reserve_percent_fee = default_sizing_reserves_percent_fee();
+    return sized;
+}
+
+// The sizing price of a default-sized MARKET entry: the signal mark carried
+// to the expected fill by the side's slippage ticks and re-snapped onto the
+// chart tick (ab9714be pine_strategy_commands.cpp:325-328).  This is the rule
+// native_order::SizePrice::SignalOnTick names generically.
+double PineExecutionAdapter::default_market_sizing_price(
+        double mark, bool is_long) const noexcept {
+    const double tick = staged_.syminfo.mintick;
+    return nearest_tick(mark + (is_long ? 1.0 : -1.0) * config_.slippage * tick, tick);
+}
+
+bool PineExecutionAdapter::core_sizes_default_opening(bool is_long) const {
+    PineSizingSnapshot sizing = sizing_snapshot();
+    if (!finite_positive(sizing.mark)) return false;
+    sizing.price = default_market_sizing_price(sizing.mark, is_long);
+    sizing.equity = percent_commission_live_equity(sizing.mark);
+    return finite_positive(default_sizing_units(sizing))
+        && default_sizing_intent(sizing, is_long).has_value()
+        && core_sizing_price_matches(sizing, is_long);
+}
+
+bool PineExecutionAdapter::core_sizing_price_matches(
+        const PineSizingSnapshot& sizing, bool is_long) const {
+    const double tick = staged_.syminfo.mintick;
+    if (!finite_positive(tick) || !finite_positive(sizing.price)) return false;
+    const auto point = require_host().current_execution_point();
+    if (!point || !finite_positive(point->price)) return false;
+    // SizePrice::SignalOnTick in the core's own arithmetic -- its nearest tick
+    // is std::round with ties away from zero, not this file's
+    // floor(v / tick + 0.5) -- so this is a comparison against the core and
+    // not a restatement of the source rule.  The two agree on every price a
+    // tick ladder can present; where they would not, the command keeps its
+    // host-resolved intent and its own frozen quantity.
+    const auto on_tick = [tick](double value) { return std::round(value / tick) * tick; };
+    const double ticks = config_.slippage < 0 ? 0.0 : static_cast<double>(config_.slippage);
+    const double slipped = is_long ? on_tick(point->price) + ticks * tick
+                                   : on_tick(point->price) - ticks * tick;
+    return on_tick(slipped) == sizing.price;
 }
 
 bool PineExecutionAdapter::same_bar_market_tx_scope() const {
@@ -1875,6 +1978,17 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key) {
     auto& host = require_host();
+    // A core-sized opening freezes its basis at the execution point the CORE
+    // sees when it accepts the command; the source froze the same rule when
+    // the command was written.  A command queued for a later point, or one
+    // the source repriced after writing it, has moved the two apart: it keeps
+    // its host-resolved intent and its own frozen quantity rather than
+    // silently resizing at the submission point.
+    if (std::holds_alternative<native_order::Sized>(request.intent)
+        && !core_sizing_price_matches(snapshot.sizing, snapshot.is_long)) {
+        request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
+            snapshot.is_long ? native_order::Side::Long : native_order::Side::Short};
+    }
     const NativePhysicalPosition physical = host.physical_position();
     snapshot.projection_position_side = physical.signed_units > 0.0
         ? static_cast<std::int32_t>(PositionSide::LONG)
@@ -4645,9 +4759,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
     }
     if (default_sized && !priced && finite_positive(snapshot.sizing.mark)) {
-        const double slipped = snapshot.sizing.mark
-            + (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
-        snapshot.sizing.price = nearest_tick(slipped, staged_.syminfo.mintick);
+        snapshot.sizing.price = default_market_sizing_price(snapshot.sizing.mark, is_long);
         snapshot.sizing.equity = percent_commission_live_equity(snapshot.sizing.mark);
     }
     const auto predecessor = live_by_source_key_.find(key_for(id));
@@ -4733,6 +4845,24 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // ab9714be pine_fills.cpp:7139: non-pure-stop priced entries size at fill time using calc_qty(fill_price)
         snapshot.sizing.at_fill = (config_.calc_on_order_fills && coof_recalc_active_)
             || (priced && !default_stop_scope);
+    }
+    // R5 R2: a declaration-level default quantity whose sizing price IS the
+    // signal rule and whose quantity is frozen at the command is exactly what
+    // the core's Sized intent names, so it is lowered onto it here.  The
+    // fill-time paths (at_fill) and the pure-stop path size at a price the
+    // core cannot name -- the source's own resolved fill quote, and the
+    // directionally snapped stop level -- and keep their host-resolved shape,
+    // as does a direction the run's own opening gate would refuse at
+    // placement.  The source keeps its money, its lot floor and its
+    // placement admission; the core owns the units that settle.
+    if (default_sized && !priced && !snapshot.sizing.at_fill && !direction_blocked
+        && finite_positive(snapshot.sizing.frozen_units)) {
+        const auto* host_shape = std::get_if<native_order::HostSized>(&request.intent);
+        if (host_shape && host_shape->kind == native_order::HostSizedKind::Open) {
+            if (auto sized = default_sizing_intent(snapshot.sizing, is_long)) {
+                request.intent = *sized;
+            }
+        }
     }
     // The TV money band is a source policy, not a generic margin rule.  Its
     // all-in source tuple is judged at placement on ten-significant-digit
@@ -9749,7 +9879,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     // price. Limits retain their immutable generic value. The generic consumer
     // has already applied the one market slippage step; source projection only
     // rounds that resulting quote to the ordinary chart tick.
-    if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
+    // A core-sized opening is a host-resolved shape too: the core owns the
+    // QUANTITY, the source still owns the fill price and every admission
+    // policy below.  Only an intent that also carries its own price -- a
+    // literal transaction, a reversal target -- takes the explicit path.
+    const bool core_sized = std::holds_alternative<native_order::Sized>(
+        facts.definition->request.intent);
+    if (!core_sized
+        && !std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
         if (std::holds_alternative<native_order::Market>(trigger)) {
             result.resolved_price = source_bar_fill();
         } else if (limit_fill) {
@@ -10183,6 +10320,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         } else {
             result.units = source.requested_qty;
         }
+    } else if (core_sized) {
+        // The core resolved cash / (signal price * point value * fx) with the
+        // percentage fee reserve at acceptance and published the quotient as
+        // this request's remaining units; only the source lot floor is left.
+        // A quotient the core could not resolve leaves the source's own
+        // frozen number, which is the same conversion.
+        const auto* published = std::get_if<native_order::RemainingUnits>(&facts.remaining);
+        result.units = published ? default_sizing_lot_floor(published->q)
+                                 : source.sizing.frozen_units;
     } else if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill
                && (!(source.family == PineOrderFamily::Entry
                      && finite_positive(source.exit_levels.stop)

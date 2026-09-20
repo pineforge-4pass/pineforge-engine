@@ -74,7 +74,9 @@ enum class ExecutionGridPolicy : std::uint8_t {
 };
 
 // Native sizing bases (L3).  The kernel resolves them into units at the
-// sizing point; the Pine adapter never emits them and keeps HostSized.
+// sizing point.  A source adapter lowers its own declaration-level default
+// quantity onto them and keeps only its rounding and admission quirks
+// (R5 R2); a host that owns its whole quantity still emits HostSized.
 struct CashValue {
     double cash = 0.0;                 // account currency
 };
@@ -104,7 +106,28 @@ enum class SizeTime : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
 // SizeTime::AtMatch, the basis still converts at that frozen signal price at
 // every later candidate. A Signal request accepted outside a decision point
 // has no price to freeze and stays unresolvable.
-enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1 };
+//
+// SignalOnTick is the same decision-point rule measured on the INSTRUMENT's
+// own tick ladder (NativeRunSpec::price_tick) instead of the run's fill grid:
+// the decision price is rounded onto the ladder (nearest tick, ties away from
+// zero), carried to the expected fill by the side's tick slippage, and rounded
+// onto the ladder again. Two rulings are folded into it, both generic:
+//
+//   * price_tick is the instrument's own resolution and the run already
+//     declares it as the slippage multiplier, so a price the market PRINTS
+//     lives on that ladder whether or not the run also quantizes the prices it
+//     BOOKS. NativeRunSpec::price_grid governs fills; it does not govern what
+//     a signal was worth. A run that books unquantized fills can therefore
+//     still size against the printed price, which Signal cannot express.
+//   * the ladder is applied BEFORE the slippage, not only after. Slippage is
+//     a whole number of ticks, so it carries a ladder price to another ladder
+//     price: pre-rounding makes `round(p) +/- n*tick` exact and leaves the
+//     second rounding a pure binary64 re-normalization, where rounding only
+//     after composes two different quantizations of the same print.
+//
+// Resolved and Signal are unchanged by this alternative, so every established
+// Sized resolution keeps its value.
+enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1, SignalOnTick = 2 };
 
 // A kernel-sized opening.  units = cash / (price * point_value * fx), where
 // cash is the basis value or fraction * marked equity, and price is the
@@ -494,7 +517,7 @@ struct LiveRequest {
     // one, and an empty optional folds nothing into the continuation digest.
     std::optional<double> sizing_units;   // SizeTime::AtAcceptance
     std::optional<double> sizing_scope;   // ScopeBasis::AtAcceptance
-    std::optional<double> sizing_price;   // SizePrice::Signal
+    std::optional<double> sizing_price;   // SizePrice::Signal / SignalOnTick
 
     const RequestHandle& handle() const noexcept { return definition->handle; }
     const Request& request() const noexcept { return definition->request; }
@@ -1058,7 +1081,8 @@ struct CommandContext {
     //
     // sizing_scope: the bound scope's exposure at acceptance, for a
     //   Reduce{ScopeFraction{ScopeBasis::AtAcceptance}}.
-    // sizing_price: the frozen signal price, for a Sized{SizePrice::Signal}.
+    // sizing_price: the frozen signal price, for a Sized whose SizePrice is
+    //   Signal or SignalOnTick.
     // sizing_admissible: false when the acceptance-resolved quantity of a
     //   Sized{SizeTime::AtAcceptance} fails the run's placement admission.
     std::optional<double> sizing_scope;

@@ -1421,11 +1421,46 @@ price at every later candidate, however far the market has moved. A `Signal`
 request accepted with no decision point has no price to freeze and stays
 `TermsUnresolved`.
 
+`SignalOnTick` is the same rule measured on the instrument's own tick ladder
+(`NativeRunSpec::price_tick`) instead of the run's fill grid, and quantized
+*before* the slippage as well as after: `round_tick(round_tick(price) ± slippage_ticks · price_tick)`.
+Two things make it distinct from `Signal`, and both are generic. First,
+`price_tick` is the instrument's resolution and the run already declares it as
+the slippage multiplier, so a price the market *prints* lives on that ladder
+whether or not the run also quantizes the prices it *books* — `price_grid`
+governs fills, not what a signal was worth, and a run that leaves it at `None`
+can still size against the printed price. Second, slippage is a whole number of
+ticks, so it carries a ladder price to another ladder price: pre-rounding makes
+`round(p) ± n·tick` exact and leaves the second rounding a binary64
+re-normalization, where rounding only afterwards composes two different
+quantizations of the same print.
+
 The rule is generic — "size against the price you expect to pay" — and names no
-source language: a source layer that divides by
-`nearest_tick(signal_close ± slippage · mintick)` spells that as
-`{SizePrice::Signal, price_grid = QuantizeFills, grid_rounding = HalfUp,
-price_tick = its mintick, slippage_ticks = its slippage}`.
+source language. A source layer that divides by
+`nearest_tick(nearest_tick(signal_close) ± slippage · mintick)` while booking
+its own fill prices spells that as `{SizePrice::SignalOnTick,
+price_tick = its mintick, slippage_ticks = its slippage}`; one that has adopted
+the kernel's fill grid spells the single-rounding form as
+`{SizePrice::Signal, price_grid = QuantizeFills, grid_rounding = HalfUp}`.
+
+#### What a source adapter keeps
+
+The Pine adapter lowers its declaration-level default quantity
+(`default_qty_type` cash and percent-of-equity, on a market entry whose
+quantity is frozen at the command) onto `Sized{CashValue, AtAcceptance,
+SignalOnTick, ExplicitUnits}` and keeps exactly three things of its own, all of
+them rounding or admission quirks the kernel deliberately does not model:
+*which* equity a percentage is taken of and its ten-significant-digit money
+rounding, which it hands over as the `CashValue` basis; its two lot floors,
+which is why it asks for `ExplicitUnits` and floors the kernel's quotient in
+its `resolve_execution_terms` override; and its own placement-time money-band
+and affordability gates, which consume a quantity before any request exists and
+so cannot be a kernel decision. The percentage fee reserve is the kernel's
+(`reserve_percent_fee`), and so is the conversion itself. Paths whose sizing
+price is not the signal rule — a fill-time resize, a pure-stop entry sized at
+its trigger level — keep `HostSized{Open}`, and so do the percentage exits: the
+kernel resolves a `ScopeFraction` as `scope * fraction`, which is not
+`scope * percent / 100`, and no field reconciles the association.
 
 #### Placement-time admission
 

@@ -762,6 +762,13 @@ public:
                const std::string& oca_name = {}, int oca_type = 0);
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
+    // R5 R2 classification, answered for the command a default-sized MARKET
+    // entry on this side would write at the CURRENT execution point: true when
+    // the core's native_order::Sized names the whole conversion, so the units
+    // that settle are the core's and only the source lot floor and the source
+    // admission gates run on top.  Pure in the run's declaration, the staged
+    // instrument and that point; nothing is remembered.
+    bool core_sizes_default_opening(bool is_long) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
     // True when the request is a source exit leg carrying priced stop, limit
     // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
@@ -1138,6 +1145,30 @@ private:
     bool same_bar_market_tx_scope() const;
     void flush_pending_same_bar_commands();
     double default_sizing_units(const PineSizingSnapshot&) const noexcept;
+    // The three pieces of the default quantity the source keeps as its own
+    // policy once the conversion itself is lowered onto the core's Sized
+    // intent: the money the percentage is taken of (with its equity mark and
+    // its ten-significant-digit rounding), whether a percentage fee is
+    // reserved out of it, and the lot floor applied to the resulting
+    // quotient.  default_sizing_units is their composition at placement, where
+    // the source's own money band and affordability gates consume the number
+    // before any request exists.
+    double default_sizing_cash(const PineSizingSnapshot&) const noexcept;
+    bool default_sizing_reserves_percent_fee() const noexcept;
+    double default_sizing_lot_floor(double units) const noexcept;
+    // The intent a re-lowerable default-quantity opening carries: the core
+    // owns cash / (signal price * point value * fx) and the fee reserve, and
+    // publishes the quotient to resolve_terms.  std::nullopt keeps the
+    // host-resolved shape for every path the core cannot name.
+    std::optional<native_order::Sized> default_sizing_intent(
+        const PineSizingSnapshot&, bool is_long) const noexcept;
+    // True when the price the core will freeze for a Sized opening accepted
+    // NOW is bit-for-bit the price this snapshot already froze.  A command
+    // deferred to a later execution point, or one whose sizing price the
+    // source took from somewhere other than the signal rule, fails it and
+    // keeps its host-resolved intent.
+    bool core_sizing_price_matches(const PineSizingSnapshot&, bool is_long) const;
+    double default_market_sizing_price(double mark, bool is_long) const noexcept;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
     native_order::Group group_for(const std::string&, int, std::int64_t = 0) const;

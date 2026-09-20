@@ -172,6 +172,20 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
     } else if (const auto* sized = std::get_if<native_order::HostSized>(&request.intent)) {
         f.i(static_cast<std::int64_t>(sized->kind)); f.b(sized->side.has_value());
         if (sized->side) f.i(static_cast<std::int64_t>(*sized->side));
+    } else if (const auto* core_sized = std::get_if<native_order::Sized>(&request.intent)) {
+        // A core-sized opening carries its whole quantity in the basis, so the
+        // source fingerprint must separate two commands that differ only there.
+        f.i(static_cast<std::int64_t>(core_sized->side));
+        f.u(core_sized->basis.index());
+        if (const auto* cash = std::get_if<native_order::CashValue>(&core_sized->basis)) {
+            f.d(cash->cash);
+        } else {
+            f.d(std::get<native_order::EquityFraction>(core_sized->basis).fraction);
+        }
+        f.i(static_cast<std::int64_t>(core_sized->time));
+        f.i(static_cast<std::int64_t>(core_sized->price));
+        f.i(static_cast<std::int64_t>(core_sized->grid_policy));
+        f.b(core_sized->reserve_percent_fee);
     }
     f.s(request.label); f.s(request.comment);
     f.u(request.trigger.index());

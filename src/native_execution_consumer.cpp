@@ -2381,7 +2381,7 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         if (native_sized) {
             if (const auto point = current_execution_point()) {
                 const double price = sizing_point_price(*spec, *native_sized, point->price);
-                if (native_sized->price == native_order::SizePrice::Signal) {
+                if (native_sized->price != native_order::SizePrice::Resolved) {
                     ctx.sizing_price = price;
                 }
                 if (native_sized->time == native_order::SizeTime::AtAcceptance) {
@@ -3701,15 +3701,25 @@ double NativeExecutionConsumer::sibling_claimed_units(
 // the candidate would otherwise divide by. SizePrice::Signal carries that
 // decision price to the expected market fill: the run's slippage on the
 // request's own side first, then the run's price grid when one is declared
-// (NativePriceGrid::None leaves it alone). It names no source language; a
-// nearest-tick, slippage-adjusted signal price is {Signal, HalfUp, slippage}.
+// (NativePriceGrid::None leaves it alone). SizePrice::SignalOnTick measures
+// the same rule on the instrument's own tick ladder instead of the run's fill
+// grid, and quantizes BEFORE the slippage as well as after, because a whole
+// number of ticks carries a ladder price to another ladder price. Neither
+// names a source language; a nearest-tick, slippage-adjusted signal price on
+// an otherwise unquantized run is {SignalOnTick, price_tick, slippage}.
 double NativeExecutionConsumer::sizing_point_price(
         const NativeRunSpec& spec, const native_order::Sized& sized,
         double decision_price) const noexcept {
-    if (sized.price != native_order::SizePrice::Signal) return decision_price;
+    if (sized.price == native_order::SizePrice::Resolved) return decision_price;
     const bool buy = sized.side == native_order::Side::Long;
-    const double slipped = native_matching::apply_slippage(
-        decision_price, static_cast<double>(spec.slippage_ticks) * spec.price_tick, buy);
+    const double slip = static_cast<double>(spec.slippage_ticks) * spec.price_tick;
+    if (sized.price == native_order::SizePrice::SignalOnTick) {
+        const double on_tick = native_matching::grid_round_half_up(
+            decision_price, spec.price_tick);
+        return native_matching::grid_round_half_up(
+            native_matching::apply_slippage(on_tick, slip, buy), spec.price_tick);
+    }
+    const double slipped = native_matching::apply_slippage(decision_price, slip, buy);
     return grid_fill_basis(spec, slipped, buy, /*limit_governed=*/false);
 }
 
@@ -3791,11 +3801,11 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         if (native_sized->time != native_order::SizeTime::AtMatch) {
             return live.sizing_units;
         }
-        // SizePrice::Signal converts at the price frozen when the request was
-        // accepted, at this and at every later candidate. A Signal request
+        // A signal rule converts at the price frozen when the request was
+        // accepted, at this and at every later candidate. A signal request
         // accepted with no decision point has no price to convert at.
         double price = facts.default_resolved_price;
-        if (native_sized->price == native_order::SizePrice::Signal) {
+        if (native_sized->price != native_order::SizePrice::Resolved) {
             if (!live.sizing_price) return std::nullopt;
             price = *live.sizing_price;
         }
