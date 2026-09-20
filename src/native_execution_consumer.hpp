@@ -370,6 +370,10 @@ private:
     bool deliver_timeframe_bar(BacktestEngine& engine, TimeframeSubscription& subscription,
                                const Bar& bucket, std::int64_t first_contributing_ms,
                                std::int64_t delivered_at_ms, NativeCompletionKind completion);
+    // The lazy seal: a still-open script bucket keyed to an interval other
+    // than `script_key` is sealed LazyComplete and reset. True when nothing
+    // was to seal or the sealed calculation succeeded.
+    bool seal_stale_script(BacktestEngine& engine, std::int64_t script_key);
     void seal_script(BacktestEngine& engine, NativeCompletionKind kind);
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
     void deliver_intrabar_script(BacktestEngine& engine, const Bar& bar,

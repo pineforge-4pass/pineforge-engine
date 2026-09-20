@@ -6609,6 +6609,22 @@ void NativeExecutionConsumer::deliver_aggregate_calculation(
     record_script_report_point(engine, base.open_ms);
 }
 
+// The lazy seal. A script interval none of its own inputs sealed -- a session
+// close clips it short of its nominal end (the last "60" of a 09:30-16:00
+// session, every "D" over an intraday input), or the feed has a hole over its
+// last slot -- is sealed by the first input of a LATER interval, as
+// LazyComplete, before that input contributes anything: the calculation runs
+// with the bucket exactly as its own contributing inputs left it. False only
+// when that calculation failed.
+bool NativeExecutionConsumer::seal_stale_script(BacktestEngine& engine,
+                                                std::int64_t script_key) {
+    if (!script_.has_data || script_.sealed || script_.key == script_key) return true;
+    seal_script(engine, NativeCompletionKind::LazyComplete);
+    if (failed()) return false;
+    script_ = ScriptBucket{};
+    return true;
+}
+
 void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompletionKind kind) {
     if (!script_.has_data || script_.sealed) return;
     NativeCoordinate base;
@@ -6642,11 +6658,7 @@ bool NativeExecutionConsumer::contribute_input(
         return false;
     }
     const int64_t script_key = script_interval->open_ms;
-    if (script_.has_data && !script_.sealed && script_.key != script_key) {
-        seal_script(engine, NativeCompletionKind::LazyComplete);
-        if (failed()) return false;
-        script_ = ScriptBucket{};
-    }
+    if (!seal_stale_script(engine, script_key)) return false;
     const int64_t source_close = (kind == InputContribution::ConfirmedBar)
         ? std::max(interval.last_traded_close_ms, interval.next_period_open_ms)
         : (last_print_time_ms_ != 0 ? last_print_time_ms_ : interval.last_traded_close_ms);
@@ -7227,12 +7239,31 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         processing_input_ = false;
         return false;
     }
-    // Declared higher-timeframe series are pumped from the accepted-input
-    // path: a completed bucket reaches the host before this input is
-    // aggregated, matched or calculated, never earlier.
-    if (!subscriptions_.empty() && !pump_timeframe_subscriptions(engine, bar, index)) {
-        processing_input_ = false;
-        return false;
+    if (!subscriptions_.empty()) {
+        // Declared higher-timeframe series are pumped from the accepted-input
+        // path, and the pump is ordered against the SCRIPT interval, not the
+        // raw input. A script bar this input does not belong to and that its
+        // own last input never sealed -- the lazy seal contribute_input would
+        // otherwise perform below, AFTER the pump -- is calculated FIRST,
+        // reading the series exactly as its own contributing inputs left
+        // them. Only then does this input reach the series: the bucket it
+        // completes, the boundary it closes, the gapped series it clears, the
+        // lookahead bucket it opens, each ahead of this input's own
+        // aggregation, matching and calculation point. A bare host therefore
+        // never calculates a bar against a bucket that already holds a later
+        // input. With no such script bar pending -- always so when the input
+        // and script timeframes are equal, where each input seals its own
+        // interval -- the seal is a no-op and this is the statement order it
+        // always was; a run without subscriptions never enters the branch and
+        // keeps its lazy seal inside contribute_input.
+        if (!seal_stale_script(engine, script_interval->open_ms)) {
+            processing_input_ = false;
+            return false;
+        }
+        if (!pump_timeframe_subscriptions(engine, bar, index)) {
+            processing_input_ = false;
+            return false;
+        }
     }
     last_accepted_input_ = *interval;
     last_observed_slot_open_ = interval->open_ms;
