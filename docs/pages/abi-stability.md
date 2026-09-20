@@ -123,7 +123,7 @@ order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v5`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v2`.
+`native_run_spec_v3`.
 
 | Matrix role | Internal identity |
 | --- | --- |
@@ -192,7 +192,7 @@ The current integrated representation uses generic broker fingerprint domain
 `pineforge-broker-state/v17` and stream fingerprint version 17; the source
 extension begins with `pineforge-source-adapter/v2`. Native consumer identity
 is `native-consumer/v7`, driver values own `native_driver_v5`, and run specs own
-`native_run_spec_v2`. Stable `RunIdentity` / `RequestHandle` / `Birth` remain
+`native_run_spec_v3`. Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v5`.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the

@@ -8,7 +8,7 @@
 #include <string>
 
 namespace pineforge {
-inline namespace native_run_spec_v2 { struct NativeRunSpec; }
+inline namespace native_run_spec_v3 { struct NativeRunSpec; }
 inline namespace native_driver_v5 {
 
 // Semantic versions hashed into native continuation identity.

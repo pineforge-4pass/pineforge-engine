@@ -637,7 +637,7 @@ def main() -> int:
         ("pineforge::native_order::native_order_v1::WorkingRequestCore::submit(",
          current_order_submit),
         ("pineforge::validate_native_run_spec(",
-         "pineforge::native_run_spec_v2::validate_native_run_spec("),
+         "pineforge::native_run_spec_v3::validate_native_run_spec("),
         ("pineforge::native_bar_structurally_valid(",
          "pineforge::native_driver_v5::native_bar_structurally_valid("),
         ("abi_accept_coordinate(pineforge::NativeCoordinate",
@@ -663,7 +663,7 @@ def main() -> int:
             "native_order_identity": "pineforge::native_order::native_order_v1",
             "native_order": "pineforge::native_order::" + order_namespace,
             "native_calendar": "pineforge::native_calendar::native_calendar_v2",
-            "native_run_spec": "pineforge::native_run_spec_v2",
+            "native_run_spec": "pineforge::native_run_spec_v3",
             "native_driver": "pineforge::native_driver_v5",
             "native_host": "pineforge::engine_script_run_v17",
         },
@@ -1087,7 +1087,7 @@ def main() -> int:
         link("current_descriptor_to_old_calendar", [current_descriptor, old_timezone_obj], old_calendar_obj,
              "pineforge::native_calendar::native_calendar_v2::timezone_identity_descriptor(")
         link("current_spec_to_old_symbol_control", [current_spec], old_spec_symbols,
-             "pineforge::native_run_spec_v2::validate_native_run_spec(")
+             "pineforge::native_run_spec_v3::validate_native_run_spec(")
         link("current_host_events_to_old_symbols", [current_host_events], old_host_events_symbols,
              "pineforge::engine_script_run_v17::NativeStrategyHost::native_events(")
         link("current_bar_to_old_object", [current_bar], old_bar_obj,

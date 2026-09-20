@@ -8,7 +8,7 @@
 #include <string_view>
 
 namespace pineforge {
-inline namespace native_run_spec_v2 {
+inline namespace native_run_spec_v3 {
 namespace {
 
 using Error = NativeRunSpecError;
@@ -85,6 +85,15 @@ bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
     switch (policy) {
     case NativeSlotLabelPolicy::Canonical:
     case NativeSlotLabelPolicy::LegacyTolerant:
+        return true;
+    }
+    return false;
+}
+
+bool valid_report_policy(NativeReportPolicy policy) noexcept {
+    switch (policy) {
+    case NativeReportPolicy::HostRecorded:
+    case NativeReportPolicy::KernelRecorded:
         return true;
     }
     return false;
@@ -203,6 +212,8 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     if (spec.initial_margin_fraction && !positive(*spec.initial_margin_fraction))
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
+    if (!valid_report_policy(spec.report_policy))
+        return {Error::UnknownReportPolicy, Field::ReportPolicy};
     if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
     }
@@ -350,5 +361,5 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
     return state;
 }
 
-}  // inline namespace native_run_spec_v2
+}  // inline namespace native_run_spec_v3
 } // namespace pineforge

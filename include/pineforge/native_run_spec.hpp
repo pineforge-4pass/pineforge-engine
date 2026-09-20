@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace native_run_spec_v2 {
+inline namespace native_run_spec_v3 {
 
 // Encodings coincide with the versioned native-v1 C transport. These values
 // describe native execution; they do not configure source strategy policies.
@@ -33,6 +33,18 @@ enum class NativeCloseExecution : std::uint32_t {
 enum class NativeAbortReporting : std::uint32_t {
     Error = 0,
     Quiet = 1,
+};
+
+// Who records the per-script-bar report series. HostRecorded leaves the
+// equity curve, its metrics and any range-end row entirely to the host, which
+// is what every host that drives its own recording already does.
+// KernelRecorded asks the consumer to mark one equity point per script
+// calculation, so a bare host gets a truthful curve, finite drawdown/run-up
+// metrics and a report whose walk is not degenerate. Recording is reporting:
+// it books no cash and places no order.
+enum class NativeReportPolicy : std::uint32_t {
+    HostRecorded = 0,
+    KernelRecorded = 1,
 };
 
 enum class NativeOpenDirections : std::uint32_t {
@@ -172,6 +184,12 @@ struct NativeRunSpec {
     NativeOpenDirections allowed_open_directions = NativeOpenDirections::Both;
     std::optional<double> initial_margin_fraction; // Positive fraction, not percent;
                                                  // no maintenance liquidation.
+    NativeReportPolicy report_policy = NativeReportPolicy::HostRecorded;
+    // Report a position still open at run end as a mark-to-market closed row
+    // at the last close. KernelRecorded only, and reporting only: the live
+    // book, the realized sums and every hash are left exactly as the run left
+    // them. Inert under HostRecorded, whose host owns the whole report series.
+    bool report_open_position_at_end = false;
     IntrabarPath intrabar{};
 };
 
@@ -188,6 +206,7 @@ enum class NativeRunSpecField : std::uint8_t {
     TimeframeUndetected,
     SlotLabelPolicy, LegacyTolerance,
     PathOrder,
+    ReportPolicy,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -216,6 +235,7 @@ enum class NativeRunSpecError : std::uint8_t {
     UnknownSlotLabelPolicy,
     UnknownLegacyTolerance,
     UnknownPathOrder,
+    UnknownReportPolicy,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -258,5 +278,5 @@ static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);
 static_assert(std::is_nothrow_move_assignable_v<NativeRunSpec>);
 
-}  // inline namespace native_run_spec_v2
+}  // inline namespace native_run_spec_v3
 } // namespace pineforge

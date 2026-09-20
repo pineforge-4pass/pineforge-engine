@@ -78,6 +78,14 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.b(spec.initial_margin_fraction.has_value());
     if (spec.initial_margin_fraction) f.d(*spec.initial_margin_fraction);
     f.u(native_intrabar_path_digest(spec.intrabar));
+    // Report recording is opt-in, so it folds only when it is on: a spec that
+    // leaves the kernel out of its report keeps the continuation identity it
+    // had before the policy existed (same conditional shape as the precommit
+    // digest below).
+    if (spec.report_policy != NativeReportPolicy::HostRecorded) {
+        f.u(static_cast<uint64_t>(spec.report_policy));
+        f.b(spec.report_open_position_at_end);
+    }
 }
 
 void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
@@ -4451,7 +4459,9 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     if (spec && spec->close_execution == NativeCloseExecution::AfterCalculation) {
         emit_discrete(bar.close, close_time, NativePriceProvenance::AfterCalculationClose,
                       NativePathPhase::Close, true);
+        if (failed()) return;
     }
+    record_script_report_point(engine, base.open_ms);
 }
 
 void NativeExecutionConsumer::deliver_intrabar_script(
@@ -4624,7 +4634,9 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         point.matching = true;
         record_driver(point);
         match_point(engine, point);
+        if (failed()) return;
     }
+    record_script_report_point(engine, base.open_ms);
 }
 
 int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) const noexcept {
@@ -4632,6 +4644,51 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
     if (base.next_period_open_ms > t) t = base.next_period_open_ms;
     if (script_.latest_close_ms > t) t = script_.latest_close_ms;
     return t;
+}
+
+// One report point per script calculation, in the order the source scheduler
+// uses (pine_strategy_host.cpp): fold the extremes at this calculation's
+// close, then append the script bar's own point. The label is the script
+// interval's open, not current_bar_.timestamp, which the intrabar walk
+// overwrites — that keeps the curve identical with and without a path.
+void NativeExecutionConsumer::record_script_report_point(
+        BacktestEngine& engine, int64_t script_open_ms) const {
+    const auto* spec = spec_ptr();
+    if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    engine.update_equity_extremes();
+    engine.record_equity_point(script_open_ms);
+}
+
+// A position still open when the feed ends is reported as the rows a close at
+// the last bar's close would record — one per physical lot, through the same
+// non-mutating row builder every full close uses. Reporting only: the live
+// book, the realized sums, the equity curve and every hash are left exactly as
+// the run left them, so enabling this cannot move a fill or a continuation.
+// The mark is the raw close on the price grid (bar_fill_price) with no
+// slippage: slippage models a market order's fill uncertainty, and this row is
+// a mark, not an order. The exit is dated on the script bar's own label.
+void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& engine) const {
+    const auto* spec = spec_ptr();
+    if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded
+        || !spec->report_open_position_at_end) return;
+    engine.range_end_trades_.clear();
+    if (engine.position_side_ == PositionSide::FLAT || engine.pyramid_entries_.empty()) return;
+    if (!std::isfinite(engine.current_bar_.close)) return;
+    const bool was_long = engine.position_side_ == PositionSide::LONG;
+    const double fill_price = engine.bar_fill_price(engine.current_bar_.close);
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = engine.equity_curve_.empty()
+        ? engine.current_bar_.timestamp
+        : engine.equity_curve_.back().time_ms;
+    context.interval_index = engine.bar_index_;
+    for (const auto& lot : engine.pyramid_entries_) {
+        Trade row = engine.build_close_trade_with_costs(
+            lot, lot.qty, fill_price, was_long,
+            engine.allocated_entry_commission(lot, lot.qty),
+            engine.calc_commission(fill_price, lot.qty), context);
+        row.open_at_end = true;
+        engine.range_end_trades_.push_back(std::move(row));
+    }
 }
 
 void NativeExecutionConsumer::deliver_aggregate_calculation(
@@ -4668,7 +4725,9 @@ void NativeExecutionConsumer::deliver_aggregate_calculation(
         point.matching = true;
         record_driver(point);
         match_point(engine, point);
+        if (failed()) return;
     }
+    record_script_report_point(engine, base.open_ms);
 }
 
 void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompletionKind kind) {
@@ -4935,6 +4994,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
         pump_batch(engine, bars, n);
         if (failed()) return;
+        record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
@@ -4977,6 +5037,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
+        record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
@@ -5017,6 +5078,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
+        record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
@@ -5506,6 +5568,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
             }
         }
         if (failed()) return false;
+        record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) {
             render(engine, "native stream_end lost running state");
