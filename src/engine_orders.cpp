@@ -195,18 +195,6 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
 
 
 
-// KI-62: after a from_entry PRICED bracket exit fills, scratch (close dur-0)
-// any same-bar same-id MARKET pyramid-add slice still open — it filled earlier
-// this bar, ahead of the exit in TV's open-tick fill sequence, so TV's exit
-// covers it. Targets ONLY flagged same-bar (entry_bar_index == bar_index_)
-// market-add slices of this from_entry: the frozen pre-add lot was already
-// drained by the normal close, and prior-bar slices (entry_bar_index <
-// bar_index_) are never touched — so multi-bar pyramids stay untouched. A
-// strict no-op when no such slice exists (the KEEP cell fills the exit first,
-// so the add is not yet open; non-collision shapes flag no add). Emits each
-// covered slice as its own dur-0 trade (entry at the add's fill price, exit at
-// this exit's fill price), matching TV's per-pyramid scratch reporting.
-
 
 
 // Internal helper: cancel OCA group members (except the one that just filled)
