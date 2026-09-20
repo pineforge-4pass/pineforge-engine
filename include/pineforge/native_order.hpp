@@ -274,9 +274,25 @@ struct PointBudget {
 };
 using Capacity = std::variant<ImmediateRemaining, PointBudget>;
 
+// Whether an owner-related request that arms is a working order before its
+// arm. Working (the default) is the established book: the request is listed
+// by native_working_requests() from acceptance on. PendingUntilArmed keeps
+// it out of that enumeration until its ArmedEvent; it is still a live
+// request the whole time -- accepted, addressable by handle (replace,
+// cancel, trail_state), counted by cancel_all / cancel_where, and folded
+// into the continuation identity -- and it never matches before the arm
+// under either value. Visibility governs enumeration, not addressing.
+enum class NativeArmVisibility : std::uint8_t {
+    Working = 0,
+    PendingUntilArmed = 1,
+};
+
 struct Independent {};
+// The one owner relation that arms (the ArmedEvent). `visibility` is
+// appended last so every existing {parent} initializer keeps its meaning.
 struct WaitForApplied {
     RequestHandle parent;
+    NativeArmVisibility visibility = NativeArmVisibility::Working;
 };
 struct BindOpening {
     RequestHandle opening;

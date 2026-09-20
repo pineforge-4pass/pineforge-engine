@@ -172,6 +172,27 @@ class NativeVersions(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.reject(FILES[10], before, after)
 
+    def test_arm_visibility_is_pinned_folded_and_hides_until_armed(self):
+        # R5 L7b: the arm visibility is appended last on WaitForApplied with
+        # a Working default, folded only when set, and the working
+        # enumeration skips a pending child until its arm.
+        for before, after in (
+            ('enum class NativeArmVisibility : std::uint8_t {',
+             'enum class MissingArmVisibility : std::uint8_t {'),
+            ('    NativeArmVisibility visibility = NativeArmVisibility::Working;\n', ''),
+            ('    Working = 0,\n    PendingUntilArmed = 1,', '    PendingUntilArmed = 0,\n    Working = 1,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[0], before, after)
+        for before, after in (
+            ('if (value.visibility != native_order::NativeArmVisibility::Working) {',
+             'if (true) {'),
+            ('f.u(static_cast<uint64_t>(value.visibility));', ''),
+            ('if (hidden_until_armed(live)) continue;', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_execution_grid_policy_is_explicit_hashed_and_consumed(self):
         self.reject(FILES[0], 'enum class ExecutionGridPolicy : std::uint8_t {',
                     'enum class MissingExecutionGridPolicy : std::uint8_t {')

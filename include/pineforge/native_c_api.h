@@ -180,6 +180,17 @@ typedef enum pf_native_anchor_rounding_e {
     PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL = 2  /**< Toward the region the leg needs. */
 } pf_native_anchor_rounding_t;
 
+/** Whether a WAIT_FOR_APPLIED child is a working order before its arm —
+ *  `native_order::NativeArmVisibility` (L7b). PENDING_UNTIL_ARMED keeps it
+ *  out of #strategy_native_working_len_v1 / #strategy_native_working_get_v1
+ *  until its ArmedEvent; it stays a live request the whole time (replace,
+ *  cancel, cancel_all still address it, and it never matches before the arm
+ *  under either value). */
+typedef enum pf_native_arm_visibility_e {
+    PF_NATIVE_ARM_VISIBILITY_WORKING             = 0,
+    PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED = 1
+} pf_native_arm_visibility_t;
+
 /** Capacity — the alternative index of `native_order::Capacity`. */
 typedef enum pf_native_capacity_e {
     PF_NATIVE_CAPACITY_IMMEDIATE    = 0, /**< Whole remaining at one point. */
@@ -553,9 +564,9 @@ typedef struct pf_native_request_v1 {
 
     /* ── The additive anchored-leg tail (L7b). Read only when `struct_size`
      * is the current sizeof; a caller sending the base layout stops at
-     * `comment` above and gets every default. ── */
+     * `comment` above and gets every default (RAW, WORKING). ── */
     uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_e, FROM_OWNER_FILL only. */
-    uint32_t reserved1;           /**< Must be 0. */
+    uint32_t visibility;          /**< #pf_native_arm_visibility_e, WAIT_FOR_APPLIED only. */
 } pf_native_request_v1;
 
 /** Byte length of #pf_native_request_v1 as the L13 lane first published it,

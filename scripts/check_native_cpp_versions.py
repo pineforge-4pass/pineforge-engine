@@ -261,7 +261,8 @@ def check_texts(files):
                     "TermsResolvedEvent", "NativeCandidatePriceKind",
                     "CashValue", "EquityFraction", "SizeTime", "SizePrice", "Sized",
                     "ScopeClaim", "ScopeBasis", "ScopeFraction",
-                    "NativeAnchorRounding", "FromOwnerFill", "ArmContext"),
+                    "NativeAnchorRounding", "FromOwnerFill", "ArmContext",
+                    "NativeArmVisibility", "WaitForApplied"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -319,6 +320,17 @@ def check_texts(files):
     if re.findall(r'(\w+)\s*=\s*(\d+)', anchor_rounding) != [
             ('Raw', '0'), ('HalfUp', '1'), ('Directional', '2')]:
         raise ValueError('NativeAnchorRounding must keep Raw=0, HalfUp=1, Directional=2')
+    # R5 L7b: the arm visibility is appended last on WaitForApplied with a
+    # Working default (the established book), so every {parent} initializer
+    # keeps its meaning and every Working child keeps its digest.
+    wait = re.sub(r'\s+', '', body(order, r'struct\s+WaitForApplied\s*\{', 'wait-for-applied'))
+    if wait != ('RequestHandleparent;'
+                'NativeArmVisibilityvisibility=NativeArmVisibility::Working;'):
+        raise ValueError('WaitForApplied must keep its member order and Working visibility default')
+    visibility = body(order, r'enum\s+class\s+NativeArmVisibility\s*:[^{]+\{', 'arm visibility')
+    if re.findall(r'(\w+)\s*=\s*(\d+)', visibility) != [
+            ('Working', '0'), ('PendingUntilArmed', '1')]:
+        raise ValueError('NativeArmVisibility must keep Working=0, PendingUntilArmed=1')
     arm_context = re.sub(r'\s+', '', body(order, r'struct\s+ArmContext\s*\{', 'arm context'))
     if arm_context != 'std::optional<double>price_tick;AnchoredLevelResolverresolve_level;':
         raise ValueError('ArmContext must carry exactly the price tick and the level resolver')
@@ -631,7 +643,11 @@ def check_texts(files):
                  'f.u(static_cast<uint64_t>(anchor->rounding));',
                  'if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;',
                  'return host->resolve_anchored_level(view);',
-                 'next_timeline_ordinal_, arm);'):
+                 'next_timeline_ordinal_, arm);',
+                 'if (value.visibility != native_order::NativeArmVisibility::Working) {',
+                 'f.u(static_cast<uint64_t>(value.visibility));',
+                 'bool hidden_until_armed(const native_order::LiveRequest& live) noexcept {',
+                 'if (hidden_until_armed(live)) continue;'):
         if fold not in consumer_src:
             raise ValueError('native consumer omits the anchored-leg fold/arm token: ' + fold)
     for token in ('lower->sample_eligibility',

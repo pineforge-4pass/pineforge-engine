@@ -91,6 +91,11 @@ static_assert(static_cast<int>(no::NativeAnchorRounding::Raw) == PF_NATIVE_ANCHO
                   && static_cast<int>(no::NativeAnchorRounding::Directional)
                          == PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL,
               "NativeAnchorRounding drifted");
+static_assert(static_cast<int>(no::NativeArmVisibility::Working)
+                      == PF_NATIVE_ARM_VISIBILITY_WORKING
+                  && static_cast<int>(no::NativeArmVisibility::PendingUntilArmed)
+                         == PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED,
+              "NativeArmVisibility drifted");
 /* The anchored-leg tail is append-only: the base layout must still end
  * exactly where PF_NATIVE_REQUEST_V1_BASE_SIZE says, and the tail must be
  * the two fields below it and nothing else. */
@@ -638,7 +643,17 @@ int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run
     if (in.anchor_offset_in_ticks > 1u) return PF_NATIVE_E_TAG;
     no::NativeAnchorRounding rounding = no::NativeAnchorRounding::Raw;
     if (has_anchor_tail) {
-        if (in.reserved1 != 0u) return PF_NATIVE_E_TAG;
+        /* Visibility belongs to the one owner relation that arms; on any
+         * other owner a non-default value is a tag error, not a silent drop. */
+        auto* wait = std::get_if<no::WaitForApplied>(&out.owner);
+        switch (in.visibility) {
+        case PF_NATIVE_ARM_VISIBILITY_WORKING: break;
+        case PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED:
+            if (!wait) return PF_NATIVE_E_TAG;
+            wait->visibility = no::NativeArmVisibility::PendingUntilArmed;
+            break;
+        default: return PF_NATIVE_E_TAG;
+        }
         switch (in.anchor_rounding) {
         case PF_NATIVE_ANCHOR_ROUNDING_RAW: break;
         case PF_NATIVE_ANCHOR_ROUNDING_HALF_UP:

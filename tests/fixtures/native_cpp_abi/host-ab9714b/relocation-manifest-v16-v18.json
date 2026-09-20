@@ -71,7 +71,9 @@
     "ArmContext::resolve_level",
     "AnchoredLevelResolver",
     "NativeAnchoredTrigger",
-    "NativeAnchoredLevelView"
+    "NativeAnchoredLevelView",
+    "WaitForApplied::visibility",
+    "NativeArmVisibility"
   ],
   "addedVirtuals": [
     "prepare_native_begin",

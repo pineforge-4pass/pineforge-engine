@@ -233,6 +233,22 @@ def main(root: Path = ROOT) -> int:
             if fold not in source_hash:
                 raise ValueError("L4c adapter policy hash fold is missing: " + fold)
 
+        # R5 L7b: the generic broker-state hash folds the native request table
+        # through the execution continuation hash, so a request-state field
+        # that is durable next-decision state must be folded there. The two
+        # anchored-leg fields fold only when set (a Raw anchor and a Working
+        # child keep their pre-lane digest); the checker fails closed the
+        # moment either conditional fold disappears from the consumer.
+        consumer_hash = executable_hash_text(
+            (root / "src/native_execution_consumer.cpp").read_text())
+        for fold in (
+            "if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {",
+            "f.u(static_cast<uint64_t>(anchor->rounding));",
+            "if (value.visibility != native_order::NativeArmVisibility::Working) {",
+            "f.u(static_cast<uint64_t>(value.visibility));",
+        ):
+            require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
+
         scheduler_header = (root / "include/pineforge/source/pine_scheduler.hpp").read_text()
         cache_errors: list[str] = []
         for cache_name in SCHEDULER_CACHE_WAIVERS:

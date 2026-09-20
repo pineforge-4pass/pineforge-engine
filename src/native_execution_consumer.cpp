@@ -555,6 +555,11 @@ void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
         if constexpr (std::is_same_v<T, native_order::Independent>) {
         } else if constexpr (std::is_same_v<T, native_order::WaitForApplied>) {
             hash_handle(f, value.parent);
+            // Visibility is request state: folded only when set, so every
+            // Working child keeps the digest it had before the knob existed.
+            if (value.visibility != native_order::NativeArmVisibility::Working) {
+                f.u(static_cast<uint64_t>(value.visibility));
+            }
         } else if constexpr (std::is_same_v<T, native_order::BindOpening>) {
             hash_handle(f, value.opening);
             f.i(value.cycle);
@@ -8037,6 +8042,19 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
     return std::move(ok.result);
 }
 
+// L7b visibility. A PendingUntilArmed child is not a working order before its
+// arm: it is out of the working enumeration while its authority is still
+// Wait, and listed from its ArmedEvent on. Every handle-addressed reader
+// (replace, cancel, trail_state), the bulk cancels, matching (a waiting leg
+// never matches under either value) and the continuation identity keep
+// seeing it: visibility governs enumeration, not addressing.
+bool hidden_until_armed(const native_order::LiveRequest& live) noexcept {
+    const auto* wait = std::get_if<native_order::WaitForApplied>(&live.request().owner);
+    return wait != nullptr
+        && wait->visibility == native_order::NativeArmVisibility::PendingUntilArmed
+        && std::holds_alternative<native_order::Wait>(live.authority);
+}
+
 std::vector<NativeWorkingRequest> NativeExecutionConsumer::working_requests() const {
     // Owning value rows in live order. The projection spelling is deliberate:
     // an observer reads what is left to execute, never the matcher's own
@@ -8044,6 +8062,7 @@ std::vector<NativeWorkingRequest> NativeExecutionConsumer::working_requests() co
     std::vector<NativeWorkingRequest> out;
     out.reserve(requests_.live().size());
     for (const auto& live : requests_.live()) {
+        if (hidden_until_armed(live)) continue;
         NativeWorkingRequest row;
         row.definition = live.definition;
         row.remaining = project_live_remaining(live.remaining);

@@ -1363,6 +1363,11 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             return RequestRejectReason::InvalidOwner;
         }
         if (!find_live(wait->parent)) return RequestRejectReason::InvalidOwner;
+        // An unknown visibility is refused rather than read as Working.
+        if (wait->visibility != NativeArmVisibility::Working
+            && wait->visibility != NativeArmVisibility::PendingUntilArmed) {
+            return RequestRejectReason::InvalidOwner;
+        }
     } else if (const auto* bind = std::get_if<BindOpening>(&request.owner)) {
         if (as_transact(request.intent)) return RequestRejectReason::InvalidOwner;
         if (bind->cycle <= 0 || bind->opening.incarnation == 0 || bind->opening.run != identity_) {

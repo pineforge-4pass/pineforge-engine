@@ -37,6 +37,23 @@ class Coverage(unittest.TestCase):
     def test_current_tree_passes(self):
         self.assertEqual(self.check()[0], 0)
 
+    def test_native_request_state_folds_are_pinned(self):
+        # R5 L7b: the anchor rounding and the arm visibility are request
+        # state folded (only when set) into the continuation the generic
+        # broker-state hash consumes; losing either fold fails closed.
+        for before, after in (
+            ("if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {",
+             "if (false) {"),
+            ("f.u(static_cast<uint64_t>(anchor->rounding));", ""),
+            ("if (value.visibility != native_order::NativeArmVisibility::Working) {",
+             "if (false) {"),
+            ("f.u(static_cast<uint64_t>(value.visibility));", ""),
+        ):
+            with self.subTest(before=before):
+                result, output = self.check((
+                    ("src/native_execution_consumer.cpp", before, after),))
+                self.assertEqual(result, 1, output)
+
     def test_generic_domain_is_pinned(self):
         result, output = self.check((
             ("src/engine_state_hash.cpp", "pineforge-broker-state/v18",

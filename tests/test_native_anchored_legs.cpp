@@ -19,6 +19,7 @@
 // prints the observed values and stops. A raw native_continuation_hash()
 // constant is not portable (it folds the machine's timezone resources), so
 // every continuation comparison here is between two runs in this process.
+#include <pineforge/native_c_api.h>
 #include <pineforge/native_toolkit.hpp>
 
 #include "native_current_fixture.hpp"
@@ -270,6 +271,8 @@ void defaults_are_byte_identical() {
         auto bracket = anchored_bracket(parent, 250.0, 250.0);
         bracket.take_profit->anchor = no::FromOwnerFill{250.0, true, no::NativeAnchorRounding::Raw};
         bracket.stop_loss->anchor = no::FromOwnerFill{-250.0, true, no::NativeAnchorRounding::Raw};
+        bracket.take_profit->owner = no::WaitForApplied{parent, no::NativeArmVisibility::Working};
+        bracket.stop_loss->owner = no::WaitForApplied{parent, no::NativeArmVisibility::Working};
         tk::submit_bracket(base, bracket);
     };
     REQUIRE(stated.configure_native(bracket_spec("l7b-neutral")).status
@@ -580,6 +583,316 @@ void hook_restates_the_level() {
     CHECK(nan.state.failure.code == NativeFailureCode::SettlementFailure);
 }
 
+// ── 3. PendingUntilArmed: not a working order before the arm ────────────
+// The pending leg is out of native_working_requests() until its ArmedEvent
+// and listed from then on; replace, cancel and cancel_all still address it;
+// matching never sees a waiting leg under either visibility; the fold is
+// conditional; and the C API's working list agrees by construction.
+struct VisibilityHost final : Host {
+    no::RequestHandle parent, pending, plain;
+    std::vector<std::size_t> working_counts;   // one per calculation
+    std::vector<bool> pending_listed, plain_listed;
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& ctx) override {
+        Host::on_native_bar(bar, ctx);
+        const auto rows = native_working_requests();
+        working_counts.push_back(rows.size());
+        bool saw_pending = false, saw_plain = false;
+        for (const auto& row : rows) {
+            if (row.definition->handle == pending) saw_pending = true;
+            if (row.definition->handle == plain) saw_plain = true;
+        }
+        pending_listed.push_back(saw_pending);
+        plain_listed.push_back(saw_plain);
+    }
+};
+
+void pending_until_armed_hides_the_leg() {
+    VisibilityHost host;
+    host.beginning = [&](Host& base) {
+        host.parent = put(base, tx(1.0, "entry"));
+        // Two legs on the same parent: one pending until armed, one working.
+        auto pending = owner_close("pending");
+        pending.trigger = no::Stop{0.0};
+        pending.owner = no::WaitForApplied{host.parent, no::NativeArmVisibility::PendingUntilArmed};
+        pending.anchor = no::FromOwnerFill{-10.0, true};
+        host.pending = put(base, pending);
+        auto plain = owner_close("plain");
+        plain.trigger = no::Limit{0.0};
+        plain.owner = no::WaitForApplied{host.parent};
+        plain.anchor = no::FromOwnerFill{10.0, true};
+        host.plain = put(base, plain);
+    };
+    // Bar 0: the parent is accepted at run begin and fills at the open, so
+    // the calculation at bar 0's close already sees both legs armed. The
+    // pre-arm book is therefore read at the moment of submission instead.
+    std::size_t at_submit = 0;
+    bool pending_at_submit = false, plain_at_submit = false;
+    host.calculation = [&](Host&) {};
+    Host probe;
+    no::RequestHandle probe_parent, probe_pending, probe_plain;
+    probe.beginning = [&](Host& base) {
+        probe_parent = put(base, tx(1.0, "entry"));
+        auto pending = owner_close("pending");
+        pending.trigger = no::Stop{0.0};
+        pending.owner = no::WaitForApplied{probe_parent, no::NativeArmVisibility::PendingUntilArmed};
+        pending.anchor = no::FromOwnerFill{-10.0, true};
+        probe_pending = put(base, pending);
+        auto plain = owner_close("plain");
+        plain.trigger = no::Limit{0.0};
+        plain.owner = no::WaitForApplied{probe_parent};
+        plain.anchor = no::FromOwnerFill{10.0, true};
+        probe_plain = put(base, plain);
+        const auto rows = base.native_working_requests();
+        at_submit = rows.size();
+        for (const auto& row : rows) {
+            if (row.definition->handle == probe_pending) pending_at_submit = true;
+            if (row.definition->handle == probe_plain) plain_at_submit = true;
+        }
+    };
+    run(probe, bracket_spec("l7b-visibility-probe"), {100.0});
+    completed(probe);
+    // Before the arm: the parent and the Working leg are the book; the
+    // pending leg is live (accepted) but not listed.
+    CHECK(at_submit == 2);
+    CHECK(!pending_at_submit);
+    CHECK(plain_at_submit);
+    CHECK(events<no::AcceptedEvent>(probe).size() == 3);
+
+    run(host, bracket_spec("l7b-visibility"), {100.0, 100.0, 100.0});
+    completed(host);
+    // From the ArmedEvent on, both legs are listed with their materialized
+    // levels (the parent is terminal).
+    const auto armed = events<no::ArmedEvent>(host);
+    REQUIRE(armed.size() == 2);
+    REQUIRE(host.working_counts.size() == 3);
+    for (std::size_t i = 0; i < 3; ++i) {
+        CHECK(host.working_counts[i] == 2);
+        CHECK(host.pending_listed[i]);
+        CHECK(host.plain_listed[i]);
+    }
+    const auto* pending_armed = armed_for(armed, host.pending);
+    REQUIRE(pending_armed != nullptr);
+    const auto* owner = std::get_if<no::WaitForApplied>(&pending_armed->definition->request.owner);
+    REQUIRE(owner != nullptr);
+    CHECK(owner->visibility == no::NativeArmVisibility::PendingUntilArmed);
+
+    // Matching: a waiting leg never matches under either visibility. Both
+    // legs are placed before the fill and neither fills at the fill's own
+    // open print (100 is not past either level), so the only fills are the
+    // parent's. The materialized levels are the anchor's.
+    CHECK(events<no::ExecutionAppliedEvent>(host).size() == 1);
+    CHECK(host.physical_position().signed_units == 1.0);
+}
+
+void pending_leg_is_still_addressable() {
+    // Replace and cancel address a hidden leg by handle; cancel_all counts it
+    // among the requests that left the book; cancel_where finds its comment.
+    Host host;
+    no::RequestHandle parent, hidden, other;
+    no::ReplaceResult replaced;
+    no::CancelResult cancelled;
+    std::size_t listed_after_replace = 0, listed_after_cancel = 0;
+    std::optional<NativeTrailState> trail_of_hidden;
+    std::size_t where_count = 0, all_count = 0;
+    host.beginning = [&](Host& base) {
+        parent = put(base, tx(1.0, "entry"));
+        auto leg = owner_close("hidden");
+        leg.trigger = no::Stop{0.0};
+        leg.owner = no::WaitForApplied{parent, no::NativeArmVisibility::PendingUntilArmed};
+        leg.anchor = no::FromOwnerFill{-10.0, true};
+        hidden = put(base, leg);
+        auto trail = owner_close("hidden-trail");
+        trail.trigger = no::Trail{0.05, 0.0};
+        trail.owner = no::WaitForApplied{parent, no::NativeArmVisibility::PendingUntilArmed};
+        trail.anchor = no::FromOwnerFill{10.0, true};
+        other = put(base, trail);
+        // A handle-addressed trail read answers for the hidden leg.
+        trail_of_hidden = base.trail_state(other);
+        // Replace keeps the leg hidden (the successor carries its own
+        // visibility) and still succeeds.
+        auto successor = leg;
+        successor.anchor = no::FromOwnerFill{-20.0, true};
+        replaced = base.replace(hidden, successor);
+        if (replaced.successor) hidden = *replaced.successor;
+        listed_after_replace = base.native_working_requests().size();
+        cancelled = base.cancel(hidden);
+        listed_after_cancel = base.native_working_requests().size();
+        where_count = base.cancel_where("bracket");
+        all_count = base.cancel_all();
+    };
+    run(host, bracket_spec("l7b-visibility-address"), {100.0});
+    completed(host);
+    CHECK(trail_of_hidden.has_value());
+    if (trail_of_hidden) CHECK(!trail_of_hidden->activated);
+    CHECK(replaced.status == no::ReplaceStatus::Replaced);
+    CHECK(listed_after_replace == 1);      // the parent only
+    CHECK(cancelled.status == no::CancelStatus::Cancelled);
+    CHECK(listed_after_cancel == 1);
+    CHECK(where_count == 1);               // the hidden trail's comment matched
+    CHECK(all_count == 1);                 // the parent; nothing else was left
+    const auto cancelled_events = events<no::CancelledEvent>(host);
+    REQUIRE(cancelled_events.size() == 3);
+    CHECK(cancelled_events[0].handle() == hidden);
+    CHECK(cancelled_events[1].handle() == other);
+    CHECK(cancelled_events[2].handle() == parent);
+    CHECK(events<no::ReplacedEvent>(host).size() == 1);
+    CHECK(events<no::NotWorkingEvent>(host).empty());
+    CHECK(events<no::InvalidHandleEvent>(host).empty());
+
+    // An unknown visibility is refused at acceptance.
+    Host rejects;
+    no::SubmitResult unknown;
+    rejects.beginning = [&](Host& base) {
+        const auto p = put(base, tx(1.0, "entry"));
+        auto leg = owner_close("leg");
+        leg.trigger = no::Stop{0.0};
+        leg.owner = no::WaitForApplied{p, static_cast<no::NativeArmVisibility>(9)};
+        leg.anchor = no::FromOwnerFill{-10.0, true};
+        unknown = base.submit(leg);
+    };
+    run(rejects, bracket_spec("l7b-visibility-unknown"), {100.0});
+    CHECK(unknown.status == no::SubmitStatus::Rejected);
+    REQUIRE(unknown.reason.has_value());
+    CHECK(*unknown.reason == no::RequestRejectReason::InvalidOwner);
+}
+
+void visibility_folds_only_when_set() {
+    auto probe = [](std::optional<no::NativeArmVisibility> visibility) {
+        Host host;
+        host.beginning = [&](Host& base) {
+            const auto parent = put(base, tx(1.0, "entry"));
+            auto leg = owner_close("leg");
+            leg.trigger = no::Stop{0.0};
+            leg.owner = visibility ? no::WaitForApplied{parent, *visibility}
+                                   : no::WaitForApplied{parent};
+            leg.anchor = no::FromOwnerFill{-10.0, true};
+            put(base, leg);
+        };
+        run(host, bracket_spec("l7b-visibility-fold"), {100.0});
+        completed(host);
+        return host.native_continuation_hash();
+    };
+    const auto plain = probe(std::nullopt);
+    CHECK(probe(no::NativeArmVisibility::Working) == plain);
+    CHECK(probe(no::NativeArmVisibility::PendingUntilArmed) != plain);
+}
+
+// The C API's working list is the same enumeration: a PENDING_UNTIL_ARMED
+// child sent with the additive tail is absent before the fill and present
+// after it, through strategy_native_working_len_v1 alone.
+struct CVisibilityState {
+    pf_strategy_t host = nullptr;
+    int calculations = 0;
+    uint64_t parent = 0;
+    uint64_t leg = 0;
+    int len_at_submit = -1;
+    int len_after_fill = -1;
+    int rc_submit = 0;
+    int rc_bad_tag = 0;
+};
+
+int c_visibility_on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1*) {
+    auto* state = static_cast<CVisibilityState*>(user);
+    ++state->calculations;
+    if (state->calculations == 1) {
+        pf_native_request_v1 parent;
+        std::memset(&parent, 0, sizeof(parent));
+        parent.struct_size = static_cast<uint32_t>(sizeof(parent));
+        parent.version = PF_NATIVE_API_VERSION;
+        parent.intent = PF_NATIVE_INTENT_TRANSACT;
+        parent.intent_value = 1.0;
+        parent.label = "c-parent";
+        if (strategy_native_submit_v1(state->host, &parent, &state->parent, nullptr)
+            != PF_NATIVE_OK) {
+            return 1;
+        }
+        pf_native_request_v1 leg;
+        std::memset(&leg, 0, sizeof(leg));
+        leg.struct_size = static_cast<uint32_t>(sizeof(leg));
+        leg.version = PF_NATIVE_API_VERSION;
+        leg.intent = PF_NATIVE_INTENT_REDUCE;
+        leg.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+        leg.trigger = PF_NATIVE_TRIGGER_STOP;
+        leg.anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL;
+        leg.anchor_offset = -10.0;
+        leg.anchor_offset_in_ticks = 1;
+        leg.anchor_rounding = PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL;
+        leg.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        leg.owner_n = 1;
+        leg.owner_incarnations = &state->parent;
+        leg.visibility = PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED;
+        leg.label = "c-leg";
+        state->rc_submit = strategy_native_submit_v1(state->host, &leg, &state->leg, nullptr);
+        state->len_at_submit = strategy_native_working_len_v1(state->host);
+        // A visibility on a non-arming owner is a tag error, not a silent drop.
+        pf_native_request_v1 bad = parent;
+        bad.visibility = PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED;
+        state->rc_bad_tag = strategy_native_submit_v1(state->host, &bad, nullptr, nullptr);
+    } else if (state->calculations == 2) {
+        state->len_after_fill = strategy_native_working_len_v1(state->host);
+    }
+    return 0;
+}
+
+void c_api_working_list_agrees() {
+    CVisibilityState state;
+    pf_native_callbacks_v1 table;
+    std::memset(&table, 0, sizeof(table));
+    table.struct_size = static_cast<uint32_t>(sizeof(table));
+    table.version = PF_NATIVE_API_VERSION;
+    table.user = &state;
+    table.on_bar = &c_visibility_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    REQUIRE(state.host != nullptr);
+    pf_native_run_spec_v1 spec;
+    std::memset(&spec, 0, sizeof(spec));
+    spec.struct_size = static_cast<uint32_t>(sizeof(spec));
+    spec.session_key = "l7b-c-visibility";
+    spec.run_number = 1;
+    spec.input_tf = "1";
+    spec.script_tf = "1";
+    spec.ticker = "L7B";
+    spec.tickerid = "TEST:L7B";
+    spec.type = "crypto";
+    spec.currency = "USDT";
+    spec.basecurrency = "ETH";
+    spec.description = "";
+    spec.volumetype = "";
+    spec.timezone = "UTC";
+    spec.session = "24x7";
+    spec.chart_timezone = "";
+    spec.initial_capital = 10000.0;
+    spec.point_value = 1.0;
+    spec.account_fx = 1.0;
+    spec.price_tick = 0.01;
+    spec.allowed_open_directions = 3;
+    CHECK(strategy_configure_native_v1(state.host, &spec) == 0);
+    pf_bar_t bars[3];
+    std::memset(bars, 0, sizeof(bars));
+    for (int i = 0; i < 3; ++i) {
+        bars[i].open = bars[i].high = bars[i].low = bars[i].close = 100.0;
+        bars[i].volume = 1.0;
+        bars[i].timestamp = kT + static_cast<int64_t>(i) * 60000;
+    }
+    CHECK(strategy_native_run_v1(state.host, bars, 3, nullptr) == PF_NATIVE_OK);
+    CHECK(state.rc_submit == PF_NATIVE_OK);
+    CHECK(state.rc_bad_tag == PF_NATIVE_E_TAG);
+    // At submission: the parent only. After the fill (the leg armed at bar
+    // 1's open, the parent terminal): the leg only.
+    CHECK(state.len_at_submit == 1);
+    CHECK(state.len_after_fill == 1);
+    if (state.len_after_fill == 1) {
+        pf_native_working_v1 row;
+        std::memset(&row, 0, sizeof(row));
+        row.struct_size = static_cast<uint32_t>(sizeof(row));
+        CHECK(strategy_native_working_get_v1(state.host, 0, &row) == PF_NATIVE_OK);
+        CHECK(row.incarnation == state.leg);
+        CHECK(row.trigger == PF_NATIVE_TRIGGER_STOP);
+        CHECK(same_bits(row.p1, 99.9));   // 100 - 10 ticks, Directional keeps the ladder point
+    }
+    strategy_native_host_free(state.host);
+}
+
 #endif  // PINEFORGE_L7B_HARVEST
 
 }  // namespace
@@ -594,6 +907,10 @@ int main() {
     test("rounding is validated at acceptance", rounding_is_validated_at_acceptance);
     test("rounding folds only when set", rounding_folds_only_when_set);
     test("hook restates the level", hook_restates_the_level);
+    test("pending until armed hides the leg", pending_until_armed_hides_the_leg);
+    test("pending leg is still addressable", pending_leg_is_still_addressable);
+    test("visibility folds only when set", visibility_folds_only_when_set);
+    test("C API working list agrees", c_api_working_list_agrees);
     std::printf("L7b native anchored legs: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 #endif
