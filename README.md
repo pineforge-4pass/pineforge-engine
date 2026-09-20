@@ -331,6 +331,13 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
 
+The header's **COVERAGE** block lists every public member of
+`NativeStrategyHost` with either its C spelling or the reason it has none, and
+`scripts/check_native_c_api_surface.py` proves that list is exactly that
+class's public surface — a member added without a row, a row naming a member
+that no longer exists, or a spelling naming a symbol the C headers do not
+declare all fail CI.
+
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
 mutates nothing. `pf_native_run_spec_ext_v1` and `pf_native_callbacks_v1` each

@@ -66,6 +66,7 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-broker-hash', ['scripts/check_broker_state_hash_coverage.py']),
     ('source-guard-pending-mirror', ['scripts/gen_pending_order_mirror.py', '--check']),
     ('source-guard-native-versions', ['scripts/check_native_cpp_versions.py']),
+    ('source-guard-native-c-surface', ['scripts/check_native_c_api_surface.py']),
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))

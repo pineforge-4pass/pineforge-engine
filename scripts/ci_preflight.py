@@ -31,6 +31,8 @@ def check_commands(source: Path) -> list[tuple[str, list[str]]]:
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
         ('verifier-tests', [sys.executable, str(source / 'scripts/test_ci_verify.py')]),
         ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
+        ('native-c-surface-tests',
+         [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')]),
     ]
 
 

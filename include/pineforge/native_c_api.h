@@ -31,6 +31,81 @@
  *   strategy_set_broker_state_hash_recording on fills
  *   pf_report_t::broker_state_hash, one row per script bar.
  *
+ * COVERAGE
+ * ────────
+ * Every public member of NativeStrategyHost, and either its C spelling or the
+ * reason it has none. scripts/check_native_c_api_surface.py proves this list is
+ * exactly that class's public surface: a member added there without a row here,
+ * or a row here naming a member that no longer exists, fails CI.
+ *
+ *   [C]  on_bar                            strategy_native_run_v1 / the strategy_stream_* ingress
+ *   [--] prepare_native_begin              borrows the codegen ingress (InputsMap, SymInfo, the opaque
+ *                                          overrides) that no C host supplies; a C run is declared up front
+ *                                          with strategy_configure_native_ext_v1
+ *   [C]  on_native_run_begin               pf_native_callbacks_v1::on_run_begin
+ *   [C]  on_native_input                   pf_native_callbacks_v1::on_input
+ *   [C]  on_native_tick                    pf_native_callbacks_v1::on_tick
+ *   [C]  on_native_timeframe_bar           pf_native_callbacks_v1::on_timeframe_bar
+ *   [C]  on_native_bar_open                pf_native_callbacks_v1::on_bar_open
+ *   [C]  on_native_bar                     pf_native_callbacks_v1::on_bar
+ *   [C]  on_native_recalculate             pf_native_callbacks_v1::on_recalculate
+ *   [C]  on_native_sub_bar                 pf_native_callbacks_v1::on_sub_bar
+ *   [C]  on_native_applied                 pf_native_callbacks_v1::on_applied
+ *   [C]  on_native_margin_call             pf_native_callbacks_v1::on_margin_call
+ *   [C]  resolve_execution_terms           pf_native_callbacks_v1::on_close_units -- the UNITS half only; the
+ *                                          price and the opening shape stay the kernel's
+ *   [--] validate_execution_precommit      its view is an ExecutionPlan, an AccountEffectProjection and a
+ *                                          variable-length closed-row P&L vector, none of which has a size-
+ *                                          prefixed POD; a C host gates an opening with
+ *                                          PF_NATIVE_INTENT_SIZED's placement-time admission or with
+ *                                          on_margin_requirement
+ *   [--] resolve_anchored_level            the generic knob for where an anchored level sits is
+ *                                          pf_native_request_v1::anchor_rounding; the hook exists for a source
+ *                                          language's own level arithmetic, and a C host that wants another
+ *                                          level replaces the leg on its PF_NATIVE_EVENT_ARMED
+ *   [C]  resolve_margin_requirement        pf_native_callbacks_v1::on_margin_requirement
+ *   [C]  margin_check_allowed              pf_native_callbacks_v1::on_margin_check
+ *   [C]  resolve_margin_call_units         pf_native_callbacks_v1::on_margin_call_units
+ *   [C]  owns_lot_excursions               pf_native_callbacks_v1::on_lot_excursion -- installing it IS
+ *                                          declaring ownership
+ *   [C]  closed_lot_excursion              pf_native_callbacks_v1::on_lot_excursion
+ *   [C]  current_partial_bar               strategy_native_partial_bar_v1
+ *   [C]  native_recalculation_count        strategy_native_recalculations_v1
+ *   [C]  native_recalculations_skipped     strategy_native_recalculations_v1
+ *   [C]  current_execution_point           pf_native_decision_v1::price / ::quote_kind, on every callback
+ *   [C]  trail_state                       strategy_native_trail_state_v1
+ *   [--] inspect_current_execution         its preview carries the account-effect projection and a variable-
+ *                                          length closed-row P&L vector with no size-prefixed POD;
+ *                                          strategy_native_execute_current_v1 answers the same verdicts as
+ *                                          pf_native_execute_outcome_e and pf_native_refusal_e
+ *   [C]  execute_current                   strategy_native_execute_current_v1
+ *   [C]  native_series_bar                 strategy_native_series_bar_v1
+ *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1
+ *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1
+ *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
+ *   [C]  native_state                      strategy_native_state_v1
+ *   [C]  submit                            strategy_native_submit_v1
+ *   [C]  replace                           strategy_native_replace_v1
+ *   [--] submit_market                     a C++ convenience that REFUSES non-market extras instead of dropping
+ *                                          them; the same request is strategy_native_submit_v1 with
+ *                                          PF_NATIVE_TRIGGER_MARKET and a zero-filled struct
+ *   [--] replace_market                    the same convenience for a replace; see submit_market
+ *   [C]  cancel                            strategy_native_cancel_v1
+ *   [C]  native_working_requests           strategy_native_working_len_v1 / strategy_native_working_get_v1
+ *   [C]  cancel_all                        strategy_native_cancel_all_v1
+ *   [C]  cancel_where                      strategy_native_cancel_where_v1
+ *   [C]  cohort_open                       strategy_native_cohort_open_v1
+ *   [C]  cohort_add                        strategy_native_cohort_add_v1
+ *   [C]  cohort_remove                     strategy_native_cohort_remove_v1
+ *   [C]  physical_position                 strategy_native_position_v1
+ *   [C]  native_marked_equity              strategy_native_marked_equity_v1
+ *   [C]  native_liquidation_price          strategy_native_liquidation_price_v1
+ *   [C]  native_risk_state                 strategy_native_risk_state_v1
+ *   [C]  native_events                     strategy_native_events_v1
+ *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
+ *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
+ *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
+ *
  * HARDENING RULES
  * ───────────────
  *  - Every struct is tagged and size-prefixed: `struct_size` is the exact
