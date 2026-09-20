@@ -86,6 +86,10 @@ public:
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
+    // NativeStrategyHost::native_sized_units: the L3 basis arithmetic under the
+    // applied spec, as a pure query (R5 N11).
+    std::optional<double> sized_units_preview(const native_order::Sized& sized, double price,
+                                              double equity, double fx) const;
     NativeRiskState risk_state() const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     uint64_t event_high_water() const noexcept;

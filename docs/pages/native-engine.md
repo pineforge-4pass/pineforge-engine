@@ -2074,6 +2074,20 @@ its trigger level — keep `HostSized{Open}`, and so do the percentage exits: th
 kernel resolves a `ScopeFraction` as `scope * fraction`, which is not
 `scope * percent / 100`, and no field reconciles the association.
 
+#### Previewing a basis
+
+`NativeStrategyHost::native_sized_units(sized, price, equity, fx)` is the
+kernel's resolution as a pure query: `units = cash / (price × point_value × fx)`
+with `cash` the basis value or `fraction × equity`, net of the percent fee
+reserve when the intent asks for it, then the intent's grid policy — the very
+function the kernel runs at acceptance and at the candidate. It moves nothing
+and freezes nothing. `nullopt` means the run is not configured or the basis is
+unresolvable at those inputs: a non-positive money or denominator, or a
+below-one-step quotient under `SnapToGrid`. A host that gates a command on its
+quantity before it submits — an affordability check, a sibling reservation —
+reads the number here instead of keeping its own copy of the conversion
+(`tests/test_native_sizing_bases.cpp`, "sizing preview").
+
 #### Placement-time admission
 
 An `AtAcceptance` quantity is also an admission input at placement, not only at

@@ -833,6 +833,20 @@ public:
 
     NativePhysicalPosition physical_position() const;
     double native_marked_equity(double mark) const;
+    // The units a kernel-sized intent resolves to under this run's spec at a
+    // sizing price, a marked equity and an account FX rate -- as a pure query.
+    // units = cash / (price * point_value * fx), cash the basis value or
+    // fraction * equity, net of the percent fee reserve when the intent asks
+    // for it, then the intent's grid policy: this is the same function the
+    // kernel runs at acceptance (SizeTime::AtAcceptance) and at the candidate
+    // (AtMatch), so a host that gates a command on its quantity before it
+    // submits reads the number here rather than keeping its own copy of the
+    // conversion. nullopt when the run is not configured or the basis is
+    // unresolvable at those inputs (non-positive money or denominator, a
+    // below-one-step quotient under SnapToGrid). Observation only: it moves
+    // nothing and freezes nothing.
+    std::optional<double> native_sized_units(const native_order::Sized& sized, double price,
+                                             double equity, double fx) const;
     // The price at which the marked equity falls below the run's maintenance
     // requirement for the live position's side. nullopt when the run declares
     // no margin model, the side has no maintenance fraction, the book is flat,

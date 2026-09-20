@@ -882,7 +882,8 @@ def check_texts(files):
              "NativeStrategyHost::current_partial_bar",
              "NativeStrategyHost::native_recalculation_count",
              "NativeStrategyHost::native_recalculations_skipped",
-             "NativeStrategyHost::native_risk_state"),
+             "NativeStrategyHost::native_risk_state",
+             "NativeStrategyHost::native_sized_units"),
             "engine_script_run_v18", r'\bNAME\s*\(')
 
 

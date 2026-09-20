@@ -685,6 +685,82 @@ bool names_identifier(const std::string& text, const std::string& name) {
 // scope * percent / 100, so a percentage exit keeps its host-resolved
 // quantity. This half of the witness therefore stands, and it is what makes
 // that ruling visible if anyone ever lowers a percentage exit onto it.
+// --- 10. the sizing preview is the acceptance arithmetic, as a pure query ---
+//
+// R5 N11: a host may ask the kernel what a Sized basis resolves to at a given
+// price, equity and FX before it submits anything. The answer is the function
+// the kernel itself runs at acceptance and at the candidate, so a host that
+// gates a command on its quantity -- an affordability check, a sibling
+// reservation -- never needs a copy of the conversion. It moves nothing.
+void the_sizing_preview_is_the_acceptance_arithmetic() {
+    auto setup = spec("n11-preview");
+    setup.fee_kind = NativeFeeKind::Percent;
+    setup.fee_value = 0.1;                 // 0.1 %, exactly as the run charges it
+    setup.quantity_grid = 1.0;
+
+    no::Sized cash;
+    cash.basis = no::CashValue{5000.0};
+    cash.reserve_percent_fee = true;
+    cash.grid_policy = no::ExecutionGridPolicy::ExplicitUnits;
+
+    // Unconfigured: no run spec, no answer.
+    TermsHost host;
+    CHECK(!host.native_sized_units(cash, 100.0, 10000.0, 1.0).has_value());
+
+    REQUIRE(host.configure_native(setup).status == NativeSetupStatus::Applied);
+    const auto hash_before = host.native_continuation_hash();
+    const auto events_before = host.native_events(0).size();
+
+    // ExplicitUnits publishes the raw quotient: 5000 / 1.001 / 100 = 49.95...
+    const auto raw = host.native_sized_units(cash, 100.0, 10000.0, 1.0);
+    REQUIRE(raw.has_value());
+    CHECK(bits(*raw) == bits(hand_units(5000.0 / (1.0 + 0.1 / 100.0), 100.0, 1.0, 1.0)));
+    // SnapToGrid floors it exactly as the candidate would.
+    no::Sized snapped = cash;
+    snapped.grid_policy = no::ExecutionGridPolicy::SnapToGrid;
+    const auto floored = host.native_sized_units(snapped, 100.0, 10000.0, 1.0);
+    REQUIRE(floored.has_value());
+    CHECK(bits(*floored) == bits(hand_floor(*raw, 1.0)));
+    CHECK(bits(*floored) == bits(49.0));
+    // An equity fraction converts fraction * the equity the caller supplies,
+    // and the FX rate scales the denominator.
+    no::Sized half;
+    half.basis = no::EquityFraction{0.5};
+    half.grid_policy = no::ExecutionGridPolicy::ExplicitUnits;
+    const auto fraction = host.native_sized_units(half, 100.0, 10000.0, 1.0);
+    REQUIRE(fraction.has_value());
+    CHECK(bits(*fraction) == bits(hand_units(0.5 * 10000.0, 100.0, 1.0, 1.0)));
+    const auto converted = host.native_sized_units(half, 100.0, 10000.0, 2.0);
+    REQUIRE(converted.has_value());
+    CHECK(bits(*converted) == bits(hand_units(0.5 * 10000.0, 100.0, 1.0, 2.0)));
+    // Unresolvable inputs answer nullopt exactly as acceptance refuses them: a
+    // non-positive money, a non-positive denominator, a below-one-step
+    // quotient under SnapToGrid.
+    no::Sized empty;
+    empty.basis = no::CashValue{0.0};
+    CHECK(!host.native_sized_units(empty, 100.0, 10000.0, 1.0).has_value());
+    CHECK(!host.native_sized_units(cash, 0.0, 10000.0, 1.0).has_value());
+    no::Sized dust;
+    dust.basis = no::CashValue{50.0};      // half a one-unit step
+    CHECK(!host.native_sized_units(dust, 100.0, 10000.0, 1.0).has_value());
+    // The query moved nothing.
+    CHECK(host.native_continuation_hash() == hash_before);
+    CHECK(host.native_events(0).size() == events_before);
+
+    // End to end: an accepted Sized{AtAcceptance} books exactly the number the
+    // preview gave at the price the kernel froze, on a fresh host of its own.
+    TermsHost booked;
+    const auto applied = open_once(
+        booked, setup,
+        sized_open(no::CashValue{5000.0}, no::Side::Long, no::SizeTime::AtAcceptance,
+                   /*reserve_fee=*/true),
+        {100.0});
+    CHECK(bits(applied.opened_units) == bits(*floored));
+    CHECK(bits(applied.opened_units) == bits(49.0));
+    std::printf("  [preview] raw=%.17g floored=%.17g booked=%.17g\n",
+                *raw, *floored, applied.opened_units);
+}
+
 void the_source_layer_never_names_the_scope_reduction_bases() {
 #ifdef PINEFORGE_SOURCE_LAYER_FILES
     std::vector<std::string> paths;
@@ -740,6 +816,8 @@ int main() {
     test("scope basis chooses when the scope is measured",
          the_scope_basis_chooses_when_the_scope_is_measured);
     test("pending bracket parent", a_pending_parent_defers_the_fraction_until_the_parent_fills);
+    test("sizing preview is the acceptance arithmetic",
+         the_sizing_preview_is_the_acceptance_arithmetic);
     test("adapter reduction neutrality",
          the_source_layer_never_names_the_scope_reduction_bases);
     std::printf("R5 L3 sizing bases: %d checks, %d failures\n", checks, failures);

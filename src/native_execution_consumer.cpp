@@ -8626,8 +8626,21 @@ std::optional<double> NativeExecutionConsumer::host_liquidation_price(
     return liquidation_level(engine);
 }
 
+std::optional<double> NativeExecutionConsumer::sized_units_preview(
+        const native_order::Sized& sized, double price, double equity, double fx) const {
+    const auto* spec = spec_ptr();
+    if (!spec) return std::nullopt;
+    return sized_basis_units(sized, price, equity, fx, *spec);
+}
+
 double NativeStrategyHost::native_marked_equity(double mark) const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).marked(*this, mark);
+}
+
+std::optional<double> NativeStrategyHost::native_sized_units(
+        const native_order::Sized& sized, double price, double equity, double fx) const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .sized_units_preview(sized, price, equity, fx);
 }
 
 std::optional<double> NativeStrategyHost::native_liquidation_price() const {
