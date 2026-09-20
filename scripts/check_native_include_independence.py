@@ -56,6 +56,7 @@ NATIVE_EXAMPLES = (
     # L4/L4b margin + liquidation, L5 calculation timing, L6/L6c/L6d
     # higher-timeframe series, L7/L9 trail + risk limits.
     ("native-sized-report", "examples/native/native_sized_report_strategy.cpp"),
+    ("native-margin", "examples/native/native_margin_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)
