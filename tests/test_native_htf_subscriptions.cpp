@@ -424,6 +424,94 @@ void test_same_timeframe_instances() {
     CHECK(coarse.accessor_matches);
 }
 
+// ---- 2c. barmerge.gaps_on clears the series between deliveries ------------
+//
+// The FNV-1a digest of one plain hourly series — `tf` "60", lookahead off, no
+// authoritative bars — as the fold produced it before `gaps` existed:
+// u(1) size, u(2) + "60", u(0) lookahead, u(0) bars. A gaps_off series must
+// still hash to exactly this, which is what keeps every established
+// subscription digest (and the continuation identity folding it) unchanged.
+constexpr std::uint64_t kHourlySeriesDigest = 13834961980321333110ull;
+
+void test_gaps_clears_between_deliveries() {
+    scenario = "gaps_on";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    NativeRunSpec spec = base_spec("15", "15", "native-htf-gaps");
+    NativeTimeframeSubscription gapped;
+    gapped.tf = "60";
+    gapped.gaps = true;
+    NativeTimeframeSubscription standing;  // the same series, gaps_off
+    standing.tf = "60";
+    NativeTimeframeSubscription gapped_lookahead;
+    gapped_lookahead.tf = "60";
+    gapped_lookahead.gaps = true;
+    gapped_lookahead.lookahead = true;
+    spec.subscriptions.push_back(gapped);
+    spec.subscriptions.push_back(standing);
+    spec.subscriptions.push_back(gapped_lookahead);
+
+    SeriesHost host;
+    host.probes = 3;
+    const auto setup = host.configure_native(spec);
+    CHECK(setup.status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+
+    // Gaps changes no completion and no delivery: 4 buckets per series.
+    CHECK(host.deliveries.size() == 12);
+    std::size_t per_index[3] = {0, 0, 0};
+    for (const Delivery& delivery : host.deliveries) {
+        CHECK(delivery.subscription < 3);
+        if (delivery.subscription < 3) ++per_index[delivery.subscription];
+        CHECK(delivery.accessor_matches);
+    }
+    CHECK(per_index[0] == 4);
+    CHECK(per_index[1] == 4);
+    CHECK(per_index[2] == 4);
+
+    const std::int64_t origin = bars.front().timestamp;
+    CHECK(host.series_at_bar.size() == 16);
+    for (std::size_t i = 0; i < host.series_at_bar.size(); ++i) {
+        const auto& row = host.series_at_bar[i];
+        CHECK(row.size() == 3);
+        if (row.size() != 3) continue;
+        // gaps_on, lookahead_off: the value exists only on the bar that
+        // completes a bucket.
+        CHECK(row[0].has_value() == (i % 4 == 3));
+        // gaps_off: the same bucket stands until the next one replaces it.
+        CHECK(row[1].has_value() == (i >= 3));
+        // gaps_on, lookahead_on: only on the bar that OPENS a bucket.
+        CHECK(row[2].has_value() == (i % 4 == 0));
+        if (row[0]) {
+            const Bar want = hand_aggregate(bars, static_cast<int>(i / 4) * 4, 4,
+                                            origin + static_cast<std::int64_t>(i / 4) * kHour);
+            check_bucket(*row[0], want, "gapped bucket");
+            CHECK(row[1].has_value());
+            if (row[1]) check_bucket(*row[1], want, "standing bucket");
+        }
+        if (row[2]) {
+            const Bar want = hand_aggregate(bars, static_cast<int>(i / 4) * 4, 4,
+                                            origin + static_cast<std::int64_t>(i / 4) * kHour);
+            check_bucket(*row[2], want, "gapped lookahead bucket");
+        }
+    }
+
+    // Digest neutrality: a gaps_off series hashes as it did before the field
+    // existed, and setting gaps moves the digest.
+    std::vector<NativeTimeframeSubscription> plain{standing};
+    const std::uint64_t plain_digest = native_timeframe_subscriptions_digest(plain);
+    if (plain_digest != kHourlySeriesDigest) {
+        std::printf("  hourly series digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(plain_digest),
+                    static_cast<unsigned long long>(kHourlySeriesDigest));
+    }
+    CHECK(plain_digest == kHourlySeriesDigest);
+    std::vector<NativeTimeframeSubscription> gapped_only{gapped};
+    CHECK(native_timeframe_subscriptions_digest(gapped_only) != kHourlySeriesDigest);
+}
+
 // ---- 3. authoritative bars replace the aggregate --------------------------
 
 void test_authoritative_bars_override() {
@@ -687,6 +775,7 @@ int main() {
     test_hourly_over_quarter_hour();
     test_hourly_lookahead();
     test_same_timeframe_instances();
+    test_gaps_clears_between_deliveries();
     test_authoritative_bars_override();
     test_finer_than_input_is_refused();
     test_weekly_matches_the_pine_path();

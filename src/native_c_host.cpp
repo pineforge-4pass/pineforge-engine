@@ -931,6 +931,7 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
             if (row.struct_size != sizeof(pf_native_subscription_v1)) return PF_NATIVE_E_STRUCT;
             if (!row.tf) return PF_NATIVE_E_ARGUMENT;
             if (row.lookahead > 1u) return PF_NATIVE_E_TAG;
+            if (row.gaps > 1u) return PF_NATIVE_E_TAG;
             if (row.authoritative_n < 0
                 || (row.authoritative_n > 0 && !row.authoritative_bars)) {
                 return PF_NATIVE_E_ARGUMENT;
@@ -938,6 +939,7 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
             pineforge::NativeTimeframeSubscription subscription;
             subscription.tf = row.tf;
             subscription.lookahead = row.lookahead != 0u;
+            subscription.gaps = row.gaps != 0u;
             const auto* bars = reinterpret_cast<const Bar*>(row.authoritative_bars);
             subscription.authoritative_bars.assign(bars, bars + row.authoritative_n);
             subscriptions.push_back(std::move(subscription));

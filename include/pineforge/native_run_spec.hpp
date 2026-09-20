@@ -415,10 +415,18 @@ struct IntrabarPath {
 // bucket is delivered when its last contributing input bar is accepted) or
 // lookahead_on (true: the completed bucket's final values are delivered at
 // its FIRST contributing input bar).
+//
+// `gaps` is Pine's barmerge.gaps_off (false, the default: a delivered bucket
+// stands until the next delivery replaces it) or gaps_on (true: the series is
+// CLEARED on every accepted input that delivers no bucket of its own, so
+// native_series_bar() answers nullopt — the empty that stands for na — on
+// exactly the bars the series does not publish on). It changes nothing about
+// which buckets complete, when they are delivered, or what they contain.
 struct NativeTimeframeSubscription {
     std::string tf;
     std::vector<Bar> authoritative_bars;
     bool lookahead = false;
+    bool gaps = false;
 };
 
 // One complete setup value, staged/copied by NativeStrategyHost before it is
@@ -637,10 +645,12 @@ NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
 std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
 
 // Exact FNV-1a content digest for the declared higher-timeframe series. It
-// includes each subscription's timeframe literal, publication mode and
+// includes each subscription's timeframe literal, publication modes and
 // authoritative bars in caller order, so a continuation cannot silently reuse
 // another begin's series. Callers fold it only when `subscriptions` is
-// non-empty, keeping the default spec's continuation identity unchanged.
+// non-empty, keeping the default spec's continuation identity unchanged, and
+// `gaps` folds only where a series set it, keeping every series declared
+// before that field existed at the digest it already had.
 std::uint64_t native_timeframe_subscriptions_digest(
         const std::vector<NativeTimeframeSubscription>& subscriptions) noexcept;
 

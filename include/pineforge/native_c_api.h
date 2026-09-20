@@ -532,14 +532,24 @@ typedef struct pf_native_request_v1 {
     const char* comment;
 } pf_native_request_v1;
 
-/** One declared higher-timeframe series of #pf_native_run_spec_ext_v1. */
+/** One declared higher-timeframe series of #pf_native_run_spec_ext_v1.
+ *
+ *  A row is a series INSTANCE, not a period: several rows may carry the same
+ *  `tf`, each delivered under its own index (the `subscription` argument of
+ *  #pf_native_callbacks_v1::on_timeframe_bar). Same-period rows may not carry
+ *  DIFFERENT `authoritative_bars`.
+ *
+ *  `gaps` occupies the word this struct published as `reserved0`, which every
+ *  layout required to be zero — so a caller that zero-fills the struct keeps
+ *  barmerge.gaps_off, and the struct's size and field offsets are unchanged.
+ *  Any value but 0 or 1 is PF_NATIVE_E_TAG. */
 typedef struct pf_native_subscription_v1 {
     uint32_t struct_size;   /**< sizeof(pf_native_subscription_v1). */
     uint32_t lookahead;     /**< 0 = barmerge.lookahead_off, 1 = lookahead_on. */
     const char* tf;         /**< Non-NULL timeframe literal. */
     const pf_bar_t* authoritative_bars; /**< Optional exchange bars; copied. */
     int32_t authoritative_n;            /**< Length of `authoritative_bars`. */
-    int32_t reserved0;
+    uint32_t gaps;          /**< 0 = barmerge.gaps_off, 1 = gaps_on. */
 } pf_native_subscription_v1;
 
 /** The run-specification fields #pf_native_run_spec_v1 predates.

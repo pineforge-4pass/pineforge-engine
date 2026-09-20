@@ -414,7 +414,8 @@ def check_texts(files):
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
                         'native timeframe subscription')
     if (re.sub(r'\s+', '', subscription)
-            != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'):
+            != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'
+               'boolgaps=false;'):
         raise ValueError('native timeframe subscription must preserve its member order and shape')
     margin = body(spec, r'struct\s+NativeMarginModel\s*\{', 'native margin model')
     if (re.sub(r'\s+', '', margin)
@@ -478,6 +479,7 @@ def check_texts(files):
             or 'spec.calculation' not in spec_src
             or 'spec.open_bar_view' not in spec_src
             or 'SubscriptionFinerThanInput' not in spec_src
+            or 'if (subscription.gaps)' not in spec_src
             or 'spec.margin' not in spec_src
             or 'valid_margin_equity_basis' not in spec_src
             or 'valid_liquidation_level_base' not in spec_src

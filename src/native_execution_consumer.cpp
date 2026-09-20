@@ -6588,8 +6588,12 @@ bool NativeExecutionConsumer::contribute_input(
 // built by register_security_eval, its authoritative bars installed through
 // the public set_native_security_feed store and routed by
 // prepare_native_security_feeds. Nothing here is Pine-shaped: the evaluator is
-// always registered lookahead_off / gaps_off, no lower-timeframe emulation can
-// be selected (the spec refuses a series finer than the input), and
+// always registered lookahead_off / gaps_off -- the publication modes the spec
+// declares are the consumer's own delivery rules, not the evaluator's (a
+// gaps_on evaluator would clear through the generated clear_security() a bare
+// native host does not implement, and lookahead_on is the projection below) --
+// no lower-timeframe emulation can be selected (the spec refuses a series
+// finer than the input), and
 // validate_security_timeframes -- which is what arms the publish gate, the
 // auxiliary-slice partial completion and the lower-TF paths -- is never
 // called. Every `calling_bar_complete` argument below is therefore inert, and
@@ -6657,6 +6661,7 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             subscription.sec_id = static_cast<int>(i);
             subscription.tf = std::move(*parsed);
             subscription.lookahead = declared.lookahead;
+            subscription.gaps = declared.gaps;
             subscriptions_.push_back(std::move(subscription));
             engine.register_security_eval(static_cast<int>(i), declared.tf, spec.input_tf,
                                           /*lookahead_on=*/false, /*gaps_on=*/false,
@@ -6763,7 +6768,19 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index) {
+    // barmerge.gaps_on for one series: the input delivered nothing of its
+    // own, so the series has no value on it. This mirrors what
+    // engine_security.cpp does for a gaps_on evaluator (clear_security on a
+    // non-completing input) at the one place the kernel owns -- its own
+    // delivery -- because the evaluator's clear reaches a generated
+    // clear_security() a bare native host does not implement, while the pull
+    // accessor is the kernel's own answer. gaps_off leaves the delivered
+    // bucket standing, which is every established run.
+    const auto clear_if_gapped = [](TimeframeSubscription& subscription) noexcept {
+        if (subscription.gaps) subscription.latest.reset();
+    };
     for (auto& subscription : subscriptions_) {
+        bool delivered = false;
         if (subscription.lookahead) {
             while (subscription.projected_cursor < subscription.projected_bars.size()
                    && subscription.projected_first_index[subscription.projected_cursor]
@@ -6776,12 +6793,14 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                                            subscription.projected_completion[at])) {
                     return false;
                 }
+                delivered = true;
             }
             // Historical inputs are served entirely by that projection. A
             // stream's live inputs are not in it and have no future to be
             // resolved over, so they fall through to the aggregating pump
             // below: the same buckets, delivered when they complete.
             if (subscription_warmup_inputs_ < 0 || index < subscription_warmup_inputs_) {
+                if (!delivered) clear_if_gapped(subscription);
                 continue;
             }
         }
@@ -6799,7 +6818,10 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, bar, /*calling_bar_complete=*/false);
         engine.security_next_input_ms_ = 0;
-        if (state.eval_complete_count <= before) continue;
+        if (state.eval_complete_count <= before) {
+            if (!delivered) clear_if_gapped(subscription);
+            continue;
+        }
         const bool boundary = state.aggregator.is_active()
             && state.aggregator.current().timestamp != state.current_bar.timestamp;
         const Bar completed = state.current_bar;

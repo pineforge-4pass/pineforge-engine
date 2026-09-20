@@ -243,6 +243,10 @@ private:
         int sec_id = 0;
         native_calendar::Timeframe tf{};
         bool lookahead = false;
+        // barmerge.gaps_on: clear `latest` on every accepted input this
+        // series delivers nothing on. Off by default, and off is the whole
+        // established surface.
+        bool gaps = false;
         // The latest delivered bucket, what native_series_bar() answers.
         std::optional<Bar> latest;
         // lookahead_off: the bucket being accumulated. -1 until an input

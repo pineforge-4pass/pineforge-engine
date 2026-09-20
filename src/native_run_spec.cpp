@@ -739,6 +739,10 @@ std::uint64_t native_timeframe_subscriptions_digest(
     for (const auto& subscription : subscriptions) {
         s(subscription.tf);
         u(subscription.lookahead ? 1u : 0u);
+        // Gaps folds only where a series set it — the same conditional shape
+        // the spec fold uses for its own opt-in blocks — so a series declared
+        // before this field existed keeps the digest it already had.
+        if (subscription.gaps) u(2u);
         u(subscription.authoritative_bars.size());
         for (const auto& bar : subscription.authoritative_bars) {
             d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);

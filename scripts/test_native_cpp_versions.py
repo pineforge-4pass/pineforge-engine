@@ -58,6 +58,19 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'f.b(spec.timeframe_undetected);', '')
         self.reject(FILES[10], 'args.n >= 2', 'args.n > 2')
 
+    def test_timeframe_subscription_publication_modes_are_owned(self):
+        # The series row's shape, and the rule that `gaps` folds into the
+        # subscription digest only where a series set it.
+        for before, after in (
+            ('bool lookahead = false;\n    bool gaps = false;',
+             'bool lookahead = false;'),
+            ('bool lookahead = false;\n    bool gaps = false;',
+             'bool gaps = false;\n    bool lookahead = false;'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'if (subscription.gaps) u(2u);', 'u(2u);')
+
     def test_legacy_tolerant_slot_policy_is_explicit_and_hashed(self):
         for before, after in (
             ('NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;', ''),

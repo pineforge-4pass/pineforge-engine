@@ -1069,6 +1069,7 @@ no source layer and no Pine expression.
 NativeTimeframeSubscription hourly;
 hourly.tf = "60";                    // pairs with input_tf like script_tf does
 hourly.lookahead = false;            // barmerge.lookahead_off (the default)
+hourly.gaps = false;                 // barmerge.gaps_off (the default)
 // hourly.authoritative_bars = …;    // optional exchange bars, see below
 spec.subscriptions.push_back(hourly);
 
@@ -1120,6 +1121,15 @@ and the input's `on_native_bar` follows it.
 - `lookahead = true` (`barmerge.lookahead_on`): the completed bucket's final
   OHLCV is delivered at its **first** contributing input bar, and
   `native_series_bar` answers with it from then on.
+- `gaps = false` (Pine's `barmerge.gaps_off`, the default): a delivered bucket
+  stands until the next delivery replaces it.
+- `gaps = true` (`barmerge.gaps_on`): the series is **cleared** on every
+  accepted input bar it delivers no bucket on — `native_series_bar` answers
+  `nullopt` there, the empty that stands for `na` — and carries the bucket
+  only on the bars it publishes on. Which buckets complete, when they are
+  delivered and what they contain are unchanged; `on_native_timeframe_bar` is
+  still called exactly once per delivered bucket and there is no callback for
+  a cleared bar.
 
 `NativeTimeframeBarContext::completion` is `Confirmed` when the bucket closed
 on its own last contributing bar and `LazyComplete` when the next period's
@@ -1900,6 +1910,14 @@ limit opt-in through its own `has_` flag — past `reserved0`, so
 accepts either: `PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE` (the layout the lane
 first shipped, defined as the offset of the first appended field rather than
 as a literal, so it stays right on every target) and the current `sizeof`.
+Each subscription row (`pf_native_subscription_v1`) carries `lookahead` and
+`gaps` as 0/1 words and may repeat a `tf`: the rows are series instances,
+delivered under their own index, and only their `authoritative_bars` are
+shared. `gaps` occupies the word the row published as `reserved0` — a
+reserved word every layout required to be zero — so the row's size and field
+offsets are unchanged, a caller that zero-fills it keeps `barmerge.gaps_off`,
+and any value but 0 or 1 is `PF_NATIVE_E_TAG`.
+
 A caller sending the base length keeps working unchanged and is refused with
 `PF_NATIVE_E_STRUCT` if it sets the risk bit it has no fields for; any third
 length is refused outright. `tests/test_native_c_api_frozen_header.cpp`
