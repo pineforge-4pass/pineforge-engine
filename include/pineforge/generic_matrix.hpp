@@ -14,8 +14,8 @@ namespace pineforge {
 namespace detail {
 
 // Storage-agnostic structural helpers parameterized on the underlying
-// row container type. Used by both PineGenericMatrix<T> (T != bool;
-// row = std::vector<T>) and PineGenericMatrix<bool> (row =
+// row container type. Used by both GenericMatrix<T> (T != bool;
+// row = std::vector<T>) and GenericMatrix<bool> (row =
 // std::vector<char>) so both share a single implementation for every
 // method that doesn't care about the element type at the boundary.
 
@@ -90,7 +90,7 @@ template <typename Row>
 inline void reshape_impl(std::vector<Row>& data, int new_rows, int new_cols,
                          const typename Row::value_type& zero) {
     if (new_rows < 0 || new_cols < 0)
-        throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
+        throw std::runtime_error("GenericMatrix::reshape: negative dimension");
     int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
     if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
         throw std::runtime_error("matrix.reshape: dimension overflow");
@@ -127,7 +127,7 @@ inline void sort_impl(std::vector<Row>& data, int column, bool ascending) {
 } // namespace detail
 
 template <typename T>
-class PineGenericMatrix {
+class GenericMatrix {
     using Data = std::vector<std::vector<T>>;
 
     struct Storage {
@@ -144,7 +144,7 @@ class PineGenericMatrix {
 
     std::shared_ptr<Storage> storage_;
 
-    explicit PineGenericMatrix(Data data)
+    explicit GenericMatrix(Data data)
         : storage_(std::make_shared<Storage>(std::move(data))) {}
 
     Storage& require_storage() {
@@ -161,16 +161,17 @@ class PineGenericMatrix {
     const Data& data() const { return require_storage().data; }
 
 public:
-    // Pine matrices are IDs. Copies and assignments alias their backing store;
-    // copy() is the explicit operation that creates an independent outer ID.
-    PineGenericMatrix() noexcept = default;
-    PineGenericMatrix(const PineGenericMatrix&) noexcept = default;
-    PineGenericMatrix& operator=(const PineGenericMatrix&) noexcept = default;
+    // A GenericMatrix is a reference handle (a source language's matrix ID).
+    // Copies and assignments alias their backing store; copy() is the
+    // explicit operation that creates an independent handle.
+    GenericMatrix() noexcept = default;
+    GenericMatrix(const GenericMatrix&) noexcept = default;
+    GenericMatrix& operator=(const GenericMatrix&) noexcept = default;
 
-    // Preserve the source handle across C++ moves, matching Pine assignment.
-    PineGenericMatrix(PineGenericMatrix&& other) noexcept
+    // Preserve the source handle across C++ moves, matching handle assignment.
+    GenericMatrix(GenericMatrix&& other) noexcept
         : storage_(other.storage_) {}
-    PineGenericMatrix& operator=(PineGenericMatrix&& other) noexcept {
+    GenericMatrix& operator=(GenericMatrix&& other) noexcept {
         if (this != &other) storage_ = other.storage_;
         return *this;
     }
@@ -185,7 +186,7 @@ public:
         Snapshot(std::shared_ptr<Storage> identity, const Data& state)
             : identity_(std::move(identity)), state_(state) {}
 
-        friend class PineGenericMatrix;
+        friend class GenericMatrix;
 
     public:
         Snapshot(const Snapshot&) = default;
@@ -194,24 +195,24 @@ public:
         Snapshot& operator=(Snapshot&&) = default;
     };
 
-    ~PineGenericMatrix() = default;
+    ~GenericMatrix() = default;
 
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init) {
+    [[nodiscard]] static GenericMatrix new_(int rows, int cols, T init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), init));
-        return PineGenericMatrix(std::move(data));
+        return GenericMatrix(std::move(data));
     }
 
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
+    [[nodiscard]] static GenericMatrix new_(int rows, int cols) {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.new: no-init overload requires default-constructible T");
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), T{}));
-        return PineGenericMatrix(std::move(data));
+        return GenericMatrix(std::move(data));
     }
 
     T get(int row, int col) const {
@@ -327,11 +328,11 @@ public:
         detail::swap_cols_impl(data(), i, j);
     }
 
-    [[nodiscard]] PineGenericMatrix copy() const {
-        return PineGenericMatrix(data());
+    [[nodiscard]] GenericMatrix copy() const {
+        return GenericMatrix(data());
     }
 
-    [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
+    [[nodiscard]] GenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
         (void)data();
         if (from_row < 0 || to_row > rows())
@@ -342,19 +343,19 @@ public:
             throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
-        return PineGenericMatrix(
+        return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
     }
 
-    [[nodiscard]] PineGenericMatrix transpose() const {
+    [[nodiscard]] GenericMatrix transpose() const {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.transpose: requires default-constructible element type");
-        return PineGenericMatrix(
+        return GenericMatrix(
             detail::transpose_impl(data(), rows(), columns(), T{}));
     }
 
-    [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+    [[nodiscard]] GenericMatrix concat(const GenericMatrix& other, bool horizontal) const {
         (void)data();
         (void)other.data();
         if (horizontal) {
@@ -364,7 +365,7 @@ public:
             if (columns() != other.columns())
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
-        PineGenericMatrix m = copy();
+        GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
     }
@@ -409,13 +410,13 @@ public:
     }
 };
 
-// PineGenericMatrix<bool> uses std::vector<char> as the row container because
+// GenericMatrix<bool> uses std::vector<char> as the row container because
 // std::vector<bool>'s proxy storage doesn't expose a stable element reference.
 // Only the boundary methods (get/set/fill/row/col/add_row/add_col) need
 // char<->bool conversion; every storage-agnostic structural method delegates
 // to the same detail:: helpers used by the primary template.
 template <>
-class PineGenericMatrix<bool> {
+class GenericMatrix<bool> {
     using Data = std::vector<std::vector<char>>;
 
     struct Storage {
@@ -432,7 +433,7 @@ class PineGenericMatrix<bool> {
 
     std::shared_ptr<Storage> storage_;
 
-    explicit PineGenericMatrix(Data data)
+    explicit GenericMatrix(Data data)
         : storage_(std::make_shared<Storage>(std::move(data))) {}
 
     Storage& require_storage() {
@@ -449,13 +450,13 @@ class PineGenericMatrix<bool> {
     const Data& data() const { return require_storage().data; }
 
 public:
-    PineGenericMatrix() noexcept = default;
-    PineGenericMatrix(const PineGenericMatrix&) noexcept = default;
-    PineGenericMatrix& operator=(const PineGenericMatrix&) noexcept = default;
+    GenericMatrix() noexcept = default;
+    GenericMatrix(const GenericMatrix&) noexcept = default;
+    GenericMatrix& operator=(const GenericMatrix&) noexcept = default;
 
-    PineGenericMatrix(PineGenericMatrix&& other) noexcept
+    GenericMatrix(GenericMatrix&& other) noexcept
         : storage_(other.storage_) {}
-    PineGenericMatrix& operator=(PineGenericMatrix&& other) noexcept {
+    GenericMatrix& operator=(GenericMatrix&& other) noexcept {
         if (this != &other) storage_ = other.storage_;
         return *this;
     }
@@ -467,7 +468,7 @@ public:
         Snapshot(std::shared_ptr<Storage> identity, const Data& state)
             : identity_(std::move(identity)), state_(state) {}
 
-        friend class PineGenericMatrix;
+        friend class GenericMatrix;
 
     public:
         Snapshot(const Snapshot&) = default;
@@ -476,15 +477,15 @@ public:
         Snapshot& operator=(Snapshot&&) = default;
     };
 
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init) {
+    [[nodiscard]] static GenericMatrix new_(int rows, int cols, bool init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
         Data data(static_cast<size_t>(rows),
                   std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
-        return PineGenericMatrix(std::move(data));
+        return GenericMatrix(std::move(data));
     }
 
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
+    [[nodiscard]] static GenericMatrix new_(int rows, int cols) {
         return new_(rows, cols, false);
     }
 
@@ -602,11 +603,11 @@ public:
         detail::swap_cols_impl(data(), i, j);
     }
 
-    [[nodiscard]] PineGenericMatrix copy() const {
-        return PineGenericMatrix(data());
+    [[nodiscard]] GenericMatrix copy() const {
+        return GenericMatrix(data());
     }
 
-    [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
+    [[nodiscard]] GenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
         (void)data();
         if (from_row < 0 || to_row > rows())
@@ -617,7 +618,7 @@ public:
             throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
-        return PineGenericMatrix(
+        return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
     }
@@ -631,13 +632,13 @@ public:
         std::reverse(values.begin(), values.end());
     }
 
-    [[nodiscard]] PineGenericMatrix transpose() const {
-        return PineGenericMatrix(
+    [[nodiscard]] GenericMatrix transpose() const {
+        return GenericMatrix(
             detail::transpose_impl(data(), rows(), columns(),
                                    static_cast<char>(0)));
     }
 
-    [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+    [[nodiscard]] GenericMatrix concat(const GenericMatrix& other, bool horizontal) const {
         (void)data();
         (void)other.data();
         if (horizontal) {
@@ -647,7 +648,7 @@ public:
             if (columns() != other.columns())
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
-        PineGenericMatrix m = copy();
+        GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
     }
@@ -681,8 +682,15 @@ public:
 };
 
 template <typename T>
-inline bool is_na(const PineGenericMatrix<T>& matrix) noexcept {
+inline bool is_na(const GenericMatrix<T>& matrix) noexcept {
     return matrix.is_na();
 }
+
+// Deprecated spelling, kept as an exact alias template so generated code and
+// the source adapter compile unchanged (R5 lane N14, the same treatment
+// session_time.hpp / str_utils.hpp received in lane L11). New code names
+// GenericMatrix<T>.
+template <typename T>
+using PineGenericMatrix = GenericMatrix<T>;
 
 } // namespace pineforge

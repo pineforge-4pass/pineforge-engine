@@ -11,26 +11,26 @@ static constexpr double EPS = 1e-10;
 
 // ── Construction ────────────────────────────────────────────────────────────
 
-PineMatrix PineMatrix::new_(int rows, int cols, double init_val) {
-    return PineMatrix(Eigen::MatrixXd::Constant(rows, cols, init_val));
+NumericMatrix NumericMatrix::new_(int rows, int cols, double init_val) {
+    return NumericMatrix(Eigen::MatrixXd::Constant(rows, cols, init_val));
 }
 
-PineMatrix::Storage& PineMatrix::require_storage() {
+NumericMatrix::Storage& NumericMatrix::require_storage() {
     if (!storage_) throw std::runtime_error(kNaIdError);
     return *storage_;
 }
 
-const PineMatrix::Storage& PineMatrix::require_storage() const {
+const NumericMatrix::Storage& NumericMatrix::require_storage() const {
     if (!storage_) throw std::runtime_error(kNaIdError);
     return *storage_;
 }
 
-PineMatrix::Snapshot PineMatrix::snapshot() const {
+NumericMatrix::Snapshot NumericMatrix::snapshot() const {
     const Storage& storage = require_storage();
     return Snapshot(storage_, storage.data);
 }
 
-void PineMatrix::restore(const Snapshot& snapshot) {
+void NumericMatrix::restore(const Snapshot& snapshot) {
     if (!snapshot.identity_) {
         throw std::runtime_error(kInvalidSnapshotError);
     }
@@ -44,39 +44,39 @@ void PineMatrix::restore(const Snapshot& snapshot) {
 
 // ── Access ──────────────────────────────────────────────────────────────────
 
-double PineMatrix::get(int row, int col) const {
+double NumericMatrix::get(int row, int col) const {
     return data()(row, col);
 }
 
-void PineMatrix::set(int row, int col, double val) {
+void NumericMatrix::set(int row, int col, double val) {
     data()(row, col) = val;
 }
 
-void PineMatrix::fill(double val) {
+void NumericMatrix::fill(double val) {
     data().setConstant(val);
 }
 
-std::vector<double> PineMatrix::row(int idx) const {
+std::vector<double> NumericMatrix::row(int idx) const {
     Eigen::VectorXd r = data().row(idx);
     return std::vector<double>(r.data(), r.data() + r.size());
 }
 
-std::vector<double> PineMatrix::col(int idx) const {
+std::vector<double> NumericMatrix::col(int idx) const {
     Eigen::VectorXd c = data().col(idx);
     return std::vector<double>(c.data(), c.data() + c.size());
 }
 
 // ── Row/Col ops ─────────────────────────────────────────────────────────────
 
-int PineMatrix::rows() const {
+int NumericMatrix::rows() const {
     return static_cast<int>(data().rows());
 }
 
-int PineMatrix::columns() const {
+int NumericMatrix::columns() const {
     return static_cast<int>(data().cols());
 }
 
-void PineMatrix::add_row(int idx, const std::vector<double>& values) {
+void NumericMatrix::add_row(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != c)
         throw std::invalid_argument("add_row: values size mismatch");
@@ -88,7 +88,7 @@ void PineMatrix::add_row(int idx, const std::vector<double>& values) {
         data()(idx, j) = values[j];
 }
 
-void PineMatrix::add_col(int idx, const std::vector<double>& values) {
+void NumericMatrix::add_col(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != r)
         throw std::invalid_argument("add_col: values size mismatch");
@@ -99,14 +99,14 @@ void PineMatrix::add_col(int idx, const std::vector<double>& values) {
         data()(i, idx) = values[i];
 }
 
-void PineMatrix::remove_row(int idx) {
+void NumericMatrix::remove_row(int idx) {
     int r = rows(), c = columns();
     for (int i = idx; i < r - 1; ++i)
         data().row(i) = data().row(i + 1);
     data().conservativeResize(r - 1, c);
 }
 
-void PineMatrix::remove_col(int idx) {
+void NumericMatrix::remove_col(int idx) {
     int r = rows(), c = columns();
     for (int j = idx; j < c - 1; ++j)
         data().col(j) = data().col(j + 1);
@@ -115,27 +115,27 @@ void PineMatrix::remove_col(int idx) {
 
 // ── Swap ────────────────────────────────────────────────────────────────────
 
-void PineMatrix::swap_rows(int i, int j) {
+void NumericMatrix::swap_rows(int i, int j) {
     data().row(i).swap(data().row(j));
 }
 
-void PineMatrix::swap_columns(int i, int j) {
+void NumericMatrix::swap_columns(int i, int j) {
     data().col(i).swap(data().col(j));
 }
 
 // ── Transform ───────────────────────────────────────────────────────────────
 
-PineMatrix PineMatrix::copy() const {
-    return PineMatrix(data());
+NumericMatrix NumericMatrix::copy() const {
+    return NumericMatrix(data());
 }
 
-PineMatrix PineMatrix::submatrix(int from_row, int to_row, int from_col, int to_col) const {
-    return PineMatrix(Eigen::MatrixXd(
+NumericMatrix NumericMatrix::submatrix(int from_row, int to_row, int from_col, int to_col) const {
+    return NumericMatrix(Eigen::MatrixXd(
         data().block(from_row, from_col,
                      to_row - from_row, to_col - from_col)));
 }
 
-void PineMatrix::reshape(int r, int c) {
+void NumericMatrix::reshape(int r, int c) {
     if (r * c != rows() * columns())
         throw std::invalid_argument("reshape: total element count must match");
     // Eigen stores column-major; we read row-major into a flat vector then refill
@@ -151,16 +151,16 @@ void PineMatrix::reshape(int r, int c) {
             data()(i, j) = flat[k++];
 }
 
-void PineMatrix::reverse() {
+void NumericMatrix::reverse() {
     Eigen::MatrixXd tmp = data().colwise().reverse();
     data() = tmp.rowwise().reverse();
 }
 
-PineMatrix PineMatrix::transpose() const {
-    return PineMatrix(Eigen::MatrixXd(data().transpose()));
+NumericMatrix NumericMatrix::transpose() const {
+    return NumericMatrix(Eigen::MatrixXd(data().transpose()));
 }
 
-void PineMatrix::sort(int column, bool ascending) {
+void NumericMatrix::sort(int column, bool ascending) {
     int r = rows();
     // gather row indices
     std::vector<int> indices(r);
@@ -175,7 +175,7 @@ void PineMatrix::sort(int column, bool ascending) {
     data() = sorted;
 }
 
-PineMatrix PineMatrix::concat(const PineMatrix& other, bool horizontal) const {
+NumericMatrix NumericMatrix::concat(const NumericMatrix& other, bool horizontal) const {
     Eigen::MatrixXd result;
     if (horizontal) {
         result.resize(rows(), columns() + other.columns());
@@ -184,17 +184,17 @@ PineMatrix PineMatrix::concat(const PineMatrix& other, bool horizontal) const {
         result.resize(rows() + other.rows(), columns());
         result << data(), other.data();
     }
-    return PineMatrix(std::move(result));
+    return NumericMatrix(std::move(result));
 }
 
 // ── Aggregation ─────────────────────────────────────────────────────────────
 
-double PineMatrix::avg() const { return data().mean(); }
-double PineMatrix::min() const { return data().minCoeff(); }
-double PineMatrix::max() const { return data().maxCoeff(); }
-double PineMatrix::sum() const { return data().sum(); }
+double NumericMatrix::avg() const { return data().mean(); }
+double NumericMatrix::min() const { return data().minCoeff(); }
+double NumericMatrix::max() const { return data().maxCoeff(); }
+double NumericMatrix::sum() const { return data().sum(); }
 
-double PineMatrix::mode() const {
+double NumericMatrix::mode() const {
     std::map<double, int> freq;
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
@@ -220,21 +220,21 @@ bool all_coeffs_finite(const Eigen::MatrixXd& m) {
 
 // ── Arithmetic ──────────────────────────────────────────────────────────────
 
-PineMatrix PineMatrix::diff(const PineMatrix& other) const {
-    return PineMatrix(Eigen::MatrixXd(data() - other.data()));
+NumericMatrix NumericMatrix::diff(const NumericMatrix& other) const {
+    return NumericMatrix(Eigen::MatrixXd(data() - other.data()));
 }
 
-PineMatrix PineMatrix::mult(const PineMatrix& other) const {
-    return PineMatrix(Eigen::MatrixXd(data() * other.data()));
+NumericMatrix NumericMatrix::mult(const NumericMatrix& other) const {
+    return NumericMatrix(Eigen::MatrixXd(data() * other.data()));
 }
 
-PineMatrix PineMatrix::pow(int n) const {
+NumericMatrix NumericMatrix::pow(int n) const {
     if (!is_square())
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     if (!all_coeffs_finite(data()))
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     // start with identity
-    PineMatrix result(Eigen::MatrixXd::Identity(rows(), rows()));
+    NumericMatrix result(Eigen::MatrixXd::Identity(rows(), rows()));
     for (int i = 0; i < n; ++i)
         result.data() = result.data() * data();
     return result;
@@ -242,7 +242,7 @@ PineMatrix PineMatrix::pow(int n) const {
 
 // ── Linear algebra ──────────────────────────────────────────────────────────
 
-double PineMatrix::det() const {
+double NumericMatrix::det() const {
     if (!is_square())
         return std::numeric_limits<double>::quiet_NaN();
     if (!all_coeffs_finite(data()))
@@ -250,30 +250,30 @@ double PineMatrix::det() const {
     return data().determinant();
 }
 
-PineMatrix PineMatrix::inv() const {
+NumericMatrix NumericMatrix::inv() const {
     if (!is_square())
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     if (!all_coeffs_finite(data()))
-        return PineMatrix::new_(0, 0, 0.0);
-    return PineMatrix(Eigen::MatrixXd(data().inverse()));
+        return NumericMatrix::new_(0, 0, 0.0);
+    return NumericMatrix(Eigen::MatrixXd(data().inverse()));
 }
 
-PineMatrix PineMatrix::pinv() const {
+NumericMatrix NumericMatrix::pinv() const {
     if (!all_coeffs_finite(data()))
-        return PineMatrix::new_(0, 0, 0.0);
-    return PineMatrix(Eigen::MatrixXd(
+        return NumericMatrix::new_(0, 0, 0.0);
+    return NumericMatrix(Eigen::MatrixXd(
         data().completeOrthogonalDecomposition().pseudoInverse()));
 }
 
-int PineMatrix::rank() const {
+int NumericMatrix::rank() const {
     if (!all_coeffs_finite(data()))
         return 0;
     return static_cast<int>(Eigen::FullPivLU<Eigen::MatrixXd>(data()).rank());
 }
 
-double PineMatrix::trace() const { return data().trace(); }
+double NumericMatrix::trace() const { return data().trace(); }
 
-std::vector<double> PineMatrix::eigenvalues() const {
+std::vector<double> NumericMatrix::eigenvalues() const {
     if (!is_square())
         return {};
     if (!all_coeffs_finite(data()))
@@ -301,32 +301,32 @@ std::vector<double> PineMatrix::eigenvalues() const {
     return result;
 }
 
-PineMatrix PineMatrix::eigenvectors() const {
+NumericMatrix NumericMatrix::eigenvectors() const {
     if (!is_square())
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     if (!all_coeffs_finite(data()))
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     if (is_symmetric()) {
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
             data(), Eigen::ComputeEigenvectors);
         if (solver.info() != Eigen::Success)
-            return PineMatrix::new_(0, 0, 0.0);
-        return PineMatrix(Eigen::MatrixXd(solver.eigenvectors()));
+            return NumericMatrix::new_(0, 0, 0.0);
+        return NumericMatrix(Eigen::MatrixXd(solver.eigenvectors()));
     }
     Eigen::EigenSolver<Eigen::MatrixXd> solver(data());
     if (solver.info() != Eigen::Success)
-        return PineMatrix::new_(0, 0, 0.0);
+        return NumericMatrix::new_(0, 0, 0.0);
     auto ev = solver.eigenvectors();
     Eigen::MatrixXd result(ev.rows(), ev.cols());
     for (Eigen::Index i = 0; i < ev.rows(); ++i)
         for (Eigen::Index j = 0; j < ev.cols(); ++j)
             result(i, j) = ev(i, j).real();
-    return PineMatrix(std::move(result));
+    return NumericMatrix(std::move(result));
 }
 
 // ── Kronecker ───────────────────────────────────────────────────────────────
 
-PineMatrix PineMatrix::kron(const PineMatrix& other) const {
+NumericMatrix NumericMatrix::kron(const NumericMatrix& other) const {
     int ar = rows(), ac = columns();
     int br = other.rows(), bc = other.columns();
     Eigen::MatrixXd result(ar * br, ac * bc);
@@ -334,32 +334,32 @@ PineMatrix PineMatrix::kron(const PineMatrix& other) const {
         for (int j = 0; j < ac * bc; ++j)
             result(i, j) = data()(i / br, j / bc) *
                            other.data()(i % br, j % bc);
-    return PineMatrix(std::move(result));
+    return NumericMatrix(std::move(result));
 }
 
 // ── Count ───────────────────────────────────────────────────────────────────
 
-int PineMatrix::elements_count() const {
+int NumericMatrix::elements_count() const {
     return static_cast<int>(data().size());
 }
 
 // ── Properties ──────────────────────────────────────────────────────────────
 
-bool PineMatrix::is_square() const { return rows() == columns(); }
+bool NumericMatrix::is_square() const { return rows() == columns(); }
 
-bool PineMatrix::is_identity() const {
+bool NumericMatrix::is_identity() const {
     if (!is_square()) return false;
     return data().isApprox(Eigen::MatrixXd::Identity(rows(), rows()), EPS);
 }
 
-bool PineMatrix::is_diagonal() const {
+bool NumericMatrix::is_diagonal() const {
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
             if (i != j && std::abs(data()(i, j)) > EPS) return false;
     return true;
 }
 
-bool PineMatrix::is_antidiagonal() const {
+bool NumericMatrix::is_antidiagonal() const {
     if (!is_square()) return false;
     int n = rows();
     for (int i = 0; i < n; ++i)
@@ -368,17 +368,17 @@ bool PineMatrix::is_antidiagonal() const {
     return true;
 }
 
-bool PineMatrix::is_symmetric() const {
+bool NumericMatrix::is_symmetric() const {
     if (!is_square()) return false;
     return data().isApprox(data().transpose(), EPS);
 }
 
-bool PineMatrix::is_antisymmetric() const {
+bool NumericMatrix::is_antisymmetric() const {
     if (!is_square()) return false;
     return data().isApprox(-data().transpose(), EPS);
 }
 
-bool PineMatrix::is_triangular() const {
+bool NumericMatrix::is_triangular() const {
     bool upper = true, lower = true;
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j) {
@@ -388,7 +388,7 @@ bool PineMatrix::is_triangular() const {
     return upper || lower;
 }
 
-bool PineMatrix::is_stochastic() const {
+bool NumericMatrix::is_stochastic() const {
     for (int i = 0; i < rows(); ++i) {
         double s = 0;
         for (int j = 0; j < columns(); ++j) {
@@ -400,7 +400,7 @@ bool PineMatrix::is_stochastic() const {
     return true;
 }
 
-bool PineMatrix::is_binary() const {
+bool NumericMatrix::is_binary() const {
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
             if (std::abs(data()(i, j)) > EPS &&
@@ -409,7 +409,7 @@ bool PineMatrix::is_binary() const {
     return true;
 }
 
-bool PineMatrix::is_zero() const {
+bool NumericMatrix::is_zero() const {
     return data().isZero(EPS);
 }
 

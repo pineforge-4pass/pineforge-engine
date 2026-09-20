@@ -7,7 +7,7 @@
 
 namespace pineforge {
 
-class PineMatrix {
+class NumericMatrix {
     struct Storage {
         Eigen::MatrixXd data;
 
@@ -23,24 +23,24 @@ class PineMatrix {
 
     std::shared_ptr<Storage> storage_;
 
-    explicit PineMatrix(Eigen::MatrixXd data)
+    explicit NumericMatrix(Eigen::MatrixXd data)
         : storage_(std::make_shared<Storage>(std::move(data))) {}
 
     [[nodiscard]] Storage& require_storage();
     [[nodiscard]] const Storage& require_storage() const;
 
 public:
-    // Pine matrices are reference IDs. Ordinary C++ copies and assignments
-    // therefore alias one backing store; matrix.copy() is the operation that
-    // allocates an independent outer ID.
-    PineMatrix() noexcept = default;
-    PineMatrix(const PineMatrix&) noexcept = default;
-    PineMatrix& operator=(const PineMatrix&) noexcept = default;
+    // A NumericMatrix is a reference handle (a source language's matrix ID):
+    // ordinary C++ copies and assignments alias one backing store, and
+    // copy() is the operation that allocates an independent handle.
+    NumericMatrix() noexcept = default;
+    NumericMatrix(const NumericMatrix&) noexcept = default;
+    NumericMatrix& operator=(const NumericMatrix&) noexcept = default;
 
-    // Treat C++ moves like Pine assignment as well. A compiler-generated move
-    // must not turn the source handle into na.
-    PineMatrix(PineMatrix&& other) noexcept : storage_(other.storage_) {}
-    PineMatrix& operator=(PineMatrix&& other) noexcept {
+    // Treat C++ moves like handle assignment as well. A compiler-generated
+    // move must not turn the source handle into na.
+    NumericMatrix(NumericMatrix&& other) noexcept : storage_(other.storage_) {}
+    NumericMatrix& operator=(NumericMatrix&& other) noexcept {
         if (this != &other) storage_ = other.storage_;
         return *this;
     }
@@ -57,7 +57,7 @@ public:
                  const Eigen::MatrixXd& state)
             : identity_(std::move(identity)), state_(state) {}
 
-        friend class PineMatrix;
+        friend class NumericMatrix;
 
     public:
         Snapshot(const Snapshot&) = default;
@@ -67,7 +67,7 @@ public:
     };
 
     // Construction
-    static PineMatrix new_(int rows, int cols, double init_val = 0.0);
+    static NumericMatrix new_(int rows, int cols, double init_val = 0.0);
 
     // Access
     double get(int row, int col) const;
@@ -89,13 +89,13 @@ public:
     void swap_columns(int i, int j);
 
     // Transform
-    PineMatrix copy() const;
-    PineMatrix submatrix(int from_row, int to_row, int from_col, int to_col) const;
+    NumericMatrix copy() const;
+    NumericMatrix submatrix(int from_row, int to_row, int from_col, int to_col) const;
     void reshape(int rows, int cols);
     void reverse();
-    PineMatrix transpose() const;
+    NumericMatrix transpose() const;
     void sort(int column, bool ascending = true);
-    PineMatrix concat(const PineMatrix& other, bool horizontal) const;
+    NumericMatrix concat(const NumericMatrix& other, bool horizontal) const;
 
     // Aggregation
     double avg() const;
@@ -105,27 +105,27 @@ public:
     double sum() const;
 
     // Arithmetic
-    PineMatrix diff(const PineMatrix& other) const;
-    PineMatrix mult(const PineMatrix& other) const;
-    PineMatrix pow(int n) const;
+    NumericMatrix diff(const NumericMatrix& other) const;
+    NumericMatrix mult(const NumericMatrix& other) const;
+    NumericMatrix pow(int n) const;
 
     // Linear algebra
     double det() const;
-    PineMatrix inv() const;
-    PineMatrix pinv() const;
+    NumericMatrix inv() const;
+    NumericMatrix pinv() const;
     int rank() const;
     double trace() const;
     std::vector<double> eigenvalues() const;
-    PineMatrix eigenvectors() const;
+    NumericMatrix eigenvectors() const;
 
     // Kronecker
-    PineMatrix kron(const PineMatrix& other) const;
+    NumericMatrix kron(const NumericMatrix& other) const;
 
     // Count
     int elements_count() const;
 
-    // Pine matrix ID state. A default-constructed value represents ``na``;
-    // matrix.new() returns a valid ID even when its dimensions are 0x0.
+    // Handle state. A default-constructed value represents ``na``; new_()
+    // returns a valid handle even when its dimensions are 0x0.
     [[nodiscard]] bool is_na() const noexcept { return !storage_; }
 
     [[nodiscard]] Snapshot snapshot() const;
@@ -148,8 +148,14 @@ public:
     Eigen::MatrixXd& data() { return require_storage().data; }
 };
 
-inline bool is_na(const PineMatrix& matrix) noexcept {
+inline bool is_na(const NumericMatrix& matrix) noexcept {
     return matrix.is_na();
 }
+
+// Deprecated spelling, kept as an exact alias so generated code and the
+// source adapter compile unchanged (R5 lane N14, the same treatment
+// session_time.hpp / str_utils.hpp received in lane L11). New code names
+// NumericMatrix.
+using PineMatrix = NumericMatrix;
 
 } // namespace pineforge
