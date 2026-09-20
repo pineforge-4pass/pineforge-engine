@@ -2507,6 +2507,25 @@ unwinding through them, which is the one thing this boundary must never do. A
 host that must abort does it from an observation callback, where the
 established "non-zero ends the run `Failed`" rule is untouched.
 
+A fifth answering hook, `on_close_units`, is the **units half** of
+`resolve_execution_terms` — and the only half this header exposes. It is
+consulted for `PF_NATIVE_INTENT_HOST_SIZED` candidates and nothing else, and
+it is what makes `PF_NATIVE_OWNER_BIND_COHORT` reachable: the kernel pairs
+that owner with exactly one intent, a host-sized close, whose quantity comes
+from the terms pass. `pf_native_close_view_v1` carries `scope_exposure_units`
+— for a cohort close, the live units of the roster's own openings — plus the
+price the kernel would settle at and the cursor; the price and opening-shape
+halves of the terms answer stay the kernel's.
+
+So a C cohort close is: `strategy_native_cohort_open_v1`, one
+`strategy_native_cohort_add_v1` per opening (and `_remove_v1` to take one back
+off), then a `PF_NATIVE_INTENT_HOST_SIZED` request with
+`owner = PF_NATIVE_OWNER_BIND_COHORT` and `cohort` set, with `on_close_units`
+answering how much of the roster's exposure to take. HOST_SIZED under any
+other owner stays `PF_NATIVE_E_UNSUPPORTED`: every other host-sized shape
+needs the parts of the terms answer that are not exposed, so it is refused at
+submit rather than accepted and then left unresolvable at the candidate.
+
 Installing `on_lot_excursion` at all is `owns_lot_excursions() == true`
 (RULING A48): the consumer then stops sampling excursion at matched trigger
 prices for the whole run and every closing row takes both magnitudes from the

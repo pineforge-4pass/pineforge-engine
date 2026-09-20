@@ -21,11 +21,10 @@
  * ✗ Streaming has no new symbols: strategy_stream_begin / _push_bar /
  *   _push_tick / _advance_time / _end / _fill_report take any handle this
  *   header produces, unchanged.
- * ✗ resolve_execution_terms / validate_execution_precommit /
- *   resolve_anchored_level are not exposed: the callback table carries no
- *   answering hook. A C host that needs kernel sizing uses
- *   PF_NATIVE_INTENT_SIZED; an anchored leg is armed at the kernel level
- *   (fill + offset, snapped per `anchor_rounding`).
+ * ✗ resolve_execution_terms is exposed only as its UNITS half, for a
+ *   host-sized close (pf_native_callbacks_v1::on_close_units). Its price and
+ *   opening-shape halves, validate_execution_precommit and
+ *   resolve_anchored_level stay C++-only; see the exclusion list below.
  * ✗ hash_host_extension is not exposed: the callback table carries no hash
  *   hook, so a C host's broker-state hash is the kernel's own fold. The
  *   per-bar rows need no new symbol: `report_policy` = KernelRecorded with
@@ -128,7 +127,10 @@ typedef enum pf_native_intent_e {
     PF_NATIVE_INTENT_REDUCE     = 1, /**< Reduce; see #pf_native_reduction_e. */
     PF_NATIVE_INTENT_TRANSACT   = 2, /**< `intent_value` signed units. */
     PF_NATIVE_INTENT_REVERSE_TO = 3, /**< `intent_value` target signed exposure. */
-    PF_NATIVE_INTENT_HOST_SIZED = 4, /**< Adapter-only; refused PF_NATIVE_E_UNSUPPORTED. */
+    PF_NATIVE_INTENT_HOST_SIZED = 4, /**< The cohort close, and nothing else;
+                                      *   see #PF_NATIVE_OWNER_BIND_COHORT.
+                                      *   Refused PF_NATIVE_E_UNSUPPORTED
+                                      *   under any other owner. */
     PF_NATIVE_INTENT_SIZED      = 5  /**< Kernel-sized opening (L3). */
 } pf_native_intent_t;
 
@@ -216,7 +218,13 @@ typedef enum pf_native_owner_e {
     PF_NATIVE_OWNER_WAIT_FOR_APPLIED = 1, /**< One parent in `owner_incarnations`. */
     PF_NATIVE_OWNER_BIND_OPENING     = 2, /**< One opening + `owner_cycle`. */
     PF_NATIVE_OWNER_BIND_OPENINGS    = 3, /**< `owner_n` openings + `owner_cycle`. */
-    PF_NATIVE_OWNER_BIND_COHORT      = 4  /**< `cohort` from #strategy_native_cohort_open_v1. */
+    /** `cohort` from #strategy_native_cohort_open_v1. The kernel pairs this
+     *  owner with exactly one intent — a host-sized CLOSE — so a cohort close
+     *  is spelled #PF_NATIVE_INTENT_HOST_SIZED with this owner and no
+     *  quantity of its own: the roster's live openings are the target and the
+     *  cohort authority decides the units. That pairing is the only shape in
+     *  which HOST_SIZED is accepted here. */
+    PF_NATIVE_OWNER_BIND_COHORT      = 4
 } pf_native_owner_t;
 
 /** Group — the alternative index of `native_order::Group`. */
@@ -731,6 +739,26 @@ typedef struct pf_native_margin_decision_v1 {
     double   equity;
 } pf_native_margin_decision_v1;
 
+/** The facts a host-sized CLOSE is resolved from, handed to
+ *  #pf_native_callbacks_v1::on_close_units.
+ *
+ *  It is the UNITS half of `NativeExecutionTermsFacts`, and only that half:
+ *  `scope_exposure_units` is what the bound scope holds at this candidate —
+ *  for a cohort close, the live units of the roster's own openings and
+ *  nothing else. The price half and the opening shape stay the kernel's. */
+typedef struct pf_native_close_view_v1 {
+    uint32_t struct_size;   /**< sizeof(pf_native_close_view_v1). */
+    uint32_t version;       /**< PF_NATIVE_API_VERSION. */
+    uint64_t incarnation;   /**< The request being resolved. */
+    double   scope_exposure_units;   /**< What the bound scope holds here. */
+    double   default_resolved_price; /**< The price the kernel would settle at. */
+    double   position_units;         /**< The whole physical book, signed. */
+    uint64_t cursor_ordinal;
+    int64_t  cursor_effective_time_ms;
+    uint32_t is_buy;        /**< 0/1: the side this candidate would trade on. */
+    uint32_t reserved0;
+} pf_native_close_view_v1;
+
 /** One closing lot's booking facts — `ClosedLotExcursionFacts` (RULING A48).
  *  Handed to #pf_native_callbacks_v1::on_lot_excursion, whose two outputs are
  *  the favorable and adverse magnitudes the closing row then carries. Facts
@@ -1123,6 +1151,16 @@ typedef struct pf_native_callbacks_v1 {
      *  lot gets — or any other value to use @p favorable and @p adverse. */
     int (*on_lot_excursion)(void* user, const pf_native_lot_excursion_v1* facts,
                             double* favorable, double* adverse);
+
+    /** How many units a host-sized CLOSE takes — the units half of
+     *  `resolve_execution_terms`, and the only half this header exposes.
+     *  Consulted for #PF_NATIVE_INTENT_HOST_SIZED candidates and nothing
+     *  else; without it a cohort close resolves no quantity and stands
+     *  deferred, which is exactly what the C++ default does. ANSWERING
+     *  callback: return #PF_NATIVE_ANSWER_DEFAULT to keep that default, any
+     *  other value to close @p units of
+     *  #pf_native_close_view_v1::scope_exposure_units. */
+    int (*on_close_units)(void* user, const pf_native_close_view_v1* view, double* units);
 } pf_native_callbacks_v1;
 
 /** Byte length of #pf_native_callbacks_v1 as the L13 lane first published it,

@@ -326,7 +326,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
 | `strategy_native_partial_bar_v1` / `_series_bar_v1` / `_trail_state_v1` / `_liquidation_price_v1` | The four optional reads — the bar so far at the cursor, a declared higher-timeframe series' latest bucket, a live trail's projection, the solved liquidation level. Each answers `PF_NATIVE_ABSENT` where the C++ `std::optional` is empty |
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |
-| `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters for cohort-bound requests |
+| `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
 | `strategy_native_declare_subscriptions_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list |
 | `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |

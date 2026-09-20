@@ -160,7 +160,7 @@ static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
  * PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, and the tail must be the six
  * function pointers below it and nothing else. */
 static_assert(sizeof(pf_native_callbacks_v1)
-                  == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 6u * sizeof(void (*)(void)),
+                  == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 7u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 hook tail moved");
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
@@ -335,6 +335,33 @@ private:
             return std::nullopt;
         }
         return units;
+    }
+
+    no::ExecutionTerms resolve_execution_terms(
+            const pineforge::NativeExecutionTermsFacts& facts) const override {
+        const no::ExecutionTerms fallback{facts.default_resolved_price, std::nullopt,
+                                          no::OpeningShape::Transact};
+        if (!table_.on_close_units) return fallback;
+        if (!facts.definition
+            || !std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return fallback;
+        }
+        pf_native_close_view_v1 view;
+        std::memset(&view, 0, sizeof(view));
+        view.struct_size = static_cast<std::uint32_t>(sizeof(view));
+        view.version = PF_NATIVE_API_VERSION;
+        view.incarnation = facts.target.incarnation;
+        view.scope_exposure_units = facts.scope_exposure_units;
+        view.default_resolved_price = facts.default_resolved_price;
+        view.position_units = facts.position.signed_units;
+        view.cursor_ordinal = facts.cursor.point.ordinal;
+        view.cursor_effective_time_ms = facts.cursor.point.effective_time_ms;
+        view.is_buy = facts.is_buy ? 1u : 0u;
+        double units = 0.0;
+        if (table_.on_close_units(table_.user, &view, &units) == PF_NATIVE_ANSWER_DEFAULT) {
+            return fallback;
+        }
+        return {facts.default_resolved_price, units, no::OpeningShape::Transact};
     }
 
     bool owns_lot_excursions() const noexcept override {
@@ -655,8 +682,19 @@ int translate_intent(const pf_native_request_v1& in, bool has_sizing_tail,
         out = no::ReverseTo{in.intent_value};
         return PF_NATIVE_OK;
     case PF_NATIVE_INTENT_HOST_SIZED:
-        /* The adapter's own sizing seam. A C host sizes with SIZED. */
-        return PF_NATIVE_E_UNSUPPORTED;
+        /* HostSized is the adapter's sizing seam and a C host sizes with
+         * SIZED -- with ONE exception the kernel leaves no other spelling
+         * for. native_order.cpp accepts BindCohort only for
+         * HostSized{Close}, and a cohort close has no quantity to write: the
+         * roster's own live openings are the target, so the accepted request
+         * carries NoTarget and the cohort authority decides the units.
+         * Every other HostSized shape needs resolve_execution_terms to
+         * answer the quantity, which this header does not expose, so it
+         * stays unsupported rather than being accepted and then rejected at
+         * the candidate. */
+        if (in.owner != PF_NATIVE_OWNER_BIND_COHORT) return PF_NATIVE_E_UNSUPPORTED;
+        out = no::HostSized{no::HostSizedKind::Close, std::nullopt};
+        return PF_NATIVE_OK;
     case PF_NATIVE_INTENT_REDUCE: {
         no::Reduce reduce{no::ExplicitUnits{in.intent_value}};
         switch (in.reduce_size) {

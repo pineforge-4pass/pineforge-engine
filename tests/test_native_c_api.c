@@ -2417,6 +2417,185 @@ static void check_margin_tail_fields(void) {
     strategy_native_host_free(host);
 }
 
+/* ── Cohort rosters and the cohort-bound owner ───────────────────
+ *
+ * strategy_native_cohort_open/add/remove_v1 shipped with the L13 lane and had
+ * no scenario at all, which left PF_NATIVE_OWNER_BIND_COHORT unreachable in
+ * any executed path: the C++ twin's cohort close is HostSized, and HOST_SIZED
+ * is deliberately refused in C. A fractional reduce over the cohort's own
+ * scope is the C spelling of that close. */
+
+#define COHORT_A_UNITS 3.0
+#define COHORT_B_UNITS 2.0
+#define COHORT_U_UNITS 4.0
+
+typedef struct cohort_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    uint64_t cohort;
+    uint64_t entry_a;
+    uint64_t entry_b;
+    uint64_t unrelated;
+    int      close_submitted;
+    int      close_reject;
+    double   units_before_close;
+    double   units_after_close;
+    int      rejected_zero_cohort;
+    int      close_units_calls;
+    double   close_scope_units;
+} cohort_state;
+
+/* The units half of resolve_execution_terms: a cohort close takes the whole
+ * roster's live exposure and nothing else. */
+static int cohort_on_close_units(void* user, const pf_native_close_view_v1* view,
+                                 double* units) {
+    cohort_state* state = (cohort_state*)user;
+    ++state->close_units_calls;
+    state->close_scope_units = view->scope_exposure_units;
+    LCHECK(state, view->struct_size == (uint32_t)sizeof(*view),
+           "the close view is a different struct");
+    LCHECK(state, view->default_resolved_price > 0.0, "the close view carried no price");
+    *units = view->scope_exposure_units;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int cohort_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    cohort_state* state = (cohort_state*)user;
+    pf_native_request_v1 request;
+    uint32_t reject = 0;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+
+    if (state->calculations == 3) {
+        LCHECK(state, strategy_native_cohort_open_v1(state->host, &state->cohort)
+                          == PF_NATIVE_OK, "cohort_open was refused");
+        LCHECK(state, state->cohort != 0u, "cohort_open answered the null roster");
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = COHORT_A_UNITS;
+        request.label = "cohort-a";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->entry_a, NULL)
+                          == PF_NATIVE_OK, "cohort entry A was refused");
+        LCHECK(state, strategy_native_cohort_add_v1(state->host, state->cohort,
+                                                    state->entry_a) == PF_NATIVE_OK,
+               "cohort_add of A was refused");
+        /* The roster handle is not optional. */
+        LCHECK(state, strategy_native_cohort_add_v1(state->host, 0u, state->entry_a)
+                          == PF_NATIVE_E_ARGUMENT, "cohort_add accepted the null roster");
+        LCHECK(state, strategy_native_cohort_remove_v1(state->host, 0u, state->entry_a)
+                          == PF_NATIVE_E_ARGUMENT, "cohort_remove accepted the null roster");
+        /* A BIND_COHORT request needs one too. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_HOST_SIZED;
+        request.owner = PF_NATIVE_OWNER_BIND_COHORT;
+        request.cohort = 0u;
+        request.label = "cohort-null";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, &reject)
+                          == PF_NATIVE_E_ARGUMENT,
+               "a cohort-bound request with the null roster was accepted");
+        state->rejected_zero_cohort = 1;
+        return 0;
+    }
+    if (state->calculations == 5) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = COHORT_B_UNITS;
+        request.label = "cohort-b";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->entry_b, NULL)
+                          == PF_NATIVE_OK, "cohort entry B was refused");
+        LCHECK(state, strategy_native_cohort_add_v1(state->host, state->cohort,
+                                                    state->entry_b) == PF_NATIVE_OK,
+               "cohort_add of B was refused");
+        /* Never added to the roster, so the cohort close must not reach it. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = COHORT_U_UNITS;
+        request.label = "cohort-unrelated";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->unrelated, NULL)
+                          == PF_NATIVE_OK, "the unrelated entry was refused");
+        return 0;
+    }
+    if (state->calculations == 8) {
+        LCHECK(state, strategy_native_position_v1(state->host, &state->units_before_close,
+                                                  NULL, NULL) == PF_NATIVE_OK,
+               "the pre-close position was refused");
+        /* A is taken OFF the roster before the close, so the close is scoped
+         * to B alone even though both are still live. */
+        LCHECK(state, strategy_native_cohort_remove_v1(state->host, state->cohort,
+                                                       state->entry_a) == PF_NATIVE_OK,
+               "cohort_remove of A was refused");
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_HOST_SIZED;
+        request.owner = PF_NATIVE_OWNER_BIND_COHORT;
+        request.cohort = state->cohort;
+        request.label = "cohort-close";
+        state->close_submitted = strategy_native_submit_v1(state->host, &request, NULL,
+                                                           &reject);
+        state->close_reject = (int)reject;
+        return 0;
+    }
+    if (state->calculations == 12 && state->units_after_close == 0.0) {
+        LCHECK(state, strategy_native_position_v1(state->host, &state->units_after_close,
+                                                  NULL, NULL) == PF_NATIVE_OK,
+               "the post-close position was refused");
+    }
+    return 0;
+}
+
+static void check_cohort_roster(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    cohort_state state;
+    const pf_bar_t* bars;
+    uint64_t cohort = 0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = cohort_on_bar;
+    table.on_close_units = cohort_on_close_units;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "cohort host create failed");
+    if (!state.host) return;
+
+    CHECK_EQ_INT(strategy_native_cohort_open_v1(NULL, &cohort), PF_NATIVE_E_HANDLE,
+                 "cohort_open accepted a NULL handle");
+    CHECK_EQ_INT(strategy_native_cohort_open_v1(state.host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "cohort_open accepted a NULL output");
+    /* Before configure there is no run identity for a roster member to
+     * belong to. */
+    CHECK_EQ_INT(strategy_native_cohort_add_v1(state.host, 1u, 1u), PF_NATIVE_E_STATE,
+                 "cohort_add answered before the run had an identity");
+    CHECK_EQ_INT(strategy_native_cohort_remove_v1(state.host, 1u, 1u), PF_NATIVE_E_STATE,
+                 "cohort_remove answered before the run had an identity");
+
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "cohort configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the cohort run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback cohort rows failed");
+
+    CHECK(state.rejected_zero_cohort, "the null-roster refusal never ran");
+    CHECK_EQ_INT(state.close_submitted, PF_NATIVE_OK, "the cohort close was refused");
+    CHECK_EQ_INT(state.close_reject, 0, "the cohort close reject reason");
+    CHECK(fabs(state.units_before_close - (COHORT_A_UNITS + COHORT_B_UNITS + COHORT_U_UNITS))
+              < 1e-9,
+          "the three entries did not all carry before the close");
+    /* Exactly B left: A was removed from the roster and the unrelated entry
+     * was never on it. */
+    CHECK(state.close_units_calls >= 1, "the close-units hook was never consulted");
+    /* A was removed from the roster and the unrelated entry was never on it,
+     * so the scope the close was resolved against is exactly B. */
+    CHECK(fabs(state.close_scope_units - COHORT_B_UNITS) < 1e-9,
+          "the cohort close was scoped to something other than its roster");
+    CHECK_EQ_INT((int)(state.units_after_close * 100.0),
+                 (int)((COHORT_A_UNITS + COHORT_U_UNITS) * 100.0),
+                 "the cohort close did not take exactly the roster's own units");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -2437,5 +2616,6 @@ int pf_native_c_api_checks(void) {
     check_intrabar_and_policies();
     check_feed_policies();
     check_margin_tail_fields();
+    check_cohort_roster();
     return failures;
 }
