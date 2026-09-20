@@ -58,6 +58,7 @@ NATIVE_EXAMPLES = (
     ("native-sized-report", "examples/native/native_sized_report_strategy.cpp"),
     ("native-margin", "examples/native/native_margin_strategy.cpp"),
     ("native-calc-on-fills", "examples/native/native_calc_on_fills_strategy.cpp"),
+    ("native-htf", "examples/native/native_htf_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)

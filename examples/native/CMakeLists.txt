@@ -20,6 +20,7 @@ set(PINEFORGE_NATIVE_EXAMPLES
     native_sized_report_strategy
     native_margin_strategy
     native_calc_on_fills_strategy
+    native_htf_strategy
 )
 
 # The same host written against the C API (R5 lane L13). It is a separate
@@ -81,6 +82,7 @@ if(PINEFORGE_BUILD_TESTS)
         example_native_bracket_strategy
         example_native_sized_report_strategy
         example_native_margin_strategy
-        example_native_calc_on_fills_strategy PROPERTIES
+        example_native_calc_on_fills_strategy
+        example_native_htf_strategy PROPERTIES
         PASS_REGULAR_EXPRESSION "closed trades: [1-9]")
 endif()
