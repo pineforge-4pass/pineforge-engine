@@ -6913,7 +6913,7 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             input_next_ms_[static_cast<std::size_t>(i)];
         engine.security_calling_close_ms_ = 0;
         const std::int64_t before = state.eval_complete_count;
-        engine.feed_security_eval_state(state, input_bars[i], /*calling_bar_complete=*/false);
+        engine.feed_security_eval_state(state, input_bars[i]);
         if (state.eval_complete_count <= before) continue;
         // A boundary emission hands back the PREVIOUS bucket and re-seats the
         // aggregator on the one this input opened; an eager completion (count,
@@ -6996,7 +6996,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                 : 0;
         engine.security_calling_close_ms_ = 0;
         const std::int64_t before = state.eval_complete_count;
-        engine.feed_security_eval_state(state, bar, /*calling_bar_complete=*/false);
+        engine.feed_security_eval_state(state, bar);
         engine.security_next_input_ms_ = 0;
         if (state.eval_complete_count <= before) {
             if (!delivered) clear_if_gapped(subscription);

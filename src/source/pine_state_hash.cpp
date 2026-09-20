@@ -625,6 +625,9 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
         for (const auto& [sec_id, pine] : pine_security_states_) {
             f.i(sec_id);
             f.b(pine.lookahead_on);
+            f.b(pine.gaps_on);
+            f.i(pine.publish_gate_tf_seconds);
+            f.b(pine.calling_close_completes_partial);
         }
     }
     // The margin slice's sampling chronology is resolved once per pending

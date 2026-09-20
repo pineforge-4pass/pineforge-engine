@@ -23,7 +23,7 @@ namespace pineforge::source {
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v1";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v2";
 
 // Pine's publication semantics for ONE request.security site, kept beside the
 // kernel's generic evaluator state of the same sec_id
@@ -38,6 +38,80 @@ struct PineSecurityEvalState {
     // second one, and generated TA sites take their recompute path on every
     // sub-bar after a bucket's first (security_series_slot_is_new).
     bool lookahead_on = false;
+    // barmerge.gaps_on: the site reads na on every input that completes no
+    // requested bucket (clear_security on the generated series).
+    bool gaps_on = false;
+    // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
+    // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
+    // chart) under ``lookahead=barmerge.lookahead_ON``: the security's
+    // own aggregator completes multiple times
+    // (script_seconds / requested_seconds) per calling/script bar. A
+    // history-offset read (``expr[1]`` inside the security call, see
+    // the ``*_hist`` push/read machinery in codegen) is meant to expose
+    // "the value already confirmed as of the close of the PREVIOUS
+    // calling bar" — TV's lookahead_on merge takes the FIRST intrabar
+    // of each calling bar, so the publish granularity is the CALLING
+    // bar, not the security's own (finer) period. Without this, the
+    // read-before-push ``hist[0]`` gets refreshed on every one of the
+    // R completions inside the current calling bar, so by the time
+    // on_bar() reads it the value has silently drifted to "one
+    // security-period behind the LAST completion of THIS SAME calling
+    // bar" (e.g. the middle of 3 sub-periods) instead of "the last
+    // completion of the PREVIOUS calling bar" — an aliasing bug
+    // confirmed against TradingView-exported trades on a triple-RSI
+    // DCA strategy using so2Rsi = request.security(sym, "5",
+    // ta.rsi(close,7)[1], lookahead=barmerge.lookahead_on) on a 15m
+    // chart (finer target under lookahead + offset).
+    //
+    // ``lookahead_OFF`` is deliberately NOT gated (field stays 0): TV's
+    // lookahead_off merge takes the LAST intrabar of the calling bar,
+    // so the exposed value — and any ``[k]`` history offset off it —
+    // advances at the security's own finer cadence (one hist.push per
+    // completed security period), which is exactly the ungated
+    // behavior. Gating lookahead_off regressed
+    // masayanfx-multi-time-score-strategy
+    // (request.security(sym, "5", ta.highest(high, 20)[1],
+    // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart) from
+    // 100.0% to 93.7% trade parity vs TradingView.
+    //
+    // When nonzero, this holds the requested TF's duration in seconds
+    // (script_seconds % this == 0 verified at validate time) and gates
+    // ``pine_feed_security_eval_state``'s aggregator branch: only the
+    // completion whose bucket END aligns to a script_tf boundary is
+    // passed through to ``evaluate_security`` as ``is_complete = true``
+    // (letting codegen's ``hist.push()`` fire); all other completions
+    // within the same calling bar are still evaluated (so the
+    // underlying TA state keeps advancing at native/security
+    // resolution) but are passed ``is_complete = false`` so they do not
+    // advance the exposed history buffer. Zero (the default) means "not
+    // applicable" (target TF coarser than or equal to script_tf, or
+    // lookahead_off — the already-correct cases) and leaves behavior
+    // unchanged.
+    int publish_gate_tf_seconds = 0;
+    // Plain ``request.security`` with a requested TF strictly finer than
+    // script_tf, served by the auxiliary finer feed (the split-feed
+    // path), under ``lookahead_off``: TradingView surfaces the LAST
+    // intrabar of the calling chart bar at that bar's close whatever
+    // the bucket's sub-bar count -- on the OANDA:XAUUSD 1D chart the
+    // Thanksgiving 2025-11-26 bar's last 3m bucket (21:57Z, holding
+    // the 21:59Z minute alone before the 22:00Z session close) is the
+    // value ``request.security(tickerid, "3", ta.rsi(close, 14))``
+    // reads at the daily close (72.64, lab tv dca-ltf-last-intrabar,
+    // 2026-09-05), where the aggregator's count / real-end /
+    // session-close rules leave that bucket partial until the next
+    // chart bar's first sub-bar and the close read the 21:54Z bucket
+    // (38.87). When set, pine_feed_security_eval_state
+    // finalizes and publishes the pending partial bucket on the
+    // calling bar's last auxiliary bar (TimeframeAggregator::
+    // complete_pending_partial), once: the next chart bar's first
+    // sub-bar resets the bucket without re-emitting it. Dense feeds
+    // whose final bucket completes on its count are untouched (no
+    // partial is pending), and so are lanes without the auxiliary
+    // slice, lookahead_on (its gated publication is untouched: on this
+    // shape it stays one bucket behind, as before -- the tape pins
+    // lookahead_off only), lower-TF arrays and calendar / same-TF
+    // requests. False (the default) means "not applicable".
+    bool calling_close_completes_partial = false;
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
@@ -429,6 +503,10 @@ private:
     }
     // Drops the entries of sec_ids the evaluator registry no longer holds.
     void prune_pine_security_states();
+    // The calling chart bar's publication boundary for a gated site
+    // (publish_gate_tf_seconds): re-publish the completed caller's final
+    // requested value before the retained boundary input is fed.
+    void publish_security_eval_state_at_calling_boundary(SecurityEvalState& state);
     void scheduler_record_range_end(const Bar&);
     // One report point per published source slot. The kernel records it
     // (NativeReportPolicy::KernelRecordedAtHostMarks); this host owns only
@@ -521,6 +599,13 @@ protected:
     // projected into the adapter at begin, so it is waived from the durable
     // fold like the other configuration slots.
     bool margin_call_enabled_ = true;
+
+    // Boundary-fallback publication replays the completed caller's already
+    // evaluated final requested value. Force generated TA sites down their
+    // recompute path so the replay advances merged history only, never the
+    // requested-context TA cadence. True only inside
+    // publish_security_eval_state_at_calling_boundary's own scope.
+    bool security_history_publication_replay_ = false;
 
     // Read-only test projection cache; no future execution can observe it.
     mutable std::vector<FixtureIntentRow> source_pending_view_cache_;

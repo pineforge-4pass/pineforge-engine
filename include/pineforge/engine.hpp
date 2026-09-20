@@ -1746,7 +1746,6 @@ protected:
         std::string tf;
         TimeframeAggregator aggregator;
         Bar current_bar{};
-        bool gaps_on = false;
         // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
         // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
         // OHLC is replaced by its Heikin-Ashi candle before the security
@@ -1767,8 +1766,8 @@ protected:
         int64_t eval_partial_count = 0;
         // Requested-context bar index of the latest dispatch_security_eval()
         // (the ring address its TA members saw, see ta::bar_context()); -1
-        // before the first dispatch. The calling-boundary replay re-dispatches
-        // the same bar under the same index.
+        // before the first dispatch. A host that replays its latest
+        // evaluation re-dispatches the same bar under the same index.
         int64_t ta_bar_index = -1;
         // ``request.security_lower_tf`` returns one element per
         // synthesised sub-bar of the current chart bar, so the codegen
@@ -1799,77 +1798,6 @@ protected:
         bool lower_tf_use_input = false;
         int lower_tf_input_aggregation_ratio = 1;
         std::vector<Bar> lower_tf_input_buffer;
-        // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
-        // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
-        // chart) under ``lookahead=barmerge.lookahead_ON``: the security's
-        // own aggregator completes multiple times
-        // (script_seconds / requested_seconds) per calling/script bar. A
-        // history-offset read (``expr[1]`` inside the security call, see
-        // the ``*_hist`` push/read machinery in codegen) is meant to expose
-        // "the value already confirmed as of the close of the PREVIOUS
-        // calling bar" — TV's lookahead_on merge takes the FIRST intrabar
-        // of each calling bar, so the publish granularity is the CALLING
-        // bar, not the security's own (finer) period. Without this, the
-        // read-before-push ``hist[0]`` gets refreshed on every one of the
-        // R completions inside the current calling bar, so by the time
-        // on_bar() reads it the value has silently drifted to "one
-        // security-period behind the LAST completion of THIS SAME calling
-        // bar" (e.g. the middle of 3 sub-periods) instead of "the last
-        // completion of the PREVIOUS calling bar" — an aliasing bug
-        // confirmed against TradingView-exported trades on a triple-RSI
-        // DCA strategy using so2Rsi = request.security(sym, "5",
-        // ta.rsi(close,7)[1], lookahead=barmerge.lookahead_on) on a 15m
-        // chart (finer target under lookahead + offset).
-        //
-        // ``lookahead_OFF`` is deliberately NOT gated (field stays 0): TV's
-        // lookahead_off merge takes the LAST intrabar of the calling bar,
-        // so the exposed value — and any ``[k]`` history offset off it —
-        // advances at the security's own finer cadence (one hist.push per
-        // completed security period), which is exactly the ungated
-        // behavior. Gating lookahead_off regressed
-        // masayanfx-multi-time-score-strategy
-        // (request.security(sym, "5", ta.highest(high, 20)[1],
-        // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart) from
-        // 100.0% to 93.7% trade parity vs TradingView.
-        //
-        // When nonzero, this holds the requested TF's duration in seconds
-        // (script_seconds % this == 0 verified at validate time) and gates
-        // ``feed_security_eval_state``'s aggregator branch: only the
-        // completion whose bucket END aligns to a script_tf boundary is
-        // passed through to ``evaluate_security`` as ``is_complete = true``
-        // (letting codegen's ``hist.push()`` fire); all other completions
-        // within the same calling bar are still evaluated (so the
-        // underlying TA state keeps advancing at native/security
-        // resolution) but are passed ``is_complete = false`` so they do not
-        // advance the exposed history buffer. Zero (the default) means "not
-        // applicable" (target TF coarser than or equal to script_tf, or
-        // lookahead_off — the already-correct cases) and leaves behavior
-        // unchanged.
-        int publish_gate_tf_seconds = 0;
-        // Plain ``request.security`` with a requested TF strictly finer than
-        // script_tf, served by the auxiliary finer feed (the split-feed
-        // path), under ``lookahead_off``: TradingView surfaces the LAST
-        // intrabar of the calling chart bar at that bar's close whatever
-        // the bucket's sub-bar count -- on the OANDA:XAUUSD 1D chart the
-        // Thanksgiving 2025-11-26 bar's last 3m bucket (21:57Z, holding
-        // the 21:59Z minute alone before the 22:00Z session close) is the
-        // value ``request.security(tickerid, "3", ta.rsi(close, 14))``
-        // reads at the daily close (72.64, lab tv dca-ltf-last-intrabar,
-        // 2026-09-05), where the aggregator's count / real-end /
-        // session-close rules leave that bucket partial until the next
-        // chart bar's first sub-bar and the close read the 21:54Z bucket
-        // (38.87). When set, feed_security_eval_state
-        // finalizes and publishes the pending partial bucket on the
-        // calling bar's last auxiliary bar (TimeframeAggregator::
-        // complete_pending_partial), once: the next chart bar's first
-        // sub-bar resets the bucket without re-emitting it. Dense feeds
-        // whose final bucket completes on its count are untouched (no
-        // partial is pending), and so are lanes without the auxiliary
-        // slice, lookahead_on (its gated publication is untouched: on this
-        // shape it stays one bucket behind, as before -- the tape pins
-        // lookahead_off only), lower-TF arrays and calendar / same-TF
-        // requests. False (the default) means "not applicable".
-        bool calling_close_completes_partial = false;
         // Plain ``request.security`` with a requested TF strictly finer than
         // script_tf, served by the auxiliary finer feed (the split-feed
         // path), under ``lookahead_on``: TradingView's merge takes the FIRST
@@ -1945,14 +1873,6 @@ protected:
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
-    // Boundary-fallback publication replays the completed caller's already
-    // evaluated final requested value. Force generated TA sites down their
-    // recompute path so the replay advances merged history only, never the
-    // requested-context TA cadence. Keep this byte layout-unconditional so
-    // generated strategy TUs and the statically linked runtime always agree on
-    // BacktestEngine offsets.
-    bool security_history_publication_replay_ = false;
-
     // The raw feed used by security aggregators in the active run. This is the
     // chart input TF on the legacy path and the auxiliary TF on the split path.
     std::string security_input_tf_;
@@ -2091,11 +2011,11 @@ protected:
     // precedes the run's first chart bar was in progress at the range start.
     bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
 #endif
-    void feed_security_eval_state(
-        SecurityEvalState& state, const Bar& input_bar,
-        bool calling_bar_complete = false);
-    void publish_security_eval_state_at_calling_boundary(
-        SecurityEvalState& state);
+    // The generic evaluator step for one input bar: aggregate, take the
+    // native bar of a completed bucket where a feed serves the timeframe,
+    // and dispatch the completed bucket. Publication at the last contributing
+    // input is the consumer's; a source host composes its own step.
+    void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar);
 
     // A new batch run (including stream_begin's historical warmup) starts a
     // fresh script lifecycle. Called once after broker reset, before any

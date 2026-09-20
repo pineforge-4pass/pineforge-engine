@@ -410,7 +410,7 @@ void PineScheduler::input(
             host.syminfo_.timezone, host.syminfo_.session);
         if (caller_boundary) {
             for (const auto& state : host.security_eval_states_) {
-                if (state.publish_gate_tf_seconds > 0) {
+                if (host.pine_security_state(state.sec_id).publish_gate_tf_seconds > 0) {
                     security_boundary_ahead = true;
                     break;
                 }

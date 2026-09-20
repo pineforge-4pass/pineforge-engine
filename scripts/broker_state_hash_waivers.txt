@@ -31,6 +31,7 @@ range_end_trades_ # Report-only synthetic rows, never a live matching population
 realtime_tail_ # Run-mode configuration consumed at begin; native stream lifecycle/hash owns active continuation state.
 realtime_tail_horizon_bars_ # Run-mode configuration consumed at begin; it is not mutated by or read from broker settlement.
 security_calling_close_ms_ # Security-feed publication cursor; no order matching or account settlement branch consumes it.
+security_history_publication_replay_ # Transient scope flag of the source host's calling-boundary replay; true only inside that one call, which reaches no hash point, and false at every fold.
 security_first_chart_bar_ms_ # Feed-start metadata used while preparing security publication, not a mutable execution fact.
 security_next_input_ms_ # Security-feed cursor; source scheduler's durable deferred-boundary state is hashed independently.
 security_range_start_ms_ # Security evaluator configuration; active evaluator buckets/series own their continuation folds.

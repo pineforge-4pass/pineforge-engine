@@ -111,7 +111,7 @@ public:
         // here to drive the unsupported-flag rejection path.
         if (!security_eval_states_.empty()) {
             pine_security_states_[0].lookahead_on = lookahead_on;
-            security_eval_states_.back().gaps_on = gaps_on;
+            pine_security_states_[0].gaps_on = gaps_on;
         }
     }
 

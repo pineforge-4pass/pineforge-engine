@@ -41,7 +41,7 @@ void source::PineStrategyHost::register_security_eval(
     SecurityEvalState& state = security_eval_states_.back();
     PineSecurityEvalState& pine = pine_security_states_[sec_id];
     pine = PineSecurityEvalState{};
-    state.gaps_on = gaps_on;
+    pine.gaps_on = gaps_on;
     pine.lookahead_on = lookahead_on;
     state.heikinashi = heikinashi;
 
@@ -157,8 +157,8 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         state.lower_tf_use_input = false;
         state.lower_tf_input_aggregation_ratio = 1;
         state.lower_tf_input_buffer.clear();
-        state.publish_gate_tf_seconds = 0;
-        state.calling_close_completes_partial = false;
+        pine.publish_gate_tf_seconds = 0;
+        pine.calling_close_completes_partial = false;
         state.calling_open_latches_first = false;
         state.first_bucket_published = false;
         state.deferred_aux.clear();
@@ -173,7 +173,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // Scalar request.security remains a validate-time refusal even
             // when registration recognized an integer-divisor lower TF.
             state.lower_tf_requested = true;
-            ensure_supported_lower_tf_emulation_flags(pine.lookahead_on, state.gaps_on);
+            ensure_supported_lower_tf_emulation_flags(pine.lookahead_on, pine.gaps_on);
             state.lower_tf_emulation = true;
             state.lower_tf_ratio = lower_ratio;
             state.lower_tf_seconds = lower_seconds;
@@ -295,7 +295,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // so2Rsi = request.security(sym, "5", ta.rsi(close,7)[1],
             // lookahead=barmerge.lookahead_on)) needs the latch to hold
             // 100.0%.
-            state.publish_gate_tf_seconds = requested_seconds;
+            pine.publish_gate_tf_seconds = requested_seconds;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
             // Served by the auxiliary finer feed (the split-feed path every
             // @1D lane runs): TradingView reads the calling bar's FIRST
@@ -305,7 +305,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // see calling_open_latches_first. The gate served the legacy
             // single-feed loop and stays there.
             if (aux_security_feed_enabled()) {
-                state.publish_gate_tf_seconds = 0;
+                pine.publish_gate_tf_seconds = 0;
                 state.calling_open_latches_first = true;
             }
 #endif
@@ -322,10 +322,37 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // aggregator's own completions stay ungated (masayanfx above);
             // only a bucket still partial on the calling bar's last
             // auxiliary bar is finalized and published there.
-            state.calling_close_completes_partial = true;
+            pine.calling_close_completes_partial = true;
         }
 #endif
     }
+}
+
+
+void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
+        SecurityEvalState& state) {
+    if (pine_security_state(state.sec_id).publish_gate_tf_seconds <= 0
+            || state.feed_count <= 0) {
+        return;
+    }
+
+    struct ReplayScope {
+        bool& active;
+        bool previous;
+        explicit ReplayScope(bool& flag)
+            : active(flag), previous(flag) { active = true; }
+        ~ReplayScope() { active = previous; }
+    } replay_scope(security_history_publication_replay_);
+
+    // The boundary-triggering input belongs to the next calling bar. Publish
+    // the final requested value that was already evaluated for the completed
+    // caller, before the chart body runs and before that retained input is fed.
+    // security_series_slot_is_new() returns false in this scope, so generated
+    // TA sites recompute the current slot instead of advancing their cadence —
+    // under the same requested-context bar index as the evaluation replayed.
+    dispatch_security_eval(state, state.current_bar, true,
+                           state.ta_bar_index >= 0 ? state.ta_bar_index
+                                                   : state.eval_complete_count);
 }
 
 
@@ -610,7 +637,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // history buffer's advance is gated. eval_complete_count/current_bar
         // bookkeeping above stays driven by the real completion.
         bool publish = true;
-        if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
+        if (pine.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
             // Merge finer-context history on the event that the calling chart
             // aggregator actually completes. Unlike a fixed seconds modulus,
             // this includes session-clipped calling bars.
@@ -662,7 +689,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             state.current_bar = fresh;
             state.current_sub_bar_count = 1;
             state.eval_partial_count++;
-            const bool peek_publish = state.publish_gate_tf_seconds > 0
+            const bool peek_publish = pine.publish_gate_tf_seconds > 0
                 && calling_bar_complete;
             dispatch_security_eval(state, fresh, peek_publish,
                                    state.eval_complete_count);
@@ -674,14 +701,14 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // A shortened calling bar can complete while the finer requested
         // bucket is partial. Publish that current requested-context value to
         // merged history without adding a second evaluator/TA dispatch.
-        const bool publish = state.publish_gate_tf_seconds > 0
+        const bool publish = pine.publish_gate_tf_seconds > 0
             && calling_bar_complete;
         // Partial (in-progress) bucket: the index the completion will carry.
         dispatch_security_eval(state, ab.bar, publish,
                                state.eval_complete_count);
     } else {
         state.current_bar = ab.bar;
-        if (state.gaps_on) {
+        if (pine.gaps_on) {
             clear_security(state.sec_id);
         }
     }
@@ -701,7 +728,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // completed chart bar's, but guarded) merges without completing it
     // again. A dense feed whose final bucket completed on its count has no
     // pending partial and is untouched (calling_close_completes_partial).
-    if (calling_bar_complete && state.calling_close_completes_partial
+    if (calling_bar_complete && pine.calling_close_completes_partial
         && state.aggregator.has_pending_partial()) {
         AggregatedBar tail = state.aggregator.complete_pending_partial();
         if (tail.is_complete) {

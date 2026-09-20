@@ -86,32 +86,6 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 }
 
 
-void BacktestEngine::publish_security_eval_state_at_calling_boundary(
-        SecurityEvalState& state) {
-    if (state.publish_gate_tf_seconds <= 0 || state.feed_count <= 0) {
-        return;
-    }
-
-    struct ReplayScope {
-        bool& active;
-        bool previous;
-        explicit ReplayScope(bool& flag)
-            : active(flag), previous(flag) { active = true; }
-        ~ReplayScope() { active = previous; }
-    } replay_scope(security_history_publication_replay_);
-
-    // The boundary-triggering input belongs to the next calling bar. Publish
-    // the final requested value that was already evaluated for the completed
-    // caller, before the chart body runs and before that retained input is fed.
-    // security_series_slot_is_new() returns false in this scope, so generated
-    // TA sites recompute the current slot instead of advancing their cadence —
-    // under the same requested-context bar index as the evaluation replayed.
-    dispatch_security_eval(state, state.current_bar, true,
-                           state.ta_bar_index >= 0 ? state.ta_bar_index
-                                                   : state.eval_complete_count);
-}
-
-
 bool BacktestEngine::security_input_precedes_range_start(
         const SecurityEvalState& state, int64_t input_ts) const {
     if (security_range_start_na_warmup_) {
@@ -252,8 +226,7 @@ bool BacktestEngine::aux_security_traded_between(int64_t from_ms,
 
 
 void BacktestEngine::feed_security_eval_state(
-        SecurityEvalState& state, const Bar& input_bar,
-        bool calling_bar_complete) {
+        SecurityEvalState& state, const Bar& input_bar) {
     // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
     //   (a) start every request.security aggregation at range_start_ms, not the
     //       feed start — drop every input bar whose HTF bucket opened before
@@ -515,68 +488,11 @@ void BacktestEngine::feed_security_eval_state(
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;
         state.eval_complete_count++;
-        // For a plain request.security whose target TF is strictly finer
-        // than script_tf (publish_gate_tf_seconds > 0), the security's own
-        // aggregator completes multiple times per calling/script bar.
-        // Only the completion whose bucket END lands on a script_tf
-        // boundary is "the last completion of THIS calling bar" — that's
-        // the one a history-offset read (``expr[1]``) should latch as
-        // "confirmed as of the previous calling bar" the NEXT time the
-        // calling script reads it. Suppress ``is_complete`` (so codegen's
-        // gated hist.push() does not fire) for every other, intermediate
-        // completion; the underlying TA state keeps advancing regardless
-        // (compute()/recompute() dispatch is driven by
-        // current_sub_bar_count, not by this flag) — only the exposed
-        // history buffer's advance is gated. eval_complete_count/current_bar
-        // bookkeeping above stays driven by the real completion.
-        bool publish = true;
-        if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
-            // Merge finer-context history on the event that the calling chart
-            // aggregator actually completes. Unlike a fixed seconds modulus,
-            // this includes session-clipped calling bars.
-            // The requested-context evaluator still runs once
-            // per input update; only its is_complete publication signal is
-            // replaced.
-            publish = calling_bar_complete;
-        }
         state.last_published_label = ab.bar.timestamp;
-        dispatch_security_eval(state, ab.bar, publish,
+        dispatch_security_eval(state, ab.bar, true,
                                state.eval_complete_count - 1);
     } else {
         state.current_bar = ab.bar;
-        if (state.gaps_on) {
-            clear_security(state.sec_id);
-        }
-    }
-
-    // The calling chart bar's last auxiliary bar left the finer bucket it
-    // opened (or merged into) partial: its count, real end and session
-    // close all lie beyond the chart bar's last sub-bar (the Thanksgiving
-    // 21:57 3m bucket holding the 21:59 minute alone; the 2-minute 20:57
-    // bucket of a day whose 20:59 minute did not trade). TradingView reads
-    // that bucket at the chart bar's close (lab tv dca-ltf-last-intrabar,
-    // 2026-09-05: 72.64, the 21:59 minute's RSI, where the previous bucket
-    // reads 38.87), so finalize it now, exactly as a count / real-end /
-    // session-close completion would have, and publish it as one more
-    // completed requested-context bar. The aggregator marks it emitted:
-    // the next chart bar's first sub-bar starts a fresh bucket without
-    // re-emitting this one, and a later sub-bar of the same bucket (not a
-    // completed chart bar's, but guarded) merges without completing it
-    // again. A dense feed whose final bucket completed on its count has no
-    // pending partial and is untouched (calling_close_completes_partial).
-    if (calling_bar_complete && state.calling_close_completes_partial
-        && state.aggregator.has_pending_partial()) {
-        AggregatedBar tail = state.aggregator.complete_pending_partial();
-        if (tail.is_complete) {
-            state.current_sub_bar_count = tail.sub_bar_count;
-            substitute_native_security_bar(state, tail.bar);
-            if (state.heikinashi) apply_ha(tail.bar, /*commit=*/true);
-            state.current_bar = tail.bar;
-            state.eval_complete_count++;
-            state.last_published_label = tail.bar.timestamp;
-            dispatch_security_eval(state, tail.bar, true,
-                                   state.eval_complete_count - 1);
-        }
     }
 }
 

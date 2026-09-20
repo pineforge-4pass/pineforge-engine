@@ -18,7 +18,11 @@
     "PyramidEntry::pooc_terminal_market_entry",
     "PyramidEntry::ordinary_stop_open",
     "BacktestEngine::margin_call_enabled_",
-    "BacktestEngine::SecurityEvalState::lookahead_on"
+    "BacktestEngine::SecurityEvalState::lookahead_on",
+    "BacktestEngine::SecurityEvalState::gaps_on",
+    "BacktestEngine::SecurityEvalState::publish_gate_tf_seconds",
+    "BacktestEngine::SecurityEvalState::calling_close_completes_partial",
+    "BacktestEngine::security_history_publication_replay_"
   ],
   "addedStorage": [],
   "addedValueMembers": [

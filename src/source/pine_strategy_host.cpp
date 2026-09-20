@@ -1399,7 +1399,8 @@ bool source::PineStrategyHost::scheduler_feed_security_input(
     security_calling_close_ms_ = 0;
     bool deferred = false;
     for (auto& state : security_eval_states_) {
-        if (defer_boundary_gate && state.publish_gate_tf_seconds > 0) {
+        if (defer_boundary_gate
+            && pine_security_state(state.sec_id).publish_gate_tf_seconds > 0) {
             deferred = true;
             continue;
         }
@@ -1410,7 +1411,7 @@ bool source::PineStrategyHost::scheduler_feed_security_input(
 
 void source::PineStrategyHost::scheduler_publish_security_boundary() {
     for (auto& state : security_eval_states_) {
-        if (state.publish_gate_tf_seconds > 0)
+        if (pine_security_state(state.sec_id).publish_gate_tf_seconds > 0)
             publish_security_eval_state_at_calling_boundary(state);
     }
 }
@@ -1420,7 +1421,7 @@ void source::PineStrategyHost::scheduler_feed_deferred_security_input(
     security_next_input_ms_ = next_input_ms;
     security_calling_close_ms_ = 0;
     for (auto& state : security_eval_states_) {
-        if (state.publish_gate_tf_seconds > 0)
+        if (pine_security_state(state.sec_id).publish_gate_tf_seconds > 0)
             pine_feed_security_eval_state(state, bar, false);
     }
 }
