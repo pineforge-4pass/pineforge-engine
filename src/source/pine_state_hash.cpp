@@ -661,6 +661,17 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
                 f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close);
                 f.d(bar.volume); f.i(bar.timestamp);
             }
+            f.b(pine.calling_open_latches_first);
+            f.b(pine.first_bucket_published);
+            f.i(pine.slice_open_label);
+            f.i(pine.last_published_label);
+            f.u(pine.deferred_aux.size());
+            for (const auto& held : pine.deferred_aux) {
+                f.d(held.bar.open); f.d(held.bar.high); f.d(held.bar.low);
+                f.d(held.bar.close); f.d(held.bar.volume); f.i(held.bar.timestamp);
+                f.i(held.next_input_ms);
+                f.b(held.calling_bar_complete);
+            }
         }
     }
     // The margin slice's sampling chronology is resolved once per pending

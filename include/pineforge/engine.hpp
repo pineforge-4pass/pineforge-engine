@@ -499,14 +499,6 @@ protected:
     // per input bar, per auxiliary bar on the split-feed path, per sub-bar
     // under the magnifier; never by the stream path.
     int64_t security_next_input_ms_ = 0;
-    // Nominal close (TradingView's time_close) of the CALLING chart bar the
-    // input bar being fed belongs to; 0 = the input bar is the chart bar
-    // (single-feed runs, streams). Set per native chart bar on the
-    // split-feed path, where a finer auxiliary slice advances
-    // request.security under a D/W/M chart bar whose close an OTC
-    // calendar bucket compares against the period's nominal close
-    // (TimeframeAggregator::feed(bar, next_input_ms, calling_close_ms)).
-    int64_t security_calling_close_ms_ = 0;
     uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple native matching calls (bar magnifier) and dual-pass
@@ -1701,53 +1693,6 @@ protected:
         // before the first dispatch. A host that replays its latest
         // evaluation re-dispatches the same bar under the same index.
         int64_t ta_bar_index = -1;
-        // Plain ``request.security`` with a requested TF strictly finer than
-        // script_tf, served by the auxiliary finer feed (the split-feed
-        // path), under ``lookahead_on``: TradingView's merge takes the FIRST
-        // intrabar of the calling chart bar and holds it for the bar -- on
-        // the BINANCE:BTCUSDT 1D chart ``request.security(tickerid, "15",
-        // ta.rsi(close, 14)[1], lookahead_on)`` reads, on every daily bar,
-        // the 15m RSI of the previous day's LAST bucket, i.e. ``rsi[1]``
-        // evaluated on the day's first 15m bucket, na on the range's first
-        // bar (lab tv notrade-ltf-sample-btc1d, 2025-04-01..20, 18/18,
-        // 2026-09-05), so a plain ``expr`` reads the day's first bucket and
-        // ``expr[k]`` the k-th bucket before it, at the requested cadence.
-        // The legacy gate above (publish_gate_tf_seconds) publishes one
-        // bucket per calling bar -- the LAST one -- which reads right for
-        // ``expr[1]`` alone and one bucket late for ``expr``. When set, the
-        // evaluator publishes EVERY completed requested bucket (the exposed
-        // history advances per bucket, as under lookahead_off), and
-        // feed_aux_security_for_chart_bar feeds the calling bar's auxiliary
-        // bars only up to the one completing its FIRST bucket before the
-        // chart body runs; the rest of the slice is held in ``deferred_aux``
-        // and fed by feed_deferred_aux_security_for_chart_bar right after
-        // dispatch_bar, so the body reads the first-bucket evaluation while
-        // the TA state still sees every sub-bar, in order, before the next
-        // chart bar. publish_gate_tf_seconds stays 0 on this path; lanes
-        // without the auxiliary slice keep the gate. False (the default)
-        // means "not applicable".
-        bool calling_open_latches_first = false;
-        // Per calling chart bar: whether this state's first bucket of the
-        // slice has been published (the deferral point), and the auxiliary
-        // bars held back until after the chart body, each with the
-        // security_next_input_ms_ / calling_bar_complete it was fed with.
-        bool first_bucket_published = false;
-        // The label (bucket open) of the slice's first requested bucket:
-        // a completion published by this slice's first auxiliary bars that
-        // carries an OLDER label is the boundary emission of the previous
-        // slice's still-pending bucket (a tail the count / real-end /
-        // session-close rules left partial), not this bar's first bucket.
-        int64_t slice_open_label = 0;
-        // The label of the latest completed bucket this evaluator published
-        // through its aggregator (feed_security_eval_state), whatever the
-        // state's current bucket is afterwards.
-        int64_t last_published_label = 0;
-        struct DeferredAuxBar {
-            Bar bar;
-            int64_t next_input_ms = 0;
-            bool calling_bar_complete = false;
-        };
-        std::vector<DeferredAuxBar> deferred_aux;
         // Native higher-timeframe feed routing, rebuilt per run by
         // prepare_native_security_feeds(): the index into
         // native_security_feeds_ serving this state's requested timeframe

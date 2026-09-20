@@ -31,7 +31,7 @@ NESTED_STRUCTS = {
     "PendingRelativeExit", "PendingCoofRequest", "PendingMarginRevival",
     "NamedEntryCancelToken", "CloseCallsiteState", "RetainedBegin",
     "DeferredBoundaryInput", "PineSecurityEvalState",
-    "HistoricalSecurityProjection",
+    "HistoricalSecurityProjection", "DeferredAuxBar",
 }
 
 # These three DELTA-review defects belong to the concurrently landing hash
@@ -210,7 +210,7 @@ def main(root: Path = ROOT) -> int:
                      "stream v18 fold")
         host_header = (root / "include/pineforge/source/pine_strategy_host.hpp").read_text()
         require_once(host_header,
-                     'kSourceSecurityDomain[] = "pineforge-source-security/v5"',
+                     'kSourceSecurityDomain[] = "pineforge-source-security/v6"',
                      "source request.security hash domain")
         require_once(source_hash, "f.s(kSourceSecurityDomain);",
                      "source request.security hash fold")

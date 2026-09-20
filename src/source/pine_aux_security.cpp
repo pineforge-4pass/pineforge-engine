@@ -233,9 +233,10 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     // every chart bar's slice live and is deferred once its first bucket of
     // the slice has been published.
     for (auto& state : security_eval_states_) {
-        state.first_bucket_published = false;
-        state.deferred_aux.clear();
-        state.slice_open_label = begin < end
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        pine.first_bucket_published = false;
+        pine.deferred_aux.clear();
+        pine.slice_open_label = begin < end
             ? state.aggregator.bucket_open_ms(aux_security_bars_[begin].timestamp)
             : 0;
     }
@@ -255,13 +256,13 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         for (auto& state : security_eval_states_) {
             PineSecurityEvalState& pine = pine_security_state(state.sec_id);
             if (!pine.lower_tf_array_requested) {
-                if (state.calling_open_latches_first
-                    && state.first_bucket_published) {
+                if (pine.calling_open_latches_first
+                    && pine.first_bucket_published) {
                     // TradingView reads the calling bar's FIRST intrabar:
                     // the chart body runs on the first bucket's
                     // publication, the rest of the slice follows it
                     // (feed_deferred_aux_security_for_chart_bar).
-                    state.deferred_aux.push_back(
+                    pine.deferred_aux.push_back(
                         {aux_bar, security_next_input_ms_,
                          calling_bar_complete});
                     continue;
@@ -275,10 +276,10 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                 // on this boundary (the Thanksgiving 21:57 singleton on
                 // Black Friday's first minute): it precedes this bar's
                 // first bucket in the requested series and does not latch.
-                if (state.calling_open_latches_first
+                if (pine.calling_open_latches_first
                     && state.eval_complete_count > published_before
-                    && state.last_published_label >= state.slice_open_label) {
-                    state.first_bucket_published = true;
+                    && pine.last_published_label >= pine.slice_open_label) {
+                    pine.first_bucket_published = true;
                 }
                 continue;
             }
@@ -364,8 +365,8 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
 void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int chart_index) {
     (void)chart_index;
     bool any = false;
-    for (const auto& state : security_eval_states_) {
-        if (state.calling_open_latches_first && !state.deferred_aux.empty()) {
+    for (const auto& entry : pine_security_states_) {
+        if (entry.second.calling_open_latches_first && !entry.second.deferred_aux.empty()) {
             any = true;
             break;
         }
@@ -373,15 +374,16 @@ void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int char
     if (!any) return;
     security_calling_close_ms_ = aux_security_calling_close_ms();
     for (auto& state : security_eval_states_) {
-        if (!state.calling_open_latches_first || state.deferred_aux.empty()) {
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        if (!pine.calling_open_latches_first || pine.deferred_aux.empty()) {
             continue;
         }
         // Move the slice out first: feeding never re-enters the deferral
         // (first_bucket_published stays set until the next chart bar's
         // slice resets it), but the buffer must not be appended to while
         // it is walked.
-        std::vector<SecurityEvalState::DeferredAuxBar> held;
-        held.swap(state.deferred_aux);
+        std::vector<DeferredAuxBar> held;
+        held.swap(pine.deferred_aux);
         for (const auto& d : held) {
             security_next_input_ms_ = d.next_input_ms;
             pine_feed_security_eval_state(state, d.bar,

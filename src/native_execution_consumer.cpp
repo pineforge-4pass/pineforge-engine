@@ -6684,21 +6684,19 @@ bool NativeExecutionConsumer::contribute_input(
 
 // ---- declared higher-timeframe series ---------------------------------------
 //
-// A native subscription reuses the kernel's own request.security machinery:
+// A native subscription reuses the kernel's own higher-timeframe machinery:
 // one BacktestEngine::SecurityEvalState per declared series, its aggregator
 // built by register_security_eval, its authoritative bars installed through
 // the public set_native_security_feed store and routed by
-// prepare_native_security_feeds. Nothing here is Pine-shaped: the evaluator is
-// always registered lookahead_off / gaps_off -- the publication modes the spec
-// declares are the consumer's own delivery rules, not the evaluator's (a
-// gaps_on evaluator would clear through the generated clear_security() a bare
-// native host does not implement, and lookahead_on is the projection below) --
-// no lower-timeframe emulation can be selected (the spec refuses a series
-// finer than the input), and
-// validate_security_timeframes -- which is what arms the publish gate, the
-// auxiliary-slice partial completion and the lower-TF paths -- is never
-// called. Every `calling_bar_complete` argument below is therefore inert, and
-// is passed false so the projected and live passes are provably identical.
+// prepare_native_security_feeds, its buckets stepped by
+// feed_security_eval_state. None of that is Pine-shaped: the kernel evaluator
+// has no publication modes at all, so the projected and live passes below are
+// the same step. The modes the spec declares (lookahead, gaps) are this
+// consumer's own delivery rules; TradingView's request.security semantics --
+// merge latching, publication gates, Heikin-Ashi, the range-start cut,
+// lower-timeframe emulation, the auxiliary chart slice -- are the source
+// host's, kept beside the same generic state, and no native run reaches them
+// (the spec also refuses a series finer than the input).
 //
 // Entanglement the host inherits with authoritative bars: the feed store is
 // TradingView-calibrated. A "W"/"M" series with no feed of its own is built
@@ -6752,7 +6750,6 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
     input_next_ms_.clear();
     engine.security_input_tf_.clear();
     engine.security_next_input_ms_ = 0;
-    engine.security_calling_close_ms_ = 0;
 }
 
 bool NativeExecutionConsumer::begin_timeframe_subscriptions(
@@ -6792,7 +6789,6 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         }
         engine.security_input_tf_ = spec.input_tf;
         engine.security_next_input_ms_ = 0;
-        engine.security_calling_close_ms_ = 0;
         // Evaluator states the host registered for itself keep their sec_ids:
         // this consumer's own states are appended after them, and the base is
         // zero for the whole population that registers none.
@@ -6911,7 +6907,6 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
         }
         engine.security_next_input_ms_ =
             input_next_ms_[static_cast<std::size_t>(i)];
-        engine.security_calling_close_ms_ = 0;
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, input_bars[i]);
         if (state.eval_complete_count <= before) continue;
@@ -6949,13 +6944,13 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index) {
     // barmerge.gaps_on for one series: the input delivered nothing of its
-    // own, so the series has no value on it. This mirrors what
-    // engine_security.cpp does for a gaps_on evaluator (clear_security on a
+    // own, so the series has no value on it. This mirrors what the Pine
+    // source host does for a gaps_on site (clear_security on a
     // non-completing input) at the one place the kernel owns -- its own
-    // delivery -- because the evaluator's clear reaches a generated
-    // clear_security() a bare native host does not implement, while the pull
-    // accessor is the kernel's own answer. gaps_off leaves the delivered
-    // bucket standing, which is every established run.
+    // delivery -- because that clear reaches a generated clear_security() a
+    // bare native host does not implement, while the pull accessor is the
+    // kernel's own answer. gaps_off leaves the delivered bucket standing,
+    // which is every established run.
     const auto clear_if_gapped = [](TimeframeSubscription& subscription) noexcept {
         if (subscription.gaps) subscription.latest.reset();
     };
@@ -6994,7 +6989,6 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
             (index >= 0 && static_cast<std::size_t>(index) < input_next_ms_.size())
                 ? input_next_ms_[static_cast<std::size_t>(index)]
                 : 0;
-        engine.security_calling_close_ms_ = 0;
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, bar);
         engine.security_next_input_ms_ = 0;

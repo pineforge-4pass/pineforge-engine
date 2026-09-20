@@ -30,7 +30,7 @@ qty_step_ # Symbol metadata carrier; quantized request/term facts preserve the e
 range_end_trades_ # Report-only synthetic rows, never a live matching population or future admission input.
 realtime_tail_ # Run-mode configuration consumed at begin; native stream lifecycle/hash owns active continuation state.
 realtime_tail_horizon_bars_ # Run-mode configuration consumed at begin; it is not mutated by or read from broker settlement.
-security_calling_close_ms_ # Security-feed publication cursor; no order matching or account settlement branch consumes it.
+security_calling_close_ms_ # Source-host auxiliary-slice publication cursor, zero outside the slice feed; no order matching or account settlement branch consumes it.
 security_history_publication_replay_ # Transient scope flag of the source host's calling-boundary replay; true only inside that one call, which reaches no hash point, and false at every fold.
 security_first_chart_bar_ms_ # Source-host feed-start metadata used while preparing request.security publication, not a mutable execution fact.
 security_next_input_ms_ # Security-feed cursor; source scheduler's durable deferred-boundary state is hashed independently.

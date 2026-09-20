@@ -23,7 +23,7 @@ namespace pineforge::source {
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v5";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v6";
 
 // One projected higher-timeframe bucket of the opt-in historical
 // request.security lookahead projection (PineSecurityEvalState below).
@@ -36,6 +36,15 @@ struct HistoricalSecurityProjection {
     // feed-call index, so both paths consume one projection per bucket.
     int64_t first_child_ms = 0;
     bool is_complete = false;
+};
+
+// One auxiliary bar a first-bucket-latched site holds back until the chart
+// body has run (PineSecurityEvalState::deferred_aux), with the cursor values
+// it would have been fed under.
+struct DeferredAuxBar {
+    Bar bar;
+    int64_t next_input_ms = 0;
+    bool calling_bar_complete = false;
 };
 
 // Pine's publication semantics for ONE request.security site, kept beside the
@@ -185,6 +194,48 @@ struct PineSecurityEvalState {
     bool lower_tf_use_input = false;
     int lower_tf_input_aggregation_ratio = 1;
     std::vector<Bar> lower_tf_input_buffer;
+    // Plain ``request.security`` with a requested TF strictly finer than
+    // script_tf, served by the auxiliary finer feed (the split-feed
+    // path), under ``lookahead_on``: TradingView's merge takes the FIRST
+    // intrabar of the calling chart bar and holds it for the bar -- on
+    // the BINANCE:BTCUSDT 1D chart ``request.security(tickerid, "15",
+    // ta.rsi(close, 14)[1], lookahead_on)`` reads, on every daily bar,
+    // the 15m RSI of the previous day's LAST bucket, i.e. ``rsi[1]``
+    // evaluated on the day's first 15m bucket, na on the range's first
+    // bar (lab tv notrade-ltf-sample-btc1d, 2025-04-01..20, 18/18,
+    // 2026-09-05), so a plain ``expr`` reads the day's first bucket and
+    // ``expr[k]`` the k-th bucket before it, at the requested cadence.
+    // The legacy gate above (publish_gate_tf_seconds) publishes one
+    // bucket per calling bar -- the LAST one -- which reads right for
+    // ``expr[1]`` alone and one bucket late for ``expr``. When set, the
+    // evaluator publishes EVERY completed requested bucket (the exposed
+    // history advances per bucket, as under lookahead_off), and
+    // feed_aux_security_for_chart_bar feeds the calling bar's auxiliary
+    // bars only up to the one completing its FIRST bucket before the
+    // chart body runs; the rest of the slice is held in ``deferred_aux``
+    // and fed by feed_deferred_aux_security_for_chart_bar right after
+    // dispatch_bar, so the body reads the first-bucket evaluation while
+    // the TA state still sees every sub-bar, in order, before the next
+    // chart bar. publish_gate_tf_seconds stays 0 on this path; lanes
+    // without the auxiliary slice keep the gate. False (the default)
+    // means "not applicable".
+    bool calling_open_latches_first = false;
+    // Per calling chart bar: whether this state's first bucket of the
+    // slice has been published (the deferral point), and the auxiliary
+    // bars held back until after the chart body, each with the
+    // security_next_input_ms_ / calling_bar_complete it was fed with.
+    bool first_bucket_published = false;
+    // The label (bucket open) of the slice's first requested bucket:
+    // a completion published by this slice's first auxiliary bars that
+    // carries an OLDER label is the boundary emission of the previous
+    // slice's still-pending bucket (a tail the count / real-end /
+    // session-close rules left partial), not this bar's first bucket.
+    int64_t slice_open_label = 0;
+    // The label of the latest completed bucket this evaluator published
+    // through its aggregator (pine_feed_security_eval_state), whatever the
+    // state's current bucket is afterwards.
+    int64_t last_published_label = 0;
+    std::vector<DeferredAuxBar> deferred_aux;
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
@@ -737,6 +788,15 @@ protected:
     // untouched (their slices begin at the first chart bar anyway), and the
     // flag above keeps its explicit epoch plus the EMA na-warmup semantics.
     int64_t security_first_chart_bar_ms_ = 0;
+
+    // Nominal close (TradingView's time_close) of the CALLING chart bar the
+    // input bar being fed belongs to; 0 = the input bar is the chart bar
+    // (single-feed runs, streams). Set per native chart bar on the
+    // split-feed path, where a finer auxiliary slice advances
+    // request.security under a D/W/M chart bar whose close an OTC
+    // calendar bucket compares against the period's nominal close
+    // (TimeframeAggregator::feed(bar, next_input_ms, calling_close_ms)).
+    int64_t security_calling_close_ms_ = 0;
 
     // Opt-in historical-only request.security lookahead projection. TradingView
     // can merge a completed higher-timeframe bar onto the first chart child

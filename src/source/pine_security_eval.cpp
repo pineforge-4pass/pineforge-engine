@@ -169,9 +169,9 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.lower_tf_input_buffer.clear();
         pine.publish_gate_tf_seconds = 0;
         pine.calling_close_completes_partial = false;
-        state.calling_open_latches_first = false;
-        state.first_bucket_published = false;
-        state.deferred_aux.clear();
+        pine.calling_open_latches_first = false;
+        pine.first_bucket_published = false;
+        pine.deferred_aux.clear();
         if (state.tf.empty()) continue;
 
         int lower_ratio = 0;
@@ -316,7 +316,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // single-feed loop and stays there.
             if (aux_security_feed_enabled()) {
                 pine.publish_gate_tf_seconds = 0;
-                state.calling_open_latches_first = true;
+                pine.calling_open_latches_first = true;
             }
 #endif
         }
@@ -830,7 +830,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         if (boundary_emission && state.current_sub_bar_count < 2) {
             state.current_sub_bar_count = 2;
         }
-        state.last_published_label = ab.bar.timestamp;
+        pine.last_published_label = ab.bar.timestamp;
         dispatch_security_eval(state, ab.bar, publish,
                                state.eval_complete_count - 1);
         if (boundary_emission) {
@@ -887,7 +887,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             if (pine.heikinashi) apply_ha(tail.bar, /*commit=*/true);
             state.current_bar = tail.bar;
             state.eval_complete_count++;
-            state.last_published_label = tail.bar.timestamp;
+            pine.last_published_label = tail.bar.timestamp;
             dispatch_security_eval(state, tail.bar, true,
                                    state.eval_complete_count - 1);
         }

@@ -69,7 +69,7 @@ class Coverage(unittest.TestCase):
     def test_security_domain_is_pinned(self):
         result, output = self.check((
             ("include/pineforge/source/pine_strategy_host.hpp",
-             "pineforge-source-security/v5", "pineforge-source-security/v0"),))
+             "pineforge-source-security/v6", "pineforge-source-security/v0"),))
         self.assertEqual(result, 1, output)
 
     def test_security_site_field_is_enumerated(self):

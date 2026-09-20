@@ -19,10 +19,10 @@ void PineStrategyHost::init_security_eval_states_for_run(
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         pine.lower_tf_sub_bar_index = 0;
         pine.lower_tf_input_buffer.clear();
-        state.first_bucket_published = false;
-        state.deferred_aux.clear();
-        state.slice_open_label = 0;
-        state.last_published_label = 0;
+        pine.first_bucket_published = false;
+        pine.deferred_aux.clear();
+        pine.slice_open_label = 0;
+        pine.last_published_label = 0;
         pine.historical_projections.clear();
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
