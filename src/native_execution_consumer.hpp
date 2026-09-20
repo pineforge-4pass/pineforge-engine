@@ -85,6 +85,7 @@ public:
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
+    NativeRiskState risk_state() const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     uint64_t event_high_water() const noexcept;
     uint64_t terminal_receipt_high_water() const noexcept {
@@ -132,6 +133,25 @@ private:
         native_order::RequestHandle handle{};
         double level = 0.0;
         double units = 0.0;
+    };
+    // L9 generic risk ledger. Durable decision state, but only for a run that
+    // declares NativeRunSpec::risk: it is folded into the continuation digest
+    // exactly there, so a spec without the block keeps its pre-risk identity.
+    // `run_block` latches to the end of the run (drawdown, consecutive loss
+    // days); `day_block` lasts only while `day_ordinal` is still
+    // `day_block_day` (intraday loss, fills per day).
+    struct RiskLedger {
+        std::int64_t day_ordinal = 0;
+        bool has_day = false;
+        std::uint64_t fills_today = 0;
+        std::uint32_t consecutive_loss_days = 0;
+        double peak_equity = 0.0;
+        bool has_peak = false;
+        double day_open_equity = 0.0;
+        double day_open_realized = 0.0;
+        std::optional<native_order::RiskLimitKind> run_block;
+        std::optional<native_order::RiskLimitKind> day_block;
+        std::int64_t day_block_day = 0;
     };
     struct ResolvedCandidate {
         native_order::ExecutionPlan physical = execution::Flatten{};
@@ -451,13 +471,51 @@ private:
                                      NativePathPhase phase, double fallback_price);
     void calculation_margin_check(BacktestEngine& engine, const NativeCoordinate& calc,
                                   double mark);
+    // One kernel-originated reduction: the margin model's liquidation, and
+    // (L9) the risk block's own flatten. `origin`, `label` and `comment` name
+    // which, and only a resting liquidation is retained as margin state.
     bool kernel_submit_liquidation(BacktestEngine& engine, double level, double units,
                                    std::int64_t decision_time_ms,
-                                   native_order::RequestHandle* out_handle = nullptr);
+                                   native_order::RequestHandle* out_handle = nullptr,
+                                   native_order::RequestOrigin origin =
+                                       native_order::RequestOrigin::KernelLiquidation,
+                                   const char* label = nullptr,
+                                   const char* comment = nullptr);
     std::optional<std::size_t> record_margin_call(
         BacktestEngine& engine, const native_order::ExecutionAppliedEvent& applied,
         const native_order::DefinitionRef& definition, double position_before,
         double position_after);
+    // L9 generic risk limits. Every one of these is inert for a spec that
+    // leaves `risk` unset, which is every source-projected spec.
+    const NativeRiskLimits* risk_limits() const noexcept;
+    bool risk_blocked() const noexcept;
+    // The risk day of an instant on the spec's own basis: the session day of
+    // the run's calendar, or the civil day of the all-day calendar built for
+    // the spec's timezone. nullopt where the calendar has no answer, which
+    // leaves the ledger on the day it is already on. Every point of a script
+    // bar is keyed on that bar's OWN open, so a bar never straddles two risk
+    // days: its close point belongs to the day it opened in.
+    std::optional<std::int64_t> risk_day(std::int64_t timestamp_ms) const;
+    // Roll the ledger onto `day`, closing the previous one: its realized
+    // result decides the consecutive-loss streak, the fill count restarts and
+    // the opening equity is marked at `mark`.
+    void risk_roll_day(const BacktestEngine& engine, std::int64_t day, double mark);
+    // One applied fill of the risk day at `coordinate`, counted before any
+    // evaluation. It never fires a breach: settlement is not a decision point.
+    void risk_note_fill(const BacktestEngine& engine, const NativeCoordinate& coordinate,
+                        double price);
+    // The evaluation itself, at a script-bar open, at that bar's own close
+    // calculation, and after an applied drain. `phase` is the frame a
+    // FlattenAndBlock breach executes its own flatten in: the bar-open point's
+    // PreOpen, the drained fill's Applied, or the calculation's Bar.
+    // `owns_frame` is false exactly where the caller already holds that frame
+    // (the close calculation), so the flatten borrows it instead of opening
+    // and closing a second one.
+    void risk_evaluate(BacktestEngine& engine, const NativeCurrentPointView& point,
+                       CallbackPhase phase, bool owns_frame = true);
+    void risk_fire(BacktestEngine& engine, native_order::RiskLimitKind kind, double limit,
+                   double observed, const NativeCurrentPointView& point, CallbackPhase phase,
+                   bool owns_frame);
     void fail_preparation(BacktestEngine& engine, const native_order::PreparationError& error,
                           NativeFailureOperation operation);
     void catch_up_timeline() noexcept;
@@ -593,6 +651,12 @@ private:
     Bar margin_path_bar_{};
     bool has_margin_path_ = false;
     bool margin_path_high_first_ = false;
+    // L9: the risk ledger and the all-day calendar a CalendarDayInTimezone
+    // basis keys on. The ledger folds into the continuation digest only under
+    // a declared `risk` block; the calendar is derived from the already
+    // hashed spec and folds nothing, exactly as `calendar_` does.
+    RiskLedger risk_{};
+    std::optional<native_calendar::SessionCalendar> risk_day_calendar_;
     std::array<CohortTargetCacheEntry, 16> cohort_target_cache_{};
     std::size_t cohort_target_cache_size_ = 0;
     // Derived calendar lookup cache, cleared at staged ingress (L10c).

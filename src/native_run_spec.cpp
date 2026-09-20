@@ -224,6 +224,52 @@ Result validate_margin(const NativeRunSpec& spec) noexcept {
     return {};
 }
 
+bool valid_risk_day(NativeRiskDay day) noexcept {
+    switch (day) {
+    case NativeRiskDay::SessionDay:
+    case NativeRiskDay::CalendarDayInTimezone:
+        return true;
+    }
+    return false;
+}
+
+bool valid_risk_action(NativeRiskAction action) noexcept {
+    switch (action) {
+    case NativeRiskAction::BlockOpenings:
+    case NativeRiskAction::FlattenAndBlock:
+        return true;
+    }
+    return false;
+}
+
+// A declared block with no limit at all is legal and inert: presence is the
+// opt-in, and the run keeps its own risk identity. Every declared limit must
+// be a usable threshold, so a nonpositive loss value and a zero count are
+// both named failures rather than a permanently blocked run.
+Result validate_risk(const NativeRunSpec& spec) noexcept {
+    if (!spec.risk) return {};
+    const auto& risk = *spec.risk;
+    if (risk.max_drawdown && !positive(risk.max_drawdown->value)) {
+        return {Error::NotFinitePositive, Field::RiskDrawdown};
+    }
+    if (risk.max_intraday_loss && !positive(risk.max_intraday_loss->value)) {
+        return {Error::NotFinitePositive, Field::RiskIntradayLoss};
+    }
+    if (risk.max_consecutive_loss_days && *risk.max_consecutive_loss_days == 0) {
+        return {Error::ZeroRiskLimit, Field::RiskLossDays};
+    }
+    if (risk.max_fills_per_day && *risk.max_fills_per_day == 0) {
+        return {Error::ZeroRiskLimit, Field::RiskFillsPerDay};
+    }
+    if (!valid_risk_day(risk.day_basis)) {
+        return {Error::UnknownRiskDay, Field::RiskDayBasis};
+    }
+    if (!valid_risk_action(risk.action)) {
+        return {Error::UnknownRiskAction, Field::RiskAction};
+    }
+    return {};
+}
+
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
         static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
@@ -337,6 +383,7 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     if (spec.initial_margin_fraction && !positive(*spec.initial_margin_fraction))
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
     if (const auto margin = validate_margin(spec); !margin) return margin;
+    if (const auto risk = validate_risk(spec); !risk) return risk;
     if (!valid_report_policy(spec.report_policy))
         return {Error::UnknownReportPolicy, Field::ReportPolicy};
     // L5 calculation timing. Every bound is legal, including zero: a host may
@@ -561,6 +608,36 @@ std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexce
     d(margin.shortfall_multiple);
     o(margin.liquidation_min_units);
     u(static_cast<std::uint64_t>(margin.check));
+    return state;
+}
+
+std::uint64_t native_risk_limits_digest(const NativeRiskLimits& risk) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto d = [&bytes](double value) noexcept { bytes(&value, sizeof value); };
+    const auto loss = [&u, &d](const std::optional<NativeLossLimit>& value) noexcept {
+        u(value.has_value() ? 1u : 0u);
+        if (!value) return;
+        d(value->value);
+        u(value->percent ? 1u : 0u);
+    };
+    const auto count = [&u](const std::optional<std::uint32_t>& value) noexcept {
+        u(value.has_value() ? 1u : 0u);
+        if (value) u(*value);
+    };
+    loss(risk.max_drawdown);
+    loss(risk.max_intraday_loss);
+    count(risk.max_consecutive_loss_days);
+    count(risk.max_fills_per_day);
+    u(static_cast<std::uint64_t>(risk.day_basis));
+    u(static_cast<std::uint64_t>(risk.action));
     return state;
 }
 

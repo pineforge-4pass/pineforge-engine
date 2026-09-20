@@ -168,6 +168,70 @@ struct NativeMarginModel {
     NativeLiquidationCheck check = NativeLiquidationCheck::PathAdverseExtreme;
 };
 
+// One risk threshold (L9). `value` is account currency when `percent` is
+// false, and a percentage of the limit's own basis equity — the running peak
+// for a drawdown, the day's opening equity for an intraday loss — when it is
+// true. Percent is out of 100: 2.5 means two and a half percent.
+struct NativeLossLimit {
+    double value = 0.0;
+    bool percent = false;
+};
+
+// Which day a risk limit's "day" is. SessionDay is the run's own session
+// calendar: the trading date of the session that contains the instant
+// (native_calendar::session_day_ordinal), so an overnight session is one day.
+// CalendarDayInTimezone is the plain civil date in the spec's scheduling
+// timezone, which is what a host that reports by wall-clock date wants. The
+// two differ exactly where a session crosses midnight.
+enum class NativeRiskDay : std::uint32_t {
+    SessionDay = 0,
+    CalendarDayInTimezone = 1,
+};
+
+// What a breach does. BlockOpenings refuses every opening while the block
+// lasts and leaves the live book alone. FlattenAndBlock first closes the book
+// with one kernel-originated Flatten and then blocks.
+enum class NativeRiskAction : std::uint32_t {
+    BlockOpenings = 0,
+    FlattenAndBlock = 1,
+};
+
+// Generic account risk limits (L9), entirely opt-in: a spec that leaves
+// `NativeRunSpec::risk` unset evaluates nothing, appends no event and folds
+// nothing into the continuation digest. The existing per-opening caps
+// (max_abs_units, max_open_lots, allowed_open_directions) are unchanged and
+// independent of this block.
+//
+// Every limit is measured at three points of each script bar — its open, its
+// own close calculation, and after each applied drain — against the marked
+// equity there:
+//   max_drawdown              equity has fallen from its running peak by at
+//                             least the limit (percent: of that peak)
+//   max_intraday_loss         equity is below the day's opening equity by at
+//                             least the limit (percent: of that opening
+//                             equity)
+//   max_consecutive_loss_days N consecutive days each closing with a realized
+//                             loss; a day that closes with a realized profit
+//                             restarts the count, a day with no realized
+//                             result leaves it where it was
+//   max_fills_per_day         N applied fills within the day, counted as they
+//                             settle, so the fills of one matching point all
+//                             settle and the limit blocks the next admission
+//
+// A drawdown or consecutive-loss-days breach blocks openings to the end of
+// the run; the two intraday limits block to the end of their own day.
+// TradingView's own strategy.risk.* rules are not this model: its chart-day
+// key, its cancel-pending behaviour and its epsilon stay in the source layer,
+// which never sets this block.
+struct NativeRiskLimits {
+    std::optional<NativeLossLimit> max_drawdown;
+    std::optional<NativeLossLimit> max_intraday_loss;
+    std::optional<std::uint32_t> max_consecutive_loss_days;
+    std::optional<std::uint32_t> max_fills_per_day;
+    NativeRiskDay day_basis = NativeRiskDay::SessionDay;
+    NativeRiskAction action = NativeRiskAction::BlockOpenings;
+};
+
 // Native hosts normally require every confirmed bar to name a canonical input
 // slot.  A host that deliberately reproduces a legacy batch route can retain
 // the caller's strictly-increasing timestamps as its decision labels instead.
@@ -334,6 +398,11 @@ struct NativeRunSpec {
     // into the continuation digest only when it is present, so a spec that
     // declares none keeps its pre-margin-model identity byte for byte.
     std::optional<NativeMarginModel> margin;
+    // Opt-in generic account risk limits. Absent is the whole default
+    // surface: nothing is measured, no risk event is appended, and the
+    // continuation digest is the pre-risk one. Folded into it only when the
+    // block is present, exactly as `margin` is.
+    std::optional<NativeRiskLimits> risk;
     NativeReportPolicy report_policy = NativeReportPolicy::HostRecorded;
     // Report a position still open at run end as a mark-to-market closed row
     // at the last close. KernelRecorded only, and reporting only: the live
@@ -379,6 +448,8 @@ enum class NativeRunSpecField : std::uint8_t {
     MarginModel, MarginInitial, MarginMaintenance, MarginSizing,
     MarginShortfallMultiple, MarginMinUnits, MarginCheck,
     Calculation, OpenBarView,
+    RiskLimits, RiskDrawdown, RiskIntradayLoss, RiskLossDays, RiskFillsPerDay,
+    RiskDayBasis, RiskAction,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -432,6 +503,13 @@ enum class NativeRunSpecError : std::uint8_t {
     // A calculation trigger / open-bar view outside its enumeration.
     UnknownCalculationTrigger,
     UnknownOpenBarView,
+    // A risk day basis / breach action outside its enumeration.
+    UnknownRiskDay,
+    UnknownRiskAction,
+    // A declared risk count of zero. A limit of "no losing day at all" or
+    // "no fill at all" is a blocked run, never a threshold, so it is named
+    // rather than silently enforced.
+    ZeroRiskLimit,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -502,6 +580,13 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept;
 // Callers fold it only when `margin` is present, keeping the default spec's
 // continuation identity unchanged.
 std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexcept;
+
+// Exact FNV-1a content digest for the generic risk limits. It includes every
+// threshold, its percent flag, the day basis and the breach action, so two
+// runs that differ only in their risk limits cannot share a continuation
+// identity. Callers fold it only when `risk` is present, keeping the default
+// spec's continuation identity unchanged.
+std::uint64_t native_risk_limits_digest(const NativeRiskLimits& risk) noexcept;
 
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);

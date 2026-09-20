@@ -2417,6 +2417,17 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_margin_call(
     return finish_mutation(std::move(plan));
 }
 
+Preparation<PreparedMutation> WorkingRequestCore::prepare_risk_event(
+        const NativeRiskEvent& event, uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    MutationPlan plan = begin_plan();
+    NativeRiskEvent receipt = event;
+    receipt.ordinal = ordinal;
+    plan.events.emplace_back(std::move(receipt));
+    return finish_mutation(std::move(plan));
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
         const RequestHandle& target,
         const EvaluationContext& context,

@@ -262,7 +262,7 @@ def check_texts(files):
                     "CashValue", "EquityFraction", "SizeTime", "SizePrice", "Sized",
                     "ScopeClaim", "ScopeBasis", "ScopeFraction"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
-    require(order, ("RequestOrigin", "MarginCallEvent"),
+    require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
                     "RemainingProjection", "Allowance", "ReductionSize", "SizeBasis"),
@@ -372,19 +372,21 @@ def check_texts(files):
                    "NativeLegacyTolerance", "NativeReportPolicy",
                    "NativeTimeframeSubscription", "NativeMarginModel",
                    "NativeLiquidationSizing", "NativeLiquidationCheck",
-                   "NativeCalculationTrigger", "NativeOpenBarView"),
+                   "NativeCalculationTrigger", "NativeOpenBarView",
+                   "NativeLossLimit", "NativeRiskDay", "NativeRiskAction",
+                   "NativeRiskLimits"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
         spec, ("validate_native_run_spec", "normalize_native_run_spec",
                "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
-               "native_margin_model_digest"),
+               "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
                    "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
-                   "native_margin_model_digest"),
+                   "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
     if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
@@ -404,7 +406,8 @@ def check_texts(files):
             'std::optional<NativeMarginModel>margin;',
             'NativeCalculationTriggercalculation=NativeCalculationTrigger::BarClose;',
             'std::uint32_tmax_recalculations_per_point=8;',
-            'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;'):
+            'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;',
+            'std::optional<NativeRiskLimits>risk;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
@@ -420,13 +423,27 @@ def check_texts(files):
                'doubleshortfall_multiple=1.0;std::optional<double>liquidation_min_units;'
                'NativeLiquidationCheckcheck=NativeLiquidationCheck::PathAdverseExtreme;'):
         raise ValueError('native margin model must preserve its member order and shape')
+    risk = body(spec, r'struct\s+NativeRiskLimits\s*\{', 'native risk limits')
+    if (re.sub(r'\s+', '', risk)
+            != 'std::optional<NativeLossLimit>max_drawdown;'
+               'std::optional<NativeLossLimit>max_intraday_loss;'
+               'std::optional<std::uint32_t>max_consecutive_loss_days;'
+               'std::optional<std::uint32_t>max_fills_per_day;'
+               'NativeRiskDayday_basis=NativeRiskDay::SessionDay;'
+               'NativeRiskActionaction=NativeRiskAction::BlockOpenings;'):
+        raise ValueError('native risk limits must preserve their member order and shape')
+    loss_limit = body(spec, r'struct\s+NativeLossLimit\s*\{', 'native loss limit')
+    if re.sub(r'\s+', '', loss_limit) != 'doublevalue=0.0;boolpercent=false;':
+        raise ValueError('native loss limit must preserve its member order and shape')
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
     for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
                   'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars',
                   'MarginModel', 'MarginInitial', 'MarginMaintenance', 'MarginSizing',
                   'MarginShortfallMultiple', 'MarginMinUnits', 'MarginCheck',
-                  'Calculation', 'OpenBarView'):
+                  'Calculation', 'OpenBarView',
+                  'RiskLimits', 'RiskDrawdown', 'RiskIntradayLoss', 'RiskLossDays',
+                  'RiskFillsPerDay', 'RiskDayBasis', 'RiskAction'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -439,7 +456,8 @@ def check_texts(files):
                   'DuplicateSubscriptionTimeframe', 'UnorderedSubscriptionBars',
                   'SubscriptionWithoutTimeframe', 'MarginModelConflict',
                   'UnknownLiquidationSizing', 'UnknownLiquidationCheck',
-                  'UnknownCalculationTrigger', 'UnknownOpenBarView'):
+                  'UnknownCalculationTrigger', 'UnknownOpenBarView',
+                  'UnknownRiskDay', 'UnknownRiskAction', 'ZeroRiskLimit'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -455,6 +473,8 @@ def check_texts(files):
             or 'SubscriptionFinerThanInput' not in spec_src
             or 'spec.margin' not in spec_src
             or 'MarginModelConflict' not in spec_src
+            or 'spec.risk' not in spec_src
+            or 'ZeroRiskLimit' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
@@ -545,6 +565,8 @@ def check_texts(files):
     consumer_src = consumer_epoch_source(files)
     if 'native_margin_model_digest(*spec.margin)' not in consumer_src:
         raise ValueError('native consumer omits the conditional margin-model digest fold')
+    if 'native_risk_limits_digest(*spec.risk)' not in consumer_src:
+        raise ValueError('native consumer omits the conditional risk-limits digest fold')
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
                  'f.u(static_cast<uint64_t>(spec.abort_reporting));',
@@ -595,7 +617,7 @@ def check_texts(files):
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
                    "NativeInputContext", "NativeTickContext",
                    "NativeTimeframeBarContext", "NativeMarginCallView",
-                   "NativeCalculationReason"),
+                   "NativeCalculationReason", "NativeRiskState"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
@@ -692,6 +714,8 @@ def check_texts(files):
          r'\s*const\s+native_order::MarginCallEvent\s*&', "on_native_margin_call"),
         (r'\bstd::optional\s*<\s*double\s*>\s+native_liquidation_price\s*\('
          r'\s*\)\s*const\s*;', "native_liquidation_price"),
+        (r'\bNativeRiskState\s+native_risk_state\s*\(\s*\)\s*const\s*;',
+         "native_risk_state"),
         (r'\bvirtual\s+void\s+on_native_recalculate\s*\('
          r'\s*const\s+Bar\s*&\s*\w*\s*,\s*const\s+NativeDecisionContext\s*&',
          "on_native_recalculate"),
@@ -733,7 +757,8 @@ def check_texts(files):
              "NativeStrategyHost::native_liquidation_price",
              "NativeStrategyHost::current_partial_bar",
              "NativeStrategyHost::native_recalculation_count",
-             "NativeStrategyHost::native_recalculations_skipped"),
+             "NativeStrategyHost::native_recalculations_skipped",
+             "NativeStrategyHost::native_risk_state"),
             "engine_script_run_v18", r'\bNAME\s*\(')
 
 

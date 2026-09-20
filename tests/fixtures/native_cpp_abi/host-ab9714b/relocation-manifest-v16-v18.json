@@ -38,7 +38,13 @@
     "NativeRunSpec::open_bar_view",
     "NativeCalculationTrigger",
     "NativeOpenBarView",
-    "NativeCalculationReason"
+    "NativeCalculationReason",
+    "NativeRunSpec::risk",
+    "NativeRiskLimits",
+    "NativeLossLimit",
+    "NativeRiskState",
+    "NativeRiskEvent",
+    "MatchRejectReason::RiskLimit"
   ],
   "addedVirtuals": [
     "prepare_native_begin",

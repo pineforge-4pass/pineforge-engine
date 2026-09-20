@@ -334,6 +334,28 @@ struct NativeMarginCallView {
     native_order::MatchCursor cursor;
 };
 
+// The run's generic risk ledger (L9), as the kernel holds it. Every field is
+// zero / absent for a run that declares no NativeRunSpec::risk.
+//
+// `blocked` is whether openings are refused right now, and `reason` names the
+// limit that did it — a drawdown or consecutive-loss-days block lasts to the
+// end of the run, the two intraday blocks to the end of their own day.
+// `day_ordinal` is the risk day the ledger is on (the spec's own day basis),
+// `fills_today` the applied fills counted in it, `consecutive_loss_days` the
+// streak of days that closed with a realized loss, `peak_equity` the running
+// peak of the marked equity and `day_open_equity` the equity the current day
+// opened at. `has_day` is false before the first evaluated point.
+struct NativeRiskState {
+    bool blocked = false;
+    std::optional<native_order::RiskLimitKind> reason;
+    bool has_day = false;
+    std::int64_t day_ordinal = 0;
+    std::uint64_t fills_today = 0;
+    std::uint32_t consecutive_loss_days = 0;
+    double peak_equity = 0.0;
+    double day_open_equity = 0.0;
+};
+
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
     double price = 0.0;
@@ -648,6 +670,9 @@ public:
     // no margin model, the side has no maintenance fraction, the book is flat,
     // or no finite price solves the breach (a long at full maintenance).
     std::optional<double> native_liquidation_price() const;
+    // The run's generic risk ledger. Every field is its zero for a run that
+    // declares no NativeRunSpec::risk; observation only, it moves nothing.
+    NativeRiskState native_risk_state() const;
     // Owning snapshots copied at query time. Later commands/reset do not
     // invalidate already returned values.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;

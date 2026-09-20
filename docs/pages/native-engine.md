@@ -582,6 +582,95 @@ its 4× shortfall default, its one-contract long money call and its
 adverse-extreme fill pricing stay in the Pine adapter, which never sets
 `margin`.
 
+### Risk limits
+
+`NativeRunSpec::risk` is the generic account-risk block, and it is opt-in. A
+spec that leaves it unset measures nothing, appends no event, refuses no
+opening and folds nothing new into the continuation digest. The existing
+per-opening caps — `max_abs_units`, `max_open_lots`,
+`allowed_open_directions` — are unchanged and independent of it.
+
+```cpp
+NativeRiskLimits risk;
+risk.max_drawdown = NativeLossLimit{1000.0, false};       // account currency
+risk.max_intraday_loss = NativeLossLimit{2.0, true};      // 2 % of the basis
+risk.max_consecutive_loss_days = 3;
+risk.max_fills_per_day = 10;
+risk.day_basis = NativeRiskDay::SessionDay;               // or CalendarDayInTimezone
+risk.action = NativeRiskAction::BlockOpenings;            // or FlattenAndBlock
+spec.risk = risk;
+```
+
+**Where it is measured.** At three points of every script bar: its open, its
+own close calculation, and once after each drain of applied fills. The mark
+is the marked equity at that point's own price — the bar's open, its close,
+or the fill's resolved price. A breach that first exists at the close is
+therefore acted on at that close: the openings of that same calculation are
+already refused, not the next bar's. A breach that exists only between the
+three points is seen at the next one.
+
+| limit | breach | block lasts |
+| --- | --- | --- |
+| `max_drawdown` | the marked equity has fallen from its running peak by at least the limit (percent: of that peak) | to the end of the run |
+| `max_intraday_loss` | the marked equity is below the day's opening equity by at least the limit (percent: of that opening equity) | to the end of that day |
+| `max_consecutive_loss_days` | N consecutive days have each closed with a realized loss | to the end of the run |
+| `max_fills_per_day` | N applied fills within the day | to the end of that day |
+
+A percent limit is out of 100, and is resolved against its own basis at the
+moment of the test. Limits are evaluated in the order above and one point
+reports at most one breach.
+
+**Counting fills.** `max_fills_per_day` counts every applied execution of the
+day as it settles, whatever issued it, and the limit is tested at the
+evaluation points like every other. The fills matched at one point therefore
+all settle — reaching the limit blocks the NEXT admission, not the fill that
+reached it. That is the generic rule; TradingView's intraday order cap, whose
+forced close also withdraws the working orders (its cancel-pending latch),
+stays an adapter quirk on top of it.
+
+**Days.** `SessionDay` keys on the run's own session calendar
+(`native_calendar::session_day_ordinal`), so an overnight session is one day;
+`CalendarDayInTimezone` keys on the plain civil date of the spec's scheduling
+timezone. Every point of a script bar takes the day of that bar's own open, so
+a bar never straddles two risk days. A day's realized result is the change in
+realized balance across it: a day that closes negative extends the
+consecutive-loss streak, one that closes positive restarts it, and one that
+realized nothing leaves it alone. The streak is settled when the next day
+opens.
+
+**The block.** While it lasts, every opening is refused with
+`MatchRejectReason::RiskLimit`, ahead of the per-opening caps. A reduction is
+never an opening, so exits, brackets and the margin model's own liquidation
+still fill. With `NativeRiskAction::FlattenAndBlock` the kernel additionally
+issues one `Flatten` of its own at the breach point, carrying
+`RequestDefinition::origin == RequestOrigin::KernelRisk`, and executes it
+there; the block is latched before that flatten is submitted, so its fill
+cannot re-enter the same breach.
+
+**The event.** Every breach appends a `NativeRiskEvent` to the command
+history, which `native_events()` returns like any other command event:
+
+```cpp
+struct NativeRiskEvent {
+    uint64_t ordinal;
+    RiskLimitKind kind;     // MaxDrawdown | MaxIntradayLoss
+                            // MaxConsecutiveLossDays | MaxFillsPerDay
+    double limit;           // the threshold in the unit it was measured in
+    double observed;        // the value that reached it
+    std::int64_t day_ordinal;
+    MatchCursor cursor;
+};
+```
+
+`NativeStrategyHost::native_risk_state()` reads the ledger back at any time:
+whether openings are blocked and why, the current risk day, the fills counted
+in it, the consecutive-loss streak, the running peak equity and the day's
+opening equity.
+
+TradingView's `strategy.risk.*` is **not** this model: its chart-day key, its
+cancel-pending forced close, its threshold epsilon and its unbooked closing
+fill stay in the Pine adapter, which never sets `risk`.
+
 ## Calculation timing
 
 `NativeRunSpec::calculation` decides when the kernel asks the host to

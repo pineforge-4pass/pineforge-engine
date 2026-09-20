@@ -579,6 +579,9 @@ enum class MatchRejectReason : std::uint8_t {
     InvalidTerms = 6,
     NoOppositeExposure = 7,
     HostPrecommit = 8,
+    // An opening refused while the run spec's generic risk limits are
+    // blocking (L9). Reduces never reach this gate.
+    RiskLimit = 9,
 };
 
 enum class NativeCandidatePriceKind : std::uint8_t {
@@ -894,6 +897,31 @@ struct MarginCallEvent {
     const Request& request() const noexcept { return definition->request; }
 };
 
+// Which generic risk limit of NativeRunSpec::risk a NativeRiskEvent reports.
+enum class RiskLimitKind : std::uint8_t {
+    MaxDrawdown = 0,
+    MaxIntradayLoss = 1,
+    MaxConsecutiveLossDays = 2,
+    MaxFillsPerDay = 3,
+};
+
+// One generic risk limit breaching (L9). It is not bound to a request: the
+// block it opens is an account fact, so this event carries no definition.
+// `limit` is the threshold in the unit the breach was measured in — account
+// currency for the two loss limits (a percent limit is already resolved
+// against its basis equity here), days or fills for the two counts — and
+// `observed` is the measured value that reached it. `day_ordinal` is the
+// risk day the breach happened on, on the spec's own day basis, and `cursor`
+// is the point it was measured at.
+struct NativeRiskEvent {
+    uint64_t ordinal = 0;
+    RiskLimitKind kind = RiskLimitKind::MaxDrawdown;
+    double limit = 0.0;
+    double observed = 0.0;
+    std::int64_t day_ordinal = 0;
+    MatchCursor cursor{};
+};
+
 using CommandEvent = std::variant<AcceptedEvent,
                                   RejectedEvent,
                                   ReplacedEvent,
@@ -911,7 +939,8 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   QuantityBoundEvent,
                                   ArmedEvent,
                                   TermsResolvedEvent,
-                                  MarginCallEvent>;
+                                  MarginCallEvent,
+                                  NativeRiskEvent>;
 
 // Almost every prepared command yields one history event. Keep that ordinary
 // transactional payload inline; the overflow vector preserves the existing
@@ -1301,6 +1330,13 @@ public:
     Preparation<PreparedMutation> prepare_margin_call(const MarginCallEvent& event,
                                                       uint64_t& next_timeline_ordinal);
 
+    // Append one NativeRiskEvent to the immutable history. It names an
+    // account-level breach rather than a request, so it moves no live row and
+    // carries no definition; the kernel's own response (an opening block, and
+    // with FlattenAndBlock a KernelRisk Flatten) is separate from the record.
+    Preparation<PreparedMutation> prepare_risk_event(const NativeRiskEvent& event,
+                                                     uint64_t& next_timeline_ordinal);
+
     // The allowance that prepare_evaluation would install for this point.
     static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
     // Consumer-only no-event form of the ordinary allowance
@@ -1561,7 +1597,7 @@ static_assert(std::variant_size_v<SizeBasis> == 2);
 static_assert(std::variant_size_v<Remaining> == 5);
 static_assert(std::variant_size_v<RemainingProjection> == 5);
 static_assert(std::variant_size_v<Allowance> == 4);
-static_assert(std::variant_size_v<CommandEvent> == 18);
+static_assert(std::variant_size_v<CommandEvent> == 19);
 static_assert(std::variant_size_v<ExecutionPlan> == 4);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);

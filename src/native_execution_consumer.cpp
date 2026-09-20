@@ -154,6 +154,12 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (spec.margin) {
         f.u(native_margin_model_digest(*spec.margin));
     }
+    // L9: the generic risk limits fold only where a host declared them. An
+    // absent block folds nothing, so every continuation hash established
+    // before it existed survives this spec extension unchanged.
+    if (spec.risk) {
+        f.u(native_risk_limits_digest(*spec.risk));
+    }
     // L5: the calculation cadence folds only where a host actually moved it
     // off BarClose/Complete. A defaulted cadence folds nothing, including its
     // inert recalculation bound, so every established continuation hash
@@ -987,6 +993,13 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             f.d(payload.units);
             f.d(payload.position_before);
             f.d(payload.position_after);
+        } else if constexpr (std::is_same_v<T, native_order::NativeRiskEvent>) {
+            f.u(19);
+            f.u(static_cast<uint64_t>(payload.kind));
+            f.d(payload.limit);
+            f.d(payload.observed);
+            f.i(payload.day_ordinal);
+            hash_cursor(f, payload.cursor);
         } else if constexpr (std::is_same_v<T, native_order::TermsResolvedEvent>) {
             f.u(17);
             hash_definition(f, payload.definition);
@@ -1049,6 +1062,10 @@ CommissionType fee_to_commission(NativeFeeKind kind) {
 // through the public surface, because a host request is never KernelLiquidation.
 constexpr char kNativeLiquidationLabel[] = "__kernel_liquidation__";
 constexpr char kNativeLiquidationComment[] = "Margin liquidation";
+
+// L9: the risk block's own flatten, under the same engine-owned convention.
+constexpr char kNativeRiskLabel[] = "__kernel_risk__";
+constexpr char kNativeRiskComment[] = "Risk limit";
 
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
@@ -1515,6 +1532,25 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.u(margin_point_ordinal_);
         f.u(margin_point_calls_);
     }
+    // L9 durable risk ledger. It exists only under declared risk limits, and
+    // folds only there, so no pre-L9 continuation identity moves.
+    if (risk_limits() != nullptr) {
+        f.b(risk_.has_day);
+        if (risk_.has_day) f.i(risk_.day_ordinal);
+        f.u(risk_.fills_today);
+        f.u(risk_.consecutive_loss_days);
+        f.b(risk_.has_peak);
+        if (risk_.has_peak) f.d(risk_.peak_equity);
+        f.d(risk_.day_open_equity);
+        f.d(risk_.day_open_realized);
+        f.b(risk_.run_block.has_value());
+        if (risk_.run_block) f.u(static_cast<uint64_t>(*risk_.run_block));
+        f.b(risk_.day_block.has_value());
+        if (risk_.day_block) {
+            f.u(static_cast<uint64_t>(*risk_.day_block));
+            f.i(risk_.day_block_day);
+        }
+    }
     return f.h;
 }
 
@@ -1641,6 +1677,15 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
+    // L9: a CalendarDayInTimezone risk day keys on the plain civil date of the
+    // spec's scheduling timezone, which is the trading date of an all-day
+    // session there. Built once per run, and only for the basis that needs it.
+    risk_day_calendar_.reset();
+    if (spec.risk && spec.risk->day_basis == NativeRiskDay::CalendarDayInTimezone) {
+        auto plain_day = native_calendar::parse_session("", spec.timezone);
+        if (!plain_day) return false;
+        risk_day_calendar_ = std::move(*plain_day);
+    }
     pairing_ = spec.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
                                          : native_calendar::compatibility(input_tf_, script_tf_);
     tz_identity_ = native_calendar::timezone_identity_descriptor(spec.timezone);
@@ -1888,6 +1933,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     margin_path_high_first_ = false;
     margin_point_ordinal_ = 0;
     margin_point_calls_ = 0;
+    risk_ = RiskLedger{};
     driver_statistics_ = NativeDriverStatistics{};
     driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
     clear_partial();
@@ -2401,6 +2447,14 @@ bool NativeExecutionConsumer::admit_opening_inspect(
         native_order::MatchRejectReason* reason) const {
     const auto* spec = spec_ptr();
     if (!spec || !inspect.would_open) return true;
+    // L9: a blocking risk limit refuses every opening of the run, ahead of the
+    // per-opening caps, which keep their own reasons and semantics. Reduces
+    // and the kernel's own requests never reach this gate: it tests
+    // would_open only.
+    if (risk_blocked()) {
+        if (reason) *reason = native_order::MatchRejectReason::RiskLimit;
+        return false;
+    }
     const auto mask = static_cast<uint32_t>(spec->allowed_open_directions);
     if (inspect.incoming_short && (mask & 2u) == 0) {
         if (reason) *reason = native_order::MatchRejectReason::OpeningDirection;
@@ -2624,10 +2678,14 @@ void NativeExecutionConsumer::withdraw_margin_liquidation(BacktestEngine& engine
 // A kernel-originated reduction. A finite positive `level` rests it as a
 // Stop; a nonpositive one makes it a market command the caller executes at the
 // current point. A slice that would take the whole book becomes a Flatten, so
-// a quantity grid can never refuse the broker's own liquidation.
+// a quantity grid can never refuse the broker's own liquidation. `origin`
+// names which kernel authority issued it — the margin model's liquidation or
+// (L9) the risk block's flatten — and only a resting liquidation is retained
+// as the run's live margin request.
 bool NativeExecutionConsumer::kernel_submit_liquidation(
         BacktestEngine& engine, double level, double units,
-        std::int64_t decision_time_ms, native_order::RequestHandle* out_handle) {
+        std::int64_t decision_time_ms, native_order::RequestHandle* out_handle,
+        native_order::RequestOrigin origin, const char* label, const char* comment) {
     const auto* spec = spec_ptr();
     if (!spec) return false;
     const bool resting = std::isfinite(level) && level > 0.0;
@@ -2646,8 +2704,8 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
         if (!std::isfinite(sized) || !(sized > 0.0)) return false;
         request.intent = native_order::Reduce{native_order::ExplicitUnits{sized}};
     }
-    request.label = kNativeLiquidationLabel;
-    request.comment = kNativeLiquidationComment;
+    request.label = label != nullptr ? label : kNativeLiquidationLabel;
+    request.comment = comment != nullptr ? comment : kNativeLiquidationComment;
     if (resting) request.trigger = native_order::Stop{level};
     // The kernel is born AT the point it decided on, exactly as a request
     // submitted from the pre-open callback is. It never inherits the input
@@ -2660,8 +2718,7 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
     native_order::PreparedSubmit prepared;
     try {
         prepared = requests_.prepare_submit(request, ctx, engine.next_order_incarnation_,
-                                            next_timeline_ordinal_,
-                                            native_order::RequestOrigin::KernelLiquidation);
+                                            next_timeline_ordinal_, origin);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Settlement});
@@ -2690,7 +2747,7 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
     }
     ++engine.next_order_incarnation_;
     record_pre_open_birth(request, *ok.result.handle);
-    if (resting) {
+    if (resting && origin == native_order::RequestOrigin::KernelLiquidation) {
         margin_liquidation_ = MarginLiquidation{*ok.result.handle, level, units};
     }
     if (out_handle) *out_handle = *ok.result.handle;
@@ -2820,6 +2877,190 @@ std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
         return std::nullopt;
     }
     return index;
+}
+
+// ── L9 generic risk limits ───────────────────────────────────────────────
+// Everything below is inert for a spec that leaves NativeRunSpec::risk unset,
+// which is every source-projected spec: risk_limits() answers nullptr, the
+// ledger stays at its zero, no event is appended and admission is unchanged.
+
+const NativeRiskLimits* NativeExecutionConsumer::risk_limits() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->risk ? &*spec->risk : nullptr;
+}
+
+bool NativeExecutionConsumer::risk_blocked() const noexcept {
+    if (risk_limits() == nullptr) return false;
+    if (risk_.run_block) return true;
+    return risk_.day_block.has_value() && risk_.has_day
+        && risk_.day_ordinal == risk_.day_block_day;
+}
+
+std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
+        std::int64_t timestamp_ms) const {
+    const auto* risk = risk_limits();
+    if (!risk) return std::nullopt;
+    try {
+        if (risk->day_basis == NativeRiskDay::CalendarDayInTimezone) {
+            if (!risk_day_calendar_) return std::nullopt;
+            return native_calendar::session_day_ordinal(*risk_day_calendar_, timestamp_ms);
+        }
+        return native_calendar::session_day_ordinal(calendar_, timestamp_ms);
+    } catch (...) {
+        // A day the calendar cannot key is not a new day: the ledger keeps
+        // the one it is on rather than inventing an ordinal.
+        return std::nullopt;
+    }
+}
+
+void NativeExecutionConsumer::risk_roll_day(const BacktestEngine& engine, std::int64_t day,
+                                            double mark) {
+    if (risk_limits() == nullptr) return;
+    // The closing day's own realized result decides the streak: a loss
+    // extends it, a profit restarts it, and a day that realized nothing
+    // leaves it exactly where it was.
+    if (risk_.has_day) {
+        const double realized = engine.net_profit_sum_ - risk_.day_open_realized;
+        if (std::isfinite(realized) && realized < 0.0) {
+            if (risk_.consecutive_loss_days < std::numeric_limits<std::uint32_t>::max()) {
+                ++risk_.consecutive_loss_days;
+            }
+        } else if (std::isfinite(realized) && realized > 0.0) {
+            risk_.consecutive_loss_days = 0;
+        }
+    }
+    risk_.day_ordinal = day;
+    risk_.has_day = true;
+    risk_.fills_today = 0;
+    risk_.day_open_realized = engine.net_profit_sum_;
+    const double equity = engine.marked_equity(mark);
+    risk_.day_open_equity = std::isfinite(equity)
+        ? equity : engine.initial_capital_ + engine.net_profit_sum_;
+}
+
+void NativeExecutionConsumer::risk_note_fill(const BacktestEngine& engine,
+                                             const NativeCoordinate& coordinate,
+                                             double price) {
+    if (risk_limits() == nullptr) return;
+    if (const auto day = risk_day(coordinate.open_ms)) {
+        if (!risk_.has_day || *day != risk_.day_ordinal) risk_roll_day(engine, *day, price);
+    }
+    if (risk_.fills_today < std::numeric_limits<std::uint64_t>::max()) ++risk_.fills_today;
+    const double equity = engine.marked_equity(price);
+    if (std::isfinite(equity) && (!risk_.has_peak || equity > risk_.peak_equity)) {
+        risk_.peak_equity = equity;
+        risk_.has_peak = true;
+    }
+}
+
+void NativeExecutionConsumer::risk_evaluate(BacktestEngine& engine,
+                                            const NativeCurrentPointView& point,
+                                            CallbackPhase phase, bool owns_frame) {
+    const auto* risk = risk_limits();
+    if (!risk || failed() || consuming_request_) return;
+    const double price = point.price;
+    if (const auto day = risk_day(point.decision.coordinate.open_ms)) {
+        if (!risk_.has_day || *day != risk_.day_ordinal) risk_roll_day(engine, *day, price);
+    }
+    const double equity = engine.marked_equity(price);
+    if (std::isfinite(equity) && (!risk_.has_peak || equity > risk_.peak_equity)) {
+        risk_.peak_equity = equity;
+        risk_.has_peak = true;
+    }
+    // A run block is terminal: nothing further is measured or reported.
+    if (risk_.run_block || !std::isfinite(equity)) return;
+    const bool day_blocked = risk_.day_block.has_value() && risk_.has_day
+        && risk_.day_ordinal == risk_.day_block_day;
+    // Declaration order, one breach per evaluation: the first limit that is
+    // reached owns this point's event.
+    if (risk->max_drawdown && risk_.has_peak) {
+        const double limit = risk->max_drawdown->percent
+            ? risk_.peak_equity * risk->max_drawdown->value / 100.0
+            : risk->max_drawdown->value;
+        const double observed = risk_.peak_equity - equity;
+        if (std::isfinite(limit) && limit > 0.0 && observed >= limit) {
+            risk_fire(engine, native_order::RiskLimitKind::MaxDrawdown, limit, observed,
+                      point, phase, owns_frame);
+            return;
+        }
+    }
+    if (risk->max_intraday_loss && risk_.has_day && !day_blocked) {
+        const double limit = risk->max_intraday_loss->percent
+            ? risk_.day_open_equity * risk->max_intraday_loss->value / 100.0
+            : risk->max_intraday_loss->value;
+        const double observed = risk_.day_open_equity - equity;
+        if (std::isfinite(limit) && limit > 0.0 && observed >= limit) {
+            risk_fire(engine, native_order::RiskLimitKind::MaxIntradayLoss, limit, observed,
+                      point, phase, owns_frame);
+            return;
+        }
+    }
+    if (risk->max_consecutive_loss_days
+        && risk_.consecutive_loss_days >= *risk->max_consecutive_loss_days) {
+        risk_fire(engine, native_order::RiskLimitKind::MaxConsecutiveLossDays,
+                  static_cast<double>(*risk->max_consecutive_loss_days),
+                  static_cast<double>(risk_.consecutive_loss_days), point, phase, owns_frame);
+        return;
+    }
+    if (risk->max_fills_per_day && risk_.has_day && !day_blocked
+        && risk_.fills_today >= *risk->max_fills_per_day) {
+        risk_fire(engine, native_order::RiskLimitKind::MaxFillsPerDay,
+                  static_cast<double>(*risk->max_fills_per_day),
+                  static_cast<double>(risk_.fills_today), point, phase, owns_frame);
+    }
+}
+
+void NativeExecutionConsumer::risk_fire(BacktestEngine& engine,
+                                        native_order::RiskLimitKind kind, double limit,
+                                        double observed, const NativeCurrentPointView& point,
+                                        CallbackPhase phase, bool owns_frame) {
+    const auto* risk = risk_limits();
+    if (!risk) return;
+    // The block latches BEFORE anything else happens at this point, so the
+    // kernel's own flatten cannot re-enter this breach through the fill it
+    // drives, and a further evaluation at the same point sees a blocked run.
+    const bool day_scope = kind == native_order::RiskLimitKind::MaxIntradayLoss
+        || kind == native_order::RiskLimitKind::MaxFillsPerDay;
+    if (day_scope) {
+        risk_.day_block = kind;
+        risk_.day_block_day = risk_.day_ordinal;
+    } else {
+        risk_.run_block = kind;
+    }
+    native_order::NativeRiskEvent event;
+    event.kind = kind;
+    event.limit = limit;
+    event.observed = observed;
+    event.day_ordinal = risk_.has_day ? risk_.day_ordinal : 0;
+    event.cursor.point = point.decision.coordinate;
+    auto prepared = requests_.prepare_risk_event(event, next_timeline_ordinal_);
+    if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+        fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+        return;
+    }
+    auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
+    if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                       NativeFailureOperation::Settlement,
+                                       point.decision.coordinate.ordinal)) {
+        return;
+    }
+    if (risk->action != NativeRiskAction::FlattenAndBlock) return;
+    const double held = std::abs(position(engine).signed_units);
+    if (!(held > 0.0)) return;
+    // One kernel-originated Flatten, executed at this very point inside the
+    // breach's own frame. finish_callback closes that frame and delivers the
+    // fill, exactly as the callback that could have driven it would. At the
+    // close calculation the caller still holds its own frame and closes it
+    // afterwards, so this borrows it rather than nesting a second one.
+    if (owns_frame) enter_point_frame(engine, point, phase);
+    native_order::RequestHandle target;
+    if (kernel_submit_liquidation(engine, 0.0, held,
+                                  point.decision.coordinate.effective_time_ms, &target,
+                                  native_order::RequestOrigin::KernelRisk,
+                                  kNativeRiskLabel, kNativeRiskComment)) {
+        (void)execute_current(engine, {target, NativeCurrentPriceRule::AsPresented});
+    }
+    if (owns_frame) finish_callback(engine, point.decision.coordinate.ordinal);
 }
 
 void NativeExecutionConsumer::fail_preparation(
@@ -4071,6 +4312,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         account_log_.push_back(observation);
         fold_account_digest(observation);
         engine.bar_index_ = ctx.interval_index;
+        // L9: one applied fill of its risk day. Counting only — settlement is
+        // not a decision point, so no limit is evaluated here.
+        risk_note_fill(engine, notification.point.decision.coordinate, resolved_price);
         // L4: the margin receipt of a kernel-issued liquidation follows its
         // own fill directly, before any dependency mutation of that fill. The
         // owning event is read from the outcome copy because recording it
@@ -5417,6 +5661,12 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
                                         last.point.decision.coordinate.path_phase,
                                         last.point.price);
         }
+        // L9: the second evaluation point. Every fill of this drain has
+        // already been counted; the account facts are measured once, at the
+        // cursor the drain ended on.
+        if (drained && risk_limits() != nullptr && !failed()) {
+            risk_evaluate(engine, last.point, CallbackPhase::Applied);
+        }
     }
 }
 
@@ -5646,6 +5896,16 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     }
     ++engine.diag_script_bars_processed_;
     calculation_margin_check(engine, coordinate, bar.close);
+    // L9: the third risk evaluation point is the script bar's own close
+    // calculation, inside this still-open frame, so a breach that first
+    // exists at the close blocks the openings of that same calculation
+    // instead of the next bar's. Not entered at all without declared limits.
+    if (risk_limits() != nullptr && !failed()) {
+        NativeCurrentPointView close_point;
+        close_point.decision = callback_context_;
+        close_point.price = bar.close;
+        risk_evaluate(engine, close_point, CallbackPhase::Bar, /*owns_frame=*/false);
+    }
     finish_callback(engine, coordinate.ordinal);
 }
 
@@ -5690,6 +5950,12 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
             if (failed()) return;
             maintain_margin_liquidation(engine, make_cursor(point, 0.0), phase, price);
             if (failed()) return;
+            // L9: the script bar's own open is one of the two risk evaluation
+            // points. Not entered at all for a run that declares no limits.
+            if (risk_limits() != nullptr) {
+                risk_evaluate(engine, point_frame_view(point), CallbackPhase::PreOpen);
+                if (failed()) return;
+            }
         }
         match_discrete(engine, point);
         raise_floor(time);
@@ -5909,6 +6175,10 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                 maintain_margin_liquidation(
                     engine, make_cursor(point, 0.0), point.coordinate.path_phase, price);
                 if (failed()) return;
+                if (risk_limits() != nullptr) {
+                    risk_evaluate(engine, point_frame_view(point), CallbackPhase::PreOpen);
+                    if (failed()) return;
+                }
             }
             if (distribution_samples || sample_index == 0) {
                 match_discrete(engine, point);
@@ -7821,6 +8091,21 @@ NativePhysicalPosition NativeStrategyHost::physical_position() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).position(*this);
 }
 
+NativeRiskState NativeExecutionConsumer::risk_state() const {
+    NativeRiskState state;
+    if (risk_limits() == nullptr) return state;
+    state.blocked = risk_blocked();
+    state.reason = risk_.run_block ? risk_.run_block
+        : (state.blocked ? risk_.day_block : std::optional<native_order::RiskLimitKind>{});
+    state.has_day = risk_.has_day;
+    state.day_ordinal = risk_.day_ordinal;
+    state.fills_today = risk_.fills_today;
+    state.consecutive_loss_days = risk_.consecutive_loss_days;
+    state.peak_equity = risk_.peak_equity;
+    state.day_open_equity = risk_.day_open_equity;
+    return state;
+}
+
 std::optional<double> NativeExecutionConsumer::host_liquidation_price(
         const BacktestEngine& engine) const {
     return liquidation_level(engine);
@@ -7833,6 +8118,11 @@ double NativeStrategyHost::native_marked_equity(double mark) const {
 std::optional<double> NativeStrategyHost::native_liquidation_price() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .host_liquidation_price(*this);
+}
+
+NativeRiskState NativeStrategyHost::native_risk_state() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .risk_state();
 }
 
 std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t after_ordinal) const {
