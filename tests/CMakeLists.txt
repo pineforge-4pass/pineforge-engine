@@ -775,6 +775,10 @@ list(APPEND TEST_SOURCES test_l4b_policy_regressions)
 # reason: the inventory above stays mechanically intact.
 list(APPEND TEST_SOURCES test_native_sizing_bases)
 
+# R5 L3b generic sizing-price rule, placement-time sizing and the reversal
+# shapes a kernel-sized opening may name.
+list(APPEND TEST_SOURCES test_native_sizing_price_rule)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is

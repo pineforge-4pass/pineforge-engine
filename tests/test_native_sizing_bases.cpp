@@ -45,22 +45,29 @@ no::Request sized_open(no::SizeBasis basis,
 
 no::Request fraction_close(double fraction,
                            no::ScopeClaim claim = no::ScopeClaim::Gross,
-                           const char* label = "fraction-close") {
+                           const char* label = "fraction-close",
+                           no::ScopeBasis basis = no::ScopeBasis::AtMatch) {
     no::Request out;
-    out.intent = no::Reduce{no::ScopeFraction{fraction, claim}};
+    out.intent = no::Reduce{no::ScopeFraction{fraction, claim, basis}};
     out.label = label;
     return out;
 }
 
 // --- the hand computation the differential control uses --------------------
 
-// Mirrors the engine's quantity step: a floor that keeps an already-on-grid
-// binary64 value as it stands.
+// Mirrors the kernel's quantity step: the largest grid multiple at or below
+// the quotient, keeping an already-on-grid binary64 value as it stands.
+//
+// Expectation corrected: the mirror no longer adds the 1e-6 step epsilon.
+// floor(u/step + 1e-6)*step can exceed the quotient, which is the grid-floor
+// bug this lane fixes; the only tolerance is quantity_on_grid.
 double hand_floor(double units, double step) {
     if (!(units > 0.0) || !(step > 0.0)) return units;
     if (no::quantity_on_grid(units, step)) return units;
-    const double floored = std::floor(units / step + 1e-6) * step;
-    return floored < units ? floored : units;
+    double n = std::floor(units / step);
+    while ((n + 1.0) * step <= units) n += 1.0;
+    while (n >= 1.0 && n * step > units) n -= 1.0;
+    return n >= 1.0 ? n * step : 0.0;
 }
 
 double hand_units(double cash, double price, double point_value, double fx) {
@@ -147,7 +154,11 @@ void differential_sized_matches_hand_resolved_host_sized() {
                 const NativeExecutionTermsFacts& facts) {
             const double price = facts.default_resolved_price;
             double cash = hand.native_marked_equity(price);
-            if (reserve) cash /= 1.0 + fee_value;
+            // Expectation corrected: the reserve divides by 1 + fee_value/100,
+            // not 1 + fee_value. NativeRunSpec::fee_value is a percent, and
+            // the charge it reserves against is fee_value/100 of the notional
+            // (engine.hpp calc_commission).
+            if (reserve) cash /= 1.0 + fee_value / 100.0;
             double units = hand_units(cash, price, 1.0, facts.active_fx);
             if (grid) units = hand_floor(units, *grid);
             return no::ExecutionTerms{price, units, no::OpeningShape::Transact};
@@ -168,6 +179,111 @@ void differential_sized_matches_hand_resolved_host_sized() {
             &kernel.resolved_facts.back().remaining);
         REQUIRE(published);
         CHECK(bits(published->q) == bits(kernel_applied.opened_units));
+    }
+}
+
+// The percent fee reserve is spelled in the run spec's own unit. fee_value is
+// a PERCENT (native_run_spec.hpp:314) and the charge is fee_value / 100 of the
+// account notional (engine.hpp calc_commission), so a 0.1 % fee must reserve
+// 0.1 % of the sizing cash, not 10 % of it.
+//
+// The measured R5 R2 facts: 10 000 of capital, a 100.0 price, a one-unit
+// quantity grid and TradingView's 0.1 % commission. The adapter books 49; the
+// pre-fix kernel divided by 1 + 0.1 and booked 45.
+void the_percent_fee_reserve_is_spelled_in_percent() {
+    auto setup = spec("l3-fee-percent");
+    setup.fee_kind = NativeFeeKind::Percent;
+    setup.fee_value = 0.1;                 // 0.1 %, exactly as the run charges it
+    setup.quantity_grid = 1.0;
+
+    TermsHost host;
+    const auto applied = open_once(
+        host, setup,
+        sized_open(no::EquityFraction{0.5}, no::Side::Long, no::SizeTime::AtMatch,
+                   /*reserve_fee=*/true),
+        {100.0});
+    scenario = "percent fee reserve is a percent";
+    const double reserved = 0.5 * 10000.0 / (1.0 + 0.1 / 100.0);
+    const double wrong = 0.5 * 10000.0 / (1.0 + 0.1);
+    CHECK(bits(applied.opened_units) == bits(std::floor(reserved / 100.0)));
+    CHECK(bits(applied.opened_units) == bits(49.0));
+    // The pre-fix formula is a different, measurably worse number.
+    CHECK(std::floor(wrong / 100.0) == 45.0);
+    CHECK(bits(applied.opened_units) != bits(45.0));
+
+    // The reserve is the exact inverse of the charge the same run books: the
+    // notional plus its commission is within one grid step of the basis.
+    const double notional = applied.opened_units * 100.0;
+    const double fee = notional * (0.1 / 100.0);
+    CHECK(notional + fee <= 0.5 * 10000.0);
+    CHECK(notional + fee + 100.0 > 0.5 * 10000.0);
+
+    // Every other fee kind stays an exact no-op.
+    for (const NativeFeeKind kind : {NativeFeeKind::CashPerUnit,
+                                     NativeFeeKind::CashPerExecution}) {
+        auto other = spec("l3-fee-other");
+        other.fee_kind = kind;
+        other.fee_value = 0.1;
+        other.quantity_grid = 1.0;
+        TermsHost cash_fee;
+        const auto row = open_once(
+            cash_fee, other,
+            sized_open(no::EquityFraction{0.5}, no::Side::Long, no::SizeTime::AtMatch,
+                       /*reserve_fee=*/true),
+            {100.0});
+        CHECK(bits(row.opened_units) == bits(50.0));
+    }
+}
+
+// The grid floor is the largest grid multiple AT OR BELOW the quotient.
+//
+// The measured R5 R2 fact: a 2.9999995-unit quotient on a one-unit grid. The
+// adapter's own money floor books 2. The pre-fix kernel computed
+// floor(u/step + 1e-6)*step = 3, which is ABOVE the quotient, so the
+// `floored < units` guard handed the raw quotient back, representable_units
+// refused it as off-grid and the request died as TermsUnresolved with no
+// trade at all.
+void the_grid_floor_never_lands_above_the_quotient() {
+    auto setup = spec("l3-grid-floor");
+    setup.quantity_grid = 1.0;
+
+    // 0.029999995 of 10 000 at a price of 100 is exactly 2.9999995 units.
+    TermsHost host;
+    const auto applied = open_once(
+        host, setup, sized_open(no::EquityFraction{0.029999995}), {100.0});
+    scenario = "grid floor stays at or below the quotient";
+    const double quotient = 0.029999995 * 10000.0 / 100.0;
+    CHECK(bits(quotient) == bits(2.9999995));
+    CHECK(bits(applied.opened_units) == bits(2.0));
+    CHECK(applied.opened_units <= quotient);
+    CHECK(no::quantity_on_grid(applied.opened_units, 1.0));
+    CHECK(host.lots().size() == 1);
+
+    // A quotient inside the engine's on-grid tolerance keeps its own binary64
+    // representation instead of being knocked a whole step down: one ulp below
+    // three units is still three units, bit for bit.
+    const double near_three = std::nextafter(3.0, 0.0);
+    CHECK(no::quantity_on_grid(near_three, 1.0));
+    TermsHost tolerant;
+    const auto tolerated = open_once(
+        tolerant, setup,
+        sized_open(no::CashValue{near_three * 100.0}), {100.0});
+    scenario = "grid floor keeps a within-tolerance quotient";
+    CHECK(bits(tolerated.opened_units) == bits(near_three * 100.0 / 100.0));
+    CHECK(tolerated.opened_units > 2.0);
+    CHECK(tolerated.opened_units < 3.0);
+
+    // A quotient at or above one step is never refused for being off the grid.
+    for (const double cash : {100.0, 199.0, 250.0, 299.9999, 1000.0}) {
+        TermsHost fundable;
+        const auto row = open_once(
+            fundable, setup, sized_open(no::CashValue{cash}), {100.0});
+        scenario = "a fundable quotient is never refused";
+        const double raw = cash / 100.0;
+        CHECK(row.opened_units >= 1.0);
+        CHECK(row.opened_units <= raw);
+        CHECK(raw - row.opened_units < 1.0);
+        CHECK(no::quantity_on_grid(row.opened_units, 1.0));
     }
 }
 
@@ -359,6 +475,153 @@ void scope_fractions_claim_gross_or_net_of_siblings() {
     CHECK(sequential_reached);
 }
 
+// ScopeBasis::AtAcceptance freezes the SIZE of the bound scope when the
+// request is accepted -- the placement-time live basis -- instead of reading
+// the scope again at the candidate.
+void the_scope_basis_chooses_when_the_scope_is_measured() {
+    struct Row {
+        const char* name;
+        no::ScopeBasis basis;
+        double first;
+        double second;
+    };
+    // Two 50 % siblings accepted against one 10-unit lot and executed in turn.
+    // AtMatch re-reads what is LEFT (10 then 5); AtAcceptance keeps the
+    // placement basis for both, so they claim 5 + 5 and together flatten it.
+    for (const Row& row : {Row{"at-match siblings", no::ScopeBasis::AtMatch, 5.0, 2.5},
+                           Row{"at-acceptance siblings", no::ScopeBasis::AtAcceptance, 5.0, 5.0}}) {
+        TermsHost host;
+        bool reached = false;
+        const no::ScopeBasis basis = row.basis;
+        const double first_units = row.first;
+        const double second_units = row.second;
+        host.calculation = [&](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            if (reached) return;
+            reached = true;
+            (void)apply(h, put(h, tx(10.0, "lot")));
+            REQUIRE(h.lots().size() == 1);
+            const auto a = put(h, fraction_close(0.5, no::ScopeClaim::Gross, "half-1", basis));
+            const auto b = put(h, fraction_close(0.5, no::ScopeClaim::Gross, "half-2", basis));
+            const auto first = apply(h, a);
+            CHECK(bits(first.closed_units) == bits(first_units));
+            const auto second = apply(h, b);
+            CHECK(bits(second.closed_units) == bits(second_units));
+        };
+        scenario = row.name;
+        run(host, spec("l3-scope-basis"), {100.0});
+        completed(host);
+        CHECK(reached);
+        // AtAcceptance's two halves flatten the lot; AtMatch leaves 2.5.
+        CHECK(host.lots().size() == (basis == no::ScopeBasis::AtAcceptance ? 0u : 1u));
+    }
+
+    // NetOfSiblings subtracts the live sibling claims from the FROZEN basis.
+    // One 10-unit lot, a live 5-unit resting sibling, then a 50 % fraction.
+    for (const Row& row : {Row{"at-acceptance gross claim", no::ScopeBasis::AtAcceptance, 5.0, 0.0},
+                           Row{"at-acceptance net claim", no::ScopeBasis::AtAcceptance, 2.5, 0.0}}) {
+        const bool net = row.first == 2.5;
+        TermsHost host;
+        bool reached = false;
+        const double expected = row.first;
+        host.calculation = [&](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            if (reached) return;
+            reached = true;
+            (void)apply(h, put(h, tx(10.0, "lot")));
+            (void)put(h, resting_reduce(5.0, 1.0, "sibling"));
+            const auto applied = apply(h, put(h, fraction_close(
+                0.5, net ? no::ScopeClaim::NetOfSiblings : no::ScopeClaim::Gross,
+                "fraction", no::ScopeBasis::AtAcceptance)));
+            CHECK(bits(applied.closed_units) == bits(expected));
+        };
+        scenario = row.name;
+        run(host, spec("l3-scope-basis-net"), {100.0});
+        completed(host);
+        CHECK(reached);
+    }
+
+    // A partial close between acceptance and the candidate, one basis per run
+    // so neither fraction can consume the other's scope: AtMatch halves the
+    // eight that survived, AtAcceptance halves the ten that were live at
+    // placement.
+    for (const Row& row : {Row{"partial close, at-match", no::ScopeBasis::AtMatch, 4.0, 4.0},
+                           Row{"partial close, at-acceptance",
+                               no::ScopeBasis::AtAcceptance, 5.0, 3.0}}) {
+        TermsHost partial;
+        bool partial_reached = false;
+        const no::ScopeBasis basis = row.basis;
+        const double closed = row.first;
+        const double left = row.second;
+        partial.calculation = [&](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            if (partial_reached) return;
+            partial_reached = true;
+            (void)apply(h, put(h, tx(10.0, "lot")));
+            const auto half = put(h, fraction_close(0.5, no::ScopeClaim::Gross, "half", basis));
+            (void)apply(h, put(h, reduce(2.0, "partial")));
+            CHECK(bits(h.lots().front().qty) == bits(8.0));
+            const auto applied = apply(h, half);
+            CHECK(bits(applied.closed_units) == bits(closed));
+            CHECK(bits(h.lots().front().qty) == bits(left));
+        };
+        scenario = row.name;
+        run(partial, spec("l3-scope-partial"), {100.0});
+        completed(partial);
+        CHECK(partial_reached);
+    }
+
+    // A replacement is a new command: the successor re-freezes against its own
+    // acceptance rather than inheriting the predecessor's basis.
+    TermsHost replaced;
+    bool replaced_reached = false;
+    replaced.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        if (replaced_reached) return;
+        replaced_reached = true;
+        (void)apply(h, put(h, tx(10.0, "lot")));
+        const auto original = put(h, fraction_close(0.5, no::ScopeClaim::Gross, "frozen",
+                                                    no::ScopeBasis::AtAcceptance));
+        (void)apply(h, put(h, reduce(2.0, "partial")));
+        const auto result = h.replace(original,
+            fraction_close(0.5, no::ScopeClaim::Gross, "refrozen",
+                           no::ScopeBasis::AtAcceptance));
+        REQUIRE(result.status == no::ReplaceStatus::Replaced);
+        REQUIRE(result.successor.has_value());
+        const auto applied = apply(h, *result.successor);
+        // Half of the EIGHT that were live when the successor was accepted.
+        CHECK(bits(applied.closed_units) == bits(4.0));
+        CHECK(bits(h.lots().front().qty) == bits(4.0));
+    };
+    scenario = "a replacement re-freezes the scope";
+    run(replaced, spec("l3-scope-replace"), {100.0});
+    completed(replaced);
+    CHECK(replaced_reached);
+
+    // The arithmetic is one multiplication, scope * fraction. A percent-spelled
+    // caller converts percent -> fraction itself: the kernel never divides by
+    // 100, because scope * percent / 100 is a different binary64 value.
+    const double scope = 698554.2358392038;
+    CHECK(bits(scope * 50.0 / 100.0) != bits(scope * (50.0 / 100.0)));
+    TermsHost exact;
+    bool exact_reached = false;
+    exact.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        if (exact_reached) return;
+        exact_reached = true;
+        (void)apply(h, put(h, tx(scope, "lot")));
+        const auto applied = apply(h, put(h, fraction_close(0.5, no::ScopeClaim::Gross, "half")));
+        CHECK(bits(applied.closed_units) == bits(scope * 0.5));
+        CHECK(bits(applied.closed_units) != bits(scope * 50.0 / 100.0));
+    };
+    scenario = "scope * fraction is one multiplication";
+    auto big = spec("l3-scope-exact");
+    big.initial_capital = 1e12;
+    run(exact, big, {100.0});
+    completed(exact);
+    CHECK(exact_reached);
+}
+
 void a_pending_parent_defers_the_fraction_until_the_parent_fills() {
     auto setup = spec("l3-bracket");
     setup.close_execution = NativeCloseExecution::NextEligiblePoint;
@@ -454,12 +717,17 @@ void the_source_layer_never_names_the_kernel_bases() {
 int main() {
     test("differential Sized vs hand-resolved HostSized",
          differential_sized_matches_hand_resolved_host_sized);
+    test("percent fee reserve is a percent", the_percent_fee_reserve_is_spelled_in_percent);
+    test("grid floor never lands above the quotient",
+         the_grid_floor_never_lands_above_the_quotient);
     test("cash value and sizing point", cash_value_units_are_exact_and_the_sizing_point_matters);
     test("invalid bases and unrepresentable dust",
          invalid_bases_are_rejected_and_dust_is_unresolved);
     test("explicit units grid policy", explicit_units_policy_keeps_the_literal_quotient);
     test("scope fraction gross and net of siblings",
          scope_fractions_claim_gross_or_net_of_siblings);
+    test("scope basis chooses when the scope is measured",
+         the_scope_basis_chooses_when_the_scope_is_measured);
     test("pending bracket parent", a_pending_parent_defers_the_fraction_until_the_parent_fills);
     test("adapter neutrality", the_source_layer_never_names_the_kernel_bases);
     std::printf("R5 L3 sizing bases: %d checks, %d failures\n", checks, failures);

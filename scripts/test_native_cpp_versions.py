@@ -104,6 +104,34 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'bool execution_terms_grid_representable(',
                     'bool removed_execution_terms_grid_representable(')
 
+    def test_placement_time_sizing_members_are_pinned_and_hashed(self):
+        # R5 L3b: the sizing-price rule, the scope basis and the three frozen
+        # placement-time measurements are native_order_v6 members, each folded
+        # into the continuation digest only where it is actually set.
+        for before, after in (
+            ('enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1 };',
+             'enum class MissingSizePrice : std::uint8_t { Resolved = 0, Signal = 1 };'),
+            ('enum class ScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };',
+             'enum class MissingScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };'),
+            ('    SizePrice price = SizePrice::Resolved;', ''),
+            ('    ScopeBasis basis = ScopeBasis::AtMatch;', ''),
+            ('    std::optional<double> sizing_units;   // SizeTime::AtAcceptance', ''),
+            ('    std::optional<double> sizing_scope;   // ScopeBasis::AtAcceptance', ''),
+            ('    std::optional<double> sizing_price;   // SizePrice::Signal', ''),
+            ('    bool sizing_admissible = true;', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[0], before, after)
+        for before, after in (
+            ('if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }', ''),
+            ('if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }', ''),
+            ('if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }', ''),
+            ('f.u(static_cast<uint64_t>(payload.price));', ''),
+            ('f.u(static_cast<uint64_t>(fraction->basis));', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_abort_reporting_policy_and_input_hook_are_explicit_and_hashed(self):
         for before, after in (
             ('enum class NativeAbortReporting : std::uint32_t {',

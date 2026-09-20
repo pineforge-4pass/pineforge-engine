@@ -168,6 +168,17 @@ private:
         const BacktestEngine& engine, const native_order::LiveRequest& live,
         const NativeExecutionTermsFacts& facts) const;
     double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
+    // L3b placement-time sizing. sizing_point_price answers the price a Sized
+    // request's basis converts at when it is accepted; placement_scope_units
+    // measures the exposure a ScopeBasis::AtAcceptance fraction freezes; and
+    // admit_placement_units runs the run's opening admission against an
+    // acceptance-resolved quantity before the request exists.
+    double sizing_point_price(const NativeRunSpec& spec, const native_order::Sized& sized,
+                              double decision_price) const noexcept;
+    std::optional<double> placement_scope_units(
+        const BacktestEngine& engine, const native_order::Request& request) const;
+    bool admit_placement_units(const BacktestEngine& engine, const native_order::Sized& sized,
+                               double units, double price) const;
     std::optional<NativeCurrentExecutionResult> consume_matched_request(
         BacktestEngine& engine, const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& evaluation, double raw_price,

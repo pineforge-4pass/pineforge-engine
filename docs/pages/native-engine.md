@@ -1254,32 +1254,94 @@ submit(request);                                  // 10 % of marked equity
 
 `SizeBasis` is `CashValue{cash}` in account currency or `EquityFraction{f}`, a
 fraction in `(0, 1]` of marked equity at the sizing point. Resolution is
-`units = cash / (price * point_value * fx)`, where `price` is the candidate's
-default resolved price. `SizeTime::AtMatch` (the default) resolves at the
-matching candidate; `SizeTime::AtAcceptance` freezes the units against the
-command point when the request is accepted. `reserve_percent_fee` divides the
-sizing cash by `1 + fee` when the run's fee kind is `NativeFeeKind::Percent`,
-and is an exact no-op for every other fee kind. `grid_policy` reuses
+`units = cash / (price * point_value * fx)`, where `price` is the sizing-point
+price. `SizeTime::AtMatch` (the default) resolves at the matching candidate;
+`SizeTime::AtAcceptance` freezes the units against the command point when the
+request is accepted. `reserve_percent_fee` divides the
+sizing cash by `1 + fee_value / 100` when the run's fee kind is
+`NativeFeeKind::Percent`, and is an exact no-op for every other fee kind.
+`NativeRunSpec::fee_value` is a percent, exactly as the charge reads it
+(`calc_commission` bills `fee_value / 100` of the account notional), so a
+0.1 % fee reserves 0.1 % of the sizing cash. `grid_policy` reuses
 `ExecutionGridPolicy`: `SnapToGrid` floors the units onto the run's
 `quantity_grid`; `ExplicitUnits` keeps the literal quotient, which the ordinary
 on-grid terms gate then refuses as `InvalidTerms` when a grid is configured and
 the quotient is off it. The two are identical on an ungridded run.
 
+The grid floor is the largest grid multiple at or below the quotient: it never
+lands above it, and a quotient of at least one whole step is never refused for
+being off the grid. Its only tolerance is the engine's own on-grid predicate
+(`quantity_on_grid`, about four ulp and strictly inside half a step), which
+keeps an already-on-grid quotient in its own binary64 representation instead of
+rebuilding it one ulp away. No proportional epsilon is applied: a floor that
+rounded 2.9999995 up to a full three units on a one-unit grid would book a
+quantity the basis cannot fund.
+
 The kernel resolves the basis *before* the host hook and publishes the result
 as the facts' `RemainingUnits`, so a `resolve_execution_terms` override still
 has the last word: return your own units to replace the kernel's, or the
-default identity terms to accept them. A basis that is not representable — not
-finite, not positive, or below one grid step after snapping — is
-`MatchRejectReason::TermsUnresolved` at the candidate. An invalid basis
-(`fraction` outside `(0, 1]`, `cash <= 0`) is `RequestRejectReason::InvalidQuantityBasis`
-at submit. A kernel-sized opening always settles as a signed book transaction
-on its declared side; the `ReverseTo` and `CloseOpposite` shapes remain
-`HostSized{Open}` only, and `Sized` requires the `Independent` owner.
+default identity terms to accept them. That holds for both sizing points:
+an `AtAcceptance` request reaches the candidate with a deferred quantity
+carrying its frozen number, so there is exactly one terms pass in which a host
+quirk — a money band, an affordability rule, a floor of its own — sees the
+kernel's quantity and may answer with a different one. A basis that is not
+representable — not finite, not positive, or below one grid step after
+snapping — is `MatchRejectReason::TermsUnresolved` at the candidate. An invalid
+basis (`fraction` outside `(0, 1]`, `cash <= 0`) is
+`RequestRejectReason::InvalidQuantityBasis` at submit. `Sized` requires the
+`Independent` owner.
+
+A kernel-sized opening settles as a signed book transaction on its declared
+side, or through the `ReverseTo` and `CloseOpposite` shapes when the host's
+terms name one — the same shapes a `HostSized{Open}` may name. The units are
+the sized opening on the declared side: a `ReverseTo` closes the opposite
+position and opens them, a `CloseOpposite` closes that many units of the
+opposite book (the whole-book `Flatten` path when it consumes all of it) and
+opens nothing. Both still require an opposite book
+(`MatchRejectReason::NoOppositeExposure`), and a `CloseOpposite` claim larger
+than that book is `InvalidTerms`.
+
+#### The sizing price
+
+`SizePrice` chooses *which* price the basis converts at. `Resolved` (the
+default) keeps today's price — the candidate's default resolved price for
+`AtMatch`, the raw acceptance-point price for `AtAcceptance`. `Signal` sizes
+against the expected market fill instead: the decision-point price at
+placement (the current bar's close, or the last print, at submit), moved by
+the run's slippage on the request's own side
+(`price ± slippage_ticks * price_tick`) and then rounded onto the run's price
+grid when `NativeRunSpec::price_grid` is set (`HalfUp` is the nearest tick;
+`NativePriceGrid::None` leaves it unrounded).
+
+The signal price is frozen when the request is accepted. It therefore composes
+with `SizeTime`: with `AtAcceptance` both the price and the units are decided
+at placement, and with `AtMatch` the basis still converts at that frozen signal
+price at every later candidate, however far the market has moved. A `Signal`
+request accepted with no decision point has no price to freeze and stays
+`TermsUnresolved`.
+
+The rule is generic — "size against the price you expect to pay" — and names no
+source language: a source layer that divides by
+`nearest_tick(signal_close ± slippage · mintick)` spells that as
+`{SizePrice::Signal, price_grid = QuantizeFills, grid_rounding = HalfUp,
+price_tick = its mintick, slippage_ticks = its slippage}`.
+
+#### Placement-time admission
+
+An `AtAcceptance` quantity is also an admission input at placement, not only at
+the candidate: when the request is accepted the kernel runs the run's own
+opening admission — `allowed_open_directions`, `max_abs_units`,
+`max_open_lots` and the initial-margin gate — against the frozen quantity at
+the sizing price. A quantity the run cannot admit is
+`RequestRejectReason::PlacementAdmission` at submit, so no request is ever
+created for it. `AtMatch` has no placement quantity and keeps the candidate
+gate it always had. A host that owns its own margin rule declares no kernel
+margin, exactly as it does for the candidate gate, and only the caps apply.
 
 ### Fractional reduces
 
-`ReductionSize` gains `ScopeFraction{fraction, claim}`, a fraction in `(0, 1]`
-of the scope the reduce is bound to, resolved at the matching candidate:
+`ReductionSize` gains `ScopeFraction{fraction, claim, basis}`, a fraction in
+`(0, 1]` of the scope the reduce is bound to:
 
 ```cpp
 no::Request exit;
@@ -1291,14 +1353,30 @@ The bound scope is the whole book for an unbound or book-bound close, the one
 opening for `BindOpening`, and the live selected roster for `BindOpenings`.
 `ScopeClaim::Gross` takes the fraction of that scope as it stands.
 `ScopeClaim::NetOfSiblings` first subtracts the units already claimed by the
-live sibling reduces bound to the same scope, so two 50 % siblings on one
-10-unit lot claim 5 + 5 gross and 5 + 2.5 net. Scope identity is the request's
-own authority — opening handles, position cycles and cohort handles — never a
-source identifier. A bracket child that is still waiting for its parent has no
-scope and resolves only after the parent fill. The fraction is floored onto
-`quantity_grid` like every other engine quantity; a fraction that does not buy
-one whole step is `TermsUnresolved`, and `fraction` outside `(0, 1]` is
-`InvalidQuantityBasis` at submit.
+live sibling reduces bound to the same scope, so a 50 % fraction beside a live
+5-unit sibling on one 10-unit lot claims 5 gross and 2.5 net. Scope identity is
+the request's own authority — opening handles, position cycles and cohort
+handles — never a source identifier. A bracket child that is still waiting for
+its parent has no scope and resolves only after the parent fill.
+
+`ScopeBasis` chooses *when* the scope is measured. `AtMatch` (the default)
+reads the bound scope as it stands at the matching candidate, so two 50 %
+siblings executed in turn on one 10-unit lot close 5 then 2.5.
+`ScopeBasis::AtAcceptance` freezes the scope's size when the request is
+accepted — the placement-time live basis — so the same two siblings each keep
+the ten they were placed against and close 5 + 5, and `NetOfSiblings`
+subtracts live sibling claims from that frozen basis. The frozen basis sizes
+the claim only; the live exposure still bounds what actually closes. A
+replacement is a new command and re-freezes against its own acceptance. A
+request accepted with no measurable scope never becomes resolvable.
+
+The resolution is `units = scope * fraction`, one binary64 multiplication: a
+caller that spells its size as a percent converts percent → fraction itself,
+because `scope * percent / 100` and `scope * (percent / 100)` are different
+binary64 values. The result is floored onto `quantity_grid` like every other
+engine quantity; a fraction that does not buy one whole step is
+`TermsUnresolved`, and `fraction` outside `(0, 1]` is `InvalidQuantityBasis` at
+submit.
 
 Neither kind is emitted by the Pine adapter, which keeps resolving its own
 `HostSized` terms; `native_order` values therefore belong to `native_order_v6`.

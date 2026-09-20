@@ -259,8 +259,8 @@ def check_texts(files):
                     "CohortRoster", "CohortReceipt", "AllowanceDeferred",
                     "OpeningShape", "ExecutionGridPolicy", "ExecutionTerms", "TermsResolvedInput",
                     "TermsResolvedEvent", "NativeCandidatePriceKind",
-                    "CashValue", "EquityFraction", "SizeTime", "Sized",
-                    "ScopeClaim", "ScopeFraction"),
+                    "CashValue", "EquityFraction", "SizeTime", "SizePrice", "Sized",
+                    "ScopeClaim", "ScopeBasis", "ScopeFraction"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("RequestOrigin", "MarginCallEvent"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -301,10 +301,29 @@ def check_texts(files):
         raise ValueError('ExecutionTerms omits its default grid policy')
     sized = re.sub(r'\s+', '', body(order, r'struct\s+Sized\s*\{', 'native sizing'))
     for pinned in ('SizeTimetime=SizeTime::AtMatch;',
+                   'SizePriceprice=SizePrice::Resolved;',
                    'ExecutionGridPolicygrid_policy=ExecutionGridPolicy::SnapToGrid;',
                    'boolreserve_percent_fee=false;'):
         if pinned not in sized:
             raise ValueError('Sized omits a pinned default: ' + pinned)
+    fraction = re.sub(r'\s+', '', body(order, r'struct\s+ScopeFraction\s*\{', 'scope fraction'))
+    for pinned in ('ScopeClaimclaim=ScopeClaim::Gross;',
+                   'ScopeBasisbasis=ScopeBasis::AtMatch;'):
+        if pinned not in fraction:
+            raise ValueError('ScopeFraction omits a pinned default: ' + pinned)
+    live = re.sub(r'\s+', '', body(order, r'struct\s+LiveRequest\s*\{', 'live request'))
+    for pinned in ('std::optional<double>sizing_units;',
+                   'std::optional<double>sizing_scope;',
+                   'std::optional<double>sizing_price;'):
+        if pinned not in live:
+            raise ValueError('LiveRequest omits a placement-time sizing member: ' + pinned)
+    context = re.sub(r'\s+', '', body(order, r'struct\s+CommandContext\s*\{', 'command context'))
+    for pinned in ('std::optional<double>sizing_units;',
+                   'std::optional<double>sizing_scope;',
+                   'std::optional<double>sizing_price;',
+                   'boolsizing_admissible=true;'):
+        if pinned not in context:
+            raise ValueError('CommandContext omits a placement-time sizing member: ' + pinned)
     require_namespace_functions(order, ("to_execution_plan",), "native_order_v6")
     required_order_members = (
         (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
@@ -533,6 +552,16 @@ def check_texts(files):
                  'f.u(static_cast<uint64_t>(terms.grid_policy));'):
         if fold not in consumer_src:
             raise ValueError('native continuation hash omits compatibility policy: ' + fold)
+    # R5 L3b placement-time sizing. Each fold is conditional, so a run that
+    # never sets the member keeps its established continuation identity; the
+    # checker only proves the fold exists at all.
+    for fold in ('if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }',
+                 'if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }',
+                 'if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }',
+                 'f.u(static_cast<uint64_t>(payload.price));',
+                 'f.u(static_cast<uint64_t>(fraction->basis));'):
+        if fold not in consumer_src:
+            raise ValueError('native continuation hash omits placement-time sizing: ' + fold)
     for token in ('lower->sample_eligibility',
                   'IntrabarPath::SampleEligibility::DistributionSamples',
                   'const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;',

@@ -1204,6 +1204,10 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
                 && fraction->claim != ScopeClaim::NetOfSiblings) {
                 return RequestRejectReason::InvalidQuantity;
             }
+            if (fraction->basis != ScopeBasis::AtMatch
+                && fraction->basis != ScopeBasis::AtAcceptance) {
+                return RequestRejectReason::InvalidQuantity;
+            }
             if (!basis_fraction_ok(fraction->fraction)) {
                 return RequestRejectReason::InvalidQuantityBasis;
             }
@@ -1211,6 +1215,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     } else if (sized) {
         if ((sized->side != Side::Long && sized->side != Side::Short)
             || (sized->time != SizeTime::AtMatch && sized->time != SizeTime::AtAcceptance)
+            || (sized->price != SizePrice::Resolved && sized->price != SizePrice::Signal)
             || (sized->grid_policy != ExecutionGridPolicy::SnapToGrid
                 && sized->grid_policy != ExecutionGridPolicy::ExplicitUnits)) {
             return RequestRejectReason::InvalidQuantity;
@@ -1219,6 +1224,12 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             if (!finite_positive(cash->cash)) return RequestRejectReason::InvalidQuantityBasis;
         } else if (!basis_fraction_ok(std::get<EquityFraction>(sized->basis).fraction)) {
             return RequestRejectReason::InvalidQuantityBasis;
+        }
+        // An acceptance-time basis is an admission input at placement: the
+        // producer measured the frozen quantity against the run's opening
+        // caps and margin before this validation ran.
+        if (!context.sizing_admissible) {
+            return RequestRejectReason::PlacementAdmission;
         }
     } else if (const auto* transact = as_transact(request.intent)) {
         if (!finite_nonzero(transact->signed_units)) return RequestRejectReason::InvalidQuantity;
@@ -1399,6 +1410,24 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
     live.trigger_state = trigger_state_from(request.trigger);
     live.allowance = AllowanceUnset{};
     live.pending = PendingNone{};
+    // Placement-time sizing measurements are carried only for the intent that
+    // asked to freeze one; every other request leaves both empty. A
+    // replacement is a new command, so its successor re-freezes against its
+    // own acceptance context rather than inheriting the predecessor's.
+    if (const auto* reduce = as_reduce(request.intent)) {
+        if (const auto* fraction = fraction_size(*reduce)) {
+            if (fraction->basis == ScopeBasis::AtAcceptance) {
+                live.sizing_scope = context.sizing_scope;
+            }
+        }
+    } else if (const auto* native_sized = as_sized(request.intent)) {
+        if (native_sized->time == SizeTime::AtAcceptance) {
+            live.sizing_units = context.sizing_units;
+        }
+        if (native_sized->price == SizePrice::Signal) {
+            live.sizing_price = context.sizing_price;
+        }
+    }
     if (std::holds_alternative<Independent>(request.owner)) {
         if (const auto* transact = as_transact(request.intent)) {
             live.remaining = RemainingUnits{std::abs(transact->signed_units)};
@@ -1411,13 +1440,14 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
             live.authority = sized->kind == HostSizedKind::Open
                 ? Authority{BookTransaction{}}
                 : Authority{UnboundBookClose{}};
-        } else if (const auto* native_sized = as_sized(request.intent)) {
-            // AtAcceptance freezes the consumer's resolution now; AtMatch, and
-            // an acceptance the producer could not resolve, stay deferred.
-            live.remaining = native_sized->time == SizeTime::AtAcceptance
-                    && context.sizing_units
-                ? Remaining{RemainingUnits{*context.sizing_units}}
-                : Remaining{RemainingDeferred{}};
+        } else if (as_sized(request.intent)) {
+            // A kernel-sized opening carries a deferred quantity exactly like a
+            // HostSized opening, whichever sizing point it asked for.
+            // AtAcceptance has already frozen its resolution in live.sizing_units
+            // above; the candidate publishes that number to the host and takes
+            // the host's own units when it returns any, so both sizing points
+            // reach settlement through one terms pass.
+            live.remaining = RemainingDeferred{};
             live.authority = BookTransaction{};
         } else if (const auto* reduce = as_reduce(request.intent)) {
             live.remaining = fraction_size(*reduce)
@@ -2429,10 +2459,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
     const auto* sized = as_host_sized(live.request().intent);
     const auto* native_sized = as_sized(live.request().intent);
     const auto* scope_fraction = deferred_reduction(live.request().intent);
-    // Only a host-sized OPENING may name a nondefault physical shape. A
-    // host-sized close, a kernel-sized opening and a scope fraction all
-    // settle through the ordinary Transact/Reduce plan.
-    const bool opening_shapes = sized && sized->kind == HostSizedKind::Open;
+    // Only an OPENING may name a nondefault physical shape. A host-sized close
+    // and a scope fraction both settle through the ordinary Transact/Reduce
+    // plan; a kernel-sized opening serves the same reversal shapes a
+    // HostSized{Open} does, with the kernel's own units on the declared side.
+    const bool opening_shapes = (sized && sized->kind == HostSizedKind::Open)
+        || native_sized != nullptr;
     if ((!sized && !native_sized && !scope_fraction)
         || (input.terms.shape != OpeningShape::Transact
             && input.terms.shape != OpeningShape::ReverseTo
@@ -2647,12 +2679,36 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else if (native_sized) {
-        // A kernel-sized opening always settles as a signed book transaction
-        // on its declared side.
+        // A kernel-sized opening settles as a signed book transaction on its
+        // declared side, or -- when the terms named one -- through the same
+        // ReverseTo / CloseOpposite shapes a HostSized{Open} may name, with the
+        // kernel's own units as the opening on that side.
         const bool long_side = native_sized->side == Side::Long;
-        if (!plan_transact || !finite_nonzero(plan_transact->signed_units)
-            || ((plan_transact->signed_units > 0.0) != long_side)
-            || std::abs(plan_transact->signed_units) > cap) {
+        if (plan_transact) {
+            if (!finite_nonzero(plan_transact->signed_units)
+                || ((plan_transact->signed_units > 0.0) != long_side)
+                || std::abs(plan_transact->signed_units) > cap) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_reverse) {
+            if (!finite_nonzero(plan_reverse->signed_units)
+                || ((plan_reverse->signed_units > 0.0) != long_side)
+                || !has_units_allowance
+                || std::abs(plan_reverse->signed_units) != working_units(live.remaining)
+                || std::abs(plan_reverse->signed_units) != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_reduce) {
+            if (!finite_positive(plan_reduce->units) || !has_units_allowance
+                || plan_reduce->units != working_units(live.remaining)
+                || plan_reduce->units != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_flatten) {
+            if (!has_units_allowance || working_units(live.remaining) != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else {

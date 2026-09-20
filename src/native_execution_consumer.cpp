@@ -203,6 +203,11 @@ void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
                            std::get_if<native_order::ScopeFraction>(&payload.size)) {
                 f.d(fraction->fraction);
                 f.u(static_cast<uint64_t>(fraction->claim));
+                // L3b: the scope basis folds only where a caller moved it off
+                // AtMatch, so every established fraction hash survives.
+                if (fraction->basis != native_order::ScopeBasis::AtMatch) {
+                    f.u(static_cast<uint64_t>(fraction->basis));
+                }
             }
         } else if constexpr (std::is_same_v<T, native_order::Transact>) {
             f.d(payload.signed_units);
@@ -223,6 +228,11 @@ void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
             f.u(static_cast<uint64_t>(payload.time));
             f.u(static_cast<uint64_t>(payload.grid_policy));
             f.b(payload.reserve_percent_fee);
+            // L3b: the sizing-price rule folds only where a caller moved it
+            // off Resolved, so every established Sized hash survives.
+            if (payload.price != native_order::SizePrice::Resolved) {
+                f.u(static_cast<uint64_t>(payload.price));
+            }
         } else {
             static_assert(!sizeof(T), "unhashed native order intent");
         }
@@ -375,17 +385,39 @@ bool same_allowance_bits(const native_order::Allowance& left,
     return true;
 }
 
-// L3 sizing bases. The quantity grid is a floor, exactly like every other
-// engine quantity step (engine.hpp apply_exit_qty_step): a basis that does not
-// buy one whole step is not representable, and an already-on-grid value keeps
-// its own binary64 representation rather than being rebuilt one ulp away.
+// L3 sizing bases. The quantity grid is a floor in the same kind as the money
+// floor a source layer applies to its own sizing quotient
+// (pine_adapter.cpp source_money_floor_lot): the LARGEST grid multiple that is
+// less than or equal to the quotient, never one above it. A basis that does
+// not buy one whole step is not representable.
+//
+// The only tolerance is the engine's existing on-grid predicate
+// (native_order.hpp quantity_on_grid, ~4 ulp and strictly inside half a step):
+// a quotient already on the grid keeps its own binary64 representation rather
+// than being rebuilt one ulp away (engine.hpp apply_exit_qty_step). A
+// proportional epsilon is deliberately NOT applied here. floor(u/step + 1e-6)
+// can land ABOVE the quotient — 2.9999995 on a one-unit grid became 3 — which
+// the old `floored < units` guard then turned back into the raw quotient that
+// representable_units refused as off-grid, so a perfectly fundable basis
+// booked nothing at all instead of the two units it can afford.
+//
+// n is corrected in both directions because one divide plus one multiply can
+// land on either side of the exact quotient by an ulp or two.
 double floor_to_quantity_grid(double units, double step) noexcept {
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     if (!std::isfinite(step) || step <= 0.0) return units;
     if (native_order::quantity_on_grid(units, step)) return units;
-    const double floored = std::floor(units / step + 1e-6) * step;
-    if (!std::isfinite(floored) || floored <= 0.0) return 0.0;
-    return floored < units ? floored : units;
+    double n = std::floor(units / step);
+    if (!std::isfinite(n)) return 0.0;
+    for (int guard = 0; guard < 4 && std::isfinite((n + 1.0) * step)
+                        && (n + 1.0) * step <= units; ++guard) {
+        n += 1.0;
+    }
+    for (int guard = 0; guard < 4 && n >= 1.0 && n * step > units; ++guard) n -= 1.0;
+    if (!(n >= 1.0)) return 0.0;
+    const double floored = n * step;
+    if (!std::isfinite(floored) || floored <= 0.0 || floored > units) return 0.0;
+    return floored;
 }
 
 std::optional<double> representable_units(double units,
@@ -401,6 +433,12 @@ std::optional<double> representable_units(double units,
 // units = cash / (price * point_value * fx); cash is the basis value or
 // fraction * marked equity at the sizing point, optionally net of a percent
 // fee reserve.
+//
+// NativeRunSpec::fee_value is a PERCENT for NativeFeeKind::Percent
+// (native_run_spec.hpp:314): the charge is fee_value / 100 of the account
+// notional (engine.hpp calc_commission). The reserve is the exact inverse of
+// that charge, so it divides by 1 + fee_value / 100 and a 0.1 % fee reserves
+// 0.1 %, not 10 %.
 std::optional<double> sized_basis_units(const native_order::Sized& sized, double price,
                                         double equity, double fx,
                                         const NativeRunSpec& spec) noexcept {
@@ -411,7 +449,7 @@ std::optional<double> sized_basis_units(const native_order::Sized& sized, double
         cash = std::get<native_order::EquityFraction>(sized.basis).fraction * equity;
     }
     if (sized.reserve_percent_fee && spec.fee_kind == NativeFeeKind::Percent) {
-        const double divisor = 1.0 + spec.fee_value;
+        const double divisor = 1.0 + spec.fee_value / 100.0;
         if (!std::isfinite(divisor) || divisor <= 0.0) return std::nullopt;
         cash /= divisor;
     }
@@ -1397,6 +1435,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         hash_trigger_state(f, live.trigger_state);
         hash_allowance(f, live.allowance);
         hash_pending(f, live.pending);
+        // L3b: a placement-time sizing measurement is durable decision state
+        // only for the request that froze one. Folding it conditionally keeps
+        // every pre-lane request table byte-identical.
+        if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
+        if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
+        if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
     }
     // The host-maintained roster is durable matching authority.  Fold it
     // immediately after the request table so a membership-only change cannot
@@ -2282,17 +2326,39 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
     if (const auto* spec = spec_ptr()) {
         ctx.quantity_grid = spec->quantity_grid;
-        // A Sized{AtAcceptance} request freezes its units here, against the
-        // command point's price, marked equity and activated FX. AtMatch and
-        // any command outside a callback frame stay deferred to the candidate.
+        // A Sized request freezes its sizing price here when it asked for the
+        // signal rule, and a Sized{AtAcceptance} additionally freezes its
+        // units against that price, the marked equity there and the activated
+        // FX. AtMatch{Resolved} and any command outside a callback frame stay
+        // deferred to the candidate.
         const auto* native_sized = std::get_if<native_order::Sized>(&request.intent);
-        if (native_sized && native_sized->time == native_order::SizeTime::AtAcceptance) {
+        if (native_sized) {
             if (const auto point = current_execution_point()) {
-                ctx.sizing_units = sized_basis_units(
-                    *native_sized, point->price, marked(engine, point->price),
-                    engine.account_currency_fx_at(
-                        point->decision.coordinate.effective_time_ms),
-                    *spec);
+                const double price = sizing_point_price(*spec, *native_sized, point->price);
+                if (native_sized->price == native_order::SizePrice::Signal) {
+                    ctx.sizing_price = price;
+                }
+                if (native_sized->time == native_order::SizeTime::AtAcceptance) {
+                    ctx.sizing_units = sized_basis_units(
+                        *native_sized, price, marked(engine, price),
+                        engine.account_currency_fx_at(
+                            point->decision.coordinate.effective_time_ms),
+                        *spec);
+                    // The frozen quantity is an admission input at placement,
+                    // not only at the candidate.
+                    if (ctx.sizing_units) {
+                        ctx.sizing_admissible = admit_placement_units(
+                            engine, *native_sized, *ctx.sizing_units, price);
+                    }
+                }
+            }
+        } else if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
+            // A ScopeBasis::AtAcceptance fraction freezes the exposure of the
+            // scope it is about to bind to, measured exactly as the candidate
+            // would measure it.
+            const auto* fraction = std::get_if<native_order::ScopeFraction>(&reduce->size);
+            if (fraction && fraction->basis == native_order::ScopeBasis::AtAcceptance) {
+                ctx.sizing_scope = placement_scope_units(engine, request);
             }
         }
         ctx.price_tick = spec->price_tick;
@@ -3389,27 +3455,129 @@ double NativeExecutionConsumer::sibling_claimed_units(
     return claimed;
 }
 
+// The price a Sized basis converts at when the request is accepted.
+// SizePrice::Resolved keeps the acceptance point's own price, which is what
+// the candidate would otherwise divide by. SizePrice::Signal carries that
+// decision price to the expected market fill: the run's slippage on the
+// request's own side first, then the run's price grid when one is declared
+// (NativePriceGrid::None leaves it alone). It names no source language; a
+// nearest-tick, slippage-adjusted signal price is {Signal, HalfUp, slippage}.
+double NativeExecutionConsumer::sizing_point_price(
+        const NativeRunSpec& spec, const native_order::Sized& sized,
+        double decision_price) const noexcept {
+    if (sized.price != native_order::SizePrice::Signal) return decision_price;
+    const bool buy = sized.side == native_order::Side::Long;
+    const double slipped = native_matching::apply_slippage(
+        decision_price, static_cast<double>(spec.slippage_ticks) * spec.price_tick, buy);
+    return grid_fill_basis(spec, slipped, buy, /*limit_governed=*/false);
+}
+
+// The exposure a ScopeBasis::AtAcceptance fraction freezes. It mirrors the
+// scope build_terms_facts measures at the candidate, derived from the owner
+// the request declares because acceptance has not bound an authority yet.
+std::optional<double> NativeExecutionConsumer::placement_scope_units(
+        const BacktestEngine& engine, const native_order::Request& request) const {
+    double units = 0.0;
+    const auto sum_incarnations = [&](const std::vector<native_order::OpeningObservation>& rows) {
+        std::vector<std::uint64_t> incarnations;
+        incarnations.reserve(rows.size());
+        for (const auto& row : rows) {
+            if (row.has_live_matching_lot) incarnations.push_back(row.queried_opening.incarnation);
+        }
+        double total = 0.0;
+        for (const auto& lot : engine.pyramid_entries_) {
+            if (std::find(incarnations.begin(), incarnations.end(), lot.entry_incarnation)
+                != incarnations.end()) {
+                total += lot.qty;
+            }
+        }
+        return total;
+    };
+    if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
+        for (const auto& lot : engine.pyramid_entries_) {
+            if (lot.entry_incarnation == bind->opening.incarnation) units += lot.qty;
+        }
+    } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
+        units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+    } else if (const auto* bind = std::get_if<native_order::BindCohort>(&request.owner)) {
+        const auto position = read_position(engine);
+        const auto* nonflat = std::get_if<native_order::PositionNonflat>(&position);
+        if (!nonflat) return 0.0;
+        std::vector<native_order::RequestHandle> handles;
+        handles.reserve(engine.pyramid_entries_.size());
+        for (const auto& lot : engine.pyramid_entries_) {
+            native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
+            if (requests_.cohort_contains(bind->cohort, handle)) handles.push_back(handle);
+        }
+        units = sum_incarnations(read_openings(engine, handles, nonflat->cycle));
+    } else {
+        // Independent and WaitForApplied both bind the whole book.
+        for (const auto& lot : engine.pyramid_entries_) units += lot.qty;
+    }
+    if (!std::isfinite(units)) return std::nullopt;
+    return units;
+}
+
+// The run's opening admission, run at placement against an acceptance-resolved
+// quantity instead of waiting for the candidate. It is the same gate the
+// candidate applies (allowed directions, max_abs_units, max_open_lots, initial
+// margin), fed by the same pure settlement inspection, at the sizing price. A
+// host that owns its own margin rule declares no kernel margin, exactly as it
+// does for the candidate gate, and only the caps apply here.
+bool NativeExecutionConsumer::admit_placement_units(
+        const BacktestEngine& engine, const native_order::Sized& sized,
+        double units, double price) const {
+    if (!spec_ptr() || !std::isfinite(units) || units <= 0.0) return true;
+    if (!std::isfinite(price) || price <= 0.0) return true;
+    const double signed_units = sized.side == native_order::Side::Long ? units : -units;
+    execution::Fill fill;
+    fill.price = price;
+    const auto inspect = engine.inspect_native_settlement_scoped(
+        order_action::Transact{signed_units}, fill, execution::Book{});
+    if (inspect.status != execution::Status::Applied) return true;
+    return admit_opening_inspect(engine, price, inspect, /*skip_initial_margin=*/false, nullptr);
+}
+
 std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
         const NativeExecutionTermsFacts& facts) const {
     const auto* spec = spec_ptr();
     if (!spec) return std::nullopt;
     if (const auto* native_sized = sized_intent(live)) {
-        // An acceptance-time basis is frozen at the command boundary. Reaching
-        // the candidate still deferred means it was never resolvable there.
-        if (native_sized->time != native_order::SizeTime::AtMatch) return std::nullopt;
-        const double price = facts.default_resolved_price;
+        // An acceptance-time basis was resolved at the command boundary, so the
+        // candidate republishes that frozen number rather than re-resolving it.
+        // An acceptance the producer could not resolve never becomes resolvable.
+        if (native_sized->time != native_order::SizeTime::AtMatch) {
+            return live.sizing_units;
+        }
+        // SizePrice::Signal converts at the price frozen when the request was
+        // accepted, at this and at every later candidate. A Signal request
+        // accepted with no decision point has no price to convert at.
+        double price = facts.default_resolved_price;
+        if (native_sized->price == native_order::SizePrice::Signal) {
+            if (!live.sizing_price) return std::nullopt;
+            price = *live.sizing_price;
+        }
         return sized_basis_units(*native_sized, price, marked(engine, price),
                                  facts.active_fx, *spec);
     }
     const auto* fraction = scope_fraction_intent(live);
     if (!fraction) return std::nullopt;
     double scope = facts.scope_exposure_units;
+    if (fraction->basis == native_order::ScopeBasis::AtAcceptance) {
+        // The placement-time live basis, frozen when the request was accepted.
+        // A request accepted with no measurable scope never becomes resolvable.
+        if (!live.sizing_scope) return std::nullopt;
+        scope = *live.sizing_scope;
+    }
     if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
         scope -= sibling_claimed_units(live);
     }
     if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
-    return representable_units(fraction->fraction * scope,
+    // units = scope * fraction, one binary64 multiplication. A percent-spelled
+    // caller converts percent -> fraction itself, so no second rounding step
+    // enters here.
+    return representable_units(scope * fraction->fraction,
                                native_order::ExecutionGridPolicy::SnapToGrid,
                                spec->quantity_grid);
 }
@@ -3494,11 +3662,15 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         const bool unresolved = (host_sized || native_sized || scope_fraction)
             && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
                 || std::holds_alternative<native_order::NoTarget>(live->remaining));
-        // Only a host-sized OPENING may name a nondefault physical shape; a
-        // host-sized close, a kernel-sized opening and a scope fraction all
-        // settle through the ordinary Transact/Reduce plan.
-        const bool opening_shapes = host_sized
-            && host_sized->kind == native_order::HostSizedKind::Open;
+        // Only an OPENING may name a nondefault physical shape; a host-sized
+        // close and a scope fraction settle through the ordinary
+        // Transact/Reduce plan. A kernel-sized opening serves the same
+        // ReverseTo / CloseOpposite shapes a HostSized{Open} does: the units
+        // are the sized opening on the declared side, and the reversal
+        // transaction closes the opposite book and opens them.
+        const bool opening_shapes = (host_sized
+            && host_sized->kind == native_order::HostSizedKind::Open)
+            || native_sized != nullptr;
         const bool closing_size = (host_sized
                 && host_sized->kind == native_order::HostSizedKind::Close)
             || scope_fraction != nullptr;
@@ -4720,8 +4892,9 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     const bool unresolved = (host_sized || native_sized || scope_fraction)
         && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
             || std::holds_alternative<native_order::NoTarget>(live->remaining));
-    const bool opening_shapes = host_sized
-        && host_sized->kind == native_order::HostSizedKind::Open;
+    const bool opening_shapes = (host_sized
+        && host_sized->kind == native_order::HostSizedKind::Open)
+        || native_sized != nullptr;
     const bool closing_size = (host_sized
             && host_sized->kind == native_order::HostSizedKind::Close)
         || scope_fraction != nullptr;

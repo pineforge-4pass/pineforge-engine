@@ -87,15 +87,49 @@ using SizeBasis = std::variant<CashValue, EquityFraction>;
 // the resolved units when the request is accepted.
 enum class SizeTime : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
 
+// WHICH price the basis is converted at. This is the generic "size against the
+// expected fill price" rule; it names no source language.
+//
+// Resolved (today's behaviour) uses the price the kernel would otherwise
+// settle at: the candidate's default resolved price for AtMatch, the raw
+// acceptance-point price for AtAcceptance.
+//
+// Signal is the decision-point price at placement -- the current bar's close,
+// or the last print, at submit -- carried to the expected market fill: it is
+// adjusted by the run's slippage for the request's own side
+// (price +/- slippage_ticks * price_tick) and then rounded onto the run's
+// price grid when NativeRunSpec::price_grid is on (HalfUp is the nearest
+// tick; NativePriceGrid::None leaves it unrounded). It is frozen when the
+// request is accepted, so it composes with SizeTime::AtAcceptance and, with
+// SizeTime::AtMatch, the basis still converts at that frozen signal price at
+// every later candidate. A Signal request accepted outside a decision point
+// has no price to freeze and stays unresolvable.
+enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1 };
+
 // A kernel-sized opening.  units = cash / (price * point_value * fx), where
 // cash is the basis value or fraction * marked equity, and price is the
-// candidate's default resolved price.  A host override of
+// sizing-point price SizePrice names.  A host override of
 // resolve_execution_terms still has the last word: it sees the kernel-resolved
 // units as the facts' RemainingUnits and may return its own.
+//
+// SizeTime chooses WHEN the basis is resolved, SizePrice chooses WHICH price
+// it converts at, and the two compose.  Either way the request reaches the
+// candidate with a deferred quantity and exactly one terms pass: the kernel
+// resolves (or republishes the acceptance-frozen) units, publishes them as the
+// facts' RemainingUnits before resolve_execution_terms and
+// validate_execution_precommit run, and uses the host's units when the host
+// returns any.  An acceptance-time quantity is additionally an admission input
+// at placement, so an opening the run cannot admit is
+// RequestRejectReason::PlacementAdmission at submit rather than a rejected
+// candidate later.
 struct Sized {
     Side side = Side::Long;
     SizeBasis basis{};
     SizeTime time = SizeTime::AtMatch;
+    // Which price the basis converts at; see SizePrice. Appended after `time`
+    // because Sized has no positional aggregate initializer outside tests that
+    // stop at the basis.
+    SizePrice price = SizePrice::Resolved;
     // SnapToGrid floors the resolved units onto the run's quantity grid.
     // ExplicitUnits keeps the literal quotient, which the ordinary on-grid
     // terms gate then refuses when a grid is configured and the quotient is
@@ -114,10 +148,22 @@ struct OwnerOpenedUnits {};
 // already claimed by the live sibling reduces bound to that same scope.  The
 // keys are opaque request/owner handles, never source identifiers.
 enum class ScopeClaim : std::uint8_t { Gross = 0, NetOfSiblings = 1 };
+// Which measurement of the bound scope the fraction is taken of. AtMatch (the
+// default) reads the scope as it stands at the matching candidate.
+// AtAcceptance freezes the scope SIZE when the request is accepted -- the
+// placement-time live basis -- so two 50 % siblings on one 10-unit lot both
+// claim 5 under Gross even after the first has already executed. NetOfSiblings
+// then subtracts the live sibling claims from that frozen basis.
+enum class ScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
 // A fraction in (0, 1] of the bound scope, resolved at the matching candidate.
+// The resolution is units = scope * fraction, one binary64 multiplication: a
+// caller that spells its size as a percent converts percent -> fraction
+// itself, so no second rounding step is introduced here.
 struct ScopeFraction {
     double fraction = 1.0;
     ScopeClaim claim = ScopeClaim::Gross;
+    // Appended last so every existing aggregate initializer keeps its meaning.
+    ScopeBasis basis = ScopeBasis::AtMatch;
 };
 using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits, ScopeFraction>;
 struct Reduce {
@@ -443,6 +489,12 @@ struct LiveRequest {
     TriggerState trigger_state = MarketReady{};
     Allowance allowance = AllowanceUnset{};
     PendingAdjustments pending = PendingNone{};
+    // Placement-time sizing measurements frozen from the accepting command
+    // context. Both stay empty for every request that did not ask to freeze
+    // one, and an empty optional folds nothing into the continuation digest.
+    std::optional<double> sizing_units;   // SizeTime::AtAcceptance
+    std::optional<double> sizing_scope;   // ScopeBasis::AtAcceptance
+    std::optional<double> sizing_price;   // SizePrice::Signal
 
     const RequestHandle& handle() const noexcept { return definition->handle; }
     const Request& request() const noexcept { return definition->request; }
@@ -488,6 +540,10 @@ enum class RequestRejectReason : std::uint8_t {
     InvalidOwner = 4,
     InvalidQuantityBasis = 5,
     InvalidGroup = 6,
+    // A Sized{SizeTime::AtAcceptance} whose acceptance-resolved quantity does
+    // not pass the run's opening admission (allowed directions, max_abs_units,
+    // max_open_lots, initial margin) at the sizing price.
+    PlacementAdmission = 7,
 };
 
 enum class SubmitStatus { Accepted, Rejected };
@@ -955,14 +1011,30 @@ struct CommandContext {
     std::vector<OpeningObservation> openings;
     // Kernel-resolved acceptance-time units for a Sized{AtAcceptance} request.
     // The execution consumer owns the account facts, so it supplies them here;
-    // a producer that leaves it unset accepts the request with a deferred size
-    // that the matching path then reports as TermsUnresolved.  Appended last so
-    // the existing positional aggregate initializers keep their meaning.
+    // a producer that leaves it unset accepts the request with a size the
+    // matching path then reports as TermsUnresolved.  The accepted request
+    // carries the value in LiveRequest::sizing_units and still reaches the
+    // candidate with a deferred remaining, so the host keeps its one override
+    // pass.  Appended last so the existing positional aggregate initializers
+    // keep their meaning.
     std::optional<double> sizing_units;
     // The run's price tick, needed only to resolve a tick-spelled trail
     // offset or trigger anchor. A tick spelling without a usable tick here is
     // rejected rather than silently read as a price distance.
     std::optional<double> price_tick;
+    // Placement-time sizing measurements the execution consumer owns, supplied
+    // only for the intent that asks for them. Appended last, exactly like
+    // sizing_units, so the existing positional aggregate initializers keep
+    // their meaning.
+    //
+    // sizing_scope: the bound scope's exposure at acceptance, for a
+    //   Reduce{ScopeFraction{ScopeBasis::AtAcceptance}}.
+    // sizing_price: the frozen signal price, for a Sized{SizePrice::Signal}.
+    // sizing_admissible: false when the acceptance-resolved quantity of a
+    //   Sized{SizeTime::AtAcceptance} fails the run's placement admission.
+    std::optional<double> sizing_scope;
+    std::optional<double> sizing_price;
+    bool sizing_admissible = true;
 };
 
 struct EvaluationContext {
