@@ -340,7 +340,10 @@ void PineScheduler::input(
             : host(value), previous(value.bar_index_) { host.bar_index_ = index; }
         ~InputBarIndexScope() { host.bar_index_ = previous; }
     } input_bar_index(host, context.input_index);
-    if (uses_aux_security_feed_) {
+    // The auxiliary slice is fed per chart bar (scheduler_feed_aux_security);
+    // sites the kernel steps (declare_security_sites_to_kernel) are fed by
+    // its own pump, right after this callback returns.
+    if (uses_aux_security_feed_ || host.security_sites_kernel_routed()) {
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
     }

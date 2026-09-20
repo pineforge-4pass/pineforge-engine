@@ -1377,6 +1377,17 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
 #endif
     validate_security_timeframes(security_input_tf_);
     security_first_chart_bar_ms_ = bars.empty() ? 0 : bars.front().timestamp;
+    if (declare_security_sites_to_kernel()) {
+        // The kernel registers the declared sites after this callback returns
+        // and prepares their feeds itself (begin_timeframe_subscriptions).
+        // The chart's day partition is the chart's, not a site's, and stays.
+        security_next_input_ms_ = 0;
+        security_calling_close_ms_ = 0;
+        clear_historical_security_lookahead_projections();
+        prepare_chart_day_partition(
+            bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
+        return;
+    }
     init_security_eval_states_for_run(security_input_tf_);
     prepare_native_security_feeds(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
@@ -1390,6 +1401,66 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()), input_tf_);
     prepare_chart_day_partition(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
+}
+
+bool source::PineStrategyHost::security_sites_kernel_routed() const noexcept {
+    const auto view = native_state();
+    return view.spec != nullptr && !view.spec->subscriptions.empty();
+}
+
+bool source::PineStrategyHost::declare_security_sites_to_kernel() {
+    if (security_eval_states_.empty()) return false;
+    // Run shapes with a Pine-only rule around the step: a stream feeds its
+    // sites from realtime prints (the kernel takes confirmed bars only); an
+    // aggregated chart or the bar magnifier can hold an input back until the
+    // calling bar's callback has run (PineScheduler::input's deferrals); the
+    // auxiliary slice is fed per chart bar; the KI-55 range-start cut, the
+    // historical lookahead projection and the OTC-daily pins veto or
+    // re-shape inputs before the aggregator sees them.
+    if (stream_warmup_mode_ || scheduler_.bar_magnifier_enabled()) return false;
+    if (security_range_start_na_warmup_ || historical_security_lookahead_projection_)
+        return false;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) return false;
+#endif
+    if (input_tf_.empty() || input_tf_ != script_tf_ || security_input_tf_ != input_tf_)
+        return false;
+    const auto view = native_state();
+    if (view.spec == nullptr || view.spec->timeframe_undetected
+        || view.spec->input_tf != input_tf_) {
+        return false;
+    }
+    const bool otc_daily_pins = (syminfo_.type == "forex" || syminfo_.type == "cfd")
+        && native_security_feeds_.empty() && script_tf_seconds_ > 0
+        && script_tf_seconds_ < 86400;
+    std::vector<NativeTimeframeSubscription> declared;
+    declared.reserve(security_eval_states_.size());
+    for (std::size_t i = 0; i < security_eval_states_.size(); ++i) {
+        const SecurityEvalState& state = security_eval_states_[i];
+        // The kernel registers sec_id = index, which is what generated code
+        // dispatches on.
+        if (state.sec_id != static_cast<int>(i) || state.tf.empty()) return false;
+        const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        // Site rules inside the step: the lookahead_on peeks and merge latch
+        // (and the publication gate they arm), ticker.heikinashi, both
+        // lower-timeframe paths, the auxiliary-slice completions.
+        if (pine.lookahead_on || pine.heikinashi || pine.lower_tf_requested
+            || pine.lower_tf_emulation || pine.lower_tf_use_input
+            || pine.lower_tf_array_requested || pine.publish_gate_tf_seconds > 0
+            || pine.calling_close_completes_partial || pine.calling_open_latches_first) {
+            return false;
+        }
+        if (otc_daily_pins && (state.tf == "D" || state.tf == "1D")) return false;
+        NativeTimeframeSubscription subscription;
+        subscription.tf = state.tf;
+        subscription.gaps = pine.gaps_on;
+        declared.push_back(std::move(subscription));
+    }
+    if (!declare_timeframe_subscriptions(std::move(declared))) return false;
+    // The kernel registers these very sites, sec_id by index, after this
+    // callback returns; the per-site table keeps their Pine semantics.
+    security_eval_states_.clear();
+    return true;
 }
 
 bool source::PineStrategyHost::scheduler_feed_security_input(

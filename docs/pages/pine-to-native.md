@@ -128,7 +128,7 @@ Everything here is one call: `submit(Request)` native_host.hpp:487, or
 | --- | --- | --- |
 | `ta.sma`, `ta.rsi`, … | `pineforge::ta` ta.hpp:12 | Engine-free: the header pulls only `na`, `series` and `window_sum` ta.hpp:2-4. Same numerics the adapter uses. |
 | `close[1]`, history operator | `pineforge::Series<T>` series.hpp:94 | Fixed-capacity ring; you push what you want to keep. |
-| `request.security(…, "D", …)` | **lane L6** | Interim recipe: aggregate it yourself with `TimeframeAggregator` timeframe.hpp:288 fed from `on_native_input` native_host.hpp:440. `set_native_security_feed` is inert before a run and refused in-run native_execution_consumer.cpp:991-1007 — it is not a bare-host path. |
+| `request.security(…, "D", …)` | `NativeTimeframeSubscription` in `NativeRunSpec::subscriptions` (or `declare_timeframe_subscriptions` inside `on_native_run_begin`), delivered by `on_native_timeframe_bar` and pulled by `native_series_bar` native_host.hpp | Landed (lanes L6, L6c). A subscription is a series instance: several may share one timeframe; `lookahead` / `gaps` are the kernel's delivery rules; `authoritative_bars` replace a completed bucket's OHLCV. The Pine adapter itself runs its plain sites through the same subscriptions (lane R3b: a batch run with `input_tf == script_tf`, sites `lookahead_off`, not Heikin-Ashi, not lower-TF; `gaps_on` is the subscription's `gaps`); TradingView's other `request.security` rules stay in the source host. |
 | `request.security_lower_tf` | **lane L5** (sub-bar hook) | The host already owns the lower bars it puts into `IntrabarPath`. |
 | `input.*` | constructor parameters | `set_input` engine.hpp:3173 exists but its getters are protected; a native host takes its parameters in C++. |
 

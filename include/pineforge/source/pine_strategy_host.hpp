@@ -607,6 +607,24 @@ private:
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
     void scheduler_prepare_security_sequence(const std::vector<Bar>&);
+    // R5 lane R3b: the plain request.security sites of a batch run whose
+    // input and script timeframes coincide are declared to the kernel as
+    // NativeTimeframeSubscription series instances at the L6c begin-time hook
+    // -- one per site, sec_id by index, barmerge.gaps_on as the kernel's
+    // `gaps` -- and the kernel's own pump steps them; this host's evaluator
+    // registration, per-run preparation and pump stand down for that run.
+    // False, keeping this host's own drive, when the run or any site needs a
+    // Pine-only rule the kernel step does not have: a stream (the kernel
+    // takes confirmed bars only), the bar magnifier or an aggregated chart
+    // (the calling-bar deferrals), the auxiliary feed, the KI-55 range-start
+    // cut and its OTC-daily pins, the historical lookahead projection,
+    // barmerge.lookahead_on, ticker.heikinashi, request.security_lower_tf,
+    // sec_ids that are not the registration order, or a declaration the
+    // kernel refuses.
+    bool declare_security_sites_to_kernel();
+    // True while the running spec names this host's sites: the kernel steps
+    // them and the scheduler feeds nothing.
+    bool security_sites_kernel_routed() const noexcept;
     void init_security_eval_states_for_run(const std::string& effective_input_tf);
     void prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input, const std::string& effective_input_tf);

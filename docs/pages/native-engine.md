@@ -1370,6 +1370,28 @@ removes only the feeds that registration installed; a feed the host put there
 stays, and is simply replaced if a later begin declares `authoritative_bars`
 of its own for the same period.
 
+**The Pine adapter on subscriptions (lane R3b).** The source host runs its own
+plain `request.security` sites through exactly this path. After generated
+`configure_security_evaluators()` has registered them inside
+`on_native_run_begin`, the adapter declares one series instance per site —
+`tf` from the site, `gaps` from `barmerge.gaps_on`, `lookahead` off, no
+`authoritative_bars` (a feed installed through `set_native_security_feed`
+stays the store's) — through `declare_timeframe_subscriptions`, drops its own
+registration, and the kernel registers the same sites `sec_id` by index and
+steps them with its pump; the adapter's own pump feeds nothing for that run
+(`PineStrategyHost::declare_security_sites_to_kernel`). The route is taken only
+where the kernel step *is* the Pine step: a batch run with `input_tf ==
+script_tf`, no auxiliary feed, no range-start warmup flag, no historical
+lookahead projection, no forex/cfd intraday daily request (the OTC pins), and
+every site `lookahead_off`, not Heikin-Ashi and not lower-timeframe. Every
+other shape — streams (the kernel takes confirmed bars only), the bar
+magnifier and aggregated charts (the calling-bar deferrals), `lookahead_on`
+(per-input peeks and the merge latch), `ticker.heikinashi`, both
+`request.security_lower_tf` paths, the auxiliary slice — keeps the adapter's
+own drive, unchanged. The corpus' 23 `request.security` probes are all of the
+first kind but the two lower-timeframe ones; their trades are byte-identical
+on either drive, which is the lane's parity evidence for the kernel pump.
+
 **Streams.** `stream_begin` accepts a non-empty `subscriptions`, so a
 forward-execution host reads the same series a backtest of the same bars
 reads. The warmup resolves the series exactly as a `run()` over those same
@@ -1430,10 +1452,13 @@ the `validate_security_timeframes` diagnostics are state and code of the Pine
 source host (`source::PineStrategyHost`, `src/source/pine_security_eval.cpp`):
 a per-`sec_id` table, `source::PineSecurityEvalState`, kept beside the generic
 state of the same id and folded into the source hash extension under its own
-domain (`pineforge-source-security/vN`, only when a site is registered). The
-source host composes its own evaluator step from the same kernel primitives;
-the kernel never calls into it. A native host therefore cannot reach any of
-those rules, and none of them can change a subscription's buckets.
+domain (`pineforge-source-security/vN`, only when a site is registered). For
+the sites that need those rules the source host composes its own evaluator
+step from the same kernel primitives and the kernel never calls into it; its
+plain sites it declares as subscriptions ("The Pine adapter on subscriptions"
+above), and the kernel's step is then the only step. A native host therefore
+cannot reach any of those rules, and none of them can change a subscription's
+buckets.
 
 ## Batch OHLCV vs ticks vs quiet
 
