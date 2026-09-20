@@ -103,6 +103,9 @@ public:
     // Reporting only, and inert under every other policy.
     void mark_script_report_point(BacktestEngine& engine, int64_t script_bar_ts) const;
     std::optional<Bar> series_bar(std::size_t subscription) const;
+    // NativeStrategyHost::declare_timeframe_subscriptions: replace the staged
+    // list from inside on_native_run_begin, before the kernel registers.
+    bool declare_timeframe_subscriptions(std::vector<NativeTimeframeSubscription> declared);
     // L5 calculation timing readbacks. The partial bar is the lookahead-free
     // bar so far at the current cursor; the two counters are observation of
     // the recalculation cadence, never matching state.
@@ -242,6 +245,9 @@ private:
         std::size_t index = 0;   // NativeRunSpec::subscriptions index
         int sec_id = 0;
         native_calendar::Timeframe tf{};
+        // The declared literal, kept so a later begin can recognize the
+        // evaluator states this consumer registered before erasing them.
+        std::string tf_literal;
         bool lookahead = false;
         // barmerge.gaps_on: clear `latest` on every accepted input this
         // series delivers nothing on. Off by default, and off is the whole
@@ -630,6 +636,21 @@ private:
     // are warmup, i.e. where a stream's historical phase ends and its live
     // phase starts. -1 for a batch run, whose every input is historical.
     int subscription_warmup_inputs_ = -1;
+    // Where this consumer's own evaluator states start in
+    // BacktestEngine::security_eval_states_. Zero for every host that
+    // registers none of its own, which is the whole established population.
+    std::size_t subscription_states_base_ = 0;
+    // The timeframe literals this consumer installed authoritative bars for.
+    // Only these are removed at the next begin: a feed installed through the
+    // engine's own public setter (the C ABI writes that same store) is host
+    // ingress and survives.
+    std::vector<std::string> subscription_feed_tfs_{};
+    // True only inside the kernel's own registration of the declared series,
+    // which runs after the run is Running and calls no host callback.
+    bool wiring_subscriptions_ = false;
+    // True only inside on_native_run_begin, where
+    // declare_timeframe_subscriptions() is legal.
+    bool in_run_begin_ = false;
     // Borrowed begin arguments, valid only inside one public begin call.
     const Bar* begin_bars_ = nullptr;
     int begin_n_ = 0;

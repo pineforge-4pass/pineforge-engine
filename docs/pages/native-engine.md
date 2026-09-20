@@ -1160,6 +1160,33 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
 Declare no `authoritative_bars` and the buckets are a plain aggregation of the
 run's own input, with no calibration to inherit.
 
+**Declaring at begin.** A host whose series are known only to its own
+begin-time registration calls
+`declare_timeframe_subscriptions(std::vector<NativeTimeframeSubscription>)`
+from inside `on_native_run_begin`. The list replaces the staged spec's
+`subscriptions`, so the staged spec keeps naming exactly what ran and the run's
+continuation identity folds the declared series. The call is legal only there:
+anywhere else, and for a list this run's `input_tf` would refuse (the same
+validation `configure_native` applies), it stages nothing, changes nothing and
+answers `false`. It is not virtual — the host calls the kernel here.
+
+The kernel registers the declared series **after** `on_native_run_begin`
+returns, which is what makes that hook usable: a host that registers its own
+`request.security` evaluators there (clearing
+`BacktestEngine::security_eval_states_` first, as generated code does) can no
+longer erase the kernel's registration, and the kernel appends its own states
+after the host's rather than in place of them. Two consequences worth stating:
+`native_series_bar` answers `nullopt` for every index *inside*
+`on_native_run_begin` (nothing is registered yet), and the kernel feeds only
+the evaluator states it registered itself.
+
+**Feeds the host installed itself survive.** `set_native_security_feed` — the
+store the C ABI's `strategy_set_native_security_feed` writes — is host ingress
+installed before a run. A later begin re-registers the kernel's own series and
+removes only the feeds that registration installed; a feed the host put there
+stays, and is simply replaced if a later begin declares `authoritative_bars`
+of its own for the same period.
+
 **Streams.** `stream_begin` accepts a non-empty `subscriptions`, so a
 forward-execution host reads the same series a backtest of the same bars
 reads. The warmup resolves the series exactly as a `run()` over those same

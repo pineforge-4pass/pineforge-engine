@@ -639,6 +639,19 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
 // that same spec atomically; own copy-allocation/lifecycle failure handling.
 NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
 
+// Exactly the part of validate_native_run_spec that judges declared
+// higher-timeframe series, against a stated input timeframe: the pairing rule
+// (as script_tf pairs, never strictly finer), the literals, the order of any
+// authoritative bars, the one conflicting-feed refusal, and the
+// undetected-timeframe rule. A host that declares its series at begin
+// (NativeStrategyHost::declare_timeframe_subscriptions) is judged by this same
+// function, so a list accepted there is one configure_native would also have
+// accepted. Calendar parsing may allocate; failures are converted into typed
+// facts and nothing is changed.
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected) noexcept;
+
 // Exact FNV-1a content digest for a retained intrabar path. It includes the
 // mode, lower bars in caller order when present, and every sampling parameter,
 // so continuation identity cannot silently reuse a path from another begin.

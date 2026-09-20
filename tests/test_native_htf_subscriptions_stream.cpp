@@ -23,7 +23,10 @@
 //      aggregates the pushed input and is counted as a feed miss;
 //   8. a stream that declares a series takes confirmed bars only: tick input
 //      is refused by name without failing the host, and a stream that
-//      declares none still takes ticks.
+//      declares none still takes ticks;
+//   9. a feed installed through the engine's own setter -- the store the C ABI
+//      writes -- is host ingress and survives a second stream_begin, which
+//      re-registers the kernel's own series without taking it away.
 
 #include <pineforge/native_host.hpp>
 
@@ -709,6 +712,72 @@ void test_tick_input_is_refused_while_subscribed() {
     CHECK(plain.stream_end(true));
 }
 
+// ---- 9. a feed installed through the engine's own setter survives --------
+//
+// strategy_set_native_security_feed writes BacktestEngine's native security
+// feed store before the run, and nothing in the spec names it. A later begin
+// re-registers the kernel's own series, and it must not take that host
+// ingress with it.
+
+void test_installed_feed_survives_a_second_begin() {
+    scenario = "installed feed across two stream begins";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    const std::int64_t origin = bars.front().timestamp;
+    const int n_warmup = 10;
+
+    std::vector<Bar> exchange;
+    for (int k = 0; k < 4; ++k) {
+        Bar bar{};
+        bar.open = 2000.0 + k;
+        bar.high = 2010.0 + k;
+        bar.low = 1990.0 + k;
+        bar.close = 2005.0 + k;
+        bar.volume = 4242.0 + k;
+        bar.timestamp = origin + static_cast<std::int64_t>(k) * kHour;
+        exchange.push_back(bar);
+    }
+
+    SeriesHost host;
+    // Host ingress, installed once and never named by a spec: the same store
+    // the C ABI's strategy_set_native_security_feed writes.
+    CHECK(host.set_native_security_feed("60", exchange.data(),
+                                        static_cast<int>(exchange.size())));
+
+    NativeRunSpec first = base_spec("15", "15", "native-htf-stream-installed");
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";  // no authoritative_bars of its own
+    first.subscriptions.push_back(hourly);
+    CHECK(host.configure_native(first).status == NativeSetupStatus::Applied);
+    CHECK(host.stream_begin(bars.data(), n_warmup, "15", "15"));
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+    CHECK(host.deliveries.size() == 2);
+    if (host.deliveries.size() == 2) {
+        check_bucket(host.deliveries[0].bar, exchange[0], "first begin exchange bucket");
+        check_bucket(host.deliveries[1].bar, exchange[1], "first begin exchange bucket");
+    }
+    CHECK(host.native_security_substitutions() == 2);
+    CHECK(host.stream_end(false));
+
+    // The second begin on the same host re-registers the kernel's series and
+    // leaves the installed feed where it is.
+    host.deliveries.clear();
+    host.log.clear();
+    NativeRunSpec second = first;
+    second.identity = {"native-htf-stream-installed", 2};
+    CHECK(host.configure_native(second).status == NativeSetupStatus::Applied);
+    CHECK(host.stream_begin(bars.data(), n_warmup, "15", "15"));
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+    CHECK(host.deliveries.size() == 2);
+    if (host.deliveries.size() == 2) {
+        check_bucket(host.deliveries[0].bar, exchange[0], "second begin exchange bucket");
+        check_bucket(host.deliveries[1].bar, exchange[1], "second begin exchange bucket");
+    }
+    CHECK(host.native_security_substitutions() == 2);
+    CHECK(host.stream_end(false));
+}
+
 }  // namespace
 
 int main() {
@@ -722,6 +791,7 @@ int main() {
     test_session_calendar_series_across_the_boundary();
     test_authoritative_bars_cover_the_warmup();
     test_tick_input_is_refused_while_subscribed();
+    test_installed_feed_survives_a_second_begin();
     std::printf("native HTF subscriptions (stream): %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;

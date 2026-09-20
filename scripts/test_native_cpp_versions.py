@@ -71,6 +71,23 @@ class NativeVersions(unittest.TestCase):
                 self.reject(FILES[4], before, after)
         self.reject(FILES[5], 'if (subscription.gaps) u(2u);', 'u(2u);')
 
+    def test_declared_series_are_registered_after_the_host_run_begin(self):
+        # The hook is the host calling the kernel: never virtual, and legal
+        # only inside on_native_run_begin.
+        self.reject(FILES[8],
+                    'bool declare_timeframe_subscriptions(',
+                    'virtual bool declare_timeframe_subscriptions(')
+        self.reject(FILES[8], 'bool declare_timeframe_subscriptions(',
+                    'bool declare_series(')
+        # The registration order, the guard the kernel's own wiring stands
+        # down, and the gaps clear are all structural.
+        for token in ('in_run_begin_ = true;', 'wiring_subscriptions_ = true;',
+                      'if (subscription.gaps) subscription.latest.reset();'):
+            with self.subTest(token=token):
+                self.reject(FILES[10], token, '')
+        self.reject(FILES[4], 'validate_native_timeframe_subscriptions',
+                    'validate_series')
+
     def test_legacy_tolerant_slot_policy_is_explicit_and_hashed(self):
         for before, after in (
             ('NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;', ''),

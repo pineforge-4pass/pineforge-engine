@@ -9,6 +9,10 @@
 //   2b. two "60" series over one 15-minute input are two INSTANCES: the same
 //      buckets are delivered twice, each under its own index, and
 //      native_series_bar answers each independently (also "60"/"60"/"240");
+//   2d. a host that declares its series inside on_native_run_begin gets them
+//      registered although the spec named none, and its own evaluator
+//      registration -- which clears the state vector as generated code does --
+//      no longer erases the kernel's;
 //   3. authoritative_bars replace the aggregated OHLCV of completed buckets;
 //   4. a series finer than the input is refused at configure with its own
 //      named reason, while two series of one period are accepted unless they
@@ -152,6 +156,55 @@ public:
         }
         log.push_back("bar@" + std::to_string(bar.timestamp));
     }
+};
+
+// A host in the adapter's shape: its series are known only to its own
+// run-begin registration, which opens by clearing the engine's evaluator
+// states exactly as a generated configure_security_evaluators() does.
+class DeclaringHost final : public NativeStrategyHost {
+public:
+    std::vector<NativeTimeframeSubscription> declare;
+    bool register_own_evaluator = false;
+    // What the hook answered inside on_native_run_begin, and outside it.
+    bool declared_at_begin = false;
+    bool declared_outside_begin = true;
+    std::vector<Delivery> deliveries;
+    int own_evaluations = 0;
+    int bars_seen = 0;
+
+    void on_native_run_begin() override {
+        if (register_own_evaluator) {
+            security_eval_states_.clear();
+            register_security_eval(0, "240", "15", false, false);
+        }
+        declared_at_begin = declare_timeframe_subscriptions(declare);
+    }
+
+    void on_native_timeframe_bar(const Bar& bar,
+                                 const NativeTimeframeBarContext& context) override {
+        Delivery delivery;
+        delivery.subscription = context.subscription;
+        delivery.bar = bar;
+        delivery.context = context;
+        delivery.bars_before = bars_seen;
+        const auto pulled = native_series_bar(context.subscription);
+        delivery.accessor_matches = pulled.has_value()
+            && pulled->timestamp == bar.timestamp && same(pulled->close, bar.close);
+        deliveries.push_back(delivery);
+    }
+
+    // The host's OWN evaluator. The kernel feeds only the states it
+    // registered itself, so this stays at zero.
+    void evaluate_security(int sec_id, const Bar&, bool is_complete) override {
+        if (sec_id == 0 && is_complete) ++own_evaluations;
+    }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++bars_seen;
+        declared_outside_begin = declare_timeframe_subscriptions(declare);
+    }
+
+    std::size_t evaluator_states() const { return security_eval_states_.size(); }
 };
 
 // The Pine twin of scenario 5: the same register_security_eval evaluator the
@@ -512,6 +565,80 @@ void test_gaps_clears_between_deliveries() {
     CHECK(native_timeframe_subscriptions_digest(gapped_only) != kHourlySeriesDigest);
 }
 
+// ---- 2d. the begin-time declaration hook ---------------------------------
+
+void test_begin_time_declaration() {
+    scenario = "begin-time declaration";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    const std::int64_t origin = bars.front().timestamp;
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+
+    // Outside a run there is nothing to declare against.
+    DeclaringHost unconfigured;
+    CHECK(!unconfigured.declare_timeframe_subscriptions({hourly}));
+
+    // The spec names NO series; the host names one at begin, after clearing
+    // and rebuilding the engine's evaluator states as generated code does.
+    NativeRunSpec spec = base_spec("15", "15", "native-htf-declare");
+    DeclaringHost host;
+    host.declare.push_back(hourly);
+    host.register_own_evaluator = true;
+    CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+
+    CHECK(host.declared_at_begin);
+    // Legal only inside on_native_run_begin.
+    CHECK(!host.declared_outside_begin);
+    CHECK(host.deliveries.size() == 4);
+    if (host.deliveries.size() == 4) {
+        for (std::size_t k = 0; k < 4; ++k) {
+            const Bar want = hand_aggregate(bars, static_cast<int>(k) * 4, 4,
+                                            origin + static_cast<std::int64_t>(k) * kHour);
+            check_bucket(host.deliveries[k].bar, want, "declared bucket");
+            CHECK(host.deliveries[k].accessor_matches);
+            CHECK(host.deliveries[k].bars_before == static_cast<int>(k) * 4 + 3);
+        }
+    }
+    // The host's own registration survives, and the kernel's is appended
+    // after it rather than in place of it.
+    CHECK(host.evaluator_states() == 2);
+    // The kernel feeds only the states it registered itself.
+    CHECK(host.own_evaluations == 0);
+    // The staged spec names what actually ran, so the run's continuation
+    // identity folds the declared series.
+    const auto view = host.native_state();
+    CHECK(view.spec != nullptr);
+    if (view.spec != nullptr) {
+        CHECK(view.spec->subscriptions.size() == 1);
+        if (view.spec->subscriptions.size() == 1) {
+            CHECK(view.spec->subscriptions[0].tf == "60");
+        }
+    }
+
+    // A list this run's input timeframe would refuse is refused by the hook,
+    // and the staged list is left exactly as it was.
+    NativeRunSpec staged = base_spec("15", "15", "native-htf-declare-refused");
+    staged.subscriptions.push_back(hourly);
+    DeclaringHost refused;
+    NativeTimeframeSubscription finer;
+    finer.tf = "5";
+    refused.declare.push_back(finer);
+    CHECK(refused.configure_native(staged).status == NativeSetupStatus::Applied);
+    refused.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+                MagnifierDistribution::ENDPOINTS);
+    CHECK(refused.last_error().empty());
+    CHECK(!refused.declared_at_begin);
+    CHECK(refused.deliveries.size() == 4);
+    if (refused.deliveries.size() == 4) {
+        check_bucket(refused.deliveries[0].bar, hand_aggregate(bars, 0, 4, origin),
+                     "staged bucket after a refused declaration");
+    }
+}
+
 // ---- 3. authoritative bars replace the aggregate --------------------------
 
 void test_authoritative_bars_override() {
@@ -776,6 +903,7 @@ int main() {
     test_hourly_lookahead();
     test_same_timeframe_instances();
     test_gaps_clears_between_deliveries();
+    test_begin_time_declaration();
     test_authoritative_bars_override();
     test_finer_than_input_is_refused();
     test_weekly_matches_the_pine_path();

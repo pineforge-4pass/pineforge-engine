@@ -711,8 +711,24 @@ public:
 
     // The latest completed bucket delivered for a declared subscription, or
     // nullopt before its first delivery / for an unknown index. Legal inside
-    // every native callback, including on_native_timeframe_bar itself.
+    // every native callback, including on_native_timeframe_bar itself. A
+    // gaps = true series answers nullopt again on every input bar it
+    // delivered nothing on.
     std::optional<Bar> native_series_bar(std::size_t subscription) const;
+
+    // Declare this run's higher-timeframe series from inside
+    // on_native_run_begin, for a host whose series are known only to its own
+    // begin-time registration. The list REPLACES the staged spec's
+    // `subscriptions`, and the kernel registers from the staged spec after
+    // this callback returns, so a host's own registration cannot erase the
+    // kernel's and the run's continuation identity folds what actually ran.
+    // Legal only inside on_native_run_begin: anywhere else, and for a list
+    // this run's input timeframe would refuse (the same validation
+    // configure_native applies), it stages nothing, changes nothing and
+    // answers false. Not virtual: the host calls the kernel here, never the
+    // other way round.
+    bool declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> subscriptions);
 
     NativeSetupResult configure_native(const NativeRunSpec& spec);
     NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);

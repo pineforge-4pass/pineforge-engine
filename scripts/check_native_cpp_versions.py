@@ -380,12 +380,14 @@ def check_texts(files):
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
         spec, ("validate_native_run_spec", "normalize_native_run_spec",
+               "validate_native_timeframe_subscriptions",
                "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
                "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
+                   "validate_native_timeframe_subscriptions",
                    "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
                    "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
@@ -617,7 +619,16 @@ def check_texts(files):
                   'NativeCalculationReason::BarClose',
                   'NativeCalculationReason::OrderFill',
                   'host->on_native_sub_bar(sub, presented);',
-                  'NativeOpenBarView::OpenOnly'):
+                  'NativeOpenBarView::OpenOnly',
+                  # L6c: the declared series are registered AFTER the host's
+                  # own run-begin work, the declaration hook is legal only
+                  # inside it, the kernel's own wiring is what the in-run
+                  # mutation guard stands down for, and gaps clears the
+                  # series where it delivers nothing.
+                  'in_run_begin_ = true;',
+                  'wiring_subscriptions_ = true;',
+                  'clear_if_gapped(subscription);',
+                  'if (subscription.gaps) subscription.latest.reset();'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
@@ -726,6 +737,11 @@ def check_texts(files):
          "on_native_timeframe_bar"),
         (r'\bstd::optional\s*<\s*Bar\s*>\s+native_series_bar\s*\('
          r'\s*std::size_t\s+\w+\s*\)\s*const\s*;', "native_series_bar"),
+        # The begin-time declaration hook is NOT virtual: the host calls the
+        # kernel, so it can never become another overridable entry point.
+        (r'(?<!virtual )bool\s+declare_timeframe_subscriptions\s*\(\s*'
+         r'std::vector\s*<\s*NativeTimeframeSubscription\s*>\s+\w+\s*\)\s*;',
+         "declare_timeframe_subscriptions"),
         (r'\bvirtual\s+std::optional\s*<\s*double\s*>\s+resolve_margin_call_units\s*\('
          r'\s*const\s+NativeMarginCallView\s*&', "resolve_margin_call_units"),
         (r'\bvirtual\s+void\s+on_native_margin_call\s*\('
@@ -777,6 +793,7 @@ def check_texts(files):
              "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
              "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state",
              "NativeStrategyHost::native_series_bar",
+             "NativeStrategyHost::declare_timeframe_subscriptions",
              "NativeStrategyHost::native_liquidation_price",
              "NativeStrategyHost::current_partial_bar",
              "NativeStrategyHost::native_recalculation_count",

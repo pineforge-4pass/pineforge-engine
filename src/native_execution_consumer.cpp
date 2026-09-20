@@ -1298,7 +1298,13 @@ void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
         || (!failed() && (std::holds_alternative<NativeUnconfigured>(state_)
                           || std::holds_alternative<NativeReady>(state_)
                           || std::holds_alternative<NativeCompleted>(state_)
-                          || preparing_begin_))) {
+                          || preparing_begin_
+                          // The kernel's own registration of the declared
+                          // higher-timeframe series, which runs after the run
+                          // is Running and calls no host callback inside its
+                          // scope. It is the consumer writing the engine's
+                          // feed store, never a source host mutating a run.
+                          || wiring_subscriptions_))) {
         return;
     }
     NativeFailure failure;
@@ -1950,42 +1956,54 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     input_callback_bar_.reset();
     tick_callback_context_.reset();
     tick_callback_bar_.reset();
-    // Declared higher-timeframe series are wired while the lifecycle is still
-    // Ready: installing their authoritative bars goes through the ordinary
-    // public feed setter, which refuses a mutation once the run is Running.
-    {
-        const Bar* const begin_bars = begin_bars_;
-        const int begin_n = begin_n_;
-        const bool begin_is_stream = begin_is_stream_;
-        begin_bars_ = nullptr;
-        begin_n_ = 0;
-        begin_is_stream_ = false;
-        if (!begin_timeframe_subscriptions(engine, spec, begin_bars, begin_n,
-                                           begin_is_stream)) {
-            return false;
-        }
-    }
+    // The begin input, borrowed for the length of this call, is consumed once
+    // by the series registration at the end of this function.
+    const Bar* const begin_bars = begin_bars_;
+    const int begin_n = begin_n_;
+    const bool begin_is_stream = begin_is_stream_;
+    begin_bars_ = nullptr;
+    begin_n_ = 0;
+    begin_is_stream_ = false;
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
         in_callback_ = true;
+        in_run_begin_ = true;
         try {
             host->on_native_run_begin();
         } catch (const std::exception& e) {
             in_callback_ = false;
+            in_run_begin_ = false;
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback});
             render(engine, e.what());
             return false;
         } catch (...) {
             in_callback_ = false;
+            in_run_begin_ = false;
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
                                        NativeFailureOperation::Callback});
             render(engine, "native callback exception");
             return false;
         }
         in_callback_ = false;
+        in_run_begin_ = false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Callback)) return false;
+    }
+    // Declared higher-timeframe series are wired LAST, after the host's own
+    // run-begin work. A host that registers its evaluators there (a generated
+    // configure_security_evaluators() opens with security_eval_states_.clear())
+    // would otherwise erase the kernel's registration, and a host that names
+    // its series through declare_timeframe_subscriptions() has only just named
+    // them -- the staged spec the registration reads back is the list that
+    // call left. Installing their authoritative bars still goes through the
+    // ordinary public feed setter, whose in-run mutation refusal is inert for
+    // exactly this kernel-owned wiring (refuse_source_mutation).
+    if (const auto* running = spec_ptr()) {
+        if (!begin_timeframe_subscriptions(engine, *running, begin_bars, begin_n,
+                                           begin_is_stream)) {
+            return false;
+        }
     }
     return true;
 }
@@ -6607,11 +6625,48 @@ bool NativeExecutionConsumer::contribute_input(
 
 void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engine) {
     subscription_warmup_inputs_ = -1;
+    // A feed THIS consumer installed at an earlier begin is the kernel's to
+    // remove. One installed through the engine's own public setter -- the C
+    // ABI's strategy_set_native_security_feed writes the same store -- is not:
+    // it is pre-run host ingress that survives every later begin unless that
+    // begin declares authoritative bars of its own for the same period, which
+    // simply replaces it (R3 row 3).
+    for (const std::string& tf : subscription_feed_tfs_) {
+        for (auto it = engine.native_security_feeds_.begin();
+             it != engine.native_security_feeds_.end(); ++it) {
+            if (it->tf != tf) continue;
+            engine.native_security_feeds_.erase(it);
+            break;
+        }
+    }
+    subscription_feed_tfs_.clear();
     if (subscriptions_.empty()) return;
+    // Erase exactly the evaluator states this consumer registered, and only
+    // while they are still the vector's tail exactly as it registered them.
+    // A host that rebuilt the vector in its own on_native_run_begin -- which
+    // now runs BEFORE this clear -- owns every state in it, and the kernel
+    // takes none of them away.
+    const std::size_t base = subscription_states_base_;
+    if (engine.security_eval_states_.size() == base + subscriptions_.size()) {
+        bool registered_by_this_consumer = true;
+        for (std::size_t i = 0; i < subscriptions_.size(); ++i) {
+            const auto& state = engine.security_eval_states_[base + i];
+            if (state.sec_id != static_cast<int>(base + i)
+                || state.tf != subscriptions_[i].tf_literal) {
+                registered_by_this_consumer = false;
+                break;
+            }
+        }
+        if (registered_by_this_consumer) {
+            engine.security_eval_states_.erase(
+                engine.security_eval_states_.begin()
+                    + static_cast<std::ptrdiff_t>(base),
+                engine.security_eval_states_.end());
+        }
+    }
+    subscription_states_base_ = 0;
     subscriptions_.clear();
     input_next_ms_.clear();
-    engine.security_eval_states_.clear();
-    engine.native_security_feeds_.clear();
     engine.security_input_tf_.clear();
     engine.security_next_input_ms_ = 0;
     engine.security_calling_close_ms_ = 0;
@@ -6620,6 +6675,15 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
 bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         BacktestEngine& engine, const NativeRunSpec& spec,
         const Bar* input_bars, int n_input, bool is_stream) {
+    // This wiring runs after the run is Running, so the engine's public feed
+    // setter would refuse it as an in-run source mutation. It is the kernel's
+    // own registration, not a host ingress, and no host callback runs inside
+    // this scope.
+    struct WiringScope {
+        bool& flag;
+        ~WiringScope() { flag = false; }
+    } wiring{wiring_subscriptions_};
+    wiring_subscriptions_ = true;
     clear_timeframe_subscriptions(engine);
     if (spec.subscriptions.empty()) return true;
     auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
@@ -6646,9 +6710,14 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         engine.security_input_tf_ = spec.input_tf;
         engine.security_next_input_ms_ = 0;
         engine.security_calling_close_ms_ = 0;
+        // Evaluator states the host registered for itself keep their sec_ids:
+        // this consumer's own states are appended after them, and the base is
+        // zero for the whole population that registers none.
+        subscription_states_base_ = engine.security_eval_states_.size();
         subscriptions_.reserve(spec.subscriptions.size());
         for (std::size_t i = 0; i < spec.subscriptions.size(); ++i) {
             const auto& declared = spec.subscriptions[i];
+            const int sec_id = static_cast<int>(subscription_states_base_ + i);
             auto parsed = native_calendar::parse_timeframe(declared.tf);
             if (!parsed) {
                 fail(engine, NativeFailure{NativeFailureCode::Calendar,
@@ -6658,12 +6727,13 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             }
             TimeframeSubscription subscription;
             subscription.index = i;
-            subscription.sec_id = static_cast<int>(i);
+            subscription.sec_id = sec_id;
             subscription.tf = std::move(*parsed);
+            subscription.tf_literal = declared.tf;
             subscription.lookahead = declared.lookahead;
             subscription.gaps = declared.gaps;
             subscriptions_.push_back(std::move(subscription));
-            engine.register_security_eval(static_cast<int>(i), declared.tf, spec.input_tf,
+            engine.register_security_eval(sec_id, declared.tf, spec.input_tf,
                                           /*lookahead_on=*/false, /*gaps_on=*/false,
                                           /*heikinashi=*/false);
             if (declared.authoritative_bars.empty()) continue;
@@ -6678,8 +6748,16 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
                 render(engine, reason.c_str());
                 return false;
             }
+            // Remembered so the next begin removes this consumer's own feeds
+            // and nothing else. Same-period instances install one feed; the
+            // spec already refused two conflicting ones.
+            if (std::find(subscription_feed_tfs_.begin(), subscription_feed_tfs_.end(),
+                          declared.tf) == subscription_feed_tfs_.end()) {
+                subscription_feed_tfs_.push_back(declared.tf);
+            }
         }
-        if (engine.security_eval_states_.size() != subscriptions_.size()) {
+        if (engine.security_eval_states_.size()
+                != subscription_states_base_ + subscriptions_.size()) {
             fail(engine, NativeFailure{NativeFailureCode::Contract,
                                        NativeFailureOperation::Begin});
             render(engine, "native timeframe subscription registration is inconsistent");
@@ -6708,6 +6786,27 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         render(engine, "native timeframe subscription preparation failed");
         return false;
     }
+    return true;
+}
+
+// The begin-time declaration hook. A host whose series are known only to its
+// own run-begin registration names them here, inside on_native_run_begin and
+// nowhere else, and the list REPLACES the staged spec's own before the kernel
+// registers -- so it is also what the run's continuation identity folds, and
+// the staged spec keeps naming exactly what ran. A list this run's input
+// timeframe would refuse is refused here, leaving the staged list untouched:
+// the same validation configure_native applied, against the running spec's
+// own input timeframe.
+bool NativeExecutionConsumer::declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> declared) {
+    if (!in_run_begin_ || failed()) return false;
+    auto* running = std::get_if<NativeRunning>(&state_);
+    if (running == nullptr) return false;
+    if (!validate_native_timeframe_subscriptions(declared, running->spec.input_tf,
+                                                 running->spec.timeframe_undetected)) {
+        return false;
+    }
+    running->spec.subscriptions = std::move(declared);
     return true;
 }
 
@@ -8147,6 +8246,12 @@ NativeFxCurveSetupResult NativeStrategyHost::configure_native_fx_curve(
 std::optional<Bar> NativeStrategyHost::native_series_bar(std::size_t subscription) const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .series_bar(subscription);
+}
+
+bool NativeStrategyHost::declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> subscriptions) {
+    return as_native_consumer(execution_consumer())
+        .declare_timeframe_subscriptions(std::move(subscriptions));
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {

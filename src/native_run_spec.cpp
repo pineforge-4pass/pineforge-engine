@@ -199,6 +199,70 @@ bool conflicting_bars(const std::vector<Bar>& left, const std::vector<Bar>& righ
     return false;
 }
 
+// Everything a declared series can be judged on without a calendar: the
+// pairing with a detected input timeframe, the literal itself, and the order
+// of the bars it supplies.
+Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subscriptions,
+                           bool timeframe_undetected) noexcept {
+    if (!subscriptions.empty() && timeframe_undetected) {
+        return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
+    }
+    for (const auto& subscription : subscriptions) {
+        const auto tf =
+            validate_string(subscription.tf, Field::SubscriptionTimeframe, true);
+        if (!tf) return tf;
+        const auto& bars = subscription.authoritative_bars;
+        for (std::size_t i = 1; i < bars.size(); ++i) {
+            if (bars[i].timestamp <= bars[i - 1].timestamp) {
+                return {Error::UnorderedSubscriptionBars, Field::SubscriptionBars};
+            }
+        }
+    }
+    return {};
+}
+
+// Declared higher-timeframe series pair with the INPUT timeframe exactly as
+// script_tf does. A strictly finer request is named separately: it is a
+// lower-timeframe array contract, never a silently promoted aggregate. A
+// subscription is a series instance, not a period: several may share one
+// timeframe, each with its own evaluator, bucket state and delivery index.
+// Only their feeds are shared, so the one refusal left is two same-period
+// series declaring DIFFERENT authoritative bars.
+Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& subscriptions,
+                             const native_calendar::Timeframe& input) {
+    const Field active_field = Field::SubscriptionTimeframe;
+    std::vector<std::int64_t> keys;
+    keys.reserve(subscriptions.size());
+    for (const auto& subscription : subscriptions) {
+        const auto requested = native_calendar::parse_timeframe(subscription.tf);
+        if (!requested) {
+            return {Error::InvalidSubscriptionTimeframe, active_field};
+        }
+        switch (native_calendar::compatibility(input, *requested).pairing) {
+        case native_calendar::TimeframePairing::Passthrough:
+        case native_calendar::TimeframePairing::SameUnitMultiple:
+        case native_calendar::TimeframePairing::FixedDivisible:
+        case native_calendar::TimeframePairing::FixedToCalendar:
+        case native_calendar::TimeframePairing::CalendarToCalendar:
+            break;
+        case native_calendar::TimeframePairing::ScriptFiner:
+            return {Error::SubscriptionFinerThanInput, active_field};
+        default:
+            return {Error::InvalidSubscriptionTimeframe, active_field};
+        }
+        const std::int64_t key = subscription_period_key(*requested);
+        for (std::size_t seen = 0; seen < keys.size(); ++seen) {
+            if (keys[seen] != key) continue;
+            if (conflicting_bars(subscriptions[seen].authoritative_bars,
+                                 subscription.authoritative_bars)) {
+                return {Error::DuplicateSubscriptionTimeframe, Field::SubscriptionBars};
+            }
+        }
+        keys.push_back(key);
+    }
+    return {};
+}
+
 bool valid_liquidation_sizing(NativeLiquidationSizing sizing) noexcept {
     switch (sizing) {
     case NativeLiquidationSizing::RestoreMinimum:
@@ -444,19 +508,10 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         return {Error::UnknownCalculationTrigger, Field::Calculation};
     if (!valid_open_bar_view(spec.open_bar_view))
         return {Error::UnknownOpenBarView, Field::OpenBarView};
-    if (!spec.subscriptions.empty() && spec.timeframe_undetected) {
-        return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
-    }
-    for (const auto& subscription : spec.subscriptions) {
-        const auto tf =
-            validate_string(subscription.tf, Field::SubscriptionTimeframe, true);
-        if (!tf) return tf;
-        const auto& bars = subscription.authoritative_bars;
-        for (std::size_t i = 1; i < bars.size(); ++i) {
-            if (bars[i].timestamp <= bars[i - 1].timestamp) {
-                return {Error::UnorderedSubscriptionBars, Field::SubscriptionBars};
-            }
-        }
+    if (const auto series =
+            subscription_shapes(spec.subscriptions, spec.timeframe_undetected);
+        !series) {
+        return series;
     }
     if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
@@ -538,45 +593,10 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
             default:
                 return {Error::IncompatibleTimeframes, active_field};
             }
-            // Declared higher-timeframe series pair with the INPUT timeframe
-            // exactly as script_tf does. A strictly finer request is named
-            // separately: it is a lower-timeframe array contract, never a
-            // silently promoted aggregate.
             active_field = Field::SubscriptionTimeframe;
-            std::vector<std::int64_t> keys;
-            keys.reserve(spec.subscriptions.size());
-            for (const auto& subscription : spec.subscriptions) {
-                const auto requested = native_calendar::parse_timeframe(subscription.tf);
-                if (!requested) {
-                    return {Error::InvalidSubscriptionTimeframe, active_field};
-                }
-                switch (native_calendar::compatibility(*input, *requested).pairing) {
-                case native_calendar::TimeframePairing::Passthrough:
-                case native_calendar::TimeframePairing::SameUnitMultiple:
-                case native_calendar::TimeframePairing::FixedDivisible:
-                case native_calendar::TimeframePairing::FixedToCalendar:
-                case native_calendar::TimeframePairing::CalendarToCalendar:
-                    break;
-                case native_calendar::TimeframePairing::ScriptFiner:
-                    return {Error::SubscriptionFinerThanInput, active_field};
-                default:
-                    return {Error::InvalidSubscriptionTimeframe, active_field};
-                }
-                // A subscription is a series instance, not a period: several
-                // may share one timeframe, each with its own evaluator, bucket
-                // state and delivery index. Only their feeds are shared, so
-                // the one refusal left is two same-period series declaring
-                // DIFFERENT authoritative bars.
-                const std::int64_t key = subscription_period_key(*requested);
-                for (std::size_t seen = 0; seen < keys.size(); ++seen) {
-                    if (keys[seen] != key) continue;
-                    if (conflicting_bars(spec.subscriptions[seen].authoritative_bars,
-                                         subscription.authoritative_bars)) {
-                        return {Error::DuplicateSubscriptionTimeframe,
-                                Field::SubscriptionBars};
-                    }
-                }
-                keys.push_back(key);
+            if (const auto series = subscription_pairings(spec.subscriptions, *input);
+                !series) {
+                return series;
             }
         }
         // Use calendar's timezone acceptance with an all-day literal first,
@@ -716,6 +736,23 @@ std::uint64_t native_risk_limits_digest(const NativeRiskLimits& risk) noexcept {
     u(static_cast<std::uint64_t>(risk.day_basis));
     u(static_cast<std::uint64_t>(risk.action));
     return state;
+}
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected) noexcept {
+    const auto shapes = subscription_shapes(subscriptions, timeframe_undetected);
+    if (!shapes) return shapes;
+    if (subscriptions.empty() || timeframe_undetected) return {};
+    try {
+        const auto input = native_calendar::parse_timeframe(input_tf);
+        if (!input) return {Error::InvalidTimeframe, Field::InputTimeframe};
+        return subscription_pairings(subscriptions, *input);
+    } catch (const std::bad_alloc&) {
+        return {Error::AllocationFailure, Field::SubscriptionTimeframe};
+    } catch (...) {
+        return {Error::CalendarFailure, Field::SubscriptionTimeframe};
+    }
 }
 
 std::uint64_t native_timeframe_subscriptions_digest(
