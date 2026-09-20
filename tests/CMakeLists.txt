@@ -1382,9 +1382,12 @@ target_compile_definitions(test_native_sizing_bases PRIVATE
 # language at all.
 string(REPLACE ";" "|" PINEFORGE_R2_CORE_JOINED
        "${PROJECT_SOURCE_DIR}/include/pineforge/native_order.hpp;${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
-target_compile_definitions(test_adapter_sizing_relower PRIVATE
-    PINEFORGE_R2_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
-    PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
+# The witness is adapter-bound, so the kernel-only build never registers it.
+if(TARGET test_adapter_sizing_relower)
+    target_compile_definitions(test_adapter_sizing_relower PRIVATE
+        PINEFORGE_R2_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
+        PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
+endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
