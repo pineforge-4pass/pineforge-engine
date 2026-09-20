@@ -84,6 +84,7 @@ set(TEST_SOURCES
     test_native_margin_fx_roll
     test_adapter_report_relower
     test_adapter_margin_relower
+    test_adapter_risk_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
     test_adapter_grid_relower
