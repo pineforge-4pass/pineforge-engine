@@ -186,8 +186,8 @@ class NativeVersions(unittest.TestCase):
             (FILES[11], "native_order_v1", "native_order_v5"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
-            (FILES[4], "native_run_spec_v2", "native_run_spec_v1"),
-            (FILES[5], "native_run_spec_v2", "native_run_spec_v1"),
+            (FILES[4], "native_run_spec_v3", "native_run_spec_v1"),
+            (FILES[5], "native_run_spec_v3", "native_run_spec_v1"),
             (FILES[6], "native_driver_v5", "native_driver_v2"),
             (FILES[7], "native_driver_v5", "native_driver_v3"),
             (FILES[8], "engine_script_run_v17", "engine_script_run_v12"),
@@ -201,7 +201,7 @@ class NativeVersions(unittest.TestCase):
         for path, namespace in (
             (FILES[0], "native_order_v5"),
             (FILES[2], "native_calendar_v2"),
-            (FILES[4], "native_run_spec_v2"),
+            (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
             (FILES[8], "engine_script_run_v17"),
             (FILES[11], "native_order_v1"),
@@ -214,7 +214,7 @@ class NativeVersions(unittest.TestCase):
         for path, namespace in (
             (FILES[0], "native_order_v5"),
             (FILES[2], "native_calendar_v2"),
-            (FILES[4], "native_run_spec_v2"),
+            (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
             (FILES[8], "engine_script_run_v17"),
             (FILES[11], "native_order_v1"),
@@ -302,8 +302,8 @@ class NativeVersions(unittest.TestCase):
         decl = "NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noexcept;"
         text = changed[spec].replace(decl, "", 1)
         text = text.replace(
-            "}  // inline namespace native_run_spec_v2",
-            "}  // inline namespace native_run_spec_v2\n" + decl,
+            "}  // inline namespace native_run_spec_v3",
+            "}  // inline namespace native_run_spec_v3\n" + decl,
             1)
         changed[spec] = text
         with self.assertRaises(ValueError):
@@ -353,7 +353,7 @@ class NativeVersions(unittest.TestCase):
         self.reject(
             FILES[6],
             DRIVER_FORWARD,
-            "inline namespace native_run_spec_v2 { struct NativeRunSpec {}; }")
+            "inline namespace native_run_spec_v3 { struct NativeRunSpec {}; }")
 
     def test_host_public_values_cannot_leave_v17(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")

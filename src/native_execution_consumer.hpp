@@ -257,6 +257,11 @@ private:
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
+    // Report truth for bare hosts (NativeReportPolicy::KernelRecorded). Both
+    // are reporting-only: they mark equity and synthesize report rows, and
+    // never book cash, place an order or move the broker book.
+    void record_script_report_point(BacktestEngine& engine, int64_t script_open_ms) const;
+    void record_open_position_report_rows(BacktestEngine& engine) const;
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_discrete(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_segment(BacktestEngine& engine, const NativeDriverPoint& dest, double from_price);

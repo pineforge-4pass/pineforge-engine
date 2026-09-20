@@ -113,6 +113,9 @@ Always set, with documented defaults in the header:
   Cash kinds are account currency per unit or per execution.
 - `close_execution`: `NextEligiblePoint` (default) or `AfterCalculation`
 - `allowed_open_directions`: `None`, `Long`, `Short`, `Both` (default)
+- `report_policy`: `HostRecorded` (default) or `KernelRecorded`;
+  `report_open_position_at_end`: `false` (default). See *Reporting for native
+  hosts* below.
 
 Optional, absent unless set:
 
@@ -346,6 +349,45 @@ on that execution (percent of absolute notional, cash per unit, or one cash
 ticket per execution). Slippage is applied to the raw observed/modeled price
 as described above. Native account rows follow lots, remaining entry costs,
 and realized balance at the matching coordinate.
+
+## Reporting for native hosts
+
+`fill_report` publishes closed trades, diagnostics, an equity curve and the
+metrics derived from it. The curve is **host-owned by default**: nothing in
+the kernel records a point, so a bare `NativeStrategyHost` that leaves
+`report_policy` at `HostRecorded` reports `equity_curve_len == 0`, and every
+equity metric (drawdown, run-up, Sharpe/Sortino, CAGR, time in market)
+degenerates over that empty series. A host that marks its own equity keeps
+this default and owns the whole series.
+
+`NativeReportPolicy::KernelRecorded` asks the consumer to record instead. Once
+per script calculation — after the callback returns, and after the
+`AfterCalculation` close when that mode is on — it folds the equity extremes
+and appends one point labelled with the **script interval's open**, so the
+curve is identical with and without an intrabar path. The result is one point
+per script bar, a finite drawdown/run-up walk, and metrics computed over a
+real series.
+
+`report_open_position_at_end` (`KernelRecorded` only) adds the rows a close of
+the still-open position at the last bar's close would record — one per
+physical lot, through the same row builder every full close uses, with
+`open_at_end` set. The mark is the raw close on the price grid with **no
+slippage**: slippage models a market order's fill uncertainty, and this row is
+a mark, not an order. It is reporting only. The live position, the pending
+orders, the realized sums, the equity curve and the broker state are left
+exactly as the run left them; the rows appear in `fill_report` and in
+`report_trade_count()` / `get_report_trade()`, never in `closed_trade_count()`
+/ `closed_trade()`.
+
+Both fields are opt-in and fold into the continuation hash only once
+`report_policy` is non-default, so a spec that does not ask for kernel
+recording keeps the continuation identity it had before these fields existed.
+Recording does move the broker-state hash, because the equity extremes it
+folds are durable engine state.
+
+Per-trade reads: `closed_trade_count()` / `closed_trade(i)` return the closed
+rows this run booked; `report_trade_count()` / `get_report_trade(i)` span those
+rows followed by the range-end rows, in the order `fill_report` lays them out.
 
 ## Calendar, session, timeframes, warmup
 

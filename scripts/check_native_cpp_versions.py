@@ -30,7 +30,7 @@ NATIVE_FX_CURVE_SOURCE = "src/native_fx_curve.cpp"
 NATIVE_FX_CURVE_NAMESPACE = "native_fx_curve_v1"
 
 DRIVER_FORWARD = (
-    "inline namespace native_run_spec_v2 { struct NativeRunSpec; }"
+    "inline namespace native_run_spec_v3 { struct NativeRunSpec; }"
 )
 
 TYPE_DEF = r'\b(?:enum\s+class|class|struct)\s+(\w+)\s*(?::[^;{]+)?\{'
@@ -291,53 +291,57 @@ def check_texts(files):
     require(calendar_src, ("TimezoneIdentityDescriptor::valid",),
             "native_calendar_v2", r'\bNAME\s*\(')
 
-    spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
+    spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v3")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
                    "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
                    "NativeSlotLabelPolicy", "NativePathOrder",
-                   "NativeLegacyTolerance"),
-            "native_run_spec_v2",
+                   "NativeLegacyTolerance", "NativeReportPolicy"),
+            "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
         spec, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
-        "native_run_spec_v2")
-    spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v2")
+        "native_run_spec_v3")
+    spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
-        "native_run_spec_v2")
+        "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
     if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
             not in re.sub(r'\s+', '', run_spec)):
-        raise ValueError('native_run_spec_v2 requires its explicit undetected-timeframe field')
+        raise ValueError('native_run_spec_v3 requires its explicit undetected-timeframe field')
     compact_spec = re.sub(r'\s+', '', run_spec)
     if not re.search(r'\benum\s+class\s+NativeAbortReporting\s*:', spec):
-        raise ValueError('native_run_spec_v2 omits NativeAbortReporting')
+        raise ValueError('native_run_spec_v3 omits NativeAbortReporting')
     for member in (
             'NativeSlotLabelPolicyslot_label_policy=NativeSlotLabelPolicy::Canonical;',
             'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;',
             'NativePathOrderpath_order=NativePathOrder::Auto;',
-            'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;'):
+            'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;',
+            'NativeReportPolicyreport_policy=NativeReportPolicy::HostRecorded;',
+            'boolreport_open_position_at_end=false;'):
         if member not in compact_spec:
-            raise ValueError('native_run_spec_v2 omits required policy member: ' + member)
+            raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
     for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
-                  'PathOrder'):
+                  'PathOrder', 'ReportPolicy'):
         if not re.search(r'\b' + field + r'\b', fields):
-            raise ValueError('native_run_spec_v2 omits the field tag: ' + field)
+            raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
                   'native run spec errors')
     for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
                   'UnknownLegacyTolerance', 'UnknownAbortReporting',
-                  'UnknownIntrabarSampleEligibility', 'UnknownPathOrder'):
+                  'UnknownIntrabarSampleEligibility', 'UnknownPathOrder',
+                  'UnknownReportPolicy'):
         if not re.search(r'\b' + error + r'\b', errors):
-            raise ValueError('native_run_spec_v2 omits the validation error: ' + error)
+            raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
             or 'InvalidUndetectedTimeframe' not in spec_src
             or 'spec.slot_label_policy' not in spec_src
             or 'spec.legacy_tolerance' not in spec_src
             or 'spec.path_order' not in spec_src
             or 'spec.abort_reporting' not in spec_src
+            or 'spec.report_policy' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
@@ -379,12 +383,12 @@ def check_texts(files):
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
         raise ValueError("market_driver.hpp must forward-declare NativeRunSpec "
-                         "in native_run_spec_v2 outside native_driver_v5")
+                         "in native_run_spec_v3 outside native_driver_v5")
     driver_clean = clean(driver_text)
     driver_owner = body(driver_clean, r'namespace\s+pineforge\s*\{', "pineforge")
     driver = body(driver_owner, r'inline\s+namespace\s+native_driver_v5\s*\{',
                   "native_driver_v5")
-    if DRIVER_FORWARD in driver or "native_run_spec_v2" in driver:
+    if DRIVER_FORWARD in driver or "native_run_spec_v3" in driver:
         raise ValueError("NativeRunSpec forward declaration must stay outside native_driver_v5")
     if re.search(r'\bstruct\s+NativeRunSpec\s*\{', driver_clean):
         raise ValueError("NativeRunSpec definition does not belong to native_driver_v5")
@@ -638,5 +642,5 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("native_order identity v1 / values v5, native_calendar_v2, native_run_spec_v2, "
+    print("native_order identity v1 / values v5, native_calendar_v2, native_run_spec_v3, "
           "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v17 ownership verified")

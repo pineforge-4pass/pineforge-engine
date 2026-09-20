@@ -74,6 +74,7 @@ set(TEST_SOURCES
     test_native_fx_curve
     test_native_order_terms_core
     test_native_execution_terms
+    test_native_report_truth
     test_native_queued_reverse_to
     test_native_precommit_view
     test_native_fx_activation
