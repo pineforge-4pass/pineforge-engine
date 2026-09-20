@@ -14,26 +14,8 @@
 namespace pineforge {
 inline namespace engine_script_run_v18 {
 
-class BrokerStateHashSink {
-public:
-    uint64_t h = 1469598103934665603ULL;
-
-    void bytes(const void* p, size_t n) {
-        const unsigned char* c = static_cast<const unsigned char*>(p);
-        for (size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ULL; }
-    }
-
-    void d(double v) {
-        if (v == 0.0) v = 0.0;
-        if (v != v) v = std::numeric_limits<double>::quiet_NaN();
-        bytes(&v, sizeof v);
-    }
-
-    void i(int64_t v) { bytes(&v, sizeof v); }
-    void u(uint64_t v) { bytes(&v, sizeof v); }
-    void b(bool v) { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
-    void s(const std::string& v) { u(v.size()); bytes(v.data(), v.size()); }
-};
+// BrokerStateHashSink itself is public (engine.hpp): a host folds its own
+// state through it. What stays here are the kernel's own fold helpers.
 
 inline void hash_admission_field(BrokerStateHashSink& f, const admission::Field& field) {
     f.s(field.path); f.u(field.value.index());

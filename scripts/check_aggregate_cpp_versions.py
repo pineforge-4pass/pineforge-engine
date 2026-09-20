@@ -53,16 +53,54 @@ def check(root: Path = ROOT) -> None:
         raise ValueError("retired source PendingOrder header is still installed")
     if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"' not in adapter:
         raise ValueError("source adapter domain must remain v3")
+    # N5: the fold's host seam is generic. BacktestEngine declares
+    # hash_host_extension beside the deprecated hash_source_extension spelling,
+    # the projection calls the generic one only, its default forwards to the
+    # deprecated one (whose default is the established marker), and the sink a
+    # host folds through is a complete public type of this epoch.
+    engine_clean = clean(engine)
+    for name in ("hash_host_extension", "hash_source_extension"):
+        if len(re.findall(r"\bvirtual\s+void\s+" + name
+                          + r"\(BrokerStateHashSink&\)\s+const\s*;", engine_clean)) != 1:
+            raise ValueError(name + " must be a v18 BacktestEngine virtual")
+    if len(re.findall(r"\bclass\s+BrokerStateHashSink\s*\{", engine_clean)) != 1:
+        raise ValueError("BrokerStateHashSink must be a complete public type")
+    if re.search(r"\bclass\s+BrokerStateHashSink\s*\{", clean(
+            (root / "src/broker_state_hash_internal.hpp").read_text())):
+        raise ValueError("BrokerStateHashSink must have one definition, the public one")
+    host_default = body(generic_hash,
+                        r"void\s+BacktestEngine::hash_host_extension\(BrokerStateHashSink&\s+sink\)\s+const\s*\{",
+                        "generic host hash default")
+    if re.sub(r"\s+", "", host_default) != "hash_source_extension(sink);":
+        raise ValueError("the generic host hash default must forward to the deprecated spelling")
+    source_default = body(generic_hash,
+                          r"void\s+BacktestEngine::hash_source_extension\(BrokerStateHashSink&\s+sink\)\s+const\s*\{",
+                          "deprecated host hash default")
+    if re.sub(r"\s+", "", source_default) != 'sink.s("source:none");':
+        raise ValueError("the deprecated host hash default must fold the established marker")
     source_body = body(source_hash,
-                       r"void\s+source::PineStrategyHost::hash_source_extension\(BrokerStateHashSink&\s+f\)\s+const\s*\{",
+                       r"void\s+source::PineStrategyHost::hash_host_extension\(BrokerStateHashSink&\s+f\)\s+const\s*\{",
                        "source hash")
     if not re.match(r"\s*f\.s\(kSourceAdapterDomain\);", source_body):
         raise ValueError("source hash must begin with its adapter domain")
+    if "hash_source_extension" in source_hash:
+        raise ValueError("the source host must fold through the generic hook")
+    source_host = clean((root / "include/pineforge/source/pine_strategy_host.hpp").read_text())
+    if len(re.findall(r"void\s+hash_host_extension\(BrokerStateHashSink&\)\s+const\s+override\s*;",
+                      source_host)) != 1:
+        raise ValueError("the source host must override the generic hash hook")
+    if not re.search(r"void\s+hash_source_extension\(BrokerStateHashSink&\s+sink\)\s+const\s+final\s*\{"
+                     r"\s*hash_host_extension\(sink\);\s*\}", source_host):
+        raise ValueError("the source host must keep the deprecated spelling as a final forward")
     generic_body = body(generic_hash,
                         r"(?:std::)?uint64_t\s+BacktestEngine::broker_state_hash_from_execution_hash\(\s*(?:std::)?uint64_t\s+execution_hash\)\s+const\s*\{",
                         "broker hash")
     if not re.match(r"\s*BrokerStateHashSink\s+f;\s*f\.s\(\"pineforge-broker-state/v18\"\);", generic_body):
         raise ValueError("broker hash requires the v18 domain")
+    if not re.search(r"hash_host_extension\(f\);\s*return\s+f\.h;\s*$", generic_body):
+        raise ValueError("broker hash must end with the generic host extension")
+    if "hash_source_extension" in generic_body:
+        raise ValueError("broker hash must not call the deprecated spelling itself")
     stream_body = body(stream_hash,
                        r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{",
                        "stream hash")

@@ -75,6 +75,7 @@ set(TEST_SOURCES
     test_native_order_terms_core
     test_native_execution_terms
     test_native_report_truth
+    test_native_host_hash_extension
     test_native_margin_model
     test_native_margin_hooks
     test_adapter_report_relower

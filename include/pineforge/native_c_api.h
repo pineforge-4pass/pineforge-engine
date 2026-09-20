@@ -26,6 +26,11 @@
  *   answering hook. A C host that needs kernel sizing uses
  *   PF_NATIVE_INTENT_SIZED; an anchored leg is armed at the kernel level
  *   (fill + offset, snapped per `anchor_rounding`).
+ * ✗ hash_host_extension is not exposed: the callback table carries no hash
+ *   hook, so a C host's broker-state hash is the kernel's own fold. The
+ *   per-bar rows need no new symbol: `report_policy` = KernelRecorded with
+ *   strategy_set_broker_state_hash_recording on fills
+ *   pf_report_t::broker_state_hash, one row per script bar.
  *
  * HARDENING RULES
  * ───────────────

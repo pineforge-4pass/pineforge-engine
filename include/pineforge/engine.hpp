@@ -315,7 +315,34 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
 inline namespace engine_script_run_v18 {
-class BrokerStateHashSink;
+// The fold broker_state_hash() is built on: FNV-1a over a canonical byte
+// spelling of each value (-0.0 folds as 0.0, every NaN as one quiet NaN, a
+// string as its length then its bytes). It is a public, complete type because
+// a host writes into it: BacktestEngine::hash_host_extension receives the sink
+// the kernel has already folded its own broker state into, and whatever the
+// host folds after that is part of every scalar, per-bar and stream hash of
+// the run. Begin an extension with a domain tag of your own (`sink.s(...)`),
+// then fold each durable value in a fixed order.
+class BrokerStateHashSink {
+public:
+    uint64_t h = 1469598103934665603ULL;
+
+    void bytes(const void* p, size_t n) {
+        const unsigned char* c = static_cast<const unsigned char*>(p);
+        for (size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ULL; }
+    }
+
+    void d(double v) {
+        if (v == 0.0) v = 0.0;
+        if (v != v) v = std::numeric_limits<double>::quiet_NaN();
+        bytes(&v, sizeof v);
+    }
+
+    void i(int64_t v) { bytes(&v, sizeof v); }
+    void u(uint64_t v) { bytes(&v, sizeof v); }
+    void b(bool v) { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
+    void s(const std::string& v) { u(v.size()); bytes(v.data(), v.size()); }
+};
 // Optional frontend projection interface retained for source compatibility.
 // Broker dispatch itself is virtual on BacktestEngine and never discovers a
 // host kind with RTTI.
@@ -340,6 +367,21 @@ protected:
     explicit BacktestEngine(NativeConsumerBindTag);
     IExecutionConsumer& execution_consumer();
     const IExecutionConsumer& execution_consumer() const;
+    // The host's own durable state, folded last into broker_state_hash():
+    // called exactly once per hash, after the kernel's generic broker state.
+    // A host whose next decision depends on state the kernel does not own — a
+    // regime, a counter, a model — overrides this and folds it, under its own
+    // domain tag, so a replay that diverges there diverges in the hash. The
+    // override replaces the default; call BacktestEngine::hash_host_extension
+    // first to keep the default's bytes and append to them. A host that
+    // overrides nothing folds exactly what it always folded: the default
+    // forwards to the deprecated spelling below, whose default is the
+    // "source:none" marker.
+    virtual void hash_host_extension(BrokerStateHashSink&) const;
+    // Deprecated spelling of hash_host_extension, named by the source layer
+    // before a bare host could extend the fold. Still folded when it is the
+    // only one overridden, so an existing subclass compiles and hashes
+    // unchanged; the kernel itself calls hash_host_extension only.
     virtual void hash_source_extension(BrokerStateHashSink&) const;
     virtual std::uint64_t broker_state_hash_projection() const;
     std::uint64_t broker_state_hash_from_execution_hash(std::uint64_t) const;

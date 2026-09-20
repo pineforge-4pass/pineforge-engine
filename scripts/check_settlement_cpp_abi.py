@@ -67,6 +67,14 @@ def verify(include: Path) -> dict:
     if not all(re.search(r"virtual\s+[^;{]+?\b" + name + r"\s*\(", native)
                for name in required_answering_virtuals):
         raise RuntimeError("current native host omits a required policy hook")
+    # N5: the generic host hash extension is a BacktestEngine virtual, so the
+    # engine header carries it, beside the deprecated spelling it forwards to.
+    required_engine_virtuals = {"hash_host_extension"}
+    if not required_engine_virtuals.issubset(declared):
+        raise RuntimeError("relocation manifest omits an engine hook")
+    if not all("virtual void " + name + "(BrokerStateHashSink&) const;" in engine
+               for name in required_engine_virtuals | {"hash_source_extension"}):
+        raise RuntimeError("current engine omits a required hash extension hook")
     pairs = manifest.get("rejectionPairs")
     if pairs != [["v16-frozen", "v18-current"], ["v18-current", "v16-frozen"]]:
         raise RuntimeError("v16/v18 rejection pairs drift")

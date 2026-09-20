@@ -108,7 +108,8 @@
     "NativeAnchoredTrigger",
     "NativeAnchoredLevelView",
     "WaitForApplied::visibility",
-    "NativeArmVisibility"
+    "NativeArmVisibility",
+    "BrokerStateHashSink"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
@@ -122,7 +123,8 @@
     "on_native_sub_bar",
     "resolve_margin_requirement",
     "margin_check_allowed",
-    "resolve_anchored_level"
+    "resolve_anchored_level",
+    "hash_host_extension"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

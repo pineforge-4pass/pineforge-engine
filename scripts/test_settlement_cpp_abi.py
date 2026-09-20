@@ -61,6 +61,20 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    def test_missing_host_hash_extension_is_refused(self):
+        # N5: the generic hash extension and the deprecated spelling it
+        # forwards to are both v18 BacktestEngine virtuals.
+        for name in ("hash_host_extension", "hash_source_extension"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                include = root / "include"
+                shutil.copytree(ROOT / "include", include)
+                path = include / "pineforge/engine.hpp"
+                path.write_text(path.read_text().replace(
+                    "virtual void " + name + "(", "virtual void missing_" + name + "(", 1))
+                with self.assertRaises(RuntimeError):
+                    checker.verify(include)
+
 
 if __name__ == "__main__":
     unittest.main()

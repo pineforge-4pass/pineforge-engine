@@ -610,7 +610,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(deferred_boundary_input_.active);
 }
 
-void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) const {
+void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);

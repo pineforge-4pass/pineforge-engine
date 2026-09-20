@@ -72,6 +72,26 @@ class Coverage(unittest.TestCase):
                     ("src/native_execution_consumer.cpp", before, after),))
                 self.assertEqual(result, 1, output)
 
+    def test_generic_host_seam_is_pinned(self):
+        # R5 N5 (RP10): the fold ends in hash_host_extension, its default
+        # reaches the established marker through the deprecated spelling, and
+        # the source host uses the generic hook.
+        for relative, before, after in (
+            ("src/engine_state_hash.cpp", "    hash_host_extension(f);\n", ""),
+            ("src/engine_state_hash.cpp", "    hash_host_extension(f);\n",
+             "    if (false) { hash_host_extension(f); }\n"),
+            ("src/engine_state_hash.cpp", "    hash_host_extension(f);\n",
+             "    hash_source_extension(f);\n"),
+            ("src/engine_state_hash.cpp", "    hash_source_extension(sink);\n", ""),
+            ("src/engine_state_hash.cpp", 'sink.s("source:none");', 'sink.s("");'),
+            ("src/source/pine_state_hash.cpp",
+             "void source::PineStrategyHost::hash_host_extension(",
+             "void source::PineStrategyHost::hash_source_extension("),
+        ):
+            with self.subTest(relative=relative, before=before, after=after):
+                result, output = self.check(((relative, before, after),))
+                self.assertEqual(result, 1, output)
+
     def test_generic_domain_is_pinned(self):
         result, output = self.check((
             ("src/engine_state_hash.cpp", "pineforge-broker-state/v18",

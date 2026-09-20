@@ -233,8 +233,21 @@ def main(root: Path = ROOT) -> int:
                      "source request.security hash fold")
         if "if (false) { integer(18); integer(broker_state_hash()); }" in stream_hash:
             raise ValueError("stream v18 fold must be unconditional")
-        if "void source::PineStrategyHost::hash_source_extension" not in source_hash:
+        # R5 N5 (RP10): the fold ends in the generic host seam. The projection
+        # calls hash_host_extension exactly once and never the deprecated
+        # spelling; the default forwards to that spelling, whose default is
+        # the marker a host without an extension has always folded; and the
+        # source host folds through the generic hook like any other host.
+        require_once(engine_hash, "hash_host_extension(f);", "generic host hash extension fold")
+        if "hash_source_extension(f);" in engine_hash:
+            raise ValueError("the generic fold must not call the deprecated spelling")
+        require_once(engine_hash, "hash_source_extension(sink);",
+                     "generic host hash default forward")
+        require_once(engine_hash, 'sink.s("source:none");', "no-extension marker")
+        if "void source::PineStrategyHost::hash_host_extension" not in source_hash:
             raise ValueError("source host hash extension is missing")
+        if "hash_source_extension" in source_hash:
+            raise ValueError("source host folds through the deprecated spelling")
         if "void source::PineExecutionAdapter::hash_state" not in source_hash:
             raise ValueError("adapter durable-state hash is missing")
         if "void source::PineScheduler::hash_state" not in source_hash:

@@ -1,9 +1,18 @@
-// Broker-state hash generic half. Source policy state is folded by the
-// PineStrategyHost extension in src/source/pine_state_hash.cpp.
+// Broker-state hash generic half. A host folds its own durable state through
+// hash_host_extension; the source adapter's fold is the PineStrategyHost
+// override in src/source/pine_state_hash.cpp.
 #include "engine_internal.hpp"
 #include "broker_state_hash_internal.hpp"
 
 namespace pineforge {
+
+// A host that overrides nothing keeps the bytes it always folded: the generic
+// default reaches the deprecated spelling, whose default is the marker. That
+// same forward is what keeps a subclass still written against the deprecated
+// spelling in the fold.
+void BacktestEngine::hash_host_extension(BrokerStateHashSink& sink) const {
+    hash_source_extension(sink);
+}
 
 void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
     sink.s("source:none");
@@ -102,7 +111,7 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
         f.d(t.qty); f.d(t.pnl);
     }
 
-    hash_source_extension(f);
+    hash_host_extension(f);
     return f.h;
 }
 

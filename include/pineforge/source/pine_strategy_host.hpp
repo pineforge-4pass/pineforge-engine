@@ -591,7 +591,14 @@ protected:
     // finer-than-chart site runs under.
     void validate_security_timeframes(const std::string& input_tf);
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
-    void hash_source_extension(BrokerStateHashSink&) const override;
+    // The adapter's durable state rides the kernel's generic host seam.
+    void hash_host_extension(BrokerStateHashSink&) const override;
+    // Deprecated spelling, kept forwarding so a caller written against it
+    // still reads this host's fold. final: the kernel folds
+    // hash_host_extension, so an override of this name would never be folded.
+    void hash_source_extension(BrokerStateHashSink& sink) const final {
+        hash_host_extension(sink);
+    }
 
 private:
     friend class PineScheduler;

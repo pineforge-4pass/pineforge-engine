@@ -25,6 +25,19 @@ class SourceProbe final : public source::PineStrategyHost {
 public:
     void on_source_bar(const Bar&) override {}
 
+    // N5: the adapter folds through the kernel's generic host seam; the
+    // deprecated spelling is a forward to it.
+    std::uint64_t generic_extension_hash() const {
+        BrokerStateHashSink sink;
+        hash_host_extension(sink);
+        return sink.h;
+    }
+    std::uint64_t deprecated_extension_hash() const {
+        BrokerStateHashSink sink;
+        hash_source_extension(sink);
+        return sink.h;
+    }
+
     void mutate_configuration() {
         source::PineStrategyConfig config;
         config.initial_capital = 12345.0;
@@ -75,6 +88,11 @@ public:
     std::uint64_t source_extension_hash() const {
         BrokerStateHashSink sink;
         hash_source_extension(sink);
+        return sink.h;
+    }
+    std::uint64_t host_extension_hash() const {
+        BrokerStateHashSink sink;
+        hash_host_extension(sink);
         return sink.h;
     }
 };
@@ -131,5 +149,17 @@ int main() {
     }
     CHECK(native.source_extension_hash() == source_none.h);
     CHECK(native.broker_state_hash() == native_before);
+
+    // N5: one seam, two spellings. A bare host's generic default is the same
+    // marker; the adapter's fold is reached through either name, is not the
+    // marker, and still follows the adapter's state.
+    CHECK(native.host_extension_hash() == source_none.h);
+    SourceProbe adapter;
+    CHECK(adapter.generic_extension_hash() == adapter.deprecated_extension_hash());
+    CHECK(adapter.generic_extension_hash() != source_none.h);
+    const std::uint64_t adapter_before = adapter.generic_extension_hash();
+    adapter.mutate_risk();
+    CHECK(adapter.generic_extension_hash() != adapter_before);
+    CHECK(adapter.generic_extension_hash() == adapter.deprecated_extension_hash());
     return failures == 0 ? 0 : 1;
 }
