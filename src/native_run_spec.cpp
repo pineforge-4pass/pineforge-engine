@@ -84,7 +84,7 @@ bool valid_sample_eligibility(IntrabarPath::SampleEligibility eligibility) noexc
 bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
     switch (policy) {
     case NativeSlotLabelPolicy::Canonical:
-    case NativeSlotLabelPolicy::LegacyTolerant:
+    case NativeSlotLabelPolicy::FeedTolerant:
         return true;
     }
     return false;
@@ -270,10 +270,10 @@ Result validate_risk(const NativeRunSpec& spec) noexcept {
     return {};
 }
 
-bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
+bool valid_legacy_tolerance(NativeFeedTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
-        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
-        | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC);
+        static_cast<std::uint32_t>(NativeFeedTolerance::BatchStructuralBars)
+        | static_cast<std::uint32_t>(NativeFeedTolerance::WarmupNonNegativeOHLC);
     const auto bits = static_cast<std::uint32_t>(tolerance);
     return (bits & ~kKnown) == 0u;
 }

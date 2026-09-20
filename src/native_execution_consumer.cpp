@@ -1571,7 +1571,7 @@ bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
 
 bool NativeExecutionConsumer::legacy_tolerant_slot_labels() const noexcept {
     const auto* spec = spec_ptr();
-    return spec && spec->slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant;
+    return spec && spec->slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
 }
 
 bool NativeExecutionConsumer::uses_raw_label_partition() const noexcept {
@@ -6752,7 +6752,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
         && running->phase == NativeRunPhase::Realtime;
     if (tolerant_realtime && last_accepted_input_) {
-        // LegacyTolerant preserves arbitrary historical labels, but the
+        // FeedTolerant preserves arbitrary provider labels, but the
         // realtime confirmed-bar API still advances on the caller's raw label
         // grid (ab9714be pine_stream.cpp:167-205).  Validate that boundary
         // before any driver, digest, aggregation, or callback mutation.
@@ -7083,9 +7083,9 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         if (preflight_spec && n_warmup > 0
             && (!std::isfinite(warmup_bars[n_warmup - 1].close)
                 || warmup_bars[n_warmup - 1].close <= 0.0)
-            && native_legacy_tolerance_enabled(
+            && native_feed_tolerance_enabled(
                 preflight_spec->legacy_tolerance,
-                NativeLegacyTolerance::WarmupNonNegativeOHLC)) {
+                NativeFeedTolerance::WarmupNonNegativeOHLC)) {
             present_refusal(engine, "stream warmup final close must be finite and positive");
             return false;
         }

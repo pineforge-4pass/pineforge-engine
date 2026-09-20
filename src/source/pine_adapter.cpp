@@ -1448,16 +1448,16 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.fee_kind = fee_kind_for(config.commission_type);
     spec.fee_value = config.commission_value;
     spec.quantity_grid = staged.quantity_grid;
-    // A13: source hosts opt into the generic legacy-compatible batch ingress.
+    // A13: source hosts opt into the generic tolerant batch ingress.
     // Native-only hosts retain the strict Canonical/None defaults.
-    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
-    spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+    spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+    spec.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
     if (args.is_stream) {
         // A36: legacy stream warmups permit zero-valued interim OHLC bars;
         // the final close is checked by the stream preflight boundary.
-        spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(
+        spec.legacy_tolerance = static_cast<NativeFeedTolerance>(
             static_cast<std::uint32_t>(spec.legacy_tolerance)
-            | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC));
+            | static_cast<std::uint32_t>(NativeFeedTolerance::WarmupNonNegativeOHLC));
     }
     spec.path_order = path_order;
     spec.close_execution = config.process_orders_on_close

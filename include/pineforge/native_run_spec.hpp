@@ -233,12 +233,16 @@ struct NativeRiskLimits {
 };
 
 // Native hosts normally require every confirmed bar to name a canonical input
-// slot.  A host that deliberately reproduces a legacy batch route can retain
-// the caller's strictly-increasing timestamps as its decision labels instead.
-// This remains a run-spec value so the two modes never share a continuation.
+// slot.  A host whose feed carries provider labels can retain the caller's
+// strictly-increasing timestamps as its decision labels instead.  This is a
+// feed-shape policy, not a source-language one, and it remains a run-spec
+// value so the two modes never share a continuation.
 enum class NativeSlotLabelPolicy : std::uint32_t {
     Canonical = 0,
-    LegacyTolerant = 1,
+    FeedTolerant = 1,
+    // Deprecated spelling of FeedTolerant; identical value, kept so existing
+    // hosts and the source adapter compile unchanged.
+    LegacyTolerant = FeedTolerant,
 };
 
 // Generic ordering for a modeled OHLC path. Auto retains the open-proximity
@@ -250,9 +254,12 @@ enum class NativePathOrder : std::uint32_t {
     LowFirst = 2,
 };
 
-// Explicit, opt-in compatibility exceptions for legacy batch input shape.
-// They are separate from slot labels because a host may need legacy price/
-// unavailable-volume admission while retaining canonical calendar labels.
+// Explicit, opt-in admission exceptions for a tolerated input-feed shape.
+// They are separate from slot labels because a host may need the tolerant
+// price / unavailable-volume admission while retaining canonical calendar
+// labels.  `NativeFeedTolerance` is the neutral spelling of this type; the
+// definition keeps its historical name because the native C++ ABI guard pins
+// it (scripts/check_native_cpp_versions.py), and the two are the same type.
 enum class NativeLegacyTolerance : std::uint32_t {
     None = 0,
     // Match engine_run.cpp's legacy batch structural check: finite OHLC values
@@ -263,10 +270,19 @@ enum class NativeLegacyTolerance : std::uint32_t {
     WarmupNonNegativeOHLC = 1u << 1,
 };
 
-constexpr bool native_legacy_tolerance_enabled(
-        NativeLegacyTolerance enabled, NativeLegacyTolerance requested) noexcept {
+// Neutral spelling of the tolerance type. Same type, same values, same hash.
+using NativeFeedTolerance = NativeLegacyTolerance;
+
+constexpr bool native_feed_tolerance_enabled(
+        NativeFeedTolerance enabled, NativeFeedTolerance requested) noexcept {
     return (static_cast<std::uint32_t>(enabled)
             & static_cast<std::uint32_t>(requested)) != 0u;
+}
+
+// Deprecated spelling of native_feed_tolerance_enabled.
+constexpr bool native_legacy_tolerance_enabled(
+        NativeFeedTolerance enabled, NativeFeedTolerance requested) noexcept {
+    return native_feed_tolerance_enabled(enabled, requested);
 }
 
 // An owned lower-timeframe execution path.  It is deliberately a run-spec
@@ -355,8 +371,10 @@ struct NativeRunSpec {
     // A public begin with fewer than two bars may not establish a timeframe.
     // This preserves that explicit state without inventing a clock literal.
     bool timeframe_undetected = false;
-    // Strict native hosts retain the canonical slot-label rule. A legacy
-    // source provider may opt into raw, strictly-increasing caller labels.
+    // Strict native hosts retain the canonical slot-label rule. A provider
+    // feed may opt into raw, strictly-increasing caller labels.  The declared
+    // type spellings below are the ones the native C++ ABI guard pins;
+    // NativeFeedTolerance is the same type under its neutral name.
     NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;
     NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;
     NativePathOrder path_order = NativePathOrder::Auto;

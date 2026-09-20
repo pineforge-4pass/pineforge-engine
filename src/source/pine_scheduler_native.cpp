@@ -488,7 +488,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     language_.is_last_tick_ = context.is_terminal_sub_bar;
     language_.history_slot_is_new_ = context.is_terminal_sub_bar;
     if (!context.is_terminal_sub_bar) return;
-    // A LegacyTolerant native stream can emit a quiet carried callback for
+    // A FeedTolerant native stream can emit a quiet carried callback for
     // the calendar-aligned slot immediately preceding the last raw-label
     // warmup bar. The retired source stream starts its realtime cadence from
     // that warmup bar's next source slot, so it never published this stale
