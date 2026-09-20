@@ -54,6 +54,27 @@ enum class NativeOpenDirections : std::uint32_t {
     Both = 3,
 };
 
+// A generic instrument price grid. The kernel otherwise treats price_tick as
+// the slippage multiplier only, so an unset grid leaves every booked price
+// exactly as the path presented it. QuantizeFills books the fill on the tick
+// ladder; QuantizeFillsAndTriggers additionally tests a resting trigger
+// against the tick-quantized path. Source-language tick quirks are not
+// spelled here: they remain source-layer policy on top of None.
+enum class NativePriceGrid : std::uint32_t {
+    None = 0,
+    QuantizeFills = 1,
+    QuantizeFillsAndTriggers = 2,
+};
+
+// HalfUp is the nearest tick with ties away from zero. Directional rounds
+// toward the price region the resting order needs: a buy limit rounds down
+// and a sell limit up, a stop the other way, which is also the adverse side
+// of a market fill.
+enum class NativeGridRounding : std::uint32_t {
+    HalfUp = 0,
+    Directional = 1,
+};
+
 // Native hosts normally require every confirmed bar to name a canonical input
 // slot.  A host that deliberately reproduces a legacy batch route can retain
 // the caller's strictly-increasing timestamps as its decision labels instead.
@@ -173,6 +194,10 @@ struct NativeRunSpec {
     double account_fx = 0.0;    // One positive scalar, not a timestamped FX series.
     double price_tick = 0.0;       // Finite, nonnegative; zero means unquantized prices.
     std::uint32_t slippage_ticks = 0; // <= INT_MAX; raw +/- ticks*tick, no snap.
+    // Opt-in instrument grid. None keeps unquantized prices; both quantizing
+    // modes require price_tick > 0 and round before slippage.
+    NativePriceGrid price_grid = NativePriceGrid::None;
+    NativeGridRounding grid_rounding = NativeGridRounding::HalfUp;
     NativeFeeKind fee_kind = NativeFeeKind::Percent;
     double fee_value = 0.0;     // Percent/100 of absolute account notional, or
                                // account-currency cash per unit/execution.
@@ -207,6 +232,7 @@ enum class NativeRunSpecField : std::uint8_t {
     SlotLabelPolicy, LegacyTolerance,
     PathOrder,
     ReportPolicy,
+    PriceGrid, GridRounding,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -236,6 +262,9 @@ enum class NativeRunSpecError : std::uint8_t {
     UnknownLegacyTolerance,
     UnknownPathOrder,
     UnknownReportPolicy,
+    UnknownPriceGrid,
+    UnknownGridRounding,
+    GridRequiresPriceTick,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.

@@ -109,6 +109,25 @@ bool valid_path_order(NativePathOrder order) noexcept {
     return false;
 }
 
+bool valid_price_grid(NativePriceGrid grid) noexcept {
+    switch (grid) {
+    case NativePriceGrid::None:
+    case NativePriceGrid::QuantizeFills:
+    case NativePriceGrid::QuantizeFillsAndTriggers:
+        return true;
+    }
+    return false;
+}
+
+bool valid_grid_rounding(NativeGridRounding rounding) noexcept {
+    switch (rounding) {
+    case NativeGridRounding::HalfUp:
+    case NativeGridRounding::Directional:
+        return true;
+    }
+    return false;
+}
+
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
         static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
@@ -169,6 +188,15 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     // values are invalid.
     if (!std::isfinite(spec.price_tick) || spec.price_tick < 0.0)
         return {Error::NotFinitePositive, Field::PriceTick};
+    if (!valid_price_grid(spec.price_grid))
+        return {Error::UnknownPriceGrid, Field::PriceGrid};
+    if (!valid_grid_rounding(spec.grid_rounding))
+        return {Error::UnknownGridRounding, Field::GridRounding};
+    // L8: a quantizing grid needs a real tick ladder. price_tick == 0 keeps
+    // its documented unquantized meaning instead of silently disabling the
+    // grid the host asked for.
+    if (spec.price_grid != NativePriceGrid::None && !(spec.price_tick > 0.0))
+        return {Error::GridRequiresPriceTick, Field::PriceGrid};
     if (spec.slippage_ticks > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
         return {Error::SlippageOutOfRange, Field::SlippageTicks};
     switch (spec.fee_kind) {

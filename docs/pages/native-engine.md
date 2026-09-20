@@ -130,6 +130,33 @@ error field. `configure_native` copies a candidate, normalizes it, then stages
 it atomically. Admitted numeric `-0` fee becomes `+0`; other literals are not
 rewritten.
 
+### Price grid
+
+`price_grid` is an opt-in instrument tick ladder, `None` by default. `None` is
+exactly the established behaviour: `price_tick` is only the slippage
+multiplier and every booked price is the raw modeled one. The source layer
+never sets it, so Pine-compatible runs are unchanged.
+
+- `QuantizeFills`: the kernel rounds the fill basis onto `price_tick`
+  **before** slippage, which is itself a whole number of ticks. A limit
+  order's protection cap moves to the tick on its own side, so limit-or-better
+  survives the grid.
+- `QuantizeFillsAndTriggers`: a resting trigger is additionally tested against
+  the tick-quantized path instead of the raw one. The order's own level is
+  untouched and stays the modeled price a crossing books. This is the generic
+  mechanism only; TradingView's exact half-tick rule is a source-layer quirk
+  and stays there.
+- `grid_rounding`: `HalfUp` (default) is the nearest tick with ties away from
+  zero. `Directional` rounds toward the region the order needs — a buy limit
+  down, a sell limit up, a stop and a market fill to the adverse side.
+- `price_grid != None` requires `price_tick > 0`. A zero tick keeps its
+  documented unquantized meaning instead of silently disabling the grid:
+  `configure_native` fails with `GridRequiresPriceTick` on field `PriceGrid`.
+- The grid is folded into the run-spec hash only when it is set, so a default
+  spec keeps its established continuation identity.
+- The grid shapes the kernel's default resolved price. A host that overrides
+  the price through `resolve_execution_terms` owns that value itself.
+
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
 `Ready`/`Running` is preserved. Magnifier/source-feed arguments are not native

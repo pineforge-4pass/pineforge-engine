@@ -57,6 +57,43 @@ void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept;
 void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept;
 void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandle>& handle) noexcept;
 
+// L8 price grid. Generic hosts opt in through the run spec; the kernel
+// otherwise keeps price_tick a pure slippage multiplier, so a spec that
+// leaves price_grid at None books exactly the prices it books today.
+bool price_grid_on(const NativeRunSpec& spec) noexcept {
+    return spec.price_grid != NativePriceGrid::None;
+}
+
+// The pre-slippage fill basis. Directional rounds toward the region a resting
+// order needs: a limit toward its own favorable side, a stop or a market fill
+// toward the adverse one.
+double grid_fill_basis(const NativeRunSpec& spec, double price, bool buy,
+                       bool limit_governed) noexcept {
+    if (!price_grid_on(spec)) return price;
+    if (spec.grid_rounding == NativeGridRounding::Directional) {
+        return native_matching::grid_round_directional(
+            price, spec.price_tick, limit_governed ? !buy : buy);
+    }
+    return native_matching::grid_round_half_up(price, spec.price_tick);
+}
+
+// Limit-or-better survives the grid: the protection cap moves to the tick on
+// the order's own side, never past its level.
+double grid_limit_cap(const NativeRunSpec& spec, double level, bool buy) noexcept {
+    if (!price_grid_on(spec)) return level;
+    return native_matching::grid_round_directional(level, spec.price_tick, !buy);
+}
+
+// Only the second mode tests triggers against the quantized path; an
+// inactive threshold is the matcher's existing raw-level arithmetic.
+native_matching::GridThreshold grid_threshold(const NativeRunSpec& spec) noexcept {
+    native_matching::GridThreshold grid;
+    if (spec.price_grid != NativePriceGrid::QuantizeFillsAndTriggers) return grid;
+    grid.tick = spec.price_tick;
+    grid.half_up = spec.grid_rounding == NativeGridRounding::HalfUp;
+    return grid;
+}
+
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number - f.run_base);
     f.s(spec.input_tf); f.s(spec.script_tf);
@@ -85,6 +122,13 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (spec.report_policy != NativeReportPolicy::HostRecorded) {
         f.u(static_cast<uint64_t>(spec.report_policy));
         f.b(spec.report_open_position_at_end);
+    }
+    // A38/L8: the price grid is folded only where a host actually opted in.
+    // A defaulted grid folds nothing, so every established continuation hash
+    // survives this spec extension unchanged.
+    if (price_grid_on(spec)) {
+        f.u(static_cast<uint64_t>(spec.price_grid));
+        f.u(static_cast<uint64_t>(spec.grid_rounding));
     }
 }
 
@@ -3130,6 +3174,7 @@ void NativeExecutionConsumer::match_path(
         return;
     }
     const auto driver_class = classify_driver(point, continuous);
+    const auto grid = grid_threshold(*spec);
     const uint64_t P = point.coordinate.ordinal;
     requests_.refresh_point_allowances(P, read_position(engine));
     double t_cursor = 0.0;
@@ -3406,13 +3451,13 @@ void NativeExecutionConsumer::match_path(
                     const auto* stop = std::get_if<native_order::Stop>(&trigger);
                     if (!stop) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, stop->price, !buy, include_current);
+                        from_price, to_price, start, stop->price, !buy, include_current, grid);
                     kind = Kind::ActivateStop;
                 } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
                     const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
                     if (!sl) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, sl->stop, !buy, include_current);
+                        from_price, to_price, start, sl->stop, !buy, include_current, grid);
                     kind = Kind::ActivateStopLimit;
                 } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
                     const auto* trail = std::get_if<native_order::Trail>(&trigger);
@@ -3422,7 +3467,7 @@ void NativeExecutionConsumer::match_path(
                     } else {
                         hit = native_matching::first_region_entry(
                             from_price, to_price, start, *trail->arm_price, buy,
-                            include_current);
+                            include_current, grid);
                     }
                     kind = Kind::BeginTrail;
                 } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
@@ -3436,7 +3481,7 @@ void NativeExecutionConsumer::match_path(
                         return;
                     }
                     hit = native_matching::trail_stop_hit(
-                        from_price, to_price, start, track->best, trail->offset, buy);
+                        from_price, to_price, start, track->best, trail->offset, buy, grid);
                     kind = Kind::ActivateTrail;
                 } else if (std::holds_alternative<native_order::LimitReady>(state)
                            || std::holds_alternative<native_order::StopLimitLive>(state)) {
@@ -3449,7 +3494,7 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, level, buy, include_current);
+                        from_price, to_price, start, level, buy, include_current, grid);
                     kind = Kind::Fill;
                 } else if (std::holds_alternative<native_order::MarketReady>(state)
                            || std::holds_alternative<native_order::StopActive>(state)
@@ -3676,14 +3721,18 @@ void NativeExecutionConsumer::match_path(
         live = requests_.find_live(winner->handle);
         if (!live) continue;
         const bool buy = request_is_buy(engine, *live);
+        const bool limit_governed =
+            std::holds_alternative<native_order::LimitReady>(live->trigger_state)
+            || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state);
         const double slip = static_cast<double>(spec->slippage_ticks) * spec->price_tick;
-        double resolved = native_matching::apply_slippage(winner->price, slip, buy);
+        // An opted-in grid books on the tick ladder BEFORE slippage, which is
+        // itself a whole number of ticks.
+        const double basis = grid_fill_basis(*spec, winner->price, buy, limit_governed);
+        double resolved = native_matching::apply_slippage(basis, slip, buy);
         const auto& trigger = live->request().trigger;
         // Limit protection applies only after finite slippage arithmetic.
         // min/max must not turn an overflowed price into an executable limit.
-        if (std::isfinite(resolved)
-            && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
-                || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
+        if (std::isfinite(resolved) && limit_governed) {
             double level = 0.0;
             bool fill_through = false;
             if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
@@ -3692,7 +3741,10 @@ void NativeExecutionConsumer::match_path(
             } else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
                 level = sl->limit;
             }
-            if (!fill_through) resolved = native_matching::protect_limit(resolved, level, buy);
+            if (!fill_through) {
+                resolved = native_matching::protect_limit(
+                    resolved, grid_limit_cap(*spec, level, buy), buy);
+            }
         }
         native_order::NativeCandidatePriceKind price_kind =
             native_order::NativeCandidatePriceKind::PointPrice;
@@ -3862,7 +3914,10 @@ double NativeExecutionConsumer::current_price(const BacktestEngine& engine,
     const bool buy = std::holds_alternative<native_order::UnboundBookClose>(live.authority)
         ? engine.position_side_ == PositionSide::SHORT : request_is_buy(engine, live);
     const auto* spec = spec_ptr();
-    return native_matching::apply_slippage(basis,
+    // Current execution is a market fill by contract, so the grid rounds it
+    // on the adverse side before the same single slippage step.
+    const double on_grid = grid_fill_basis(*spec, basis, buy, /*limit_governed=*/false);
+    return native_matching::apply_slippage(on_grid,
         static_cast<double>(spec->slippage_ticks) * spec->price_tick, buy);
 }
 

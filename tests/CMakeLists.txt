@@ -115,6 +115,7 @@ set(TEST_SOURCES
     test_native_remaining_path_l5k
     test_native_trail_state_l5k
     test_native_zero_price_tick_l5o
+    test_native_price_grid
     test_native_adapter_lowering_l1
     test_native_adapter_lowering_l2
     test_native_c_abi_stream_l3a
