@@ -57,6 +57,7 @@ def verify(include: Path) -> dict:
     # Policy hooks answer a value, so their declaration is not "virtual void".
     required_answering_virtuals = {
         "resolve_margin_requirement", "margin_check_allowed",
+        "resolve_anchored_level",
     }
     declared = set(manifest.get("addedVirtuals", []))
     if not (required_virtuals | required_answering_virtuals).issubset(declared):

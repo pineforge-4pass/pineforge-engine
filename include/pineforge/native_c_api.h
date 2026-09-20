@@ -21,8 +21,11 @@
  * ✗ Streaming has no new symbols: strategy_stream_begin / _push_bar /
  *   _push_tick / _advance_time / _end / _fill_report take any handle this
  *   header produces, unchanged.
- * ✗ resolve_execution_terms / validate_execution_precommit are not exposed.
- *   A C host that needs kernel sizing uses PF_NATIVE_INTENT_SIZED.
+ * ✗ resolve_execution_terms / validate_execution_precommit /
+ *   resolve_anchored_level are not exposed: the callback table carries no
+ *   answering hook. A C host that needs kernel sizing uses
+ *   PF_NATIVE_INTENT_SIZED; an anchored leg is armed at the kernel level
+ *   (fill + offset, snapped per `anchor_rounding`).
  *
  * HARDENING RULES
  * ───────────────

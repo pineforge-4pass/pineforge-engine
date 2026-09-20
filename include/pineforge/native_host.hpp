@@ -389,6 +389,39 @@ struct NativeMarginDecision {
     bool force_breach = false;
 };
 
+// Which trigger of an anchored leg the owner's fill is about to supply.
+enum class NativeAnchoredTrigger : std::uint8_t {
+    Limit = 0,
+    Stop = 1,
+    TrailArm = 2,
+};
+
+// Ephemeral read-only facts of one anchored-leg materialization (L7b),
+// offered to the host exactly once, before the ArmedEvent is built. `owner`
+// is the request whose fill arms the leg, `owner_applied_ordinal` that fill's
+// ExecutionAppliedEvent, `owner_lot_incarnation` the lot it opened,
+// `owner_fill_price` its resolved price and `owner_cursor` its cursor. `leg`
+// is the anchored request, `leg_side` the side it trades on (a closing leg
+// trades against the lot the fill opened), `trigger` which trigger receives
+// the level, `offset` the anchor's resolved offset in price units,
+// `price_tick` the run's tick (0 when the run has none) and `kernel_level`
+// the level the kernel would install: fill + offset after the anchor's own
+// rounding. A host that answers with a value owns the installed level; the
+// kernel's representability check still applies.
+struct NativeAnchoredLevelView {
+    native_order::RequestHandle owner;
+    std::uint64_t owner_applied_ordinal = 0;
+    std::uint64_t owner_lot_incarnation = 0;
+    double owner_fill_price = 0.0;
+    native_order::MatchCursor owner_cursor;
+    native_order::RequestHandle leg;
+    native_order::Side leg_side = native_order::Side::Long;
+    NativeAnchoredTrigger trigger = NativeAnchoredTrigger::Limit;
+    double offset = 0.0;
+    double price_tick = 0.0;
+    double kernel_level = 0.0;
+};
+
 // The run's generic risk ledger (L9), as the kernel holds it. Every field is
 // zero / absent for a run that declares no NativeRunSpec::risk.
 //
@@ -680,6 +713,20 @@ public:
     // A kernel-issued liquidation that filled. It is delivered after the
     // ordinary on_native_applied for the same fill, with the same cursor.
     virtual void on_native_margin_call(const native_order::MarginCallEvent&) {}
+
+    // The level an anchored leg (FromOwnerFill) is about to be armed at,
+    // offered to the host exactly once per materialization, before the
+    // ArmedEvent is built. Returning nullopt installs the kernel level
+    // (fill + offset after the anchor's rounding); a returned value is the
+    // level to install, still subject to the kernel's representability
+    // check, whose failure is the existing PreparationError path. The
+    // mechanism (the arm, the once-only materialization, the ArmedEvent,
+    // matching) stays the kernel's; only the policy of where the level sits
+    // is the host's, exactly as resolve_execution_terms owns the fill price.
+    virtual std::optional<double> resolve_anchored_level(
+            const NativeAnchoredLevelView&) const {
+        return std::nullopt;
+    }
 
     // RULING A48 — the ONE generic per-lot excursion capability. A host that
     // returns true here takes ownership of every open lot's favorable/adverse

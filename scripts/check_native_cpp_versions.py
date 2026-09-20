@@ -320,8 +320,11 @@ def check_texts(files):
             ('Raw', '0'), ('HalfUp', '1'), ('Directional', '2')]:
         raise ValueError('NativeAnchorRounding must keep Raw=0, HalfUp=1, Directional=2')
     arm_context = re.sub(r'\s+', '', body(order, r'struct\s+ArmContext\s*\{', 'arm context'))
-    if 'std::optional<double>price_tick;' not in arm_context:
-        raise ValueError('ArmContext omits the price tick a rounded anchor snaps to')
+    if arm_context != 'std::optional<double>price_tick;AnchoredLevelResolverresolve_level;':
+        raise ValueError('ArmContext must carry exactly the price tick and the level resolver')
+    if not re.search(r'\busing\s+AnchoredLevelResolver\s*=\s*std::function\s*<\s*std::optional\s*<'
+                     r'\s*double\s*>\s*\(', order):
+        raise ValueError('AnchoredLevelResolver must be a native_order_v6 optional<double> callable')
     fraction = re.sub(r'\s+', '', body(order, r'struct\s+ScopeFraction\s*\{', 'scope fraction'))
     for pinned in ('ScopeClaimclaim=ScopeClaim::Gross;',
                    'ScopeBasisbasis=ScopeBasis::AtMatch;'):
@@ -626,7 +629,9 @@ def check_texts(files):
     # arm reads the run's price tick through the core's ArmContext.
     for fold in ('if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {',
                  'f.u(static_cast<uint64_t>(anchor->rounding));',
-                 'if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;'):
+                 'if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;',
+                 'return host->resolve_anchored_level(view);',
+                 'next_timeline_ordinal_, arm);'):
         if fold not in consumer_src:
             raise ValueError('native consumer omits the anchored-leg fold/arm token: ' + fold)
     for token in ('lower->sample_eligibility',
@@ -678,9 +683,23 @@ def check_texts(files):
                    "NativeTimeframeBarContext", "NativeMarginCallView",
                    "NativeMarginCheckKind", "NativeMarginCheckPoint",
                    "NativeMarginRequirementView", "NativeMarginDecision",
-                   "NativeCalculationReason", "NativeRiskState"),
+                   "NativeCalculationReason", "NativeRiskState",
+                   "NativeAnchoredTrigger", "NativeAnchoredLevelView"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    # R5 L7b: the anchored-level view is the read-only fact set the arm hook
+    # sees, in this order; the kernel level is the last member so a host
+    # reads the whole chronology (owner fill -> leg -> offset -> tick ->
+    # kernel level) before it answers.
+    anchored_view = re.sub(r'\s+', '', body(host, r'struct\s+NativeAnchoredLevelView\s*\{',
+                                             'anchored level view'))
+    if anchored_view != ('native_order::RequestHandleowner;std::uint64_towner_applied_ordinal=0;'
+                         'std::uint64_towner_lot_incarnation=0;doubleowner_fill_price=0.0;'
+                         'native_order::MatchCursorowner_cursor;native_order::RequestHandleleg;'
+                         'native_order::Sideleg_side=native_order::Side::Long;'
+                         'NativeAnchoredTriggertrigger=NativeAnchoredTrigger::Limit;'
+                         'doubleoffset=0.0;doubleprice_tick=0.0;doublekernel_level=0.0;'):
+        raise ValueError('NativeAnchoredLevelView must keep its exact read-only facts and order')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
     begin_fields = (
         (r'\bconst\s+Bar\s*\*\s*bars\s*=\s*nullptr\s*;', 'bars'),
@@ -783,6 +802,8 @@ def check_texts(files):
          r'\s*const\s+NativeMarginRequirementView\s*&', "resolve_margin_requirement"),
         (r'\bvirtual\s+bool\s+margin_check_allowed\s*\('
          r'\s*const\s+NativeMarginCheckPoint\s*&', "margin_check_allowed"),
+        (r'\bvirtual\s+std::optional\s*<\s*double\s*>\s+resolve_anchored_level\s*\('
+         r'\s*const\s+NativeAnchoredLevelView\s*&', "resolve_anchored_level"),
         (r'\bstd::optional\s*<\s*double\s*>\s+native_liquidation_price\s*\('
          r'\s*\)\s*const\s*;', "native_liquidation_price"),
         (r'\bNativeRiskState\s+native_risk_state\s*\(\s*\)\s*const\s*;',

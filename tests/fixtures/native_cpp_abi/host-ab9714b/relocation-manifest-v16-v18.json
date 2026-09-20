@@ -67,7 +67,11 @@
     "Trade::close_cause",
     "FromOwnerFill::rounding",
     "NativeAnchorRounding",
-    "ArmContext"
+    "ArmContext",
+    "ArmContext::resolve_level",
+    "AnchoredLevelResolver",
+    "NativeAnchoredTrigger",
+    "NativeAnchoredLevelView"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
@@ -80,7 +84,8 @@
     "on_native_recalculate",
     "on_native_sub_bar",
     "resolve_margin_requirement",
-    "margin_check_allowed"
+    "margin_check_allowed",
+    "resolve_anchored_level"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

@@ -241,11 +241,13 @@ bool install_anchored_level(Request& request, double level) noexcept {
 // trigger kind and side (a limit and a trail arm from the favourable side, a
 // stop from the adverse one), with the same grid arithmetic the run's L8
 // price grid uses. Host-free: the tick is a value the caller passes in.
-// False means the level is not representable.
-bool materialize_anchor(Request& request, double fill_price, std::optional<double> price_tick,
-                        bool leg_is_buy, double* level_out) noexcept {
+// False means the level cannot be computed (nonfinite operands, a rounding
+// without a ladder); representability is the installer's check.
+bool anchored_kernel_level(const Request& request, double fill_price,
+                           std::optional<double> price_tick, bool leg_is_buy,
+                           double* level_out) noexcept {
     const auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
-    if (!anchor) return true;
+    if (!anchor) return false;
     if (!std::isfinite(fill_price) || !std::isfinite(anchor->offset)) return false;
     double level = fill_price + anchor->offset;
     if (anchor->rounding != NativeAnchorRounding::Raw) {
@@ -260,7 +262,6 @@ bool materialize_anchor(Request& request, double fill_price, std::optional<doubl
                     level, tick, favourable_side ? !leg_is_buy : leg_is_buy);
         }
     }
-    if (!install_anchored_level(request, level)) return false;
     if (level_out) *level_out = level;
     return true;
 }
@@ -3280,9 +3281,20 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         // Wait authority, which has no bound scope yet.
         const bool leg_is_buy = closing ? !(payload->opened_units > 0.0)
                                         : working_is_buy(live);
-        double kernel_level = 0.0;
-        if (!materialize_anchor(materialized.request, payload->resolved_price, arm.price_tick,
-                                leg_is_buy, &kernel_level)) {
+        double level = 0.0;
+        if (!anchored_kernel_level(materialized.request, payload->resolved_price, arm.price_tick,
+                                   leg_is_buy, &level)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
+        }
+        // The host's one restatement, consulted here and nowhere else: the
+        // installed level below is what the ArmedEvent carries.
+        if (arm.resolve_level) {
+            const auto& anchor = std::get<FromOwnerFill>(materialized.request.anchor);
+            const auto restated = arm.resolve_level(
+                    live, *payload, leg_is_buy ? Side::Long : Side::Short, anchor.offset, level);
+            if (restated) level = *restated;
+        }
+        if (!install_anchored_level(materialized.request, level)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
         }
         armed_definition = std::make_shared<RequestDefinition>(std::move(materialized));

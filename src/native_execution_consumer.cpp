@@ -3420,9 +3420,51 @@ void NativeExecutionConsumer::drain_after_applied(
         const auto children = requests_.waiting_children(filler);
         // The arm of an anchored leg reads the run's price tick (the ladder a
         // rounded anchor snaps to) exactly as acceptance does through
-        // CommandContext::price_tick; the core itself stays host-free.
+        // CommandContext::price_tick, and offers the host its one level
+        // restatement; the core itself stays host-free and sees both as
+        // values. A throwing hook latches CallbackException exactly like
+        // resolve_execution_terms and the arm below is not installed.
         native_order::ArmContext arm;
         if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;
+        auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+        if (host) {
+            arm.resolve_level = [this, &engine, host, &applied](
+                    const native_order::LiveRequest& leg,
+                    const native_order::ExecutionAppliedEvent& owner_fill,
+                    native_order::Side leg_side, double offset,
+                    double kernel_level) -> std::optional<double> {
+                NativeAnchoredLevelView view;
+                view.owner = owner_fill.handle();
+                view.owner_applied_ordinal = applied.ordinal;
+                view.owner_lot_incarnation = owner_fill.opened_lot_incarnation;
+                view.owner_fill_price = owner_fill.resolved_price;
+                view.owner_cursor = owner_fill.cursor;
+                view.leg = leg.handle();
+                view.leg_side = leg_side;
+                view.trigger = std::holds_alternative<native_order::Stop>(leg.request().trigger)
+                    ? NativeAnchoredTrigger::Stop
+                    : std::holds_alternative<native_order::Trail>(leg.request().trigger)
+                        ? NativeAnchoredTrigger::TrailArm
+                        : NativeAnchoredTrigger::Limit;
+                view.offset = offset;
+                view.price_tick = spec_ptr() ? spec_ptr()->price_tick : 0.0;
+                view.kernel_level = kernel_level;
+                try {
+                    return host->resolve_anchored_level(view);
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                               NativeFailureOperation::Settlement,
+                                               applied.ordinal});
+                    render(engine, e.what());
+                } catch (...) {
+                    fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                               NativeFailureOperation::Settlement,
+                                               applied.ordinal});
+                    render(engine, "native anchored level callback exception");
+                }
+                return std::nullopt;
+            };
+        }
         for (const auto& child : children) {
             if (failed()) return;
             std::optional<native_order::OpeningObservation> observation;
@@ -3431,6 +3473,7 @@ void NativeExecutionConsumer::drain_after_applied(
             }
             auto prep = requests_.prepare_owner_applied(applied, child, observation,
                                                         next_timeline_ordinal_, arm);
+            if (failed()) return;
             if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;

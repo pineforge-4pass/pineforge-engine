@@ -152,6 +152,26 @@ class NativeVersions(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.reject(FILES[10], before, after)
 
+    def test_anchored_level_hook_is_pinned_and_consulted(self):
+        # R5 L7b: the arm hook is a v18 answering virtual over an exact
+        # read-only view, the core carries the resolver as a value, and the
+        # consumer consults it at the arm.
+        for before, after in (
+            ('struct NativeAnchoredLevelView {', 'struct MissingAnchoredLevelView {'),
+            ('    double kernel_level = 0.0;\n};', '};'),
+            ('virtual std::optional<double> resolve_anchored_level(',
+             'virtual std::optional<double> resolve_anchored_level_renamed('),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[8], before, after)
+        self.reject(FILES[0], '    AnchoredLevelResolver resolve_level;\n', '')
+        for before, after in (
+            ('return host->resolve_anchored_level(view);', 'return std::nullopt;'),
+            ('next_timeline_ordinal_, arm);', 'next_timeline_ordinal_);'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_execution_grid_policy_is_explicit_hashed_and_consumed(self):
         self.reject(FILES[0], 'enum class ExecutionGridPolicy : std::uint8_t {',
                     'enum class MissingExecutionGridPolicy : std::uint8_t {')

@@ -26,6 +26,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -445,6 +447,139 @@ void rounding_folds_only_when_set() {
     CHECK(probe(no::NativeAnchorRounding::HalfUp) != probe(no::NativeAnchorRounding::Directional));
 }
 
+// ── 2. The arm hook restates the level, once, before the ArmedEvent ─────
+// A host that answers resolve_anchored_level owns the installed level; a
+// host that answers nullopt keeps the kernel level; a non-representable
+// answer fails the run through the existing PreparationError path.
+struct HookHost final : Host {
+    std::function<std::optional<double>(const NativeAnchoredLevelView&)> policy;
+    std::vector<NativeAnchoredLevelView> seen;
+    no::RequestHandle parent;
+    std::optional<double> resolve_anchored_level(const NativeAnchoredLevelView& view) const override {
+        const_cast<HookHost*>(this)->seen.push_back(view);
+        return policy ? policy(view) : std::nullopt;
+    }
+};
+
+struct HookRun {
+    std::vector<no::ArmedEvent> armed;
+    std::vector<no::ExecutionAppliedEvent> applied;
+    std::vector<NativeAnchoredLevelView> seen;
+    std::uint64_t continuation = 0;
+    NativeStateView state;
+    std::string error;
+    no::RequestHandle parent, take_profit, stop_loss;
+};
+
+HookRun hook_run(const char* key,
+                 std::function<std::optional<double>(const NativeAnchoredLevelView&)> policy,
+                 double loss_ticks = 250.0) {
+    HookHost host;
+    host.policy = std::move(policy);
+    tk::BracketReceipt receipt;
+    host.beginning = [&](Host& base) {
+        host.parent = put(base, tx(2.0, "L"));
+        receipt = tk::submit_bracket(base, anchored_bracket(host.parent, 250.0, loss_ticks));
+    };
+    HookRun out;
+    REQUIRE(host.configure_native(bracket_spec(key)).status == NativeSetupStatus::Applied);
+    const auto bars = staircase();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    out.armed = events<no::ArmedEvent>(host);
+    out.applied = events<no::ExecutionAppliedEvent>(host);
+    out.seen = host.seen;
+    out.continuation = host.native_continuation_hash();
+    out.state = host.native_state();
+    out.error = host.last_error();
+    out.parent = host.parent;
+    if (receipt.take_profit) out.take_profit = *receipt.take_profit;
+    if (receipt.stop_loss) out.stop_loss = *receipt.stop_loss;
+    return out;
+}
+
+void hook_restates_the_level() {
+    // The kernel would arm the profit leg at 102.5 and the stop at 97.5. The
+    // host moves the profit leg a tick lower (102.49) and leaves the stop.
+    const auto restated = hook_run("l7b-hook", [](const NativeAnchoredLevelView& view) {
+        if (view.trigger == NativeAnchoredTrigger::Limit) return std::optional<double>{102.49};
+        return std::optional<double>{};
+    });
+    CHECK(restated.error.empty());
+    CHECK(restated.state.kind == NativeLifecycleKind::Completed);
+    // Consulted exactly once per materialization: two legs, two views, and
+    // every fact in them is the kernel's.
+    REQUIRE(restated.seen.size() == 2);
+    for (const auto& view : restated.seen) {
+        CHECK(view.owner == restated.parent);
+        CHECK(view.owner_applied_ordinal != 0);
+        CHECK(view.owner_lot_incarnation != 0);
+        CHECK(same_bits(view.owner_fill_price, 100.0));
+        CHECK(view.owner_cursor.point.interval_index == 0);
+        CHECK(view.leg_side == no::Side::Short);
+        CHECK(same_bits(view.price_tick, 0.01));
+        if (view.trigger == NativeAnchoredTrigger::Limit) {
+            CHECK(view.leg == restated.take_profit);
+            CHECK(same_bits(view.offset, 250.0 * 0.01));
+            CHECK(same_bits(view.kernel_level, 100.0 + 250.0 * 0.01));
+        } else {
+            CHECK(view.trigger == NativeAnchoredTrigger::Stop);
+            CHECK(view.leg == restated.stop_loss);
+            CHECK(same_bits(view.offset, -250.0 * 0.01));
+            CHECK(same_bits(view.kernel_level, 100.0 + -250.0 * 0.01));
+        }
+    }
+    // The ArmedEvent carries the restated level, and so does the live book.
+    REQUIRE(restated.armed.size() == 2);
+    const auto* profit = armed_for(restated.armed, restated.take_profit);
+    const auto* stop = armed_for(restated.armed, restated.stop_loss);
+    REQUIRE(profit != nullptr && stop != nullptr);
+    const auto profit_level = installed_level(profit->definition->request);
+    const auto stop_level = installed_level(stop->definition->request);
+    REQUIRE(profit_level && stop_level);
+    CHECK(same_bits(*profit_level, 102.49));
+    CHECK(same_bits(*stop_level, 97.5));
+    CHECK(std::holds_alternative<no::Absolute>(profit->definition->request.anchor));
+    // The restated level is what matches: the profit leg fills at 102.49.
+    REQUIRE(restated.applied.size() == 2);
+    CHECK(restated.applied[1].handle() == restated.take_profit);
+    CHECK(same_bits(restated.applied[1].resolved_price, 102.49));
+    CHECK(restated.applied[1].cursor.point.interval_index == 4);
+
+    // nullopt keeps the kernel level: the same run as a host with no hook.
+    const auto kept = hook_run("l7b-hook-null", [](const NativeAnchoredLevelView&) {
+        return std::optional<double>{};
+    });
+    const auto plain = neutral_run("l7b-hook-null");
+    CHECK(kept.seen.size() == 2);
+    CHECK(kept.continuation == plain.continuation);
+    REQUIRE(kept.applied.size() == 2);
+    CHECK(same_bits(kept.applied[1].resolved_price, 102.5));
+    REQUIRE(kept.armed.size() == 2);
+    const auto* kept_profit = armed_for(kept.armed, kept.take_profit);
+    REQUIRE(kept_profit != nullptr);
+    const auto kept_level = installed_level(kept_profit->definition->request);
+    CHECK(kept_level && same_bits(*kept_level, 102.5));
+
+    // A non-representable restatement (a negative stop) fails the run through
+    // the existing PreparationError path: NonrepresentableQuantity, reported
+    // as a settlement failure at the arm, and no leg is armed.
+    const auto broken = hook_run("l7b-hook-broken", [](const NativeAnchoredLevelView& view) {
+        if (view.trigger == NativeAnchoredTrigger::Stop) return std::optional<double>{-1.0};
+        return std::optional<double>{};
+    });
+    CHECK(broken.state.kind == NativeLifecycleKind::Failed);
+    CHECK(broken.state.failure.code == NativeFailureCode::SettlementFailure);
+    CHECK(broken.state.failure.operation == NativeFailureOperation::Settlement);
+    CHECK(!broken.error.empty());
+    CHECK(broken.armed.size() < 2);
+    // A NaN answer is the same refusal.
+    const auto nan = hook_run("l7b-hook-nan", [](const NativeAnchoredLevelView&) {
+        return std::optional<double>{std::numeric_limits<double>::quiet_NaN()};
+    });
+    CHECK(nan.state.kind == NativeLifecycleKind::Failed);
+    CHECK(nan.state.failure.code == NativeFailureCode::SettlementFailure);
+}
+
 #endif  // PINEFORGE_L7B_HARVEST
 
 }  // namespace
@@ -458,6 +593,7 @@ int main() {
     test("rounding snaps the level", rounding_snaps_the_level);
     test("rounding is validated at acceptance", rounding_is_validated_at_acceptance);
     test("rounding folds only when set", rounding_folds_only_when_set);
+    test("hook restates the level", hook_restates_the_level);
     std::printf("L7b native anchored legs: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 #endif

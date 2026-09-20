@@ -1125,13 +1125,27 @@ struct EvaluationContext {
     std::optional<Side> cohort_side;
 };
 
+// The one policy point of an anchored materialization. The core knows it
+// only as a callable over its own values: the leg's live row, the owner's
+// fill, the leg's side, the resolved offset (price units) and the kernel
+// level after the anchor rounding. It is consulted exactly once per
+// materialization, before the ArmedEvent is built, so the ArmedEvent and
+// every later reader see the installed level. A returned value is the level
+// to install (the kernel's representability check still applies and a
+// failure is the existing PreparationError path); nullopt keeps the kernel
+// level. An empty callable is exactly the pre-hook behaviour.
+using AnchoredLevelResolver = std::function<std::optional<double>(
+        const LiveRequest& leg, const ExecutionAppliedEvent& owner_fill, Side leg_side,
+        double offset, double kernel_level)>;
+
 // What the consumer hands to prepare_owner_applied for an anchored leg's
 // materialization, the way acceptance receives CommandContext::price_tick.
 // price_tick is the ladder a rounded anchor snaps to; an anchor whose
-// rounding is Raw never reads it. The core stays host-free: nothing here is
-// a host, only values.
+// rounding is Raw never reads it. resolve_level is the host's restatement,
+// carried as a value so the core stays host-free.
 struct ArmContext {
     std::optional<double> price_tick;
+    AnchoredLevelResolver resolve_level;
 };
 
 struct BeginTrailTracking {
@@ -1420,8 +1434,9 @@ public:
                                                        const RequestHandle& recipient,
                                                        uint64_t& next_timeline_ordinal);
     // `arm` carries the materialization facts of an anchored leg (the price
-    // tick a rounded anchor snaps to); a default-constructed value is exactly
-    // the pre-rounding behaviour, so every existing caller keeps its meaning.
+    // tick a rounded anchor snaps to, the host's level restatement); a
+    // default-constructed value is exactly the pre-lane behaviour, so every
+    // existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_owner_applied(
             const EventId& applied,
             const RequestHandle& child,
