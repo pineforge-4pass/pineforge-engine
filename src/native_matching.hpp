@@ -57,29 +57,56 @@ inline std::optional<double> t_for_price(double from, double to, double price) n
 // arithmetic in engine.hpp: a computed level that lands one ULP off an exact
 // tick keeps that tick instead of jumping a whole one. Nearest rounding needs
 // no guard, a nanotick being far inside the half-tick it would have to cross.
+//
+// Exactness (R7 ruling): a ladder price is a fixed point of the grid. A level
+// bit-identical to either binary64 spelling of its ladder point — k * tick,
+// or k / n for a decimal tick 1 / n, which is what a decimal literal parses
+// to — maps to index k without consulting the quotient's last bit (the guard
+// alone misindexes ladder prices from k ~ 1.7e7 on), and the directional
+// forms hand such a price back unchanged instead of re-spelling it as k *
+// tick one ULP away. Off the ladder the guard decides as before.
 inline constexpr double kGridBoundaryTicks = 1e-9;
 
 inline bool grid_active(double tick) noexcept {
     return std::isfinite(tick) && tick > 0.0;
 }
 
+// The ladder index of a price that IS a ladder point, NaN otherwise. Both
+// spellings of the point are recognized; the decimal one only when 1 / tick
+// is an integer to within the same 1e-6 band the reference arithmetic uses.
+inline double grid_exact_index(double price, double tick) noexcept {
+    if (!std::isfinite(price) || !grid_active(tick)) return std::numeric_limits<double>::quiet_NaN();
+    const double k = std::round(price / tick);
+    if (k * tick == price) return k;
+    const double inverse = 1.0 / tick;
+    const double n = std::round(inverse);
+    if (n > 0.0 && std::abs(inverse - n) <= 1e-6 * n && k / n == price) return k;
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
 inline double grid_index_up(double price, double tick) noexcept {
+    const double exact = grid_exact_index(price, tick);
+    if (!std::isnan(exact)) return exact;
     return std::ceil(price / tick - kGridBoundaryTicks);
 }
 
 inline double grid_index_down(double price, double tick) noexcept {
+    const double exact = grid_exact_index(price, tick);
+    if (!std::isnan(exact)) return exact;
     return std::floor(price / tick + kGridBoundaryTicks);
 }
 
-// Nearest tick, ties away from zero.
+// Nearest tick, ties away from zero. Spelled as the product on purpose: the
+// sizing rule SizePrice::SignalOnTick pins this exact form.
 inline double grid_round_half_up(double price, double tick) noexcept {
     if (!std::isfinite(price) || !grid_active(tick)) return price;
     return std::round(price / tick) * tick;
 }
 
-// The tick on one named side of the price.
+// The tick on one named side of the price; a ladder price is its own tick.
 inline double grid_round_directional(double price, double tick, bool up) noexcept {
     if (!std::isfinite(price) || !grid_active(tick)) return price;
+    if (!std::isnan(grid_exact_index(price, tick))) return price;
     return (up ? grid_index_up(price, tick) : grid_index_down(price, tick)) * tick;
 }
 
@@ -90,17 +117,45 @@ struct GridThreshold {
     bool half_up = true;
 };
 
+// The outermost price whose half-up ladder index is still inside the closed
+// region (index <= for le, >= otherwise): the exact binary64 boundary of
+// grid_round_half_up, not the product (index +/- 0.5) * tick. The product is
+// not that boundary — a tie print rounds away from zero and so lies OUTSIDE
+// a `<=` region, and a decimal half tick lands one or two ULPs to either side
+// of the product — so the nominal half tick is walked to the last price the
+// rounding itself keeps inside. Bounded: a half tick is never more than a few
+// ULPs from its nominal spelling.
+inline double grid_half_up_boundary(double index, bool le, double tick) noexcept {
+    double boundary = (le ? index + 0.5 : index - 0.5) * tick;
+    if (!std::isfinite(boundary)) return boundary;
+    const auto inside = [&](double price) noexcept {
+        const double k = std::round(price / tick);
+        return le ? k <= index : k >= index;
+    };
+    const double inf = std::numeric_limits<double>::infinity();
+    const double inward = le ? -inf : inf;    // toward the level
+    const double outward = le ? inf : -inf;   // away from it
+    for (int i = 0; i < 16 && !inside(boundary); ++i) boundary = std::nextafter(boundary, inward);
+    for (int i = 0; i < 16; ++i) {
+        const double candidate = std::nextafter(boundary, outward);
+        if (!inside(candidate)) break;
+        boundary = candidate;
+    }
+    return boundary;
+}
+
 // The raw price at which the quantized path first enters the closed region
-// first_region_entry tests. Half-up rounding opens the region at the
-// enclosing half-tick; a directional path extends its own excursion to the
-// enclosing tick, so the region opens a tick early with the boundary itself
-// left outside by the same nanotick.
+// first_region_entry tests. Half-up rounding opens the region at the exact
+// boundary of its own rounding (grid_half_up_boundary); a directional path
+// extends its own excursion to the enclosing tick, so the region opens a tick
+// early with the boundary itself left outside by the same nanotick.
 inline double grid_region_threshold(
         double level, bool le, const GridThreshold& grid) noexcept {
     if (!std::isfinite(level) || !grid_active(grid.tick)) return level;
     const double index = le ? grid_index_down(level, grid.tick)
                             : grid_index_up(level, grid.tick);
-    const double shift = grid.half_up ? 0.5 : 1.0 - kGridBoundaryTicks;
+    if (grid.half_up) return grid_half_up_boundary(index, le, grid.tick);
+    const double shift = 1.0 - kGridBoundaryTicks;
     return (le ? index + shift : index - shift) * grid.tick;
 }
 

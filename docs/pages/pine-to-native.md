@@ -66,7 +66,8 @@ exists, is in the Notes.
 | `calc_on_order_fills` | partial — `on_native_applied` native_host.hpp:452 | Fires mid-path after each fill; a request born there is eligible on the unconsumed rest of the bar native_execution_consumer.cpp:3248-3257. Calculation *re-entry* and a bar-so-far view are **lane L5**. |
 | `calc_on_every_tick` | partial — `on_native_tick` native_host.hpp:443 | One call per accepted realtime print in the stream. Per-tick calculation in batch is **lane L5**. |
 | `margin_long`, `margin_short` | partial — `initial_margin_fraction` native_run_spec.hpp:173 | One fraction for both sides, opening gate only native_execution_consumer.cpp:2006-2013. Per-side margin, maintenance margin and liquidation are **lane L4**. |
-| `qty_step` | `quantity_grid` native_run_spec.hpp:167 | Admission check, never a silent resize. Tick-quantized *fill prices* are **lane L8**. |
+| `qty_step` | `quantity_grid` native_run_spec.hpp:167 | Admission check, never a silent resize. Tick-quantized *fill prices* are the price grid row below. |
+| `syminfo.mintick`, tick-quantized triggers | `price_tick` native_run_spec.hpp:480, `NativePriceGrid::QuantizeFillsAndTriggers` native_run_spec.hpp:104 | Generic: fills booked on the ladder, a resting trigger tested against the half-up quantized path at the exact boundary of that rounding, a ladder price a fixed point. TradingView quantizes per order *kind* (stop / limit legs and trail activation on the quantized bar; trail stop, stop-limit and calc_on_order_fills cursors raw), so the adapter keeps `None` and its own half-tick thresholds (R7; tests/test_adapter_grid_relower.cpp). |
 | bar magnifier / lower-TF path | `IntrabarPath` native_run_spec.hpp:86-126, staged at native_run_spec.hpp:175 | The host owns the lower bars; the C magnifier arguments do not configure a native host. |
 
 ### Risk limits {#pine_to_native_map_risk}

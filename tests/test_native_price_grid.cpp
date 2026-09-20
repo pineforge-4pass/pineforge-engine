@@ -334,7 +334,10 @@ void quantize_triggers() {
     const native_matching::GridThreshold half{kTick, true};
     const native_matching::GridThreshold dir{kTick, false};
     CHECK(same_bits(native_matching::grid_region_threshold(100.50, false, half), 100.375));
-    CHECK(same_bits(native_matching::grid_region_threshold(100.50, true, half), 100.625));
+    // R7: the le boundary is the last price that still rounds to 100.50; the
+    // exact half tick 100.625 rounds away from zero to 100.75 and lies outside.
+    CHECK(same_bits(native_matching::grid_region_threshold(100.50, true, half),
+                    std::nextafter(100.625, 0.0)));
     CHECK(native_matching::grid_region_threshold(100.50, false, dir) > 100.25);
     CHECK(native_matching::grid_region_threshold(100.50, false, dir) < 100.2501);
     CHECK(native_matching::grid_region_threshold(100.50, true, dir) < 100.75);

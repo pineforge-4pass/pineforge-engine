@@ -78,7 +78,11 @@ double grid_fill_basis(const NativeRunSpec& spec, double price, bool buy,
 }
 
 // Limit-or-better survives the grid: the protection cap moves to the tick on
-// the order's own side, never past its level.
+// the order's own side, never past its level. A level that already is a
+// ladder point is its own cap (grid_round_directional is a fixed point there,
+// R7): the half-up basis spells that point as k * tick, one ULP past a
+// decimal literal, and the cap clamps it back onto the level instead of
+// booking a fill the terms check below then refuses.
 double grid_limit_cap(const NativeRunSpec& spec, double level, bool buy) noexcept {
     if (!price_grid_on(spec)) return level;
     return native_matching::grid_round_directional(level, spec.price_tick, !buy);

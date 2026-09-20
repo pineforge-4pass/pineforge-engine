@@ -191,6 +191,35 @@ never sets it, so Pine-compatible runs are unchanged.
   spec keeps its established continuation identity.
 - The grid shapes the kernel's default resolved price. A host that overrides
   the price through `resolve_execution_terms` owns that value itself.
+- Exactness (R5 lane R7). A ladder price is a fixed point of the grid: a level
+  bit-identical to either binary64 spelling of its tick — `k * price_tick`, or
+  for a decimal tick `k / (1 / price_tick)`, the double a decimal literal
+  parses to — maps to index `k` whatever the quotient's last bit says (the
+  nanotick guard alone misindexes ladder prices from about k = 1.7e7, a
+  five-decimal instrument above 167.82), is booked as presented by
+  `QuantizeFills`, and is its own limit-or-better cap. The `HalfUp` trigger
+  threshold is the exact boundary of `grid_round_half_up` — the last raw price
+  whose nearest tick is still inside the region — not the product
+  `(k ± 0.5) * tick`: an exact half-tick print rounds away from zero and so
+  lies outside a `<=` region. The Pine adapter still runs with `None`.
+  TradingView quantizes per order kind — stop and limit legs and a trail's
+  activation against the tick-quantized bar; the trail stop, the running best,
+  stop-limit entries and the calc_on_order_fills cursors against the raw path
+  (engine.hpp, design-stop-tick-rounding and design-trail-activation-tick-bar)
+  — whereas the run spec's grid is one rule for every trigger the matcher
+  tests. The measured divergence is the trail stop: `best - offset` lands one
+  ULP under a ladder point on about 14% of (best, offset) pairs on a
+  two-decimal feed, and the grid then fires it a tick early where TradingView
+  holds (tests/test_adapter_grid_relower.cpp). A per-kind grid mask would
+  spell that inconsistency into the kernel and is not generic.
+- Known limit of `QuantizeFillsAndTriggers` on a sub-tick feed: a cursor print
+  that is inside the quantized region but short of the raw level (a bar
+  opening at 100.40 under a buy stop at 100.50 on a 0.25 ladder) is reported
+  by the matcher and then refused by the core's raw activation check, so the
+  run fails closed with `native working-request preparation failed` instead
+  of filling. The same witness pins the reproducer; until an activation's
+  reached price is ruled on, use the trigger mode on feeds already on the
+  ladder, or `QuantizeFills` alone.
 
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
