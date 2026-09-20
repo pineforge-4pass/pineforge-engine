@@ -120,6 +120,7 @@ set(TEST_SOURCES
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
     test_native_htf_subscriptions
+    test_native_htf_subscriptions_twin
     test_native_calc_timing
     test_native_calc_timing_twin
     test_native_htf_subscriptions_stream
