@@ -308,15 +308,18 @@ def check_texts(files):
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
                    "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
                    "NativeSlotLabelPolicy", "NativePathOrder",
-                   "NativeLegacyTolerance", "NativeReportPolicy"),
+                   "NativeLegacyTolerance", "NativeReportPolicy",
+                   "NativeTimeframeSubscription"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
-        spec, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
+        spec, ("validate_native_run_spec", "normalize_native_run_spec",
+               "native_intrabar_path_digest", "native_timeframe_subscriptions_digest"),
         "native_run_spec_v3")
     spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
-        spec_src, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
+        spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
+                   "native_intrabar_path_digest", "native_timeframe_subscriptions_digest"),
         "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
     if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
@@ -331,13 +334,19 @@ def check_texts(files):
             'NativePathOrderpath_order=NativePathOrder::Auto;',
             'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;',
             'NativeReportPolicyreport_policy=NativeReportPolicy::HostRecorded;',
-            'boolreport_open_position_at_end=false;'):
+            'boolreport_open_position_at_end=false;',
+            'std::vector<NativeTimeframeSubscription>subscriptions;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
+    subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
+                        'native timeframe subscription')
+    if (re.sub(r'\s+', '', subscription)
+            != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'):
+        raise ValueError('native timeframe subscription must preserve its member order and shape')
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
     for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
-                  'PathOrder', 'ReportPolicy'):
+                  'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -345,7 +354,10 @@ def check_texts(files):
     for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
                   'UnknownLegacyTolerance', 'UnknownAbortReporting',
                   'UnknownIntrabarSampleEligibility', 'UnknownPathOrder',
-                  'UnknownReportPolicy'):
+                  'UnknownReportPolicy',
+                  'InvalidSubscriptionTimeframe', 'SubscriptionFinerThanInput',
+                  'DuplicateSubscriptionTimeframe', 'UnorderedSubscriptionBars',
+                  'SubscriptionWithoutTimeframe'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -355,6 +367,8 @@ def check_texts(files):
             or 'spec.path_order' not in spec_src
             or 'spec.abort_reporting' not in spec_src
             or 'spec.report_policy' not in spec_src
+            or 'spec.subscriptions' not in spec_src
+            or 'SubscriptionFinerThanInput' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
@@ -442,7 +456,7 @@ def check_texts(files):
         if token not in driver_src:
             raise ValueError('native driver omits legacy-compatible preflight token: ' + token)
 
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v18")
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
                  'f.u(static_cast<uint64_t>(spec.abort_reporting));',
@@ -465,7 +479,7 @@ def check_texts(files):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v17")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v18")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
                    "NativeFailure", "NativeFailureContext", "NativeInRunCause",
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
@@ -475,8 +489,9 @@ def check_texts(files):
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
-                   "NativeInputContext", "NativeTickContext"),
-            "engine_script_run_v17",
+                   "NativeInputContext", "NativeTickContext",
+                   "NativeTimeframeBarContext"),
+            "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
     begin_fields = (
@@ -525,13 +540,13 @@ def check_texts(files):
             'boolactivated=false;doublebest_price=0.0;doublecurrent_level=0.0;'
             'std::uint64_tactivation_ordinal=0;'):
         raise ValueError('NativeTrailState must expose the exact read-only A35 facts')
-    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
+    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v18",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
         host, "NativeCurrentExecutionResult",
         "std::variant<NativeCurrentRefusal,native_order::ExecutionAppliedEvent,"
         "native_order::NoEffectEvent,native_order::MatchRejectedEvent,"
-        "native_order::CancelledEvent>", "engine_script_run_v17")
+        "native_order::CancelledEvent>", "engine_script_run_v18")
     current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
     if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
         raise ValueError('current command has exactly target and price_rule, no competing selected authority')
@@ -561,36 +576,42 @@ def check_texts(files):
          r'\s*const\s+Bar\s*&', "on_native_bar_open"),
         (r'\bstd::optional\s*<\s*NativeTrailState\s*>\s+trail_state\s*\('
          r'\s*const\s+native_order::RequestHandle\s*&', "trail_state"),
+        (r'\bvirtual\s+void\s+on_native_timeframe_bar\s*\('
+         r'\s*const\s+Bar\s*&\s*,\s*const\s+NativeTimeframeBarContext\s*&',
+         "on_native_timeframe_bar"),
+        (r'\bstd::optional\s*<\s*Bar\s*>\s+native_series_bar\s*\('
+         r'\s*std::size_t\s+\w+\s*\)\s*const\s*;', "native_series_bar"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
-            raise ValueError(name + " must be a v17 NativeStrategyHost member")
+            raise ValueError(name + " must be a v18 NativeStrategyHost member")
     for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution',
                  'execute_current', 'cohort_open', 'cohort_add', 'cohort_remove'):
         if name not in host:
             raise ValueError('missing current host contract: ' + name)
     if "native_failure_context_in_run" not in host:
-        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v17")
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v18")
     if "native_failed_run_identity" not in host:
-        raise ValueError("native_failed_run_identity must belong to engine_script_run_v17")
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v18")
     if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
-        raise ValueError("general submit must belong to engine_script_run_v17")
+        raise ValueError("general submit must belong to engine_script_run_v18")
     if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
                      host):
-        raise ValueError("general replace must belong to engine_script_run_v17")
+        raise ValueError("general replace must belong to engine_script_run_v18")
     if "submit_market" not in host or "replace_market" not in host:
-        raise ValueError("market-only submit/replace must remain in engine_script_run_v17")
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v17")
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v18")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v18")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v17", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
+            "engine_script_run_v18", r'\bclass\s+NAME\s*')
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v18")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events",
              "NativeStrategyHost::configure_native_fx_curve",
              "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
-             "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state"),
-            "engine_script_run_v17", r'\bNAME\s*\(')
+             "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state",
+             "NativeStrategyHost::native_series_bar"),
+            "engine_script_run_v18", r'\bNAME\s*\(')
 
 
     # These are continuation owners, not redundant physical-book snapshots.
@@ -656,4 +677,4 @@ def check(root=ROOT):
 if __name__ == "__main__":
     check()
     print("native_order identity v1 / values v6, native_calendar_v2, native_run_spec_v3, "
-          "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v17 ownership verified")
+          "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v18 ownership verified")

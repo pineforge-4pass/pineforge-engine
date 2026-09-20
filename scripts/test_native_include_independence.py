@@ -89,7 +89,7 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
         self.assertEqual(forbidden_symbol_lines(symbols), symbols.splitlines())
 
     def test_only_the_opaque_override_pointer_is_allowed(self):
-        allowed = ("U pineforge::engine_script_run_v17::BacktestEngine::run_rich("
+        allowed = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
                    "pineforge::Bar const*, pineforge::source::StrategyOverrides const*)")
         self.assertTrue(is_allowed_opaque_source_symbol(allowed))
         self.assertEqual(forbidden_symbol_lines(allowed), [])
@@ -97,9 +97,9 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
             "U pineforge::source::PineStrategyHost::run()"),
             ["U pineforge::source::PineStrategyHost::run()"])
         self.assertEqual(forbidden_symbol_lines(
-            "U pineforge::engine_script_run_v17::BacktestEngine::run_rich("
+            "U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
             "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"),
-            ["U pineforge::engine_script_run_v17::BacktestEngine::run_rich("
+            ["U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
              "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"])
 
     def test_expect_fail_only_inverts_real_findings(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared, compiler-backed controls for the frozen v16/v17 C++ boundary.
+"""Shared, compiler-backed controls for the frozen v16 / live v18 C++ boundary.
 
 The ABI checks deliberately compile callers against the headers that name each
 epoch, then link them only.  A caller binary is never executed: a successful
@@ -28,7 +28,7 @@ from prepare_settlement_cpp_abi_base import (
 
 ROOT = Path(__file__).resolve().parents[1]
 V16_EPOCH = "engine_script_run_v16"
-V17_EPOCH = "engine_script_run_v17"
+V18_EPOCH = "engine_script_run_v18"
 
 
 class PairingError(RuntimeError):
@@ -123,7 +123,7 @@ def load_frozen_v16(receipt_path: Path, destination: Path) -> FrozenProvider:
 def audit_prepared_receipt(receipt_path: Path, label: str) -> dict:
     """Consume every historical CMake receipt with artifact-byte evidence.
 
-    Only host-ab9714b is the active v16/v17 pairing provider.  The older
+    Only host-ab9714b is the active v16/v18 pairing provider.  The older
     receipts remain historical input evidence, so accepting a CMake argument
     without reading its archive and header bytes would make the CTest command
     line misleading again.
@@ -236,7 +236,7 @@ def _link(compiler: str, flags: Iterable[str], name: str, object_file: Path, arc
     }
 
 
-def execute_v16_v17_pair(*, compiler: str, extra_flags: Iterable[str], current_library: Path,
+def execute_v16_v18_pair(*, compiler: str, extra_flags: Iterable[str], current_library: Path,
                           current_include: Path, generated_include: Path,
                           v16_receipt: Path, kind: str, artifact_directory: Path | None = None) -> dict:
     """Compile and link the two acceptance and two rejection pairings."""
@@ -245,18 +245,18 @@ def execute_v16_v17_pair(*, compiler: str, extra_flags: Iterable[str], current_l
     generated_include = generated_include.resolve()
     if not current_library.is_file():
         raise PairingError("current ABI library is missing: " + str(current_library))
-    if epoch_from_headers(current_include) != V17_EPOCH:
-        raise PairingError("current headers are not engine_script_run_v17")
-    if V17_EPOCH + "::BacktestEngine::broker_state_hash" not in _archive_symbols(current_library):
-        raise PairingError("current v17 archive does not export its broker-state ABI witness")
+    if epoch_from_headers(current_include) != V18_EPOCH:
+        raise PairingError("current headers are not engine_script_run_v18")
+    if V18_EPOCH + "::BacktestEngine::broker_state_hash" not in _archive_symbols(current_library):
+        raise PairingError("current v18 archive does not export its broker-state ABI witness")
     flags = list(extra_flags)
     root_parent = artifact_directory if artifact_directory is not None else None
     if root_parent is not None:
         root_parent.mkdir(parents=True, exist_ok=True)
-        root = Path(tempfile.mkdtemp(prefix="v16-v17-" + kind + ".artifacts-", dir=root_parent))
+        root = Path(tempfile.mkdtemp(prefix="v18-v16-" + kind + ".artifacts-", dir=root_parent))
         cleanup = None
     else:
-        cleanup = tempfile.TemporaryDirectory(prefix="pineforge-v16-v17-")
+        cleanup = tempfile.TemporaryDirectory(prefix="pineforge-v16-v18-")
         root = Path(cleanup.name)
     try:
         frozen_root = root / "frozen-v16"
@@ -264,17 +264,17 @@ def execute_v16_v17_pair(*, compiler: str, extra_flags: Iterable[str], current_l
         frozen_include = frozen_root / "include"
         v16_object, v16_compile = _compile(compiler, flags, kind + "_v16", _source(V16_EPOCH, kind),
                                             frozen_include, generated_include, root)
-        v17_object, v17_compile = _compile(compiler, flags, kind + "_v17", _source(V17_EPOCH, kind),
+        v18_object, v18_compile = _compile(compiler, flags, kind + "_v18", _source(V18_EPOCH, kind),
                                             current_include, generated_include, root)
         links = [
             _link(compiler, flags, kind + "_v16_to_v16", v16_object, frozen.archive, "accept",
                   V16_EPOCH, V16_EPOCH, root),
-            _link(compiler, flags, kind + "_v17_to_v17", v17_object, current_library, "accept",
-                  V17_EPOCH, V17_EPOCH, root),
-            _link(compiler, flags, kind + "_v16_to_v17_reject", v16_object, current_library, "reject",
-                  V16_EPOCH, V17_EPOCH, root),
-            _link(compiler, flags, kind + "_v17_to_v16_reject", v17_object, frozen.archive, "reject",
-                  V17_EPOCH, V16_EPOCH, root),
+            _link(compiler, flags, kind + "_v18_to_v18", v18_object, current_library, "accept",
+                  V18_EPOCH, V18_EPOCH, root),
+            _link(compiler, flags, kind + "_v16_to_v18_reject", v16_object, current_library, "reject",
+                  V16_EPOCH, V18_EPOCH, root),
+            _link(compiler, flags, kind + "_v18_to_v16_reject", v18_object, frozen.archive, "reject",
+                  V18_EPOCH, V16_EPOCH, root),
         ]
     finally:
         if cleanup is not None:
@@ -288,7 +288,7 @@ def execute_v16_v17_pair(*, compiler: str, extra_flags: Iterable[str], current_l
             "archiveSha256": sha256(frozen.archive),
             "headersSha256": sha256(frozen.headers_tar),
         },
-        "compiles": [v16_compile, v17_compile],
+        "compiles": [v16_compile, v18_compile],
         "links": links,
         "summary": {"accepted": 2, "rejected": 2, "executedBinaries": 0},
     }

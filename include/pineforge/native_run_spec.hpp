@@ -158,6 +158,33 @@ struct IntrabarPath {
     synthesized* synthesized_path() noexcept { return std::get_if<synthesized>(&value); }
 };
 
+// One declared higher-timeframe series of the run's own symbol, the native
+// equivalent of request.security(syminfo.tickerid, tf, ...). The kernel
+// aggregates the accepted input into `tf` buckets and delivers each completed
+// bucket to the host; nothing here configures a source language.
+//
+// `tf` must pair with NativeRunSpec::input_tf exactly as script_tf does
+// (native_calendar::compatibility) and may not be strictly finer than the
+// input: a lower-timeframe array is a different contract.
+//
+// `authoritative_bars` are the exchange's own bars of that timeframe, at most
+// one per completed bucket. When present, a completed bucket takes its
+// OHLCV from the bar keyed to the same period, and those stamps become the
+// period partition: the feed store is TradingView-calibrated, so "W"/"M"
+// buckets are built from installed DAILY bars and a session with no stamp of
+// its own folds into the next trade date's bar. A host that supplies them
+// inherits those rules (docs/pages/native-engine.md).
+//
+// `lookahead` is Pine's barmerge.lookahead_off (false, the default: the
+// bucket is delivered when its last contributing input bar is accepted) or
+// lookahead_on (true: the completed bucket's final values are delivered at
+// its FIRST contributing input bar).
+struct NativeTimeframeSubscription {
+    std::string tf;
+    std::vector<Bar> authoritative_bars;
+    bool lookahead = false;
+};
+
 // One complete setup value, staged/copied by NativeStrategyHost before it is
 // applied at begin. This aggregate owns no host phase, consumed-run counter,
 // parsed-calendar authority, physical account, or C transport presence mask.
@@ -216,6 +243,10 @@ struct NativeRunSpec {
     // them. Inert under HostRecorded, whose host owns the whole report series.
     bool report_open_position_at_end = false;
     IntrabarPath intrabar{};
+    // Declared higher-timeframe series. Empty is the whole default surface:
+    // no evaluator is registered, no feed is prepared, and the run spec's
+    // continuation digest is the pre-subscription one.
+    std::vector<NativeTimeframeSubscription> subscriptions;
 };
 
 enum class NativeRunSpecField : std::uint8_t {
@@ -233,6 +264,7 @@ enum class NativeRunSpecField : std::uint8_t {
     PathOrder,
     ReportPolicy,
     PriceGrid, GridRounding,
+    SubscriptionTimeframe, SubscriptionBars,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -265,6 +297,19 @@ enum class NativeRunSpecError : std::uint8_t {
     UnknownPriceGrid,
     UnknownGridRounding,
     GridRequiresPriceTick,
+    // A declared higher-timeframe series whose literal does not parse, or
+    // whose pairing with input_tf is not one script_tf would accept.
+    InvalidSubscriptionTimeframe,
+    // A declared series strictly finer than input_tf. Lower-timeframe arrays
+    // are a separate contract; this is never silently promoted.
+    SubscriptionFinerThanInput,
+    // Two declared series of the same period. The feed store is keyed by the
+    // timeframe's duration, so duplicates could not own their own bars.
+    DuplicateSubscriptionTimeframe,
+    // Authoritative bars that are not strictly increasing in time.
+    UnorderedSubscriptionBars,
+    // Subscriptions declared with no detected input timeframe to pair with.
+    SubscriptionWithoutTimeframe,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -302,6 +347,14 @@ NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
 // mode, lower bars in caller order when present, and every sampling parameter,
 // so continuation identity cannot silently reuse a path from another begin.
 std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
+
+// Exact FNV-1a content digest for the declared higher-timeframe series. It
+// includes each subscription's timeframe literal, publication mode and
+// authoritative bars in caller order, so a continuation cannot silently reuse
+// another begin's series. Callers fold it only when `subscriptions` is
+// non-empty, keeping the default spec's continuation identity unchanged.
+std::uint64_t native_timeframe_subscriptions_digest(
+        const std::vector<NativeTimeframeSubscription>& subscriptions) noexcept;
 
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);

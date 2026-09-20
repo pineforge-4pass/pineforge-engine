@@ -124,6 +124,9 @@ Optional, absent unless set:
 - `max_open_lots`: positive; surviving + new lots
 - `initial_margin_fraction`: finite > 0 as a fraction, not a percent. Opening
   admission only; no maintenance liquidation.
+- `subscriptions`: declared higher-timeframe series of the run's own symbol.
+  Empty is the whole default surface; see "Higher-timeframe series for native
+  hosts" below.
 
 `validate_native_run_spec` / `normalize_native_run_spec` report the first
 error field. `configure_native` copies a candidate, normalizes it, then stages
@@ -465,6 +468,93 @@ Warmup → Realtime. The handoff does not invent a script callback, a future
 exclusive close, or a raised floor to a future seal. Empty batch is a valid
 completed run with no events.
 
+## Higher-timeframe series for native hosts
+
+A bare `NativeStrategyHost` reads a coarser series of its own symbol — Pine's
+`request.security(syminfo.tickerid, tf, …)` — by declaring it in the run spec.
+The kernel aggregates the accepted input into the declared buckets; there is
+no source layer and no Pine expression.
+
+```cpp
+NativeTimeframeSubscription hourly;
+hourly.tf = "60";                    // pairs with input_tf like script_tf does
+hourly.lookahead = false;            // barmerge.lookahead_off (the default)
+// hourly.authoritative_bars = …;    // optional exchange bars, see below
+spec.subscriptions.push_back(hourly);
+
+class Host : public NativeStrategyHost {
+    void on_native_timeframe_bar(const Bar& bucket,
+                                 const NativeTimeframeBarContext& context) override {
+        // context.subscription indexes spec.subscriptions
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (auto hour = native_series_bar(0)) { /* latest delivered bucket */ }
+    }
+};
+```
+
+`subscriptions` is empty by default and every part of this section is inert
+for a spec that declares none: no evaluator is registered, no feed is
+prepared, `on_native_timeframe_bar` is never called, and the run's
+continuation hash is the pre-subscription one.
+
+**Validation (at `configure_native`).** Each `tf` must parse and must pair
+with `input_tf` exactly as `script_tf` does. Named refusals:
+
+| `NativeRunSpecError` | Cause |
+| --- | --- |
+| `InvalidSubscriptionTimeframe` | unparseable literal, or a pairing `script_tf` would not accept |
+| `SubscriptionFinerThanInput` | strictly finer than `input_tf` — a lower-timeframe array is a different contract and is not promoted |
+| `DuplicateSubscriptionTimeframe` | two series of the same period (the feed store is keyed by duration, and every monthly literal is one period) |
+| `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
+| `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
+
+**Delivery.** A bucket is delivered on an accepted input bar, before that
+input is aggregated, matched or calculated — so `on_native_input` precedes it
+and the input's `on_native_bar` follows it.
+
+- `lookahead = false` (Pine's `barmerge.lookahead_off`): the bucket is
+  delivered when its **last** contributing input bar is accepted, never
+  earlier.
+- `lookahead = true` (`barmerge.lookahead_on`): the completed bucket's final
+  OHLCV is delivered at its **first** contributing input bar, and
+  `native_series_bar` answers with it from then on.
+
+`NativeTimeframeBarContext::completion` is `Confirmed` when the bucket closed
+on its own last contributing bar and `LazyComplete` when the next period's
+first input closed it. `interval` is the calendar span of the bucket's first
+contributing input bar; `delivered_at_ms` is the input bar the delivery rides
+on. A bucket still open at the end of the input is never delivered.
+
+**Authoritative bars.** `authoritative_bars` are the exchange's own bars of
+that timeframe. A completed bucket takes its OHLCV from the bar keyed to the
+same period; the aggregator still decides *when* the bucket completes.
+`native_security_substitutions()` and `native_security_misses()` report how
+many completed buckets took one and how many found none.
+
+**Inherited TradingView calibration.** The feed store these bars go into is
+TradingView-calibrated, and a host that supplies them inherits its rules:
+
+- A `"W"` / `"M"` series with no feed of its own is built from the installed
+  **daily** bars of the same run — first session's daily open, the daily
+  extremes, last session's daily close, summed volume — not from a
+  re-aggregation of the intraday input.
+- An installed feed's stamps become that series' period partition. A session
+  with no stamp of its own (an exchange holiday session that pauses and
+  reopens the same day) therefore folds into the **next trade date's** bar,
+  and a data hole inside a stamped period is not a close.
+- A period the supplied bars only partly cover yields a partial bucket,
+  exactly as a partly covered chart would.
+
+Declare no `authoritative_bars` and the buckets are a plain aggregation of the
+run's own input, with no calibration to inherit.
+
+**Limits.** Subscriptions are a batch-run feature: a `stream_begin` with a
+non-empty `subscriptions` is refused (`Contract`) because a series is resolved
+over the run's whole input. A series finer than the input is refused at
+configure, not emulated. Only the run's own symbol is addressable; there is no
+auxiliary-symbol feed and no chart-slice mapping.
+
 ## Batch OHLCV vs ticks vs quiet
 
 Two driver models only: confirmed OHLCV and observed ticks. Mixing them on
@@ -519,6 +609,9 @@ These are existing refusals, not implied future features:
   setters, `set_input`, and Pine
   entry/exit/cancel commands — native hosts latch `Failed`
   (`UnsupportedSource`) before mutation
+- A non-empty `subscriptions` on `stream_begin` (`Contract`): a declared
+  higher-timeframe series is resolved over the run's whole input; batch runs
+  may declare them
 - C-level native request submit/replace/cancel
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the

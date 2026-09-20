@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class SettlementAbi(unittest.TestCase):
     def test_current_include_tree(self):
         result = checker.verify(ROOT / "include")
-        self.assertEqual(result["transition"]["to"], "engine_script_run_v17")
+        self.assertEqual(result["transition"]["to"], "engine_script_run_v18")
 
     def test_retired_header_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -48,7 +48,7 @@ class SettlementAbi(unittest.TestCase):
     def test_unknown_pair_kind_is_refused(self) -> None:
         from cpp_abi_pairing import _source
         with self.assertRaises(PairingError):
-            _source("engine_script_run_v17", "unknown")
+            _source("engine_script_run_v18", "unknown")
 
     def test_missing_tick_hook_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

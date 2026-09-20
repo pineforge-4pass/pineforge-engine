@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -90,6 +90,7 @@ public:
     }
     uint64_t high_water() const noexcept { return consumed_high_water_; }
     void reject_inherited_on_bar(BacktestEngine& engine);
+    std::optional<Bar> series_bar(std::size_t subscription) const;
 
 private:
     struct CurrentExecutionFrame {
@@ -171,6 +172,29 @@ private:
         // False once a tick or quiet-carried slot has contributed. Seal then
         // calculates without replaying modeled OHLC matching/excursion.
         bool modeled_ohlc = true;
+    };
+
+    // One declared higher-timeframe series, live for the length of a run.
+    // The evaluator itself lives in BacktestEngine::security_eval_states_
+    // under `sec_id`; this is the consumer's own delivery bookkeeping.
+    struct TimeframeSubscription {
+        std::size_t index = 0;   // NativeRunSpec::subscriptions index
+        int sec_id = 0;
+        native_calendar::Timeframe tf{};
+        bool lookahead = false;
+        // The latest delivered bucket, what native_series_bar() answers.
+        std::optional<Bar> latest;
+        // lookahead_off: the bucket being accumulated. -1 until an input
+        // opens one.
+        int bucket_first_index = -1;
+        std::int64_t bucket_first_ms = 0;
+        // lookahead_on: the whole series, resolved over the batch input at
+        // begin, each bucket keyed to the input index it is delivered on.
+        std::vector<Bar> projected_bars;
+        std::vector<int> projected_first_index;
+        std::vector<std::int64_t> projected_first_ms;
+        std::vector<NativeCompletionKind> projected_completion;
+        std::size_t projected_cursor = 0;
     };
 
     enum class InputContribution : std::uint8_t {
@@ -257,6 +281,19 @@ private:
     bool contribute_input(BacktestEngine& engine, const Bar& bar,
                           const native_calendar::NativeInterval& interval,
                           int index, InputContribution kind);
+    // Declared higher-timeframe series. Every one of these is a no-op for a
+    // spec whose `subscriptions` are empty, which is every source-projected
+    // spec, so the adapter pays nothing and cannot observe them.
+    void clear_timeframe_subscriptions(BacktestEngine& engine);
+    bool begin_timeframe_subscriptions(BacktestEngine& engine, const NativeRunSpec& spec,
+                                       const Bar* input_bars, int n_input, bool is_stream);
+    bool project_timeframe_subscription(BacktestEngine& engine,
+                                        TimeframeSubscription& subscription,
+                                        const Bar* input_bars, int n_input);
+    bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index);
+    bool deliver_timeframe_bar(BacktestEngine& engine, TimeframeSubscription& subscription,
+                               const Bar& bucket, std::int64_t first_contributing_ms,
+                               std::int64_t delivered_at_ms, NativeCompletionKind completion);
     void seal_script(BacktestEngine& engine, NativeCompletionKind kind);
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
     void deliver_intrabar_script(BacktestEngine& engine, const Bar& bar,
@@ -399,6 +436,18 @@ private:
     uint64_t last_tick_sequence_ = 0;
     bool has_tick_sequence_ = false;
     ScriptBucket script_{};
+    // Declared higher-timeframe series: empty for every spec that declares
+    // none, which is the whole source-projected population.
+    std::vector<TimeframeSubscription> subscriptions_{};
+    // Owned copy of the batch input's forward look, input_next_ms_[i] being
+    // input bar i+1's timestamp (0 for the last). The calendar aggregators
+    // need it to complete a D/W/M bucket on the period's actual last bar;
+    // allocated only for a run that declares a subscription.
+    std::vector<std::int64_t> input_next_ms_{};
+    // Borrowed begin arguments, valid only inside one public begin call.
+    const Bar* begin_bars_ = nullptr;
+    int begin_n_ = 0;
+    bool begin_is_stream_ = false;
     Bar forming_{};
     bool has_forming_ = false;
     double last_price_ = 0.0;
@@ -434,5 +483,5 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
     return static_cast<NativeExecutionConsumer&>(consumer);
 }
 
-}  // inline namespace engine_script_run_v17
+}  // inline namespace engine_script_run_v18
 }  // namespace pineforge

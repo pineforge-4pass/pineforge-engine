@@ -13,7 +13,7 @@ static_assert(int(NativePriceProvenance::PartialFinalized)==6);
 static_assert(int(NativePriceProvenance::Calculation)==7);
 static_assert(int(NativePriceProvenance::CurrentExecution)==8);
 static_assert(int(no::DriverEligibilityClass::CurrentExecution)==6);
-static_assert(std::is_same_v<NativeStrategyHost,pineforge::engine_script_run_v17::NativeStrategyHost>);
+static_assert(std::is_same_v<NativeStrategyHost,pineforge::engine_script_run_v18::NativeStrategyHost>);
 static_assert(std::variant_size_v<no::ExecutionScope> == 3);
 static_assert(std::variant_size_v<ex::CloseScope> == 2);
 

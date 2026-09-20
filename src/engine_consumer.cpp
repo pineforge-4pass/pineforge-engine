@@ -8,7 +8,7 @@
 #include <utility>
 
 namespace pineforge {
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 
 BacktestEngine::BacktestEngine(NativeConsumerBindTag) {
     execution_consumer_slot_.native = true;
@@ -148,5 +148,5 @@ bool BacktestEngine::source_aux_security_feed_enabled() const { return false; }
 void BacktestEngine::source_aux_security_input_view(const Bar*&, int&) const {}
 #endif
 
-}  // inline namespace engine_script_run_v17
+}  // inline namespace engine_script_run_v18
 }  // namespace pineforge

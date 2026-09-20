@@ -116,18 +116,21 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-D L1 advances `BacktestEngine`, `NativeStrategyHost`, and the
-private consumer to `engine_script_run_v17`; the host capability macro is
-`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17`. L3b removes the source compatibility
+runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
+private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
+`engine_script_run_v18` for the native higher-timeframe host surface
+(`on_native_timeframe_bar`, `native_series_bar`), and the host capability macro
+is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v5`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v3`.
+`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
+the continuation hash only when it is non-empty).
 
 | Matrix role | Internal identity |
 | --- | --- |
-| Live engine/host library | `engine_script_run_v17` |
+| Live engine/host library | `engine_script_run_v18` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` |
 | `host-ab9714b` immutable provider | `engine_script_run_v16` |
 | Source extension | `pineforge-source-adapter/v2` |
@@ -136,8 +139,8 @@ The verifier prepares six immutable historical archives with the profile's
 compiler/settings and authenticates every receipt against the real archive and
 header bytes. The active transition control is deliberately narrower and
 executable: callers compiled against `host-ab9714b` v16 link to its archive,
-callers compiled against live v17 link to the live archive, and both v16→v17
-and v17→v16 links must reject the exact epoch-qualified
+callers compiled against live v18 link to the live archive, and both v16→v18
+and v18→v16 links must reject the exact epoch-qualified
 `BacktestEngine::broker_state_hash` symbol. Settlement, script-host, and
 aggregate controls each exercise that pair; no caller executable is run.
 
@@ -145,7 +148,7 @@ For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
 
-The relocation manifest remains a reviewed description of the v16→v17 source
+The relocation manifest remains a reviewed description of the v16→v18 source
 and host transition; it is not proof by itself. The proof is the authenticated
 archive/header input plus the acceptance/rejection links above. The frozen
 pending-row POD is checked separately. Preparation never overwrites an

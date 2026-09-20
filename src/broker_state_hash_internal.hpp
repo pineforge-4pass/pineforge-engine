@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 
 class BrokerStateHashSink {
 public:
@@ -76,5 +76,5 @@ inline void hash_str_set(BrokerStateHashSink& f, const std::unordered_set<std::s
     for (const auto& x : v) f.s(x);
 }
 
-} // inline namespace engine_script_run_v17
+} // inline namespace engine_script_run_v18
 } // namespace pineforge

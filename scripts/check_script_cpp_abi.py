@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile/link the generated source-host ABI against frozen v16 and live v17."""
+"""Compile/link the generated source-host ABI against frozen v16 and live v18."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v17_pair
+from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v18_pair
 
 
 def verify_source_shape(include: Path) -> None:
@@ -43,7 +43,7 @@ def main() -> int:
         if mode is not None:
             return mode
         verify_source_shape(args.include)
-        result = execute_v16_v17_pair(
+        result = execute_v16_v18_pair(
             compiler=args.compiler,
             extra_flags=args.extra_flag,
             current_library=args.library,
@@ -57,7 +57,7 @@ def main() -> int:
         raise SystemExit("script C++ ABI: " + str(error))
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print("script C++ ABI: source-host v16/v17 acceptance and bidirectional rejection pairs passed")
+    print("script C++ ABI: source-host v16/v18 acceptance and bidirectional rejection pairs passed")
     return 0
 
 

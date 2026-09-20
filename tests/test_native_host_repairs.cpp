@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17
+#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18
 #error "native strategy host must fail closed against an unversioned epoch"
 #endif
 
@@ -371,7 +371,7 @@ const native_order::ExecutionAppliedEvent* first_applied(
 int main() {
     {
         const std::string name = typeid(NativeStrategyHost).name();
-        CHECK(name.find("engine_script_run_v17") != std::string::npos);
+        CHECK(name.find("engine_script_run_v18") != std::string::npos);
         CHECK(name.find("NativeStrategyHost") != std::string::npos);
     }
     {

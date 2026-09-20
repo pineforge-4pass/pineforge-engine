@@ -18,7 +18,7 @@
 #include <variant>
 
 namespace pineforge {
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 namespace {
 
 template<class T>
@@ -129,6 +129,12 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (price_grid_on(spec)) {
         f.u(static_cast<uint64_t>(spec.price_grid));
         f.u(static_cast<uint64_t>(spec.grid_rounding));
+    }
+    // Declared higher-timeframe series fold only when there are any, so a
+    // spec that declares none keeps its pre-subscription continuation
+    // identity byte for byte (the precommit_digest_ precedent).
+    if (!spec.subscriptions.empty()) {
+        f.u(native_timeframe_subscriptions_digest(spec.subscriptions));
     }
 }
 
@@ -1030,6 +1036,11 @@ bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
 bool NativeExecutionConsumer::prepare_public_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
     interval_cache_.clear();
+    // Borrowed for the length of this begin call only: begin_ready needs the
+    // caller's own input array to prepare declared higher-timeframe series.
+    begin_bars_ = args.bars;
+    begin_n_ = args.n;
+    begin_is_stream_ = args.is_stream;
     if (preparing_begin_) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "native prepare_native_begin cannot reenter");
@@ -1697,6 +1708,21 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     input_callback_bar_.reset();
     tick_callback_context_.reset();
     tick_callback_bar_.reset();
+    // Declared higher-timeframe series are wired while the lifecycle is still
+    // Ready: installing their authoritative bars goes through the ordinary
+    // public feed setter, which refuses a mutation once the run is Running.
+    {
+        const Bar* const begin_bars = begin_bars_;
+        const int begin_n = begin_n_;
+        const bool begin_is_stream = begin_is_stream_;
+        begin_bars_ = nullptr;
+        begin_n_ = 0;
+        begin_is_stream_ = false;
+        if (!begin_timeframe_subscriptions(engine, spec, begin_bars, begin_n,
+                                           begin_is_stream)) {
+            return false;
+        }
+    }
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
@@ -5091,6 +5117,274 @@ bool NativeExecutionConsumer::contribute_input(
     return !failed();
 }
 
+// ---- declared higher-timeframe series ---------------------------------------
+//
+// A native subscription reuses the kernel's own request.security machinery:
+// one BacktestEngine::SecurityEvalState per declared series, its aggregator
+// built by register_security_eval, its authoritative bars installed through
+// the public set_native_security_feed store and routed by
+// prepare_native_security_feeds. Nothing here is Pine-shaped: the evaluator is
+// always registered lookahead_off / gaps_off, no lower-timeframe emulation can
+// be selected (the spec refuses a series finer than the input), and
+// validate_security_timeframes -- which is what arms the publish gate, the
+// auxiliary-slice partial completion and the lower-TF paths -- is never
+// called. Every `calling_bar_complete` argument below is therefore inert, and
+// is passed false so the projected and live passes are provably identical.
+//
+// Entanglement the host inherits with authoritative bars: the feed store is
+// TradingView-calibrated. A "W"/"M" series with no feed of its own is built
+// from installed DAILY bars, and an installed feed's stamps become the
+// period partition, so a session with no stamp of its own folds into the next
+// trade date's bar (src/engine_aux_security.cpp, docs/pages/native-engine.md).
+
+void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engine) {
+    if (subscriptions_.empty()) return;
+    subscriptions_.clear();
+    input_next_ms_.clear();
+    engine.security_eval_states_.clear();
+    engine.native_security_feeds_.clear();
+    engine.security_input_tf_.clear();
+    engine.security_next_input_ms_ = 0;
+    engine.security_calling_close_ms_ = 0;
+}
+
+bool NativeExecutionConsumer::begin_timeframe_subscriptions(
+        BacktestEngine& engine, const NativeRunSpec& spec,
+        const Bar* input_bars, int n_input, bool is_stream) {
+    clear_timeframe_subscriptions(engine);
+    if (spec.subscriptions.empty()) return true;
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (host == nullptr) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Begin});
+        render(engine, "native timeframe subscriptions require a native strategy host");
+        return false;
+    }
+    if (is_stream) {
+        // A subscription is resolved over the run's whole input: the calendar
+        // aggregators need each bar's successor to close a period on its
+        // actual last bar, and lookahead_on needs the completed bucket before
+        // its first bar. Neither is available to a stream.
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Begin});
+        render(engine, "native timeframe subscriptions require a batch run");
+        return false;
+    }
+    if (input_bars == nullptr || n_input < 0) n_input = 0;
+    try {
+        input_next_ms_.assign(static_cast<std::size_t>(n_input), 0);
+        for (int i = 0; i + 1 < n_input; ++i) {
+            input_next_ms_[static_cast<std::size_t>(i)] = input_bars[i + 1].timestamp;
+        }
+        engine.security_input_tf_ = spec.input_tf;
+        engine.security_next_input_ms_ = 0;
+        engine.security_calling_close_ms_ = 0;
+        subscriptions_.reserve(spec.subscriptions.size());
+        for (std::size_t i = 0; i < spec.subscriptions.size(); ++i) {
+            const auto& declared = spec.subscriptions[i];
+            auto parsed = native_calendar::parse_timeframe(declared.tf);
+            if (!parsed) {
+                fail(engine, NativeFailure{NativeFailureCode::Calendar,
+                                           NativeFailureOperation::Begin});
+                render(engine, "native timeframe subscription parse failed at begin");
+                return false;
+            }
+            TimeframeSubscription subscription;
+            subscription.index = i;
+            subscription.sec_id = static_cast<int>(i);
+            subscription.tf = std::move(*parsed);
+            subscription.lookahead = declared.lookahead;
+            subscriptions_.push_back(std::move(subscription));
+            engine.register_security_eval(static_cast<int>(i), declared.tf, spec.input_tf,
+                                          /*lookahead_on=*/false, /*gaps_on=*/false,
+                                          /*heikinashi=*/false);
+            if (declared.authoritative_bars.empty()) continue;
+            if (!engine.set_native_security_feed(
+                    declared.tf, declared.authoritative_bars.data(),
+                    static_cast<int>(declared.authoritative_bars.size()))) {
+                const std::string reason = engine.last_error_.empty()
+                    ? std::string("native timeframe subscription feed was refused")
+                    : engine.last_error_;
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Begin});
+                render(engine, reason.c_str());
+                return false;
+            }
+        }
+        if (engine.security_eval_states_.size() != subscriptions_.size()) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                       NativeFailureOperation::Begin});
+            render(engine, "native timeframe subscription registration is inconsistent");
+            return false;
+        }
+        engine.prepare_native_security_feeds(input_bars, n_input);
+        for (auto& subscription : subscriptions_) {
+            if (!subscription.lookahead) continue;
+            if (!project_timeframe_subscription(engine, subscription, input_bars, n_input)) {
+                return false;
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Begin});
+        render(engine, "native timeframe subscription allocation failed");
+        return false;
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Unexpected,
+                                   NativeFailureOperation::Begin});
+        render(engine, e.what());
+        return false;
+    } catch (...) {
+        fail(engine, NativeFailure{NativeFailureCode::Unexpected,
+                                   NativeFailureOperation::Begin});
+        render(engine, "native timeframe subscription preparation failed");
+        return false;
+    }
+    return true;
+}
+
+// barmerge.lookahead_on: resolve the whole series over the batch input now, so
+// each completed bucket's FINAL values can be delivered at the input bar that
+// opened it. This pass IS the subscription's only feed; its live pump is
+// skipped, so the substitution/miss diagnostics count each bucket exactly once.
+bool NativeExecutionConsumer::project_timeframe_subscription(
+        BacktestEngine& engine, TimeframeSubscription& subscription,
+        const Bar* input_bars, int n_input) {
+    auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    int first_index = -1;
+    std::int64_t first_ms = 0;
+    for (int i = 0; i < n_input; ++i) {
+        if (first_index < 0) {
+            first_index = i;
+            first_ms = input_bars[i].timestamp;
+        }
+        engine.security_next_input_ms_ =
+            input_next_ms_[static_cast<std::size_t>(i)];
+        engine.security_calling_close_ms_ = 0;
+        const std::int64_t before = state.eval_complete_count;
+        engine.feed_security_eval_state(state, input_bars[i], /*calling_bar_complete=*/false);
+        if (state.eval_complete_count <= before) continue;
+        // A boundary emission hands back the PREVIOUS bucket and re-seats the
+        // aggregator on the one this input opened; an eager completion (count,
+        // real end, session close, the period's last input) leaves the
+        // completed bucket current.
+        const bool boundary = state.aggregator.is_active()
+            && state.aggregator.current().timestamp != state.current_bar.timestamp;
+        subscription.projected_bars.push_back(state.current_bar);
+        subscription.projected_first_index.push_back(first_index);
+        subscription.projected_first_ms.push_back(first_ms);
+        subscription.projected_completion.push_back(
+            boundary ? NativeCompletionKind::LazyComplete : NativeCompletionKind::Confirmed);
+        if (boundary) {
+            first_index = i;
+            first_ms = input_bars[i].timestamp;
+        } else {
+            first_index = -1;
+            first_ms = 0;
+        }
+    }
+    engine.security_next_input_ms_ = 0;
+    return !failed();
+}
+
+bool NativeExecutionConsumer::pump_timeframe_subscriptions(
+        BacktestEngine& engine, const Bar& bar, int index) {
+    for (auto& subscription : subscriptions_) {
+        if (subscription.lookahead) {
+            while (subscription.projected_cursor < subscription.projected_bars.size()
+                   && subscription.projected_first_index[subscription.projected_cursor]
+                          == index) {
+                const std::size_t at = subscription.projected_cursor++;
+                if (!deliver_timeframe_bar(engine, subscription,
+                                           subscription.projected_bars[at],
+                                           subscription.projected_first_ms[at],
+                                           bar.timestamp,
+                                           subscription.projected_completion[at])) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        auto& state =
+            engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+        if (subscription.bucket_first_index < 0) {
+            subscription.bucket_first_index = index;
+            subscription.bucket_first_ms = bar.timestamp;
+        }
+        engine.security_next_input_ms_ =
+            (index >= 0 && static_cast<std::size_t>(index) < input_next_ms_.size())
+                ? input_next_ms_[static_cast<std::size_t>(index)]
+                : 0;
+        engine.security_calling_close_ms_ = 0;
+        const std::int64_t before = state.eval_complete_count;
+        engine.feed_security_eval_state(state, bar, /*calling_bar_complete=*/false);
+        engine.security_next_input_ms_ = 0;
+        if (state.eval_complete_count <= before) continue;
+        const bool boundary = state.aggregator.is_active()
+            && state.aggregator.current().timestamp != state.current_bar.timestamp;
+        const Bar completed = state.current_bar;
+        const std::int64_t first_ms = subscription.bucket_first_ms;
+        if (boundary) {
+            subscription.bucket_first_index = index;
+            subscription.bucket_first_ms = bar.timestamp;
+        } else {
+            subscription.bucket_first_index = -1;
+            subscription.bucket_first_ms = 0;
+        }
+        if (!deliver_timeframe_bar(engine, subscription, completed, first_ms, bar.timestamp,
+                                   boundary ? NativeCompletionKind::LazyComplete
+                                            : NativeCompletionKind::Confirmed)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool NativeExecutionConsumer::deliver_timeframe_bar(
+        BacktestEngine& engine, TimeframeSubscription& subscription, const Bar& bucket,
+        std::int64_t first_contributing_ms, std::int64_t delivered_at_ms,
+        NativeCompletionKind completion) {
+    // The pull accessor answers with this bucket for the whole callback.
+    subscription.latest = bucket;
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (host == nullptr) return true;
+    NativeTimeframeBarContext context;
+    context.subscription = subscription.index;
+    if (auto interval = native_calendar::interval_containing(
+            calendar_, subscription.tf, input_tf_, first_contributing_ms)) {
+        context.interval = *interval;
+    }
+    context.completion = completion;
+    context.delivered_at_ms = delivered_at_ms;
+    in_callback_ = true;
+    try {
+        host->on_native_timeframe_bar(bucket, context);
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, e.what());
+        }
+        return false;
+    } catch (...) {
+        in_callback_ = false;
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, "native timeframe callback exception");
+        }
+        return false;
+    }
+    in_callback_ = false;
+    return !failed();
+}
+
+std::optional<Bar> NativeExecutionConsumer::series_bar(std::size_t subscription) const {
+    if (subscription >= subscriptions_.size()) return std::nullopt;
+    return subscriptions_[subscription].latest;
+}
+
 bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, const Bar& bar,
                                                       int index, bool last) {
     (void)last;
@@ -5214,6 +5508,13 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
     input_context.completes_script_interval =
         interval->next_period_open_ms >= script_interval->next_period_open_ms;
     if (!invoke_input_callback(engine, bar, input_context)) {
+        processing_input_ = false;
+        return false;
+    }
+    // Declared higher-timeframe series are pumped from the accepted-input
+    // path: a completed bucket reaches the host before this input is
+    // aggregated, matched or calculated, never earlier.
+    if (!subscriptions_.empty() && !pump_timeframe_subscriptions(engine, bar, index)) {
         processing_input_ = false;
         return false;
     }
@@ -6258,6 +6559,11 @@ NativeFxCurveSetupResult NativeStrategyHost::configure_native_fx_curve(
     return as_native_consumer(execution_consumer()).configure_fx_curve(curve);
 }
 
+std::optional<Bar> NativeStrategyHost::native_series_bar(std::size_t subscription) const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .series_bar(subscription);
+}
+
 NativeStateView NativeStrategyHost::native_state() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).view();
 }
@@ -6345,5 +6651,5 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
         .continuation_hash();
 }
 
-}  // inline namespace engine_script_run_v17
+}  // inline namespace engine_script_run_v18
 }  // namespace pineforge

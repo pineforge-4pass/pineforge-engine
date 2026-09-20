@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed v17 ownership guard, with an optional real ABI pair control."""
+"""Fail-closed v18 ownership guard, with an optional real ABI pair control."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import re
 
-from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v17_pair
+from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v18_pair
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,10 +42,10 @@ def check(root: Path = ROOT) -> None:
     generic_hash = clean((root / "src/engine_state_hash.cpp").read_text())
     stream_hash = clean((root / "src/engine_stream.cpp").read_text())
     epochs = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", clean(engine))
-    if epochs != ["engine_script_run_v17"]:
-        raise ValueError("BacktestEngine requires engine_script_run_v17")
-    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17 1" not in native:
-        raise ValueError("native host capability must remain v17")
+    if epochs != ["engine_script_run_v18"]:
+        raise ValueError("BacktestEngine requires engine_script_run_v18")
+    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1" not in native:
+        raise ValueError("native host capability must remain v18")
     if "class PineStrategyHost : public NativeStrategyHost" not in (
             root / "include/pineforge/source/pine_strategy_host.hpp").read_text():
         raise ValueError("source host must remain native-bound")
@@ -98,7 +98,7 @@ def main() -> int:
         if any(value is not None for value in requested):
             if not all(value is not None for value in requested):
                 raise PairingError("runtime ABI control requires compiler, library, include, generated include, and v16 receipt")
-            result = execute_v16_v17_pair(
+            result = execute_v16_v18_pair(
                 compiler=args.compiler,
                 extra_flags=args.extra_flag,
                 current_library=args.library,
@@ -114,7 +114,7 @@ def main() -> int:
                 args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     except (PairingError, ValueError) as error:
         raise SystemExit("aggregate C++ versions: " + str(error))
-    print("aggregate v17 ownership" + (" and v16/v17 ABI pairs" if args.compiler else "") + " verified")
+    print("aggregate v18 ownership" + (" and v16/v18 ABI pairs" if args.compiler else "") + " verified")
     return 0
 
 

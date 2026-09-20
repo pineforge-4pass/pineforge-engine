@@ -128,6 +128,30 @@ bool valid_grid_rounding(NativeGridRounding rounding) noexcept {
     return false;
 }
 
+// The native security feed store keys one feed per timeframe DURATION, and
+// treats every monthly literal as one calendar period (tf_to_seconds returns
+// -1 for any "*M"). Two declared series that share this key could not own
+// their own authoritative bars, so the spec refuses them. Overflow-safe: a
+// count whose duration is not representable answers 0, which never matches a
+// valid key and leaves the pairing check to name the failure.
+std::int64_t subscription_period_key(const native_calendar::Timeframe& tf) noexcept {
+    if (!tf.valid()) return 0;
+    std::int64_t unit_seconds = 0;
+    switch (tf.unit()) {
+    case native_calendar::TimeframeUnit::Second: unit_seconds = 1; break;
+    case native_calendar::TimeframeUnit::Minute: unit_seconds = 60; break;
+    case native_calendar::TimeframeUnit::Day: unit_seconds = 86400; break;
+    case native_calendar::TimeframeUnit::Week: unit_seconds = 604800; break;
+    case native_calendar::TimeframeUnit::Month: return -1;
+    }
+    const std::int64_t count = tf.count();
+    if (unit_seconds <= 0 || count <= 0
+        || count > std::numeric_limits<std::int64_t>::max() / unit_seconds) {
+        return 0;
+    }
+    return count * unit_seconds;
+}
+
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
         static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
@@ -242,6 +266,20 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
     if (!valid_report_policy(spec.report_policy))
         return {Error::UnknownReportPolicy, Field::ReportPolicy};
+    if (!spec.subscriptions.empty() && spec.timeframe_undetected) {
+        return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
+    }
+    for (const auto& subscription : spec.subscriptions) {
+        const auto tf =
+            validate_string(subscription.tf, Field::SubscriptionTimeframe, true);
+        if (!tf) return tf;
+        const auto& bars = subscription.authoritative_bars;
+        for (std::size_t i = 1; i < bars.size(); ++i) {
+            if (bars[i].timestamp <= bars[i - 1].timestamp) {
+                return {Error::UnorderedSubscriptionBars, Field::SubscriptionBars};
+            }
+        }
+    }
     if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
     }
@@ -322,6 +360,38 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
             default:
                 return {Error::IncompatibleTimeframes, active_field};
             }
+            // Declared higher-timeframe series pair with the INPUT timeframe
+            // exactly as script_tf does. A strictly finer request is named
+            // separately: it is a lower-timeframe array contract, never a
+            // silently promoted aggregate.
+            active_field = Field::SubscriptionTimeframe;
+            std::vector<std::int64_t> keys;
+            keys.reserve(spec.subscriptions.size());
+            for (const auto& subscription : spec.subscriptions) {
+                const auto requested = native_calendar::parse_timeframe(subscription.tf);
+                if (!requested) {
+                    return {Error::InvalidSubscriptionTimeframe, active_field};
+                }
+                switch (native_calendar::compatibility(*input, *requested).pairing) {
+                case native_calendar::TimeframePairing::Passthrough:
+                case native_calendar::TimeframePairing::SameUnitMultiple:
+                case native_calendar::TimeframePairing::FixedDivisible:
+                case native_calendar::TimeframePairing::FixedToCalendar:
+                case native_calendar::TimeframePairing::CalendarToCalendar:
+                    break;
+                case native_calendar::TimeframePairing::ScriptFiner:
+                    return {Error::SubscriptionFinerThanInput, active_field};
+                default:
+                    return {Error::InvalidSubscriptionTimeframe, active_field};
+                }
+                const std::int64_t key = subscription_period_key(*requested);
+                for (const std::int64_t seen : keys) {
+                    if (seen == key) {
+                        return {Error::DuplicateSubscriptionTimeframe, active_field};
+                    }
+                }
+                keys.push_back(key);
+            }
         }
         // Use calendar's timezone acceptance with an all-day literal first,
         // so malformed session syntax has its own stable failure field.
@@ -385,6 +455,36 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
         u(synthesized->volume_weighted ? 1u : 0u);
         i(synthesized->volume_weighted_min_samples);
         i(synthesized->volume_weighted_max_samples);
+    }
+    return state;
+}
+
+std::uint64_t native_timeframe_subscriptions_digest(
+        const std::vector<NativeTimeframeSubscription>& subscriptions) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto i = [&bytes](std::int64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto d = [&bytes](double value) noexcept { bytes(&value, sizeof value); };
+    const auto s = [&u, &bytes](const std::string& value) noexcept {
+        u(value.size());
+        bytes(value.data(), value.size());
+    };
+    u(subscriptions.size());
+    for (const auto& subscription : subscriptions) {
+        s(subscription.tf);
+        u(subscription.lookahead ? 1u : 0u);
+        u(subscription.authoritative_bars.size());
+        for (const auto& bar : subscription.authoritative_bars) {
+            d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
+            i(bar.timestamp);
+        }
     }
     return state;
 }

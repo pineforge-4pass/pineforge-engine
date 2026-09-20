@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Audit the v17 surface and execute frozen-v16/live-v17 settlement ABI pairs.
+"""Audit the v18 surface and execute frozen-v16/live-v18 settlement ABI pairs.
 
 This is intentionally a compile/link control, never a JSON-to-JSON manifest
 comparison.  It consumes every historical receipt supplied by CMake and links
 the actual host-ab9714b archive in both stale directions, after checking the
-authenticated v16-to-v17 relocation manifest and retired surface.
+authenticated v16-to-v18 relocation manifest and retired surface.
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from pathlib import Path
 
 from cpp_abi_pairing import (
     PairingError, audit_prepared_receipt, enforce_receipt_mode,
-    execute_v16_v17_pair,
+    execute_v16_v18_pair,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v17.json"
+MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json"
 RETIRED_HEADER = "pineforge/source/pine_pending_intent.hpp"
 _OLD = "legacy"
 _RUN = _OLD + "_run_"
@@ -37,12 +37,12 @@ def verify(include: Path) -> dict:
     native = (include / "pineforge/native_host.hpp").read_text()
     manifest = json.loads(MANIFEST.read_text())
     if manifest.get("schema") != "pineforge-r4-d-relocation/v1":
-        raise RuntimeError("unexpected v16-v17 relocation schema")
+        raise RuntimeError("unexpected v16-v18 relocation schema")
     if manifest.get("transition") != {
-            "from": "engine_script_run_v16", "to": "engine_script_run_v17"}:
-        raise RuntimeError("v16-v17 relocation transition drift")
-    if "inline namespace engine_script_run_v17" not in engine:
-        raise RuntimeError("current engine epoch is not v17")
+            "from": "engine_script_run_v16", "to": "engine_script_run_v18"}:
+        raise RuntimeError("v16-v18 relocation transition drift")
+    if "inline namespace engine_script_run_v18" not in engine:
+        raise RuntimeError("current engine epoch is not v18")
     if (include / RETIRED_HEADER).exists():
         raise RuntimeError("retired source order header remains installed")
     present = [name for name in RETIRED_SEAMS if name in engine]
@@ -50,15 +50,15 @@ def verify(include: Path) -> dict:
         raise RuntimeError("retired engine seams remain: " + ", ".join(present))
     required_virtuals = {
         "prepare_native_begin", "on_native_bar_open", "on_native_input",
-        "on_native_tick",
+        "on_native_tick", "on_native_timeframe_bar",
     }
     if not required_virtuals.issubset(set(manifest.get("addedVirtuals", []))):
         raise RuntimeError("relocation manifest omits a native hook")
     if not all("virtual void " + name in native for name in required_virtuals):
         raise RuntimeError("current native host omits a required hook")
     pairs = manifest.get("rejectionPairs")
-    if pairs != [["v16-frozen", "v17-current"], ["v17-current", "v16-frozen"]]:
-        raise RuntimeError("v16/v17 rejection pairs drift")
+    if pairs != [["v16-frozen", "v18-current"], ["v18-current", "v16-frozen"]]:
+        raise RuntimeError("v16/v18 rejection pairs drift")
     return {"transition": manifest["transition"], "rejectionPairs": pairs,
             "retiredHeader": RETIRED_HEADER}
 
@@ -73,7 +73,7 @@ def verify_pair(args: argparse.Namespace) -> dict:
         audit_prepared_receipt(args.v15_frozen_receipt, "frozen v15"),
         audit_prepared_receipt(args.v16_frozen_receipt, "frozen v16"),
     ]
-    pair = execute_v16_v17_pair(
+    pair = execute_v16_v18_pair(
         compiler=args.compiler,
         extra_flags=args.extra_flag,
         current_library=args.library,
@@ -85,9 +85,9 @@ def verify_pair(args: argparse.Namespace) -> dict:
     )
     return {
         "schemaVersion": "pineforge-settlement-abi/v2",
-        "v16V17Surface": surface,
+        "v16V18Surface": surface,
         "historicalInputs": inputs,
-        "v16V17Pair": pair,
+        "v16V18Pair": pair,
         "summary": {
             "compiled": len(pair["compiles"]),
             "linked": sum(row["outcome"] == "linked" for row in pair["links"]),
@@ -130,7 +130,7 @@ def main() -> int:
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     summary = result["summary"]
     print(f"settlement C++ ABI: {summary['compiled']} callers compiled; "
-          f"{summary['linked']} positive links; {summary['rejected']} v16/v17 rejections; "
+          f"{summary['linked']} positive links; {summary['rejected']} v16/v18 rejections; "
           "no executable run")
     return 0
 

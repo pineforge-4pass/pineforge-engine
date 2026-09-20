@@ -446,7 +446,7 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 class BrokerStateHashSink;
 // Optional frontend projection interface retained for source compatibility.
 // Broker dispatch itself is virtual on BacktestEngine and never discovers a
@@ -458,6 +458,14 @@ public:
 };
 class BacktestEngine {
 protected:
+    // The consumer is the kernel's own execution authority, so this
+    // friendship is also the access path for the request.security feed
+    // machinery a native higher-timeframe subscription drives:
+    // register_security_eval, prepare_native_security_feeds and
+    // feed_security_eval_state stay protected members of this class and are
+    // still out of reach of host code, while the consumer calls them at
+    // begin and from its accepted-input path. No member moved and no
+    // behaviour changed for this.
     friend class NativeExecutionConsumer;
     friend class NativeStrategyHost;
     struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
@@ -3612,5 +3620,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v17
+} // inline namespace engine_script_run_v18
 } // namespace pineforge

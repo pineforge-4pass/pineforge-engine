@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v17 {
+inline namespace engine_script_run_v18 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -416,12 +416,31 @@ struct NativeTickContext {
     std::uint64_t sequence = 0;
 };
 
+// One completed higher-timeframe bucket of a declared subscription
+// (NativeRunSpec::subscriptions), presented before the calculation of the
+// input bar it is delivered on.
+//
+// `subscription` indexes NativeRunSpec::subscriptions. `interval` is the
+// calendar span of the bucket's FIRST contributing input bar, read through the
+// run's own session calendar; it is left zeroed when that lookup has no answer.
+// `completion` is Confirmed when the bucket completed on its own last
+// contributing input bar and LazyComplete when the next period's first input
+// closed it. `delivered_at_ms` is the timestamp of the input bar the delivery
+// rides on: the bucket's last contributing bar under lookahead_off and its
+// first under lookahead_on.
+struct NativeTimeframeBarContext {
+    std::size_t subscription = 0;
+    native_calendar::NativeInterval interval{};
+    NativeCompletionKind completion = NativeCompletionKind::Confirmed;
+    std::int64_t delivered_at_ms = 0;
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -441,6 +460,11 @@ public:
     // Called once for every accepted realtime print, before matching at that
     // point. inspect_current_execution/execute_current are legal here.
     virtual void on_native_tick(const Bar&, const NativeTickContext&) {}
+    // One completed bucket of a declared higher-timeframe subscription,
+    // delivered on an accepted input bar before that input is aggregated,
+    // matched or calculated. Never called for a spec whose `subscriptions`
+    // are empty. native_series_bar() already answers with this bar here.
+    virtual void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext&) {}
     // Precedes the matching pass at the script bar's open decision point.
     // inspect_current_execution/execute_current are legal in this hook.
     virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}
@@ -480,6 +504,11 @@ public:
     NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
+    // The latest completed bucket delivered for a declared subscription, or
+    // nullopt before its first delivery / for an unknown index. Legal inside
+    // every native callback, including on_native_timeframe_bar itself.
+    std::optional<Bar> native_series_bar(std::size_t subscription) const;
+
     NativeSetupResult configure_native(const NativeRunSpec& spec);
     NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);
     NativeStateView native_state() const;
@@ -507,5 +536,5 @@ public:
     friend class NativeExecutionConsumer;
 };
 
-}  // inline namespace engine_script_run_v17
+}  // inline namespace engine_script_run_v18
 }  // namespace pineforge
