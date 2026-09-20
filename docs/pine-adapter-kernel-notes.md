@@ -427,3 +427,60 @@ mechanism 2a, adapter fact `dormant_reissue_pending`).
 execute_market_entry / execute_partial_exit_* helpers (defined in
 engine_orders.cpp).
 ```
+
+## 5. Dead kernel helpers removed with their evidence
+
+`include/pineforge/engine.hpp` carried two protected helpers with no caller
+anywhere in `src/` or `tests/` (R5 lane L11, §2.ii e). The arithmetic was
+one line each; the evidence attached to them is the part worth keeping.
+
+### 5.1 `apply_limit_fill` — limit-or-better, favourable snap
+
+```text
+TradingView applies slippage to MARKET and STOP fills but NOT to
+LIMIT fills: a limit order fills at limit-or-better. An off-tick
+limit price snaps one tick in the FAVORABLE direction (sell limit
+-> ceil, buy limit -> floor) — the opposite direction of the
+adverse market/stop snap in apply_slippage. A limit order that gaps
+through at the bar open fills at the raw open (better price), also
+unslipped; the open is on-tick in practice so the favorable snap is
+an identity there.
+
+Evidence (2026-06-12): TV export of corpus/validation/
+bracket-exit-tp-sl-fixed-01 on BINANCE:ETHUSDT.P, commission 0.1%,
+slippage 2, mintick 0.01 — TP (limit) exits: 152/152 intra-bar
+fills equal ceil(limit) with no slip (62 of them discriminate ceil
+from round-to-nearest), 44/44 gap fills equal the raw bar open.
+SL (stop) exits 195/195 and market entries 396/396 match the
+slipped path, pinning slippage to market/stop fills only. The
+probe's slippage=0 tv_trades.csv shows the same favorable snap
+(143/143 TP fills at ceil(limit)), so this rule is slippage-
+independent.
+```
+
+```cpp
+double apply_limit_fill(double price, bool is_buy) const {
+    if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+    return round_to_mintick_directional(price, /*is_long_stop=*/!is_buy);
+}
+```
+
+### 5.2 `reserve_percent_commission` — percent-commission reservation
+
+```text
+TradingView reserves the entry commission when sizing percent_of_equity:
+it sizes the notional so that notional + entry_fee <= equity*pct, i.e.
+divides the sizing cash by (1 + commRate). Proven from TV exports for
+BOTH fractional (pct=10) and all-in (pct=100) sizing — the reservation is
+not gated on headroom (KI-52 probes: ki52-pct-equity-commission-{frac,allin},
+first-entry qty = equity/(price*(1+commRate)) to the lot step, 16/16). Only
+percent commission reserves; cash-per-order/contract and a zero rate are
+exact no-ops, so FIXED/CASH qty types and commission_value_==0 are unchanged.
+```
+
+```cpp
+double reserve_percent_commission(double cash) const {
+    return (commission_type_ == CommissionType::PERCENT && commission_value_ > 0.0)
+        ? cash / (1.0 + commission_value_ / 100.0) : cash;
+}
+```

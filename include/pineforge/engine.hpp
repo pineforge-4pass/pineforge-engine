@@ -1026,8 +1026,8 @@ protected:
     // limit LEVELS that fall between ticks; applying it to a raw bar price
     // was the finding-432/446 defect (sells floored, buys ceiled — 43 AAPL
     // slugs off by one tick). The result is on-tick, so the directional snap
-    // downstream in apply_slippage / apply_limit_fill is an identity on it
-    // (the 1e-9 boundary guard absorbs the n*tick/tick FP residue).
+    // downstream in apply_slippage is an identity on it (the 1e-9 boundary
+    // guard absorbs the n*tick/tick FP residue).
     double bar_fill_price(double raw_bar_price) const {
         return round_to_mintick(raw_bar_price);
     }
@@ -1199,30 +1199,6 @@ protected:
         return round_to_mintick_directional(slipped, /*is_long_stop=*/is_buy);
     }
 
-    // TradingView applies slippage to MARKET and STOP fills but NOT to
-    // LIMIT fills: a limit order fills at limit-or-better. An off-tick
-    // limit price snaps one tick in the FAVORABLE direction (sell limit
-    // -> ceil, buy limit -> floor) — the opposite direction of the
-    // adverse market/stop snap in apply_slippage. A limit order that gaps
-    // through at the bar open fills at the raw open (better price), also
-    // unslipped; the open is on-tick in practice so the favorable snap is
-    // an identity there.
-    //
-    // Evidence (2026-06-12): TV export of corpus/validation/
-    // bracket-exit-tp-sl-fixed-01 on BINANCE:ETHUSDT.P, commission 0.1%,
-    // slippage 2, mintick 0.01 — TP (limit) exits: 152/152 intra-bar
-    // fills equal ceil(limit) with no slip (62 of them discriminate ceil
-    // from round-to-nearest), 44/44 gap fills equal the raw bar open.
-    // SL (stop) exits 195/195 and market entries 396/396 match the
-    // slipped path, pinning slippage to market/stop fills only. The
-    // probe's slippage=0 tv_trades.csv shows the same favorable snap
-    // (143/143 TP fills at ceil(limit)), so this rule is slippage-
-    // independent.
-    double apply_limit_fill(double price, bool is_buy) const {
-        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
-        return round_to_mintick_directional(price, /*is_long_stop=*/!is_buy);
-    }
-
     // --- Commission helper ---
     // PERCENT commission is a % of the order's notional value. The notional
     // (fill_price × qty × pointvalue) is in the symbol's QUOTE currency; the
@@ -1344,19 +1320,6 @@ protected:
         return gridded;
     }
 
-    // TradingView reserves the entry commission when sizing percent_of_equity:
-    // it sizes the notional so that notional + entry_fee <= equity*pct, i.e.
-    // divides the sizing cash by (1 + commRate). Proven from TV exports for
-    // BOTH fractional (pct=10) and all-in (pct=100) sizing — the reservation is
-    // not gated on headroom (KI-52 probes: ki52-pct-equity-commission-{frac,allin},
-    // first-entry qty = equity/(price*(1+commRate)) to the lot step, 16/16). Only
-    // percent commission reserves; cash-per-order/contract and a zero rate are
-    // exact no-ops, so FIXED/CASH qty types and commission_value_==0 are unchanged.
-    double reserve_percent_commission(double cash) const {
-        return (commission_type_ == CommissionType::PERCENT && commission_value_ > 0.0)
-            ? cash / (1.0 + commission_value_ / 100.0) : cash;
-    }
-
     // The broker's sizing arithmetic runs ON-TICK. Both the price the budget
     // is divided by and the price the open position is marked at for the
     // equity term are round_to_mintick() of their raw inputs; the FEED itself
@@ -1412,8 +1375,11 @@ protected:
     //   equity_S     = initial_capital + realized net profit
     //                  + open_profit(tick(close(S)))  // position may still be OPEN
     //   sizing_price = tick(close(S)) + slippage*mintick*(+1 buy / -1 sell)
-    //   qty          = floor_step( reserve_percent_commission(budget)
+    //   qty          = floor_step( commission_reserved(budget)
     //                              / fx / (sizing_price * pointvalue) )
+    //                  // commission_reserved divides by (1 + commRate) for a
+    //                  // PERCENT commission and is the identity otherwise;
+    //                  // the adapter owns it (docs/pine-adapter-kernel-notes.md)
     //
     // The market order then fills at the NEXT bar's open carrying this frozen
     // quantity. calc_qty(price) implements exactly that shape when evaluated
@@ -3098,8 +3064,9 @@ public:
     //                            dispatch consumes it (round 7 family K).
     //   3 AT_FILL                default sizing at the slipped fill,
     //                            calc_qty(fill).
-    // `fill_price` is slipped the way the kernel slips it
-    // (apply_slippage; a LIMIT-triggered entry takes apply_limit_fill).
+    // `fill_price` is slipped the way the kernel slips it (apply_slippage; a
+    // LIMIT-triggered entry fills limit-or-better and is not slipped, see
+    // docs/pine-adapter-kernel-notes.md).
     // `close_only` is 1 when the kernel's close-only predicate fires -- the
     // fill closes against the live opposite position and that predicate
     // opens no leg of its own (where the order was created FLAT the branch
