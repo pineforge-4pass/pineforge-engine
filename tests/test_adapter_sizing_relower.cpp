@@ -227,16 +227,38 @@ public:
     // The R2 classification observed at every command the script writes.
     std::vector<int> core_sized_at_command;
 
-    void on_source_bar(const Bar&) override {
+    // The placement-time frozen default quantity and its sizing price, read
+    // from the adapter's pending view right after the command is written --
+    // the number the source's own money band and affordability gates consume
+    // before any request reaches the core.
+    std::vector<double> frozen_at_command;
+    std::vector<double> sizing_price_at_command;
+    void capture_frozen() {
+        const auto& view = source_pending_view();
+        if (view.empty()) return;
+        frozen_at_command.push_back(view.back().frozen_default_qty);
+        sizing_price_at_command.push_back(view.back().default_stop_sizing_price);
+    }
+
+    void on_source_bar(const Bar& bar) override {
+        current_close_ = bar.close;
         if (bar_index_ < 0 || bar_index_ >= static_cast<int>(script.size())) return;
         switch (script[bar_index_]) {
         case 'L':
             core_sized_at_command.push_back(adapter_core_sizes_default_opening(true) ? 1 : 0);
             strategy_entry("L", true);
+            capture_frozen();
             break;
         case 'S':
             core_sized_at_command.push_back(adapter_core_sizes_default_opening(false) ? 1 : 0);
             strategy_entry("S", false);
+            capture_frozen();
+            break;
+        case 'T':
+            // A pure-stop default-sized entry one point above the signal
+            // close: sized at its own trigger level, never at the signal rule.
+            strategy_entry("T", true, kNaN, current_close_ + 1.0);
+            capture_frozen();
             break;
         case 'e': strategy_entry("L", true, kNaN, kNaN, 10.0); break;
         case 'C': strategy_close_all(); break;
@@ -250,6 +272,8 @@ public:
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
     const std::vector<Trade>& rows() const { return trades_; }
+private:
+    double current_close_ = kNaN;
 };
 
 // --- the core half ---------------------------------------------------------
@@ -767,6 +791,182 @@ void the_source_layer_names_the_sizing_basis_and_the_core_names_no_source() {
 #endif
 }
 
+// ===========================================================================
+// 8. The conversion exists once (R5 N11).
+// ===========================================================================
+//
+// The adapter's placement-time frozen quantity -- the number its money band
+// and affordability gates consume before any request exists -- is the
+// kernel's own arithmetic, read through NativeStrategyHost::native_sized_units
+// and floored by the source, and it is bit for bit the quantity the pre-R2
+// adapter computed with a conversion of its own.
+void the_conversion_exists_once() {
+    struct Row {
+        const char* name;
+        QtyType type;
+        double value;
+        double signal_close;
+        int slippage;
+        double qty_step;
+        double fee_percent;
+        double previous;      // the literal quantity the pre-R2 adapter froze
+    };
+    const Row rows[] = {
+        {"cash on-grid close, no slip", QtyType::CASH, 5000.0, 125.0, 0, 0.0, 0.0, 40.0},
+        {"cash off-grid close, 3 ticks", QtyType::CASH, 5000.0, 2517.70, 3, 0.0, 0.0,
+         1.9859158845467941},
+        {"cash off-grid close, lot grid", QtyType::CASH, 5000.0, 2517.70, 0, 1.0, 0.0, 1.0},
+        {"percent fee+grid", QtyType::PERCENT_OF_EQUITY, 50.0, 100.0, 0, 1.0, 0.1, 49.0},
+    };
+    for (const Row& row : rows) {
+        Account account;
+        account.capital = row.type == QtyType::CASH ? 100000.0 : 10000.0;
+        account.slippage = row.slippage;
+        account.qty_step = row.qty_step;
+        account.fee_percent = row.fee_percent;
+        const auto bars = flat_bars(row.signal_close, 4);
+        const double price = market_sizing_price(account, row.signal_close, true);
+
+        // (a) the pre-R2 conversion, restated and pinned.
+        const double previous = previous_default_units(
+            account, row.type, row.value, row.signal_close, true, account.capital);
+        CHECK(bits(previous) == bits(row.previous));
+
+        // (b) the adapter freezes exactly it at the command, before submit.
+        PineProbe pine(account, row.type, row.value);
+        pine.script = "L.C.";
+        pine.run(bars.data(), static_cast<int>(bars.size()));
+        REQUIRE(pine.frozen_at_command.size() == 1);
+        CHECK(bits(pine.frozen_at_command[0]) == bits(previous));
+        CHECK(bits(pine.sizing_price_at_command[0]) == bits(price));
+        REQUIRE(pine.trade_count() == 1);
+        CHECK(bits(pine.rows()[0].qty) == bits(previous));
+
+        // (c) the kernel's query on the same inputs is the pre-floor quotient,
+        // and the source floor on top of it is the frozen number: the
+        // division and the fee reserve exist in the kernel alone.
+        CoreProbe core;
+        REQUIRE(core.configure_native(core_spec(account, "n11-once")).status
+                == NativeSetupStatus::Applied);
+        const auto request = core_sized_open(
+            source_sizing_cash(account, row.type, row.value, account.capital),
+            no::Side::Long, row.type == QtyType::PERCENT_OF_EQUITY && row.fee_percent > 0.0,
+            no::SizePrice::SignalOnTick, "once");
+        const auto& sized = std::get<no::Sized>(request.intent);
+        const auto quotient = core.native_sized_units(sized, price, account.capital, 1.0);
+        REQUIRE(quotient.has_value());
+        double cash = source_sizing_cash(account, row.type, row.value, account.capital);
+        if (sized.reserve_percent_fee) cash /= 1.0 + row.fee_percent / 100.0;
+        CHECK(bits(*quotient) == bits(cash / (price * account.point_value * 1.0)));
+        CHECK(bits(source_lot_floor(account, row.type, *quotient)) == bits(previous));
+        std::printf("  [once %-28s] quotient=%.17g frozen=%.17g previous=%.17g booked=%.17g\n",
+                    row.name, *quotient, pine.frozen_at_command[0], previous,
+                    pine.rows()[0].qty);
+    }
+}
+
+// ===========================================================================
+// 9. Why the two lot floors stay the adapter's -- measured, not asserted.
+// ===========================================================================
+//
+// The kernel's SnapToGrid is the largest grid multiple at or below the
+// quotient, with the engine's on-grid tolerance. Neither source floor is
+// that function on every input, so the adapter asks for ExplicitUnits and
+// floors the kernel's quotient itself (retained, why):
+//   * the cash floor floor(u/g + 1e-6)*g keeps a quotient within a millionth
+//     of a lot below a boundary RAW, where the kernel takes a whole lot off;
+//   * the percent floor floor(u/g)*g has no on-grid tolerance, so a quotient
+//     that IS a lot multiple can come out one lot short when u/g lands an ulp
+//     below the integer (0.0392 / 0.0001 = 391.99999999999994).
+void the_source_lot_floors_are_not_the_kernel_floor() {
+    Account cash_account;
+    cash_account.capital = 100000.0;
+    cash_account.qty_step = 1.0;
+    CoreProbe host;
+    REQUIRE(host.configure_native(core_spec(cash_account, "n11-floors")).status
+            == NativeSetupStatus::Applied);
+
+    // 299.99999999 / 100 = 2.9999999999: a millionth of a lot below three.
+    const double just_under = 299.99999999 / 100.0;
+    CHECK(bits(just_under) == bits(2.9999999999));
+    no::Sized snapped;
+    snapped.basis = no::CashValue{299.99999999};
+    snapped.grid_policy = no::ExecutionGridPolicy::SnapToGrid;
+    const auto kernel_cash = host.native_sized_units(snapped, 100.0, cash_account.capital, 1.0);
+    REQUIRE(kernel_cash.has_value());
+    CHECK(bits(*kernel_cash) == bits(2.0));
+    CHECK(bits(source_lot_floor(cash_account, QtyType::CASH, just_under)) == bits(just_under));
+    CHECK(bits(source_lot_floor(cash_account, QtyType::PERCENT_OF_EQUITY, just_under))
+          == bits(2.0));
+
+    // 3.92 / 100 = 0.0392 exactly on a 0.0001 grid: the kernel keeps the lot
+    // multiple, the percent floor drops to 0.0391.
+    Account fine_account;
+    fine_account.capital = 100000.0;
+    fine_account.qty_step = 0.0001;
+    CoreProbe fine;
+    REQUIRE(fine.configure_native(core_spec(fine_account, "n11-floors-fine")).status
+            == NativeSetupStatus::Applied);
+    const double on_grid = 3.92 / 100.0;
+    CHECK(bits(on_grid) == bits(0.0392));
+    no::Sized lot;
+    lot.basis = no::CashValue{3.92};
+    lot.grid_policy = no::ExecutionGridPolicy::SnapToGrid;
+    const auto kernel_lot = fine.native_sized_units(lot, 100.0, fine_account.capital, 1.0);
+    REQUIRE(kernel_lot.has_value());
+    CHECK(bits(*kernel_lot) == bits(0.0392));
+    CHECK(bits(source_lot_floor(fine_account, QtyType::PERCENT_OF_EQUITY, on_grid))
+          == bits(0.0391));
+    CHECK(bits(source_lot_floor(fine_account, QtyType::CASH, on_grid)) == bits(0.0392));
+    std::printf("  [floors] 2.9999999999: kernel=%.17g cash-floor=%.17g percent-floor=%.17g\n",
+                *kernel_cash, source_lot_floor(cash_account, QtyType::CASH, just_under),
+                source_lot_floor(cash_account, QtyType::PERCENT_OF_EQUITY, just_under));
+    std::printf("  [floors] 0.0392 on 0.0001: kernel=%.17g percent-floor=%.17g\n",
+                *kernel_lot, source_lot_floor(fine_account, QtyType::PERCENT_OF_EQUITY, on_grid));
+}
+
+// ===========================================================================
+// 10. A retained host-sized branch: the pure-stop default entry.
+// ===========================================================================
+//
+// A default-sized STOP entry is sized at its own directionally snapped
+// trigger level, which no SizePrice names; it keeps HostSized and the frozen
+// quantity of its own resolve_terms branch. Harvested from the adapter at
+// 683a82f (the tree before this lane touched src/source/): the placement-time
+// frozen quantity, its sizing price and the booked row.
+//
+// bar0 close 100  stop entry at 101 (percent 100 % of 10000 on a 1-unit grid)
+// bar1 high 102   fills at the stop
+// bar2            close all
+void a_pure_stop_default_entry_keeps_its_own_sizing_branch() {
+    Account account;
+    account.capital = 10000.0;
+    account.qty_step = 1.0;
+    std::vector<Bar> bars;
+    bars.push_back(mk_bar(0, 100.0, 100.0, 100.0, 100.0));
+    bars.push_back(mk_bar(1, 100.0, 102.0, 100.0, 101.5));
+    bars.push_back(mk_bar(2, 101.5, 101.5, 101.5, 101.5));
+    bars.push_back(mk_bar(3, 101.5, 101.5, 101.5, 101.5));
+
+    PineProbe pine(account, QtyType::PERCENT_OF_EQUITY, 100.0);
+    pine.script = "T.C.";
+    pine.run(bars.data(), static_cast<int>(bars.size()));
+    REQUIRE(pine.frozen_at_command.size() == 1);
+    REQUIRE(pine.trade_count() == 1);
+    std::printf("  [stop entry] frozen=%.17g sizing_price=%.17g booked=%.17g entry=%.17g\n",
+                pine.frozen_at_command[0], pine.sizing_price_at_command[0],
+                pine.rows()[0].qty, pine.rows()[0].entry_price);
+    // Harvested at 683a82f: the command freezes its sizing PRICE (the snapped
+    // stop level) but no quantity -- the stop branch of resolve_terms sizes
+    // it at the fill against that level: 10000 / 101 = 99.0099 -> 99 on the
+    // lot grid, not the 100 units the signal close would give.
+    CHECK(bits(pine.sizing_price_at_command[0]) == bits(101.0));
+    CHECK(std::isnan(pine.frozen_at_command[0]));
+    CHECK(bits(pine.rows()[0].qty) == bits(99.0));
+    CHECK(bits(pine.rows()[0].entry_price) == bits(101.0));
+    CHECK(bits(pine.rows()[0].qty) != bits(100.0));
+}
+
 void test(const char* name, void (*fn)()) {
     const int before = failures;
     std::printf("-- %s\n", name);
@@ -785,6 +985,11 @@ int main() {
     test("sizing price rule", the_sizing_price_rule_is_the_tick_ladder_not_the_fill_grid);
     test("re-lowering witness",
          the_source_layer_names_the_sizing_basis_and_the_core_names_no_source);
+    test("the conversion exists once", the_conversion_exists_once);
+    test("the source lot floors are not the kernel floor",
+         the_source_lot_floors_are_not_the_kernel_floor);
+    test("pure-stop default entry keeps its own branch",
+         a_pure_stop_default_entry_keeps_its_own_sizing_branch);
     std::printf("R5 R2 adapter sizing re-lowering: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -2068,11 +2068,20 @@ which is why it asks for `ExplicitUnits` and floors the kernel's quotient in
 its `resolve_execution_terms` override; and its own placement-time money-band
 and affordability gates, which consume a quantity before any request exists and
 so cannot be a kernel decision. The percentage fee reserve is the kernel's
-(`reserve_percent_fee`), and so is the conversion itself. Paths whose sizing
-price is not the signal rule — a fill-time resize, a pure-stop entry sized at
-its trigger level — keep `HostSized{Open}`, and so do the percentage exits: the
-kernel resolves a `ScopeFraction` as `scope * fraction`, which is not
-`scope * percent / 100`, and no field reconciles the association.
+(`reserve_percent_fee`), and so is the conversion itself — including the
+placement-time number those gates consume: the adapter reads it through
+`native_sized_units()` and floors it, so the arithmetic exists once (R5 N11;
+`tests/test_adapter_sizing_relower.cpp`, "the conversion exists once"). The two
+lot floors stay the adapter's because neither is the kernel's `SnapToGrid` on
+every input — the cash floor keeps a quotient a millionth of a lot under a
+boundary raw, and the percent floor has no on-grid tolerance, so an exact lot
+multiple such as `0.0392` on a `0.0001` grid comes out `0.0391` — both measured
+in the same test ("the source lot floors are not the kernel floor"). Paths whose
+sizing price is not the signal rule — a fill-time resize, a pure-stop entry
+sized at its trigger level — keep `HostSized{Open}` and their own terms branch
+(same test, "pure-stop default entry keeps its own branch"), and so do the
+percentage exits: the kernel resolves a `ScopeFraction` as `scope * fraction`,
+which is not `scope * percent / 100`, and no field reconciles the association.
 
 #### Previewing a basis
 

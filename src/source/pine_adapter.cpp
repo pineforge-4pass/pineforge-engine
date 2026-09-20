@@ -1716,28 +1716,41 @@ double PineExecutionAdapter::default_sizing_lot_floor(double units) const noexce
     return floor_quantity_grid(units, staged_.quantity_grid);
 }
 
-// The placement-time composition of the three.  The source's own money band
-// and affordability gates consume this number before any request exists
-// (entry(): "The TV money band is a source policy"), which is why the source
-// still computes it even where the core owns the quantity that settles.
-double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const noexcept {
+// The core intent a default-quantity declaration spells: the source money as
+// the CashValue basis, the core's percentage fee reserve, the raw quotient
+// (ExplicitUnits) for the source lot floor, frozen at acceptance against the
+// signal rule.  A declaration with no money of its own has no shape.
+std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_shape(
+        const PineSizingSnapshot& sizing) const noexcept {
+    const double cash = default_sizing_cash(sizing);
+    if (!finite_positive(cash)) return std::nullopt;
+    native_order::Sized sized;
+    sized.basis = native_order::CashValue{cash};
+    sized.time = native_order::SizeTime::AtAcceptance;
+    sized.price = native_order::SizePrice::SignalOnTick;
+    sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+    sized.reserve_percent_fee = default_sizing_reserves_percent_fee();
+    return sized;
+}
+
+// The placement-time default quantity.  The source's own money band and
+// affordability gates consume this number before any request exists
+// (entry(): "The TV money band is a source policy"), so the source asks the
+// core for its conversion -- cash / (price * point value * fx) with the fee
+// reserve, the very arithmetic acceptance runs -- and floors it; the
+// conversion exists once (R5 N11).  A money the core cannot convert freezes
+// nothing.
+double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const {
     if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
-    double cash = default_sizing_cash(sizing);
-    if (!std::isfinite(cash)) return 0.0;
-    if (default_sizing_reserves_percent_fee()) {
-        cash /= 1.0 + config_.commission_value / 100.0;
-    }
-    const double denominator = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
-    if (!finite_positive(denominator)) return 0.0;
-    return default_sizing_lot_floor(cash / denominator);
+    const auto sized = default_sizing_shape(sizing);
+    if (!sized) return 0.0;
+    const auto quotient = require_host().native_sized_units(
+        *sized, sizing.price, sizing.equity, sizing.fx);
+    return quotient ? default_sizing_lot_floor(*quotient) : 0.0;
 }
 
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
         const PineSizingSnapshot& sizing, bool is_long) const noexcept {
-    if (config_.default_qty_type != static_cast<int>(QtyType::CASH)
-        && config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-        return std::nullopt;
-    }
     // The core converts at the run's own point value and at the FX rate of the
     // acceptance coordinate; the source samples its rate at the sub-bar open.
     // The two are the same number only while the run carries no FX series, so
@@ -1748,15 +1761,8 @@ std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
         || !finite_positive(staged_.syminfo.mintick)) {
         return std::nullopt;
     }
-    const double cash = default_sizing_cash(sizing);
-    if (!finite_positive(cash)) return std::nullopt;
-    native_order::Sized sized;
-    sized.side = is_long ? native_order::Side::Long : native_order::Side::Short;
-    sized.basis = native_order::CashValue{cash};
-    sized.time = native_order::SizeTime::AtAcceptance;
-    sized.price = native_order::SizePrice::SignalOnTick;
-    sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
-    sized.reserve_percent_fee = default_sizing_reserves_percent_fee();
+    auto sized = default_sizing_shape(sizing);
+    if (sized) sized->side = is_long ? native_order::Side::Long : native_order::Side::Short;
     return sized;
 }
 
@@ -10903,11 +10909,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         // The core resolved cash / (signal price * point value * fx) with the
         // percentage fee reserve at acceptance and published the quotient as
         // this request's remaining units; only the source lot floor is left.
-        // A quotient the core could not resolve leaves the source's own
-        // frozen number, which is the same conversion.
+        // default_sizing_intent emits Sized only where that acceptance is
+        // resolvable, so a missing quotient is a broken invariant, not a
+        // case to fall back from.
         const auto* published = std::get_if<native_order::RemainingUnits>(&facts.remaining);
-        result.units = published ? default_sizing_lot_floor(published->q)
-                                 : source.sizing.frozen_units;
+        if (!published) throw std::logic_error("core-sized quantity without the core's quotient");
+        result.units = default_sizing_lot_floor(published->q);
     } else if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill
                && (!(source.family == PineOrderFamily::Entry
                      && finite_positive(source.exit_levels.stop)

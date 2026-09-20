@@ -1260,22 +1260,25 @@ private:
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
     void flush_pending_same_bar_commands();
-    double default_sizing_units(const PineSizingSnapshot&) const noexcept;
+    // The placement-time default quantity: the core's own conversion, read as
+    // a query (NativeStrategyHost::native_sized_units) and floored by the
+    // source.  The source's money band and affordability gates consume the
+    // number before any request exists, which is why it is computed here at
+    // all; the arithmetic itself exists once, in the core (R5 N11).
+    double default_sizing_units(const PineSizingSnapshot&) const;
     // The three pieces of the default quantity the source keeps as its own
-    // policy once the conversion itself is lowered onto the core's Sized
-    // intent: the money the percentage is taken of (with its equity mark and
+    // policy: the money the percentage is taken of (with its equity mark and
     // its ten-significant-digit rounding), whether a percentage fee is
-    // reserved out of it, and the lot floor applied to the resulting
-    // quotient.  default_sizing_units is their composition at placement, where
-    // the source's own money band and affordability gates consume the number
-    // before any request exists.
+    // reserved out of it, and the lot floor applied to the core's quotient.
     double default_sizing_cash(const PineSizingSnapshot&) const noexcept;
     bool default_sizing_reserves_percent_fee() const noexcept;
     double default_sizing_lot_floor(double units) const noexcept;
-    // The intent a re-lowerable default-quantity opening carries: the core
-    // owns cash / (signal price * point value * fx) and the fee reserve, and
-    // publishes the quotient to resolve_terms.  std::nullopt keeps the
-    // host-resolved shape for every path the core cannot name.
+    // The core intent a default-quantity declaration spells -- the source
+    // money as a CashValue basis, the core's fee reserve, the raw quotient --
+    // and the sided intent a re-lowerable opening carries.  std::nullopt keeps
+    // the host-resolved shape for every path the core cannot name.
+    std::optional<native_order::Sized> default_sizing_shape(
+        const PineSizingSnapshot&) const noexcept;
     std::optional<native_order::Sized> default_sizing_intent(
         const PineSizingSnapshot&, bool is_long) const noexcept;
     // True when the price the core will freeze for a Sized opening accepted
