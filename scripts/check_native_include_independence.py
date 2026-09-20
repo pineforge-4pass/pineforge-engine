@@ -52,6 +52,10 @@ NATIVE_EXAMPLES = (
     ("native-market", "examples/native/native_market_strategy.cpp"),
     ("native-selected", "examples/native/native_selected_strategy.cpp"),
     ("native-bracket", "examples/native/native_bracket_strategy.cpp"),
+    # One host per landed R5 lane family (audit gap N4): L2/L3 sizing + report,
+    # L4/L4b margin + liquidation, L5 calculation timing, L6/L6c/L6d
+    # higher-timeframe series, L7/L9 trail + risk limits.
+    ("native-sized-report", "examples/native/native_sized_report_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)
