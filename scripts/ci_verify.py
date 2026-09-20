@@ -55,6 +55,10 @@ SOURCE_GUARD_SCRIPTS = (
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 TWIN_PARITY_PROFILES = frozenset(('release', 'native'))
+# The Pine-free hosts under examples/native/ are built, and their example_*
+# ctest rows executed, in the two profiles they are written for: the default
+# release build and the kernel-only one. Every example links PineForge::kernel.
+EXAMPLES_PROFILES = frozenset(('release', 'kernel'))
 
 
 class ConfigError(Exception):
@@ -170,7 +174,7 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
         'PINEFORGE_BUILD_CORPUS_STRATEGIES': 'OFF',
         'PINEFORGE_BUILD_BENCH_STRATEGIES': 'OFF',
         'PINEFORGE_BUILD_SPEED_BENCH': 'OFF',
-        'PINEFORGE_BUILD_EXAMPLES': 'OFF',
+        'PINEFORGE_BUILD_EXAMPLES': 'ON' if profile.name in EXAMPLES_PROFILES else 'OFF',
         'PINEFORGE_ENABLE_COVERAGE': 'OFF',
         'PINEFORGE_STRICT_WARNINGS': 'OFF',
         'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
@@ -559,6 +563,7 @@ class Driver:
             ('PINEFORGE_BUILD_LIVE_RUNNER', profile.live_runner),
             ('PINEFORGE_BUILD_SOURCE_LAYER', profile.source_layer),
             ('PINEFORGE_ENABLE_SANITIZERS', profile.sanitizers),
+            ('PINEFORGE_BUILD_EXAMPLES', profile.name in EXAMPLES_PROFILES),
             ('PINEFORGE_REQUIRE_ABI_RECEIPTS', True),
         ):
             if cmake_on(cache.get(key)) != wanted:
@@ -734,6 +739,7 @@ class Driver:
             'liveRunner': cmake_on(cache.get('PINEFORGE_BUILD_LIVE_RUNNER')),
             'sourceLayer': cmake_on(cache.get('PINEFORGE_BUILD_SOURCE_LAYER')),
             'sanitizers': cmake_on(cache.get('PINEFORGE_ENABLE_SANITIZERS')),
+            'examples': cmake_on(cache.get('PINEFORGE_BUILD_EXAMPLES')),
             'versionSource': cache.get('PINEFORGE_VERSION_SOURCE'),
             'python': cache.get('Python3_EXECUTABLE'),
             'buildType': cache.get('CMAKE_BUILD_TYPE'),

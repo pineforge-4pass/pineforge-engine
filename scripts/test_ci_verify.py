@@ -194,6 +194,7 @@ class Scripted:
         live = 'ON' if self.profile in {'native', 'kernel'} else 'OFF'
         sanitizers = 'ON' if self.profile == 'sanitizers' else 'OFF'
         source_layer = 'OFF' if self.profile == 'kernel' else 'ON'
+        examples = 'ON' if self.profile in {'release', 'kernel'} else 'OFF'
         build_type = 'Debug' if self.profile in {'debug', 'sanitizers'} else 'Release'
         values = {
             'CMAKE_HOME_DIRECTORY': str(self.source),
@@ -206,6 +207,7 @@ class Scripted:
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
             'PINEFORGE_BUILD_SOURCE_LAYER': source_layer,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
+            'PINEFORGE_BUILD_EXAMPLES': examples,
             'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
             'PINEFORGE_VERSION_SOURCE': 'FILE',
             'Python3_EXECUTABLE': self.exits.get('cache_python', sys.executable),
@@ -463,6 +465,19 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'OFF')
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'OFF')
         self.assertIn('-DPINEFORGE_BUILD_SOURCE_LAYER=OFF', argv)
+
+    def test_examples_build_in_release_and_kernel_only(self):
+        # Before audit lane N4 every profile pinned PINEFORGE_BUILD_EXAMPLES=OFF,
+        # so the example_* ctest rows never ran in any gate.
+        for name in ('release', 'kernel'):
+            with self.subTest(profile=name):
+                values, argv = self.definitions(name)
+                self.assertEqual(values['PINEFORGE_BUILD_EXAMPLES'], 'ON')
+                self.assertIn('-DPINEFORGE_BUILD_EXAMPLES=ON', argv)
+        for name in ('debug', 'sanitizers', 'native'):
+            with self.subTest(profile=name):
+                values, _ = self.definitions(name)
+                self.assertEqual(values['PINEFORGE_BUILD_EXAMPLES'], 'OFF')
 
     def test_every_other_profile_keeps_the_source_layer(self):
         for name in ('release', 'debug', 'sanitizers', 'native'):
