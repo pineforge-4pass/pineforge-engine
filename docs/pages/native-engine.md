@@ -26,6 +26,14 @@ Headers: `<pineforge/native_host.hpp>`, `<pineforge/native_run_spec.hpp>`,
 `<pineforge/market_driver.hpp>`, `<pineforge/order_action.hpp>`,
 `<pineforge/execution.hpp>`. Enumeration members live in those headers; this
 page does not re-list every enumerator.
+`<pineforge/native_module.hpp>` is separate: it is needed only to export a host
+as a loadable module (see @ref native_engine_examples).
+
+Coming from PineScript? **[PineScript to native C++](@ref pine_to_native)** maps
+each `strategy.*` concept to its native counterpart
+(@ref pine_to_native_map), migrates a small strategy end to end
+(@ref pine_to_native_worked), and states how to diff a native port against its
+Pine twin (@ref pine_to_native_parity).
 
 ## Lifecycle and run identity
 
@@ -1015,7 +1023,7 @@ class NativeSelectedExample final : public pineforge::NativeStrategyHost {
 ```
 
 This is the shape of
-`runner/examples/native_selected_strategy.cpp`. The accompanying runner test
+`examples/native/native_selected_strategy.cpp`. The accompanying runner test
 executes it once in batch and once through `stream_begin` / `stream_push_bar` /
 `stream_end`; its selected close uses the current-point preview only as a
 readiness observation before `execute_current`.
@@ -1033,6 +1041,38 @@ if (fx.status != pineforge::NativeSetupStatus::Applied) {
     // Read fx.validation; engine storage was not changed.
 }
 ```
+
+### Examples and the export macro {#native_engine_examples}
+
+Both hosts on this page are built sources, not listings. They live under
+`examples/native/`, alongside a minimal `hello_kernel.cpp`:
+
+```bash
+cmake -S . -B build -DPINEFORGE_BUILD_EXAMPLES=ON
+cmake --build build -j
+./build/examples/native/hello_kernel
+```
+
+`PINEFORGE_BUILD_EXAMPLES` builds each one as a standalone executable and
+registers it as a CTest row. The market and selected examples are also built,
+from the same sources, as the MODULE targets the live runner `dlopen`s.
+
+A host becomes such a module through one macro from
+`<pineforge/native_module.hpp>`:
+
+```cpp
+PINEFORGE_EXPORT_NATIVE_STRATEGY(MyHost);
+```
+
+It defines `strategy_create`, `strategy_free`, `strategy_set_input`,
+`strategy_set_override`, `strategy_set_magnifier_volume_weighted`,
+`run_backtest`, `run_backtest_full` and `report_free` — and no other C symbol.
+Every remaining runtime export (`strategy_configure_native_v1`, the
+`strategy_stream_*` family, `strategy_execution_contract`,
+`strategy_get_last_error`) is the engine's own; the generated `strategy_create`
+references `pf_abi_version()` so a static link retains it. The host class must
+derive from `NativeStrategyHost` and must not be `final`: the macro wraps it in
+one derived class so the C boundary can write the presentation error string.
 
 ### Known limits
 

@@ -34,7 +34,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 option(PINEFORGE_BUILD_TESTS "Build the C++ test suite" ON)
-option(PINEFORGE_BUILD_EXAMPLES "Build example consumers (none yet)" OFF)
+option(PINEFORGE_BUILD_EXAMPLES
+    "Build the top-level Pine-free native examples under examples/native/" OFF)
 # OFF builds the kernel alone: libpineforge.a then holds exactly the objects
 # of PineForge::kernel, the source-only headers are not installed, and every
 # Pine-bound target (corpus, tutorial, bench, the strategy.cpp example and
@@ -293,6 +294,14 @@ elseif(PINEFORGE_BUILD_TUTORIAL)
     add_subdirectory(tutorial)
 endif()
 
+# === Native examples (opt-in) =========================================
+# Standalone, Pine-free C++ hosts under examples/native/. Two of them are
+# also built as loadable MODULEs by the live runner; this option adds the
+# executable form plus a "hello, kernel" host, and their CTest rows.
+if(PINEFORGE_BUILD_EXAMPLES)
+    add_subdirectory(examples/native)
+endif()
+
 # === Corpus strategies (opt-in) ========================================
 if(PINEFORGE_BUILD_CORPUS_STRATEGIES AND NOT PINEFORGE_BUILD_SOURCE_LAYER)
     message(STATUS
@@ -419,6 +428,7 @@ message(STATUS "  C++ standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  build tests:       ${PINEFORGE_BUILD_TESTS}")
 message(STATUS "  build tutorial:    ${PINEFORGE_BUILD_TUTORIAL}")
+message(STATUS "  build examples:    ${PINEFORGE_BUILD_EXAMPLES}")
 message(STATUS "  build corpus:      ${PINEFORGE_BUILD_CORPUS_STRATEGIES}")
 message(STATUS "  build live runner: ${PINEFORGE_BUILD_LIVE_RUNNER}")
 message(STATUS "  build src layer:   ${PINEFORGE_BUILD_SOURCE_LAYER}")

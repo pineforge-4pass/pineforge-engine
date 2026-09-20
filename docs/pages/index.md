@@ -33,6 +33,9 @@ consumption.
 - <b class="tab-title">I'm writing a native strategy</b>
   Read **[Native engine](@ref native_engine)** for `NativeStrategyHost`,
   `configure_native`, execution terms, and the C ABI contract query.
+  Coming from PineScript, start with
+  **[PineScript to native C++](@ref pine_to_native)** — the concept map,
+  a worked migration, and how to diff a port against its Pine twin.
 
 - <b class="tab-title">I'm integrating from CMake</b>
   Jump straight to **[Install](@ref install)** and

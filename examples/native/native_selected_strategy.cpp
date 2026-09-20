@@ -1,33 +1,34 @@
-#include <pineforge/native_host.hpp>
+// Pine-free native example: the ownership and execution seams.
+//
+// Where native_market_strategy.cpp is the minimum host, this one exercises the
+// public request vocabulary a Pine strategy would reach through
+// `strategy.entry` / `strategy.exit` / `strategy.close`:
+//
+//   * a host-sized opening behind a limit trigger (`HostSized` +
+//     `resolve_execution_terms`);
+//   * a child stop bound to that opening's cycle (`BindOpening`), the native
+//     spelling of a bracket leg;
+//   * a close selected against exactly one opening (`BindOpenings`), executed
+//     at the current point after a readiness preview;
+//   * an exact reversal to a signed target (`ReverseTo`).
+//
+// Like its sibling it is both a loadable module and a standalone program, and
+// contains no Pine command call, formula, or protected engine write.
 
-#include <cstddef>
+#include <pineforge/native_module.hpp>
+
 #include <cstdint>
+#include <iostream>
 #include <optional>
 #include <variant>
-#include <vector>
 
 namespace {
 
 namespace no = pineforge::native_order;
 
-static_assert(sizeof(pf_bar_t) == sizeof(pineforge::Bar),
-              "pf_bar_t / pineforge::Bar size mismatch");
-static_assert(offsetof(pf_bar_t, open) == offsetof(pineforge::Bar, open),
-              "pf_bar_t::open offset mismatch");
-static_assert(offsetof(pf_bar_t, high) == offsetof(pineforge::Bar, high),
-              "pf_bar_t::high offset mismatch");
-static_assert(offsetof(pf_bar_t, low) == offsetof(pineforge::Bar, low),
-              "pf_bar_t::low offset mismatch");
-static_assert(offsetof(pf_bar_t, close) == offsetof(pineforge::Bar, close),
-              "pf_bar_t::close offset mismatch");
-static_assert(offsetof(pf_bar_t, volume) == offsetof(pineforge::Bar, volume),
-              "pf_bar_t::volume offset mismatch");
-static_assert(offsetof(pf_bar_t, timestamp) == offsetof(pineforge::Bar, timestamp),
-              "pf_bar_t::timestamp offset mismatch");
-static_assert(sizeof(pf_report_t) == sizeof(pineforge::ReportC),
-              "pf_report_t / pineforge::ReportC size mismatch");
-
-class NativeSelectedExample final : public pineforge::NativeStrategyHost {
+// Not `final`: PINEFORGE_EXPORT_NATIVE_STRATEGY derives the module class from
+// this one.
+class NativeSelectedExample : public pineforge::NativeStrategyHost {
     std::optional<no::RequestHandle> opening_;
     std::optional<no::RequestHandle> reversal_;
     std::optional<no::RequestHandle> selected_;
@@ -44,6 +45,8 @@ class NativeSelectedExample final : public pineforge::NativeStrategyHost {
         double selected_ticket = 0.0;
     };
 
+    // The sizing seam. An unresolved HostSized request asks the host for its
+    // units; returning none leaves it unresolved and fails the run.
     no::ExecutionTerms resolve_execution_terms(
             const pineforge::NativeExecutionTermsFacts& facts) const override {
         if (std::holds_alternative<no::RemainingDeferred>(facts.remaining)) {
@@ -178,40 +181,11 @@ public:
     }
 };
 
-pineforge::BacktestEngine* as_engine(pf_strategy_t strategy) {
-    return static_cast<pineforge::BacktestEngine*>(strategy);
-}
-
 NativeSelectedExample* as_example(pf_strategy_t strategy) {
-    return strategy ? dynamic_cast<NativeSelectedExample*>(as_engine(strategy)) : nullptr;
-}
-
-void run_c_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
-                 const char* input_tf, const char* script_tf, bool with_timeframes,
-                 pf_report_t* report) {
-    if (!strategy) return;
-    try {
-        std::vector<pineforge::Bar> copied;
-        const pineforge::Bar* source = nullptr;
-        if (count > 0 && bars != nullptr) {
-            copied.reserve(static_cast<std::size_t>(count));
-            for (int i = 0; i < count; ++i) {
-                const auto& bar = bars[static_cast<std::size_t>(i)];
-                copied.push_back({bar.open, bar.high, bar.low, bar.close, bar.volume,
-                                  bar.timestamp});
-            }
-            source = copied.data();
-        }
-        auto* engine = as_engine(strategy);
-        if (with_timeframes) {
-            engine->run(source, count, input_tf ? input_tf : "",
-                        script_tf ? script_tf : "");
-        } else {
-            engine->run(source, count);
-        }
-        if (report) engine->fill_report(reinterpret_cast<pineforge::ReportC*>(report));
-    } catch (...) {
-    }
+    return strategy
+        ? dynamic_cast<NativeSelectedExample*>(
+              pineforge::native_module::as_engine(strategy))
+        : nullptr;
 }
 
 int lifecycle_kind(pf_strategy_t strategy) {
@@ -229,49 +203,60 @@ std::uint32_t failure_discriminator(pf_strategy_t strategy) {
     return example ? example->native_state().failure.discriminator : 0;
 }
 
+pineforge::NativeRunSpec make_spec() {
+    pineforge::NativeRunSpec spec;
+    spec.identity.session_key = "native-selected-example";
+    spec.identity.run_number = 1;
+    spec.input_tf = "5";
+    spec.script_tf = "5";
+    spec.ticker = "SELECTED";
+    spec.tickerid = "EXCHANGE:SELECTED";
+    spec.type = "crypto";
+    spec.currency = "USD";
+    spec.basecurrency = "USD";
+    spec.description = "native-selected-example";
+    spec.volumetype = "base";
+    spec.timezone = "UTC";
+    spec.session = "24x7";
+    spec.chart_timezone = "UTC";
+    spec.initial_capital = 10000.0;
+    spec.point_value = 1.0;
+    spec.account_fx = 1.0;
+    spec.price_tick = 0.01;
+    spec.slippage_ticks = 0;
+    spec.fee_kind = pineforge::NativeFeeKind::CashPerExecution;
+    spec.fee_value = 1.0;
+    spec.close_execution = pineforge::NativeCloseExecution::NextEligiblePoint;
+    spec.allowed_open_directions = pineforge::NativeOpenDirections::Both;
+    return spec;
+}
+
+const pineforge::Bar kBars[] = {
+    {100.0, 102.0, 100.0, 101.0, 1.0, 0},
+    {102.0, 103.0, 101.0, 102.5, 1.0, 300000},
+    {103.0, 104.0, 102.0, 103.5, 1.0, 600000},
+    {104.0, 105.0, 103.0, 104.5, 1.0, 900000},
+    {105.0, 106.0, 104.0, 105.5, 1.0, 1200000},
+};
+constexpr int kBarCount = 5;
+
+bool completed(const NativeSelectedExample& host, const char* where) {
+    if (host.native_state().kind == pineforge::NativeLifecycleKind::Completed) return true;
+    std::cerr << where << ": lifecycle="
+              << static_cast<int>(host.native_state().kind)
+              << " code=" << static_cast<int>(host.native_state().failure.code)
+              << " " << host.last_error() << '\n';
+    return false;
+}
+
 }  // namespace
+
+PINEFORGE_EXPORT_NATIVE_STRATEGY(NativeSelectedExample);
 
 extern "C" {
 
-PF_API pf_strategy_t strategy_create(const char*) {
-    try {
-        return static_cast<pf_strategy_t>(new NativeSelectedExample());
-    } catch (...) {
-        return nullptr;
-    }
-}
-
-PF_API void strategy_free(pf_strategy_t strategy) {
-    delete as_engine(strategy);
-}
-
-PF_API void strategy_set_input(pf_strategy_t, const char*, const char*) {}
-PF_API void strategy_set_override(pf_strategy_t, const char*, const char*) {}
-PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t, int) {}
-
-PF_API void run_backtest(pf_strategy_t strategy, pf_bar_t* bars, int count,
-                         pf_report_t* report) {
-    run_c_batch(strategy, bars, count, nullptr, nullptr, false, report);
-}
-
-PF_API void run_backtest_full(pf_strategy_t strategy, pf_bar_t* bars, int count,
-                              const char* input_tf, const char* script_tf,
-                              int bar_magnifier, int magnifier_samples,
-                              pf_magnifier_distribution_t magnifier_distribution,
-                              pf_report_t* report) {
-    if (bar_magnifier != 0 || magnifier_samples != 4
-        || magnifier_distribution != PF_MAGNIFIER_ENDPOINTS) {
-        return;
-    }
-    run_c_batch(strategy, bars, count, input_tf, script_tf, true, report);
-}
-
-PF_API void report_free(pf_report_t* report) {
-    if (report) pineforge::BacktestEngine::free_report(
-        reinterpret_cast<pineforge::ReportC*>(report));
-}
-
-// Retain the runtime C ABI object while reporting the public host epoch.
+// Example-specific observation symbols kept outside the macro: the C ABI test
+// reads the host's own counters through them.
 PF_API int native_selected_example_host_epoch() {
     (void)pf_abi_version();
     return 15;
@@ -325,3 +310,42 @@ PF_API double native_selected_example_selected_ticket(pf_strategy_t strategy) {
 }
 
 }  // extern "C"
+
+int main() {
+    const auto spec = make_spec();
+
+    NativeSelectedExample batch;
+    if (batch.configure_native(spec).status != pineforge::NativeSetupStatus::Applied) {
+        std::cerr << "configure: " << batch.last_error() << '\n';
+        return 1;
+    }
+    batch.run(kBars, kBarCount, "5", "5");
+    if (!completed(batch, "run(tf)")) return 1;
+
+    NativeSelectedExample stream;
+    if (stream.configure_native(spec).status != pineforge::NativeSetupStatus::Applied) {
+        std::cerr << "configure(stream): " << stream.last_error() << '\n';
+        return 1;
+    }
+    if (!stream.stream_begin(kBars, 1, "5", "5")) {
+        std::cerr << "stream_begin: " << stream.last_error() << '\n';
+        return 1;
+    }
+    for (int i = 1; i < kBarCount; ++i) {
+        if (!stream.stream_push_bar(kBars[i])) {
+            std::cerr << "stream_push_bar: " << stream.last_error() << '\n';
+            return 1;
+        }
+    }
+    if (!stream.stream_end()) {
+        std::cerr << "stream_end: " << stream.last_error() << '\n';
+        return 1;
+    }
+    if (!completed(stream, "stream")) return 1;
+
+    std::cout << "host-sized applied: " << batch.host_sized_applied()
+              << " units=" << batch.host_sized_opened_units()
+              << "  selected-close applied: " << batch.selected_applied()
+              << "  closed trades: " << batch.trade_count() << '\n';
+    return 0;
+}

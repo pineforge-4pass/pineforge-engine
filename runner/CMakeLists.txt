@@ -42,12 +42,14 @@ else()
         "PINEFORGE_BUILD_SOURCE_LAYER is OFF")
 endif()
 
-add_library(native_market_example MODULE examples/native_market_strategy.cpp)
+add_library(native_market_example MODULE
+    ${PROJECT_SOURCE_DIR}/examples/native/native_market_strategy.cpp)
 target_link_libraries(native_market_example PRIVATE PineForge::pineforge)
 target_compile_options(native_market_example PRIVATE -fvisibility=hidden -ffp-contract=off)
 set_target_properties(native_market_example PROPERTIES PREFIX "" OUTPUT_NAME "native-market-example")
 
-add_library(native_selected_example MODULE examples/native_selected_strategy.cpp)
+add_library(native_selected_example MODULE
+    ${PROJECT_SOURCE_DIR}/examples/native/native_selected_strategy.cpp)
 target_link_libraries(native_selected_example PRIVATE PineForge::pineforge)
 target_compile_options(native_selected_example PRIVATE -fvisibility=hidden -ffp-contract=off)
 set_target_properties(native_selected_example PROPERTIES PREFIX "" OUTPUT_NAME "native-selected-example")

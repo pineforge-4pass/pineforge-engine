@@ -3,7 +3,7 @@
 
 The caller supplies a disposable installation prefix. The checker installs the
 configured build there, removes the source-only header trees, then compiles the
-native public roots and the two R4-B native examples using only that installed
+native public roots and the top-level native examples using only that installed
 include root. It never links or runs a consumer binary.
 
 With --kernel-archive the same run also reads the kernel-only static library
@@ -33,12 +33,16 @@ ROOT_HEADERS = (
     "execution.hpp",
     "market_driver.hpp",
 )
-# native_market_example is exercised by test_native_example_batch and
-# native_live_startup_e2e; native_selected_example is the R4-B second native
-# host example. strategy.cpp is intentionally legacy/source-bound after L1.
+# The top-level Pine-free examples (PINEFORGE_BUILD_EXAMPLES). hello_kernel is
+# the minimal host; native_market_example is exercised by
+# test_native_example_batch and native_live_startup_e2e; native_selected_example
+# is the R4-B second native host example. Both of the latter are also built as
+# the live runner's MODULE targets. runner/examples/strategy.cpp is
+# intentionally legacy/source-bound after L1.
 NATIVE_EXAMPLES = (
-    ("native-market", "runner/examples/native_market_strategy.cpp"),
-    ("native-selected", "runner/examples/native_selected_strategy.cpp"),
+    ("hello-kernel", "examples/native/hello_kernel.cpp"),
+    ("native-market", "examples/native/native_market_strategy.cpp"),
+    ("native-selected", "examples/native/native_selected_strategy.cpp"),
 )
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")
