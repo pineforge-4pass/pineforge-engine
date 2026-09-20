@@ -12,8 +12,9 @@
 //   4. native_series_bar answers with the latest delivered bucket on both
 //      sides of the warmup -> live boundary;
 //   5. a stream whose spec declares no series keeps this tree's event
-//      sequence, continuation hash and stream state hash, pinned from a build
-//      of the tip this lane branched from;
+//      sequence and folds nothing new into its run-spec digest (the portable
+//      half of the continuation identity), with the continuation and stream
+//      state hashes compared between two streams in this process;
 //   6. a session-clipped daily series (a calendar aggregator, whose buckets
 //      close on the session close and not on a bar count) over a stream whose
 //      warmup stops mid-session is the batch's series, bucket for bucket;
@@ -435,11 +436,17 @@ void test_series_bar_across_the_boundary() {
 
 // ---- 5. a stream without subscriptions is unchanged -----------------------
 
-// Pinned from a build of 9f2c61b — this lane's base tip — running this exact
-// stream (8 warmup bars, 4 pushed, stream_end(false)) through a bare
-// NativeStrategyHost whose spec declares no series.
-constexpr std::uint64_t kNeutralStreamContinuationHash = 3068282625134746017ull;
-constexpr std::uint64_t kNeutralStreamStateHash = 11067946060992835522ull;
+// The portable pin of that identity. Neither native_continuation_hash() nor
+// stream_state_hash() — which folds broker_state_hash(), and so the
+// continuation — can be pinned as a constant: both carry the machine's
+// resolved timezone resources (zoneinfo root and zone file paths), so the same
+// stream hashes differently here and on each CI runner.
+// native_run_spec_digest() is exactly the consumer's run-spec fold and nothing
+// else, so it is the same number everywhere. Observed on THIS tree for
+// base_spec("15", "15", "native-htf-stream-neutral"); it guards the fold's
+// field list and order, while the neutrality itself is the event sequence and
+// the in-process equalities below.
+constexpr std::uint64_t kNeutralStreamSpecDigest = 10367175860638888234ull;
 
 void test_stream_without_subscriptions_is_unchanged() {
     scenario = "stream neutrality";
@@ -468,22 +475,43 @@ void test_stream_without_subscriptions_is_unchanged() {
     }
     check_logs_equal(host.log, want_log);
 
-    const std::uint64_t continuation = host.native_continuation_hash();
-    if (continuation != kNeutralStreamContinuationHash) {
-        std::printf("  continuation hash %llu, pinned %llu\n",
-                    static_cast<unsigned long long>(continuation),
-                    static_cast<unsigned long long>(kNeutralStreamContinuationHash));
+    const std::uint64_t digest = native_run_spec_digest(spec);
+    if (digest != kNeutralStreamSpecDigest) {
+        std::printf("  spec digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kNeutralStreamSpecDigest));
     }
-    CHECK(continuation == kNeutralStreamContinuationHash);
-    const std::uint64_t stream_state = host.stream_state_hash();
-    if (stream_state != kNeutralStreamStateHash) {
-        std::printf("  stream state hash %llu, pinned %llu\n",
-                    static_cast<unsigned long long>(stream_state),
-                    static_cast<unsigned long long>(kNeutralStreamStateHash));
-    }
-    CHECK(stream_state == kNeutralStreamStateHash);
+    CHECK(digest == kNeutralStreamSpecDigest);
 
-    // Declaring a series cannot land on the same continuation.
+    // Stating the field at its default — an empty series list — folds nothing.
+    NativeRunSpec stated = spec;
+    stated.subscriptions.clear();
+    CHECK(native_run_spec_digest(stated) == kNeutralStreamSpecDigest);
+
+    // The run's own identity is compared between two streams in this process,
+    // never against a constant: the same stream under the spec with its empty
+    // series list stated outright reaches the same event sequence, the same
+    // continuation identity and the same stream state.
+    const std::uint64_t continuation = host.native_continuation_hash();
+    const std::uint64_t stream_state = host.stream_state_hash();
+    SeriesHost restated;
+    CHECK(restated.configure_native(stated).status == NativeSetupStatus::Applied);
+    CHECK(restated.stream_begin(bars.data(), 8, "15", "15"));
+    for (int i = 8; i < 12; ++i) {
+        CHECK(restated.stream_push_bar(bars[static_cast<std::size_t>(i)]));
+    }
+    CHECK(restated.stream_end(false));
+    CHECK(restated.last_error().empty());
+    CHECK(restated.bars_seen == 12);
+    CHECK(restated.deliveries.empty());
+    check_logs_equal(restated.log, want_log);
+    CHECK(restated.native_continuation_hash() == continuation);
+    CHECK(restated.stream_state_hash() == stream_state);
+
+    // Declaring a series cannot land on the same run-spec fold, nor on the
+    // same continuation.
+    CHECK(native_run_spec_digest(hourly_spec("native-htf-stream-neutral", false))
+          != kNeutralStreamSpecDigest);
     SeriesHost declared;
     if (begin_stream(declared, bars, 8, "native-htf-stream-neutral", false)) {
         for (int i = 8; i < 12; ++i) {

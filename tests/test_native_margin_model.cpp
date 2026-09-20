@@ -2,9 +2,9 @@
  * test_native_margin_model.cpp — R5 lane L4: the generic native margin model.
  *
  * Everything here is opt-in through NativeRunSpec::margin. The first scenario
- * pins that a spec WITHOUT a margin model still books the same fills and the
- * same continuation hash as the pre-L4 tree, so the adapter — which never sets
- * the field — is byte-identical by construction.
+ * pins that a spec WITHOUT a margin model still books the same fills, the same
+ * book and the same run-spec fold as the pre-L4 tree, so the adapter — which
+ * never sets the field — is byte-identical by construction.
  *
  * Hand arithmetic used throughout (point_value = 1, account fx = 1, no fee):
  *   equity(P)      = capital + realized + dir * (P - entry) * units
@@ -16,6 +16,7 @@
  */
 #include "native_current_fixture.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -25,6 +26,21 @@ using namespace r4_test;
 namespace {
 
 constexpr const char* kLiquidationLabel = "__kernel_liquidation__";
+
+// ── Portable spec-fold pins ─────────────────────────────────────────────
+// A raw native_continuation_hash() constant is NOT portable: the consumer
+// folds the run's resolved timezone identity — the zoneinfo root and the zone
+// file paths of the machine that ran it — so the same run hashes differently
+// here and on each CI runner. native_run_spec_digest() is exactly the
+// consumer's run-spec fold and nothing else, so it is the same number
+// everywhere. Both constants are observed on THIS tree for the margin-free
+// specs of scenarios 1+10 and guard the fold's field list and order; the
+// neutrality claim itself is the equalities beside them — `margin` folds
+// nothing while it is unset, and declaring a model (even one whose every field
+// is its default) is what moves the fold — plus the fills, the book and the
+// trade counts, which are unchanged from the pre-L4 tree.
+constexpr std::uint64_t kNeutralSpecDigest = 2166775980498865536ULL;
+constexpr std::uint64_t kNeutralRichSpecDigest = 17505314342075340318ULL;
 
 Bar ohlc(int index, double open, double high, double low, double close,
          double volume = 1.0) {
@@ -145,9 +161,37 @@ void neutral_without_margin() {
     CHECK(liquidations(host).empty());
     CHECK(host.margin_calls.empty());
     near(host.physical_position().signed_units, 20.0);
-    // Pinned from the pre-L4 tree (b01ef03) by compiling the identical probe
-    // against both libraries: 0xb8bcdfcd5f474996 on each.
-    CHECK(host.native_continuation_hash() == 0xb8bcdfcd5f474996ULL);
+    // The portable half of the pre-L4 neutrality: the run-spec fold this run
+    // applies is pinned, stating `margin` as absent keeps it exactly there,
+    // and declaring a model is what moves it.
+    const auto digest = native_run_spec_digest(s);
+    if (digest != kNeutralSpecDigest) {
+        std::printf("  neutral spec digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kNeutralSpecDigest));
+    }
+    CHECK(digest == kNeutralSpecDigest);
+    auto stated = s;
+    stated.margin.reset();
+    CHECK(native_run_spec_digest(stated) == kNeutralSpecDigest);
+    // Presence is the opt-in: a model left at every default still moves the
+    // fold, against the same spec without one (no initial_margin_fraction
+    // here, which the model would conflict with).
+    auto bare = margin_spec("l4-neutral");
+    auto declared = bare;
+    declared.margin = NativeMarginModel{};
+    CHECK(native_run_spec_digest(declared) != native_run_spec_digest(bare));
+
+    // The run-level half, compared between two runs in this process rather
+    // than against a constant: the same margin-free spec with `margin` spelled
+    // out as absent books the same fill and reaches the same continuation.
+    MarginHost restated;
+    restated.open_units = 20.0;
+    drive(restated, stated, twin_tape());
+    CHECK(events<no::ExecutionAppliedEvent>(restated).size() == 1);
+    CHECK(liquidations(restated).empty());
+    near(restated.physical_position().signed_units, 20.0);
+    CHECK(restated.native_continuation_hash() == host.native_continuation_hash());
     // No maintenance fraction anywhere: the accessor stays silent.
     CHECK(!host.native_liquidation_price().has_value());
 }
@@ -155,7 +199,8 @@ void neutral_without_margin() {
 // A richer margin-free population — market, resting limit, resting stop,
 // cancel, pyramided add, flatten, slippage, percent fee, lot cap — so every
 // RequestOrigin::Host definition and every CommandEvent tag takes part in the
-// digest. Pinned from the same pre-L4 tree: 0xc600f565783631d0.
+// digest, which stays where the pre-L4 tree left it: authorship folds nothing
+// for a host request.
 struct RichHost final : Host {
     int bars = 0;
     std::optional<no::RequestHandle> resting;
@@ -202,7 +247,28 @@ void neutral_rich_population() {
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 4);
     near(host.physical_position().signed_units, 0.0);
-    CHECK(host.native_continuation_hash() == 0xc600f565783631d0ULL);
+
+    const auto digest = native_run_spec_digest(s);
+    if (digest != kNeutralRichSpecDigest) {
+        std::printf("  rich spec digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kNeutralRichSpecDigest));
+    }
+    CHECK(digest == kNeutralRichSpecDigest);
+    auto stated = s;
+    stated.margin.reset();
+    CHECK(native_run_spec_digest(stated) == kNeutralRichSpecDigest);
+
+    // In process, not against a constant: the same population under the same
+    // spec with `margin` stated as absent books the same trades, the same flat
+    // book and the same continuation identity.
+    RichHost restated;
+    REQUIRE(restated.configure_native(stated).status == NativeSetupStatus::Applied);
+    restated.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(restated.last_error().empty());
+    CHECK(restated.trade_count() == 4);
+    near(restated.physical_position().signed_units, 0.0);
+    CHECK(restated.native_continuation_hash() == host.native_continuation_hash());
 }
 
 // ------------------------------------------------------------------- 2

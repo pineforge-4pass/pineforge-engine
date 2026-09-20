@@ -122,9 +122,16 @@ std::string partial_of(const NativeStrategyHost& host) {
 
 // ---- 1. the BarClose default surface --------------------------------------
 
-// Pinned from a clean b01ef03 build running this exact spec and batch through
-// a host that implements only on_native_bar (the pre-L5 contract).
-constexpr std::uint64_t kDefaultContinuationHash = 9019705263044865965ull;
+// The cadence folds into the run-spec fold only once the trigger or the
+// open-bar view is non-default, so a BarClose spec folds exactly the pre-L5
+// fields. That is pinned as native_run_spec_digest() and not as a continuation
+// hash: the continuation identity also folds the machine's resolved timezone
+// resources (zoneinfo root and zone file paths), so a raw constant passes here
+// and fails on CI. Observed on THIS tree for base_spec("native-calc-timing");
+// it guards the fold's field list and order, while the neutrality claim is the
+// equalities in test_bar_close_default — including the callback log, the book
+// and the recalculation counters, which are the pre-L5 contract itself.
+constexpr std::uint64_t kDefaultSpecDigest = 12300031127478902007ull;
 
 class DefaultHost final : public NativeStrategyHost {
 public:
@@ -183,24 +190,55 @@ void test_bar_close_default() {
     // of the run is the script bar's own.
     CHECK(host.native_recalculation_count() == 0);
     CHECK(host.native_recalculations_skipped() == 0);
-    // 7. hash neutrality against the pre-L5 tip.
-    if (host.native_continuation_hash() != kDefaultContinuationHash) {
-        std::printf("  continuation hash %llu, pinned %llu\n",
-                    static_cast<unsigned long long>(host.native_continuation_hash()),
-                    static_cast<unsigned long long>(kDefaultContinuationHash));
+    // 7. hash neutrality against the pre-L5 tip, stated portably.
+    const auto base = base_spec("native-calc-timing");
+    const auto digest = native_run_spec_digest(base);
+    if (digest != kDefaultSpecDigest) {
+        std::printf("  spec digest %llu, pinned %llu\n",
+                    static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kDefaultSpecDigest));
     }
-    CHECK(host.native_continuation_hash() == kDefaultContinuationHash);
+    CHECK(digest == kDefaultSpecDigest);
 
-    // The spec folds the cadence only when it is non-default, so the two
-    // opted-in specs below cannot share this continuation identity.
-    auto moved = base_spec("native-calc-timing");
+    // Spelling all three cadence fields out at their defaults folds nothing,
+    // and the recalculation bound is inert while the cadence is BarClose.
+    auto stated = base;
+    stated.calculation = NativeCalculationTrigger::BarClose;
+    stated.max_recalculations_per_point = 8;
+    stated.open_bar_view = NativeOpenBarView::Complete;
+    CHECK(native_run_spec_digest(stated) == kDefaultSpecDigest);
+    auto bound_only = base;
+    bound_only.max_recalculations_per_point = 3;
+    CHECK(native_run_spec_digest(bound_only) == kDefaultSpecDigest);
+
+    // Moving the trigger, or the open-bar view on its own, is what moves it.
+    auto moved = base;
     moved.calculation = NativeCalculationTrigger::BarCloseAndFills;
+    CHECK(native_run_spec_digest(moved) != kDefaultSpecDigest);
+    auto open_only = base;
+    open_only.open_bar_view = NativeOpenBarView::OpenOnly;
+    CHECK(native_run_spec_digest(open_only) != kDefaultSpecDigest);
+
+    // The same three facts at run level, compared between runs in this process
+    // so no continuation constant is needed: the restated defaults reproduce
+    // this run's callback log and identity, and the opted-in spec cannot share
+    // that identity.
+    DefaultHost restated;
+    CHECK(restated.configure_native(stated).status == NativeSetupStatus::Applied);
+    restated.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
+                 MagnifierDistribution::ENDPOINTS);
+    CHECK(restated.last_error().empty());
+    CHECK(restated.log == want);
+    CHECK(restated.native_recalculation_count() == 0);
+    CHECK(restated.native_recalculations_skipped() == 0);
+    CHECK(restated.native_continuation_hash() == host.native_continuation_hash());
+
     DefaultHost opted;
     CHECK(opted.configure_native(moved).status == NativeSetupStatus::Applied);
     opted.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
               MagnifierDistribution::ENDPOINTS);
     CHECK(opted.last_error().empty());
-    CHECK(opted.native_continuation_hash() != kDefaultContinuationHash);
+    CHECK(opted.native_continuation_hash() != host.native_continuation_hash());
 }
 
 // The BarClose calculation reaches on_native_recalculate too, and its default
