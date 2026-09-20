@@ -1746,16 +1746,6 @@ protected:
         std::string tf;
         TimeframeAggregator aggregator;
         Bar current_bar{};
-        // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
-        // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
-        // OHLC is replaced by its Heikin-Ashi candle before the security
-        // expression is evaluated, so close/open/high/low inside the call see
-        // HA values. HA is stateful (ha_open depends on the prior HA bar), so
-        // the running state lives here per sec_id.
-        bool heikinashi = false;
-        double ha_prev_open = 0.0;
-        double ha_prev_close = 0.0;
-        bool ha_seeded = false;
         bool lower_tf_requested = false;
         bool lower_tf_emulation = false;
         int lower_tf_ratio = 0;

@@ -23,7 +23,7 @@ namespace pineforge::source {
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v2";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v3";
 
 // Pine's publication semantics for ONE request.security site, kept beside the
 // kernel's generic evaluator state of the same sec_id
@@ -112,6 +112,16 @@ struct PineSecurityEvalState {
     // lookahead_off only), lower-TF arrays and calendar / same-TF
     // requests. False (the default) means "not applicable".
     bool calling_close_completes_partial = false;
+    // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
+    // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
+    // OHLC is replaced by its Heikin-Ashi candle before the security
+    // expression is evaluated, so close/open/high/low inside the call see
+    // HA values. HA is stateful (ha_open depends on the prior HA bar), so
+    // the running state lives here per sec_id.
+    bool heikinashi = false;
+    double ha_prev_open = 0.0;
+    double ha_prev_close = 0.0;
+    bool ha_seeded = false;
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {

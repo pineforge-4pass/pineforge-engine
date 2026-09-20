@@ -43,7 +43,7 @@ void source::PineStrategyHost::register_security_eval(
     pine = PineSecurityEvalState{};
     pine.gaps_on = gaps_on;
     pine.lookahead_on = lookahead_on;
-    state.heikinashi = heikinashi;
+    pine.heikinashi = heikinashi;
 
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
@@ -389,10 +389,10 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // HA candle before evaluating the security expression. The completed
     // state advances once per committed HTF bucket; a partial/projection peek
     // derives from the prior state without committing it.
-    auto apply_ha = [&state](Bar& b, bool commit) {
+    auto apply_ha = [&pine](Bar& b, bool commit) {
         double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
-        double ha_open = state.ha_seeded
-                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
+        double ha_open = pine.ha_seeded
+                             ? (pine.ha_prev_open + pine.ha_prev_close) / 2.0
                              : (b.open + b.close) / 2.0;
         double ha_high = std::max(b.high, std::max(ha_open, ha_close));
         double ha_low = std::min(b.low, std::min(ha_open, ha_close));
@@ -401,9 +401,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         b.low = ha_low;
         b.close = ha_close;
         if (commit) {
-            state.ha_prev_open = ha_open;
-            state.ha_prev_close = ha_close;
-            state.ha_seeded = true;
+            pine.ha_prev_open = ha_open;
+            pine.ha_prev_close = ha_close;
+            pine.ha_seeded = true;
         }
     };
 
@@ -584,7 +584,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // miss.
         substitute_native_security_bar(state, projected_bar,
                                        /*count_miss=*/projection.is_complete);
-        if (state.heikinashi) {
+        if (pine.heikinashi) {
             apply_ha(projected_bar, projection.is_complete);
         }
         state.current_bar = projected_bar;
@@ -619,7 +619,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // print), before any Heikin-Ashi derivation. Partial (lookahead_on)
         // peeks keep the running aggregate.
         substitute_native_security_bar(state, ab.bar);
-        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
+        if (pine.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;
         state.eval_complete_count++;
         // For a plain request.security whose target TF is strictly finer
@@ -685,7 +685,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                                state.eval_complete_count - 1);
         if (boundary_emission) {
             Bar fresh = state.aggregator.current();
-            if (state.heikinashi) apply_ha(fresh, /*commit=*/false);
+            if (pine.heikinashi) apply_ha(fresh, /*commit=*/false);
             state.current_bar = fresh;
             state.current_sub_bar_count = 1;
             state.eval_partial_count++;
@@ -695,7 +695,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                                    state.eval_complete_count);
         }
     } else if (pine.lookahead_on) {
-        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
+        if (pine.heikinashi) apply_ha(ab.bar, /*commit=*/false);
         state.current_bar = ab.bar;
         state.eval_partial_count++;
         // A shortened calling bar can complete while the finer requested
@@ -734,7 +734,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         if (tail.is_complete) {
             state.current_sub_bar_count = tail.sub_bar_count;
             substitute_native_security_bar(state, tail.bar);
-            if (state.heikinashi) apply_ha(tail.bar, /*commit=*/true);
+            if (pine.heikinashi) apply_ha(tail.bar, /*commit=*/true);
             state.current_bar = tail.bar;
             state.eval_complete_count++;
             state.last_published_label = tail.bar.timestamp;

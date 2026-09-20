@@ -628,6 +628,10 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
             f.b(pine.gaps_on);
             f.i(pine.publish_gate_tf_seconds);
             f.b(pine.calling_close_completes_partial);
+            f.b(pine.heikinashi);
+            f.d(pine.ha_prev_open);
+            f.d(pine.ha_prev_close);
+            f.b(pine.ha_seeded);
         }
     }
     // The margin slice's sampling chronology is resolved once per pending

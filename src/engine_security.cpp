@@ -252,28 +252,6 @@ void BacktestEngine::feed_security_eval_state(
         ~SecurityNaWarmupScope() { ta::ema_na_warmup_flag() = prev_; }
     } _na_warmup_scope(security_range_start_na_warmup_);
 
-    // Heikin-Ashi same-symbol read: replace an aggregated bar's OHLC with its
-    // HA candle before evaluating the security expression. The completed
-    // state advances once per committed HTF bucket; a partial/projection peek
-    // derives from the prior state without committing it.
-    auto apply_ha = [&state](Bar& b, bool commit) {
-        double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
-        double ha_open = state.ha_seeded
-                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
-                             : (b.open + b.close) / 2.0;
-        double ha_high = std::max(b.high, std::max(ha_open, ha_close));
-        double ha_low = std::min(b.low, std::min(ha_open, ha_close));
-        b.open = ha_open;
-        b.high = ha_high;
-        b.low = ha_low;
-        b.close = ha_close;
-        if (commit) {
-            state.ha_prev_open = ha_open;
-            state.ha_prev_close = ha_close;
-            state.ha_seeded = true;
-        }
-    };
-
     if (state.lower_tf_use_input) {
         // Buffer raw input bars until we accumulate one full script-TF
         // chunk, then aggregate (if req > input) and dispatch each
@@ -451,9 +429,6 @@ void BacktestEngine::feed_security_eval_state(
         // miss.
         substitute_native_security_bar(state, projected_bar,
                                        /*count_miss=*/projection.is_complete);
-        if (state.heikinashi) {
-            apply_ha(projected_bar, projection.is_complete);
-        }
         state.current_bar = projected_bar;
         // The projected HTF bucket is introduced on its first chart child, so
         // generated security series must allocate a fresh history/TA slot even
@@ -483,9 +458,8 @@ void BacktestEngine::feed_security_eval_state(
     if (ab.is_complete) {
         // The aggregator decided WHEN the bucket completes; a native feed for
         // this timeframe decides WHAT it closed at (the settlement / official
-        // print), before any Heikin-Ashi derivation.
+        // print).
         substitute_native_security_bar(state, ab.bar);
-        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;
         state.eval_complete_count++;
         state.last_published_label = ab.bar.timestamp;

@@ -22,7 +22,11 @@
     "BacktestEngine::SecurityEvalState::gaps_on",
     "BacktestEngine::SecurityEvalState::publish_gate_tf_seconds",
     "BacktestEngine::SecurityEvalState::calling_close_completes_partial",
-    "BacktestEngine::security_history_publication_replay_"
+    "BacktestEngine::security_history_publication_replay_",
+    "BacktestEngine::SecurityEvalState::heikinashi",
+    "BacktestEngine::SecurityEvalState::ha_prev_open",
+    "BacktestEngine::SecurityEvalState::ha_prev_close",
+    "BacktestEngine::SecurityEvalState::ha_seeded"
   ],
   "addedStorage": [],
   "addedValueMembers": [
