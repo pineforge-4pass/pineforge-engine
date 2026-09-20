@@ -262,6 +262,8 @@ def check_texts(files):
                     "CashValue", "EquityFraction", "SizeTime", "Sized",
                     "ScopeClaim", "ScopeFraction"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    require(order, ("RequestOrigin", "MarginCallEvent"),
+            "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
                     "RemainingProjection", "Allowance", "ReductionSize", "SizeBasis"),
             "native_order_v6", r'\busing\s+NAME\s*=')
@@ -349,17 +351,20 @@ def check_texts(files):
                    "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
                    "NativeSlotLabelPolicy", "NativePathOrder",
                    "NativeLegacyTolerance", "NativeReportPolicy",
-                   "NativeTimeframeSubscription"),
+                   "NativeTimeframeSubscription", "NativeMarginModel",
+                   "NativeLiquidationSizing", "NativeLiquidationCheck"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
         spec, ("validate_native_run_spec", "normalize_native_run_spec",
-               "native_intrabar_path_digest", "native_timeframe_subscriptions_digest"),
+               "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
+               "native_margin_model_digest"),
         "native_run_spec_v3")
     spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
-                   "native_intrabar_path_digest", "native_timeframe_subscriptions_digest"),
+                   "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
+                   "native_margin_model_digest"),
         "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
     if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
@@ -375,7 +380,8 @@ def check_texts(files):
             'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;',
             'NativeReportPolicyreport_policy=NativeReportPolicy::HostRecorded;',
             'boolreport_open_position_at_end=false;',
-            'std::vector<NativeTimeframeSubscription>subscriptions;'):
+            'std::vector<NativeTimeframeSubscription>subscriptions;',
+            'std::optional<NativeMarginModel>margin;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
@@ -383,10 +389,20 @@ def check_texts(files):
     if (re.sub(r'\s+', '', subscription)
             != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'):
         raise ValueError('native timeframe subscription must preserve its member order and shape')
+    margin = body(spec, r'struct\s+NativeMarginModel\s*\{', 'native margin model')
+    if (re.sub(r'\s+', '', margin)
+            != 'doubleinitial_long=0.0;doubleinitial_short=0.0;'
+               'std::optional<double>maintenance_long;std::optional<double>maintenance_short;'
+               'NativeLiquidationSizingsizing=NativeLiquidationSizing::RestoreMinimum;'
+               'doubleshortfall_multiple=1.0;std::optional<double>liquidation_min_units;'
+               'NativeLiquidationCheckcheck=NativeLiquidationCheck::PathAdverseExtreme;'):
+        raise ValueError('native margin model must preserve its member order and shape')
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
     for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
-                  'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars'):
+                  'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars',
+                  'MarginModel', 'MarginInitial', 'MarginMaintenance', 'MarginSizing',
+                  'MarginShortfallMultiple', 'MarginMinUnits', 'MarginCheck'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -397,7 +413,8 @@ def check_texts(files):
                   'UnknownReportPolicy',
                   'InvalidSubscriptionTimeframe', 'SubscriptionFinerThanInput',
                   'DuplicateSubscriptionTimeframe', 'UnorderedSubscriptionBars',
-                  'SubscriptionWithoutTimeframe'):
+                  'SubscriptionWithoutTimeframe', 'MarginModelConflict',
+                  'UnknownLiquidationSizing', 'UnknownLiquidationCheck'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -409,6 +426,8 @@ def check_texts(files):
             or 'spec.report_policy' not in spec_src
             or 'spec.subscriptions' not in spec_src
             or 'SubscriptionFinerThanInput' not in spec_src
+            or 'spec.margin' not in spec_src
+            or 'MarginModelConflict' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
@@ -497,6 +516,8 @@ def check_texts(files):
             raise ValueError('native driver omits legacy-compatible preflight token: ' + token)
 
     consumer_src = consumer_epoch_source(files)
+    if 'native_margin_model_digest(*spec.margin)' not in consumer_src:
+        raise ValueError('native consumer omits the conditional margin-model digest fold')
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
                  'f.u(static_cast<uint64_t>(spec.abort_reporting));',
@@ -530,7 +551,7 @@ def check_texts(files):
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
                    "NativeInputContext", "NativeTickContext",
-                   "NativeTimeframeBarContext"),
+                   "NativeTimeframeBarContext", "NativeMarginCallView"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
@@ -621,6 +642,12 @@ def check_texts(files):
          "on_native_timeframe_bar"),
         (r'\bstd::optional\s*<\s*Bar\s*>\s+native_series_bar\s*\('
          r'\s*std::size_t\s+\w+\s*\)\s*const\s*;', "native_series_bar"),
+        (r'\bvirtual\s+std::optional\s*<\s*double\s*>\s+resolve_margin_call_units\s*\('
+         r'\s*const\s+NativeMarginCallView\s*&', "resolve_margin_call_units"),
+        (r'\bvirtual\s+void\s+on_native_margin_call\s*\('
+         r'\s*const\s+native_order::MarginCallEvent\s*&', "on_native_margin_call"),
+        (r'\bstd::optional\s*<\s*double\s*>\s+native_liquidation_price\s*\('
+         r'\s*\)\s*const\s*;', "native_liquidation_price"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
@@ -650,7 +677,8 @@ def check_texts(files):
              "NativeStrategyHost::configure_native_fx_curve",
              "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
              "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state",
-             "NativeStrategyHost::native_series_bar"),
+             "NativeStrategyHost::native_series_bar",
+             "NativeStrategyHost::native_liquidation_price"),
             "engine_script_run_v18", r'\bNAME\s*\(')
 
 

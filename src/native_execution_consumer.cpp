@@ -136,6 +136,12 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (!spec.subscriptions.empty()) {
         f.u(native_timeframe_subscriptions_digest(spec.subscriptions));
     }
+    // L4: the generic margin model folds only where a host declared one. An
+    // absent model folds nothing, so every continuation hash established
+    // before it existed survives this spec extension unchanged.
+    if (spec.margin) {
+        f.u(native_margin_model_digest(*spec.margin));
+    }
 }
 
 void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
@@ -641,6 +647,12 @@ void hash_definition(Fnv& f, const native_order::DefinitionRef& definition) noex
     hash_request(f, definition->request);
     hash_birth(f, definition->birth);
     hash_optional_handle(f, definition->predecessor);
+    // Every host request is RequestOrigin::Host, so the authorship of the
+    // established population folds nothing. Only a kernel-originated request
+    // moves the digest, and only a run with a margin model has one.
+    if (definition->origin != native_order::RequestOrigin::Host) {
+        f.u(static_cast<uint64_t>(definition->origin));
+    }
 }
 
 void hash_scope(Fnv& f, const native_order::ExecutionScope& scope) noexcept {
@@ -903,6 +915,19 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             }
             f.b(payload.quantity_resolution.has_value());
             if (payload.quantity_resolution) hash_event_id(f, *payload.quantity_resolution);
+        } else if constexpr (std::is_same_v<T, native_order::MarginCallEvent>) {
+            f.u(18);
+            hash_definition(f, payload.definition);
+            hash_event_id(f, payload.applied);
+            hash_cursor(f, payload.cursor);
+            f.u(static_cast<uint64_t>(payload.side));
+            f.d(payload.mark);
+            f.d(payload.equity);
+            f.d(payload.required);
+            f.d(payload.liquidation_price);
+            f.d(payload.units);
+            f.d(payload.position_before);
+            f.d(payload.position_after);
         } else if constexpr (std::is_same_v<T, native_order::TermsResolvedEvent>) {
             f.u(17);
             hash_definition(f, payload.definition);
@@ -959,6 +984,12 @@ CommissionType fee_to_commission(NativeFeeKind kind) {
     }
     return CommissionType::PERCENT;
 }
+
+// The kernel's own liquidation is a generic request, not a source signal:
+// its label and comment are engine-owned literals no host can collide with
+// through the public surface, because a host request is never KernelLiquidation.
+constexpr char kNativeLiquidationLabel[] = "__kernel_liquidation__";
+constexpr char kNativeLiquidationComment[] = "Margin liquidation";
 
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
@@ -1287,6 +1318,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.u(notification.history_index);
         f.u(notification.ordinal);
         hash_current_point(f, notification.point);
+        // Conditional: only a kernel-originated fill carries a margin receipt,
+        // so a host-only queue folds exactly what it folded before L4.
+        if (notification.margin_call_index) {
+            f.u(1);
+            f.u(*notification.margin_call_index);
+        }
     }
     f.b(processing_input_);
     f.u(static_cast<uint64_t>(input_mode_));
@@ -1361,6 +1398,23 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (precommit_digest_.count != 0) {
         f.u(precommit_digest_.count);
         f.u(precommit_digest_.h);
+    }
+    // L4 durable liquidation state. It exists only under a declared margin
+    // model, and folds only there, so no pre-L4 continuation identity moves.
+    if (margin_model() != nullptr) {
+        f.b(margin_liquidation_.has_value());
+        if (margin_liquidation_) {
+            hash_handle(f, margin_liquidation_->handle);
+            f.d(margin_liquidation_->level);
+            f.d(margin_liquidation_->units);
+        }
+        f.b(has_margin_path_);
+        if (has_margin_path_) {
+            hash_bar(f, margin_path_bar_);
+            f.b(margin_path_high_first_);
+        }
+        f.u(margin_point_ordinal_);
+        f.u(margin_point_calls_);
     }
     return f.h;
 }
@@ -1729,6 +1783,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     driver_digest_.reset();
     account_digest_.reset();
     precommit_digest_.reset();
+    margin_liquidation_.reset();
+    has_margin_path_ = false;
+    margin_path_bar_ = Bar{};
+    margin_path_high_first_ = false;
+    margin_point_ordinal_ = 0;
+    margin_point_calls_ = 0;
     driver_statistics_ = NativeDriverStatistics{};
     driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
     callback_context_ = NativeDecisionContext{};
@@ -2229,15 +2289,408 @@ bool NativeExecutionConsumer::admit_opening_inspect(
         if (reason) *reason = native_order::MatchRejectReason::MaxOpenLots;
         return false;
     }
-    if (!skip_initial_margin && spec->initial_margin_fraction) {
+    // L4: a declared margin model replaces the one-scalar gate for this run
+    // with its own per-side initial fraction. The two spellings are mutually
+    // exclusive by configure, so exactly one of these branches can apply.
+    const double fraction = spec->margin
+        ? (inspect.incoming_short ? spec->margin->initial_short : spec->margin->initial_long)
+        : (spec->initial_margin_fraction ? *spec->initial_margin_fraction : 0.0);
+    if (!skip_initial_margin && fraction > 0.0) {
         const double equity = engine.marked_equity(resolved_price) - inspect.current_ticket;
-        const double required = inspect.resulting_abs_notional * *spec->initial_margin_fraction;
+        const double required = inspect.resulting_abs_notional * fraction;
         if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
             if (reason) *reason = native_order::MatchRejectReason::InitialMargin;
             return false;
         }
     }
     return true;
+}
+
+const NativeMarginModel* NativeExecutionConsumer::margin_model() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->margin ? &*spec->margin : nullptr;
+}
+
+std::optional<double> NativeExecutionConsumer::maintenance_fraction(
+        bool short_side) const noexcept {
+    const auto* margin = margin_model();
+    if (!margin) return std::nullopt;
+    return short_side ? margin->maintenance_short : margin->maintenance_long;
+}
+
+// equity(P) = base + dir * (P * Q - W) * pv * fx and requirement(P) =
+// Q * P * pv * fx * m are both affine in P, so the breach has exactly one
+// solution unless their slopes coincide: (m - dir) == 0, which is a LONG at
+// full maintenance. That case has no liquidation price at all and is reported
+// as such rather than as a very large or negative one.
+std::optional<double> NativeExecutionConsumer::liquidation_level(
+        const BacktestEngine& engine) const {
+    if (engine.position_side_ == PositionSide::FLAT || engine.pyramid_entries_.empty()) {
+        return std::nullopt;
+    }
+    const bool short_side = engine.position_side_ == PositionSide::SHORT;
+    const auto fraction = maintenance_fraction(short_side);
+    if (!fraction) return std::nullopt;
+    const double point_value = engine.syminfo_.pointvalue;
+    const double fx = engine.active_account_currency_fx();
+    if (!std::isfinite(point_value) || !(point_value > 0.0)
+        || !std::isfinite(fx) || !(fx > 0.0)) {
+        return std::nullopt;
+    }
+    double units = 0.0;
+    double cost = 0.0;
+    double commissions = 0.0;
+    for (const auto& lot : engine.pyramid_entries_) {
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
+            return std::nullopt;
+        }
+        units += lot.qty;
+        cost += lot.price * lot.qty;
+        commissions += engine.open_entry_commission(lot);
+    }
+    if (!(units > 0.0) || !std::isfinite(commissions)) return std::nullopt;
+    const double direction = short_side ? -1.0 : 1.0;
+    const double slope = *fraction - direction;
+    if (!std::isfinite(slope) || std::abs(slope) < 1e-12) return std::nullopt;
+    const double base = engine.initial_capital_ + engine.net_profit_sum_ - commissions;
+    const double level = (base - direction * cost * point_value * fx)
+        / (units * point_value * fx * slope);
+    if (!std::isfinite(level)) return std::nullopt;
+    return level;
+}
+
+// The most adverse price the modeled script path still reaches after `phase`,
+// including the cursor price itself so a point with no remaining waypoint
+// still has a finite mark. A run with an intrabar path has no whole-bar
+// waypoint model here: it re-evaluates at each delivered sample instead.
+double NativeExecutionConsumer::margin_sizing_price(
+        bool short_side, NativePathPhase phase, double fallback) const noexcept {
+    if (!has_margin_path_) return fallback;
+    const NativePathPhase order[4] = {
+        NativePathPhase::Open,
+        margin_path_high_first_ ? NativePathPhase::High : NativePathPhase::Low,
+        margin_path_high_first_ ? NativePathPhase::Low : NativePathPhase::High,
+        NativePathPhase::Close,
+    };
+    const double prices[4] = {
+        margin_path_bar_.open,
+        margin_path_high_first_ ? margin_path_bar_.high : margin_path_bar_.low,
+        margin_path_high_first_ ? margin_path_bar_.low : margin_path_bar_.high,
+        margin_path_bar_.close,
+    };
+    int current = -1;
+    for (int index = 0; index < 4; ++index) {
+        if (order[index] == phase) {
+            current = index;
+            break;
+        }
+    }
+    if (current < 0) return fallback;
+    double adverse = fallback;
+    for (int index = current + 1; index < 4; ++index) {
+        const double price = prices[index];
+        if (!std::isfinite(price) || !(price > 0.0)) continue;
+        if (!std::isfinite(adverse) || (short_side ? price > adverse : price < adverse)) {
+            adverse = price;
+        }
+    }
+    return adverse;
+}
+
+std::optional<double> NativeExecutionConsumer::margin_call_units(
+        const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
+        double* out_equity, double* out_required) const {
+    const auto* margin = margin_model();
+    if (!margin || engine.position_side_ == PositionSide::FLAT) return std::nullopt;
+    const bool short_side = engine.position_side_ == PositionSide::SHORT;
+    const auto fraction = maintenance_fraction(short_side);
+    if (!fraction) return std::nullopt;
+    const auto book = position(engine);
+    const double held = std::abs(book.signed_units);
+    const double point_value = engine.syminfo_.pointvalue;
+    const double fx = engine.active_account_currency_fx();
+    if (!(held > 0.0) || !std::isfinite(mark) || !(mark > 0.0)
+        || !std::isfinite(point_value) || !(point_value > 0.0)
+        || !std::isfinite(fx) || !(fx > 0.0)) {
+        return std::nullopt;
+    }
+    const double unit_margin = mark * point_value * fx * *fraction;
+    const double equity = engine.marked_equity(mark);
+    const double required = held * unit_margin;
+    if (out_equity) *out_equity = equity;
+    if (out_required) *out_required = required;
+    if (!std::isfinite(unit_margin) || !(unit_margin > 0.0)
+        || !std::isfinite(equity) || !std::isfinite(required) || !(required > equity)) {
+        return std::nullopt;
+    }
+    const double restore = (required - equity) / unit_margin;
+    double units = 0.0;
+    switch (margin->sizing) {
+    case NativeLiquidationSizing::RestoreMinimum:
+        units = restore;
+        break;
+    case NativeLiquidationSizing::ShortfallMultiple:
+        units = restore * margin->shortfall_multiple;
+        break;
+    case NativeLiquidationSizing::Flatten:
+        units = held;
+        break;
+    }
+    if (!std::isfinite(units) || !(units > 0.0)) return std::nullopt;
+    units = std::min(units, held);
+    // A restore below the broker's minimum trade is not a broker action: the
+    // position is closed instead of nibbled.
+    if (margin->liquidation_min_units && units < *margin->liquidation_min_units) {
+        units = held;
+    }
+    // The host sees the kernel's own facts and has the last word on the size.
+    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+    if (host) {
+        NativeMarginCallView view;
+        view.position = book;
+        view.mark = mark;
+        view.equity = equity;
+        view.required = required;
+        view.cursor = cursor;
+        if (const auto override_units = host->resolve_margin_call_units(view)) {
+            if (!std::isfinite(*override_units) || !(*override_units > 0.0)) return std::nullopt;
+            units = std::min(*override_units, held);
+        }
+    }
+    if (!std::isfinite(units) || !(units > 0.0)) return std::nullopt;
+    return units;
+}
+
+void NativeExecutionConsumer::withdraw_margin_liquidation(BacktestEngine& engine) {
+    if (!margin_liquidation_) return;
+    const auto handle = margin_liquidation_->handle;
+    margin_liquidation_.reset();
+    if (!requests_.find_live(handle)) return;
+    auto prepared = requests_.prepare_cancel(handle, next_timeline_ordinal_,
+                                             native_order::CancelReason::Superseded);
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Settlement});
+        render(engine, "native liquidation withdrawal produced no preparation");
+        return;
+    }
+    const auto predicted = prepared.predicted_event_id();
+    const auto status = prepared.predicted().status;
+    auto installed = requests_.install_cancel(std::move(prepared));
+    if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
+                                   predicted.ordinal, static_cast<uint32_t>(*error)});
+        render(engine, "native liquidation withdrawal install failed");
+        return;
+    }
+    auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
+    note_terminal_events(ok.events);
+    clear_cohort_target_cache();
+    catch_up_timeline();
+    if (status == native_order::CancelStatus::Cancelled) {
+        drain_parent_terminal(engine, predicted, handle, NativeFailureOperation::Settlement);
+    }
+}
+
+// A kernel-originated reduction. A finite positive `level` rests it as a
+// Stop; a nonpositive one makes it a market command the caller executes at the
+// current point. A slice that would take the whole book becomes a Flatten, so
+// a quantity grid can never refuse the broker's own liquidation.
+bool NativeExecutionConsumer::kernel_submit_liquidation(
+        BacktestEngine& engine, double level, double units,
+        std::int64_t decision_time_ms, native_order::RequestHandle* out_handle) {
+    const auto* spec = spec_ptr();
+    if (!spec) return false;
+    const bool resting = std::isfinite(level) && level > 0.0;
+    const auto book = position(engine);
+    const double held = std::abs(book.signed_units);
+    native_order::Request request;
+    const double slack = std::max(1e-12, held * 1e-12);
+    if (units >= held - slack) {
+        request.intent = native_order::Flatten{};
+    } else {
+        double sized = units;
+        if (spec->quantity_grid && *spec->quantity_grid > 0.0) {
+            sized = std::floor(units / *spec->quantity_grid) * *spec->quantity_grid;
+            if (!native_order::quantity_on_grid(sized, *spec->quantity_grid)) return false;
+        }
+        if (!std::isfinite(sized) || !(sized > 0.0)) return false;
+        request.intent = native_order::Reduce{native_order::ExplicitUnits{sized}};
+    }
+    request.label = kNativeLiquidationLabel;
+    request.comment = kNativeLiquidationComment;
+    if (resting) request.trigger = native_order::Stop{level};
+    // The kernel is born AT the point it decided on, exactly as a request
+    // submitted from the pre-open callback is. It never inherits the input
+    // path's already-raised future decision floor, which would make it
+    // ineligible for the very bar it was armed for.
+    native_order::CommandContext ctx;
+    ctx.decision_time_ms = decision_time_ms;
+    ctx.quantity_grid = spec->quantity_grid;
+    ctx.surface = native_order::CommandSurface::General;
+    native_order::PreparedSubmit prepared;
+    try {
+        prepared = requests_.prepare_submit(request, ctx, engine.next_order_incarnation_,
+                                            next_timeline_ordinal_,
+                                            native_order::RequestOrigin::KernelLiquidation);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Settlement});
+        render(engine, e.what());
+        return false;
+    }
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Settlement});
+        render(engine, "native liquidation submit produced no preparation");
+        return false;
+    }
+    auto installed = requests_.install_submit(std::move(prepared));
+    if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
+                                   0, static_cast<uint32_t>(*error)});
+        render(engine, "native liquidation submit install failed");
+        return false;
+    }
+    auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
+    note_terminal_events(ok.events);
+    clear_cohort_target_cache();
+    catch_up_timeline();
+    if (ok.result.status != native_order::SubmitStatus::Accepted || !ok.result.handle) {
+        return false;
+    }
+    ++engine.next_order_incarnation_;
+    record_pre_open_birth(request, *ok.result.handle);
+    if (resting) {
+        margin_liquidation_ = MarginLiquidation{*ok.result.handle, level, units};
+    }
+    if (out_handle) *out_handle = *ok.result.handle;
+    return true;
+}
+
+void NativeExecutionConsumer::maintain_margin_liquidation(
+        BacktestEngine& engine, const native_order::MatchCursor& cursor,
+        NativePathPhase phase, double fallback_price) {
+    const auto* margin = margin_model();
+    if (!margin || failed() || consuming_request_) return;
+    if (margin->check != NativeLiquidationCheck::PathAdverseExtreme) return;
+    try {
+        if (engine.position_side_ == PositionSide::FLAT) {
+            withdraw_margin_liquidation(engine);
+            return;
+        }
+        const bool short_side = engine.position_side_ == PositionSide::SHORT;
+        const auto level = liquidation_level(engine);
+        if (!level || !std::isfinite(*level) || !(*level > 0.0)) {
+            withdraw_margin_liquidation(engine);
+            return;
+        }
+        const double mark = margin_sizing_price(short_side, phase, fallback_price);
+        const auto units = margin_call_units(engine, mark, cursor, nullptr, nullptr);
+        if (!units) {
+            withdraw_margin_liquidation(engine);
+            return;
+        }
+        // Bound the re-arm chain at one driver point (see the member note).
+        if (cursor.point.ordinal == margin_point_ordinal_ && margin_point_calls_ >= 8) {
+            withdraw_margin_liquidation(engine);
+            return;
+        }
+        if (margin_liquidation_ && requests_.find_live(margin_liquidation_->handle) != nullptr
+            && native_matching::double_bits(margin_liquidation_->level)
+                == native_matching::double_bits(*level)
+            && native_matching::double_bits(margin_liquidation_->units)
+                == native_matching::double_bits(*units)) {
+            return;
+        }
+        withdraw_margin_liquidation(engine);
+        if (failed()) return;
+        kernel_submit_liquidation(engine, *level, *units, cursor.point.effective_time_ms);
+    } catch (const std::exception& e) {
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Settlement,
+                                       cursor.point.ordinal});
+            render(engine, e.what());
+        }
+    } catch (...) {
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Settlement,
+                                       cursor.point.ordinal});
+            render(engine, "native margin maintenance callback exception");
+        }
+    }
+}
+
+void NativeExecutionConsumer::calculation_margin_check(
+        BacktestEngine& engine, const NativeCoordinate& calc, double mark) {
+    const auto* margin = margin_model();
+    if (!margin || failed() || consuming_request_) return;
+    if (margin->check != NativeLiquidationCheck::CalculationOnly) return;
+    if (engine.position_side_ == PositionSide::FLAT) return;
+    const bool short_side = engine.position_side_ == PositionSide::SHORT;
+    if (!maintenance_fraction(short_side)) return;
+    native_order::MatchCursor cursor;
+    cursor.point = calc;
+    std::optional<double> units;
+    try {
+        units = margin_call_units(engine, mark, cursor, nullptr, nullptr);
+    } catch (const std::exception& e) {
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Settlement, calc.ordinal});
+            render(engine, e.what());
+        }
+        return;
+    }
+    if (!units) return;
+    native_order::RequestHandle target;
+    if (!kernel_submit_liquidation(engine, 0.0, *units, calc.effective_time_ms, &target)) return;
+    (void)execute_current(engine, {target, NativeCurrentPriceRule::AsPresented});
+}
+
+std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
+        BacktestEngine& engine, const native_order::ExecutionAppliedEvent& applied,
+        const native_order::DefinitionRef& definition, double position_before,
+        double position_after) {
+    if (!definition || definition->origin != native_order::RequestOrigin::KernelLiquidation) {
+        return std::nullopt;
+    }
+    native_order::MarginCallEvent event;
+    event.definition = definition;
+    event.applied = native_order::EventId{applied.handle().run, applied.ordinal};
+    event.cursor = applied.cursor;
+    event.side = position_before < 0.0 ? native_order::Side::Short : native_order::Side::Long;
+    event.mark = applied.resolved_price;
+    event.equity = engine.marked_equity(applied.resolved_price);
+    const auto fraction = maintenance_fraction(position_before < 0.0);
+    event.required = fraction
+        ? std::abs(position_after) * applied.resolved_price * engine.syminfo_.pointvalue
+              * engine.active_account_currency_fx() * *fraction
+        : 0.0;
+    if (const auto level = liquidation_level(engine)) event.liquidation_price = *level;
+    event.units = applied.closed_units;
+    event.position_before = position_before;
+    event.position_after = position_after;
+    if (applied.cursor.point.ordinal == margin_point_ordinal_) {
+        ++margin_point_calls_;
+    } else {
+        margin_point_ordinal_ = applied.cursor.point.ordinal;
+        margin_point_calls_ = 1;
+    }
+    const std::size_t index = requests_.history().size();
+    auto prepared = requests_.prepare_margin_call(event, next_timeline_ordinal_);
+    if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+        fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+        return std::nullopt;
+    }
+    auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
+    if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                       NativeFailureOperation::Settlement, applied.ordinal)) {
+        return std::nullopt;
+    }
+    return index;
 }
 
 void NativeExecutionConsumer::fail_preparation(
@@ -3247,6 +3700,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         proposal.inspected_opened_units = inspect.opened_units;
         proposal.inspected_current_ticket = *candidate.fill.commission_account;
         const int64_t cycle_before = engine.position_cycle_seq_;
+        const double signed_units_before = position(engine).signed_units;
         const native_order::EventId applied_id{handle.run, next_timeline_ordinal_};
         auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
         if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
@@ -3309,7 +3763,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             }
             if (verdict == NativePrecommitVerdict::AdmitWithHostMargin) {
                 const auto* admitted_spec = spec_ptr();
-                if (admitted_spec && admitted_spec->initial_margin_fraction) {
+                if (admitted_spec
+                    && (admitted_spec->initial_margin_fraction || admitted_spec->margin)) {
                     Fnv digest;
                     digest.run_base = requests_.identity().run_number;
                     digest.h = precommit_digest_.h;
@@ -3381,6 +3836,20 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         account_log_.push_back(observation);
         fold_account_digest(observation);
         engine.bar_index_ = ctx.interval_index;
+        // L4: the margin receipt of a kernel-issued liquidation follows its
+        // own fill directly, before any dependency mutation of that fill. The
+        // owning event is read from the outcome copy because recording it
+        // appends to the history the borrowed reference points into.
+        {
+            const auto& booked = std::get<native_order::ExecutionAppliedEvent>(outcome);
+            if (booked.definition
+                && booked.definition->origin != native_order::RequestOrigin::Host) {
+                notification.margin_call_index = record_margin_call(
+                    engine, booked, booked.definition, signed_units_before,
+                    observation.signed_units);
+                if (failed()) return std::nullopt;
+            }
+        }
         drain_after_applied(engine, applied_id, handle);
         if (failed()) return std::nullopt;
         enqueue_applied_notification(std::move(notification));
@@ -4449,6 +4918,17 @@ void NativeExecutionConsumer::invoke_applied_callback(
         callback_phase_ = CallbackPhase::Applied;
         const auto presented = callback_context_;
         host->on_native_applied(applied, presented);
+        // L4: the margin receipt of this same fill, after the ordinary applied
+        // notification and with the same cursor.
+        if (notification.margin_call_index
+            && *notification.margin_call_index < requests_.history().size()) {
+            const auto* margin_call = std::get_if<native_order::MarginCallEvent>(
+                &requests_.history().at(*notification.margin_call_index));
+            if (margin_call) {
+                const auto receipt = *margin_call;
+                host->on_native_margin_call(receipt);
+            }
+        }
         finish_callback(engine, notification.ordinal);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -4483,8 +4963,19 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
     }
     draining_notifications_ = false;
     if (!failed()) {
+        const bool drained = !applied_notifications_.empty();
+        const auto last = drained ? applied_notifications_.back() : AppliedNotification{};
         applied_notifications_.clear();
         notification_head_ = 0;
+        // L4: every applied fill re-arms the margin model against the book it
+        // left behind. Inert for a run that declares no margin model.
+        if (drained && margin_model() != nullptr) {
+            native_order::MatchCursor cursor;
+            cursor.point = last.point.decision.coordinate;
+            maintain_margin_liquidation(engine, cursor,
+                                        last.point.decision.coordinate.path_phase,
+                                        last.point.price);
+        }
     }
 }
 
@@ -4692,6 +5183,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         return;
     }
     ++engine.diag_script_bars_processed_;
+    calculation_margin_check(engine, coordinate, bar.close);
     finish_callback(engine, coordinate.ordinal);
 }
 
@@ -4700,6 +5192,11 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     const auto* spec = spec_ptr();
     const bool high_first = path_uses_high_first(
         bar, spec ? spec->path_order : NativePathOrder::Auto);
+    // L4 publishes this script bar's modeled waypoints so the margin model can
+    // measure a breach against the adverse price the path still reaches.
+    margin_path_bar_ = bar;
+    margin_path_high_first_ = high_first;
+    has_margin_path_ = margin_model() != nullptr;
     callback_context_ = NativeDecisionContext{};
     callback_context_.sub_index = 0;
     callback_context_.sub_count = 1;
@@ -4723,6 +5220,8 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         record_driver(point);
         if (phase == NativePathPhase::Open) {
             invoke_bar_open_callback(engine, bar, point);
+            if (failed()) return;
+            maintain_margin_liquidation(engine, make_cursor(point, 0.0), phase, price);
             if (failed()) return;
         }
         match_discrete(engine, point);
@@ -4767,6 +5266,9 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     if (failed()) return;
     emit_segment(prev, bar.close, close_time, NativePathPhase::Close);
     if (failed()) return;
+    // The modeled path is consumed: from the calculation on there is no
+    // remaining waypoint for the margin model to measure a breach against.
+    has_margin_path_ = false;
     NativeCoordinate calc = base;
     calc.ordinal = take_ordinal(engine);
     calc.effective_time_ms = close_time;
@@ -4796,6 +5298,9 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         return;
     }
 
+    // A sampled intrabar path re-evaluates the margin model at each delivered
+    // sample instead of at the containing bar's remaining waypoints.
+    has_margin_path_ = false;
     std::vector<const Bar*> sub_bars;
     if (lower) {
         const int64_t begin = base.open_ms;
@@ -4916,6 +5421,10 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             record_driver(point);
             if (sub_index == 0 && sample_index == 0) {
                 invoke_bar_open_callback(engine, script_bar, point);
+                if (failed()) return;
+                has_margin_path_ = false;
+                maintain_margin_liquidation(
+                    engine, make_cursor(point, 0.0), point.coordinate.path_phase, price);
                 if (failed()) return;
             }
             if (distribution_samples || sample_index == 0) {
@@ -6732,8 +7241,18 @@ NativePhysicalPosition NativeStrategyHost::physical_position() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).position(*this);
 }
 
+std::optional<double> NativeExecutionConsumer::host_liquidation_price(
+        const BacktestEngine& engine) const {
+    return liquidation_level(engine);
+}
+
 double NativeStrategyHost::native_marked_equity(double mark) const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).marked(*this, mark);
+}
+
+std::optional<double> NativeStrategyHost::native_liquidation_price() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .host_liquidation_price(*this);
 }
 
 std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t after_ordinal) const {

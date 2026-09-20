@@ -84,6 +84,7 @@ public:
         BacktestEngine& engine, const NativeCurrentExecution& command);
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
+    std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     uint64_t event_high_water() const noexcept;
     uint64_t terminal_receipt_high_water() const noexcept {
@@ -107,6 +108,19 @@ private:
         std::size_t history_index = 0;
         uint64_t ordinal = 0;
         NativeCurrentPointView point;
+        // History index of the MarginCallEvent this fill recorded, when the
+        // filled request was the kernel's own liquidation. Absent for every
+        // host request, which is the whole population of a run without a
+        // margin model.
+        std::optional<std::size_t> margin_call_index;
+    };
+    // The live kernel-issued liquidation of the current position, if any.
+    // At most one rests at a time: a moved level or moved units withdraw the
+    // previous one under CancelReason::Superseded before the new one is born.
+    struct MarginLiquidation {
+        native_order::RequestHandle handle{};
+        double level = 0.0;
+        double units = 0.0;
     };
     struct ResolvedCandidate {
         native_order::ExecutionPlan physical = execution::Flatten{};
@@ -353,6 +367,34 @@ private:
                                const execution::SettlementInspection& inspect,
                                bool skip_initial_margin,
                                native_order::MatchRejectReason* reason) const;
+    // L4 generic margin model. Every one of these is inert for a spec that
+    // leaves `margin` unset, which is every source-projected spec.
+    const NativeMarginModel* margin_model() const noexcept;
+    std::optional<double> maintenance_fraction(bool short_side) const noexcept;
+    // Solve equity(P) == maintenance requirement(P) for the live book.
+    std::optional<double> liquidation_level(const BacktestEngine& engine) const;
+    // The price the breach is measured at: the most adverse price the modeled
+    // script path still reaches after `phase`, or `fallback` when the point
+    // has no remaining modeled path of its own.
+    double margin_sizing_price(bool short_side, NativePathPhase phase,
+                               double fallback) const noexcept;
+    // Kernel sizing then the host override. nullopt means no liquidation.
+    std::optional<double> margin_call_units(
+        const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
+        double* out_equity, double* out_required) const;
+    void withdraw_margin_liquidation(BacktestEngine& engine);
+    void maintain_margin_liquidation(BacktestEngine& engine,
+                                     const native_order::MatchCursor& cursor,
+                                     NativePathPhase phase, double fallback_price);
+    void calculation_margin_check(BacktestEngine& engine, const NativeCoordinate& calc,
+                                  double mark);
+    bool kernel_submit_liquidation(BacktestEngine& engine, double level, double units,
+                                   std::int64_t decision_time_ms,
+                                   native_order::RequestHandle* out_handle = nullptr);
+    std::optional<std::size_t> record_margin_call(
+        BacktestEngine& engine, const native_order::ExecutionAppliedEvent& applied,
+        const native_order::DefinitionRef& definition, double position_before,
+        double position_after);
     void fail_preparation(BacktestEngine& engine, const native_order::PreparationError& error,
                           NativeFailureOperation operation);
     void catch_up_timeline() noexcept;
@@ -471,6 +513,18 @@ private:
     // Derived receipt cursor: it can be reconstructed from the immutable
     // command history and only lets source projections skip empty polls.
     uint64_t terminal_receipt_high_water_ = 0;
+    // L4: the resting kernel liquidation and the modeled script path it is
+    // sized against. Both are folded into the continuation digest only when
+    // the run spec declares a margin model.
+    std::optional<MarginLiquidation> margin_liquidation_;
+    // Kernel liquidations already booked at one driver point. A kernel-sized
+    // slice always restores or flattens, so it re-arms at most once per fill;
+    // this bounds a host override that keeps answering with a smaller slice.
+    uint64_t margin_point_ordinal_ = 0;
+    std::uint32_t margin_point_calls_ = 0;
+    Bar margin_path_bar_{};
+    bool has_margin_path_ = false;
+    bool margin_path_high_first_ = false;
     std::array<CohortTargetCacheEntry, 16> cohort_target_cache_{};
     std::size_t cohort_target_cache_size_ = 0;
     // Derived calendar lookup cache, cleared at staged ingress (L10c).

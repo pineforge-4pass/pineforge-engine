@@ -416,11 +416,23 @@ struct TargetObservation {
     std::vector<OpeningObservation> openings;
 };
 
+// Who authored a request. Host is every request a host submits, replaces or
+// cancels, and it is the whole existing population: it folds nothing into the
+// continuation digest, so no established hash moves. KernelLiquidation marks
+// the margin model's own Reduce; KernelRisk is reserved for the risk lane.
+enum class RequestOrigin : std::uint8_t {
+    Host = 0,
+    KernelLiquidation = 1,
+    KernelRisk = 2,
+};
+
 struct RequestDefinition {
     RequestHandle handle;
     Request request;
     Birth birth;
     std::optional<RequestHandle> predecessor;
+    // Appended last so every existing aggregate initializer keeps its meaning.
+    RequestOrigin origin = RequestOrigin::Host;
 };
 using DefinitionRef = std::shared_ptr<const RequestDefinition>;
 
@@ -554,6 +566,9 @@ enum class CancelReason : std::uint8_t {
     Group = 1,
     OwnerGone = 2,
     UnsupportedRelation = 3,
+    // A kernel-originated request the kernel itself withdrew: the liquidation
+    // level or its units moved, or the requirement is no longer breached.
+    Superseded = 4,
 };
 
 enum class AppliedTerminalReason : std::uint8_t {
@@ -799,6 +814,30 @@ struct ArmedEvent {
     std::optional<EventId> quantity_resolution;
 };
 
+// A kernel-issued liquidation that actually filled. It carries the margin
+// facts of that fill, so a host reconstructs the outcome without recomputing
+// the account: `mark` is the booked resolved price, `equity` and `required`
+// are the marked equity and the maintenance requirement of the SURVIVING book
+// at that price, `liquidation_price` is the level re-solved for what is left,
+// and `position_before` / `position_after` are the signed book on either side
+// of the reduction. `applied` names the ExecutionAppliedEvent that booked it.
+struct MarginCallEvent {
+    uint64_t ordinal = 0;
+    DefinitionRef definition;
+    EventId applied;
+    MatchCursor cursor{};
+    Side side = Side::Long;
+    double mark = 0.0;
+    double equity = 0.0;
+    double required = 0.0;
+    double liquidation_price = 0.0;
+    double units = 0.0;
+    double position_before = 0.0;
+    double position_after = 0.0;
+    const RequestHandle& handle() const noexcept { return definition->handle; }
+    const Request& request() const noexcept { return definition->request; }
+};
+
 using CommandEvent = std::variant<AcceptedEvent,
                                   RejectedEvent,
                                   ReplacedEvent,
@@ -815,7 +854,8 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   DeferredGroupAdjustmentEvent,
                                   QuantityBoundEvent,
                                   ArmedEvent,
-                                  TermsResolvedEvent>;
+                                  TermsResolvedEvent,
+                                  MarginCallEvent>;
 
 // Almost every prepared command yields one history event. Keep that ordinary
 // transactional payload inline; the overflow vector preserves the existing
@@ -1132,14 +1172,18 @@ public:
     PreparedSubmit prepare_submit(const Request& request,
                                   const CommandContext& context,
                                   uint64_t& next_order_incarnation,
-                                  uint64_t& next_timeline_ordinal);
+                                  uint64_t& next_timeline_ordinal,
+                                  RequestOrigin origin = RequestOrigin::Host);
     PreparedReplace prepare_replace(const RequestHandle& target,
                                     const Request& request,
                                     const CommandContext& context,
                                     uint64_t& next_order_incarnation,
                                     uint64_t& next_timeline_ordinal,
                                     ReplaceOptions options = {});
-    PreparedCancel prepare_cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal);
+    // `reason` lets the kernel withdraw its own request under the durable
+    // Superseded receipt. Host cancels keep the default User reason.
+    PreparedCancel prepare_cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal,
+                                  CancelReason reason = CancelReason::User);
 
     InstalledCommand<SubmitResult> install_submit(PreparedSubmit&& prepared) noexcept;
     InstalledCommand<ReplaceResult> install_replace(PreparedReplace&& prepared) noexcept;
@@ -1178,6 +1222,12 @@ public:
                                                  const EvaluationContext& context,
                                                  const TermsResolvedInput& input,
                                                  uint64_t& next_timeline_ordinal);
+
+    // Append one MarginCallEvent to the immutable history. The target is the
+    // kernel-originated request that filled, which is already terminal by the
+    // time its margin facts are recorded, so no live row moves.
+    Preparation<PreparedMutation> prepare_margin_call(const MarginCallEvent& event,
+                                                      uint64_t& next_timeline_ordinal);
 
     // The allowance that prepare_evaluation would install for this point.
     static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
@@ -1439,7 +1489,7 @@ static_assert(std::variant_size_v<SizeBasis> == 2);
 static_assert(std::variant_size_v<Remaining> == 5);
 static_assert(std::variant_size_v<RemainingProjection> == 5);
 static_assert(std::variant_size_v<Allowance> == 4);
-static_assert(std::variant_size_v<CommandEvent> == 17);
+static_assert(std::variant_size_v<CommandEvent> == 18);
 static_assert(std::variant_size_v<ExecutionPlan> == 4);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);

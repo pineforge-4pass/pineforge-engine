@@ -152,6 +152,58 @@ std::int64_t subscription_period_key(const native_calendar::Timeframe& tf) noexc
     return count * unit_seconds;
 }
 
+bool valid_liquidation_sizing(NativeLiquidationSizing sizing) noexcept {
+    switch (sizing) {
+    case NativeLiquidationSizing::RestoreMinimum:
+    case NativeLiquidationSizing::ShortfallMultiple:
+    case NativeLiquidationSizing::Flatten:
+        return true;
+    }
+    return false;
+}
+
+bool valid_liquidation_check(NativeLiquidationCheck check) noexcept {
+    switch (check) {
+    case NativeLiquidationCheck::PathAdverseExtreme:
+    case NativeLiquidationCheck::CalculationOnly:
+        return true;
+    }
+    return false;
+}
+
+// The generic margin model is the whole admission authority of the run that
+// declares it. Both spellings at once is a configuration conflict, never a
+// silent precedence rule.
+Result validate_margin(const NativeRunSpec& spec) noexcept {
+    if (!spec.margin) return {};
+    if (spec.initial_margin_fraction) {
+        return {Error::MarginModelConflict, Field::MarginModel};
+    }
+    const auto& margin = *spec.margin;
+    if (!positive(margin.initial_long) || !positive(margin.initial_short)) {
+        return {Error::NotFinitePositive, Field::MarginInitial};
+    }
+    if (margin.maintenance_long && !positive(*margin.maintenance_long)) {
+        return {Error::NotFinitePositive, Field::MarginMaintenance};
+    }
+    if (margin.maintenance_short && !positive(*margin.maintenance_short)) {
+        return {Error::NotFinitePositive, Field::MarginMaintenance};
+    }
+    if (!valid_liquidation_sizing(margin.sizing)) {
+        return {Error::UnknownLiquidationSizing, Field::MarginSizing};
+    }
+    if (!positive(margin.shortfall_multiple)) {
+        return {Error::NotFinitePositive, Field::MarginShortfallMultiple};
+    }
+    if (margin.liquidation_min_units && !positive(*margin.liquidation_min_units)) {
+        return {Error::NotFinitePositive, Field::MarginMinUnits};
+    }
+    if (!valid_liquidation_check(margin.check)) {
+        return {Error::UnknownLiquidationCheck, Field::MarginCheck};
+    }
+    return {};
+}
+
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
         static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
@@ -264,6 +316,7 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     if (spec.initial_margin_fraction && !positive(*spec.initial_margin_fraction))
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
+    if (const auto margin = validate_margin(spec); !margin) return margin;
     if (!valid_report_policy(spec.report_policy))
         return {Error::UnknownReportPolicy, Field::ReportPolicy};
     if (!spec.subscriptions.empty() && spec.timeframe_undetected) {
@@ -456,6 +509,32 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
         i(synthesized->volume_weighted_min_samples);
         i(synthesized->volume_weighted_max_samples);
     }
+    return state;
+}
+
+std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto d = [&bytes](double value) noexcept { bytes(&value, sizeof value); };
+    const auto o = [&u, &d](const std::optional<double>& value) noexcept {
+        u(value.has_value() ? 1u : 0u);
+        if (value) d(*value);
+    };
+    d(margin.initial_long);
+    d(margin.initial_short);
+    o(margin.maintenance_long);
+    o(margin.maintenance_short);
+    u(static_cast<std::uint64_t>(margin.sizing));
+    d(margin.shortfall_multiple);
+    o(margin.liquidation_min_units);
+    u(static_cast<std::uint64_t>(margin.check));
     return state;
 }
 

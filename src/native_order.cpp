@@ -1666,7 +1666,8 @@ std::vector<RequestHandle> WorkingRequestCore::group_recipients(const EventId& a
 PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
                                                   const CommandContext& context,
                                                   uint64_t& next_order_incarnation,
-                                                  uint64_t& next_timeline_ordinal) {
+                                                  uint64_t& next_timeline_ordinal,
+                                                  RequestOrigin origin) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     Request staged = request;
@@ -1689,7 +1690,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
     auto definition = std::make_shared<RequestDefinition>(
-            RequestDefinition{handle, std::move(staged), birth, std::nullopt});
+            RequestDefinition{handle, std::move(staged), birth, std::nullopt, origin});
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     AcceptedEvent accepted;
     accepted.ordinal = ordinal;
@@ -1800,7 +1801,8 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
 }
 
 PreparedCancel WorkingRequestCore::prepare_cancel(const RequestHandle& target,
-                                                  uint64_t& next_timeline_ordinal) {
+                                                  uint64_t& next_timeline_ordinal,
+                                                  CancelReason reason) {
     require_identity(identity_);
     RequestHandle staged_target = target;
     std::size_t live_index = 0;
@@ -1825,7 +1827,7 @@ PreparedCancel WorkingRequestCore::prepare_cancel(const RequestHandle& target,
         return PreparedCancel(std::move(impl));
     }
     impl->result = CancelResult{CancelStatus::Cancelled, ordinal};
-    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], CancelReason::User,
+    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], reason,
                                             EventId{identity_, ordinal}));
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
@@ -2363,6 +2365,25 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_match_rejected(
     plan.events.emplace_back(std::move(rejected));
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
+    return finish_mutation(std::move(plan));
+}
+
+Preparation<PreparedMutation> WorkingRequestCore::prepare_margin_call(
+        const MarginCallEvent& event, uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    if (!event.definition || event.definition->handle.run != identity_) {
+        return PreparationError{CoreFailure::InvalidProposal, event.applied,
+                                event.definition ? event.definition->handle : RequestHandle{}};
+    }
+    if (event.definition->origin == RequestOrigin::Host) {
+        return PreparationError{CoreFailure::InvalidProposal, event.applied,
+                                event.definition->handle};
+    }
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    MutationPlan plan = begin_plan();
+    MarginCallEvent receipt = event;
+    receipt.ordinal = ordinal;
+    plan.events.emplace_back(std::move(receipt));
     return finish_mutation(std::move(plan));
 }
 

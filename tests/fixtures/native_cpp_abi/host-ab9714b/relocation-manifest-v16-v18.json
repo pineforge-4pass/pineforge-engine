@@ -27,14 +27,21 @@
     "IntrabarPath::synthesized",
     "NativeDecisionContext::driver_statistics",
     "NativeInputContext",
-    "NativeTickContext"
+    "NativeTickContext",
+    "NativeRunSpec::margin",
+    "NativeMarginModel",
+    "NativeMarginCallView",
+    "RequestDefinition::origin",
+    "MarginCallEvent"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
     "on_native_bar_open",
     "on_native_input",
     "on_native_tick",
-    "on_native_timeframe_bar"
+    "on_native_timeframe_bar",
+    "resolve_margin_call_units",
+    "on_native_margin_call"
   ],
   "removedVirtuals": [
     "legacy_run_simple",
@@ -52,7 +59,13 @@
     "apply_source_pending_removals"
   ],
   "rejectionPairs": [
-    ["v16-frozen", "v18-current"],
-    ["v18-current", "v16-frozen"]
+    [
+      "v16-frozen",
+      "v18-current"
+    ],
+    [
+      "v18-current",
+      "v16-frozen"
+    ]
   ]
 }

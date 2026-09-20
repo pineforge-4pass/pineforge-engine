@@ -119,14 +119,19 @@ Rebuild generated and native C++ objects against matching engine headers and
 runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
 private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
 `engine_script_run_v18` for the native higher-timeframe host surface
-(`on_native_timeframe_bar`, `native_series_bar`), and the host capability macro
+(`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
+surface (`resolve_margin_call_units`, `on_native_margin_call`,
+`native_liquidation_price`), and the host capability macro
 is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v6`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
-the continuation hash only when it is non-empty).
+`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions` and R5 L4 adds
+`NativeRunSpec::margin`, each folded into the continuation hash only when it is
+set). R5 L4 also adds `RequestDefinition::origin` and the `MarginCallEvent`
+alternative to `native_order_v6`; `RequestOrigin::Host` — every host request —
+folds nothing, so no established continuation hash moves.
 
 | Matrix role | Internal identity |
 | --- | --- |

@@ -50,7 +50,7 @@ def verify(include: Path) -> dict:
         raise RuntimeError("retired engine seams remain: " + ", ".join(present))
     required_virtuals = {
         "prepare_native_begin", "on_native_bar_open", "on_native_input",
-        "on_native_tick", "on_native_timeframe_bar",
+        "on_native_tick", "on_native_timeframe_bar", "on_native_margin_call",
     }
     if not required_virtuals.issubset(set(manifest.get("addedVirtuals", []))):
         raise RuntimeError("relocation manifest omits a native hook")

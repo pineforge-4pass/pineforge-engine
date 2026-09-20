@@ -321,6 +321,19 @@ enum class NativePrecommitVerdict : std::uint8_t {
     AdmitWithHostMargin = 2,
 };
 
+// Ephemeral factual view of one kernel-issued liquidation before its units
+// are fixed. `position` is the physical book being liquidated, `mark` the
+// sizing price the kernel measured the breach at, `equity` the marked equity
+// there and `required` the maintenance requirement of the whole position at
+// that same mark. A host that answers with a value owns the slice quantity.
+struct NativeMarginCallView {
+    NativePhysicalPosition position;
+    double mark = 0.0;
+    double equity = 0.0;
+    double required = 0.0;
+    native_order::MatchCursor cursor;
+};
+
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
     double price = 0.0;
@@ -498,6 +511,17 @@ public:
         return NativePrecommitVerdict::Admit;
     }
 
+    // The kernel's own liquidation sizing, offered to the host before the
+    // reduction rests. Returning nullopt keeps the run spec's sizing policy;
+    // a returned value is clamped into (0, held] and wins over it.
+    virtual std::optional<double> resolve_margin_call_units(
+            const NativeMarginCallView&) const {
+        return std::nullopt;
+    }
+    // A kernel-issued liquidation that filled. It is delivered after the
+    // ordinary on_native_applied for the same fill, with the same cursor.
+    virtual void on_native_margin_call(const native_order::MarginCallEvent&) {}
+
     // RULING A48 — the ONE generic per-lot excursion capability. A host that
     // returns true here takes ownership of every open lot's favorable/adverse
     // excursion: the consumer stops sampling excursion at matched trigger
@@ -548,6 +572,11 @@ public:
 
     NativePhysicalPosition physical_position() const;
     double native_marked_equity(double mark) const;
+    // The price at which the marked equity falls below the run's maintenance
+    // requirement for the live position's side. nullopt when the run declares
+    // no margin model, the side has no maintenance fraction, the book is flat,
+    // or no finite price solves the breach (a long at full maintenance).
+    std::optional<double> native_liquidation_price() const;
     // Owning snapshots copied at query time. Later commands/reset do not
     // invalidate already returned values.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;

@@ -23,7 +23,7 @@ static_assert(std::variant_size_v<no::OrderIntent> == 6);
 static_assert(std::variant_size_v<no::Remaining> == 5);
 static_assert(std::variant_size_v<no::RemainingProjection> == 5);
 static_assert(std::variant_size_v<no::Allowance> == 4);
-static_assert(std::variant_size_v<no::CommandEvent> == 17);
+static_assert(std::variant_size_v<no::CommandEvent> == 18);
 static_assert(std::variant_size_v<no::ExecutionPlan> == 4);
 static_assert(std::variant_size_v<no::ExecutionScope> == 3);
 static_assert(std::variant_size_v<no::TriggerState> == 9);

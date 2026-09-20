@@ -147,6 +147,9 @@ Optional, absent unless set:
 - `max_open_lots`: positive; surviving + new lots
 - `initial_margin_fraction`: finite > 0 as a fraction, not a percent. Opening
   admission only; no maintenance liquidation.
+- `margin`: the generic per-side broker margin model. Mutually exclusive with
+  `initial_margin_fraction` (setting both is `MarginModelConflict`). See
+  *Margin and liquidation* below.
 - `subscriptions`: declared higher-timeframe series of the run's own symbol.
   Empty is the whole default surface; see "Higher-timeframe series for native
   hosts" below.
@@ -482,6 +485,98 @@ already presented open/high/low/close.
 `NativeCloseExecution::AfterCalculation`: after that calculation, a modeled
 close point may match, still obeying birth ordinal/floor. It is not a replay
 of observed prints.
+
+## Margin and liquidation
+
+`NativeRunSpec::margin` is the whole generic broker margin model, and it is
+opt-in. A spec that leaves it unset keeps `initial_margin_fraction`'s
+one-scalar opening gate, never enters a liquidation path, and folds nothing
+new into the continuation digest. The two spellings are mutually exclusive:
+declaring both fails validation with `MarginModelConflict`.
+
+```cpp
+NativeMarginModel margin;
+margin.initial_long   = 0.5;   // fractions, not percents; both > 0
+margin.initial_short  = 0.5;
+margin.maintenance_long  = 0.25;   // absent = that side never liquidates
+margin.maintenance_short = 0.25;
+margin.sizing = NativeLiquidationSizing::RestoreMinimum;
+margin.shortfall_multiple = 1.0;           // used by ShortfallMultiple
+margin.liquidation_min_units = 1.0;        // optional broker minimum trade
+margin.check = NativeLiquidationCheck::PathAdverseExtreme;
+spec.margin = margin;
+```
+
+**Opening admission.** With a model set, `initial_long` / `initial_short`
+replace the single scalar for that run: an opening is refused with
+`MatchRejectReason::InitialMargin` when
+`resulting_abs_notional × initial_<side> > marked_equity − ticket`. A host
+that answers `AdmitWithHostMargin` from `validate_execution_precommit` still
+takes that one check over, exactly as before.
+
+**The liquidation level.** With a maintenance fraction for the live side, the
+kernel solves the one price where the marked equity meets the maintenance
+requirement:
+
+```
+equity(P)   = capital + realized − open entry fees + dir × (P × Q − Σ qty×price) × pv × fx
+required(P) = Q × P × pv × fx × maintenance
+L           : equity(L) == required(L)
+```
+
+Both sides are affine in `P`, so `L` is unique unless the slopes coincide —
+`maintenance == 1.0` on a LONG, where equity and requirement move together and
+no price solves the breach. `NativeStrategyHost::native_liquidation_price()`
+answers `L`, or `nullopt` when the run declares no model, the side has no
+maintenance fraction, the book is flat, or no finite price solves it. It is
+the exact level: no tick rounding, which is a source-layer spelling.
+
+**Arming (`PathAdverseExtreme`, the default).** At every script-bar open and
+after every applied fill, the kernel measures the requirement against the most
+adverse price the modeled script path still reaches after the current
+waypoint — the same sizing mark a whole-bar broker check would use. If that
+mark breaches, the kernel rests its own `Reduce` (or `Flatten`) with
+`Stop{L}`, bound to the live book. The reduction therefore *fills at the
+liquidation level*, where the account actually runs out of margin, while it is
+*sized at* the adverse mark. With a declared `IntrabarPath` there is no
+whole-bar waypoint model: the kernel re-evaluates at each delivered sample.
+
+The units come from `sizing`:
+
+| `sizing` | units |
+| --- | --- |
+| `RestoreMinimum` | `(required(mark) − equity(mark)) / (mark × pv × fx × maintenance)` — the fewest units that restore the requirement |
+| `ShortfallMultiple` | that restore × `shortfall_multiple` |
+| `Flatten` | the whole position |
+
+The result is capped at the held quantity, floored onto `quantity_grid` when
+one is configured, and replaced by a full flatten when `liquidation_min_units`
+is set and the computed slice falls below it. A host override of
+`resolve_margin_call_units(const NativeMarginCallView&)` has the last word and
+is clamped into `(0, held]`.
+
+**Re-pricing.** Exactly one kernel liquidation is live at a time. When the
+level or the units move — typically after a host fill changes the book — the
+previous one is withdrawn with `CancelReason::Superseded` before the new one
+is accepted. A book that is flat or no longer breached withdraws it outright.
+
+**`CalculationOnly`.** The kernel rests nothing and tests the requirement only
+at a script calculation point, against that bar's close. A breach there is
+liquidated immediately as a current execution. Nothing fills mid-path.
+
+**Events and hooks.** A kernel-issued request carries
+`RequestDefinition::origin == RequestOrigin::KernelLiquidation`; every host
+request is `RequestOrigin::Host`. When it fills, a `MarginCallEvent` joins the
+command history directly after its own `ExecutionAppliedEvent`, carrying the
+mark, the marked equity and requirement at that mark, the solved liquidation
+price, the filled units and the signed book on either side. The host sees
+`on_native_applied` first and `on_native_margin_call` immediately after, with
+the same cursor.
+
+The TradingView margin call is **not** this model: its rounded-money rules,
+its 4× shortfall default, its one-contract long money call and its
+adverse-extreme fill pricing stay in the Pine adapter, which never sets
+`margin`.
 
 ## One physical book
 

@@ -75,6 +75,58 @@ enum class NativeGridRounding : std::uint32_t {
     Directional = 1,
 };
 
+// Which units a kernel-issued liquidation reduces (L4).  RestoreMinimum is
+// the fewest units that restore the marked equity to the maintenance
+// requirement at the sizing mark; ShortfallMultiple books that same restore
+// scaled by `shortfall_multiple` (TradingView's 4.0 is the adapter's choice,
+// never the default here); Flatten closes the whole position.
+enum class NativeLiquidationSizing : std::uint32_t {
+    RestoreMinimum = 0,
+    ShortfallMultiple = 1,
+    Flatten = 2,
+};
+
+// When the kernel tests the maintenance requirement. PathAdverseExtreme
+// evaluates it against the most adverse price the remaining modeled script
+// path still reaches and rests the reduction at the liquidation level, so the
+// fill lands where the account actually runs out of margin. CalculationOnly
+// tests the mark only at a script calculation point and rests nothing.
+enum class NativeLiquidationCheck : std::uint32_t {
+    PathAdverseExtreme = 0,
+    CalculationOnly = 1,
+};
+
+// A generic per-side broker margin model (L4). It is entirely opt-in: a spec
+// that leaves `NativeRunSpec::margin` unset keeps the one-scalar
+// `initial_margin_fraction` gate and has no liquidation path at all.
+//
+// `initial_long` / `initial_short` are the opening-admission fractions (not
+// percents) applied to the resulting absolute notional of an opening, per
+// side. Both must be finite and positive.
+//
+// `maintenance_long` / `maintenance_short` are the liquidation fractions.
+// Absent means that side never liquidates. Present means the kernel solves
+// for the liquidation level -- the price at which the marked equity falls
+// below the maintenance requirement -- and rests a kernel-originated Reduce
+// with Stop{level} while the requirement is breached on the modeled path.
+// A maintenance fraction equal to 1.0 has no finite level for a LONG: at
+// full maintenance a long's equity and requirement move together, so the
+// breach is a constant and no price solves it. Source-language money rules
+// for that case are source-layer policy, never spelled here.
+//
+// `liquidation_min_units` is the broker's minimum liquidation trade: a
+// computed reduction below it flattens the position instead.
+struct NativeMarginModel {
+    double initial_long = 0.0;
+    double initial_short = 0.0;
+    std::optional<double> maintenance_long;
+    std::optional<double> maintenance_short;
+    NativeLiquidationSizing sizing = NativeLiquidationSizing::RestoreMinimum;
+    double shortfall_multiple = 1.0;
+    std::optional<double> liquidation_min_units;
+    NativeLiquidationCheck check = NativeLiquidationCheck::PathAdverseExtreme;
+};
+
 // Native hosts normally require every confirmed bar to name a canonical input
 // slot.  A host that deliberately reproduces a legacy batch route can retain
 // the caller's strictly-increasing timestamps as its decision labels instead.
@@ -236,6 +288,11 @@ struct NativeRunSpec {
     NativeOpenDirections allowed_open_directions = NativeOpenDirections::Both;
     std::optional<double> initial_margin_fraction; // Positive fraction, not percent;
                                                  // no maintenance liquidation.
+    // Opt-in generic margin model. Mutually exclusive with
+    // initial_margin_fraction, which remains the one-scalar spelling. Folded
+    // into the continuation digest only when it is present, so a spec that
+    // declares none keeps its pre-margin-model identity byte for byte.
+    std::optional<NativeMarginModel> margin;
     NativeReportPolicy report_policy = NativeReportPolicy::HostRecorded;
     // Report a position still open at run end as a mark-to-market closed row
     // at the last close. KernelRecorded only, and reporting only: the live
@@ -265,6 +322,8 @@ enum class NativeRunSpecField : std::uint8_t {
     ReportPolicy,
     PriceGrid, GridRounding,
     SubscriptionTimeframe, SubscriptionBars,
+    MarginModel, MarginInitial, MarginMaintenance, MarginSizing,
+    MarginShortfallMultiple, MarginMinUnits, MarginCheck,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -310,6 +369,11 @@ enum class NativeRunSpecError : std::uint8_t {
     UnorderedSubscriptionBars,
     // Subscriptions declared with no detected input timeframe to pair with.
     SubscriptionWithoutTimeframe,
+    // Both the generic margin model and the one-scalar initial-margin gate
+    // were set. They are two spellings of the same admission authority.
+    MarginModelConflict,
+    UnknownLiquidationSizing,
+    UnknownLiquidationCheck,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -373,6 +437,13 @@ std::uint64_t native_timeframe_subscriptions_digest(
 // (zoneinfo root and zone file paths), which differ per machine, so only this
 // digest is portable enough to pin as a constant.
 std::uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept;
+
+// Exact FNV-1a content digest for the generic margin model. It includes every
+// per-side fraction, the liquidation policy and its parameters, so two runs
+// that differ only in their margin model cannot share a continuation identity.
+// Callers fold it only when `margin` is present, keeping the default spec's
+// continuation identity unchanged.
+std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexcept;
 
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);
