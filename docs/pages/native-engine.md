@@ -139,6 +139,10 @@ Always set, with documented defaults in the header:
 - `report_policy`: `HostRecorded` (default) or `KernelRecorded`;
   `report_open_position_at_end`: `false` (default). See *Reporting for native
   hosts* below.
+- `calculation`: `BarClose` (default), `BarCloseAndFills` or
+  `EveryModeledPoint`; `max_recalculations_per_point`: `8` (default, any
+  value including 0 is legal); `open_bar_view`: `Complete` (default) or
+  `OpenOnly`. See *Calculation timing* below.
 
 Optional, absent unless set:
 
@@ -578,6 +582,128 @@ its 4× shortfall default, its one-contract long money call and its
 adverse-extreme fill pricing stay in the Pine adapter, which never sets
 `margin`.
 
+## Calculation timing
+
+`NativeRunSpec::calculation` decides when the kernel asks the host to
+calculate. It is `NativeCalculationTrigger::BarClose` by default, which is the
+established surface exactly: one calculation per script bar, at its close. The
+source layer never sets this field, so Pine-compatible runs are unchanged, and
+the spec folds the block into the continuation hash only once the trigger or
+the open-bar view is non-default.
+
+Every calculation — including the script bar's own — is delivered through
+
+```cpp
+virtual void on_native_recalculate(const Bar& bar, const NativeDecisionContext& ctx,
+                                   NativeCalculationReason reason,
+                                   const native_order::ExecutionAppliedEvent* cause);
+```
+
+whose default forwards to `on_native_bar(bar, ctx)`. A host that implements
+only `on_native_bar` therefore sees precisely what it saw before this field
+existed. `NativeCalculationReason` is `BarClose` (the script bar's own
+calculation, `cause == nullptr`), `OrderFill` (one recalculation at an applied
+execution's cursor, `cause` being that event, valid only for the call),
+`Tick` (one recalculation at a modeled point or an observed print) and
+`SubBar`, which is reserved: a lower-timeframe sub-bar has its own hook and is
+never delivered through `on_native_recalculate`.
+
+The triggers are a strict superset chain, so opting in never removes a
+calculation:
+
+- `BarClose` (default): the script bar's calculation only.
+- `BarCloseAndFills`: additionally one `OrderFill` recalculation per applied
+  execution (Pine's `calc_on_order_fills`, without its TradingView specifics).
+- `EveryModeledPoint`: additionally one `Tick` recalculation at every modeled
+  point of the delivered path — each confirmed OHLC waypoint, each intrabar
+  sample — and at every observed print, in batch and in a stream alike
+  (Pine's `calc_on_every_tick`, generically).
+
+### Chronology contract
+
+At **one** point, in this order and no other:
+
+1. Match and settle.
+2. `on_native_applied` for each applied event, FIFO, through the existing
+   notification drain under its re-entrancy guard.
+3. With `BarCloseAndFills` or `EveryModeledPoint`, one `OrderFill`
+   recalculation at that event's own cursor, immediately after its
+   `on_native_applied`, driven from the same drain. It is bounded by
+   `max_recalculations_per_point` (default 8) **per matching point**:
+   executions a callback drives through `execute_current` land at the same
+   cursor and spend the same budget, so a host that refills on its own fill
+   cannot cascade without end. Beyond the bound the execution is still
+   applied and still delivered to `on_native_applied`; only the calculation
+   it would have driven is dropped. `native_recalculation_count()` and
+   `native_recalculations_skipped()` report both totals.
+4. With `EveryModeledPoint`, one `Tick` recalculation after the point's
+   matching is finished. `on_native_tick` stays the observation hook and
+   still runs **before** the print is matched.
+
+A request born in any of these callbacks follows the existing birth rule
+unchanged: it is eligible on the unconsumed rest of the bar, which for a
+market request means the next discrete matching point. Nothing about the
+drain order, the birth rule or language-state rollback moves — the kernel
+never attempts rollback; that stays a source-layer concern.
+
+A recalculation records **no** report point. Under
+`NativeReportPolicy::KernelRecorded` the equity curve still has exactly one
+point per script bar whatever the trigger is.
+
+### Sub-bars
+
+```cpp
+virtual void on_native_sub_bar(const Bar& sub, const NativeDecisionContext& ctx);
+```
+
+fires once after each retained lower-timeframe sub-bar's whole matching path,
+before the next sub-bar's. It is not a cadence: it fires whatever
+`calculation` is. It requires a real lower feed
+(`IntrabarPath::lower_tf`) — a synthesized path and a plain confirmed bar have
+no sub-bars of their own, so it never fires for them. The decision point is
+the sub-bar's last modeled point, so commands and `execute_current` are legal
+and a request born there follows the ordinary birth rule.
+
+### The bar so far, and the open-bar view
+
+```cpp
+std::optional<Bar> current_partial_bar() const;   // non-virtual
+```
+
+answers the lookahead-free bar so far at the current cursor: the open of this
+script bar's first modeled point, the running high/low, and the close at the
+cursor. `volume` accrues only activity actually consumed — the completed
+lower-timeframe sub-bars of an intrabar path, or the observed prints of a
+stream — and stays 0 for a modeled path that carries no intrabar volume of its
+own. It is valid in the bar-open, applied, tick, sub-bar and recalculation
+callbacks, and is `nullopt` outside a path walk, including in the bar's own
+close calculation, where the host already holds the complete bar.
+
+This matters because the mid-bar callbacks are handed the **complete** script
+bar: `on_native_bar_open` receives the whole bar by default, and so does every
+`OrderFill` / batch `Tick` recalculation. That is deliberate — a host that
+schedules against the bar's own high/low needs it, and the adapter relies on
+it — but it is lookahead. `current_partial_bar()` is the answer for a host
+that must not see it.
+
+`NativeRunSpec::open_bar_view` masks exactly one callback:
+`NativeOpenBarView::OpenOnly` hands `on_native_bar_open` (and `current_bar_`
+while it runs) `H = L = C = open` and volume 0. `Complete` (default) is
+unchanged. The mask is presentation only: the complete bar is restored before
+the open match, so matching, fills, excursions and every later callback are
+byte-for-byte what `Complete` books.
+
+### What stays in the source layer
+
+TradingView's COOF specifics are **not** reproduced here (design ruling R5-5):
+the waypoint-only refill, the two-fills-at-open rule, the script-state
+snapshot/restore and the adapter's own cascade guard and deferral queue all
+remain in `src/source`. A native `BarCloseAndFills` host running the adapter's
+refill rule reaches the same book with the same order ids in the same order,
+but the coordinates a request born in a recalculation fills at differ: the
+adapter re-presents it at the chart bar's next waypoint, the kernel at the
+next discrete matching point of the delivered path.
+
 ## One physical book
 
 There is one engine lot/account book. Native matching inspects settlement,
@@ -767,7 +893,9 @@ auxiliary-symbol feed and no chart-slice mapping.
 Two driver models only: confirmed OHLCV and observed ticks. Mixing them on
 one stream is refused. The script-bar **calculation** callback is
 `on_native_bar`, one per completed script bucket; the opening, tick and
-post-fill hooks fire in addition to it, not instead of it.
+post-fill hooks fire in addition to it, not instead of it. Calculation is
+**close-only** unless the spec asks otherwise; see *Calculation timing* above
+for `BarCloseAndFills` and `EveryModeledPoint`.
 
 Confirmed OHLC retains the modeled **Opening**, high/low in the existing
 AUTO order, close, calculation and optional AfterCalculation close sequence.
@@ -809,8 +937,10 @@ These are existing refusals, not implied future features:
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
   with `calc_on_order_fills`, `pine_strategy_host.cpp:266-269`). This is a
-  limit on the *source* calculation policies, not on the native hooks:
-  `on_native_tick` and `on_native_applied` are delivered on a stream.
+  **source-route** refusal, not a limit on the native hooks: `on_native_tick`
+  and `on_native_applied` are delivered on a stream, and a native host's own
+  `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
+  recalculates per observed print
 - A nonempty staged native FX curve on `stream_begin`; batch runs may use one.
 - Auxiliary/native security feeds, source magnifier/tail/probe/hash/trace
   setters, `set_input`, and Pine

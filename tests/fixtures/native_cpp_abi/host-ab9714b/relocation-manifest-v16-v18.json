@@ -32,7 +32,13 @@
     "NativeMarginModel",
     "NativeMarginCallView",
     "RequestDefinition::origin",
-    "MarginCallEvent"
+    "MarginCallEvent",
+    "NativeRunSpec::calculation",
+    "NativeRunSpec::max_recalculations_per_point",
+    "NativeRunSpec::open_bar_view",
+    "NativeCalculationTrigger",
+    "NativeOpenBarView",
+    "NativeCalculationReason"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
@@ -41,7 +47,9 @@
     "on_native_tick",
     "on_native_timeframe_bar",
     "resolve_margin_call_units",
-    "on_native_margin_call"
+    "on_native_margin_call",
+    "on_native_recalculate",
+    "on_native_sub_bar"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

@@ -121,17 +121,22 @@ private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
 `engine_script_run_v18` for the native higher-timeframe host surface
 (`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
-`native_liquidation_price`), and the host capability macro
+`native_liquidation_price`) and R5 L5's calculation-timing surface
+(`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`), and the
+host capability macro
 is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v6`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions` and R5 L4 adds
-`NativeRunSpec::margin`, each folded into the continuation hash only when it is
-set). R5 L4 also adds `RequestDefinition::origin` and the `MarginCallEvent`
-alternative to `native_order_v6`; `RequestOrigin::Host` — every host request —
-folds nothing, so no established continuation hash moves.
+`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
+the continuation hash only when it is non-empty; R5 L4 adds
+`NativeRunSpec::margin`, folded only when it is set; R5 L5 adds `calculation`,
+`max_recalculations_per_point` and `open_bar_view`, folded only once the
+trigger or the open-bar view is non-default). R5 L4 also adds
+`RequestDefinition::origin` and the `MarginCallEvent` alternative to
+`native_order_v6`; `RequestOrigin::Host` — every host request — folds nothing,
+so no established continuation hash moves.
 
 | Matrix role | Internal identity |
 | --- | --- |

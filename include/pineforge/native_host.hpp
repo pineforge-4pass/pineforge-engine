@@ -460,6 +460,24 @@ struct NativeTimeframeBarContext {
     std::int64_t delivered_at_ms = 0;
 };
 
+// Why the kernel is asking the host to calculate. BarClose is the script
+// bar's own calculation and is delivered for every run, whatever the spec's
+// NativeCalculationTrigger is: every calculation is routed through
+// on_native_recalculate, whose default forwards to on_native_bar, so a host
+// that only implements on_native_bar sees exactly what it saw before.
+// OrderFill is one recalculation at the cursor of an applied execution
+// (NativeCalculationTrigger::BarCloseAndFills and above) and carries that
+// event as its cause. Tick is one recalculation at a modeled path point or
+// an observed print (NativeCalculationTrigger::EveryModeledPoint). SubBar is
+// reserved: a lower-timeframe sub-bar has its own hook, on_native_sub_bar,
+// and is never delivered through on_native_recalculate.
+enum class NativeCalculationReason : std::uint8_t {
+    BarClose = 0,
+    OrderFill = 1,
+    Tick = 2,
+    SubBar = 3,
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
@@ -498,6 +516,43 @@ public:
     // returns, before the consumer advances beyond this calculation point.
     virtual void on_native_bar(const Bar& bar, const NativeDecisionContext& context) = 0;
 
+    // EVERY calculation of the run arrives here first, including the script
+    // bar's own close calculation (reason BarClose, cause nullptr), whose
+    // default forwarding keeps on_native_bar the complete contract for a host
+    // that never opts into another cadence.
+    //
+    // reason OrderFill: one recalculation at an applied execution's cursor,
+    // driven from the applied-notification drain after that event's
+    // on_native_applied and bounded by
+    // NativeRunSpec::max_recalculations_per_point. `cause` is that event and
+    // is valid only for this call. reason Tick: one recalculation at a
+    // modeled path point or an observed print, with a null cause.
+    //
+    // `bar` is the bar the calculation is about: the script bar under
+    // delivery in batch, the print's value bar for a stream Tick. It is the
+    // COMPLETE script bar even mid-path; current_partial_bar() is the
+    // lookahead-free bar so far at this cursor. Commands and
+    // execute_current are legal here exactly as in on_native_applied.
+    virtual void on_native_recalculate(const Bar& bar, const NativeDecisionContext& ctx,
+                                       NativeCalculationReason reason,
+                                       const native_order::ExecutionAppliedEvent* cause) {
+        (void)reason;
+        (void)cause;
+        on_native_bar(bar, ctx);
+    }
+
+    // One completed lower-timeframe sub-bar of an IntrabarPath::lower_tf
+    // path, delivered after that sub-bar's whole matching path and before the
+    // next sub-bar's. Never called for a run without a retained lower feed:
+    // a synthesized path and a plain confirmed bar have no sub-bars of their
+    // own. The decision point is the sub-bar's last modeled point, so
+    // commands and execute_current are legal and a request born here follows
+    // the ordinary birth rule.
+    virtual void on_native_sub_bar(const Bar& sub, const NativeDecisionContext& ctx) {
+        (void)sub;
+        (void)ctx;
+    }
+
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
                                    const NativeDecisionContext&) {}
 
@@ -533,6 +588,22 @@ public:
             const ClosedLotExcursionFacts&) const {
         return {};
     }
+
+    // The bar so far at the current cursor, folded from the modeled points
+    // this script bar has already presented: open of its first point,
+    // running high/low, close at the cursor. Volume is the activity actually
+    // consumed so far — the completed lower-timeframe sub-bars of an
+    // intrabar path, or the prints of an observed stream — and stays 0 for a
+    // modeled path with no intrabar volume of its own. Valid in the bar-open,
+    // applied, tick, sub-bar and recalculation callbacks; nullopt outside a
+    // path walk, including in the bar's own close calculation, where the host
+    // already holds the complete bar.
+    std::optional<Bar> current_partial_bar() const;
+    // How many recalculations the kernel has driven this run, and how many it
+    // suppressed because a point had already spent its
+    // max_recalculations_per_point budget. Observation only.
+    std::uint64_t native_recalculation_count() const;
+    std::uint64_t native_recalculations_skipped() const;
 
     std::optional<NativeCurrentPointView> current_execution_point() const;
     std::optional<NativeTrailState> trail_state(

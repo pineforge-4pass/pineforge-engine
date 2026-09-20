@@ -352,7 +352,8 @@ def check_texts(files):
                    "NativeSlotLabelPolicy", "NativePathOrder",
                    "NativeLegacyTolerance", "NativeReportPolicy",
                    "NativeTimeframeSubscription", "NativeMarginModel",
-                   "NativeLiquidationSizing", "NativeLiquidationCheck"),
+                   "NativeLiquidationSizing", "NativeLiquidationCheck",
+                   "NativeCalculationTrigger", "NativeOpenBarView"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
@@ -381,7 +382,10 @@ def check_texts(files):
             'NativeReportPolicyreport_policy=NativeReportPolicy::HostRecorded;',
             'boolreport_open_position_at_end=false;',
             'std::vector<NativeTimeframeSubscription>subscriptions;',
-            'std::optional<NativeMarginModel>margin;'):
+            'std::optional<NativeMarginModel>margin;',
+            'NativeCalculationTriggercalculation=NativeCalculationTrigger::BarClose;',
+            'std::uint32_tmax_recalculations_per_point=8;',
+            'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
@@ -402,7 +406,8 @@ def check_texts(files):
     for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
                   'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars',
                   'MarginModel', 'MarginInitial', 'MarginMaintenance', 'MarginSizing',
-                  'MarginShortfallMultiple', 'MarginMinUnits', 'MarginCheck'):
+                  'MarginShortfallMultiple', 'MarginMinUnits', 'MarginCheck',
+                  'Calculation', 'OpenBarView'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -414,7 +419,8 @@ def check_texts(files):
                   'InvalidSubscriptionTimeframe', 'SubscriptionFinerThanInput',
                   'DuplicateSubscriptionTimeframe', 'UnorderedSubscriptionBars',
                   'SubscriptionWithoutTimeframe', 'MarginModelConflict',
-                  'UnknownLiquidationSizing', 'UnknownLiquidationCheck'):
+                  'UnknownLiquidationSizing', 'UnknownLiquidationCheck',
+                  'UnknownCalculationTrigger', 'UnknownOpenBarView'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -425,6 +431,8 @@ def check_texts(files):
             or 'spec.abort_reporting' not in spec_src
             or 'spec.report_policy' not in spec_src
             or 'spec.subscriptions' not in spec_src
+            or 'spec.calculation' not in spec_src
+            or 'spec.open_bar_view' not in spec_src
             or 'SubscriptionFinerThanInput' not in spec_src
             or 'spec.margin' not in spec_src
             or 'MarginModelConflict' not in spec_src
@@ -536,7 +544,13 @@ def check_texts(files):
                   'input_callback_context_', 'hash_input_context',
                   'tick_callback_context_', 'hash_tick_context',
                   'invoke_tick_callback(engine, tick_bar, tick_context)',
-                  'staged_ingress_fx_', 'if (failed() && !recoverable_abort())'):
+                  'staged_ingress_fx_', 'if (failed() && !recoverable_abort())',
+                  'bool calc_timing_on(const NativeRunSpec& spec) noexcept {',
+                  'if (calc_timing_on(spec)) {',
+                  'NativeCalculationReason::BarClose',
+                  'NativeCalculationReason::OrderFill',
+                  'host->on_native_sub_bar(sub, presented);',
+                  'NativeOpenBarView::OpenOnly'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
@@ -551,7 +565,8 @@ def check_texts(files):
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
                    "NativeInputContext", "NativeTickContext",
-                   "NativeTimeframeBarContext", "NativeMarginCallView"),
+                   "NativeTimeframeBarContext", "NativeMarginCallView",
+                   "NativeCalculationReason"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
@@ -648,6 +663,14 @@ def check_texts(files):
          r'\s*const\s+native_order::MarginCallEvent\s*&', "on_native_margin_call"),
         (r'\bstd::optional\s*<\s*double\s*>\s+native_liquidation_price\s*\('
          r'\s*\)\s*const\s*;', "native_liquidation_price"),
+        (r'\bvirtual\s+void\s+on_native_recalculate\s*\('
+         r'\s*const\s+Bar\s*&\s*\w*\s*,\s*const\s+NativeDecisionContext\s*&',
+         "on_native_recalculate"),
+        (r'\bvirtual\s+void\s+on_native_sub_bar\s*\('
+         r'\s*const\s+Bar\s*&\s*\w*\s*,\s*const\s+NativeDecisionContext\s*&',
+         "on_native_sub_bar"),
+        (r'\bstd::optional\s*<\s*Bar\s*>\s+current_partial_bar\s*\(\s*\)\s*const\s*;',
+         "current_partial_bar"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
@@ -678,7 +701,10 @@ def check_texts(files):
              "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
              "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state",
              "NativeStrategyHost::native_series_bar",
-             "NativeStrategyHost::native_liquidation_price"),
+             "NativeStrategyHost::native_liquidation_price",
+             "NativeStrategyHost::current_partial_bar",
+             "NativeStrategyHost::native_recalculation_count",
+             "NativeStrategyHost::native_recalculations_skipped"),
             "engine_script_run_v18", r'\bNAME\s*\(')
 
 

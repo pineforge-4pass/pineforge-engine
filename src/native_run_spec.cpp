@@ -99,6 +99,25 @@ bool valid_report_policy(NativeReportPolicy policy) noexcept {
     return false;
 }
 
+bool valid_calculation_trigger(NativeCalculationTrigger trigger) noexcept {
+    switch (trigger) {
+    case NativeCalculationTrigger::BarClose:
+    case NativeCalculationTrigger::BarCloseAndFills:
+    case NativeCalculationTrigger::EveryModeledPoint:
+        return true;
+    }
+    return false;
+}
+
+bool valid_open_bar_view(NativeOpenBarView view) noexcept {
+    switch (view) {
+    case NativeOpenBarView::Complete:
+    case NativeOpenBarView::OpenOnly:
+        return true;
+    }
+    return false;
+}
+
 bool valid_path_order(NativePathOrder order) noexcept {
     switch (order) {
     case NativePathOrder::Auto:
@@ -319,6 +338,12 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     if (const auto margin = validate_margin(spec); !margin) return margin;
     if (!valid_report_policy(spec.report_policy))
         return {Error::UnknownReportPolicy, Field::ReportPolicy};
+    // L5 calculation timing. Every bound is legal, including zero: a host may
+    // ask for the fills to be delivered without ever driving a recalculation.
+    if (!valid_calculation_trigger(spec.calculation))
+        return {Error::UnknownCalculationTrigger, Field::Calculation};
+    if (!valid_open_bar_view(spec.open_bar_view))
+        return {Error::UnknownOpenBarView, Field::OpenBarView};
     if (!spec.subscriptions.empty() && spec.timeframe_undetected) {
         return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
     }

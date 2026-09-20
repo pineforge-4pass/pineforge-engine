@@ -54,6 +54,39 @@ enum class NativeOpenDirections : std::uint32_t {
     Both = 3,
 };
 
+// When the kernel asks the host to calculate. BarClose is the whole default
+// surface: exactly one calculation per script bar, at its close, which is
+// what every host that drives its own cadence already gets. The other two
+// are a strict superset of the one before them, so a host never loses the
+// close calculation by opting in.
+//
+// BarCloseAndFills additionally recalculates once at the cursor of each
+// applied execution, from the existing applied-notification drain and
+// bounded by max_recalculations_per_point. EveryModeledPoint additionally
+// recalculates at every modeled point of the delivered path (each confirmed
+// OHLC waypoint, each intrabar sample) and at every observed print.
+//
+// This is a generic cadence, not a source-language policy: TradingView's
+// waypoint-only COOF refill, its two-fills-at-open rule and its script-state
+// rollback stay in the source layer, which never sets this field.
+enum class NativeCalculationTrigger : std::uint32_t {
+    BarClose = 0,
+    BarCloseAndFills = 1,
+    EveryModeledPoint = 2,
+};
+
+// What a bar-open callback is handed. Complete keeps the established view:
+// on_native_bar_open receives the whole script bar, which is what a host that
+// schedules against the bar's own high/low needs. OpenOnly masks that
+// lookahead for hosts that must decide at the open with open-only
+// information: H = L = C = open and volume 0. It changes no matching, no
+// fill and no other callback; mid-bar callbacks answer current_partial_bar()
+// for the lookahead-free bar so far.
+enum class NativeOpenBarView : std::uint32_t {
+    Complete = 0,
+    OpenOnly = 1,
+};
+
 // A generic instrument price grid. The kernel otherwise treats price_tick as
 // the slippage multiplier only, so an unset grid leaves every booked price
 // exactly as the path presented it. QuantizeFills books the fill on the tick
@@ -299,6 +332,19 @@ struct NativeRunSpec {
     // book, the realized sums and every hash are left exactly as the run left
     // them. Inert under HostRecorded, whose host owns the whole report series.
     bool report_open_position_at_end = false;
+    // Calculation timing. BarClose is the established cadence and the whole
+    // default surface; the other triggers only add calculations, never move
+    // or remove one. max_recalculations_per_point bounds the fill cascade at
+    // one matching point: further executions at that point are still applied
+    // and still delivered to on_native_applied, they just stop driving a new
+    // calculation. Zero is a legal bound and means "deliver, never
+    // recalculate". All three fold into the continuation hash only once the
+    // trigger or the open-bar view is non-default, so a spec that leaves the
+    // cadence alone keeps the continuation identity it had before these
+    // fields existed.
+    NativeCalculationTrigger calculation = NativeCalculationTrigger::BarClose;
+    std::uint32_t max_recalculations_per_point = 8;
+    NativeOpenBarView open_bar_view = NativeOpenBarView::Complete;
     IntrabarPath intrabar{};
     // Declared higher-timeframe series. Empty is the whole default surface:
     // no evaluator is registered, no feed is prepared, and the run spec's
@@ -324,6 +370,7 @@ enum class NativeRunSpecField : std::uint8_t {
     SubscriptionTimeframe, SubscriptionBars,
     MarginModel, MarginInitial, MarginMaintenance, MarginSizing,
     MarginShortfallMultiple, MarginMinUnits, MarginCheck,
+    Calculation, OpenBarView,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -374,6 +421,9 @@ enum class NativeRunSpecError : std::uint8_t {
     MarginModelConflict,
     UnknownLiquidationSizing,
     UnknownLiquidationCheck,
+    // A calculation trigger / open-bar view outside its enumeration.
+    UnknownCalculationTrigger,
+    UnknownOpenBarView,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.

@@ -97,6 +97,12 @@ public:
     uint64_t high_water() const noexcept { return consumed_high_water_; }
     void reject_inherited_on_bar(BacktestEngine& engine);
     std::optional<Bar> series_bar(std::size_t subscription) const;
+    // L5 calculation timing readbacks. The partial bar is the lookahead-free
+    // bar so far at the current cursor; the two counters are observation of
+    // the recalculation cadence, never matching state.
+    std::optional<Bar> partial_bar() const;
+    uint64_t recalculation_count() const noexcept { return recalculations_; }
+    uint64_t recalculations_skipped() const noexcept { return recalculations_skipped_; }
 
 private:
     struct CurrentExecutionFrame {
@@ -333,6 +339,41 @@ private:
     void apply_excursion(BacktestEngine& engine, double price);
     void invoke_bar_open_callback(BacktestEngine& engine, const Bar& bar,
                                   const NativeDriverPoint& point);
+    // L5 calculation timing. Every calculation of the run is routed through
+    // invoke_recalculation, whose BarClose reason is the script bar's own
+    // calculation; the default host forwarding keeps on_native_bar exactly
+    // what it was. A recalculation never records a report point: only the
+    // script calculation does (record_script_report_point).
+    void invoke_recalculation(BacktestEngine& engine, const Bar& bar,
+                              NativeCalculationReason reason,
+                              const native_order::ExecutionAppliedEvent* cause);
+    // One Tick recalculation at a modeled path point / observed print, for a
+    // spec that asked for EveryModeledPoint. Inert for every other spec.
+    void recalculate_at_point(BacktestEngine& engine, const Bar& bar,
+                              const NativeDriverPoint& point);
+    void invoke_sub_bar_callback(BacktestEngine& engine, const Bar& sub,
+                                 const NativeDriverPoint& point);
+    // Frame bookkeeping shared by the mid-path callbacks above and by
+    // invoke_applied_callback: one owning current point, one decision
+    // context, and the engine's callback timestamp.
+    void enter_point_frame(BacktestEngine& engine, const NativeCurrentPointView& point,
+                           CallbackPhase phase);
+    NativeCurrentPointView point_frame_view(const NativeDriverPoint& point) const;
+    const Bar& calculating_bar(const BacktestEngine& engine) const noexcept;
+    NativeCalculationTrigger calculation_trigger() const noexcept;
+    bool recalculates_on_fills() const noexcept;
+    // The lookahead-free bar so far. Folded from the modeled points as they
+    // are presented, keyed by the script bar's own open so a new script bar
+    // always restarts it; `volume` accrues only activity actually consumed
+    // (completed lower sub-bars, observed prints).
+    void note_partial_point(int64_t script_open_ms, double price, double volume_delta);
+    void clear_partial() noexcept;
+    // One matching point's recalculation budget. Points are identified by a
+    // monotone epoch raised whenever the consumer establishes a new cursor,
+    // so executions a callback drives through execute_current at that same
+    // cursor spend the same budget as the matched fill that started them.
+    void open_point_epoch() noexcept;
+    bool claim_recalculation() noexcept;
     bool invoke_input_callback(BacktestEngine& engine, const Bar& bar,
                                const NativeInputContext& context);
     bool invoke_tick_callback(BacktestEngine& engine, const Bar& bar,
@@ -537,6 +578,26 @@ private:
     // not set that gate, preserving their established fingerprint while the
     // new generic authority remains hash-visible for native hosts.
     mutable AppendDigest precommit_digest_{};
+    // L5 calculation timing. All of this is derived observation over the
+    // already hashed driver/notification state: the partial bar is the fold
+    // of points the driver log already holds, the epoch is a cursor counter,
+    // and the two totals are readbacks. They fold into the continuation
+    // digest only for a spec that actually opted into a non-default cadence,
+    // so a default spec keeps the continuation identity it had before this
+    // lane (the precommit_digest_ precedent).
+    Bar partial_{};
+    bool partial_has_ = false;
+    // The bar a mid-path callback is calculating: the script bar under
+    // delivery in batch, the print's value bar in a stream. Borrowed nowhere:
+    // it is an owning copy taken when delivery begins.
+    Bar calculating_bar_{};
+    bool calculating_bar_has_ = false;
+    int64_t partial_script_open_ms_ = 0;
+    uint64_t point_epoch_ = 0;
+    uint64_t recalc_epoch_ = 0;
+    uint32_t recalc_epoch_count_ = 0;
+    uint64_t recalculations_ = 0;
+    uint64_t recalculations_skipped_ = 0;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

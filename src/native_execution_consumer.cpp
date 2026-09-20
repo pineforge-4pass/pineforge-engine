@@ -94,6 +94,15 @@ native_matching::GridThreshold grid_threshold(const NativeRunSpec& spec) noexcep
     return grid;
 }
 
+// L5 calculation timing. A spec that leaves both the trigger and the
+// open-bar view at their defaults is exactly the pre-lane surface: no
+// recalculation is driven, no bar is masked, and nothing of this block is
+// folded into the continuation digest.
+bool calc_timing_on(const NativeRunSpec& spec) noexcept {
+    return spec.calculation != NativeCalculationTrigger::BarClose
+        || spec.open_bar_view != NativeOpenBarView::Complete;
+}
+
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number - f.run_base);
     f.s(spec.input_tf); f.s(spec.script_tf);
@@ -141,6 +150,15 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     // before it existed survives this spec extension unchanged.
     if (spec.margin) {
         f.u(native_margin_model_digest(*spec.margin));
+    }
+    // L5: the calculation cadence folds only where a host actually moved it
+    // off BarClose/Complete. A defaulted cadence folds nothing, including its
+    // inert recalculation bound, so every established continuation hash
+    // survives this spec extension unchanged.
+    if (calc_timing_on(spec)) {
+        f.u(static_cast<uint64_t>(spec.calculation));
+        f.u(spec.max_recalculations_per_point);
+        f.u(static_cast<uint64_t>(spec.open_bar_view));
     }
 }
 
@@ -1328,7 +1346,23 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(processing_input_);
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
-    if (const auto* spec = spec_ptr()) hash_spec(f, *spec);
+    if (const auto* spec = spec_ptr()) {
+        hash_spec(f, *spec);
+        // L5: the recalculation cadence is durable decision state only for a
+        // spec that opted into it. Folding it conditionally keeps a default
+        // run's continuation identity byte-identical to the pre-lane tree.
+        if (calc_timing_on(*spec)) {
+            f.u(recalc_epoch_);
+            f.u(recalc_epoch_count_);
+            f.u(recalculations_);
+            f.u(recalculations_skipped_);
+            f.b(partial_has_);
+            if (partial_has_) {
+                hash_bar(f, partial_);
+                f.i(partial_script_open_ms_);
+            }
+        }
+    }
     f.b(staged_ingress_fx_);
     f.b(staged_fx_curve_.has_value());
     if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
@@ -1791,6 +1825,14 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     margin_point_calls_ = 0;
     driver_statistics_ = NativeDriverStatistics{};
     driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
+    clear_partial();
+    calculating_bar_ = Bar{};
+    calculating_bar_has_ = false;
+    point_epoch_ = 0;
+    recalc_epoch_ = 0;
+    recalc_epoch_count_ = 0;
+    recalculations_ = 0;
+    recalculations_skipped_ = 0;
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
     input_callback_context_.reset();
@@ -3870,6 +3912,8 @@ void NativeExecutionConsumer::match_path(
         BacktestEngine& engine, const NativeDriverPoint& point,
         bool continuous, double from_price, double to_price) {
     if (failed()) return;
+    // Every matching cursor is its own recalculation budget (L5).
+    open_point_epoch();
     if (point.coordinate.provenance == NativePriceProvenance::CurrentExecution) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
                                    point.coordinate.ordinal});
@@ -4885,6 +4929,197 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     }
 }
 
+// ---------------------------------------------------------------------------
+// L5 calculation timing
+//
+// The chronology at one point is the established one with exactly one
+// addition. Match and settle, then drain the applied notifications FIFO under
+// the existing re-entrancy guard, delivering on_native_applied for each; a
+// spec that asked for BarCloseAndFills (or above) then drives ONE
+// recalculation at that event's own cursor, bounded by
+// max_recalculations_per_point for the point. A request born in any of these
+// callbacks keeps the existing birth rule: born_on_remaining_path and the
+// drain order are untouched. A recalculation never records a report point —
+// only the script calculation does.
+// ---------------------------------------------------------------------------
+
+NativeCalculationTrigger NativeExecutionConsumer::calculation_trigger() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec ? spec->calculation : NativeCalculationTrigger::BarClose;
+}
+
+bool NativeExecutionConsumer::recalculates_on_fills() const noexcept {
+    const auto trigger = calculation_trigger();
+    return trigger == NativeCalculationTrigger::BarCloseAndFills
+        || trigger == NativeCalculationTrigger::EveryModeledPoint;
+}
+
+void NativeExecutionConsumer::open_point_epoch() noexcept { ++point_epoch_; }
+
+bool NativeExecutionConsumer::claim_recalculation() noexcept {
+    const auto* spec = spec_ptr();
+    const uint32_t budget = spec ? spec->max_recalculations_per_point : 0;
+    if (recalc_epoch_ != point_epoch_) {
+        recalc_epoch_ = point_epoch_;
+        recalc_epoch_count_ = 0;
+    }
+    if (recalc_epoch_count_ >= budget) {
+        ++recalculations_skipped_;
+        return false;
+    }
+    ++recalc_epoch_count_;
+    return true;
+}
+
+void NativeExecutionConsumer::note_partial_point(
+        int64_t script_open_ms, double price, double volume_delta) {
+    if (!std::isfinite(price)) return;
+    if (!partial_has_ || partial_script_open_ms_ != script_open_ms) {
+        partial_ = Bar{price, price, price, price, 0.0, script_open_ms};
+        partial_script_open_ms_ = script_open_ms;
+        partial_has_ = true;
+    } else {
+        if (price > partial_.high) partial_.high = price;
+        if (price < partial_.low) partial_.low = price;
+        partial_.close = price;
+    }
+    if (volume_delta > 0.0 && std::isfinite(volume_delta)) partial_.volume += volume_delta;
+}
+
+void NativeExecutionConsumer::clear_partial() noexcept {
+    partial_has_ = false;
+    partial_ = Bar{};
+    partial_script_open_ms_ = 0;
+}
+
+std::optional<Bar> NativeExecutionConsumer::partial_bar() const {
+    if (!partial_has_) return std::nullopt;
+    return partial_;
+}
+
+NativeCurrentPointView NativeExecutionConsumer::point_frame_view(
+        const NativeDriverPoint& point) const {
+    NativeCurrentPointView view;
+    // The delivery loop already owns this bar's sub-bar labels and driver
+    // statistics; only the cursor's own facts are replaced here.
+    view.decision = callback_context_;
+    view.decision.coordinate = point.coordinate;
+    view.decision.decision_floor_ms = decision_floor();
+    if (auto input = input_interval_at(point.coordinate.open_ms))
+        view.decision.input_interval = *input;
+    if (auto script = script_interval_at(point.coordinate.open_ms))
+        view.decision.script_interval = *script;
+    view.price = point.raw_price;
+    view.quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    view.quote_origin_ordinal = point.coordinate.ordinal;
+    return view;
+}
+
+void NativeExecutionConsumer::enter_point_frame(
+        BacktestEngine& engine, const NativeCurrentPointView& point, CallbackPhase phase) {
+    current_frame_ = CurrentExecutionFrame{point, next_timeline_ordinal_ - 1};
+    callback_context_ = point.decision;
+    callback_context_.decision_floor_ms = decision_floor();
+    current_frame_->point.decision.decision_floor_ms = decision_floor();
+    engine.current_bar_.timestamp = std::max(
+        point.decision.coordinate.effective_time_ms, decision_floor());
+    in_callback_ = true;
+    callback_phase_ = phase;
+}
+
+void NativeExecutionConsumer::invoke_recalculation(
+        BacktestEngine& engine, const Bar& bar, NativeCalculationReason reason,
+        const native_order::ExecutionAppliedEvent* cause) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        return;
+    }
+    const uint64_t ordinal = callback_context_.coordinate.ordinal;
+    ++recalculations_;
+    try {
+        const NativeDecisionContext presented = callback_context_;
+        host->on_native_recalculate(bar, presented, reason, cause);
+    } catch (const std::bad_alloc& e) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Callback, ordinal});
+        render(engine, e.what());
+        return;
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+            NativeFailureOperation::Callback, ordinal});
+        render(engine, e.what());
+        return;
+    } catch (...) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+            NativeFailureOperation::Callback, ordinal});
+        return;
+    }
+    finish_callback(engine, ordinal);
+}
+
+const Bar& NativeExecutionConsumer::calculating_bar(const BacktestEngine& engine) const noexcept {
+    return calculating_bar_has_ ? calculating_bar_ : engine.current_bar_;
+}
+
+void NativeExecutionConsumer::recalculate_at_point(
+        BacktestEngine& engine, const Bar& bar, const NativeDriverPoint& point) {
+    if (failed()) return;
+    if (calculation_trigger() != NativeCalculationTrigger::EveryModeledPoint) return;
+    if (in_callback_ || consuming_request_ || draining_notifications_) return;
+    enter_point_frame(engine, point_frame_view(point), CallbackPhase::Tick);
+    invoke_recalculation(engine, bar, NativeCalculationReason::Tick, nullptr);
+}
+
+void NativeExecutionConsumer::invoke_sub_bar_callback(
+        BacktestEngine& engine, const Bar& sub, const NativeDriverPoint& point) {
+    if (failed()) return;
+    if (in_callback_ || consuming_request_ || draining_notifications_) return;
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return;
+    enter_point_frame(engine, point_frame_view(point), CallbackPhase::Tick);
+    const uint64_t ordinal = callback_context_.coordinate.ordinal;
+    try {
+        const NativeDecisionContext presented = callback_context_;
+        host->on_native_sub_bar(sub, presented);
+    } catch (const std::bad_alloc& e) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Callback, ordinal});
+        render(engine, e.what());
+        return;
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+            NativeFailureOperation::Callback, ordinal});
+        render(engine, e.what());
+        return;
+    } catch (...) {
+        in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
+        current_frame_.reset();
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+            NativeFailureOperation::Callback, ordinal});
+        return;
+    }
+    finish_callback(engine, ordinal);
+}
+
 void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification notification) {
     applied_notifications_.push_back(std::move(notification));
 }
@@ -4960,6 +5195,18 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
         const auto notification = applied_notifications_[notification_head_++];
         raise_floor(notification.point.decision.coordinate.effective_time_ms);
         invoke_applied_callback(engine, notification);
+        if (failed() || !recalculates_on_fills()) continue;
+        // The event is delivered whatever the budget says; only the
+        // recalculation it would drive is dropped once this point has spent
+        // max_recalculations_per_point. Executions the callback drives
+        // through execute_current land at the same cursor, so they spend the
+        // same point's budget and the cascade is bounded.
+        if (!claim_recalculation()) continue;
+        const auto applied = std::get<native_order::ExecutionAppliedEvent>(
+            requests_.history().at(notification.history_index));
+        enter_point_frame(engine, notification.point, CallbackPhase::Applied);
+        invoke_recalculation(engine, calculating_bar(engine),
+                             NativeCalculationReason::OrderFill, &applied);
     }
     draining_notifications_ = false;
     if (!failed()) {
@@ -5005,13 +5252,24 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     current.quote_kind = NativeCurrentQuoteKind::MarketDecision;
     current.quote_origin_ordinal = point.coordinate.ordinal;
     current_frame_ = CurrentExecutionFrame{current, next_timeline_ordinal_ - 1};
-    engine.current_bar_ = bar;
+    open_point_epoch();
+    // L5 open-bar view. OpenOnly masks this one callback's lookahead: the
+    // host sees H = L = C = open and no volume, and so does current_bar_
+    // while the callback runs. Nothing else moves — the complete bar is
+    // restored before the open match, so matching, fills and every later
+    // callback are exactly what Complete presents.
+    const auto* view_spec = spec_ptr();
+    const bool open_only = view_spec
+        && view_spec->open_bar_view == NativeOpenBarView::OpenOnly;
+    const Bar open_view = open_only
+        ? Bar{bar.open, bar.open, bar.open, bar.open, 0.0, bar.timestamp} : bar;
+    engine.current_bar_ = open_view;
     engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
     in_callback_ = true;
     callback_phase_ = CallbackPhase::PreOpen;
     try {
         const NativeDecisionContext presented = callback_context_;
-        host->on_native_bar_open(bar, presented);
+        host->on_native_bar_open(open_view, presented);
     } catch (const std::exception& e) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
@@ -5034,6 +5292,11 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
             render(engine, "native bar-open callback exception");
         }
         return;
+    }
+    if (open_only) {
+        const int64_t stamp = engine.current_bar_.timestamp;
+        engine.current_bar_ = bar;
+        engine.current_bar_.timestamp = stamp;
     }
     finish_callback(engine, point.coordinate.ordinal);
 }
@@ -5156,9 +5419,14 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     current_frame_ = CurrentExecutionFrame{point, next_timeline_ordinal_ - 1};
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Bar;
+    open_point_epoch();
     try {
         const NativeDecisionContext presented = callback_context_;
-        host->on_native_bar(bar, presented);
+        // L5: every calculation of the run is routed here. The default
+        // on_native_recalculate forwards to on_native_bar, so a host that
+        // never opted into another cadence sees exactly its own contract.
+        host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
+                                    nullptr);
     } catch (const std::exception& e) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
@@ -5190,6 +5458,8 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
                                                        const NativeCoordinate& base) {
     const auto* spec = spec_ptr();
+    calculating_bar_ = bar;
+    calculating_bar_has_ = true;
     const bool high_first = path_uses_high_first(
         bar, spec ? spec->path_order : NativePathOrder::Auto);
     // L4 publishes this script bar's modeled waypoints so the margin model can
@@ -5219,6 +5489,9 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         point.matching = matching;
         record_driver(point);
         if (phase == NativePathPhase::Open) {
+            // A discrete point IS its own cursor, so the bar so far is folded
+            // before the callbacks that decide at it.
+            note_partial_point(base.open_ms, price, 0.0);
             invoke_bar_open_callback(engine, bar, point);
             if (failed()) return;
             maintain_margin_liquidation(engine, make_cursor(point, 0.0), phase, price);
@@ -5226,6 +5499,8 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         }
         match_discrete(engine, point);
         raise_floor(time);
+        if (provenance != NativePriceProvenance::AfterCalculationClose)
+            recalculate_at_point(engine, bar, point);
     };
     auto emit_segment = [&](double from, double to, int64_t time, NativePathPhase phase) {
         NativeDriverPoint point;
@@ -5240,7 +5515,11 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         point.excursion = true;
         record_driver(point);
         match_segment(engine, point, from);
+        // A segment's destination is only reached once the segment has been
+        // consumed, so the bar so far never runs ahead of the cursor.
+        note_partial_point(base.open_ms, to, 0.0);
         raise_floor(time);
+        recalculate_at_point(engine, bar, point);
     };
     const int64_t open_time = script_.first_source_time_ms != 0
         ? script_.first_source_time_ms
@@ -5278,6 +5557,7 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     engine.current_bar_ = bar;
     engine.bar_index_ = calc.interval_index;
     engine.current_bar_.timestamp = close_time;
+    clear_partial();
     invoke_callback(engine, bar, calc);
     if (failed()) return;
     if (spec && spec->close_execution == NativeCloseExecution::AfterCalculation) {
@@ -5325,6 +5605,8 @@ void NativeExecutionConsumer::deliver_intrabar_script(
 
     Bar script_bar = bar;
     script_bar.timestamp = base.open_ms;
+    calculating_bar_ = script_bar;
+    calculating_bar_has_ = true;
     const int sample_count = lower ? lower->samples : synthesized->samples;
     const auto distribution = lower ? lower->distribution : synthesized->distribution;
     const bool volume_weighted = lower ? lower->volume_weighted : synthesized->volume_weighted;
@@ -5349,6 +5631,7 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     const bool distribution_samples = synthesized || lower->sample_eligibility
         == IntrabarPath::SampleEligibility::DistributionSamples;
 
+    NativeDriverPoint sub_last_point{};
     for (std::size_t sub_index = 0; sub_index < sub_bars.size(); ++sub_index) {
         const Bar& sub = *sub_bars[sub_index];
         callback_context_.sub_index = static_cast<int>(sub_index);
@@ -5419,6 +5702,12 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             point.matching = distribution_samples || sample_index == 0;
             point.excursion = sample_index != 0;
             record_driver(point);
+            // Same rule as the confirmed path: a discrete sample is its own
+            // cursor and folds before its callbacks, a segment folds after it
+            // has been consumed.
+            if (distribution_samples || sample_index == 0) {
+                note_partial_point(base.open_ms, price, 0.0);
+            }
             if (sub_index == 0 && sample_index == 0) {
                 invoke_bar_open_callback(engine, script_bar, point);
                 if (failed()) return;
@@ -5432,10 +5721,22 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                 if (!failed()) apply_excursion(engine, price);
             } else {
                 match_segment(engine, point, previous);
+                if (!failed()) note_partial_point(base.open_ms, price, 0.0);
             }
             if (failed()) return;
             raise_floor(sub.timestamp);
+            recalculate_at_point(engine, script_bar, point);
+            if (failed()) return;
+            sub_last_point = point;
             previous = price;
+        }
+        // CT8/HT3: one hook per completed lower-timeframe sub-bar, after its
+        // whole path. A synthesized path has no lower bars of its own — its
+        // single "sub-bar" IS the script bar — so it never fires here.
+        if (lower) {
+            note_partial_point(base.open_ms, previous, sub.volume);
+            invoke_sub_bar_callback(engine, sub, sub_last_point);
+            if (failed()) return;
         }
     }
 
@@ -5453,6 +5754,7 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     engine.current_bar_ = script_bar;
     engine.bar_index_ = calculation.interval_index;
     engine.current_bar_.timestamp = calculation.effective_time_ms;
+    clear_partial();
     invoke_callback(engine, script_bar, calculation);
     if (failed()) return;
     if (spec->close_execution == NativeCloseExecution::AfterCalculation) {
@@ -5524,6 +5826,8 @@ void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& e
 
 void NativeExecutionConsumer::deliver_aggregate_calculation(
         BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base) {
+    calculating_bar_ = bar;
+    calculating_bar_has_ = true;
     callback_context_ = NativeDecisionContext{};
     callback_context_.sub_index = 0;
     callback_context_.sub_count = 1;
@@ -5541,6 +5845,7 @@ void NativeExecutionConsumer::deliver_aggregate_calculation(
     engine.current_bar_ = bar;
     engine.bar_index_ = calc.interval_index;
     engine.current_bar_.timestamp = close_time;
+    clear_partial();
     invoke_callback(engine, bar, calc);
     if (failed()) return;
     const auto* spec = spec_ptr();
@@ -6443,6 +6748,9 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
             calc.ordinal = take_ordinal(engine);
             raise_floor(calc.effective_time_ms);
             engine.current_bar_ = forming_;
+            calculating_bar_ = forming_;
+            calculating_bar_has_ = true;
+            clear_partial();
             invoke_callback(engine, forming_, calc);
             if (failed()) return false;
             const auto* spec = spec_ptr();
@@ -6548,6 +6856,11 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     tick_context.sequence = tick.sequence;
     const Bar tick_bar{tick.price, tick.price, tick.price, tick.price,
                        tick.quantity, tick.timestamp};
+    calculating_bar_ = tick_bar;
+    calculating_bar_has_ = true;
+    // The print is the cursor, and it is real traded activity: the bar so far
+    // folds its price and its quantity before the observation hook runs.
+    note_partial_point(tick_context.decision.script_bar_open_ms, tick.price, tick.quantity);
     if (!invoke_tick_callback(engine, tick_bar, tick_context)) {
         processing_input_ = false;
         return false;
@@ -6555,6 +6868,11 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     match_point(engine, point);
     apply_excursion(engine, tick.price);
     raise_floor(tick.timestamp);
+    recalculate_at_point(engine, tick_bar, point);
+    if (failed()) {
+        processing_input_ = false;
+        return false;
+    }
     last_price_ = tick.price;
     has_last_price_ = true;
     last_print_time_ms_ = tick.timestamp;
@@ -7155,6 +7473,21 @@ NativeFxCurveSetupResult NativeStrategyHost::configure_native_fx_curve(
 std::optional<Bar> NativeStrategyHost::native_series_bar(std::size_t subscription) const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .series_bar(subscription);
+}
+
+std::optional<Bar> NativeStrategyHost::current_partial_bar() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .partial_bar();
+}
+
+std::uint64_t NativeStrategyHost::native_recalculation_count() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .recalculation_count();
+}
+
+std::uint64_t NativeStrategyHost::native_recalculations_skipped() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .recalculations_skipped();
 }
 
 NativeStateView NativeStrategyHost::native_state() const {

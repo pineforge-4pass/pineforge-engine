@@ -51,6 +51,7 @@ def verify(include: Path) -> dict:
     required_virtuals = {
         "prepare_native_begin", "on_native_bar_open", "on_native_input",
         "on_native_tick", "on_native_timeframe_bar", "on_native_margin_call",
+        "on_native_recalculate", "on_native_sub_bar",
     }
     if not required_virtuals.issubset(set(manifest.get("addedVirtuals", []))):
         raise RuntimeError("relocation manifest omits a native hook")
