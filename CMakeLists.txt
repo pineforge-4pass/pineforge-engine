@@ -96,6 +96,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/compat/pine/order_priority.cpp
     src/compat/pine/reservation_expansion.cpp
     src/source/pine_adapter.cpp
+    src/source/pine_path_resolve.cpp
     src/source/pine_scheduler_native.cpp
     src/source/pine_scheduler.cpp
     src/source/pine_strategy_host.cpp
