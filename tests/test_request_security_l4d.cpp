@@ -110,7 +110,7 @@ public:
         // The lower-TF-array helper pins flags off; flip them back on
         // here to drive the unsupported-flag rejection path.
         if (!security_eval_states_.empty()) {
-            security_eval_states_.back().lookahead_on = lookahead_on;
+            pine_security_states_[0].lookahead_on = lookahead_on;
             security_eval_states_.back().gaps_on = gaps_on;
         }
     }

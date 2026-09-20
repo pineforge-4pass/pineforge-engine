@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,27 @@
 #define PINEFORGE_HAS_NATIVE_LOWERING_V1 1
 
 namespace pineforge::source {
+
+// Hash domain of the per-site request.security semantics below. Folded into
+// the source extension only when a site is registered, so a run without
+// request.security hashes exactly as before; bumped whenever the folded
+// field set changes.
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v1";
+
+// Pine's publication semantics for ONE request.security site, kept beside the
+// kernel's generic evaluator state of the same sec_id
+// (BacktestEngine::SecurityEvalState: aggregator, current bar, feed counts,
+// native feed routing). The kernel evaluator knows none of these rules; this
+// host composes them around the kernel's aggregation, substitution and
+// dispatch primitives (src/source/pine_security_eval.cpp).
+struct PineSecurityEvalState {
+    // barmerge.lookahead_on: the site reads the in-progress requested bucket.
+    // Every input peeks the running aggregate (a partial evaluation), a
+    // completion rewrites the slot its first peek opened instead of opening a
+    // second one, and generated TA sites take their recompute path on every
+    // sub-bar after a bucket's first (security_series_slot_is_new).
+    bool lookahead_on = false;
+};
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
 public:
@@ -400,6 +422,13 @@ private:
     // (src/source/pine_security_eval.cpp).
     void pine_feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
                                        bool calling_bar_complete = false);
+    // The site's Pine semantics; a sec_id registered outside this host's
+    // register_security_eval (none today) reads as a plain site.
+    PineSecurityEvalState& pine_security_state(int sec_id) {
+        return pine_security_states_[sec_id];
+    }
+    // Drops the entries of sec_ids the evaluator registry no longer holds.
+    void prune_pine_security_states();
     void scheduler_record_range_end(const Bar&);
     // One report point per published source slot. The kernel records it
     // (NativeReportPolicy::KernelRecordedAtHostMarks); this host owns only
@@ -480,6 +509,12 @@ protected:
     std::vector<std::size_t> aux_security_chart_begin_;
     std::vector<std::size_t> aux_security_chart_end_;
 #endif
+    // Per-sec_id request.security semantics (PineSecurityEvalState), keyed and
+    // folded in sec_id order. An entry lives exactly as long as the kernel
+    // evaluator state registered under the same sec_id: generated
+    // configure_security_evaluators() opens with security_eval_states_.clear(),
+    // so the first registration into an empty registry starts this table over.
+    std::map<int, PineSecurityEvalState> pine_security_states_;
     // @source-state end
 
     // Provider configuration, not book state: it is staged before a run and

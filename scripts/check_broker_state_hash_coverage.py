@@ -30,7 +30,7 @@ NESTED_STRUCTS = {
     "DelayedMarketOrder", "PendingSameBarCommand", "SourceShadowPending",
     "PendingRelativeExit", "PendingCoofRequest", "PendingMarginRevival",
     "NamedEntryCancelToken", "CloseCallsiteState", "RetainedBegin",
-    "DeferredBoundaryInput",
+    "DeferredBoundaryInput", "PineSecurityEvalState",
 }
 
 # These three DELTA-review defects belong to the concurrently landing hash
@@ -207,6 +207,12 @@ def main(root: Path = ROOT) -> int:
                      "source hash domain")
         require_once(stream_hash, "integer(18); integer(broker_state_hash());",
                      "stream v18 fold")
+        host_header = (root / "include/pineforge/source/pine_strategy_host.hpp").read_text()
+        require_once(host_header,
+                     'kSourceSecurityDomain[] = "pineforge-source-security/v1"',
+                     "source request.security hash domain")
+        require_once(source_hash, "f.s(kSourceSecurityDomain);",
+                     "source request.security hash fold")
         if "if (false) { integer(18); integer(broker_state_hash()); }" in stream_hash:
             raise ValueError("stream v18 fold must be unconditional")
         if "void source::PineStrategyHost::hash_source_extension" not in source_hash:

@@ -616,6 +616,17 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.u(aux_security_chart_end_.size());
     for (const auto value : aux_security_chart_end_) f.u(value);
 #endif
+    // Per-site request.security semantics, in sec_id order. Folded under
+    // their own domain and only when a site is registered, so a run without
+    // request.security keeps the hash it had.
+    if (!pine_security_states_.empty()) {
+        f.s(kSourceSecurityDomain);
+        f.u(pine_security_states_.size());
+        for (const auto& [sec_id, pine] : pine_security_states_) {
+            f.i(sec_id);
+            f.b(pine.lookahead_on);
+        }
+    }
     // The margin slice's sampling chronology is resolved once per pending
     // slice in the precommit pass and read back by the host's own excursion
     // sampler at settlement, so it is folded rather than waived.

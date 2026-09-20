@@ -17,7 +17,8 @@
     "PyramidEntry::ordinary_market_open",
     "PyramidEntry::pooc_terminal_market_entry",
     "PyramidEntry::ordinary_stop_open",
-    "BacktestEngine::margin_call_enabled_"
+    "BacktestEngine::margin_call_enabled_",
+    "BacktestEngine::SecurityEvalState::lookahead_on"
   ],
   "addedStorage": [],
   "addedValueMembers": [

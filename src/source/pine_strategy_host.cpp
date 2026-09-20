@@ -977,9 +977,6 @@ bool source::PineStrategyHost::history_advances_new_bar() const noexcept {
     return scheduler_.history_advances_new_bar();
 }
 
-bool source::PineStrategyHost::security_series_slot_is_new(int slot) const noexcept {
-    return BacktestEngine::security_series_slot_is_new(slot);
-}
 
 double source::PineStrategyHost::prev_chart_close() const {
     return scheduler_.previous_chart_close();
@@ -1361,6 +1358,7 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
 
 void source::PineStrategyHost::scheduler_configure_security_evaluators() {
     configure_security_evaluators();
+    prune_pine_security_states();
 }
 
 bool source::PineStrategyHost::scheduler_uses_aux_security_feed() const noexcept {

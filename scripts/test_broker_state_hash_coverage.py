@@ -66,6 +66,19 @@ class Coverage(unittest.TestCase):
              "pineforge-source-adapter/v3", "pineforge-source-adapter/v0"),))
         self.assertEqual(result, 1, output)
 
+    def test_security_domain_is_pinned(self):
+        result, output = self.check((
+            ("include/pineforge/source/pine_strategy_host.hpp",
+             "pineforge-source-security/v1", "pineforge-source-security/v0"),))
+        self.assertEqual(result, 1, output)
+
+    def test_security_site_field_is_enumerated(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", "f.b(pine.lookahead_on);",
+            "f.b(false);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("lookahead_on", output)
+
     def test_adapter_fold_is_required(self):
         result, output = self.check((
             ("src/source/pine_state_hash.cpp", "adapter_.hash_state(f);",

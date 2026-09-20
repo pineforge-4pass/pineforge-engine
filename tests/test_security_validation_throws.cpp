@@ -137,7 +137,7 @@ struct SlotHarness : public pineforge::source::PineStrategyHost {
     void add(bool lookahead_on, int sub_bar_count) {
         register_security_eval(7, "60", "15", lookahead_on, false);
         auto& st = security_eval_states_.back();
-        st.lookahead_on = lookahead_on;
+        pine_security_states_[7].lookahead_on = lookahead_on;
         st.current_sub_bar_count = sub_bar_count;
     }
 };
@@ -196,7 +196,7 @@ struct PartialEvalHarness : public pineforge::source::PineStrategyHost {
         // input=15m, requested=60m -> ratio 4. lookahead_on=true so the
         // aggregator emits partials for the 3 incomplete sub-bars per group.
         register_security_eval(0, "60", "15", /*lookahead_on=*/true, false);
-        security_eval_states_.back().lookahead_on = true;
+        pine_security_states_[0].lookahead_on = true;
     }
 
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {

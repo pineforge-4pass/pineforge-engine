@@ -1747,7 +1747,6 @@ protected:
         TimeframeAggregator aggregator;
         Bar current_bar{};
         bool gaps_on = false;
-        bool lookahead_on = false;
         // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
         // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
         // OHLC is replaced by its Heikin-Ashi candle before the security
@@ -2063,7 +2062,6 @@ protected:
     // synthesis loop. Used by codegen to clear its per-call vector at
     // sub-bar 0 and push one element per sub-bar after.
     int security_lower_tf_sub_bar_index(int sec_id) const;
-    bool security_series_slot_is_new(int sec_id) const;
     // The one path to evaluate_security(): installs the requested context's
     // bar index for the evaluator's TA members (ta::bar_context()) for the
     // duration of the dispatch. `bar_index` is the 0-based index of the

@@ -86,20 +86,6 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
 }
 
 
-bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
-    if (security_history_publication_replay_) {
-        return false;
-    }
-    for (const auto& state : security_eval_states_) {
-        if (state.sec_id != sec_id) {
-            continue;
-        }
-        return !state.lookahead_on || state.current_sub_bar_count <= 1;
-    }
-    return true;
-}
-
-
 void BacktestEngine::publish_security_eval_state_at_calling_boundary(
         SecurityEvalState& state) {
     if (state.publish_gate_tf_seconds <= 0 || state.feed_count <= 0) {
@@ -524,8 +510,7 @@ void BacktestEngine::feed_security_eval_state(
     if (ab.is_complete) {
         // The aggregator decided WHEN the bucket completes; a native feed for
         // this timeframe decides WHAT it closed at (the settlement / official
-        // print), before any Heikin-Ashi derivation. Partial (lookahead_on)
-        // peeks keep the running aggregate.
+        // print), before any Heikin-Ashi derivation.
         substitute_native_security_bar(state, ab.bar);
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;
@@ -554,66 +539,9 @@ void BacktestEngine::feed_security_eval_state(
             // replaced.
             publish = calling_bar_complete;
         }
-        // A boundary emission: the input bar opened a NEW bucket and the
-        // aggregator emitted the previous one, still partial (a singleton the
-        // count / real-end / session-close rules never reached: OANDA:XAUUSD
-        // Thanksgiving's 21:54 bucket holding the 21:56 minute, emitted when
-        // 21:59 opens the 21:57 bucket). Under lookahead_on that bucket's
-        // history slot was already opened by its first sub-bar's partial
-        // peek (compute), so the completion must REWRITE it (recompute) --
-        // a fresh compute here committed a phantom copy of the bucket and
-        // shifted every later requested value (the RSI diverged from the
-        // lookahead_off twin's on the same buckets). And the input bar that
-        // opened the new bucket got no peek of its own in this feed, so open
-        // its slot now, exactly as the merge branch below does for a first
-        // sub-bar. Count, real-end and session-close completions carry the
-        // input bar's own bucket (the label matches) and are untouched, as
-        // is lookahead_off (no peeks: every completion is a new slot).
-        // The emitted bucket is a boundary emission exactly when it is not
-        // the aggregator's CURRENT bucket: a boundary completion hands back
-        // the previous bucket and re-seats the aggregator on the one the
-        // input opened (feed_calendar_mode / feed_ratio_mode), while every
-        // eager completion (count, real end, session close, the calendar
-        // period's last input) leaves the completed bucket current. The
-        // former test compared the label against bar_label_ms(input), which
-        // is the intraday grid open for a fixed-TF bucket but the DAY stamp
-        // for a calendar W / M bucket -- so every weekly completion on its
-        // last daily bar looked like a boundary and committed a phantom copy
-        // of the week as one more requested bar (round 7, family I: the
-        // hungpixi weekly f_count carry decayed twice per week, hist ties
-        // compared the week with its own copy).
-        const bool boundary_emission = state.lookahead_on
-            && state.aggregator.is_active()
-            && ab.bar.timestamp != state.aggregator.current().timestamp;
-        if (boundary_emission && state.current_sub_bar_count < 2) {
-            state.current_sub_bar_count = 2;
-        }
         state.last_published_label = ab.bar.timestamp;
         dispatch_security_eval(state, ab.bar, publish,
                                state.eval_complete_count - 1);
-        if (boundary_emission) {
-            Bar fresh = state.aggregator.current();
-            if (state.heikinashi) apply_ha(fresh, /*commit=*/false);
-            state.current_bar = fresh;
-            state.current_sub_bar_count = 1;
-            state.eval_partial_count++;
-            const bool peek_publish = state.publish_gate_tf_seconds > 0
-                && calling_bar_complete;
-            dispatch_security_eval(state, fresh, peek_publish,
-                                   state.eval_complete_count);
-        }
-    } else if (state.lookahead_on) {
-        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
-        state.current_bar = ab.bar;
-        state.eval_partial_count++;
-        // A shortened calling bar can complete while the finer requested
-        // bucket is partial. Publish that current requested-context value to
-        // merged history without adding a second evaluator/TA dispatch.
-        const bool publish = state.publish_gate_tf_seconds > 0
-            && calling_bar_complete;
-        // Partial (in-progress) bucket: the index the completion will carry.
-        dispatch_security_eval(state, ab.bar, publish,
-                               state.eval_complete_count);
     } else {
         state.current_bar = ab.bar;
         if (state.gaps_on) {

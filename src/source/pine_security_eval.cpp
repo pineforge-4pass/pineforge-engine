@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <stdexcept>
 
 namespace pineforge {
@@ -31,11 +32,17 @@ void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
     const std::size_t before = security_eval_states_.size();
+    // Generated configure_security_evaluators() opens with
+    // security_eval_states_.clear(): the first site registered into an empty
+    // registry starts this host's per-site table over with it.
+    if (before == 0) pine_security_states_.clear();
     BacktestEngine::register_security_eval(sec_id, requested_tf, input_tf);
     if (security_eval_states_.size() <= before) return;
     SecurityEvalState& state = security_eval_states_.back();
+    PineSecurityEvalState& pine = pine_security_states_[sec_id];
+    pine = PineSecurityEvalState{};
     state.gaps_on = gaps_on;
-    state.lookahead_on = lookahead_on;
+    pine.lookahead_on = lookahead_on;
     state.heikinashi = heikinashi;
 
     const std::string& evaluator_input_tf =
@@ -81,6 +88,37 @@ void source::PineStrategyHost::register_security_lower_tf_eval(
 }
 
 
+bool source::PineStrategyHost::security_series_slot_is_new(int sec_id) const noexcept {
+    if (security_history_publication_replay_) {
+        return false;
+    }
+    for (const auto& state : security_eval_states_) {
+        if (state.sec_id != sec_id) {
+            continue;
+        }
+        const auto pine = pine_security_states_.find(sec_id);
+        const bool lookahead_on =
+            pine != pine_security_states_.end() && pine->second.lookahead_on;
+        return !lookahead_on || state.current_sub_bar_count <= 1;
+    }
+    return true;
+}
+
+
+void source::PineStrategyHost::prune_pine_security_states() {
+    for (auto it = pine_security_states_.begin(); it != pine_security_states_.end();) {
+        bool registered = false;
+        for (const auto& state : security_eval_states_) {
+            if (state.sec_id == it->first) {
+                registered = true;
+                break;
+            }
+        }
+        it = registered ? std::next(it) : pine_security_states_.erase(it);
+    }
+}
+
+
 // Safe wrapper around tf_to_seconds: returns <=0 on any parse failure
 // (including std::invalid_argument from stoi on garbage like "abc").
 // We use this instead of letting stoi escape so we can attach the
@@ -111,6 +149,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
     int input_seconds = tf_to_seconds(input_tf);
     int script_seconds = script_tf_seconds_;
     for (auto& state : security_eval_states_) {
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         state.lower_tf_requested = false;
         state.lower_tf_emulation = false;
         state.lower_tf_ratio = 0;
@@ -134,7 +173,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // Scalar request.security remains a validate-time refusal even
             // when registration recognized an integer-divisor lower TF.
             state.lower_tf_requested = true;
-            ensure_supported_lower_tf_emulation_flags(state.lookahead_on, state.gaps_on);
+            ensure_supported_lower_tf_emulation_flags(pine.lookahead_on, state.gaps_on);
             state.lower_tf_emulation = true;
             state.lower_tf_ratio = lower_ratio;
             state.lower_tf_seconds = lower_seconds;
@@ -228,7 +267,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
                 requested_seconds / input_seconds;
             state.lower_tf_ratio = script_seconds / requested_seconds;
             state.lower_tf_seconds = requested_seconds;
-        } else if (!is_calendar_month && state.lookahead_on
+        } else if (!is_calendar_month && pine.lookahead_on
                    && script_seconds > 0
                    && requested_seconds < script_seconds
                    && script_seconds % requested_seconds == 0) {
@@ -272,7 +311,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
 #endif
         }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-        else if (!is_calendar_month && !state.lookahead_on
+        else if (!is_calendar_month && !pine.lookahead_on
                  && aux_security_feed_enabled()
                  && script_seconds > 0
                  && requested_seconds < script_seconds) {
@@ -311,6 +350,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     if (security_input_precedes_range_start(state, input_bar.timestamp)) {
         return;
     }
+    PineSecurityEvalState& pine = pine_security_state(state.sec_id);
     struct SecurityNaWarmupScope {
         bool prev_;
         explicit SecurityNaWarmupScope(bool on)
@@ -607,7 +647,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // of the week as one more requested bar (round 7, family I: the
         // hungpixi weekly f_count carry decayed twice per week, hist ties
         // compared the week with its own copy).
-        const bool boundary_emission = state.lookahead_on
+        const bool boundary_emission = pine.lookahead_on
             && state.aggregator.is_active()
             && ab.bar.timestamp != state.aggregator.current().timestamp;
         if (boundary_emission && state.current_sub_bar_count < 2) {
@@ -627,7 +667,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             dispatch_security_eval(state, fresh, peek_publish,
                                    state.eval_complete_count);
         }
-    } else if (state.lookahead_on) {
+    } else if (pine.lookahead_on) {
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
         state.current_bar = ab.bar;
         state.eval_partial_count++;

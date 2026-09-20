@@ -55,8 +55,9 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const int requested_seconds = tf_to_seconds(state.tf);
         const bool calendar_month = requested_seconds == -1
             && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
+        const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         const bool eligible = !state.lower_tf_requested && !state.lower_tf_emulation
-            && !state.lower_tf_use_input && state.lookahead_on && !state.gaps_on
+            && !state.lower_tf_use_input && pine.lookahead_on && !state.gaps_on
             && !state.heikinashi
             && (calendar_month || requested_seconds > script_seconds);
         if (!eligible) continue;
