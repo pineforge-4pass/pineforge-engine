@@ -3,7 +3,7 @@
 #include <limits>
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
-#include <pineforge/pine_float_compare.hpp>
+#include <pineforge/ta_compare_band.hpp>
 
 using namespace pineforge;
 
@@ -130,12 +130,12 @@ static void test_dmi_up_within_band_of_zero_is_not_up() {
 // The band itself, replayed from the two `lab tv` sensor tapes on NYSE:F 15m
 // 2025-07-10..18 (scratchpad/r7/pins/f15-eps-abs / f15-eps-rel, qty = 1000 +
 // 100*(a>b) + 10*(a==b) + (a<b) + 10000*k): 20/20 decisions.
-static void test_pine_float_compare_band_replays_the_sensor_tapes() {
-    std::printf("test_pine_float_compare_band_replays_the_sensor_tapes\n");
+static void test_float_compare_band_replays_the_sensor_tapes() {
+    std::printf("test_float_compare_band_replays_the_sensor_tapes\n");
     auto code = [](double a, double b) {
-        return 100 * (pine_float_gt(a, b) ? 1 : 0)
-             + 10 * (pine_float_eq(a, b) ? 1 : 0)
-             + (pine_float_lt(a, b) ? 1 : 0);
+        return 100 * (float_band_gt(a, b) ? 1 : 0)
+             + 10 * (float_band_eq(a, b) ? 1 : 0)
+             + (float_band_lt(a, b) ? 1 : 0);
     };
     // abs: a = m + d, b = m.
     const double m = 11.5;
@@ -161,15 +161,15 @@ static void test_pine_float_compare_band_replays_the_sensor_tapes() {
     CHECK(code(1.1e-10, 0.0) == 100);                    // k8
     CHECK(code(0.9e-10, 0.0) == 10);                     // k9
     // na makes every relational false, != included.
-    CHECK(!pine_float_gt(na<double>(), 1.0));
-    CHECK(!pine_float_lt(1.0, na<double>()));
-    CHECK(!pine_float_eq(na<double>(), na<double>()));
-    CHECK(!pine_float_ne(na<double>(), 1.0));
-    CHECK(pine_float_ge(1.0 + 1e-11, 1.0) && pine_float_le(1.0 + 1e-11, 1.0));
-    CHECK(pine_float_ne(1.0 + 1.1e-10, 1.0));
+    CHECK(!float_band_gt(na<double>(), 1.0));
+    CHECK(!float_band_lt(1.0, na<double>()));
+    CHECK(!float_band_eq(na<double>(), na<double>()));
+    CHECK(!float_band_ne(na<double>(), 1.0));
+    CHECK(float_band_ge(1.0 + 1e-11, 1.0) && float_band_le(1.0 + 1e-11, 1.0));
+    CHECK(float_band_ne(1.0 + 1.1e-10, 1.0));
     // Infinities compare by value.
     const double inf = std::numeric_limits<double>::infinity();
-    CHECK(pine_float_eq(inf, inf) && pine_float_gt(inf, 1.0) && pine_float_lt(-inf, inf));
+    CHECK(float_band_eq(inf, inf) && float_band_gt(inf, 1.0) && float_band_lt(-inf, inf));
 }
 
 int main() {
@@ -179,7 +179,7 @@ int main() {
     test_dmi_exact_decimal_tie_books_neither_dm();
     test_dmi_clear_difference_is_unchanged();
     test_dmi_up_within_band_of_zero_is_not_up();
-    test_pine_float_compare_band_replays_the_sensor_tapes();
+    test_float_compare_band_replays_the_sensor_tapes();
     std::printf("dmi_parity: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }

@@ -9,7 +9,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
-#include <pineforge/pine_float_compare.hpp>
+#include <pineforge/ta_compare_band.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -22,10 +22,10 @@ namespace ta {
 
 namespace {
 
-// Pine's tolerant `<=` (pine_float_compare.hpp): the band that used to live
+// The tolerant `<=` (ta_compare_band.hpp): the band that used to live
 // here is the engine-wide constant now that ta.dmi decides on it too.
 bool percentrank_less_equal(double lhs, double rhs) {
-    return pine_float_le(lhs, rhs);
+    return float_band_le(lhs, rhs);
 }
 
 }  // namespace

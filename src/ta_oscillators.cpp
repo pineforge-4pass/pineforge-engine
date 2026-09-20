@@ -9,7 +9,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
-#include <pineforge/pine_float_compare.hpp>
+#include <pineforge/ta_compare_band.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -458,9 +458,9 @@ double MFI::compute(double src, double vol) {
     if (!is_na(prev_src_)) {
         double mf = src * vol;
         // Equal-decimal source values can differ by binary64 residue. MFI
-        // classifies direction with Pine's absolute comparison band as well.
-        if (pine_float_gt(src, prev_src_)) pos = mf;
-        else if (pine_float_lt(src, prev_src_)) neg = mf;
+        // classifies direction with the absolute comparison band as well.
+        if (float_band_gt(src, prev_src_)) pos = mf;
+        else if (float_band_lt(src, prev_src_)) neg = mf;
     }
     prev_src_ = src;
     pos_buffer_.push_back(pos);
