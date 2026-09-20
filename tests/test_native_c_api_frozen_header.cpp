@@ -53,7 +53,7 @@ struct FrozenState {
     int calculations = 0;
     int refused_struct = 0;
     int submitted = 0;
-    unsigned long long entry = 0;
+    uint64_t entry = 0;
 };
 
 const pf_bar_t* frozen_bars(int* n) {
