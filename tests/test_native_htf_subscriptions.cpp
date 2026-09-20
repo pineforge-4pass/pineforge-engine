@@ -9,10 +9,15 @@
 //   2b. two "60" series over one 15-minute input are two INSTANCES: the same
 //      buckets are delivered twice, each under its own index, and
 //      native_series_bar answers each independently (also "60"/"60"/"240");
+//   2c. barmerge.gaps_on empties the pull accessor AND reaches the push side
+//      (clear_security) on every input a gapped series delivers nothing on;
 //   2d. a host that declares its series inside on_native_run_begin gets them
 //      registered although the spec named none, and its own evaluator
 //      registration -- which clears the state vector as generated code does --
 //      no longer erases the kernel's;
+//   2e. the kernel tears its previous run's registration down BEFORE the
+//      host's run-begin callback, so a host that re-registers the identical
+//      evaluator state itself keeps it;
 //   3. authoritative_bars replace the aggregated OHLCV of completed buckets;
 //   4. a series finer than the input is refused at configure with its own
 //      named reason, while two series of one period are accepted unless they
@@ -34,6 +39,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -118,6 +124,8 @@ public:
     std::vector<std::string> log;
     std::vector<Delivery> deliveries;
     int bars_seen = 0;
+    // The push side of barmerge.gaps_on: clear_security calls per sec_id.
+    std::map<int, int> clears;
     // Optional per-calculation probe: what native_series_bar(i) answered at
     // each script bar, for every i < probes. Zero — the default — records
     // nothing, so every scenario that does not ask for it is unchanged.
@@ -145,6 +153,8 @@ public:
         log.push_back("htf:" + std::to_string(context.subscription) + "@"
                       + std::to_string(bar.timestamp));
     }
+
+    void clear_security(int sec_id) override { ++clears[sec_id]; }
 
     void on_native_bar(const Bar& bar, const NativeDecisionContext&) override {
         ++bars_seen;
@@ -524,6 +534,15 @@ void test_gaps_clears_between_deliveries() {
     CHECK(per_index[1] == 4);
     CHECK(per_index[2] == 4);
 
+    // The push side of gaps: the generated clear_security() a source host
+    // implements is called on every input the gapped series delivers nothing
+    // on -- 12 of the 16 for the lookahead_off series, the same 12 for the
+    // lookahead_on one (delivered on the four opening bars) -- and never for
+    // the gaps_off twin. A bare host's clear_security is the base no-op.
+    CHECK(host.clears[0] == 12);
+    CHECK(host.clears.count(1) == 0);
+    CHECK(host.clears[2] == 12);
+
     const std::int64_t origin = bars.front().timestamp;
     CHECK(host.series_at_bar.size() == 16);
     for (std::size_t i = 0; i < host.series_at_bar.size(); ++i) {
@@ -637,6 +656,66 @@ void test_begin_time_declaration() {
         check_bucket(refused.deliveries[0].bar, hand_aggregate(bars, 0, 4, origin),
                      "staged bucket after a refused declaration");
     }
+}
+
+// ---- 2e. the previous run's series are torn down before on_native_run_begin
+//
+// A host that declared a series in one run and registers the SAME evaluator
+// state itself in the next -- the adapter switching a site from the kernel's
+// drive to its own -- must keep that state. The kernel tears its previous
+// registration down before the host's run-begin callback, so what the
+// callback registers can never be mistaken for the kernel's own tail.
+class SwitchingHost final : public NativeStrategyHost {
+public:
+    bool register_own = false;
+    int evaluations = 0;
+
+    void on_native_run_begin() override {
+        if (!register_own) return;
+        security_eval_states_.clear();
+        register_security_eval(0, "60", "15");
+    }
+    void evaluate_security(int sec_id, const Bar&, bool is_complete) override {
+        if (sec_id == 0 && is_complete) ++evaluations;
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+    std::size_t evaluator_states() const { return security_eval_states_.size(); }
+};
+
+void test_teardown_precedes_run_begin() {
+    scenario = "teardown precedes run begin";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+
+    // Run 1: the spec declares "60"; the kernel registers it as sec_id 0 and
+    // its four completions reach evaluate_security.
+    NativeRunSpec declared = base_spec("15", "15", "native-htf-teardown");
+    declared.subscriptions.push_back(hourly);
+    SwitchingHost host;
+    CHECK(host.configure_native(declared).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+    CHECK(host.evaluator_states() == 1);
+    CHECK(host.evaluations == 4);
+
+    // Run 2, same host: the spec declares nothing and the host registers the
+    // identical state itself at begin. It is the host's, and it stays:
+    // nothing pumps it (this host has no pump of its own), nothing erases it.
+    NativeRunSpec own = base_spec("15", "15", "native-htf-teardown");
+    own.identity.run_number = 2;
+    host.register_own = true;
+    host.evaluations = 0;
+    CHECK(host.configure_native(own).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+    CHECK(host.evaluator_states() == 1);
+    CHECK(host.evaluations == 0);
+    CHECK(!host.native_series_bar(0).has_value());
 }
 
 // ---- 3. authoritative bars replace the aggregate --------------------------
@@ -904,6 +983,7 @@ int main() {
     test_same_timeframe_instances();
     test_gaps_clears_between_deliveries();
     test_begin_time_declaration();
+    test_teardown_precedes_run_begin();
     test_authoritative_bars_override();
     test_finer_than_input_is_refused();
     test_weekly_matches_the_pine_path();

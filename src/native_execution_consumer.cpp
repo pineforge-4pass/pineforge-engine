@@ -2005,6 +2005,13 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     begin_is_stream_ = false;
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
+    // The previous run's declared series are torn down BEFORE the host's
+    // run-begin callback: whatever evaluator states that callback registers
+    // -- even ones identical to the kernel's last registration, as a host
+    // moving a series from the kernel's drive to its own does -- are the
+    // host's and are never mistaken for the kernel's tail. This run's
+    // declaration is registered after the callback (below).
+    clear_timeframe_subscriptions(engine);
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
@@ -6739,8 +6746,11 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
     if (subscriptions_.empty()) return;
     // Erase exactly the evaluator states this consumer registered, and only
     // while they are still the vector's tail exactly as it registered them.
-    // A host that rebuilt the vector in its own on_native_run_begin -- which
-    // now runs BEFORE this clear -- owns every state in it, and the kernel
+    // This runs at the next begin BEFORE the host's on_native_run_begin, so a
+    // state that callback registers -- even one identical to the kernel's
+    // last registration, as a host moving a series from the kernel's drive
+    // to its own does -- is never mistaken for the kernel's tail; a host that
+    // touched the vector between runs owns every state in it, and the kernel
     // takes none of them away.
     const std::size_t base = subscription_states_base_;
     if (engine.security_eval_states_.size() == base + subscriptions_.size()) {
@@ -6959,15 +6969,16 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         BacktestEngine& engine, const Bar& bar, int index) {
     // barmerge.gaps_on for one series: the input delivered nothing of its
-    // own, so the series has no value on it. This mirrors what the Pine
-    // source host does for a gaps_on site (clear_security on a
-    // non-completing input) at the one place the kernel owns -- its own
-    // delivery -- because that clear reaches a generated clear_security() a
-    // bare native host does not implement, while the pull accessor is the
-    // kernel's own answer. gaps_off leaves the delivered bucket standing,
-    // which is every established run.
-    const auto clear_if_gapped = [](TimeframeSubscription& subscription) noexcept {
+    // own, so the series has no value on it -- on the pull side
+    // (native_series_bar answers nullopt) and on the push side
+    // (clear_security, the counterpart of the evaluate_security the step
+    // dispatches: a bare host's is the base no-op, a source host's reaches
+    // the generated clear_security() of the same sec_id, exactly where the
+    // Pine source host's own step clears a gaps_on site). gaps_off leaves
+    // the delivered bucket standing, which is every established run.
+    const auto clear_if_gapped = [&engine](TimeframeSubscription& subscription) {
         if (subscription.gaps) subscription.latest.reset();
+        if (subscription.gaps) engine.clear_security(subscription.sec_id);
     };
     for (auto& subscription : subscriptions_) {
         bool delivered = false;

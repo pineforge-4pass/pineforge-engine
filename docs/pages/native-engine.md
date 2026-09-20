@@ -1304,8 +1304,11 @@ and the input's `on_native_bar` follows it.
   `nullopt` there, the empty that stands for `na` — and carries the bucket
   only on the bars it publishes on. Which buckets complete, when they are
   delivered and what they contain are unchanged; `on_native_timeframe_bar` is
-  still called exactly once per delivered bucket and there is no callback for
-  a cleared bar.
+  still called exactly once per delivered bucket and never for a cleared bar.
+  The push side of a cleared bar is `clear_security(sec_id)`, the counterpart
+  of the `evaluate_security` the step dispatches; a bare host leaves both at
+  their no-op defaults, a source host's reaches its generated
+  `clear_security()`.
 
 `NativeTimeframeBarContext::completion` is `Confirmed` when the bucket closed
 on its own last contributing bar and `LazyComplete` when the next period's
@@ -1351,10 +1354,14 @@ returns, which is what makes that hook usable: a host that registers its own
 `request.security` evaluators there (clearing
 `BacktestEngine::security_eval_states_` first, as generated code does) can no
 longer erase the kernel's registration, and the kernel appends its own states
-after the host's rather than in place of them. Two consequences worth stating:
-`native_series_bar` answers `nullopt` for every index *inside*
-`on_native_run_begin` (nothing is registered yet), and the kernel feeds only
-the evaluator states it registered itself.
+after the host's rather than in place of them. The previous run's declared
+series are torn down **before** that callback, so an evaluator state the
+callback registers itself — even one identical to what the kernel registered
+last run, as a host moving a series from the kernel's drive to its own does —
+is the host's and stays. Two consequences worth stating: `native_series_bar`
+answers `nullopt` for every index *inside* `on_native_run_begin` (nothing is
+registered yet), and the kernel feeds only the evaluator states it registered
+itself.
 
 **Feeds the host installed itself survive.** `set_native_security_feed` — the
 store the C ABI's `strategy_set_native_security_feed` writes — is host ingress
