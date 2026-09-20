@@ -3,6 +3,8 @@
 // tick through the generic BacktestEngine price helpers.
 #include <pineforge/native_host.hpp>
 
+#include "../src/native_matching.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -57,8 +59,9 @@ struct Host final : NativeStrategyHost {
         double resolved = facts.default_resolved_price;
         if (facts.price_kind == no::NativeCandidatePriceKind::TriggerLevel
             && facts.trigger_level) {
-            resolved = round_to_mintick_directional(
-                level_on_price_grid(*facts.trigger_level), facts.is_buy);
+            resolved = native_matching::grid_round_directional(
+                level_on_price_grid(*facts.trigger_level), syminfo_mintick_,
+                /*up=*/facts.is_buy);
         }
         return {resolved, std::nullopt, no::OpeningShape::Transact};
     }

@@ -21,6 +21,8 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
+#include "../src/native_matching.hpp"
+
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -47,9 +49,12 @@ class SnapProbe : public pineforge::source::PineStrategyHost {
 public:
     void on_source_bar(const Bar&) override {}   // helper-only; never run
     void set_mintick(double m) { syminfo_mintick_ = m; }
-    // long stop snaps UP (ceil), short stop snaps DOWN (floor).
+    // long stop snaps UP (ceil), short stop snaps DOWN (floor).  R5 lane N10
+    // deleted BacktestEngine::round_to_mintick_directional — a dead twin of
+    // the matcher's own snap — so the rule is pinned where it now lives.
     double dsnap(double price, bool is_long_stop) const {
-        return round_to_mintick_directional(price, is_long_stop);
+        return native_matching::grid_round_directional(price, syminfo_mintick_,
+                                                       /*up=*/is_long_stop);
     }
 };
 }  // namespace

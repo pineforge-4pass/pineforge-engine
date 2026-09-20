@@ -1333,10 +1333,28 @@ public:
     void on_source_bar(const Bar&) override {}
     double nearest(double p) const { return round_to_mintick(p); }
     double bar_fill(double p) const { return bar_fill_price(p); }
+    // R5 lane N10 deleted BacktestEngine::round_to_mintick_directional and
+    // ::apply_slippage. This census is the NEGATIVE control for them: every
+    // row below asserts that the directional snap DISAGREES with the nearest
+    // rounding bar_fill_price must use (the finding-432/446 defect). The
+    // contrast therefore keeps the retired spelling verbatim as this file's
+    // own oracle rather than borrowing the live matcher's, whose ladder
+    // exactness (native_matching::grid_exact_index, R7) hands an on-grid
+    // price back in its own binary spelling instead of re-spelling it as
+    // index * tick — a difference the on-grid fixed-point rows below pin.
     double directional(double p, bool up) const {
-        return round_to_mintick_directional(p, up);
+        if (std::isnan(p) || syminfo_mintick_ <= 0.0) return p;
+        constexpr double kBoundaryEps = 1e-9;
+        const double r = p / syminfo_mintick_;
+        return (up ? std::ceil(r - kBoundaryEps) : std::floor(r + kBoundaryEps))
+               * syminfo_mintick_;
     }
-    double slipped(double p, bool is_buy) const { return apply_slippage(p, is_buy); }
+    double slipped(double p, bool is_buy) const {
+        if (std::isnan(p) || syminfo_mintick_ <= 0.0) return p;
+        if (slippage_ == 0) return directional(p, /*up=*/is_buy);
+        const double slip = slippage_ * syminfo_mintick_;
+        return directional(is_buy ? p + slip : p - slip, /*up=*/is_buy);
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────

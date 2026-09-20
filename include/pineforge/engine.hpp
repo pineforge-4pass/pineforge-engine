@@ -976,13 +976,13 @@ protected:
     // carries slippage ticks. The FEED is never quantized (indicators consume
     // the raw sub-tick values); only the fill and the broker's default-sizing
     // snapshot (calc_qty / frozen_sizing_price, same nearest-tick form) are
-    // on-tick. The directional
-    // snap (round_to_mintick_directional) is reserved for COMPUTED stop /
-    // limit LEVELS that fall between ticks; applying it to a raw bar price
-    // was the finding-432/446 defect (sells floored, buys ceiled — 43 AAPL
-    // slugs off by one tick). The result is on-tick, so the directional snap
-    // downstream in apply_slippage is an identity on it (the 1e-9 boundary
-    // guard absorbs the n*tick/tick FP residue).
+    // on-tick. The directional snap
+    // (native_matching::grid_round_directional, src/native_matching.hpp) is
+    // reserved for COMPUTED stop / limit LEVELS that fall between ticks;
+    // applying it to a raw bar price was the finding-432/446 defect (sells
+    // floored, buys ceiled — 43 AAPL slugs off by one tick). The result is
+    // on-tick, so the matcher's directional snap downstream is an identity
+    // on it (its ladder-exactness test absorbs the n*tick/tick FP residue).
     double bar_fill_price(double raw_bar_price) const {
         return round_to_mintick(raw_bar_price);
     }
@@ -1106,53 +1106,6 @@ protected:
     // KI-67 cascade waypoint bar — is a slice of an already-decided path and
     // is compared raw, exactly as before; a real chart / lower-TF bar is
     // quantized.
-
-    // TradingView fills stop entries directionally to mintick rather than
-    // rounding to nearest: long stops snap UP (ceil), short stops snap DOWN
-    // (floor). Verified against basic/parabolic-asr where the 2,513
-    // non-gap stop entry fills show a perfectly one-sided +/-0.01 bias.
-    // See investigation report at /tmp/pf_investigation_parabolic_asr.md.
-    // This applies to COMPUTED LEVELS only (a stop at (open+high)/2, a
-    // user_close + 0.5 level, ...). A fill at a RAW BAR PRICE goes through
-    // bar_fill_price (nearest tick, finding-446) before it reaches the
-    // slippage path, where this snap is then an identity.
-    //
-    // The 1e-9 epsilon nudge guards against FP slop: a price computed as
-    // ``user_close + 0.5`` may land at ``1803.1199999998`` (just below the
-    // 1803.12 mintick boundary), which a raw ``ceil`` would push to 1803.13
-    // and a raw ``floor`` to 1803.11. The nudge resolves any value within
-    // 1 nanotick of an exact mintick boundary to that boundary, keeping
-    // the bias one-sided only for sub-mintick midpoints (e.g. 1804.945).
-    double round_to_mintick_directional(double price, bool is_long_stop) const {
-        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
-        constexpr double kBoundaryEps = 1e-9;
-        double r = price / syminfo_mintick_;
-        if (is_long_stop) {
-            return std::ceil(r - kBoundaryEps) * syminfo_mintick_;
-        }
-        return std::floor(r + kBoundaryEps) * syminfo_mintick_;
-    }
-
-    double apply_slippage(double price, bool is_buy) const {
-        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
-        // TradingView snaps LEVEL fills to mintick directionally even when
-        // slippage is zero: a buy fills at the next-higher mintick, a sell
-        // at the next-lower mintick. (A raw bar price arrives here already
-        // nearest-rounded by bar_fill_price, finding-446, so the snap below
-        // is an identity on it.) The legacy nearest-mintick rounding biased
-        // sub-mintick stop levels (e.g. (open+high)/2 for an odd-mintick
-        // bar) up by one tick for sells, producing a deterministic +0.01
-        // exit-price drift on the magnifier-dist corpus (≈ 180 trades per
-        // probe). Matching TV's directional snap removes that drift while
-        // preserving the original add-slippage-then-snap shape for the
-        // slippage > 0 path.
-        if (slippage_ == 0) {
-            return round_to_mintick_directional(price, /*is_long_stop=*/is_buy);
-        }
-        double slip = slippage_ * syminfo_mintick_;
-        double slipped = is_buy ? price + slip : price - slip;
-        return round_to_mintick_directional(slipped, /*is_long_stop=*/is_buy);
-    }
 
     // --- Commission helper ---
     // PERCENT commission is a % of the order's notional value. The notional
@@ -2757,7 +2710,8 @@ public:
     //                            dispatch consumes it (round 7 family K).
     //   3 AT_FILL                default sizing at the slipped fill,
     //                            calc_qty(fill).
-    // `fill_price` is slipped the way the kernel slips it (apply_slippage; a
+    // `fill_price` is slipped the way the kernel slips it
+    // (native_matching::apply_slippage then the directional grid snap; a
     // LIMIT-triggered entry fills limit-or-better and is not slipped, see
     // docs/pine-adapter-kernel-notes.md).
     // `close_only` is 1 when the kernel's close-only predicate fires -- the

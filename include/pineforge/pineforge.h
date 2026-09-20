@@ -922,7 +922,8 @@ PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count);
  *  live-runtime surface, task 8, spec 3.6): the contracts the entry kernel
  *  would OPEN if that order filled at @p fill_price, sized by the engine's
  *  own rules so a live runtime never re-implements them. @p fill_price is
- *  slipped the way the kernel slips it (`apply_slippage`; an entry with a
+ *  slipped the way the kernel slips it (`native_matching::apply_slippage`
+ *  then the directional grid snap; an entry with a
  *  limit leg takes the unslipped limit-or-better route). @p partition
  *  receives which sizing rule produced the value:
  *    - `0` EXPLICIT -- a script-supplied qty: for `strategy.entry` the
