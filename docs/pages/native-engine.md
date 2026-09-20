@@ -368,6 +368,95 @@ refused; time advance is likewise refused after confirmed-bar input.
 Rows with the same ordinal describe one execution and its account projection.
 Process the whole ordinal group before advancing an event-reader cursor.
 
+### Brackets and trailing
+
+A live request is visible without replaying the event log:
+
+```cpp
+for (const auto& row : native_working_requests()) {
+    row.definition->request;   // the accepted request
+    row.remaining;             // what is left to execute
+    row.trigger_state;         // where its own trigger has reached
+}
+std::size_t ended = cancel_all();              // one CancelledEvent per request
+std::size_t dropped = cancel_where("bracket"); // by the request's comment
+```
+
+`native_working_requests()` copies owning value rows in live order; later
+commands do not invalidate a row already returned. `cancel_all()` answers how
+many requests left the book, dependants of a cancelled owner included;
+`cancel_where(comment)` cancels exactly the live requests carrying that
+comment and answers how many of those it cancelled. An unknown comment is not
+a command.
+
+A leg can be placed before its owner has a price. `Request::anchor` defaults
+to `Absolute{}` — the level written in the trigger. `FromOwnerFill{offset,
+ticks}` instead defers it: when the owner's fill arms the request, the level
+becomes `fill + offset`, with `offset` signed (adverse is negative) and
+spelled in price ticks when `ticks` is set. The anchor applies to `Limit` and
+`Stop` prices and to a `Trail` arm threshold; the anchored field carries the
+placeholder `0.0` until then, and `Market`, `StopLimit`, and any owner other
+than `WaitForApplied` are rejected, because only that relation arms. The
+`ArmedEvent` carries the materialized definition: from then on the request
+reads as the absolute level it now is.
+
+```cpp
+native_order::Request stop{native_order::Reduce{native_order::OwnerOpenedUnits{}}, "sl", ""};
+stop.owner = native_order::WaitForApplied{entry};
+stop.trigger = native_order::Stop{0.0};
+stop.anchor = native_order::FromOwnerFill{-10.0, /*ticks=*/true};  // ten ticks under the fill
+```
+
+Trailing offsets accept the same two spellings. `Trail::ticks` is a
+`TrailTicks{n}` offset resolved against the run's price tick at acceptance:
+the accepted request carries the resolved price distance and no spelling, so
+a tick-spelled trail and its price-spelled equal behave identically bar for
+bar. A zero offset is legal and means *ride the best*: the level is the
+running best itself and the exit is the first move strictly past it. Negative
+and nonfinite offsets remain rejected, and a tick spelling without a usable
+price tick is rejected rather than read as a price.
+
+Re-pricing a trail normally restarts it. `replace(handle, request,
+ReplaceOptions{/*retain_trigger_state=*/true})` instead carries the
+predecessor's live trigger state — a tracking trail's best, an already active
+stop — into the successor. Predecessor and successor must hold the same
+trigger alternative, and a retained best must still produce a representable
+level for the successor's offset; otherwise the replacement is rejected and
+the predecessor stays live.
+
+### From strategy.exit to submit_bracket
+
+`include/pineforge/native_toolkit.hpp` is header-only, Pine-free and additive:
+it composes the primitives above and adds no kernel behaviour. A Pine
+`strategy.exit("x", from_entry="e", limit=…, stop=…, trail_points=…)` maps
+onto one call:
+
+```cpp
+#include <pineforge/native_toolkit.hpp>
+namespace tk = pineforge::native_toolkit;
+
+tk::BracketSpec bracket;
+bracket.parent = entry;                    // the handle strategy.entry returned
+bracket.take_profit = take_profit_request;  // limit leg
+bracket.stop_loss = stop_loss_request;      // stop leg
+bracket.trail = trail_request;              // optional trailing leg
+const tk::BracketReceipt legs = tk::submit_bracket(*this, bracket);
+```
+
+Each present leg is submitted as the parent's `WaitForApplied` child in one
+OCA group — group id the parent's incarnation, one cohort per leg, the
+caller's `sibling_effect` (default `Cancel`) — in take-profit, stop-loss,
+trail order. That is exactly the owner/group shape a host would write by
+hand, and the legs' own intent, trigger and anchor are left untouched. The
+receipt reports the handle each leg was accepted under; a rejected leg stays
+empty and the others are still submitted.
+
+`tk::OrderBook<Key>` is the id bookkeeping a strategy would otherwise write
+itself: `submit_or_replace(key, request)` re-prices the key's own request
+while it is still working and submits a fresh one when it is gone,
+`cancel(key)` ends it and forgets the key, and `handle(key)` reports the
+current handle. An unknown key never reaches the host.
+
 ## Close execution
 
 `NativeCloseExecution::NextEligiblePoint` (default): a request born at a

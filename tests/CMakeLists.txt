@@ -93,6 +93,8 @@ set(TEST_SOURCES
     test_order_action
     test_native_order_core
     test_native_order_terminal
+    test_native_order_ergonomics
+    test_native_toolkit_bracket
     test_native_order_resting_core
     test_native_resting_contract
     test_native_resting_acceptance

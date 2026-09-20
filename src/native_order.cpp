@@ -198,6 +198,32 @@ void canonicalize_owner(Request& request) {
     }
 }
 
+// The owner's fill supplies an anchored trigger level exactly once. The
+// placeholder becomes fill + offset and the anchor becomes Absolute, so a
+// stored definition always reads as the absolute level it now is and can
+// never be resolved a second time. False means the resolved level is not a
+// representable trigger level.
+bool materialize_anchor(Request& request, double fill_price) noexcept {
+    const auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
+    if (!anchor) return true;
+    if (!std::isfinite(fill_price) || !std::isfinite(anchor->offset)) return false;
+    const double level = fill_price + anchor->offset;
+    if (auto* limit = std::get_if<Limit>(&request.trigger)) {
+        if (!finite_non_negative(level)) return false;
+        limit->price = level;
+    } else if (auto* stop = std::get_if<Stop>(&request.trigger)) {
+        if (!finite_non_negative(level)) return false;
+        stop->price = level;
+    } else if (auto* trail = std::get_if<Trail>(&request.trigger)) {
+        if (!finite_positive(level)) return false;
+        trail->arm_price = level;
+    } else {
+        return false;
+    }
+    request.anchor = Absolute{};
+    return true;
+}
+
 bool valid_position(const PositionIdentity& position) noexcept {
     if (std::holds_alternative<PositionFlat>(position)) return true;
     const auto* nonflat = std::get_if<PositionNonflat>(&position);
@@ -370,26 +396,58 @@ int receipt_cmp(uint64_t oa, uint64_t ia, GroupEffect ea, uint64_t ob, uint64_t 
     return 0;
 }
 
-std::optional<RequestRejectReason> validate_levels(const Trigger& trigger) {
+// A trail offset is a finite price distance. Zero is the "ride the best"
+// spelling: the level is the best itself and only a move strictly past it
+// exits. Negative and nonfinite offsets stay rejected.
+bool valid_trail_offset(double offset) noexcept {
+    return std::isfinite(offset) && offset >= 0.0;
+}
+
+// The anchored level is supplied by the owner's fill, so the trigger carries
+// the placeholder 0.0 until then; any other written level would be silently
+// overwritten at arm time.
+std::optional<RequestRejectReason> validate_levels(const Trigger& trigger, bool anchored) {
     if (const auto* limit = std::get_if<Limit>(&trigger)) {
         if (!finite_non_negative(limit->price)) return RequestRejectReason::InvalidTrigger;
+        if (anchored && limit->price != 0.0) return RequestRejectReason::InvalidTrigger;
         return std::nullopt;
     }
     if (const auto* stop = std::get_if<Stop>(&trigger)) {
         if (!finite_non_negative(stop->price)) return RequestRejectReason::InvalidTrigger;
+        if (anchored && stop->price != 0.0) return RequestRejectReason::InvalidTrigger;
         return std::nullopt;
     }
     if (const auto* stop_limit = std::get_if<StopLimit>(&trigger)) {
         if (!finite_non_negative(stop_limit->stop) || !finite_non_negative(stop_limit->limit)) {
             return RequestRejectReason::InvalidTrigger;
         }
+        // One signed distance cannot describe two levels.
+        if (anchored) return RequestRejectReason::InvalidTrigger;
         return std::nullopt;
     }
     if (const auto* trail = std::get_if<Trail>(&trigger)) {
-        if (!finite_positive(trail->offset)) return RequestRejectReason::InvalidTrigger;
+        if (trail->ticks) {
+            if (!std::isfinite(trail->ticks->ticks) || trail->ticks->ticks < 0.0
+                || trail->offset != 0.0) {
+                return RequestRejectReason::InvalidTrigger;
+            }
+        } else if (!valid_trail_offset(trail->offset)) {
+            return RequestRejectReason::InvalidTrigger;
+        }
+        // An anchored trail moves its arm threshold, which must therefore be
+        // present and hold the placeholder.
+        if (anchored) {
+            if (!trail->arm_price || *trail->arm_price != 0.0) {
+                return RequestRejectReason::InvalidTrigger;
+            }
+            return std::nullopt;
+        }
         if (trail->arm_price && !finite_positive(*trail->arm_price)) {
             return RequestRejectReason::InvalidTrigger;
         }
+    }
+    if (anchored && std::holds_alternative<Market>(trigger)) {
+        return RequestRejectReason::InvalidTrigger;
     }
     return std::nullopt;
 }
@@ -1022,11 +1080,15 @@ std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan
 
 bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
                                         double* stop) const noexcept {
-    if (!finite_positive(offset) || !std::isfinite(best)) return false;
+    if (!valid_trail_offset(offset) || !std::isfinite(best)) return false;
     const double level = is_buy ? best + offset : best - offset;
     if (!std::isfinite(level)) return false;
-    if (is_buy && !(level > best)) return false;
-    if (!is_buy && !(level < best)) return false;
+    // A zero offset rides the best, so its level IS the best. Every positive
+    // offset must still land strictly beyond it.
+    if (offset != 0.0) {
+        if (is_buy && !(level > best)) return false;
+        if (!is_buy && !(level < best)) return false;
+    }
     if (stop) *stop = level;
     return true;
 }
@@ -1189,7 +1251,19 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     if (market_only && !std::holds_alternative<Market>(request.trigger)) {
         return RequestRejectReason::InvalidTrigger;
     }
-    if (const auto reason = validate_levels(request.trigger)) return reason;
+    const auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
+    if (market_only && anchor) return RequestRejectReason::InvalidTrigger;
+    if (anchor && (!std::isfinite(anchor->offset)
+                   || (anchor->ticks && !context.price_tick))) {
+        return RequestRejectReason::InvalidTrigger;
+    }
+    if (const auto reason = validate_levels(request.trigger, anchor != nullptr)) return reason;
+    // The anchor is delivered by the owner's fill through the arming path,
+    // and WaitForApplied is the only relation that arms. A cohort or an
+    // already enrolled opening has no later fill event to read a level from.
+    if (anchor && !std::holds_alternative<WaitForApplied>(request.owner)) {
+        return RequestRejectReason::InvalidOwner;
+    }
 
     const bool flatten = as_flatten(request.intent) != nullptr;
     const bool owner_opened =
@@ -1282,6 +1356,37 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (member->effect != GroupEffect::Cancel && member->effect != GroupEffect::Reduce) {
             return RequestRejectReason::InvalidGroup;
         }
+    }
+    return std::nullopt;
+}
+
+std::optional<RequestRejectReason> WorkingRequestCore::resolve_tick_spellings(
+        Request& request, const CommandContext& context) {
+    auto* trail = std::get_if<Trail>(&request.trigger);
+    auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
+    const bool trail_ticks = trail != nullptr && trail->ticks.has_value();
+    const bool anchor_ticks = anchor != nullptr && anchor->ticks;
+    if (!trail_ticks && !anchor_ticks) return std::nullopt;
+    const double tick = context.price_tick ? *context.price_tick : 0.0;
+    if (!finite_positive(tick)) return RequestRejectReason::InvalidTrigger;
+    double trail_offset = 0.0;
+    double anchor_offset = 0.0;
+    if (trail_ticks) {
+        trail_offset = trail->ticks->ticks * tick;
+        if (!valid_trail_offset(trail_offset)) return RequestRejectReason::InvalidTrigger;
+    }
+    if (anchor_ticks) {
+        anchor_offset = anchor->offset * tick;
+        if (!std::isfinite(anchor_offset)) return RequestRejectReason::InvalidTrigger;
+    }
+    // Every check is done: nothing below can leave a half-resolved request.
+    if (trail_ticks) {
+        trail->offset = trail_offset;
+        trail->ticks.reset();
+    }
+    if (anchor_ticks) {
+        anchor->offset = anchor_offset;
+        anchor->ticks = false;
     }
     return std::nullopt;
 }
@@ -1566,7 +1671,8 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     Request staged = request;
     MutationPlan plan = begin_plan();
-    const auto reason = validate_request(staged, context, std::nullopt);
+    auto reason = validate_request(staged, context, std::nullopt);
+    if (!reason) reason = resolve_tick_spellings(staged, context);
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     auto impl = std::make_unique<PreparedSubmit::Impl>();
     if (reason) {
@@ -1604,7 +1710,8 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
                                                     const Request& request,
                                                     const CommandContext& context,
                                                     uint64_t& next_order_incarnation,
-                                                    uint64_t& next_timeline_ordinal) {
+                                                    uint64_t& next_timeline_ordinal,
+                                                    ReplaceOptions options) {
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     RequestHandle staged_target = target;
@@ -1630,7 +1737,29 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    const auto reason = validate_request(staged, context, staged_target);
+    auto reason = validate_request(staged, context, staged_target);
+    if (!reason) reason = resolve_tick_spellings(staged, context);
+    // A retained trigger state only describes the trigger alternative it came
+    // from, and a retained trail best must still produce a representable
+    // level for the successor's offset on either side.
+    if (!reason && options.retain_trigger_state) {
+        const LiveRequest& predecessor = live_[live_index];
+        if (predecessor.request().trigger.index() != staged.trigger.index()) {
+            reason = RequestRejectReason::InvalidTrigger;
+        } else {
+            std::optional<double> best;
+            if (const auto* track = std::get_if<TrailTrack>(&predecessor.trigger_state)) {
+                best = track->best;
+            } else if (const auto* active = std::get_if<TrailActive>(&predecessor.trigger_state)) {
+                best = active->best_at_trigger;
+            }
+            const auto* trail = std::get_if<Trail>(&staged.trigger);
+            if (best && (!trail || !trail_level_ok(*best, trail->offset, true, nullptr)
+                         || !trail_level_ok(*best, trail->offset, false, nullptr))) {
+                reason = RequestRejectReason::InvalidTrigger;
+            }
+        }
+    }
     if (reason) {
         impl->result = ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason};
         ReplaceRejectedEvent rejected;
@@ -1645,12 +1774,14 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         return PreparedReplace(std::move(impl));
     }
     canonicalize_owner(staged);
+    const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle successor{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
     auto definition = std::make_shared<RequestDefinition>(
             RequestDefinition{successor, std::move(staged), birth, staged_target});
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
+    if (options.retain_trigger_state) live.trigger_state = retained;
     ReplacedEvent replaced;
     replaced.ordinal = ordinal;
     replaced.predecessor_definition = live_[live_index].definition;
@@ -1750,11 +1881,12 @@ ReplaceResult WorkingRequestCore::replace(const RequestHandle& target,
                                           int64_t decision_time_ms,
                                           uint64_t& next_order_incarnation,
                                           uint64_t& next_timeline_ordinal,
-                                          std::optional<double> quantity_grid) {
+                                          std::optional<double> quantity_grid,
+                                          ReplaceOptions options) {
     auto prepared = prepare_replace(target, request,
                                     CommandContext{decision_time_ms, quantity_grid, std::nullopt,
                                                     CommandSurface::General, {}},
-                                    next_order_incarnation, next_timeline_ordinal);
+                                    next_order_incarnation, next_timeline_ordinal, options);
     auto installed = install_replace(std::move(prepared));
     if (std::holds_alternative<InstallError>(installed)) {
         throw std::logic_error("native replace install failed");
@@ -2995,6 +3127,19 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
 
     MutationPlan plan = begin_plan();
     LiveRequest updated = live;
+    // An anchored leg receives its level from this fill, once, at the arm
+    // that binds it to the owner. Every later reader sees the absolute level
+    // in the live definition and in the ArmedEvent that installed it.
+    DefinitionRef armed_definition = live.definition;
+    if (std::holds_alternative<FromOwnerFill>(live.request().anchor)) {
+        RequestDefinition materialized{live.definition->handle, live.request(),
+                                       live.definition->birth, live.definition->predecessor};
+        if (!materialize_anchor(materialized.request, payload->resolved_price)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
+        }
+        armed_definition = std::make_shared<RequestDefinition>(std::move(materialized));
+        updated.definition = armed_definition;
+    }
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     if (!closing) {
         ArmedTransaction armed;
@@ -3003,7 +3148,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         armed.cause_cursor = payload->cursor;
         ArmedEvent armed_event;
         armed_event.ordinal = ordinal;
-        armed_event.definition = live.definition;
+        armed_event.definition = armed_definition;
         armed_event.before = live.authority;
         armed_event.after = armed;
         armed_event.enrollment = EnrollmentFromApplied{applied, payload->cursor};
@@ -3087,7 +3232,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     }
     ArmedEvent armed_event;
     armed_event.ordinal = arm_ord;
-    armed_event.definition = live.definition;
+    armed_event.definition = armed_definition;
     armed_event.before = live.authority;
     armed_event.after = close;
     armed_event.enrollment = close.enrollment;

@@ -274,9 +274,9 @@ def check_texts(files):
     )
     for pattern, name in required_order_members:
         if len(re.findall(pattern, order)) != 1:
-            raise ValueError(name + " must be a native_order_v5 WorkingRequestCore member")
+            raise ValueError(name + " must be a native_order_v6 WorkingRequestCore member")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
-        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v5")
+        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v6")
     order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v6")
     require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live",
                         "WorkingRequestCore::prepare_terms",

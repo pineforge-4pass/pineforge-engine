@@ -152,15 +152,20 @@ inline double protect_limit(double slipped, double limit, bool buy) noexcept {
 
 // Sell trail: stop = best - offset, must sit strictly below best.
 // Buy trail: stop = best + offset, must sit strictly above best.
-// Returns false on nonfinite/nonpositive offset or an absorbed/overflowed
-// level. A finite nonpositive stop is still reported; callers do not clamp it.
+// A zero offset is the "ride the best" spelling: the stop IS the best and the
+// strictness requirement does not apply, because the exit is the first move
+// strictly past it (trail_zero_stop_hit). Returns false on a nonfinite or
+// negative offset or an absorbed/overflowed level. A finite nonpositive stop
+// is still reported; callers do not clamp it.
 inline bool checked_trail_stop(double best, double offset, bool buy, double* stop_out) noexcept {
     if (stop_out) *stop_out = std::numeric_limits<double>::quiet_NaN();
-    if (!std::isfinite(best) || !std::isfinite(offset) || offset <= 0.0) return false;
+    if (!std::isfinite(best) || !std::isfinite(offset) || offset < 0.0) return false;
     const double stop = buy ? best + offset : best - offset;
     if (!std::isfinite(stop)) return false;
-    if (buy && !(stop > best)) return false;
-    if (!buy && !(stop < best)) return false;
+    if (offset != 0.0) {
+        if (buy && !(stop > best)) return false;
+        if (!buy && !(stop < best)) return false;
+    }
     if (stop_out) *stop_out = stop;
     return true;
 }
@@ -168,6 +173,31 @@ inline bool checked_trail_stop(double best, double offset, bool buy, double* sto
 inline bool trail_best_improves(double best, double price, bool buy) noexcept {
     if (!std::isfinite(best) || !std::isfinite(price)) return false;
     return buy ? price < best : price > best;
+}
+
+// Zero-offset ride: the level is the best itself, so only a move strictly
+// past it exits. A cursor already strictly past the best exits at the cursor;
+// an adverse remaining suffix exits at the best. A favorable or flat suffix
+// never exits, so arming at the best cannot immediately fire the same trail.
+inline std::optional<GeometricHit> trail_zero_stop_hit(
+        double from, double to, const GeometricHit& start, double best, bool buy) noexcept {
+    const double t_start = start.t;
+    const double current = start.price;
+    if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(best)
+        || !std::isfinite(current) || !std::isfinite(t_start)
+        || t_start < 0.0 || t_start > 1.0) {
+        return std::nullopt;
+    }
+    if (buy ? current > best : current < best) {
+        return GeometricHit{t_start, current, false};
+    }
+    if (from == to) return std::nullopt;
+    if (!(buy ? to > best : to < best)) return std::nullopt;
+    const auto t_level = t_for_price(from, to, best);
+    if (!t_level) return std::nullopt;
+    const double t_hit = *t_level > t_start ? *t_level : t_start;
+    if (t_hit > 1.0) return std::nullopt;
+    return GeometricHit{t_hit, best, true};
 }
 
 // Adverse remaining suffix against a frozen best. Favorable monotonic
@@ -182,6 +212,7 @@ inline std::optional<GeometricHit> trail_stop_hit(
         || t_start < 0.0 || t_start > 1.0) {
         return std::nullopt;
     }
+    if (offset == 0.0) return trail_zero_stop_hit(from, to, start, best, buy);
     const bool le = !buy;
     return first_region_entry(from, to, start, stop, le, true, grid);
 }

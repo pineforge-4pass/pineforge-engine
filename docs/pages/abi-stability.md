@@ -122,7 +122,7 @@ private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
 (`on_native_timeframe_bar`, `native_series_bar`), and the host capability macro
 is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
-instead. Native request/core/event values are `native_order_v5`, the private
+instead. Native request/core/event values are `native_order_v6`, the private
 consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
@@ -196,7 +196,7 @@ The current integrated representation uses generic broker fingerprint domain
 extension begins with `pineforge-source-adapter/v2`. Native consumer identity
 is `native-consumer/v7`, driver values own `native_driver_v5`, and run specs own
 `native_run_spec_v3`. Stable `RunIdentity` / `RequestHandle` / `Birth` remain
-`native_order_v1`; request, core, and event values own `native_order_v5`.
+`native_order_v1`; request, core, and event values own `native_order_v6`.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and

@@ -8,6 +8,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -57,7 +58,8 @@ public:
     native_order::SubmitResult submit(BacktestEngine& engine, const native_order::Request& request);
     native_order::ReplaceResult replace(BacktestEngine& engine,
                                         const native_order::RequestHandle& target,
-                                        const native_order::Request& request);
+                                        const native_order::Request& request,
+                                        native_order::ReplaceOptions options = {});
     native_order::SubmitResult submit_market(BacktestEngine& engine,
                                              const native_order::Request& request);
     native_order::ReplaceResult replace_market(BacktestEngine& engine,
@@ -65,6 +67,9 @@ public:
                                                const native_order::Request& request);
     native_order::CancelResult cancel(BacktestEngine& engine,
                                       const native_order::RequestHandle& target);
+    std::vector<NativeWorkingRequest> working_requests() const;
+    std::size_t cancel_all(BacktestEngine& engine);
+    std::size_t cancel_where(BacktestEngine& engine, std::string_view comment);
     native_order::CohortHandle cohort_open(BacktestEngine& engine);
     void cohort_add(BacktestEngine& engine, native_order::CohortHandle cohort,
                     native_order::RequestHandle origin);
@@ -361,7 +366,8 @@ private:
             native_order::CommandSurface surface);
     native_order::ReplaceResult replace_with_surface(
             BacktestEngine& engine, const native_order::RequestHandle& target,
-            const native_order::Request& request, native_order::CommandSurface surface);
+            const native_order::Request& request, native_order::CommandSurface surface,
+            native_order::ReplaceOptions options = {});
     void drain_after_applied(BacktestEngine& engine, const native_order::EventId& applied,
                              const native_order::RequestHandle& filler);
     void drain_parent_terminal(BacktestEngine& engine, const native_order::EventId& cause,

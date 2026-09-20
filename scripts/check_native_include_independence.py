@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROOT_HEADERS = (
     "native_host.hpp",
     "native_order.hpp",
+    "native_toolkit.hpp",
     "native_run_spec.hpp",
     "native_calendar.hpp",
     "execution.hpp",

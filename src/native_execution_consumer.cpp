@@ -309,6 +309,25 @@ double allowance_left_at(const native_order::Allowance& allowance, uint64_t poin
     return 0.0;
 }
 
+// The live Remaining alternatives map one-to-one onto their projection
+// spelling, which is what leaves the engine in a receipt or a snapshot.
+native_order::RemainingProjection project_live_remaining(
+        const native_order::Remaining& remaining) noexcept {
+    if (std::holds_alternative<native_order::RemainingFlattenAll>(remaining)) {
+        return native_order::RemainingProjectionFlattenAll{};
+    }
+    if (const auto* units = std::get_if<native_order::RemainingUnits>(&remaining)) {
+        return native_order::RemainingProjectionUnits{units->q};
+    }
+    if (std::holds_alternative<native_order::RemainingDeferred>(remaining)) {
+        return native_order::RemainingProjectionDeferred{};
+    }
+    if (std::holds_alternative<native_order::NoTarget>(remaining)) {
+        return native_order::RemainingProjectionNoTarget{};
+    }
+    return native_order::RemainingProjectionUnbound{};
+}
+
 bool same_allowance_bits(const native_order::Allowance& left,
                          const native_order::Allowance& right) noexcept {
     if (left.index() != right.index()) return false;
@@ -446,6 +465,10 @@ void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
         f.d(trail->offset);
         f.b(trail->arm_price.has_value());
         if (trail->arm_price) f.d(*trail->arm_price);
+        // Folded only when the tick spelling is still present, so every
+        // price-spelled trail keeps its prior digest. Acceptance resolves the
+        // spelling away, so only an attempted request can carry one.
+        if (trail->ticks) f.d(trail->ticks->ticks);
     }
 }
 
@@ -492,6 +515,12 @@ void hash_request(Fnv& f, const native_order::Request& request) noexcept {
     hash_capacity(f, request.capacity);
     hash_owner(f, request.owner);
     hash_group(f, request.group);
+    // Folded only when the request is anchored, so every absolute request
+    // keeps its prior digest.
+    if (const auto* anchor = std::get_if<native_order::FromOwnerFill>(&request.anchor)) {
+        f.d(anchor->offset);
+        f.b(anchor->ticks);
+    }
 }
 
 void hash_remaining(Fnv& f, const native_order::Remaining& remaining) noexcept {
@@ -2143,6 +2172,7 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
                     *spec);
             }
         }
+        ctx.price_tick = spec->price_tick;
     }
     ctx.surface = surface;
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
@@ -6194,7 +6224,8 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
 
 native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         BacktestEngine& engine, const native_order::RequestHandle& target,
-        const native_order::Request& request, native_order::CommandSurface surface) {
+        const native_order::Request& request, native_order::CommandSurface surface,
+        native_order::ReplaceOptions options) {
     if (!commands_allowed()) {
         throw std::runtime_error("native replace refused outside allowed phase");
     }
@@ -6203,7 +6234,8 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     try {
         ctx = make_command_context(engine, request, surface);
         prepared = requests_.prepare_replace(
-            target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+            target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
+            options);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
@@ -6266,8 +6298,10 @@ native_order::SubmitResult NativeExecutionConsumer::submit(BacktestEngine& engin
 native_order::ReplaceResult NativeExecutionConsumer::replace(
         BacktestEngine& engine,
         const native_order::RequestHandle& target,
-        const native_order::Request& request) {
-    return replace_with_surface(engine, target, request, native_order::CommandSurface::General);
+        const native_order::Request& request,
+        native_order::ReplaceOptions options) {
+    return replace_with_surface(engine, target, request, native_order::CommandSurface::General,
+                                options);
 }
 
 native_order::SubmitResult NativeExecutionConsumer::submit_market(
@@ -6327,6 +6361,56 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         }
     }
     return std::move(ok.result);
+}
+
+std::vector<NativeWorkingRequest> NativeExecutionConsumer::working_requests() const {
+    // Owning value rows in live order. The projection spelling is deliberate:
+    // an observer reads what is left to execute, never the matcher's own
+    // Remaining state.
+    std::vector<NativeWorkingRequest> out;
+    out.reserve(requests_.live().size());
+    for (const auto& live : requests_.live()) {
+        NativeWorkingRequest row;
+        row.definition = live.definition;
+        row.remaining = project_live_remaining(live.remaining);
+        row.trigger_state = live.trigger_state;
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+std::size_t NativeExecutionConsumer::cancel_all(BacktestEngine& engine) {
+    // Cancelling an owner ends its waiting children in the same command, so
+    // the answer is how many requests left the working book: exactly one
+    // CancelledEvent each.
+    const std::size_t before = requests_.live().size();
+    if (before == 0) return 0;
+    std::vector<native_order::RequestHandle> handles;
+    handles.reserve(before);
+    for (const auto& live : requests_.live()) handles.push_back(live.handle());
+    for (const auto& handle : handles) {
+        if (!requests_.find_live(handle)) continue;
+        cancel(engine, handle);
+    }
+    const std::size_t after = requests_.live().size();
+    return before > after ? before - after : 0;
+}
+
+std::size_t NativeExecutionConsumer::cancel_where(BacktestEngine& engine,
+                                                  std::string_view comment) {
+    // Only matching comments are cancelled. A dependent child still ends with
+    // a cancelled owner, but it is not counted unless its own comment matched
+    // and it was still live when the loop reached it.
+    std::vector<native_order::RequestHandle> handles;
+    for (const auto& live : requests_.live()) {
+        if (std::string_view(live.request().comment) == comment) handles.push_back(live.handle());
+    }
+    std::size_t cancelled = 0;
+    for (const auto& handle : handles) {
+        if (!requests_.find_live(handle)) continue;
+        if (cancel(engine, handle).status == native_order::CancelStatus::Cancelled) ++cancelled;
+    }
+    return cancelled;
 }
 
 native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& engine) {
@@ -6586,8 +6670,27 @@ native_order::ReplaceResult NativeStrategyHost::replace_market(
     return as_native_consumer(execution_consumer()).replace_market(*this, target, request);
 }
 
+native_order::ReplaceResult NativeStrategyHost::replace(
+        const native_order::RequestHandle& target, const native_order::Request& request,
+        native_order::ReplaceOptions options) {
+    return as_native_consumer(execution_consumer()).replace(*this, target, request, options);
+}
+
 native_order::CancelResult NativeStrategyHost::cancel(const native_order::RequestHandle& target) {
     return as_native_consumer(execution_consumer()).cancel(*this, target);
+}
+
+std::vector<NativeWorkingRequest> NativeStrategyHost::native_working_requests() const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .working_requests();
+}
+
+std::size_t NativeStrategyHost::cancel_all() {
+    return as_native_consumer(execution_consumer()).cancel_all(*this);
+}
+
+std::size_t NativeStrategyHost::cancel_where(std::string_view comment) {
+    return as_native_consumer(execution_consumer()).cancel_where(*this, comment);
 }
 
 native_order::CohortHandle NativeStrategyHost::cohort_open() {

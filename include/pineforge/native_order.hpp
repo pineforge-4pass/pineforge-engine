@@ -140,11 +140,44 @@ struct StopLimit {
     double stop = 0.0;
     double limit = 0.0;
 };
+// Trail offset spelled in price ticks instead of a price distance. The
+// acceptance path resolves it against the run's price tick, writes the
+// product into Trail::offset and clears the spelling, so a stored definition
+// always carries a plain price distance and can never resolve twice.
+struct TrailTicks {
+    double ticks = 0.0;
+};
+// offset is a price distance: the stop rides `offset` behind the running
+// best. Zero is legal and means "ride the best": the exit is the first
+// adverse move past it. Negative and nonfinite offsets are rejected.
 struct Trail {
     double offset = 0.0;
     std::optional<double> arm_price;
+    std::optional<TrailTicks> ticks = std::nullopt;
 };
 using Trigger = std::variant<Market, Limit, Stop, StopLimit, Trail>;
+
+// Where a request's trigger level comes from. Absolute is the level written
+// in the trigger itself. FromOwnerFill defers it to the owner's fill: the
+// level becomes fill + offset when the owner arms the request, so a bracket
+// leg can be placed before its parent has a price. offset is signed (adverse
+// is negative) and is spelled in price ticks when `ticks` is set; acceptance
+// resolves a tick spelling exactly like TrailTicks, in place, once.
+struct Absolute {};
+struct FromOwnerFill {
+    double offset = 0.0;
+    bool ticks = false;
+};
+using TriggerAnchor = std::variant<Absolute, FromOwnerFill>;
+
+// Replacement behaviour that is not expressible in the successor request.
+// retain_trigger_state carries the predecessor's live trigger state (a
+// tracking trail's best, an already active stop) into the successor instead
+// of restarting it; predecessor and successor must hold the same trigger
+// alternative.
+struct ReplaceOptions {
+    bool retain_trigger_state = false;
+};
 
 struct ImmediateRemaining {};
 struct PointBudget {
@@ -194,6 +227,7 @@ struct Request {
     Capacity capacity = ImmediateRemaining{};
     Owner owner = Independent{};
     Group group = NoGroup{};
+    TriggerAnchor anchor = Absolute{};
 };
 
 inline OrderIntent intent_from_physical(const execution::Action& action) {
@@ -215,7 +249,8 @@ inline bool has_market_defaults(const Request& request) noexcept {
     return std::holds_alternative<Market>(request.trigger)
         && std::holds_alternative<ImmediateRemaining>(request.capacity)
         && std::holds_alternative<Independent>(request.owner)
-        && std::holds_alternative<NoGroup>(request.group);
+        && std::holds_alternative<NoGroup>(request.group)
+        && std::holds_alternative<Absolute>(request.anchor);
 }
 
 struct EventId {
@@ -884,6 +919,10 @@ struct CommandContext {
     // that the matching path then reports as TermsUnresolved.  Appended last so
     // the existing positional aggregate initializers keep their meaning.
     std::optional<double> sizing_units;
+    // The run's price tick, needed only to resolve a tick-spelled trail
+    // offset or trigger anchor. A tick spelling without a usable tick here is
+    // rejected rather than silently read as a price distance.
+    std::optional<double> price_tick;
 };
 
 struct EvaluationContext {
@@ -1081,7 +1120,8 @@ public:
                           int64_t decision_time_ms,
                           uint64_t& next_order_incarnation,
                           uint64_t& next_timeline_ordinal,
-                          std::optional<double> quantity_grid = std::nullopt);
+                          std::optional<double> quantity_grid = std::nullopt,
+                          ReplaceOptions options = {});
 
     CancelResult cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal);
 
@@ -1097,7 +1137,8 @@ public:
                                     const Request& request,
                                     const CommandContext& context,
                                     uint64_t& next_order_incarnation,
-                                    uint64_t& next_timeline_ordinal);
+                                    uint64_t& next_timeline_ordinal,
+                                    ReplaceOptions options = {});
     PreparedCancel prepare_cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal);
 
     InstalledCommand<SubmitResult> install_submit(PreparedSubmit&& prepared) noexcept;
@@ -1207,6 +1248,11 @@ private:
             const Request& request,
             const CommandContext& context,
             const std::optional<RequestHandle>& replace_target) const;
+    // Resolves tick-spelled trail offsets and trigger anchors in place
+    // against context.price_tick. Runs after validate_request, on the staged
+    // copy that becomes the stored definition.
+    static std::optional<RequestRejectReason> resolve_tick_spellings(
+            Request& request, const CommandContext& context);
     LiveRequest make_live(DefinitionRef definition,
                           const CommandContext& context,
                           EventId accepted) const;
@@ -1397,6 +1443,7 @@ static_assert(std::variant_size_v<CommandEvent> == 17);
 static_assert(std::variant_size_v<ExecutionPlan> == 4);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);
+static_assert(std::variant_size_v<TriggerAnchor> == 2);
 
 }  // inline namespace native_order_v6
 }  // namespace pineforge::native_order

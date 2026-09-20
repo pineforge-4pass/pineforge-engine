@@ -491,10 +491,10 @@ class NativeVersions(unittest.TestCase):
     def test_order_namespace_is_derived_not_literal(self):
         from check_native_cpp_abi import current_order_namespace
         self.assertEqual(current_order_namespace(
-            'inline namespace native_order_v5 { struct X {}; }'), 'native_order_v5')
+            'inline namespace native_order_v6 { struct X {}; }'), 'native_order_v6')
         with self.assertRaises(RuntimeError):
             current_order_namespace(
-                'inline namespace native_order_v5 { }\n'
+                'inline namespace native_order_v6 { }\n'
                 'inline namespace native_order_v3 { }')
 
     def test_missing_cancelled_mutation_is_exactly_one(self):

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -338,6 +339,17 @@ struct NativeTrailState {
     std::uint64_t activation_ordinal = 0;
 };
 
+// Owning value row for one live request, copied at query time. The
+// definition is the accepted (and, for an anchored leg, already materialized)
+// request; remaining is what is left to execute; trigger_state is where the
+// request's own trigger has reached. Later commands do not invalidate a row
+// that was already returned.
+struct NativeWorkingRequest {
+    native_order::DefinitionRef definition;
+    native_order::RemainingProjection remaining = native_order::RemainingProjectionUnbound{};
+    native_order::TriggerState trigger_state = native_order::MarketReady{};
+};
+
 enum class NativeCurrentRefusal : std::uint8_t {
     NoExecutionContext = 0, Reentrant = 1, InvalidHandle = 2, NotWorking = 3,
     NotAcceptedInCallback = 4, UnsupportedRequest = 5, UnreadyOwner = 6,
@@ -519,7 +531,17 @@ public:
     native_order::SubmitResult submit_market(const native_order::Request& request);
     native_order::ReplaceResult replace_market(const native_order::RequestHandle& target,
                                                const native_order::Request& request);
+    native_order::ReplaceResult replace(const native_order::RequestHandle& target,
+                                        const native_order::Request& request,
+                                        native_order::ReplaceOptions options);
     native_order::CancelResult cancel(const native_order::RequestHandle& target);
+    // Working-book snapshot and bulk cancellation. cancel_all returns how
+    // many requests left the book (one CancelledEvent each, dependants
+    // included); cancel_where cancels exactly the live requests carrying that
+    // comment and returns how many of them it cancelled.
+    std::vector<NativeWorkingRequest> native_working_requests() const;
+    std::size_t cancel_all();
+    std::size_t cancel_where(std::string_view comment);
     native_order::CohortHandle cohort_open();
     void cohort_add(native_order::CohortHandle cohort, native_order::RequestHandle origin);
     void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);
