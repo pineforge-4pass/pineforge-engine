@@ -39,6 +39,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -863,6 +864,35 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
 /* `has_risk_tail` is false for a caller compiled against the base layout of
  * pf_native_run_spec_ext_v1 (PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE): its struct
  * stops at `reserved0`, so the risk fields must not be read at all. */
+/* One subscription list, shared by the configure-time block and the
+ * begin-time declaration so both read a row the same way. */
+int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t n,
+                            std::vector<pineforge::NativeTimeframeSubscription>& out) {
+    if (n > 0 && !rows) return PF_NATIVE_E_ARGUMENT;
+    std::vector<pineforge::NativeTimeframeSubscription> subscriptions;
+    subscriptions.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        const auto& row = rows[i];
+        if (row.struct_size != sizeof(pf_native_subscription_v1)) return PF_NATIVE_E_STRUCT;
+        if (!row.tf) return PF_NATIVE_E_ARGUMENT;
+        if (row.lookahead > 1u) return PF_NATIVE_E_TAG;
+        if (row.gaps > 1u) return PF_NATIVE_E_TAG;
+        if (row.authoritative_n < 0
+            || (row.authoritative_n > 0 && !row.authoritative_bars)) {
+            return PF_NATIVE_E_ARGUMENT;
+        }
+        pineforge::NativeTimeframeSubscription subscription;
+        subscription.tf = row.tf;
+        subscription.lookahead = row.lookahead != 0u;
+        subscription.gaps = row.gaps != 0u;
+        const auto* bars = reinterpret_cast<const Bar*>(row.authoritative_bars);
+        subscription.authoritative_bars.assign(bars, bars + row.authoritative_n);
+        subscriptions.push_back(std::move(subscription));
+    }
+    out = std::move(subscriptions);
+    return PF_NATIVE_OK;
+}
+
 int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
                    bool has_risk_tail) {
     if (ext.present_mask & ~0x7fu) return PF_NATIVE_E_TAG;
@@ -974,28 +1004,11 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
         spec.risk = risk;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS) {
-        if (ext.subscriptions_n > 0 && !ext.subscriptions) return PF_NATIVE_E_ARGUMENT;
-        std::vector<pineforge::NativeTimeframeSubscription> subscriptions;
-        subscriptions.reserve(ext.subscriptions_n);
-        for (std::uint32_t i = 0; i < ext.subscriptions_n; ++i) {
-            const auto& row = ext.subscriptions[i];
-            if (row.struct_size != sizeof(pf_native_subscription_v1)) return PF_NATIVE_E_STRUCT;
-            if (!row.tf) return PF_NATIVE_E_ARGUMENT;
-            if (row.lookahead > 1u) return PF_NATIVE_E_TAG;
-            if (row.gaps > 1u) return PF_NATIVE_E_TAG;
-            if (row.authoritative_n < 0
-                || (row.authoritative_n > 0 && !row.authoritative_bars)) {
-                return PF_NATIVE_E_ARGUMENT;
-            }
-            pineforge::NativeTimeframeSubscription subscription;
-            subscription.tf = row.tf;
-            subscription.lookahead = row.lookahead != 0u;
-            subscription.gaps = row.gaps != 0u;
-            const auto* bars = reinterpret_cast<const Bar*>(row.authoritative_bars);
-            subscription.authoritative_bars.assign(bars, bars + row.authoritative_n);
-            subscriptions.push_back(std::move(subscription));
+        if (int rc = translate_subscriptions(ext.subscriptions, ext.subscriptions_n,
+                                             spec.subscriptions);
+            rc != PF_NATIVE_OK) {
+            return rc;
         }
-        spec.subscriptions = std::move(subscriptions);
     }
     return PF_NATIVE_OK;
 }
@@ -1279,6 +1292,24 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out) {
         out->phase = static_cast<std::uint32_t>(state.phase);
         out->completion = static_cast<std::uint32_t>(state.completion);
         return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
+                                                    const pf_native_subscription_v1* rows,
+                                                    int n) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (n < 0 || (n > 0 && !rows)) return PF_NATIVE_E_ARGUMENT;
+        std::vector<pineforge::NativeTimeframeSubscription> declared;
+        if (int rc = translate_subscriptions(rows, static_cast<std::uint32_t>(n), declared);
+            rc != PF_NATIVE_OK) {
+            return rc;
+        }
+        return host->declare_timeframe_subscriptions(std::move(declared))
+            ? PF_NATIVE_OK
+            : PF_NATIVE_E_STATE;
     });
 }
 

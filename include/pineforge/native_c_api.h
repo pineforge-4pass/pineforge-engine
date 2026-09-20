@@ -920,6 +920,22 @@ PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
  *  `sizeof(pf_native_state_v1)` before the call. */
 PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out);
 
+/** Declare this run's higher-timeframe series from inside `on_run_begin` —
+ *  `declare_timeframe_subscriptions()`.
+ *
+ *  The list REPLACES the `subscriptions` staged by
+ *  #strategy_configure_native_ext_v1; the kernel registers from the staged
+ *  spec after the callback returns, so the run's continuation identity folds
+ *  what actually ran. @p n may be 0 (with @p rows NULL), which declares no
+ *  series at all.
+ *  @return PF_NATIVE_OK when the list was staged; PF_NATIVE_E_STATE anywhere
+ *  but inside `on_run_begin` and for a list this run's input timeframe would
+ *  refuse — the same validation #strategy_configure_native_ext_v1 applies —
+ *  in which case nothing is staged and nothing changes. */
+PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
+                                                    const pf_native_subscription_v1* rows,
+                                                    int n);
+
 /** The bar so far at the current cursor — `current_partial_bar()`.
  *
  *  Open of the script bar's first modeled point, running high/low, close at

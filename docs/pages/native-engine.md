@@ -2325,7 +2325,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-27 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+29 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -2390,6 +2390,18 @@ other four always answer: `_risk_state_v1` (L9's ledger, all zeros for a run
 that declares no risk block), `_marked_equity_v1`, `_recalculations_v1` (the
 driven and suppressed counts — the script bar's own close calculation is not
 a recalculation, so a `BarClose` run drives zero) and `_continuation_hash_v1`.
+
+`strategy_native_cancel_where_v1` is `cancel_where()`: it matches the text
+the request carries in the field the third argument names — its **comment**,
+what a group of requests can share, or its **label**, one request's own
+identity — and answers how many left the book. `""` is the text a request
+carrying no such field matches, so it takes the comment-less requests rather
+than all of them; NULL is `PF_NATIVE_E_ARGUMENT`.
+`strategy_native_declare_subscriptions_v1` is
+`declare_timeframe_subscriptions()`: called from inside `on_run_begin`, it
+replaces the `subscriptions` the extension staged, and anywhere else — or for
+a list this run's input timeframe would refuse — it stages nothing and
+answers `PF_NATIVE_E_STATE`.
 
 **The request.** `pf_native_request_v1` is translated field by field into
 `native_order::Request` and is never cast onto it. It carries the intent

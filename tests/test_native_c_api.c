@@ -1300,6 +1300,180 @@ static void check_live_accessors(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── cancel_where and the begin-time subscription declaration ───── */
+
+typedef struct command_state {
+    pf_strategy_t host;
+    int           calculations;
+    int           failures;
+    int           cancelled_fade;
+    int           cancelled_unmatched;
+    int           cancelled_blank;
+    int           working_after_fade;
+    int           working_after_blank;
+    int           declared_in_begin;
+    int           declared_refused_in_bar;
+    int           declared_refused_finer;
+    int           series_after_declaration;
+} command_state;
+
+static int resting_limit(command_state* state, const char* label, const char* comment,
+                         double price) {
+    pf_native_request_v1 request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.p1 = price;
+    request.label = label;
+    request.comment = comment;
+    return strategy_native_submit_v1(state->host, &request, NULL, NULL);
+}
+
+static int command_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    command_state* state = (command_state*)user;
+    pf_native_subscription_v1 row;
+    (void)at;
+    ++state->calculations;
+
+    if (state->calculations == 2) {
+        /* Three resting buys far below the feed: they never match, so the
+         * only thing that takes them off the book is a cancellation. */
+        LCHECK(state, resting_limit(state, "fade-a", "fade", bar->low - 40.0) == PF_NATIVE_OK,
+               "fade-a refused");
+        LCHECK(state, resting_limit(state, "fade-b", "fade", bar->low - 41.0) == PF_NATIVE_OK,
+               "fade-b refused");
+        LCHECK(state, resting_limit(state, "hold-a", "hold", bar->low - 42.0) == PF_NATIVE_OK,
+               "hold-a refused");
+        /* One with no comment at all, to pin what NULL means. */
+        LCHECK(state, resting_limit(state, "bare-a", NULL, bar->low - 43.0) == PF_NATIVE_OK,
+               "bare-a refused");
+        LCHECK(state, strategy_native_working_len_v1(state->host) == 4,
+               "the four resting requests are not all working");
+
+        /* A comment no live request carries cancels nothing and is not an
+         * error. */
+        state->cancelled_unmatched = strategy_native_cancel_where_v1(
+            state->host, "no-such-comment", PF_NATIVE_FIELD_COMMENT);
+        /* The two that share the comment leave; the other two stay. */
+        state->cancelled_fade =
+            strategy_native_cancel_where_v1(state->host, "fade", PF_NATIVE_FIELD_COMMENT);
+        state->working_after_fade = strategy_native_working_len_v1(state->host);
+        /* "" is the text a comment-less request carries: it takes that one and
+         * leaves "hold" alone. */
+        state->cancelled_blank =
+            strategy_native_cancel_where_v1(state->host, "", PF_NATIVE_FIELD_COMMENT);
+        state->working_after_blank = strategy_native_working_len_v1(state->host);
+        return 0;
+    }
+    if (state->calculations == 3) {
+        /* Legal only inside on_run_begin. */
+        memset(&row, 0, sizeof(row));
+        row.struct_size = (uint32_t)sizeof(row);
+        row.tf = "15";
+        state->declared_refused_in_bar =
+            strategy_native_declare_subscriptions_v1(state->host, &row, 1);
+        return 0;
+    }
+    if (state->calculations == 20) {
+        pf_bar_t series;
+        memset(&series, 0, sizeof(series));
+        state->series_after_declaration =
+            (strategy_native_series_bar_v1(state->host, 0u, &series) == PF_NATIVE_OK
+             && series.high >= series.low) ? 1 : 0;
+    }
+    return 0;
+}
+
+static int command_on_run_begin(void* user) {
+    command_state* state = (command_state*)user;
+    pf_native_subscription_v1 row;
+
+    /* A series strictly finer than the input is a different contract: the
+     * same validation configure applies, so the kernel refuses and stages
+     * nothing. */
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "1";
+    state->declared_refused_finer =
+        strategy_native_declare_subscriptions_v1(state->host, &row, 1);
+
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "15";
+    state->declared_in_begin = strategy_native_declare_subscriptions_v1(state->host, &row, 1);
+    return 0;
+}
+
+static void check_command_spellings(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_native_subscription_v1 row;
+    command_state state;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = command_on_bar;
+    table.on_run_begin = command_on_run_begin;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "command host create failed");
+    if (!state.host) return;
+
+    CHECK_EQ_INT(strategy_native_cancel_where_v1(NULL, "x", PF_NATIVE_FIELD_COMMENT),
+                 PF_NATIVE_E_HANDLE, "cancel_where accepted a NULL handle");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(NULL, NULL, 0), PF_NATIVE_E_HANDLE,
+                 "declare_subscriptions accepted a NULL handle");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, NULL, 2),
+                 PF_NATIVE_E_ARGUMENT, "declare_subscriptions accepted a NULL row array");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, NULL, -1),
+                 PF_NATIVE_E_ARGUMENT, "declare_subscriptions accepted a negative count");
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row) - 4u;
+    row.tf = "15";
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, &row, 1),
+                 PF_NATIVE_E_STRUCT, "declare_subscriptions accepted a mis-sized row");
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "15";
+    row.lookahead = 2u;
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, &row, 1),
+                 PF_NATIVE_E_TAG, "declare_subscriptions accepted an unknown lookahead");
+
+    /* Outside on_run_begin the kernel refuses; before a run there is no
+     * callback at all. */
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "15";
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, &row, 1),
+                 PF_NATIVE_E_STATE, "declare_subscriptions was legal before the run");
+
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "command configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the command run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback command rows failed");
+
+    CHECK_EQ_INT(state.cancelled_unmatched, 0, "cancel_where cancelled an unmatched comment");
+    CHECK_EQ_INT(state.cancelled_fade, 2, "cancel_where did not cancel both fades");
+    CHECK_EQ_INT(state.working_after_fade, 2, "cancel_where took the wrong requests");
+    CHECK_EQ_INT(state.cancelled_blank, 1,
+                 "the empty comment did not cancel exactly the comment-less request");
+    CHECK_EQ_INT(state.working_after_blank, 1, "the empty comment cancelled too much");
+
+    /* The spec staged no subscription; the run's series came from the
+     * begin-time declaration alone. */
+    CHECK_EQ_INT(state.declared_in_begin, PF_NATIVE_OK,
+                 "the begin-time subscription declaration was refused");
+    CHECK_EQ_INT(state.declared_refused_finer, PF_NATIVE_E_STATE,
+                 "a finer-than-input series was staged");
+    CHECK_EQ_INT(state.declared_refused_in_bar, PF_NATIVE_E_STATE,
+                 "declare_subscriptions was legal outside on_run_begin");
+    CHECK(state.series_after_declaration,
+          "the declared series delivered no bucket");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -1310,5 +1484,6 @@ int pf_native_c_api_checks(void) {
     check_risk_event();
     check_absent_accessors();
     check_live_accessors();
+    check_command_spellings();
     return failures;
 }
