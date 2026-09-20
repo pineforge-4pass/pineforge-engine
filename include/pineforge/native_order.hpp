@@ -226,16 +226,36 @@ struct Trail {
 };
 using Trigger = std::variant<Market, Limit, Stop, StopLimit, Trail>;
 
+// How a materialized anchored level is snapped onto the run's price tick
+// ladder (NativeRunSpec::price_tick). Raw keeps `fill + offset` exactly,
+// which is the established behaviour. HalfUp is the nearest tick with ties
+// away from zero. Directional rounds toward the price region the resting leg
+// needs, relative to the leg's trigger kind and side exactly as
+// NativeGridRounding documents it: a buy limit down and a sell limit up, a
+// stop the other way; a trail arm threshold is reached from the favourable
+// side like a limit and rounds like one. Either rounding needs a positive
+// price tick, checked at acceptance exactly like a tick-spelled offset. This
+// is a generic instrument grid: a source language's own trigger projection
+// is not spelled here (a host restates the level through its arm hook).
+enum class NativeAnchorRounding : std::uint8_t {
+    Raw = 0,
+    HalfUp = 1,
+    Directional = 2,
+};
+
 // Where a request's trigger level comes from. Absolute is the level written
 // in the trigger itself. FromOwnerFill defers it to the owner's fill: the
 // level becomes fill + offset when the owner arms the request, so a bracket
 // leg can be placed before its parent has a price. offset is signed (adverse
 // is negative) and is spelled in price ticks when `ticks` is set; acceptance
-// resolves a tick spelling exactly like TrailTicks, in place, once.
+// resolves a tick spelling exactly like TrailTicks, in place, once. The
+// materialized level is then snapped per `rounding`, which is appended last
+// so every existing aggregate initializer keeps its meaning.
 struct Absolute {};
 struct FromOwnerFill {
     double offset = 0.0;
     bool ticks = false;
+    NativeAnchorRounding rounding = NativeAnchorRounding::Raw;
 };
 using TriggerAnchor = std::variant<Absolute, FromOwnerFill>;
 
@@ -1105,6 +1125,15 @@ struct EvaluationContext {
     std::optional<Side> cohort_side;
 };
 
+// What the consumer hands to prepare_owner_applied for an anchored leg's
+// materialization, the way acceptance receives CommandContext::price_tick.
+// price_tick is the ladder a rounded anchor snaps to; an anchor whose
+// rounding is Raw never reads it. The core stays host-free: nothing here is
+// a host, only values.
+struct ArmContext {
+    std::optional<double> price_tick;
+};
+
 struct BeginTrailTracking {
     MatchCursor cursor{};
     double reached_price = 0.0;
@@ -1390,11 +1419,15 @@ public:
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
                                                        const RequestHandle& recipient,
                                                        uint64_t& next_timeline_ordinal);
+    // `arm` carries the materialization facts of an anchored leg (the price
+    // tick a rounded anchor snaps to); a default-constructed value is exactly
+    // the pre-rounding behaviour, so every existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_owner_applied(
             const EventId& applied,
             const RequestHandle& child,
             const std::optional<OpeningObservation>& observation,
-            uint64_t& next_timeline_ordinal);
+            uint64_t& next_timeline_ordinal,
+            const ArmContext& arm = {});
     Preparation<PreparedMutation> prepare_bound_expiry(const EventId& physical_cause,
                                                        const RequestHandle& child,
                                                        const TargetObservation& observation,

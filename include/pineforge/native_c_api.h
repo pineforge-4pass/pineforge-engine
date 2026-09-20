@@ -168,6 +168,15 @@ typedef enum pf_native_anchor_e {
     PF_NATIVE_ANCHOR_FROM_OWNER_FILL = 1  /**< owner fill + `anchor_offset` (signed). */
 } pf_native_anchor_t;
 
+/** How a materialized anchored level snaps onto the run's price tick ladder —
+ *  `native_order::NativeAnchorRounding` (L7b). RAW is the established
+ *  behaviour; the other two need `price_tick > 0` at acceptance. */
+typedef enum pf_native_anchor_rounding_e {
+    PF_NATIVE_ANCHOR_ROUNDING_RAW         = 0, /**< fill + offset exactly. */
+    PF_NATIVE_ANCHOR_ROUNDING_HALF_UP     = 1, /**< Nearest tick, ties away from zero. */
+    PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL = 2  /**< Toward the region the leg needs. */
+} pf_native_anchor_rounding_t;
+
 /** Capacity — the alternative index of `native_order::Capacity`. */
 typedef enum pf_native_capacity_e {
     PF_NATIVE_CAPACITY_IMMEDIATE    = 0, /**< Whole remaining at one point. */
@@ -482,7 +491,15 @@ typedef struct pf_native_state_v1 {
 
 /** One order request. Translated field by field into `native_order::Request`;
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
- *  set only the fields the chosen `intent` and `trigger` document. */
+ *  set only the fields the chosen `intent` and `trigger` document.
+ *
+ *  This struct has TWO published layouts and the runtime accepts either: the
+ *  base layout the L13 lane first shipped, whose length is
+ *  #PF_NATIVE_REQUEST_V1_BASE_SIZE, and the current one, which appends the
+ *  L7b anchored-leg tail (`anchor_rounding`). A caller compiled against the
+ *  base layout keeps working unchanged and simply gets the tail's defaults
+ *  (RAW). Any other `struct_size` is PF_NATIVE_E_STRUCT. The tail is
+ *  append-only: nothing above it moved. */
 typedef struct pf_native_request_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_request_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
@@ -530,7 +547,22 @@ typedef struct pf_native_request_v1 {
      * NULL is the empty string. */
     const char* label;
     const char* comment;
+
+    /* ── The additive anchored-leg tail (L7b). Read only when `struct_size`
+     * is the current sizeof; a caller sending the base layout stops at
+     * `comment` above and gets every default. ── */
+    uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_e, FROM_OWNER_FILL only. */
+    uint32_t reserved1;           /**< Must be 0. */
 } pf_native_request_v1;
+
+/** Byte length of #pf_native_request_v1 as the L13 lane first published it,
+ *  before the anchored-leg tail was appended. It is the offset of the first
+ *  appended field, so it stays correct on every target this header builds
+ *  for — it is not a literal. The runtime accepts this length as well as the
+ *  current `sizeof`, which is what makes the tail additive rather than a
+ *  layout break. */
+#define PF_NATIVE_REQUEST_V1_BASE_SIZE \
+    ((uint32_t)offsetof(pf_native_request_v1, anchor_rounding))
 
 /** One declared higher-timeframe series of #pf_native_run_spec_ext_v1.
  *

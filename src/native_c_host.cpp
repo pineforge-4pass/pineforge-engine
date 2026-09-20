@@ -85,6 +85,18 @@ static_assert(static_cast<int>(pineforge::NativeFailureCode::CallbackException)
                   == PF_NATIVE_FAILURE_CALLBACK,
               "PF_NATIVE_FAILURE_CALLBACK must mirror NativeFailureCode::CallbackException");
 static_assert(static_cast<int>(no::Side::Short) == PF_NATIVE_SIDE_SHORT, "Side drifted");
+static_assert(static_cast<int>(no::NativeAnchorRounding::Raw) == PF_NATIVE_ANCHOR_ROUNDING_RAW
+                  && static_cast<int>(no::NativeAnchorRounding::HalfUp)
+                         == PF_NATIVE_ANCHOR_ROUNDING_HALF_UP
+                  && static_cast<int>(no::NativeAnchorRounding::Directional)
+                         == PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL,
+              "NativeAnchorRounding drifted");
+/* The anchored-leg tail is append-only: the base layout must still end
+ * exactly where PF_NATIVE_REQUEST_V1_BASE_SIZE says, and the tail must be
+ * the two fields below it and nothing else. */
+static_assert(sizeof(pf_native_request_v1)
+                  == PF_NATIVE_REQUEST_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
+              "the pf_native_request_v1 anchored-leg tail moved");
 static_assert(static_cast<int>(no::SizeTime::AtAcceptance) == PF_NATIVE_SIZE_AT_ACCEPTANCE,
               "SizeTime drifted");
 static_assert(static_cast<int>(no::ExecutionGridPolicy::ExplicitUnits)
@@ -584,7 +596,11 @@ int translate_owner(const pf_native_request_v1& in, const no::RunIdentity& run,
 
 int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run,
                       no::Request& out) {
-    if (in.struct_size != sizeof(pf_native_request_v1)
+    /* Two published layouts: the base one the L13 lane first shipped and the
+     * current one with the L7b anchored-leg tail. A base-sized caller's tail
+     * is never read; it gets the tail's defaults. */
+    const bool has_anchor_tail = in.struct_size == sizeof(pf_native_request_v1);
+    if ((!has_anchor_tail && in.struct_size != PF_NATIVE_REQUEST_V1_BASE_SIZE)
         || in.version != PF_NATIVE_API_VERSION) {
         return PF_NATIVE_E_STRUCT;
     }
@@ -620,13 +636,33 @@ int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run
     }
 
     if (in.anchor_offset_in_ticks > 1u) return PF_NATIVE_E_TAG;
+    no::NativeAnchorRounding rounding = no::NativeAnchorRounding::Raw;
+    if (has_anchor_tail) {
+        if (in.reserved1 != 0u) return PF_NATIVE_E_TAG;
+        switch (in.anchor_rounding) {
+        case PF_NATIVE_ANCHOR_ROUNDING_RAW: break;
+        case PF_NATIVE_ANCHOR_ROUNDING_HALF_UP:
+            rounding = no::NativeAnchorRounding::HalfUp;
+            break;
+        case PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL:
+            rounding = no::NativeAnchorRounding::Directional;
+            break;
+        default: return PF_NATIVE_E_TAG;
+        }
+    }
     switch (in.anchor) {
     case PF_NATIVE_ANCHOR_ABSOLUTE:
+        if (rounding != no::NativeAnchorRounding::Raw) return PF_NATIVE_E_TAG;
         out.anchor = no::Absolute{};
         break;
-    case PF_NATIVE_ANCHOR_FROM_OWNER_FILL:
-        out.anchor = no::FromOwnerFill{in.anchor_offset, in.anchor_offset_in_ticks != 0u};
+    case PF_NATIVE_ANCHOR_FROM_OWNER_FILL: {
+        no::FromOwnerFill anchor;
+        anchor.offset = in.anchor_offset;
+        anchor.ticks = in.anchor_offset_in_ticks != 0u;
+        anchor.rounding = rounding;
+        out.anchor = anchor;
         break;
+    }
     default: return PF_NATIVE_E_TAG;
     }
 

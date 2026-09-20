@@ -587,10 +587,14 @@ void hash_request(Fnv& f, const native_order::Request& request) noexcept {
     hash_owner(f, request.owner);
     hash_group(f, request.group);
     // Folded only when the request is anchored, so every absolute request
-    // keeps its prior digest.
+    // keeps its prior digest; the rounding folds only when set, so every
+    // Raw anchor keeps the digest it had before the rounding existed.
     if (const auto* anchor = std::get_if<native_order::FromOwnerFill>(&request.anchor)) {
         f.d(anchor->offset);
         f.b(anchor->ticks);
+        if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {
+            f.u(static_cast<uint64_t>(anchor->rounding));
+        }
     }
 }
 
@@ -3414,6 +3418,11 @@ void NativeExecutionConsumer::drain_after_applied(
         }
 
         const auto children = requests_.waiting_children(filler);
+        // The arm of an anchored leg reads the run's price tick (the ladder a
+        // rounded anchor snaps to) exactly as acceptance does through
+        // CommandContext::price_tick; the core itself stays host-free.
+        native_order::ArmContext arm;
+        if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;
         for (const auto& child : children) {
             if (failed()) return;
             std::optional<native_order::OpeningObservation> observation;
@@ -3421,7 +3430,7 @@ void NativeExecutionConsumer::drain_after_applied(
                 observation = read_opening(engine, filler, engine.position_cycle_seq_);
             }
             auto prep = requests_.prepare_owner_applied(applied, child, observation,
-                                                        next_timeline_ordinal_);
+                                                        next_timeline_ordinal_, arm);
             if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;

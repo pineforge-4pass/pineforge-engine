@@ -260,7 +260,8 @@ def check_texts(files):
                     "OpeningShape", "ExecutionGridPolicy", "ExecutionTerms", "TermsResolvedInput",
                     "TermsResolvedEvent", "NativeCandidatePriceKind",
                     "CashValue", "EquityFraction", "SizeTime", "SizePrice", "Sized",
-                    "ScopeClaim", "ScopeBasis", "ScopeFraction"),
+                    "ScopeClaim", "ScopeBasis", "ScopeFraction",
+                    "NativeAnchorRounding", "FromOwnerFill", "ArmContext"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -306,6 +307,21 @@ def check_texts(files):
                    'boolreserve_percent_fee=false;'):
         if pinned not in sized:
             raise ValueError('Sized omits a pinned default: ' + pinned)
+    # R5 L7b: the anchor rounding is appended last on FromOwnerFill with a Raw
+    # default, so every existing {offset, ticks} initializer keeps its
+    # meaning and every Raw anchor keeps its continuation digest.
+    anchor = re.sub(r'\s+', '', body(order, r'struct\s+FromOwnerFill\s*\{', 'owner-fill anchor'))
+    if anchor != ('doubleoffset=0.0;boolticks=false;'
+                  'NativeAnchorRoundingrounding=NativeAnchorRounding::Raw;'):
+        raise ValueError('FromOwnerFill must keep its member order and Raw rounding default')
+    anchor_rounding = body(order, r'enum\s+class\s+NativeAnchorRounding\s*:[^{]+\{',
+                           'anchor rounding')
+    if re.findall(r'(\w+)\s*=\s*(\d+)', anchor_rounding) != [
+            ('Raw', '0'), ('HalfUp', '1'), ('Directional', '2')]:
+        raise ValueError('NativeAnchorRounding must keep Raw=0, HalfUp=1, Directional=2')
+    arm_context = re.sub(r'\s+', '', body(order, r'struct\s+ArmContext\s*\{', 'arm context'))
+    if 'std::optional<double>price_tick;' not in arm_context:
+        raise ValueError('ArmContext omits the price tick a rounded anchor snaps to')
     fraction = re.sub(r'\s+', '', body(order, r'struct\s+ScopeFraction\s*\{', 'scope fraction'))
     for pinned in ('ScopeClaimclaim=ScopeClaim::Gross;',
                    'ScopeBasisbasis=ScopeBasis::AtMatch;'):
@@ -605,6 +621,14 @@ def check_texts(files):
                  'f.u(static_cast<uint64_t>(fraction->basis));'):
         if fold not in consumer_src:
             raise ValueError('native continuation hash omits placement-time sizing: ' + fold)
+    # R5 L7b anchored legs. The anchor rounding folds only when it is set,
+    # so every Raw anchor keeps its established continuation identity; the
+    # arm reads the run's price tick through the core's ArmContext.
+    for fold in ('if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {',
+                 'f.u(static_cast<uint64_t>(anchor->rounding));',
+                 'if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;'):
+        if fold not in consumer_src:
+            raise ValueError('native consumer omits the anchored-leg fold/arm token: ' + fold)
     for token in ('lower->sample_eligibility',
                   'IntrabarPath::SampleEligibility::DistributionSamples',
                   'const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;',

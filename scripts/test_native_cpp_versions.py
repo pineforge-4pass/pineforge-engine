@@ -129,6 +129,29 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'class NativePathOrderScope {',
                     'class RemovedNativePathOrderScope {')
 
+    def test_anchored_leg_rounding_is_pinned_and_folded_when_set(self):
+        # R5 L7b: the per-anchor rounding is a native_order_v6 member appended
+        # last with a Raw default, its enumerators are pinned, the arm reads
+        # the tick through ArmContext, and the fold is conditional.
+        for before, after in (
+            ('enum class NativeAnchorRounding : std::uint8_t {',
+             'enum class MissingAnchorRounding : std::uint8_t {'),
+            ('    NativeAnchorRounding rounding = NativeAnchorRounding::Raw;\n', ''),
+            ('    HalfUp = 1,\n    Directional = 2,', '    Directional = 1,\n    HalfUp = 2,'),
+            ('struct ArmContext {\n    std::optional<double> price_tick;',
+             'struct ArmContext {\n    std::optional<double> tick;'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[0], before, after)
+        for before, after in (
+            ('if (anchor->rounding != native_order::NativeAnchorRounding::Raw) {',
+             'if (true) {'),
+            ('f.u(static_cast<uint64_t>(anchor->rounding));', ''),
+            ('if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_execution_grid_policy_is_explicit_hashed_and_consumed(self):
         self.reject(FILES[0], 'enum class ExecutionGridPolicy : std::uint8_t {',
                     'enum class MissingExecutionGridPolicy : std::uint8_t {')

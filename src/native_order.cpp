@@ -1,5 +1,10 @@
 #include <pineforge/native_order.hpp>
 
+// The price-grid arithmetic an anchored level snaps with is the run's own L8
+// ladder arithmetic, so a rounded anchor and a quantized fill agree tick for
+// tick. The header is value-only geometry; it brings no host into the core.
+#include "native_matching.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -198,16 +203,22 @@ void canonicalize_owner(Request& request) {
     }
 }
 
-// The owner's fill supplies an anchored trigger level exactly once. The
-// placeholder becomes fill + offset and the anchor becomes Absolute, so a
-// stored definition always reads as the absolute level it now is and can
-// never be resolved a second time. False means the resolved level is not a
-// representable trigger level.
-bool materialize_anchor(Request& request, double fill_price) noexcept {
-    const auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
-    if (!anchor) return true;
-    if (!std::isfinite(fill_price) || !std::isfinite(anchor->offset)) return false;
-    const double level = fill_price + anchor->offset;
+bool valid_anchor_rounding(NativeAnchorRounding rounding) noexcept {
+    switch (rounding) {
+    case NativeAnchorRounding::Raw:
+    case NativeAnchorRounding::HalfUp:
+    case NativeAnchorRounding::Directional:
+        return true;
+    }
+    return false;
+}
+
+// Writes an anchored level into the trigger it was deferred for and retires
+// the anchor, so a stored definition always reads as the absolute level it
+// now is and can never be resolved a second time. False means the level is
+// not a representable trigger level; the request is left untouched.
+bool install_anchored_level(Request& request, double level) noexcept {
+    if (!std::holds_alternative<FromOwnerFill>(request.anchor)) return false;
     if (auto* limit = std::get_if<Limit>(&request.trigger)) {
         if (!finite_non_negative(level)) return false;
         limit->price = level;
@@ -221,6 +232,36 @@ bool materialize_anchor(Request& request, double fill_price) noexcept {
         return false;
     }
     request.anchor = Absolute{};
+    return true;
+}
+
+// The kernel level of an anchored leg at its owner's fill: fill + offset,
+// snapped onto the price tick ladder when the anchor asked for a rounding.
+// Directional rounds toward the region the leg needs, relative to its own
+// trigger kind and side (a limit and a trail arm from the favourable side, a
+// stop from the adverse one), with the same grid arithmetic the run's L8
+// price grid uses. Host-free: the tick is a value the caller passes in.
+// False means the level is not representable.
+bool materialize_anchor(Request& request, double fill_price, std::optional<double> price_tick,
+                        bool leg_is_buy, double* level_out) noexcept {
+    const auto* anchor = std::get_if<FromOwnerFill>(&request.anchor);
+    if (!anchor) return true;
+    if (!std::isfinite(fill_price) || !std::isfinite(anchor->offset)) return false;
+    double level = fill_price + anchor->offset;
+    if (anchor->rounding != NativeAnchorRounding::Raw) {
+        const double tick = price_tick ? *price_tick : 0.0;
+        if (!finite_positive(tick)) return false;
+        if (anchor->rounding == NativeAnchorRounding::HalfUp) {
+            level = native_matching::grid_round_half_up(level, tick);
+        } else {
+            const bool favourable_side = std::holds_alternative<Limit>(request.trigger)
+                || std::holds_alternative<Trail>(request.trigger);
+            level = native_matching::grid_round_directional(
+                    level, tick, favourable_side ? !leg_is_buy : leg_is_buy);
+        }
+    }
+    if (!install_anchored_level(request, level)) return false;
+    if (level_out) *level_out = level;
     return true;
 }
 
@@ -1267,6 +1308,16 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     if (market_only && anchor) return RequestRejectReason::InvalidTrigger;
     if (anchor && (!std::isfinite(anchor->offset)
                    || (anchor->ticks && !context.price_tick))) {
+        return RequestRejectReason::InvalidTrigger;
+    }
+    // A rounded anchor snaps onto the run's tick ladder at the arm, so it
+    // needs a positive tick at acceptance, exactly like a tick spelling; an
+    // unknown rounding is refused rather than read as Raw.
+    if (anchor && !valid_anchor_rounding(anchor->rounding)) {
+        return RequestRejectReason::InvalidTrigger;
+    }
+    if (anchor && anchor->rounding != NativeAnchorRounding::Raw
+        && !(context.price_tick && finite_positive(*context.price_tick))) {
         return RequestRejectReason::InvalidTrigger;
     }
     if (const auto reason = validate_levels(request.trigger, anchor != nullptr)) return reason;
@@ -3182,7 +3233,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         const EventId& applied,
         const RequestHandle& child,
         const std::optional<OpeningObservation>& observation,
-        uint64_t& next_timeline_ordinal) {
+        uint64_t& next_timeline_ordinal,
+        const ArmContext& arm) {
     require_identity(identity_);
     const CommandEvent* event = event_at(applied);
     const auto* payload = event ? as_applied(*event) : nullptr;
@@ -3223,7 +3275,14 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     if (std::holds_alternative<FromOwnerFill>(live.request().anchor)) {
         RequestDefinition materialized{live.definition->handle, live.request(),
                                        live.definition->birth, live.definition->predecessor};
-        if (!materialize_anchor(materialized.request, payload->resolved_price)) {
+        // A closing leg trades against the lot this fill opened; a waiting
+        // transaction has its own side. working_is_buy cannot answer for a
+        // Wait authority, which has no bound scope yet.
+        const bool leg_is_buy = closing ? !(payload->opened_units > 0.0)
+                                        : working_is_buy(live);
+        double kernel_level = 0.0;
+        if (!materialize_anchor(materialized.request, payload->resolved_price, arm.price_tick,
+                                leg_is_buy, &kernel_level)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
         }
         armed_definition = std::make_shared<RequestDefinition>(std::move(materialized));
