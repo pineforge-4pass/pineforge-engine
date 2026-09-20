@@ -130,18 +130,6 @@ struct PyramidEntry {
     // the full bar).
     bool skip_entry_bar_high = false;
     bool skip_entry_bar_low = false;
-    // KI-62: this slice opened as a same-direction MARKET pyramid add (not the
-    // base open, not a priced entry). When a from_entry priced bracket exit
-    // fills on this add's OWN entry bar and after it in TV's open-tick fill
-    // sequence, the exit covers (scratches) the add dur-0. Gated by
-    // entry_bar_index == bar_index_ so prior-bar slices are never covered.
-    bool market_pyramid_add = false;
-    // Synthetic OHLC-path coordinate where a pure stop/limit strategy.entry
-    // fired.
-    // A single flat-born, non-trailing from_entry bracket may inspect only the
-    // path suffix at/after this cursor on the entry bar. NaN marks every
-    // unrouted parent class (market, stop-limit, raw order).
-    double entry_path_position = std::numeric_limits<double>::quiet_NaN();
     // Entry-leg commission in account currency at this slice's actual fill
     // boundary. Percentage commission depends on quote->account FX, so an
     // effective-time provider must not retroactively reprice this already-paid
@@ -158,20 +146,6 @@ struct PyramidEntry {
     // same physical-entry provenance. Zero is reserved for legacy/test-only
     // synthetic lots that were not created by a request record.
     uint64_t entry_incarnation = 0;
-    // A foreign/global or ambiguous same-ID bracket consumed part of this
-    // physical lot by FIFO. Its logical slot cannot later be released merely
-    // because an owner-bound bracket closes the last physical remainder.
-    bool bracket_slot_shadowed = false;
-    // Exact ordinary MARKET fill at the next bar open. Priced/RAW entries
-    // cannot infer this provenance from an equal numeric entry price.
-    bool ordinary_market_open = false;
-    // Actual flat-born MARKET fill at the ordinary POOC terminal close.
-    // Priced/RAW entries and orders born in fill callbacks do not acquire it.
-    bool pooc_terminal_market_entry = false;
-    // A flat-born pure STOP strategy.entry actually filled at the bar open.
-    // Keep this separate from MARKET provenance: equal fill prices do not
-    // make the two order classes interchangeable for affordability rules.
-    bool ordinary_stop_open = false;
 };
 
 struct Trade {

@@ -10,7 +10,13 @@
     "BacktestEngine::calc_on_order_fills_",
     "PineStrategyHost::pending_orders_",
     "PineStrategyHost::id_unclosed_qty_",
-    "PineStrategyHost::PineLanguageState mixin"
+    "PineStrategyHost::PineLanguageState mixin",
+    "PyramidEntry::market_pyramid_add",
+    "PyramidEntry::entry_path_position",
+    "PyramidEntry::bracket_slot_shadowed",
+    "PyramidEntry::ordinary_market_open",
+    "PyramidEntry::pooc_terminal_market_entry",
+    "PyramidEntry::ordinary_stop_open"
   ],
   "addedStorage": [],
   "addedValueMembers": [

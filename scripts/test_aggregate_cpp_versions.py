@@ -37,8 +37,8 @@ class AggregateVersions(unittest.TestCase):
         root = self.copied_root()
         path = root / "src/engine_stream.cpp"
         path.write_text(path.read_text().replace(
-            "integer(17); integer(broker_state_hash());",
-            "if (false) { integer(17); integer(broker_state_hash()); }", 1))
+            "integer(18); integer(broker_state_hash());",
+            "if (false) { integer(18); integer(broker_state_hash()); }", 1))
         with self.assertRaises(ValueError):
             checker.check(root)
 

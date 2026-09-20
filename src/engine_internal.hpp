@@ -230,10 +230,10 @@ bool first_touch_position(const Bar& bar, double level, double* out_pos);
 // design-stop-tick-rounding: the path helpers below also come in a form whose
 // LEG ORDER (O->H->L->C vs O->L->H->C) is chosen by the caller. The engine
 // walks the tick-quantized twin of a bar (BacktestEngine::broker_trigger_bar)
-// with the RAW bar's order, so a path coordinate produced here — the
-// entry_path_position cursor a same-bar bracket resumes from, a sibling /
-// opposing-order tie-break — lives in the same coordinate system as
-// resolve_exit_path_fill's walk. The single-bar forms derive the order from
+// with the RAW bar's order, so a path coordinate produced here — the entry
+// cursor a same-bar bracket resumes from, a sibling / opposing-order
+// tie-break — lives in the same coordinate system as resolve_exit_path_fill's
+// walk. The single-bar forms derive the order from
 // the bar they are given (bar_path_uses_high_first) and are unchanged.
 bool first_touch_position(const Bar& bar, bool high_first, double level,
                           double* out_pos);

@@ -1354,6 +1354,7 @@ void PineExecutionAdapter::reset_for_run() {
     risk_.intraday_cancel_pending = false;
     policy_script_bar_ = {};
     policy_script_bar_valid_ = false;
+    market_pyramid_adds_.clear();
     trail_state_at_open_.clear();
     stream_mode_ = false;
     bar_magnifier_ = false;
@@ -15927,7 +15928,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             std::vector<native_order::RequestHandle> adds;
             double units = 0.0;
             for (const auto& lot : pine->pyramid_entries_) {
-                if (!lot.market_pyramid_add || lot.entry_bar_index != bar
+                if (!market_pyramid_add(lot.entry_incarnation)
+                    || lot.entry_bar_index != bar
                     || lot.entry_id != placement_snapshot->from_entry
                     || !(lot.qty > internal::kQtyEpsilon)) {
                     continue;
@@ -16166,6 +16168,9 @@ void PineExecutionAdapter::set_risk_max_intraday_loss(double value, bool percent
 void PineExecutionAdapter::set_risk_max_position_size(double value) noexcept { risk_.max_position_size = value; }
 void PineExecutionAdapter::set_margin_call_enabled(bool enabled) noexcept {
     source_margin_call_enabled_ = enabled;
+}
+void PineExecutionAdapter::mark_market_pyramid_add(std::uint64_t incarnation) {
+    market_pyramid_adds_.insert(incarnation);
 }
 void PineExecutionAdapter::enable_intraday_cap() noexcept { cap.attach(); }
 void PineExecutionAdapter::attach_execution_adapter() noexcept { priority.attach(); }

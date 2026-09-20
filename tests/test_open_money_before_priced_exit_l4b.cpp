@@ -143,7 +143,7 @@ public:
         PyramidEntry entry{};
         entry.price = entry_price; entry.qty = qty;
         entry.time = current.timestamp; entry.entry_id = "Boundary";
-        entry.entry_bar_index = 0; entry.entry_path_position = 3.0;
+        entry.entry_bar_index = 0;
         entry.entry_commission_account = 0.0;
         pyramid_entries_.push_back(entry);
         strategy_exit("Resting", "Boundary", 11.0, 9.0);

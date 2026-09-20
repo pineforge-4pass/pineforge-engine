@@ -494,12 +494,7 @@ void source::PineStrategyHost::on_native_applied(
                 [&](const PyramidEntry& lot) {
                     return lot.entry_incarnation != event.handle().incarnation;
                 });
-        if (market_add) {
-            for (auto& lot : pyramid_entries_) {
-                if (lot.entry_incarnation == event.handle().incarnation)
-                    lot.market_pyramid_add = true;
-            }
-        }
+        if (market_add) adapter_.mark_market_pyramid_add(event.handle().incarnation);
     }
     // The legacy source observer counted one broker fill for every committed
     // execution event.  The native consumer owns those events now; mirror the

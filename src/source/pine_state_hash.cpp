@@ -465,6 +465,15 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(policy_script_bar_.low); f.d(policy_script_bar_.close);
     f.d(policy_script_bar_.volume); f.i(policy_script_bar_.timestamp);
     f.b(policy_script_bar_valid_);
+    // KI-62 market-add provenance (R5 lane L12, 2.ii j). It used to ride the
+    // generic lot as PyramidEntry::market_pyramid_add; it is adapter state
+    // now, so the source extension folds it. Unordered container: sort the
+    // keys, exactly like trail_state_at_open_ below.
+    std::vector<std::uint64_t> market_add_keys(market_pyramid_adds_.begin(),
+                                               market_pyramid_adds_.end());
+    std::sort(market_add_keys.begin(), market_add_keys.end());
+    f.u(market_add_keys.size());
+    for (const auto key : market_add_keys) f.u(key);
     std::vector<std::uint64_t> trail_open_keys;
     trail_open_keys.reserve(trail_state_at_open_.size());
     for (const auto& row : trail_state_at_open_) trail_open_keys.push_back(row.first);

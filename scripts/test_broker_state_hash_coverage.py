@@ -39,14 +39,14 @@ class Coverage(unittest.TestCase):
 
     def test_generic_domain_is_pinned(self):
         result, output = self.check((
-            ("src/engine_state_hash.cpp", "pineforge-broker-state/v17",
+            ("src/engine_state_hash.cpp", "pineforge-broker-state/v18",
              "pineforge-broker-state/v0"),))
         self.assertEqual(result, 1, output)
 
     def test_source_domain_is_pinned(self):
         result, output = self.check((
             ("include/pineforge/source/pine_adapter.hpp",
-             "pineforge-source-adapter/v2", "pineforge-source-adapter/v0"),))
+             "pineforge-source-adapter/v3", "pineforge-source-adapter/v0"),))
         self.assertEqual(result, 1, output)
 
     def test_adapter_fold_is_required(self):

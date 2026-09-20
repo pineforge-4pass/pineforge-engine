@@ -44,14 +44,8 @@ void same_lot(const PyramidEntry& a, const PyramidEntry& b) {
     CHECK(same_bits(a.max_drawdown, b.max_drawdown));
     CHECK(a.skip_entry_bar_high == b.skip_entry_bar_high);
     CHECK(a.skip_entry_bar_low == b.skip_entry_bar_low);
-    CHECK(a.market_pyramid_add == b.market_pyramid_add);
-    CHECK(same_bits(a.entry_path_position, b.entry_path_position));
     CHECK(same_bits(a.entry_commission_account, b.entry_commission_account));
     CHECK(a.entry_incarnation == b.entry_incarnation);
-    CHECK(a.bracket_slot_shadowed == b.bracket_slot_shadowed);
-    CHECK(a.ordinary_market_open == b.ordinary_market_open);
-    CHECK(a.pooc_terminal_market_entry == b.pooc_terminal_market_entry);
-    CHECK(a.ordinary_stop_open == b.ordinary_stop_open);
 }
 
 PyramidEntry lot(const char* label, std::uint64_t owner, double qty, double price,

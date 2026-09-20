@@ -202,13 +202,13 @@ def main(root: Path = ROOT) -> int:
         source_hash = executable_hash_text(source_hash_raw)
         adapter_header = (root / "include/pineforge/source/pine_adapter.hpp").read_text()
         stream_hash = clean((root / "src/engine_stream.cpp").read_text())
-        require_once(engine_hash, 'f.s("pineforge-broker-state/v17")', "generic hash domain")
-        require_once(adapter_header, 'kSourceAdapterDomain[] = "pineforge-source-adapter/v2"',
+        require_once(engine_hash, 'f.s("pineforge-broker-state/v18")', "generic hash domain")
+        require_once(adapter_header, 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"',
                      "source hash domain")
-        require_once(stream_hash, "integer(17); integer(broker_state_hash());",
-                     "stream v17 fold")
-        if "if (false) { integer(17); integer(broker_state_hash()); }" in stream_hash:
-            raise ValueError("stream v17 fold must be unconditional")
+        require_once(stream_hash, "integer(18); integer(broker_state_hash());",
+                     "stream v18 fold")
+        if "if (false) { integer(18); integer(broker_state_hash()); }" in stream_hash:
+            raise ValueError("stream v18 fold must be unconditional")
         if "void source::PineStrategyHost::hash_source_extension" not in source_hash:
             raise ValueError("source host hash extension is missing")
         if "void source::PineExecutionAdapter::hash_state" not in source_hash:

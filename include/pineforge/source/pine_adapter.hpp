@@ -34,7 +34,7 @@ using SourceId = std::string;
 class PineStrategyHost;
 class PineScheduler;
 
-inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
+inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v3";
 
 // TradingView's calc_on_order_fills cascade guard. It is a Pine literal, not a
 // kernel default: project() hands it to the generic cadence as
@@ -876,6 +876,19 @@ public:
     }
     bool take_intraday_loss_relabel(std::uint64_t ordinal) noexcept;
     void set_margin_call_enabled(bool enabled) noexcept;
+    // KI-62 (moved out of PyramidEntry by R5 lane L12, 2.ii j): the physical
+    // lots opened by request incarnation `incarnation` came from a
+    // same-direction MARKET pyramid add — not the base open, not a priced
+    // entry.  When a from_entry priced bracket exit fills on such an add's OWN
+    // entry bar, and after it in TV's open-tick fill sequence, the exit covers
+    // (scratches) the add dur-0.  The reader also gates on
+    // `entry_bar_index == bar`, so prior-bar slices are never covered.  This
+    // is TradingView provenance, so it is adapter state keyed by the lot's
+    // entry incarnation rather than a field on the generic lot.
+    void mark_market_pyramid_add(std::uint64_t incarnation);
+    bool market_pyramid_add(std::uint64_t incarnation) const noexcept {
+        return market_pyramid_adds_.count(incarnation) != 0;
+    }
     void enable_intraday_cap() noexcept;
     void attach_execution_adapter() noexcept;
     bool calc_on_order_fills() const noexcept { return config_.calc_on_order_fills; }
@@ -1391,6 +1404,7 @@ private:
     bool source_margin_call_enabled_ = true;
     Bar policy_script_bar_{};
     bool policy_script_bar_valid_ = false;
+    std::unordered_set<std::uint64_t> market_pyramid_adds_;
     std::unordered_map<std::uint64_t, NativeTrailState> trail_state_at_open_;
     bool stream_mode_ = false;
     SourceDayLedger day_ledger_{};

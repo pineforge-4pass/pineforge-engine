@@ -51,8 +51,8 @@ def check(root: Path = ROOT) -> None:
         raise ValueError("source host must remain native-bound")
     if (root / "include/pineforge/source/pine_pending_intent.hpp").exists():
         raise ValueError("retired source PendingOrder header is still installed")
-    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v2"' not in adapter:
-        raise ValueError("source adapter domain must remain v2")
+    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"' not in adapter:
+        raise ValueError("source adapter domain must remain v3")
     source_body = body(source_hash,
                        r"void\s+source::PineStrategyHost::hash_source_extension\(BrokerStateHashSink&\s+f\)\s+const\s*\{",
                        "source hash")
@@ -61,16 +61,16 @@ def check(root: Path = ROOT) -> None:
     generic_body = body(generic_hash,
                         r"(?:std::)?uint64_t\s+BacktestEngine::broker_state_hash_from_execution_hash\(\s*(?:std::)?uint64_t\s+execution_hash\)\s+const\s*\{",
                         "broker hash")
-    if not re.match(r"\s*BrokerStateHashSink\s+f;\s*f\.s\(\"pineforge-broker-state/v17\"\);", generic_body):
-        raise ValueError("broker hash requires the v17 domain")
+    if not re.match(r"\s*BrokerStateHashSink\s+f;\s*f\.s\(\"pineforge-broker-state/v18\"\);", generic_body):
+        raise ValueError("broker hash requires the v18 domain")
     stream_body = body(stream_hash,
                        r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{",
                        "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    if compact.count("integer(17);integer(broker_state_hash());") != 1:
-        raise ValueError("stream hash requires one unconditional v17 broker fold")
-    if "if(false){integer(17);integer(broker_state_hash());}" in compact:
-        raise ValueError("stream v17 fold must be unconditional")
+    if compact.count("integer(18);integer(broker_state_hash());") != 1:
+        raise ValueError("stream hash requires one unconditional v18 broker fold")
+    if "if(false){integer(18);integer(broker_state_hash());}" in compact:
+        raise ValueError("stream v18 fold must be unconditional")
 
 
 def main() -> int:

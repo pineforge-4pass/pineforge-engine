@@ -33,7 +33,6 @@ public:
         entry.entry_comment = "literal";
         entry.max_runup = 4;
         entry.max_drawdown = 2;
-        entry.entry_path_position = 0.5;
         entry.entry_commission_account = 0.25;
         entry.entry_incarnation = 7;
         pyramid_entries_.push_back(entry);
@@ -45,6 +44,10 @@ public:
     }
     PyramidEntry& lot() { return pyramid_entries_.front(); }
     const PyramidEntry& lot() const { return pyramid_entries_.front(); }
+    // R5 lane L12 (2.ii j) moved the KI-62 market-add provenance off the
+    // generic lot into the adapter, keyed by entry_incarnation. It must
+    // still be covered by the broker hash, through the source extension.
+    void mark_market_add() { adapter_.mark_market_pyramid_add(lot().entry_incarnation); }
     double paid_entry_fee() const { return open_entry_commission(lot()); }
     std::string pine_comment() const { return open_trade_entry_comment(0); }
     double pine_runup() const { return open_trade_max_runup(0); }
@@ -66,14 +69,8 @@ const Mutation kMutations[] = {
     {"max_drawdown", [](PyramidEntry& e) { e.max_drawdown = 3; }},
     {"skip_entry_bar_high", [](PyramidEntry& e) { e.skip_entry_bar_high = true; }},
     {"skip_entry_bar_low", [](PyramidEntry& e) { e.skip_entry_bar_low = true; }},
-    {"market_pyramid_add", [](PyramidEntry& e) { e.market_pyramid_add = true; }},
-    {"entry_path_position", [](PyramidEntry& e) { e.entry_path_position = 1.5; }},
     {"entry_commission_account", [](PyramidEntry& e) { e.entry_commission_account = 0.5; }},
     {"entry_incarnation", [](PyramidEntry& e) { ++e.entry_incarnation; }},
-    {"bracket_slot_shadowed", [](PyramidEntry& e) { e.bracket_slot_shadowed = true; }},
-    {"ordinary_market_open", [](PyramidEntry& e) { e.ordinary_market_open = true; }},
-    {"pooc_terminal_market_entry", [](PyramidEntry& e) { e.pooc_terminal_market_entry = true; }},
-    {"ordinary_stop_open", [](PyramidEntry& e) { e.ordinary_stop_open = true; }},
 };
 
 bool same_hashes(const LiteralBook& a, const LiteralBook& b) {
@@ -107,6 +104,17 @@ int main() {
         }
     }
 
+    // The relocated KI-62 flag is adapter state now; the broker hash folds
+    // it through the source extension, so marking it must still move the hash.
+    {
+        LiteralBook marked;
+        marked.mark_market_add();
+        if (base.broker_state_hash() == marked.broker_state_hash()) {
+            std::printf("FAIL adapter market_pyramid_add: broker hash unchanged\n");
+            ++failures;
+        }
+    }
+
     // These omitted fields are directly observable without running a bar.
     LiteralBook visible;
     visible.lot().entry_commission_account = 0.5;
@@ -125,8 +133,7 @@ int main() {
     // object bytes. NaN payload/sign and negative zero are canonicalized.
     const std::vector<double PyramidEntry::*> doubles = {
         &PyramidEntry::price, &PyramidEntry::qty, &PyramidEntry::max_runup,
-        &PyramidEntry::max_drawdown, &PyramidEntry::entry_path_position,
-        &PyramidEntry::entry_commission_account,
+        &PyramidEntry::max_drawdown, &PyramidEntry::entry_commission_account,
     };
     for (auto field : doubles) {
         LiteralBook a, b;

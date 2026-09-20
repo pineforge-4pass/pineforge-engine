@@ -20,7 +20,7 @@ uint64_t BacktestEngine::broker_state_hash_projection() const {
 uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
         std::uint64_t execution_hash) const {
     BrokerStateHashSink f;
-    f.s("pineforge-broker-state/v17");
+    f.s("pineforge-broker-state/v18");
     f.u(execution_hash);
 
     // --- Position core ---
@@ -54,14 +54,8 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
         f.s(e.entry_comment);
         f.d(e.max_runup); f.d(e.max_drawdown);
         f.b(e.skip_entry_bar_high); f.b(e.skip_entry_bar_low);
-        f.b(e.market_pyramid_add);
-        f.d(e.entry_path_position);
         f.d(e.entry_commission_account);
         f.u(e.entry_incarnation);
-        f.b(e.bracket_slot_shadowed);
-        f.b(e.ordinary_market_open);
-        f.b(e.pooc_terminal_market_entry);
-        f.b(e.ordinary_stop_open);
     }
 
     // A31 residue: these stage-coordinator inputs remain physical/generic.
