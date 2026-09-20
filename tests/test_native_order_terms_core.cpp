@@ -19,7 +19,7 @@
 namespace no = pineforge::native_order;
 namespace ex = pineforge::execution;
 
-static_assert(std::variant_size_v<no::OrderIntent> == 5);
+static_assert(std::variant_size_v<no::OrderIntent> == 6);
 static_assert(std::variant_size_v<no::Remaining> == 5);
 static_assert(std::variant_size_v<no::RemainingProjection> == 5);
 static_assert(std::variant_size_v<no::Allowance> == 4);

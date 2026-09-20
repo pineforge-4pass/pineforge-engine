@@ -764,6 +764,10 @@ list(APPEND TEST_SOURCES
 # the retired owner inventory above remains mechanically intact for merge.
 list(APPEND TEST_SOURCES test_l4b_policy_regressions)
 
+# R5 L3 kernel sizing bases and fractional reduces.  Appended for the same
+# reason: the inventory above stays mechanically intact.
+list(APPEND TEST_SOURCES test_native_sizing_bases)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is
@@ -1336,6 +1340,24 @@ add_test(NAME test_oracle_sha256_pin
 
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")
+
+# R5 L3 adapter-neutrality witness: the sizing-bases test reads the whole
+# source layer and proves no Pine translation unit names the new value kinds.
+# '|' separates the paths because ';' would split the compile definition.
+file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/source/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/source/*.hpp"
+     "${PROJECT_SOURCE_DIR}/src/compat/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/compat/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/source/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/compat/*.hpp")
+list(LENGTH PINEFORGE_SOURCE_LAYER_FILES PINEFORGE_SOURCE_LAYER_COUNT)
+if(PINEFORGE_SOURCE_LAYER_COUNT LESS 4)
+    message(FATAL_ERROR "source-layer neutrality glob found no translation units")
+endif()
+string(REPLACE ";" "|" PINEFORGE_SOURCE_LAYER_JOINED "${PINEFORGE_SOURCE_LAYER_FILES}")
+target_compile_definitions(test_native_sizing_bases PRIVATE
+    PINEFORGE_SOURCE_LAYER_FILES="${PINEFORGE_SOURCE_LAYER_JOINED}")
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)

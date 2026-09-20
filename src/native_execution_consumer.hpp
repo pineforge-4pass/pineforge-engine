@@ -130,6 +130,13 @@ private:
         native_order::HostSizedKind kind, std::optional<native_order::Side> side,
         native_order::OpeningShape shape, double after, double allowance_left,
         double opposite_book_units);
+    // L3 kernel sizing bases. resolve_sized_units answers the units a Sized
+    // opening or a ScopeFraction reduce claims at this candidate; nullopt is
+    // the nonrepresentable basis the matching path reports as TermsUnresolved.
+    std::optional<double> resolve_sized_units(
+        const BacktestEngine& engine, const native_order::LiveRequest& live,
+        const NativeExecutionTermsFacts& facts) const;
+    double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
     std::optional<NativeCurrentExecutionResult> consume_matched_request(
         BacktestEngine& engine, const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& evaluation, double raw_price,

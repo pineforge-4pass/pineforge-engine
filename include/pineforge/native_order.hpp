@@ -22,13 +22,13 @@
 #include <vector>
 
 namespace pineforge::native_order {
-inline namespace native_order_v5 {
+inline namespace native_order_v6 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v5.
+// Identity types remain native_order_v1. Request/core/event values are v6.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
 // source instead of a dummy units field. ExecutionPlan is a transient widening
 // used at the core/consumer boundary.
@@ -64,15 +64,66 @@ struct HostSized {
     std::optional<Side> side;
 };
 
+// Resolved host sizing normally remains subject to the run's quantity grid.
+// A host may instead authenticate literal units for a pure reduction; the
+// consumer still proves that the positive quantity is representable within
+// the selected exposure before it can reach settlement.
+enum class ExecutionGridPolicy : std::uint8_t {
+    SnapToGrid = 0,
+    ExplicitUnits = 1,
+};
+
+// Native sizing bases (L3).  The kernel resolves them into units at the
+// sizing point; the Pine adapter never emits them and keeps HostSized.
+struct CashValue {
+    double cash = 0.0;                 // account currency
+};
+struct EquityFraction {
+    double fraction = 0.0;             // of marked equity at the sizing point (0.10 = 10 %)
+};
+using SizeBasis = std::variant<CashValue, EquityFraction>;
+
+// AtMatch resolves the basis at the matching candidate; AtAcceptance freezes
+// the resolved units when the request is accepted.
+enum class SizeTime : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
+
+// A kernel-sized opening.  units = cash / (price * point_value * fx), where
+// cash is the basis value or fraction * marked equity, and price is the
+// candidate's default resolved price.  A host override of
+// resolve_execution_terms still has the last word: it sees the kernel-resolved
+// units as the facts' RemainingUnits and may return its own.
+struct Sized {
+    Side side = Side::Long;
+    SizeBasis basis{};
+    SizeTime time = SizeTime::AtMatch;
+    // SnapToGrid floors the resolved units onto the run's quantity grid.
+    // ExplicitUnits keeps the literal quotient, which the ordinary on-grid
+    // terms gate then refuses when a grid is configured and the quotient is
+    // off it; the two are identical on an ungridded run.
+    ExecutionGridPolicy grid_policy = ExecutionGridPolicy::SnapToGrid;
+    // Divide the sizing cash by (1 + fee) when the run's fee kind is
+    // NativeFeeKind::Percent.  Every other fee kind is an exact no-op.
+    bool reserve_percent_fee = false;
+};
+
 struct ExplicitUnits {
     double units = 0.0;
 };
 struct OwnerOpenedUnits {};
-using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits>;
+// Gross claims the whole bound scope; NetOfSiblings first subtracts the units
+// already claimed by the live sibling reduces bound to that same scope.  The
+// keys are opaque request/owner handles, never source identifiers.
+enum class ScopeClaim : std::uint8_t { Gross = 0, NetOfSiblings = 1 };
+// A fraction in (0, 1] of the bound scope, resolved at the matching candidate.
+struct ScopeFraction {
+    double fraction = 1.0;
+    ScopeClaim claim = ScopeClaim::Gross;
+};
+using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits, ScopeFraction>;
 struct Reduce {
     ReductionSize size;
 };
-using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;
+using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized, Sized>;
 
 struct Market {};
 // `fill_through` makes the limit a touch trigger (market-if-touched): the
@@ -437,15 +488,6 @@ enum class OpeningShape : std::uint8_t {
     Transact = 0,
     ReverseTo = 1,
     CloseOpposite = 2,
-};
-
-// Resolved host sizing normally remains subject to the run's quantity grid.
-// A host may instead authenticate literal units for a pure reduction; the
-// consumer still proves that the positive quantity is representable within
-// the selected exposure before it can reach settlement.
-enum class ExecutionGridPolicy : std::uint8_t {
-    SnapToGrid = 0,
-    ExplicitUnits = 1,
 };
 
 struct ExecutionTerms {
@@ -836,6 +878,12 @@ struct CommandContext {
     std::optional<OpeningObservation> opening;
     CommandSurface surface = CommandSurface::General;
     std::vector<OpeningObservation> openings;
+    // Kernel-resolved acceptance-time units for a Sized{AtAcceptance} request.
+    // The execution consumer owns the account facts, so it supplies them here;
+    // a producer that leaves it unset accepts the request with a deferred size
+    // that the matching path then reports as TermsUnresolved.  Appended last so
+    // the existing positional aggregate initializers keep their meaning.
+    std::optional<double> sizing_units;
 };
 
 struct EvaluationContext {
@@ -1339,7 +1387,9 @@ static_assert(std::is_nothrow_move_constructible_v<NoEffectEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchCursor>);
-static_assert(std::variant_size_v<OrderIntent> == 5);
+static_assert(std::variant_size_v<OrderIntent> == 6);
+static_assert(std::variant_size_v<ReductionSize> == 3);
+static_assert(std::variant_size_v<SizeBasis> == 2);
 static_assert(std::variant_size_v<Remaining> == 5);
 static_assert(std::variant_size_v<RemainingProjection> == 5);
 static_assert(std::variant_size_v<Allowance> == 4);
@@ -1348,7 +1398,7 @@ static_assert(std::variant_size_v<ExecutionPlan> == 4);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);
 
-}  // inline namespace native_order_v5
+}  // inline namespace native_order_v6
 }  // namespace pineforge::native_order
 
 namespace std {

@@ -166,6 +166,10 @@ void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
             f.u(payload.size.index());
             if (const auto* units = std::get_if<native_order::ExplicitUnits>(&payload.size)) {
                 f.d(units->units);
+            } else if (const auto* fraction =
+                           std::get_if<native_order::ScopeFraction>(&payload.size)) {
+                f.d(fraction->fraction);
+                f.u(static_cast<uint64_t>(fraction->claim));
             }
         } else if constexpr (std::is_same_v<T, native_order::Transact>) {
             f.d(payload.signed_units);
@@ -175,6 +179,17 @@ void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
             f.u(static_cast<uint64_t>(payload.kind));
             f.b(payload.side.has_value());
             if (payload.side) f.u(static_cast<uint64_t>(*payload.side));
+        } else if constexpr (std::is_same_v<T, native_order::Sized>) {
+            f.u(static_cast<uint64_t>(payload.side));
+            f.u(payload.basis.index());
+            if (const auto* cash = std::get_if<native_order::CashValue>(&payload.basis)) {
+                f.d(cash->cash);
+            } else {
+                f.d(std::get<native_order::EquityFraction>(payload.basis).fraction);
+            }
+            f.u(static_cast<uint64_t>(payload.time));
+            f.u(static_cast<uint64_t>(payload.grid_policy));
+            f.b(payload.reserve_percent_fee);
         } else {
             static_assert(!sizeof(T), "unhashed native order intent");
         }
@@ -306,6 +321,94 @@ bool same_allowance_bits(const native_order::Allowance& left,
             == std::get<native_order::AllowanceDeferred>(right).point_ordinal;
     }
     return true;
+}
+
+// L3 sizing bases. The quantity grid is a floor, exactly like every other
+// engine quantity step (engine.hpp apply_exit_qty_step): a basis that does not
+// buy one whole step is not representable, and an already-on-grid value keeps
+// its own binary64 representation rather than being rebuilt one ulp away.
+double floor_to_quantity_grid(double units, double step) noexcept {
+    if (!std::isfinite(units) || units <= 0.0) return 0.0;
+    if (!std::isfinite(step) || step <= 0.0) return units;
+    if (native_order::quantity_on_grid(units, step)) return units;
+    const double floored = std::floor(units / step + 1e-6) * step;
+    if (!std::isfinite(floored) || floored <= 0.0) return 0.0;
+    return floored < units ? floored : units;
+}
+
+std::optional<double> representable_units(double units,
+                                          native_order::ExecutionGridPolicy policy,
+                                          const std::optional<double>& grid) noexcept {
+    if (!std::isfinite(units) || units <= 0.0) return std::nullopt;
+    if (policy != native_order::ExecutionGridPolicy::SnapToGrid || !grid) return units;
+    const double snapped = floor_to_quantity_grid(units, *grid);
+    if (!(snapped > 0.0) || !native_order::quantity_on_grid(snapped, *grid)) return std::nullopt;
+    return snapped;
+}
+
+// units = cash / (price * point_value * fx); cash is the basis value or
+// fraction * marked equity at the sizing point, optionally net of a percent
+// fee reserve.
+std::optional<double> sized_basis_units(const native_order::Sized& sized, double price,
+                                        double equity, double fx,
+                                        const NativeRunSpec& spec) noexcept {
+    double cash = 0.0;
+    if (const auto* value = std::get_if<native_order::CashValue>(&sized.basis)) {
+        cash = value->cash;
+    } else {
+        cash = std::get<native_order::EquityFraction>(sized.basis).fraction * equity;
+    }
+    if (sized.reserve_percent_fee && spec.fee_kind == NativeFeeKind::Percent) {
+        const double divisor = 1.0 + spec.fee_value;
+        if (!std::isfinite(divisor) || divisor <= 0.0) return std::nullopt;
+        cash /= divisor;
+    }
+    const double denominator = price * spec.point_value * fx;
+    if (!std::isfinite(cash) || !std::isfinite(denominator) || denominator <= 0.0) {
+        return std::nullopt;
+    }
+    return representable_units(cash / denominator, sized.grid_policy, spec.quantity_grid);
+}
+
+const native_order::Sized* sized_intent(const native_order::LiveRequest& live) noexcept {
+    return std::get_if<native_order::Sized>(&live.request().intent);
+}
+
+const native_order::ScopeFraction* scope_fraction_intent(
+        const native_order::LiveRequest& live) noexcept {
+    const auto* reduce = std::get_if<native_order::Reduce>(&live.request().intent);
+    return reduce ? std::get_if<native_order::ScopeFraction>(&reduce->size) : nullptr;
+}
+
+// Two reduces share a scope when their authorities name the same physical
+// target. The keys are opaque request/cohort handles and position cycles,
+// never source identifiers. An unbound book close already names the book.
+bool same_reduction_scope(const native_order::Authority& left,
+                          const native_order::Authority& right) noexcept {
+    const auto book = [](const native_order::Authority& value) {
+        return std::holds_alternative<native_order::UnboundBookClose>(value)
+            || std::holds_alternative<native_order::BookClose>(value);
+    };
+    if (book(left) || book(right)) {
+        if (!book(left) || !book(right)) return false;
+        const auto* a = std::get_if<native_order::BookClose>(&left);
+        const auto* b = std::get_if<native_order::BookClose>(&right);
+        if (a && b) return a->cycle == b->cycle && a->side == b->side;
+        return true;
+    }
+    if (left.index() != right.index()) return false;
+    if (const auto* a = std::get_if<native_order::OpeningClose>(&left)) {
+        const auto& b = std::get<native_order::OpeningClose>(right);
+        return a->opening == b.opening && a->cycle == b.cycle;
+    }
+    if (const auto* a = std::get_if<native_order::OpeningsClose>(&left)) {
+        const auto& b = std::get<native_order::OpeningsClose>(right);
+        return a->cycle == b.cycle && a->openings == b.openings;
+    }
+    if (const auto* a = std::get_if<native_order::CohortClose>(&left)) {
+        return a->cohort == std::get<native_order::CohortClose>(right).cohort;
+    }
+    return false;
 }
 
 const native_order::HostSized* host_sized_intent(
@@ -1999,7 +2102,22 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     ctx.decision_time_ms = (callback_phase_ == CallbackPhase::PreOpen || applied_point_is_current)
             && current_frame_
         ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
-    if (const auto* spec = spec_ptr()) ctx.quantity_grid = spec->quantity_grid;
+    if (const auto* spec = spec_ptr()) {
+        ctx.quantity_grid = spec->quantity_grid;
+        // A Sized{AtAcceptance} request freezes its units here, against the
+        // command point's price, marked equity and activated FX. AtMatch and
+        // any command outside a callback frame stay deferred to the candidate.
+        const auto* native_sized = std::get_if<native_order::Sized>(&request.intent);
+        if (native_sized && native_sized->time == native_order::SizeTime::AtAcceptance) {
+            if (const auto point = current_execution_point()) {
+                ctx.sizing_units = sized_basis_units(
+                    *native_sized, point->price, marked(engine, point->price),
+                    engine.account_currency_fx_at(
+                        point->decision.coordinate.effective_time_ms),
+                    *spec);
+            }
+        }
+    }
     ctx.surface = surface;
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
         ctx.opening = read_opening(engine, bind->opening, bind->cycle);
@@ -2660,7 +2778,8 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
         if (const auto* allowance = std::get_if<native_order::AllowanceUnits>(&live.allowance)) {
             if (allowance->point_ordinal == cursor.point.ordinal) qty = std::min(qty, allowance->left);
         }
-        if (std::holds_alternative<native_order::Transact>(live.request().intent))
+        if (std::holds_alternative<native_order::Transact>(live.request().intent)
+            || std::holds_alternative<native_order::Sized>(live.request().intent))
             candidate.physical = native_order::Transact{request_is_buy(engine, live) ? qty : -qty};
         else if (const auto* reverse = std::get_if<native_order::ReverseTo>(&live.request().intent))
             candidate.physical = execution::ReverseTo{reverse->signed_units};
@@ -2682,6 +2801,45 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
     const double inspected_ticket = candidate.inspect.current_ticket;
     candidate.fill.commission_account = inspected_ticket;
     return candidate;
+}
+
+double NativeExecutionConsumer::sibling_claimed_units(
+        const native_order::LiveRequest& live) const noexcept {
+    double claimed = 0.0;
+    for (const auto& other : requests_.live()) {
+        if (other.handle() == live.handle()) continue;
+        if (!same_reduction_scope(live.authority, other.authority)) continue;
+        const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
+        if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
+        claimed += units->q;
+        if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
+    }
+    return claimed;
+}
+
+std::optional<double> NativeExecutionConsumer::resolve_sized_units(
+        const BacktestEngine& engine, const native_order::LiveRequest& live,
+        const NativeExecutionTermsFacts& facts) const {
+    const auto* spec = spec_ptr();
+    if (!spec) return std::nullopt;
+    if (const auto* native_sized = sized_intent(live)) {
+        // An acceptance-time basis is frozen at the command boundary. Reaching
+        // the candidate still deferred means it was never resolvable there.
+        if (native_sized->time != native_order::SizeTime::AtMatch) return std::nullopt;
+        const double price = facts.default_resolved_price;
+        return sized_basis_units(*native_sized, price, marked(engine, price),
+                                 facts.active_fx, *spec);
+    }
+    const auto* fraction = scope_fraction_intent(live);
+    if (!fraction) return std::nullopt;
+    double scope = facts.scope_exposure_units;
+    if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
+        scope -= sibling_claimed_units(live);
+    }
+    if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
+    return representable_units(fraction->fraction * scope,
+                               native_order::ExecutionGridPolicy::SnapToGrid,
+                               spec->quantity_grid);
 }
 
 NativeCurrentPointView NativeExecutionConsumer::execution_anchor(
@@ -2759,20 +2917,46 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         };
 
         const auto* host_sized = host_sized_intent(*live);
-        const bool unresolved = host_sized
+        const auto* native_sized = sized_intent(*live);
+        const auto* scope_fraction = scope_fraction_intent(*live);
+        const bool unresolved = (host_sized || native_sized || scope_fraction)
             && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
                 || std::holds_alternative<native_order::NoTarget>(live->remaining));
+        // Only a host-sized OPENING may name a nondefault physical shape; a
+        // host-sized close, a kernel-sized opening and a scope fraction all
+        // settle through the ordinary Transact/Reduce plan.
+        const bool opening_shapes = host_sized
+            && host_sized->kind == native_order::HostSizedKind::Open;
+        const bool closing_size = (host_sized
+                && host_sized->kind == native_order::HostSizedKind::Close)
+            || scope_fraction != nullptr;
+        const native_order::HostSizedKind terms_kind = opening_shapes || native_sized
+            ? native_order::HostSizedKind::Open : native_order::HostSizedKind::Close;
+        const std::optional<native_order::Side> terms_side = host_sized
+            ? host_sized->side
+            : (native_sized ? std::optional<native_order::Side>{native_sized->side}
+                            : std::nullopt);
         // This is the lone terms pre-resolver shortcut. The ordinary queued
         // evaluation path already owns the equivalent terminal.
-        if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+        if (unresolved && closing_size
             && std::holds_alternative<native_order::UnboundBookClose>(live->authority)
             && engine.position_side_ == PositionSide::FLAT) {
             return terminal(std::nullopt);
         }
 
-        const auto terms_facts = build_terms_facts(engine, *live, evaluation, price_kind,
-                                                   price_rule, raw_price, default_resolved_price,
-                                                   shared_cursor_collision);
+        auto terms_facts = build_terms_facts(engine, *live, evaluation, price_kind,
+                                             price_rule, raw_price, default_resolved_price,
+                                             shared_cursor_collision);
+        // The kernel owns the L3 bases. It resolves them before the host hook
+        // and publishes the result as the facts' remaining units, so a host
+        // override of resolve_execution_terms still has the last word.
+        std::optional<double> kernel_units;
+        if (unresolved && (native_sized || scope_fraction)) {
+            kernel_units = resolve_sized_units(engine, *live, terms_facts);
+            if (kernel_units) {
+                terms_facts.remaining = native_order::RemainingUnits{*kernel_units};
+            }
+        }
         native_order::ExecutionTerms terms;
         try {
             auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
@@ -2794,6 +2978,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
             return std::nullopt;
         }
+        if (unresolved && (native_sized || scope_fraction) && !terms.units) {
+            terms.units = kernel_units;
+        }
 
         const bool identity = identity_terms(terms, default_resolved_price);
         const auto nonidentity_attempt = identity
@@ -2805,7 +2992,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (unresolved && !terms.units) {
             return terminal(native_order::MatchRejectReason::TermsUnresolved, terms);
         }
-        if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+        if (unresolved && !opening_shapes
             && terms.shape != native_order::OpeningShape::Transact) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
@@ -2874,15 +3061,15 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
 
         std::optional<native_order::ExecutionPlan> plan;
-        if (host_sized) {
+        if (host_sized || native_sized || scope_fraction) {
             if (unresolved) {
                 if (after > 0.0) {
-                    plan = plan_from_terms(host_sized->kind, host_sized->side, terms.shape,
+                    plan = plan_from_terms(terms_kind, terms_side, terms.shape,
                                            after, binding_allowance, terms_facts.opposite_book_units);
                 }
             } else if (const auto* remaining = std::get_if<native_order::RemainingUnits>(
                            &live->remaining)) {
-                plan = plan_from_terms(host_sized->kind, host_sized->side,
+                plan = plan_from_terms(terms_kind, terms_side,
                     native_order::OpeningShape::Transact, remaining->q,
                     allowance_left_at(terms_facts.allowance, P),
                 terms_facts.opposite_book_units);
@@ -3852,7 +4039,10 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
         || std::holds_alternative<native_order::RemainingUnbound>(live->remaining))
         return Refusal::UnreadyOwner;
     if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
-        if (!std::holds_alternative<native_order::ExplicitUnits>(reduce->size))
+        if (std::holds_alternative<native_order::OwnerOpenedUnits>(reduce->size))
+            return Refusal::UnsupportedRequest;
+    } else if (std::holds_alternative<native_order::Sized>(request.intent)) {
+        if (!std::holds_alternative<native_order::Independent>(request.owner))
             return Refusal::UnsupportedRequest;
     } else if (std::holds_alternative<native_order::Transact>(request.intent)) {
         if (!std::holds_alternative<native_order::Independent>(request.owner))
@@ -3935,10 +4125,23 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     evaluation.existing_matching_bit = true;
     evaluation.cohort_side = cohort_side(engine, *live);
     const auto* host_sized = host_sized_intent(*live);
-    const bool unresolved = host_sized
+    const auto* native_sized = sized_intent(*live);
+    const auto* scope_fraction = scope_fraction_intent(*live);
+    const bool unresolved = (host_sized || native_sized || scope_fraction)
         && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
             || std::holds_alternative<native_order::NoTarget>(live->remaining));
-    if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+    const bool opening_shapes = host_sized
+        && host_sized->kind == native_order::HostSizedKind::Open;
+    const bool closing_size = (host_sized
+            && host_sized->kind == native_order::HostSizedKind::Close)
+        || scope_fraction != nullptr;
+    const native_order::HostSizedKind terms_kind = opening_shapes || native_sized
+        ? native_order::HostSizedKind::Open : native_order::HostSizedKind::Close;
+    const std::optional<native_order::Side> terms_side = host_sized
+        ? host_sized->side
+        : (native_sized ? std::optional<native_order::Side>{native_sized->side}
+                        : std::nullopt);
+    if (unresolved && closing_size
         && std::holds_alternative<native_order::UnboundBookClose>(live->authority)
         && engine.position_side_ == PositionSide::FLAT) {
         out.settlement_readiness = execution::Status::NoEffect;
@@ -3946,9 +4149,14 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     }
     const double raw_price = current_frame_->point.price;
     const double default_resolved = current_price(engine, *live, command.price_rule);
-    const auto facts = build_terms_facts(engine, *live, evaluation,
+    auto facts = build_terms_facts(engine, *live, evaluation,
         native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule,
         raw_price, default_resolved);
+    std::optional<double> kernel_units;
+    if (unresolved && (native_sized || scope_fraction)) {
+        kernel_units = resolve_sized_units(engine, *live, facts);
+        if (kernel_units) facts.remaining = native_order::RemainingUnits{*kernel_units};
+    }
     native_order::ExecutionTerms terms;
     struct PreviewSeal {
         bool& value;
@@ -3968,6 +4176,9 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.refusal = NativeCurrentRefusal::ConfigurationMismatch;
         return out;
     }
+    if (unresolved && (native_sized || scope_fraction) && !terms.units) {
+        terms.units = kernel_units;
+    }
     if (!unresolved && (terms.units || terms.shape != native_order::OpeningShape::Transact)) {
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
@@ -3976,7 +4187,7 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::TermsUnresolved;
         return out;
     }
-    if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+    if (unresolved && !opening_shapes
         && terms.shape != native_order::OpeningShape::Transact) {
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
@@ -4039,13 +4250,13 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         return out;
     }
     std::optional<native_order::ExecutionPlan> plan;
-    if (host_sized) {
+    if (host_sized || native_sized || scope_fraction) {
         if (unresolved) {
-            plan = plan_from_terms(host_sized->kind, host_sized->side, terms.shape,
+            plan = plan_from_terms(terms_kind, terms_side, terms.shape,
                                    after, binding_allowance, facts.opposite_book_units);
         } else if (const auto* remaining = std::get_if<native_order::RemainingUnits>(
                        &live->remaining)) {
-            plan = plan_from_terms(host_sized->kind, host_sized->side,
+            plan = plan_from_terms(terms_kind, terms_side,
                 native_order::OpeningShape::Transact, remaining->q,
                 allowance_left_at(facts.allowance, cursor.point.ordinal),
                 facts.opposite_book_units);

@@ -181,9 +181,9 @@ class NativeVersions(unittest.TestCase):
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v5", "native_order_v1"),
-            (FILES[1], "native_order_v5", "native_order_v1"),
-            (FILES[11], "native_order_v1", "native_order_v5"),
+            (FILES[0], "native_order_v6", "native_order_v1"),
+            (FILES[1], "native_order_v6", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v6"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
             (FILES[4], "native_run_spec_v3", "native_run_spec_v1"),
@@ -199,7 +199,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v5"),
+            (FILES[0], "native_order_v6"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
@@ -212,7 +212,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v5"),
+            (FILES[0], "native_order_v6"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
@@ -225,7 +225,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v5", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v6", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
             (FILES[8], "engine_script_run_v17", "class NativeStrategyHost"),
@@ -338,8 +338,8 @@ class NativeVersions(unittest.TestCase):
         needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v5",
-            "}  // inline namespace native_order_v5\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
+            "}  // inline namespace native_order_v6",
+            "}  // inline namespace native_order_v6\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -415,8 +415,12 @@ class NativeVersions(unittest.TestCase):
                 self.reject(path, before, after)
 
         aliases = (
-            ("using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;",
-             "using OrderIntent = std::variant<Flatten, Reduce, Transact, HostSized, ReverseTo>;"),
+            ("using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized, Sized>;",
+             "using OrderIntent = std::variant<Flatten, Reduce, Transact, HostSized, ReverseTo, Sized>;"),
+            ("using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits, ScopeFraction>;",
+             "using ReductionSize = std::variant<ExplicitUnits, ScopeFraction, OwnerOpenedUnits>;"),
+            ("using SizeBasis = std::variant<CashValue, EquityFraction>;",
+             "using SizeBasis = std::variant<EquityFraction, CashValue>;"),
             ("using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,\n"
              "                               RemainingDeferred, NoTarget>;",
              "using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingDeferred,\n"

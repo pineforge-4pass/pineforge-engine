@@ -10,7 +10,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
-inline namespace native_order_v5 {
+inline namespace native_order_v6 {
 namespace {
 
 constexpr std::uint8_t kLivePush = 1;
@@ -69,6 +69,9 @@ const ReverseTo* as_reverse_to(const OrderIntent& intent) noexcept {
 const HostSized* as_host_sized(const OrderIntent& intent) noexcept {
     return std::get_if<HostSized>(&intent);
 }
+const Sized* as_sized(const OrderIntent& intent) noexcept {
+    return std::get_if<Sized>(&intent);
+}
 
 const ExplicitUnits* explicit_size(const Reduce& reduce) noexcept {
     return std::get_if<ExplicitUnits>(&reduce.size);
@@ -76,6 +79,22 @@ const ExplicitUnits* explicit_size(const Reduce& reduce) noexcept {
 
 bool is_owner_opened(const Reduce& reduce) noexcept {
     return std::holds_alternative<OwnerOpenedUnits>(reduce.size);
+}
+
+const ScopeFraction* fraction_size(const Reduce& reduce) noexcept {
+    return std::get_if<ScopeFraction>(&reduce.size);
+}
+
+// A scope fraction is the only reduction size whose units are unknown at the
+// command boundary: like a host-sized close it stays deferred until the
+// matching candidate resolves the bound scope.
+const ScopeFraction* deferred_reduction(const OrderIntent& intent) noexcept {
+    const auto* reduce = as_reduce(intent);
+    return reduce ? fraction_size(*reduce) : nullptr;
+}
+
+bool basis_fraction_ok(double fraction) noexcept {
+    return std::isfinite(fraction) && fraction > 0.0 && fraction <= 1.0;
 }
 
 double working_units(const Remaining& remaining) noexcept {
@@ -256,7 +275,8 @@ bool current_shape(const LiveRequest& live) noexcept {
             || std::holds_alternative<BindOpenings>(request.owner);
     }
     const auto* reduce = as_reduce(request.intent);
-    if (!as_flatten(request.intent) && !(reduce && explicit_size(*reduce))) return false;
+    if (!as_flatten(request.intent)
+        && !(reduce && (explicit_size(*reduce) || fraction_size(*reduce)))) return false;
     return std::holds_alternative<BindOpening>(request.owner)
         || std::holds_alternative<BindOpenings>(request.owner);
 }
@@ -1108,6 +1128,8 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     require_grid(context.quantity_grid);
     const auto* reverse_to = as_reverse_to(request.intent);
     const auto* host_sized = as_host_sized(request.intent);
+    const auto* sized = as_sized(request.intent);
+    const auto* scope_fraction = deferred_reduction(request.intent);
     if (as_flatten(request.intent)) {
     } else if (const auto* reduce = as_reduce(request.intent)) {
         if (const auto* units = explicit_size(*reduce)) {
@@ -1115,6 +1137,26 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             if (!on_optional_grid(units->units, context.quantity_grid)) {
                 return RequestRejectReason::OffGrid;
             }
+        } else if (const auto* fraction = fraction_size(*reduce)) {
+            if (fraction->claim != ScopeClaim::Gross
+                && fraction->claim != ScopeClaim::NetOfSiblings) {
+                return RequestRejectReason::InvalidQuantity;
+            }
+            if (!basis_fraction_ok(fraction->fraction)) {
+                return RequestRejectReason::InvalidQuantityBasis;
+            }
+        }
+    } else if (sized) {
+        if ((sized->side != Side::Long && sized->side != Side::Short)
+            || (sized->time != SizeTime::AtMatch && sized->time != SizeTime::AtAcceptance)
+            || (sized->grid_policy != ExecutionGridPolicy::SnapToGrid
+                && sized->grid_policy != ExecutionGridPolicy::ExplicitUnits)) {
+            return RequestRejectReason::InvalidQuantity;
+        }
+        if (const auto* cash = std::get_if<CashValue>(&sized->basis)) {
+            if (!finite_positive(cash->cash)) return RequestRejectReason::InvalidQuantityBasis;
+        } else if (!basis_fraction_ok(std::get<EquityFraction>(sized->basis).fraction)) {
+            return RequestRejectReason::InvalidQuantityBasis;
         }
     } else if (const auto* transact = as_transact(request.intent)) {
         if (!finite_nonzero(transact->signed_units)) return RequestRejectReason::InvalidQuantity;
@@ -1140,8 +1182,10 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
 
     const bool market_only = context.surface == CommandSurface::MarketOnly;
     // The market-only surface mirrors execution::Action, which cannot carry
-    // either of the late-resolution request forms.
-    if (market_only && (reverse_to || host_sized)) return RequestRejectReason::InvalidQuantity;
+    // any of the late-resolution request forms.
+    if (market_only && (reverse_to || host_sized || sized || scope_fraction)) {
+        return RequestRejectReason::InvalidQuantity;
+    }
     if (market_only && !std::holds_alternative<Market>(request.trigger)) {
         return RequestRejectReason::InvalidTrigger;
     }
@@ -1161,7 +1205,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         }
     }
 
-    if (reverse_to && !std::holds_alternative<Independent>(request.owner)) {
+    if ((reverse_to || sized) && !std::holds_alternative<Independent>(request.owner)) {
         return RequestRejectReason::InvalidOwner;
     }
     if (host_sized
@@ -1262,8 +1306,18 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
             live.authority = sized->kind == HostSizedKind::Open
                 ? Authority{BookTransaction{}}
                 : Authority{UnboundBookClose{}};
+        } else if (const auto* native_sized = as_sized(request.intent)) {
+            // AtAcceptance freezes the consumer's resolution now; AtMatch, and
+            // an acceptance the producer could not resolve, stay deferred.
+            live.remaining = native_sized->time == SizeTime::AtAcceptance
+                    && context.sizing_units
+                ? Remaining{RemainingUnits{*context.sizing_units}}
+                : Remaining{RemainingDeferred{}};
+            live.authority = BookTransaction{};
         } else if (const auto* reduce = as_reduce(request.intent)) {
-            live.remaining = RemainingUnits{explicit_size(*reduce)->units};
+            live.remaining = fraction_size(*reduce)
+                ? Remaining{RemainingDeferred{}}
+                : Remaining{RemainingUnits{explicit_size(*reduce)->units}};
             live.authority = UnboundBookClose{};
         } else {
             live.remaining = RemainingFlattenAll{};
@@ -1277,6 +1331,7 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
             live.remaining = RemainingUnits{std::abs(transact->signed_units)};
         } else if (const auto* reduce = as_reduce(request.intent)) {
             if (is_owner_opened(*reduce)) live.remaining = RemainingUnbound{};
+            else if (fraction_size(*reduce)) live.remaining = RemainingDeferred{};
             else live.remaining = RemainingUnits{explicit_size(*reduce)->units};
         } else {
             live.remaining = RemainingFlattenAll{};
@@ -1302,7 +1357,9 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
             ? Remaining{RemainingDeferred{}}
             : Remaining{RemainingUnbound{}};
     } else if (const auto* reduce = as_reduce(request.intent)) {
-        live.remaining = RemainingUnits{explicit_size(*reduce)->units};
+        live.remaining = fraction_size(*reduce)
+            ? Remaining{RemainingDeferred{}}
+            : Remaining{RemainingUnits{explicit_size(*reduce)->units}};
     } else {
         live.remaining = RemainingFlattenAll{};
     }
@@ -1351,6 +1408,9 @@ bool WorkingRequestCore::working_is_buy(const LiveRequest& live,
         if (sized->kind == HostSizedKind::Open && sized->side) {
             return *sized->side == Side::Long;
         }
+    }
+    if (const auto* native_sized = as_sized(live.request().intent)) {
+        return native_sized->side == Side::Long;
     }
     if (const auto* close = std::get_if<BookClose>(&live.authority)) {
         return close->side == Side::Short;
@@ -2214,11 +2274,17 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
     const auto* sized = as_host_sized(live.request().intent);
-    if (!sized || (input.terms.shape != OpeningShape::Transact
-                   && input.terms.shape != OpeningShape::ReverseTo
-                   && input.terms.shape != OpeningShape::CloseOpposite)
-        || (sized->kind == HostSizedKind::Close
-                   && input.terms.shape != OpeningShape::Transact)) {
+    const auto* native_sized = as_sized(live.request().intent);
+    const auto* scope_fraction = deferred_reduction(live.request().intent);
+    // Only a host-sized OPENING may name a nondefault physical shape. A
+    // host-sized close, a kernel-sized opening and a scope fraction all
+    // settle through the ordinary Transact/Reduce plan.
+    const bool opening_shapes = sized && sized->kind == HostSizedKind::Open;
+    if ((!sized && !native_sized && !scope_fraction)
+        || (input.terms.shape != OpeningShape::Transact
+            && input.terms.shape != OpeningShape::ReverseTo
+            && input.terms.shape != OpeningShape::CloseOpposite)
+        || (!opening_shapes && input.terms.shape != OpeningShape::Transact)) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
 
@@ -2362,6 +2428,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     const auto* transact = as_transact(live.request().intent);
     const auto* reverse_to = as_reverse_to(live.request().intent);
     const auto* host_sized = as_host_sized(live.request().intent);
+    const auto* native_sized = as_sized(live.request().intent);
     const bool plan_flatten = std::holds_alternative<execution::Flatten>(proposal.physical_action);
     const auto* plan_reduce = std::get_if<order_action::Reduce>(&proposal.physical_action);
     const auto* plan_transact = std::get_if<order_action::Transact>(&proposal.physical_action);
@@ -2424,6 +2491,15 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
                 return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
             }
         } else {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (native_sized) {
+        // A kernel-sized opening always settles as a signed book transaction
+        // on its declared side.
+        const bool long_side = native_sized->side == Side::Long;
+        if (!plan_transact || !finite_nonzero(plan_transact->signed_units)
+            || ((plan_transact->signed_units > 0.0) != long_side)
+            || std::abs(plan_transact->signed_units) > cap) {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else {
@@ -3113,5 +3189,5 @@ static_assert(std::variant_size_v<Owner> == 5);
 static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-}  // inline namespace native_order_v5
+}  // inline namespace native_order_v6
 }  // namespace pineforge::native_order

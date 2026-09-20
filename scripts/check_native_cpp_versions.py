@@ -210,7 +210,7 @@ def check_texts(files):
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
-    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v5")
+    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v6")
     require(order, ("WorkingRequestCore", "Request", "SubmitResult",
                     "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
                     "ExecutionAppliedEvent", "HostSized", "HostSizedKind", "ReverseTo",
@@ -218,39 +218,52 @@ def check_texts(files):
                     "RemainingProjectionNoTarget", "CohortHandle", "BindCohort", "CohortClose",
                     "CohortRoster", "CohortReceipt", "AllowanceDeferred",
                     "OpeningShape", "ExecutionGridPolicy", "ExecutionTerms", "TermsResolvedInput",
-                    "TermsResolvedEvent", "NativeCandidatePriceKind"),
-            "native_order_v5", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+                    "TermsResolvedEvent", "NativeCandidatePriceKind",
+                    "CashValue", "EquityFraction", "SizeTime", "Sized",
+                    "ScopeClaim", "ScopeFraction"),
+            "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
-                    "RemainingProjection", "Allowance"),
-            "native_order_v5", r'\busing\s+NAME\s*=')
+                    "RemainingProjection", "Allowance", "ReductionSize", "SizeBasis"),
+            "native_order_v6", r'\busing\s+NAME\s*=')
     for token in ('operator==(CohortHandle', 'operator<(CohortHandle',
                   'struct hash<pineforge::native_order::CohortHandle>'):
         if token not in files[FILES[0]]:
             raise ValueError('CohortHandle requires C++17 equality/order/hash support')
     require_exact_alias(
-        order, "OrderIntent", "std::variant<Flatten,Reduce,Transact,ReverseTo,HostSized>",
-        "native_order_v5")
+        order, "OrderIntent", "std::variant<Flatten,Reduce,Transact,ReverseTo,HostSized,Sized>",
+        "native_order_v6")
+    require_exact_alias(
+        order, "ReductionSize", "std::variant<ExplicitUnits,OwnerOpenedUnits,ScopeFraction>",
+        "native_order_v6")
+    require_exact_alias(
+        order, "SizeBasis", "std::variant<CashValue,EquityFraction>", "native_order_v6")
     require_exact_alias(
         order, "Remaining",
         "std::variant<RemainingUnbound,RemainingFlattenAll,RemainingUnits,RemainingDeferred,NoTarget>",
-        "native_order_v5")
+        "native_order_v6")
     require_exact_alias(
         order, "RemainingProjection",
         "std::variant<RemainingProjectionUnbound,RemainingProjectionFlattenAll,"
-        "RemainingProjectionUnits,RemainingProjectionDeferred,RemainingProjectionNoTarget>", "native_order_v5")
+        "RemainingProjectionUnits,RemainingProjectionDeferred,RemainingProjectionNoTarget>", "native_order_v6")
     require_exact_alias(
         order, "Allowance",
         "std::variant<AllowanceUnset,AllowanceUnits,AllowanceAllScope,AllowanceDeferred>",
-        "native_order_v5")
+        "native_order_v6")
     require_exact_alias(
         order, "ExecutionPlan",
         "std::variant<execution::Flatten,order_action::Reduce,order_action::Transact,"
-        "execution::ReverseTo>", "native_order_v5")
+        "execution::ReverseTo>", "native_order_v6")
     execution_terms = body(order, r'struct\s+ExecutionTerms\s*\{', 'execution terms')
     if ('ExecutionGridPolicygrid_policy=ExecutionGridPolicy::SnapToGrid;'
             not in re.sub(r'\s+', '', execution_terms)):
         raise ValueError('ExecutionTerms omits its default grid policy')
-    require_namespace_functions(order, ("to_execution_plan",), "native_order_v5")
+    sized = re.sub(r'\s+', '', body(order, r'struct\s+Sized\s*\{', 'native sizing'))
+    for pinned in ('SizeTimetime=SizeTime::AtMatch;',
+                   'ExecutionGridPolicygrid_policy=ExecutionGridPolicy::SnapToGrid;',
+                   'boolreserve_percent_fee=false;'):
+        if pinned not in sized:
+            raise ValueError('Sized omits a pinned default: ' + pinned)
+    require_namespace_functions(order, ("to_execution_plan",), "native_order_v6")
     required_order_members = (
         (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
         (r'\bstatic\s+Allowance\s+evaluated_allowance\s*\(', "evaluated_allowance"),
@@ -264,14 +277,14 @@ def check_texts(files):
             raise ValueError(name + " must be a native_order_v5 WorkingRequestCore member")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
         raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v5")
-    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v5")
+    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v6")
     require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live",
                         "WorkingRequestCore::prepare_terms",
                         "WorkingRequestCore::evaluated_allowance",
                         "WorkingRequestCore::effective_host_units",
                         "WorkingRequestCore::cohort_open", "WorkingRequestCore::cohort_add",
                         "WorkingRequestCore::cohort_remove"),
-            "native_order_v5", r'\bNAME\s*\(')
+            "native_order_v6", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
     require(calendar, ("Timeframe", "SessionCalendar", "NativeInterval",
@@ -642,5 +655,5 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("native_order identity v1 / values v5, native_calendar_v2, native_run_spec_v3, "
+    print("native_order identity v1 / values v6, native_calendar_v2, native_run_spec_v3, "
           "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v17 ownership verified")

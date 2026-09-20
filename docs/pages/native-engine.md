@@ -192,7 +192,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. There is no C request API in this
 slice.
 
-`native_order::Request` values belong to `native_order_v5`
+`native_order::Request` values belong to `native_order_v6`
 (`native_order.hpp:25`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
@@ -758,6 +758,69 @@ units separately from `filled_working` turnover, so a reversal remains one
 ticket and one settlement cycle. A `HostSized{Open}` is sized once; later
 candidate rematches may re-resolve price but not size. `CloseOpposite` uses the
 existing whole-book Flatten path when it must close an absorbed roster.
+
+### Sizing without a host override
+
+`native_order::Sized` is the sixth `OrderIntent`: an opening whose size the
+kernel resolves, so a bare host needs no `resolve_execution_terms` override to
+buy a cash amount or a share of equity.
+
+```cpp
+no::Request request;
+request.intent = no::Sized{no::Side::Long, no::EquityFraction{0.10}};
+submit(request);                                  // 10 % of marked equity
+```
+
+`SizeBasis` is `CashValue{cash}` in account currency or `EquityFraction{f}`, a
+fraction in `(0, 1]` of marked equity at the sizing point. Resolution is
+`units = cash / (price * point_value * fx)`, where `price` is the candidate's
+default resolved price. `SizeTime::AtMatch` (the default) resolves at the
+matching candidate; `SizeTime::AtAcceptance` freezes the units against the
+command point when the request is accepted. `reserve_percent_fee` divides the
+sizing cash by `1 + fee` when the run's fee kind is `NativeFeeKind::Percent`,
+and is an exact no-op for every other fee kind. `grid_policy` reuses
+`ExecutionGridPolicy`: `SnapToGrid` floors the units onto the run's
+`quantity_grid`; `ExplicitUnits` keeps the literal quotient, which the ordinary
+on-grid terms gate then refuses as `InvalidTerms` when a grid is configured and
+the quotient is off it. The two are identical on an ungridded run.
+
+The kernel resolves the basis *before* the host hook and publishes the result
+as the facts' `RemainingUnits`, so a `resolve_execution_terms` override still
+has the last word: return your own units to replace the kernel's, or the
+default identity terms to accept them. A basis that is not representable — not
+finite, not positive, or below one grid step after snapping — is
+`MatchRejectReason::TermsUnresolved` at the candidate. An invalid basis
+(`fraction` outside `(0, 1]`, `cash <= 0`) is `RequestRejectReason::InvalidQuantityBasis`
+at submit. A kernel-sized opening always settles as a signed book transaction
+on its declared side; the `ReverseTo` and `CloseOpposite` shapes remain
+`HostSized{Open}` only, and `Sized` requires the `Independent` owner.
+
+### Fractional reduces
+
+`ReductionSize` gains `ScopeFraction{fraction, claim}`, a fraction in `(0, 1]`
+of the scope the reduce is bound to, resolved at the matching candidate:
+
+```cpp
+no::Request exit;
+exit.intent = no::Reduce{no::ScopeFraction{0.5, no::ScopeClaim::NetOfSiblings}};
+exit.owner = no::BindOpening{opening, cycle};     // half of that one lot
+```
+
+The bound scope is the whole book for an unbound or book-bound close, the one
+opening for `BindOpening`, and the live selected roster for `BindOpenings`.
+`ScopeClaim::Gross` takes the fraction of that scope as it stands.
+`ScopeClaim::NetOfSiblings` first subtracts the units already claimed by the
+live sibling reduces bound to the same scope, so two 50 % siblings on one
+10-unit lot claim 5 + 5 gross and 5 + 2.5 net. Scope identity is the request's
+own authority — opening handles, position cycles and cohort handles — never a
+source identifier. A bracket child that is still waiting for its parent has no
+scope and resolves only after the parent fill. The fraction is floored onto
+`quantity_grid` like every other engine quantity; a fraction that does not buy
+one whole step is `TermsUnresolved`, and `fraction` outside `(0, 1]` is
+`InvalidQuantityBasis` at submit.
+
+Neither kind is emitted by the Pine adapter, which keeps resolving its own
+`HostSized` terms; `native_order` values therefore belong to `native_order_v6`.
 
 ### Source-layer boundary (R4-C)
 

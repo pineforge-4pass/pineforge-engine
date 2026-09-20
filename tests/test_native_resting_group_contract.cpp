@@ -164,7 +164,7 @@ static_assert(std::is_constructible_v<no::ReductionSize, no::ExplicitUnits>);
 static_assert(std::is_constructible_v<no::ReductionSize, no::OwnerOpenedUnits>);
 static_assert(!std::is_constructible_v<no::Transact, no::OwnerOpenedUnits>);
 static_assert(!std::is_constructible_v<no::Flatten, no::OwnerOpenedUnits>);
-static_assert(std::variant_size_v<no::ReductionSize> == 2);
+static_assert(std::variant_size_v<no::ReductionSize> == 3);
 static_assert(std::is_same_v<decltype(no::Transact::signed_units), double>);
 static_assert(std::is_same_v<decltype(no::Reduce::size), no::ReductionSize>);
 static_assert(std::is_empty_v<no::OwnerOpenedUnits>);
