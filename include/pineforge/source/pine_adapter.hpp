@@ -1199,8 +1199,7 @@ private:
     // keeps its host-resolved intent.
     bool core_sizing_price_matches(const PineSizingSnapshot&, bool is_long) const;
     double default_market_sizing_price(double mark, bool is_long) const noexcept;
-    native_order::Trigger trigger_for(double limit_price, double stop_price,
-                                      double trail_offset, double trail_price) const;
+    native_order::Trigger trigger_for(double limit_price, double stop_price) const;
     native_order::Group group_for(const std::string&, int, std::int64_t = 0) const;
     PineSizingSnapshot sizing_snapshot() const;
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;

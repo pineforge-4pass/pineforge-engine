@@ -448,6 +448,23 @@ trigger alternative, and a retained best must still produce a representable
 level for the successor's offset; otherwise the replacement is rejected and
 the predecessor stays live.
 
+What the Pine adapter takes from this set is the tick spelling: a source
+`trail_offset` is a tick count, so `exit()` hands the kernel a `TrailTicks`
+and the acceptance path resolves it against the run's `price_tick` — the very
+`syminfo.mintick` the adapter projects — instead of multiplying the count by
+the tick itself. The remaining TradingView rules stay adapter policy because
+no kernel primitive expresses them: the legacy broker rides the
+*tick-quantized* running best, which the adapter still spells as a
+half-a-tick trailing distance (now `TrailTicks{0.5}`) rather than the
+kernel's raw-best zero offset; a relative bracket leg's level is not the
+anchored `fill + offset` a `FromOwnerFill` installs but that value projected
+twice more, onto the instrument grid and then onto the half-tick arm
+threshold the quantized bar is tested against, and the leg's quantity,
+reservation and birth are facts of the fill point, not of the call; and an
+offset-only trail re-issue keeps the live request rather than replacing it,
+so `ReplaceOptions{retain_trigger_state}` has no adapter consumer. See
+`docs/design/native-feature-parity.md` §1.2 B3 and A.6.
+
 ### From strategy.exit to submit_bracket
 
 `include/pineforge/native_toolkit.hpp` is header-only, Pine-free and additive:

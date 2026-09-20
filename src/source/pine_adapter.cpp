@@ -1797,12 +1797,11 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
         && (state.spec->intrabar.is_none() || inactive_sampler_path);
 }
 
-native_order::Trigger PineExecutionAdapter::trigger_for(double limit_price, double stop_price,
-                                                         double trail_offset, double trail_price) const {
-    if (finite_positive(trail_offset)) {
-        return native_order::Trail{trail_offset,
-            finite_positive(trail_price) ? std::optional<double>{trail_price} : std::nullopt};
-    }
+// Entry-family triggers only: every trailing shape the source language can
+// ask for is built in exit(), on the kernel's own Trail / TrailTicks
+// spelling, so this helper never carried a live trail case.
+native_order::Trigger PineExecutionAdapter::trigger_for(double limit_price,
+                                                         double stop_price) const {
     if (price_present(limit_price) && price_present(stop_price))
         return native_order::StopLimit{stop_price, limit_price};
     if (price_present(limit_price)) return native_order::Limit{limit_price};
@@ -2336,8 +2335,13 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 && same_double_bits(stop->price, prior.exit_levels.stop);
         }
         if (const auto* trail = std::get_if<native_order::Trail>(&request.trigger)) {
+            // An attempted request still carries the kernel's tick spelling;
+            // acceptance resolves it against the same mintick, so read the
+            // price distance this leg will be stored with.
+            const double trail_offset = trail->ticks
+                ? trail->ticks->ticks * staged_.syminfo.mintick : trail->offset;
             return snapshot.family == PineOrderFamily::ExitTrail
-                && same_double_bits(trail->offset, prior.exit_levels.trail_offset)
+                && same_double_bits(trail_offset, prior.exit_levels.trail_offset)
                 && trail->arm_price.has_value() == std::isfinite(prior.exit_levels.trail_price)
                 && (!trail->arm_price || same_double_bits(*trail->arm_price,
                                                            prior.exit_levels.trail_price));
@@ -4155,7 +4159,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             : native_order::OrderIntent{native_order::Transact{signed_target}};
         request.label = id;
         request.comment = comment;
-        request.trigger = trigger_for(limit_price, stop_price, kNaN, kNaN);
+        request.trigger = trigger_for(limit_price, stop_price);
         request.group = group_for(oca_name, oca_type);
         PlacementSnapshot snapshot;
         snapshot.family = PineOrderFamily::Entry;
@@ -4613,7 +4617,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         ? native_order::Trigger{native_order::Limit{
             is_long ? std::numeric_limits<double>::min()
                     : std::numeric_limits<double>::max()}}
-        : trigger_for(native_limit, native_stop, kNaN, kNaN);
+        : trigger_for(native_limit, native_stop);
     double coof_market_fill = kNaN;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_market_next_open
         && coof_script_bar_valid_
@@ -6902,17 +6906,20 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     limit_price = source_level_on_price_grid(limit_price, tick);
     stop_price = source_level_on_price_grid(stop_price, tick);
-    std::optional<double> native_trail_offset;
+    // A source trail offset is a tick count, which is the kernel's own
+    // native_order::TrailTicks spelling: acceptance resolves it against the
+    // run's price tick — the same syminfo mintick this adapter projects into
+    // NativeRunSpec::price_tick (project()) — and stores a plain price
+    // distance, so the adapter never multiplies a tick count by a tick.
+    // Only the explicit-zero shape stays adapter policy: the legacy broker
+    // rides the TICK-QUANTIZED running best, whereas the kernel's zero offset
+    // rides the raw best and exits on any adverse ULP. Half a tick is exactly
+    // that quantization boundary, and it is now spelled in ticks as well.
+    std::optional<double> native_trail_offset_ticks;
     if (has_trail_request && std::isfinite(source_trail_offset)
         && source_trail_offset >= 0.0 && finite_positive(tick)) {
         const double offset_ticks = std::floor(source_trail_offset);
-        // The native request algebra requires a positive representable
-        // distance. Keep the source zero-tick shape within a tiny fraction of
-        // the symbol grid so generic Trail tracking remains live; source
-        // settlement rounds its public level back to that grid.
-        native_trail_offset = offset_ticks == 0.0
-            ? tick * 0.5
-            : offset_ticks * tick;
+        native_trail_offset_ticks = offset_ticks == 0.0 ? 0.5 : offset_ticks;
     }
     const bool unresolved_trail = has_trail_request
         && !finite_positive(trail_price) && std::isfinite(source_trail_points);
@@ -7863,7 +7870,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // facts and the eventual source fill remain on the original level.
         double native_trail_price = trail_price;
         bool trail_already_reached = false;
-        const bool zero_distance = native_trail_offset
+        const bool zero_distance = native_trail_offset_ticks
             && std::isfinite(source_trail_offset)
             && std::floor(source_trail_offset) == 0.0;
         if (finite_positive(tick)) {
@@ -7874,7 +7881,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool already_reached = point && (buy_close
                 ? point->price <= trail_price : point->price >= trail_price);
             trail_already_reached = already_reached;
-            const bool no_trailing_distance = !native_trail_offset || zero_distance;
+            const bool no_trailing_distance = !native_trail_offset_ticks || zero_distance;
             // An omitted offset and an explicit offset that truncates to zero
             // are both one-shot activation legs until the activation is
             // reached.  Once a zero-distance trail is already armed at the
@@ -7947,13 +7954,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 && finite_positive(tick);
             submit_leg(PineOrderFamily::ExitTrail,
                        native_order::Limit{one_shot_level, slipped_touch});
-        } else if (native_trail_offset) {
+        } else if (native_trail_offset_ticks) {
             std::optional<double> native_arm_price = native_trail_price;
             // ab9714be engine_path_resolve.cpp:464-479: trailing exit already reached at placement arms immediately
             if (trail_already_reached)
                 native_arm_price.reset();
             submit_leg(PineOrderFamily::ExitTrail, native_order::Trail{
-                *native_trail_offset, native_arm_price});
+                0.0, native_arm_price,
+                native_order::TrailTicks{*native_trail_offset_ticks}});
         } else if (trail_already_reached) {
             // ab9714be engine_path_resolve.cpp:634-639: omitted-offset trail already active at placement is marketable at next open
             // An omitted offset that was already activated at placement is
@@ -9363,7 +9371,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         native_stop = source_trigger_threshold(
             stop_price, staged_.syminfo.mintick, is_long, false);
     }
-    request.trigger = trigger_for(native_limit, native_stop, kNaN, kNaN);
+    request.trigger = trigger_for(native_limit, native_stop);
     if (coof_recalc_active_ && coof_first_open_) {
         const auto point = require_host().current_execution_point();
         if (point && finite_positive(limit_price)

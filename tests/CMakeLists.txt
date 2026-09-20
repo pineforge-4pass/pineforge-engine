@@ -80,6 +80,7 @@ set(TEST_SOURCES
     test_adapter_report_relower
     test_adapter_margin_relower
     test_native_margin_kernel_r5
+    test_adapter_brackets_relower
     test_native_queued_reverse_to
     test_native_precommit_view
     test_native_fx_activation
