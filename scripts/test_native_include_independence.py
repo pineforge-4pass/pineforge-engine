@@ -7,9 +7,14 @@ import tempfile
 import unittest
 
 from check_native_include_independence import (
+    NATIVE_EXAMPLES,
+    ROOT,
     Finding,
     archive_text,
+    c_compile_command_flags,
     compile_command_flags,
+    example_sources_on_disk,
+    is_c_source,
     forbidden_dependency_entries,
     forbidden_symbol_lines,
     independence_exit_code,
@@ -76,6 +81,42 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
             self.assertIn("-std=c++17", flags)
             self.assertNotIn("-I", flags)
             self.assertNotIn("/repo/include", flags)
+
+    def test_c_example_compiles_with_the_c_toolchain_not_cxx17(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            cache = {
+                "CMAKE_C_COMPILER": "/tool/cc",
+                "CMAKE_CXX_COMPILER": "/tool/c++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_FLAGS": "-Wall -I /repo/include",
+                "CMAKE_C_FLAGS_RELEASE": "-O2 -ffp-contract=off",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3",
+            }
+            compiler, flags, origin = c_compile_command_flags(build, cache)
+            self.assertEqual(compiler, "/tool/cc")
+            self.assertEqual(origin, "CMakeCache.txt")
+            self.assertIn("-O2", flags)
+            self.assertNotIn("-O3", flags)
+            self.assertIn("-std=c11", flags)
+            self.assertNotIn("-std=c++17", flags)
+            self.assertNotIn("-I", flags)
+        self.assertTrue(is_c_source("examples/native/hello_kernel_c.c"))
+        self.assertFalse(is_c_source("examples/native/hello_kernel.cpp"))
+        # A .c operand is dropped from a reused compile command like a .cpp one.
+        flags = sanitize_compile_flags(
+            ["/tool/cc", "-O2", "-c", "/repo/examples/native/hello_kernel_c.c", "-o", "/b/x.o"],
+            source_file="/repo/examples/native/hello_kernel_c.c", compiler="/tool/cc")
+        self.assertEqual(flags, ["-O2"])
+
+    def test_manifest_covers_every_example_source_on_disk(self):
+        # The lane's own acceptance: the checker covers ALL example sources,
+        # the C twin included. A source added to examples/native/ without a
+        # manifest row fails here before it fails in the checker itself.
+        listed = sorted(relative for _, relative in NATIVE_EXAMPLES)
+        self.assertEqual(listed, sorted(example_sources_on_disk(ROOT)))
+        self.assertIn("examples/native/hello_kernel_c.c", listed)
+        self.assertTrue(all((ROOT / relative).is_file() for relative in listed))
 
     def test_depfile_and_nm_detection_preserve_offending_lines(self):
         with tempfile.TemporaryDirectory() as temporary:

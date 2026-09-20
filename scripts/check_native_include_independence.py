@@ -3,8 +3,9 @@
 
 The caller supplies a disposable installation prefix. The checker installs the
 configured build there, removes the source-only header trees, then compiles the
-native public roots and the top-level native examples using only that installed
-include root. It never links or runs a consumer binary.
+native public roots and every top-level native example (the .c one with the C
+compiler) using only that installed include root. It never links or runs a
+consumer binary.
 
 With --kernel-archive the same run also reads the kernel-only static library
 with nm: every defined and undefined symbol in it must be free of the source
@@ -34,19 +35,26 @@ ROOT_HEADERS = (
     "execution.hpp",
     "market_driver.hpp",
 )
-# The top-level Pine-free examples (PINEFORGE_BUILD_EXAMPLES). hello_kernel is
-# the minimal host; native_market_example is exercised by
+# Every top-level Pine-free example (PINEFORGE_BUILD_EXAMPLES), C++ and C:
+# hello_kernel is the minimal host and hello_kernel_c.c its C twin (compiled
+# by the C compiler below, so a C++ construct leaking into the C API header
+# is caught here as well); native_market_example is exercised by
 # test_native_example_batch and native_live_startup_e2e; native_selected_example
 # is the R4-B second native host example. Both of the latter are also built as
 # the live runner's MODULE targets. native_bracket_strategy is the L7b
 # anchored-bracket host (a standalone program only). runner/examples/strategy.cpp is
-# intentionally legacy/source-bound after L1.
+# intentionally legacy/source-bound after L1. The tooling test pins this list
+# against the directory, so a new example cannot be added without being
+# checked here.
 NATIVE_EXAMPLES = (
     ("hello-kernel", "examples/native/hello_kernel.cpp"),
+    ("hello-kernel-c", "examples/native/hello_kernel_c.c"),
     ("native-market", "examples/native/native_market_strategy.cpp"),
     ("native-selected", "examples/native/native_selected_strategy.cpp"),
     ("native-bracket", "examples/native/native_bracket_strategy.cpp"),
 )
+NATIVE_EXAMPLES_DIRECTORY = "examples/native"
+C_SOURCE_SUFFIXES = (".c",)
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")
 # No exception: the rich begin bridge carries its host overrides as an opaque
@@ -108,7 +116,7 @@ def _is_output_option(argument: str) -> bool:
 def _looks_like_source_operand(argument: str, source_file: str | None) -> bool:
     if source_file and Path(argument).name == Path(source_file).name:
         return True
-    return argument.endswith((".cc", ".cp", ".cxx", ".cpp", ".C"))
+    return argument.endswith((".cc", ".cp", ".cxx", ".cpp", ".C", ".c"))
 
 
 def sanitize_compile_flags(arguments: list[str], *, source_file: str | None = None,
@@ -136,10 +144,17 @@ def sanitize_compile_flags(arguments: list[str], *, source_file: str | None = No
     return retained
 
 
-def compile_command_flags(build_dir: Path, cache: dict[str, str]) -> tuple[str, list[str], str]:
-    compiler = cache.get("CMAKE_CXX_COMPILER")
+def _toolchain_flags(build_dir: Path, cache: dict[str, str], *, language: str,
+                     preferred_files: tuple[str, ...], suffixes: tuple[str, ...],
+                     default_standard: str) -> tuple[str, list[str], str]:
+    """The configured compiler and sanitized flags of one language (CXX or C).
+
+    The flags come from a compile command of that language when the build
+    exported one, else from the cache's per-language flag variables."""
+    compiler_key = "CMAKE_" + language + "_COMPILER"
+    compiler = cache.get(compiler_key)
     if not compiler:
-        raise InfrastructureError("CMAKE_CXX_COMPILER is missing from CMakeCache.txt")
+        raise InfrastructureError(compiler_key + " is missing from CMakeCache.txt")
     database = build_dir / "compile_commands.json"
     if database.is_file():
         try:
@@ -147,11 +162,14 @@ def compile_command_flags(build_dir: Path, cache: dict[str, str]) -> tuple[str, 
         except (OSError, ValueError) as error:
             raise InfrastructureError("cannot read compile_commands.json: " + str(error)) from error
         if isinstance(entries, list):
-            preferred = next((entry for entry in entries
-                              if Path(str(entry.get("file", ""))).name == "native_market_strategy.cpp"), None)
-            entry = preferred or next((entry for entry in entries
-                                       if Path(str(entry.get("file", ""))).name == "c_abi.cpp"), None)
-            entry = entry or (entries[0] if entries else None)
+            entry = None
+            for name in preferred_files:
+                entry = next((candidate for candidate in entries
+                              if Path(str(candidate.get("file", ""))).name == name), None)
+                if entry is not None:
+                    break
+            entry = entry or next((candidate for candidate in entries
+                                   if str(candidate.get("file", "")).endswith(suffixes)), None)
             if isinstance(entry, dict):
                 raw = entry.get("arguments")
                 if not isinstance(raw, list):
@@ -164,13 +182,44 @@ def compile_command_flags(build_dir: Path, cache: dict[str, str]) -> tuple[str, 
                                                    compiler=compiler),
                             "compile_commands.json")
     build_type = cache.get("CMAKE_BUILD_TYPE", "").upper()
-    flags = shlex.split(cache.get("CMAKE_CXX_FLAGS", ""))
+    flags = shlex.split(cache.get("CMAKE_" + language + "_FLAGS", ""))
     if build_type:
-        flags += shlex.split(cache.get("CMAKE_CXX_FLAGS_" + build_type, ""))
+        flags += shlex.split(cache.get("CMAKE_" + language + "_FLAGS_" + build_type, ""))
     flags = sanitize_compile_flags(flags, compiler=compiler)
     if not any(flag.startswith("-std=") for flag in flags):
-        flags.append("-std=c++17")
+        flags.append(default_standard)
     return compiler, flags, "CMakeCache.txt"
+
+
+def compile_command_flags(build_dir: Path, cache: dict[str, str]) -> tuple[str, list[str], str]:
+    """The C++ toolchain: the root headers and every .cpp example compile with it."""
+    return _toolchain_flags(
+        build_dir, cache, language="CXX",
+        preferred_files=("native_market_strategy.cpp", "c_abi.cpp"),
+        suffixes=(".cc", ".cp", ".cxx", ".cpp", ".C"),
+        default_standard="-std=c++17")
+
+
+def c_compile_command_flags(build_dir: Path, cache: dict[str, str]) -> tuple[str, list[str], str]:
+    """The C toolchain: a .c example must compile as C, never as C++ with a
+    C++ standard flag, or a C++ construct in the C API header would pass."""
+    return _toolchain_flags(
+        build_dir, cache, language="C",
+        preferred_files=("hello_kernel_c.c", "test_native_c_api.c", "test_c_abi.c"),
+        suffixes=C_SOURCE_SUFFIXES,
+        default_standard="-std=c11")
+
+
+def is_c_source(relative: str) -> bool:
+    return relative.endswith(C_SOURCE_SUFFIXES)
+
+
+def example_sources_on_disk(root: Path = ROOT) -> tuple[str, ...]:
+    """Every C/C++ source under examples/native/, as the manifest spells them."""
+    directory = root / NATIVE_EXAMPLES_DIRECTORY
+    return tuple(sorted(
+        str(path.relative_to(root)) for path in directory.iterdir()
+        if path.is_file() and path.suffix in {".c", ".cc", ".cp", ".cxx", ".cpp", ".C"}))
 
 
 def parse_depfile(path: Path) -> list[str]:
@@ -297,6 +346,7 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
     remove_forbidden_prefix_trees(prefix)
     cache = read_cmake_cache(build_dir / "CMakeCache.txt")
     compiler, flags, origin = compile_command_flags(build_dir, cache)
+    c_compiler, c_flags, c_origin = c_compile_command_flags(build_dir, cache)
     if evidence_dir is not None:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         archive_text(evidence_dir, Path("manifest.json"), json.dumps({
@@ -304,11 +354,19 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
             "compiler": compiler,
             "flags": flags,
             "flagsOrigin": origin,
+            "cCompiler": c_compiler,
+            "cFlags": c_flags,
+            "cFlagsOrigin": c_origin,
             "rootHeaders": list(ROOT_HEADERS),
             "nativeExamples": [relative for _, relative in NATIVE_EXAMPLES],
         }, indent=2, sort_keys=True) + "\n")
     if not shutil.which(compiler) and not Path(compiler).is_file():
         raise InfrastructureError("C++ compiler not found: " + compiler)
+    if not shutil.which(c_compiler) and not Path(c_compiler).is_file():
+        raise InfrastructureError("C compiler not found: " + c_compiler)
+    unlisted = sorted(set(example_sources_on_disk()) - {relative for _, relative in NATIVE_EXAMPLES})
+    if unlisted:
+        raise InfrastructureError("examples not covered by NATIVE_EXAMPLES: " + ", ".join(unlisted))
     findings: list[Finding] = []
     with tempfile.TemporaryDirectory(prefix="pineforge-native-include-") as temporary:
         work = Path(temporary)
@@ -336,7 +394,9 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
             if not source.is_file():
                 raise InfrastructureError("native example is missing: " + str(source))
             output = work / "objects" / (name + ".o")
-            result = compile_object(compiler, flags, source=source, output=output,
+            example_compiler, example_flags = (
+                (c_compiler, c_flags) if is_c_source(relative) else (compiler, flags))
+            result = compile_object(example_compiler, example_flags, source=source, output=output,
                                     depfile=work / "deps" / (name + ".d"),
                                     include_root=include_root, label="compile " + relative)
             depfile = work / "deps" / (name + ".d")
