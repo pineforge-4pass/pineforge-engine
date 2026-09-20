@@ -140,7 +140,7 @@ public:
     int x_bar(int i) const { return closed_trade_exit_bar_index(i); }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    using BacktestEngine::margin_call_enabled_;
+    using pineforge::source::PineStrategyHost::margin_call_enabled_;
 };
 
 // Canonical LONG-then-declined-reversal bars. LONG fills 100 @100 (bar1),

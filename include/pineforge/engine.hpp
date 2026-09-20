@@ -403,15 +403,6 @@ protected:
     std::size_t account_currency_fx_broker_epoch_ = 0;
     double account_currency_fx_broker_rate_ = 1.0;
 
-    // TradingView force-liquidation (margin call) toggle. TV runs the broker
-    // margin-call emulator by default, so this defaults ON to match TV. It is
-    // a no-op for the validation corpus (long-only positions at the default
-    // 100% margin can never be liquidated — the formula denominator
-    // ``margin/100 - direction`` is 0 — and no corpus short is sized at full
-    // equity), and can be switched off via ``set_margin_call_enabled`` for
-    // callers that want the legacy hold-to-infinity behaviour.
-    bool margin_call_enabled_ = true;
-
     int64_t trade_start_time_ = std::numeric_limits<int64_t>::min();
 
 
@@ -2873,13 +2864,6 @@ public:
         if (pv > 0.0) { syminfo_.pointvalue = pv; }
     }
 
-    // Toggle TradingView's forced-liquidation (margin call) emulation. Defaults
-    // ON to match TV; set false for the legacy hold-the-position behaviour.
-    void set_margin_call_enabled(bool enabled) {
-        guard_native_mutation("set_margin_call_enabled");
-        margin_call_enabled_ = enabled;
-    }
-    bool margin_call_enabled() const { return margin_call_enabled_; }
     virtual void set_syminfo_metadata(const std::string& key, double value);
 
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,

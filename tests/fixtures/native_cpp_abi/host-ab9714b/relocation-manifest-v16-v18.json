@@ -16,7 +16,8 @@
     "PyramidEntry::bracket_slot_shadowed",
     "PyramidEntry::ordinary_market_open",
     "PyramidEntry::pooc_terminal_market_entry",
-    "PyramidEntry::ordinary_stop_open"
+    "PyramidEntry::ordinary_stop_open",
+    "BacktestEngine::margin_call_enabled_"
   ],
   "addedStorage": [],
   "addedValueMembers": [

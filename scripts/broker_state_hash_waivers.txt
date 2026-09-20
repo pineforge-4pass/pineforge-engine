@@ -23,7 +23,7 @@ inputs_ # Staged source input map; generated source series and scheduler-owned l
 is_tail_bar_ # Callback visibility flag derived from the delivered feed, with no independent execution transition.
 last_bar_index_ # Feed metadata for reports/accessors; source scheduler indexes its durable cadence state separately.
 last_bar_time_ # Feed metadata for reports/accessors; request timing uses native decision/birth timestamps instead.
-margin_call_enabled_ # Source provider configuration; active margin terms are projected into native run/request facts.
+margin_call_enabled_ # Source provider configuration (PineStrategyHost since L12 2.ii k); active margin terms are projected into native run/request facts.
 path_order_mode_ # Requested path-mode configuration; selected native path and current decision context are hashed by the consumer.
 probe_suppress_tail_logic_ # Reporting/probe mode configuration; it does not alter accepted historical execution decisions.
 qty_step_ # Symbol metadata carrier; quantized request/term facts preserve the executable value at placement.

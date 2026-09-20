@@ -183,6 +183,25 @@ public:
         MarketAdmissionDraft market_admission{};
     };
 
+public:
+    // Toggle TradingView's forced-liquidation (margin call) emulation.
+    // Defaults ON to match TV; set false for the hold-the-position behaviour.
+    // TV runs the broker margin-call emulator by default.  It is a no-op for
+    // the validation corpus (long-only positions at the default 100% margin
+    // can never be liquidated — the formula denominator ``margin/100 -
+    // direction`` is 0 — and no corpus short is sized at full equity).
+    //
+    // R5 lane L12 (2.ii k): this used to be BacktestEngine state.  The kernel
+    // toggle is the presence of `spec.margin` since L4/L4b, so the TV emulator
+    // switch belongs to the adapter that implements that emulator.  The value
+    // reaches `PineExecutionAdapter::source_margin_call_enabled_` at the
+    // native begin boundary, exactly as before.
+    void set_margin_call_enabled(bool enabled) {
+        guard_native_mutation("set_margin_call_enabled");
+        margin_call_enabled_ = enabled;
+    }
+    bool margin_call_enabled() const { return margin_call_enabled_; }
+
 protected:
     // Narrow test-facade configuration slots keep the frozen L0 oracle bodies
     // unchanged while routing their setup through the source configuration
@@ -433,6 +452,11 @@ protected:
     std::vector<std::size_t> aux_security_chart_end_;
 #endif
     // @source-state end
+
+    // Provider configuration, not book state: it is staged before a run and
+    // projected into the adapter at begin, so it is waived from the durable
+    // fold like the other configuration slots.
+    bool margin_call_enabled_ = true;
 
     // Read-only test projection cache; no future execution can observe it.
     mutable std::vector<FixtureIntentRow> source_pending_view_cache_;
