@@ -417,6 +417,7 @@ set(TEST_SOURCES
     test_live_probe_suppress_tail
     test_live_path_order
     test_pyramid_entry_state_hash
+    test_pine_security_state_hash
     test_live_state_hash_recording
     test_live_order_derived
     test_live_trade_accessors
