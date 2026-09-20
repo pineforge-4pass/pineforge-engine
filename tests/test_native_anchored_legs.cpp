@@ -893,6 +893,150 @@ void c_api_working_list_agrees() {
     strategy_native_host_free(state.host);
 }
 
+// ── 4. Which non-level facts resolve at the arm (measurement) ───────────
+// For a bracket child (a WaitForApplied leg) on this tree:
+//   Sized intent            -> not a child at all: InvalidOwner at submit
+//                              (validate_request: a Sized/ReverseTo intent
+//                              must be Independent);
+//   Reduce{OwnerOpenedUnits}-> at the ARM, from the owner's opened units
+//                              (QuantityBoundEvent), i.e. sized against the
+//                              owner's fill -- what a bracket child needs;
+//   Reduce{ScopeFraction, AtMatch} -> at the candidate, against the bound
+//                              scope, which after the arm is the owner's lot;
+//   Reduce{ScopeFraction, AtAcceptance} -> frozen at SUBMIT against the
+//                              whole book (a waiting child binds the whole
+//                              book), so a pre-fill child freezes the
+//                              pre-fill book: not the owner's lot;
+//   Capacity{PointBudget}   -> the budget is fixed at submit, the per-point
+//                              allowance is initialised at each matching
+//                              point after the arm from the post-arm
+//                              remaining (min(remaining, budget));
+//   Group{Member}           -> identity fixed at submit, the effect resolved
+//                              at the filling member's applied over the
+//                              live members, which for legs of one bracket
+//                              is always after their common arm;
+//   cancel on owner rejection -> at the owner's terminal event
+//                              (MatchRejected, Cancelled, Replaced,
+//                              NoEffect or a terminal fill that opened
+//                              nothing): CancelReason::OwnerGone.
+// The twin (acceptance a) sizes its legs with OwnerOpenedUnits, which is
+// already an arm-time fact, so no SizeTime::AtArm is added.
+void facts_resolve_at_the_arm() {
+    // (i) A Sized child is refused at submit.
+    {
+        Host host;
+        no::SubmitResult sized;
+        host.beginning = [&](Host& base) {
+            const auto parent = put(base, tx(2.0, "entry"));
+            no::Request leg{no::Sized{no::Side::Short, no::CashValue{100.0}}, "sized", ""};
+            leg.trigger = no::Stop{0.0};
+            leg.owner = no::WaitForApplied{parent};
+            leg.anchor = no::FromOwnerFill{-10.0, true};
+            sized = base.submit(leg);
+        };
+        run(host, bracket_spec("l7b-facts-sized"), {100.0});
+        CHECK(sized.status == no::SubmitStatus::Rejected);
+        REQUIRE(sized.reason.has_value());
+        CHECK(*sized.reason == no::RequestRejectReason::InvalidOwner);
+    }
+    // (ii) OwnerOpenedUnits: unbound at submit, bound at the arm to what the
+    //      owner opened; a per-point budget then meters the post-arm
+    //      remaining one unit per point.
+    {
+        Host host;
+        no::RequestHandle parent, leg;
+        std::optional<no::RemainingProjection> at_submit;
+        host.beginning = [&](Host& base) {
+            parent = put(base, tx(3.0, "entry"));
+            auto close = owner_close("close");
+            close.trigger = no::Stop{0.0};
+            close.owner = no::WaitForApplied{parent};
+            close.anchor = no::FromOwnerFill{50.0, true};   // 100.5: hit by the rise
+            close.capacity = no::PointBudget{1.0};
+            leg = put(base, close);
+            for (const auto& row : base.native_working_requests()) {
+                if (row.definition->handle == leg) at_submit = row.remaining;
+            }
+        };
+        run(host, bracket_spec("l7b-facts-owner-opened"), {100.0, 101.0, 101.0, 101.0, 101.0});
+        completed(host);
+        REQUIRE(at_submit.has_value());
+        CHECK(std::holds_alternative<no::RemainingProjectionUnbound>(*at_submit));
+        const auto bound = events<no::QuantityBoundEvent>(host);
+        REQUIRE(bound.size() == 1);
+        CHECK(bound[0].definition && bound[0].definition->handle == leg);
+        CHECK(same_bits(bound[0].source_units, 3.0));
+        const auto* units = std::get_if<no::RemainingProjectionUnits>(&bound[0].remaining);
+        REQUIRE(units != nullptr);
+        CHECK(same_bits(units->q, 3.0));
+        // Three one-unit fills, one per matching point, all after the arm.
+        std::size_t leg_fills = 0;
+        for (const auto& row : events<no::ExecutionAppliedEvent>(host)) {
+            if (row.handle() != leg) continue;
+            ++leg_fills;
+            CHECK(same_bits(row.closed_units, 1.0));
+        }
+        CHECK(leg_fills == 3);
+        CHECK(host.physical_position().signed_units == 0.0);
+    }
+    // (iii) ScopeFraction AtMatch resolves against the owner's lot at the
+    //       candidate; AtAcceptance freezes the pre-fill book at submit.
+    {
+        auto probe = [](no::ScopeBasis basis) {
+            Host host;
+            no::RequestHandle parent, leg;
+            host.beginning = [&](Host& base) {
+                parent = put(base, tx(2.0, "entry"));
+                no::Request close{no::Reduce{no::ScopeFraction{0.5, no::ScopeClaim::Gross, basis}},
+                                  "half", "bracket"};
+                close.trigger = no::Stop{0.0};
+                close.owner = no::WaitForApplied{parent};
+                close.anchor = no::FromOwnerFill{50.0, true};
+                leg = put(base, close);
+            };
+            run(host, bracket_spec("l7b-facts-fraction"), {100.0, 101.0, 101.0});
+            double closed = 0.0;
+            for (const auto& row : events<no::ExecutionAppliedEvent>(host)) {
+                if (row.handle() == leg) closed += row.closed_units;
+            }
+            return closed;
+        };
+        // Half of the owner's 2-unit lot, measured at the candidate.
+        CHECK(same_bits(probe(no::ScopeBasis::AtMatch), 1.0));
+        // Frozen at submit, when the book was flat: nothing to halve, so the
+        // leg closes nothing. Measured, not what a bracket child needs.
+        CHECK(same_bits(probe(no::ScopeBasis::AtAcceptance), 0.0));
+    }
+    // (iv) A rejected owner ends its waiting children: OwnerGone at the
+    //      owner's MatchRejectedEvent, before any arm.
+    {
+        Host host;
+        no::RequestHandle parent, leg;
+        host.beginning = [&](Host& base) {
+            parent = put(base, tx(10.0, "entry"));
+            auto close = owner_close("close");
+            close.trigger = no::Stop{0.0};
+            close.owner = no::WaitForApplied{parent, no::NativeArmVisibility::PendingUntilArmed};
+            close.anchor = no::FromOwnerFill{-10.0, true};
+            leg = put(base, close);
+        };
+        auto s = bracket_spec("l7b-facts-owner-rejected");
+        s.max_abs_units = 5.0;
+        run(host, s, {100.0, 100.0});
+        completed(host);
+        const auto rejected = events<no::MatchRejectedEvent>(host);
+        REQUIRE(rejected.size() == 1);
+        CHECK(rejected[0].handle() == parent);
+        CHECK(rejected[0].reason == no::MatchRejectReason::MaxAbsUnits);
+        const auto cancelled = events<no::CancelledEvent>(host);
+        REQUIRE(cancelled.size() == 1);
+        CHECK(cancelled[0].handle() == leg);
+        CHECK(cancelled[0].reason == no::CancelReason::OwnerGone);
+        CHECK(events<no::ArmedEvent>(host).empty());
+        CHECK(host.native_working_requests().empty());
+    }
+}
+
 #endif  // PINEFORGE_L7B_HARVEST
 
 }  // namespace
@@ -911,6 +1055,7 @@ int main() {
     test("pending leg is still addressable", pending_leg_is_still_addressable);
     test("visibility folds only when set", visibility_folds_only_when_set);
     test("C API working list agrees", c_api_working_list_agrees);
+    test("facts resolve at the arm", facts_resolve_at_the_arm);
     std::printf("L7b native anchored legs: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 #endif
