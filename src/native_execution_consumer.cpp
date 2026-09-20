@@ -6979,7 +6979,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const std::string& input_tf, const std::string& script_tf,
                                        const std::unordered_map<std::string, std::string>& inputs,
                                        const SymInfo& syminfo,
-                                       const source::StrategyOverrides* overrides,
+                                       const void* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
     NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,

@@ -193,10 +193,11 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `src/compat/pine/market_admission.cpp` (`CMakeLists.txt:111`), a boundary bug.
 - **Include independence already holds.** No kernel translation unit reaches a source header —
   `engine_aux_security.cpp:5-12`, for instance, pulls only `engine_internal.hpp`, `ta.hpp` and std
-  headers. The one kernel reference to an adapter type is the forward-declared
-  `source::StrategyOverrides` (`engine.hpp:407-409`, `execution_consumer.hpp:15`), an opaque
-  `const void*` the kernel never dereferences (`native_host.hpp:387`); the checker whitelists
-  exactly that symbol (`check_native_include_independence.py:42-46`).
+  headers. Since R5 lane L11 no kernel signature names an adapter type either: the rich begin
+  bridge takes the host overrides as a plain `const void*` (`engine.hpp`, `execution_consumer.hpp`)
+  and forwards it as `NativeBeginArgs::overrides_opaque`, which the kernel never dereferences; the
+  source host casts it back (`pine_strategy_host.cpp`). `check_native_include_independence.py`
+  therefore whitelists no source symbol at all.
 - **The four rules earlier drafts named — two survive as code.** The ten-significant-digit money
   rule is a comment block (`engine.hpp:73-180`); the arithmetic is adapter-side
   (`pine_adapter.cpp:396-403`). KI-62 leaves orphaned comments (`src/engine_orders.cpp:198-208`,

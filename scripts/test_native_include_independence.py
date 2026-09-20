@@ -12,7 +12,6 @@ from check_native_include_independence import (
     compile_command_flags,
     forbidden_dependency_entries,
     forbidden_symbol_lines,
-    is_allowed_opaque_source_symbol,
     independence_exit_code,
     parse_depfile,
     remove_forbidden_prefix_trees,
@@ -88,19 +87,18 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
         symbols = "U pineforge::source::PineStrategyHost::run()\nU compat::pine::CapAttachment::x()\n"
         self.assertEqual(forbidden_symbol_lines(symbols), symbols.splitlines())
 
-    def test_only_the_opaque_override_pointer_is_allowed(self):
-        allowed = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
-                   "pineforge::Bar const*, pineforge::source::StrategyOverrides const*)")
-        self.assertTrue(is_allowed_opaque_source_symbol(allowed))
-        self.assertEqual(forbidden_symbol_lines(allowed), [])
+    def test_no_source_symbol_is_whitelisted(self):
+        # The rich begin bridge takes `const void*`, so even the override
+        # pointer no longer names the source layer anywhere in the kernel.
+        neutral = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
+                   "pineforge::Bar const*, void const*)")
+        self.assertEqual(forbidden_symbol_lines(neutral), [])
         self.assertEqual(forbidden_symbol_lines(
             "U pineforge::source::PineStrategyHost::run()"),
             ["U pineforge::source::PineStrategyHost::run()"])
-        self.assertEqual(forbidden_symbol_lines(
-            "U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
-            "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"),
-            ["U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
-             "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"])
+        overrides = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
+                     "pineforge::Bar const*, pineforge::source::StrategyOverrides const*)")
+        self.assertEqual(forbidden_symbol_lines(overrides), [overrides])
 
     def test_expect_fail_only_inverts_real_findings(self):
         finding = Finding("dependency", "header", "/prefix/include/pineforge/compat/pine/x.hpp")

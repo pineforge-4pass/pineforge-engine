@@ -404,9 +404,6 @@ struct ReportC {
 };
 
 using ExitLegLifecycle = exit_legs::Lifecycle;
-namespace source {
-struct StrategyOverrides;
-} // namespace source
 
 // default_qty_type constants (matches TradingView)
 enum class QtyType { FIXED = 0, PERCENT_OF_EQUITY = 1, CASH = 2 };
@@ -3125,7 +3122,11 @@ public:
              const std::string& script_tf,
              const std::unordered_map<std::string, std::string>& inputs,
              const SymInfo& syminfo,
-             const source::StrategyOverrides* overrides = nullptr,
+             // Opaque host-override handle: the kernel only forwards it to
+             // prepare_native_begin() as NativeBeginArgs::overrides_opaque
+             // and never dereferences it. A host layer that defines its own
+             // override record passes its address and casts it back there.
+             const void* overrides = nullptr,
              bool bar_magnifier = false,
              int magnifier_samples = 4,
              MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);

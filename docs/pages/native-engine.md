@@ -1670,11 +1670,12 @@ target_link_libraries(my_native_consumer PRIVATE PineForge::kernel)
 ```
 
 `PineForge::kernel` (`libpineforge_kernel.a`) is built from
-`PINEFORGE_KERNEL_SOURCES` with exactly the flags `pineforge` uses. Its only
-mention of the source layer is the opaque `pineforge::source::StrategyOverrides
-const*` forward declaration in the rich begin bridge, so it links standalone;
+`PINEFORGE_KERNEL_SOURCES` with exactly the flags `pineforge` uses. It does not
+mention the source layer at all — the rich begin bridge carries its host
+overrides as an opaque `const void*` — so it links standalone;
 `scripts/check_native_include_independence.py --kernel-archive` asserts that
-with `nm` over the archive's defined and undefined symbols.
+with `nm` over the archive's defined and undefined symbols, with no whitelisted
+symbol.
 
 With the option OFF the build excludes, each with a CMake STATUS line:
 

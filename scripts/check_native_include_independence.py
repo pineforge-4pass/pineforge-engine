@@ -47,11 +47,8 @@ NATIVE_EXAMPLES = (
 )
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")
-# The rich begin bridge keeps this one opaque pointer in its generic wrapper.
-# It is a forward declaration only: no native consumer can construct or name a
-# source host through it.  Keep the exception narrow so a real source symbol
-# (or a second source type) remains a failure.
-OPAQUE_SOURCE_SYMBOL = "pineforge::source::StrategyOverrides const*"
+# No exception: the rich begin bridge carries its host overrides as an opaque
+# `const void*`, so no kernel signature names the source layer at all.
 INCLUDE_VALUE_OPTIONS = {
     "-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
     "-isysroot", "-iframework", "-F",
@@ -194,16 +191,9 @@ def forbidden_dependency_entries(entries: list[str]) -> list[str]:
     return found
 
 
-def is_allowed_opaque_source_symbol(line: str) -> bool:
-    return ("StrategyOverrides" in line
-            and OPAQUE_SOURCE_SYMBOL in line
-            and line.count("pineforge::source::") == 1)
-
-
 def forbidden_symbol_lines(symbols: str) -> list[str]:
     return [line for line in symbols.splitlines()
-            if any(token in line for token in FORBIDDEN_SYMBOLS)
-            and not is_allowed_opaque_source_symbol(line)]
+            if any(token in line for token in FORBIDDEN_SYMBOLS)]
 
 
 def kernel_archive_findings(archive: Path, *, evidence_dir: Path | None = None) -> list[Finding]:

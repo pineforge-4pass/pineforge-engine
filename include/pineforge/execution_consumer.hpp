@@ -12,7 +12,6 @@
 namespace pineforge {
 
 struct SymInfo;
-namespace source { struct StrategyOverrides; }
 
 inline namespace engine_script_run_v18 {
 
@@ -50,7 +49,8 @@ public:
                           const std::string& script_tf,
                           const std::unordered_map<std::string, std::string>& inputs,
                           const SymInfo& syminfo,
-                          const source::StrategyOverrides* overrides,
+                          // Opaque host-override handle, forwarded verbatim.
+                          const void* overrides,
                           bool bar_magnifier,
                           int magnifier_samples,
                           MagnifierDistribution magnifier_dist) = 0;

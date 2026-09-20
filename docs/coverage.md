@@ -165,7 +165,7 @@ void run(const Bar* input_bars, int n_input,
          const std::string& script_tf,
          const std::unordered_map<std::string, std::string>& inputs,
          const SymInfo& syminfo,
-         const StrategyOverrides* overrides = nullptr,
+         const void* overrides = nullptr,   // opaque; a source::StrategyOverrides* here
          bool bar_magnifier = false,
          int magnifier_samples = 4,
          MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);
