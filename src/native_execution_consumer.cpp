@@ -7140,6 +7140,22 @@ bool NativeExecutionConsumer::refuse_subscription_tick_input(BacktestEngine& eng
     return true;
 }
 
+// FP6. The account converts at the rate of the engine's presented clock.
+// Confirmed input moves that clock point by point, exactly as a batch of the
+// same bars does, so a confirmed-bar stream under a declared curve IS that
+// batch. Tick-driven input does not: an observation hook runs before its
+// print has moved the clock, and a partially finalized slot calculates at its
+// own OPEN, behind prints it has already matched -- measured on this tree, a
+// step at T+30s still converted at the pre-step rate at the T+40s and T+50s
+// prints and at the slot's calculation. Rather than convert one run on two
+// clocks, a stream that declares a curve takes confirmed bars only.
+bool NativeExecutionConsumer::refuse_fx_curve_tick_input(BacktestEngine& engine) {
+    if (!staged_fx_curve_) return false;
+    present_refusal(engine,
+        "a declared native FX curve requires confirmed-bar stream input");
+    return true;
+}
+
 bool NativeExecutionConsumer::deliver_timeframe_bar(
         BacktestEngine& engine, TimeframeSubscription& subscription, const Bar& bucket,
         std::int64_t first_contributing_ms, std::int64_t delivered_at_ms,
@@ -7516,7 +7532,13 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
             present_refusal(engine, "native timeframe arguments must be empty or match the spec");
             return false;
         }
-        if (staged_fx_curve_) {
+        // FP6: a curve the run itself declared (configure_fx_curve) is the
+        // stream's FX epoch -- immutable from Ready to the end of the run and
+        // named by the continuation identity, so every realtime conversion
+        // reads a rate that was fixed before the first warmup bar. The series
+        // of the mutable setter ingress stays refused: its owner revalues on a
+        // broker clock of its own, which has no realtime route.
+        if (staged_fx_curve_ && staged_ingress_fx_) {
             present_refusal(engine,
                 "timestamped account-currency FX is not supported by streaming");
             return false;
@@ -7609,6 +7631,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
     }
     if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
     if (refuse_subscription_tick_input(engine)) return false;
+    if (refuse_fx_curve_tick_input(engine)) return false;
     if (n == 0) return true;
     uint64_t prev_sequence = last_tick_sequence_;
     bool prev_has_sequence = has_tick_sequence_;
@@ -7919,6 +7942,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
         }
         if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
         if (refuse_subscription_tick_input(engine)) return false;
+        if (refuse_fx_curve_tick_input(engine)) return false;
         if (has_floor_ && timestamp_ms < decision_floor_ms_) {
             present_refusal(engine, "native time advance regresses the decision floor");
             return false;

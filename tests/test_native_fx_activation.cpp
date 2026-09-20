@@ -7,6 +7,15 @@ using namespace r4_terms;
 
 namespace {
 
+// The mutable setter ingress of a source provider, reached the way
+// BacktestEngine::set_account_currency_fx_series reaches it.
+struct IngressHost : TermsHost {
+    bool stage_ingress_series(std::int64_t effective_from_ms, double rate) {
+        return as_native_consumer(execution_consumer())
+            .stage_account_currency_fx_series({effective_from_ms}, {rate});
+    }
+};
+
 void stage_and_apply_at_execution_coordinate() {
     TermsHost host;
     NativeExecutionTermsFacts seen{};
@@ -33,15 +42,67 @@ void stage_and_apply_at_execution_coordinate() {
     CHECK(host.physical_position().signed_units == 1.0);
 }
 
-void staged_curve_refuses_native_streaming() {
+// expectation corrected: stream_begin refused the declared curve (Ready,
+// "timestamped account-currency FX is not supported by streaming") ->
+// stream_begin accepts it (Running) and the refusal moves to tick-driven
+// input, because audit lane N6 (design row FP6) rules a curve declared through
+// configure_native_fx_curve the stream's immutable FX epoch: confirmed input
+// converts on the same clock as a batch of the same bars, while an observation
+// hook and a partially finalized slot read a stale one (measured: a step at
+// T+30s still converted at the pre-step rate at the T+40s and T+50s prints).
+void declared_curve_streams_confirmed_bars_only() {
     TermsHost host;
+    std::vector<double> rates;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        rates.push_back(facts.active_fx);
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
     REQUIRE(host.configure_native(spec("fx-stream")).status == NativeSetupStatus::Applied);
     REQUIRE(host.configure_native_fx_curve(NativeFxCurve{{T}, {1.25}}).status
             == NativeSetupStatus::Applied);
     const Bar warmup{100, 100, 100, 100, 1, T - 60000};
-    CHECK(!host.stream_begin(&warmup, 1, "1", "1"));
-    CHECK(host.native_state().kind == NativeLifecycleKind::Ready);
-    CHECK(host.last_error().find("timestamped account-currency FX is not supported by streaming")
+    CHECK(host.stream_begin(&warmup, 1, "1", "1"));
+    CHECK(host.native_state().kind == NativeLifecycleKind::Running);
+    CHECK(host.last_error().empty());
+
+    // Tick-driven input is a refusal, not a failure: the stream keeps running.
+    CHECK(!host.stream_push_tick(TradeTick{T, 1, 100.0, 1.0}));
+    CHECK(host.last_error()
+          == "a declared native FX curve requires confirmed-bar stream input");
+    CHECK(host.native_state().kind == NativeLifecycleKind::Running);
+    CHECK(!host.stream_advance_time(T + 1));
+    CHECK(host.native_state().kind == NativeLifecycleKind::Running);
+
+    // The begin-time market order fills at the warmup bar's open, before the
+    // curve's first point; a realtime bar then converts at the declared rate.
+    REQUIRE(!rates.empty());
+    CHECK(rates.front() == 1.0);
+    bool closed = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        if (closed || h.physical_position().signed_units == 0.0) return;
+        const auto close = put(h, reduce(1, "fx-stream-close"));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(
+            h.execute_current(command(close))));
+        closed = true;
+    };
+    CHECK(host.stream_push_bar(Bar{100, 100, 100, 100, 1, T}));
+    CHECK(closed);
+    CHECK(rates.back() == 1.25);
+    CHECK(host.stream_end(false));
+    completed(host);
+
+    // The mutable setter ingress keeps its refusal: that series belongs to an
+    // owner that revalues on a broker clock of its own.
+    IngressHost ingress;
+    REQUIRE(ingress.configure_native(spec("fx-stream-ingress")).status
+            == NativeSetupStatus::Applied);
+    CHECK(ingress.stage_ingress_series(T, 1.25));
+    CHECK(!ingress.stream_begin(&warmup, 1, "1", "1"));
+    CHECK(ingress.native_state().kind == NativeLifecycleKind::Ready);
+    CHECK(ingress.last_error().find("timestamped account-currency FX is not supported by streaming")
           != std::string::npos);
 }
 
@@ -338,7 +399,7 @@ void d1_applied_callback_uses_activation_timestamp() {
 
 int main() {
     test("FX activation at execution coordinate", stage_and_apply_at_execution_coordinate);
-    test("native stream curve refusal", staged_curve_refuses_native_streaming);
+    test("declared curve streams confirmed bars only", declared_curve_streams_confirmed_bars_only);
     test("resolver projection barrier", post_resolver_projection_guard_blocks_effects);
     test("wrong phase staging", wrong_phase_is_side_effect_free);
     test("preview projection barrier", preview_projection_barrier_is_a_typed_refusal);

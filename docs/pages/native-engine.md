@@ -1675,7 +1675,12 @@ These are existing refusals, not implied future features:
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
   recalculates per observed print
-- A nonempty staged native FX curve on `stream_begin`; batch runs may use one.
+- Tick-driven input (`stream_push_tick` / `stream_push_ticks` /
+  `stream_advance_time`) on a stream that declares a `NativeFxCurve`; confirmed
+  bars run under one (see @ref native_engine_stream_fx)
+- A timestamped FX series staged through the mutable setter ingress
+  (`set_account_currency_fx_series`) on `stream_begin`; its owner revalues on a
+  broker clock of its own, which has no realtime route
 - Auxiliary/native security feeds, source magnifier/tail/probe/hash/trace
   setters, `set_input`, and Pine
   entry/exit/cancel commands — native hosts latch `Failed`
@@ -2205,10 +2210,10 @@ executes it once in batch and once through `stream_begin` / `stream_push_bar` /
 readiness observation before `execute_current`.
 
 An immutable `NativeFxCurve` is staged only while the host is Ready, after
-`configure_native` and before a batch `run`. Its parallel timestamp/rate arrays
-must have equal length, strictly increasing timestamps, and finite positive
-rates; an empty curve clears the staged value. `account_fx` remains the
-fallback before the first curve point.
+`configure_native` and before a batch `run` or a `stream_begin`. Its parallel
+timestamp/rate arrays must have equal length, strictly increasing timestamps,
+and finite positive rates; an empty curve clears the staged value.
+`account_fx` remains the fallback before the first curve point.
 
 ```cpp
 pineforge::NativeFxCurve curve{{0, 900000}, {1.0, 1.01}};
@@ -2217,6 +2222,48 @@ if (fx.status != pineforge::NativeSetupStatus::Applied) {
     // Read fx.validation; engine storage was not changed.
 }
 ```
+
+#### Stream FX: the declared curve is the stream's FX epoch {#native_engine_stream_fx}
+
+A curve declared through `configure_native_fx_curve` (C:
+`strategy_configure_native_fx_curve_v1`) is the run's **FX epoch**: immutable
+from Ready to the end of the run, refused with `WrongPhase` once the run is
+Running, and named by the continuation identity before the first warmup bar. A
+stream runs under it exactly as a batch does. The account converts at
+`account_currency_fx_at(effective time)` of each driver point, confirmed input
+reaches those points through the same `consume_confirmed_input` a batch uses,
+and so a stream of confirmed bars converts — and takes its
+`NativeMarginCheckKind::FxRoll` check points — exactly where a batch of the same
+bars does, whether a step lands in the warmup replay or in realtime
+(`tests/test_native_margin_fx_roll.cpp`, the stream twin: every offered check
+point, requirement, receipt, closed row and the book left behind, ordinal for
+ordinal). The last point's rate carries forward for as long as the stream
+lives.
+
+Two limits are permanent parts of that contract, not pending work:
+
+- **No realtime rate ingestion.** The epoch is fixed at begin. A host that
+  learns a new rate ends the stream and begins the next one under the new
+  curve; the two runs have different continuation identities, which is the
+  point — a rate that arrived mid-run would retroactively be a different run.
+- **Confirmed bars only.** Tick-driven input is refused on a stream that
+  declares a curve (`"a declared native FX curve requires confirmed-bar stream
+  input"`; a refusal, not a failure — the stream keeps running). The reason is
+  the conversion clock, not the curve: an observation hook runs before its
+  print has moved the engine's presented clock, and a partially finalized slot
+  calculates at its own OPEN, behind prints it has already matched. Measured
+  on this tree with a step at T+30s: the T+40s and T+50s prints, and the
+  slot's own calculation, still converted at the pre-step rate. Rather than
+  convert one run on two clocks, the tick route stays closed. Moving that
+  clock changes what the run's timestamp sinks (the stream state hash, trace
+  rows) present on the tick route, so it is a change of its own, with its own
+  pins, and not a condition this contract waits on.
+
+The series of the mutable setter ingress (`set_account_currency_fx_series`,
+the source providers' route) keeps its `stream_begin` refusal
+(`"timestamped account-currency FX is not supported by streaming"`): that
+series belongs to an owner that revalues on a broker-open clock of its own,
+which has no realtime route.
 
 ### Examples and the export macro {#native_engine_examples}
 
@@ -2417,9 +2464,11 @@ so `pf_native_callbacks_v1` does not move.
 ### Known limits
 
 The test-only Pine oracle is a comparison aid and earns no native-independence
-or adapter credit. There is no generic native FX broker-open epoch clock in
-this slice: the O7 clock work is deferred to slice B. Native streaming refuses
-a nonempty staged FX curve. The precommit verdict is not previewed; preview
+or adapter credit. The kernel has no broker-open FX epoch clock and needs
+none: the declared `NativeFxCurve` is the run's FX epoch, a step of it is the
+`FxRoll` margin check point, and a confirmed-bar stream runs under it as a
+batch does (@ref native_engine_stream_fx); tick-driven input under a
+declared curve stays refused. The precommit verdict is not previewed; preview
 terms outcomes are typed facts, not the host's verdict. Generated Pine code
 remains on its compatibility route until the later adapter slice.
 

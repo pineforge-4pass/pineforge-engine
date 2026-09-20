@@ -368,6 +368,10 @@ private:
     // is the only input a batch of the same bars also has. True (refused)
     // exactly when a stream that declares one is asked for tick-driven input.
     bool refuse_subscription_tick_input(BacktestEngine& engine);
+    // FP6: a declared FX curve converts on the clock confirmed input moves.
+    // True (refused) exactly when a stream that declares one is asked for
+    // tick-driven input, whose hooks and partial slots read a stale clock.
+    bool refuse_fx_curve_tick_input(BacktestEngine& engine);
     bool deliver_timeframe_bar(BacktestEngine& engine, TimeframeSubscription& subscription,
                                const Bar& bucket, std::int64_t first_contributing_ms,
                                std::int64_t delivered_at_ms, NativeCompletionKind completion);

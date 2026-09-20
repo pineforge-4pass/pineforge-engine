@@ -11,6 +11,11 @@
  * at a different rate than the point before it, offered immediately before
  * that point is matched.
  *
+ * Design row FP6 rides on the same clock: a curve declared through
+ * configure_native_fx_curve is the run's immutable FX epoch, so a stream of
+ * confirmed bars converts — and rolls — exactly as a batch of the same bars
+ * does. The stream twin at the end runs every roll scenario both ways.
+ *
  * No Pine twin lives here on purpose: the TU reaches no source header, so the
  * kernel-only build (PINEFORGE_BUILD_SOURCE_LAYER=OFF) runs every row.
  *
@@ -407,6 +412,118 @@ void roll_inside_a_lower_timeframe_walk() {
     near(host.physical_position().signed_units, 8.0);
 }
 
+// ── 8. FP6 stream twin ───────────────────────────────────────────────────
+// The same bars, the same declared curve, once as a batch and once through
+// stream_begin / stream_push_bar / stream_end. Every offered check point,
+// every requirement the kernel measured, every receipt, every closed row and
+// the book that is left are the batch's, whether the roll lands in the warmup
+// or in realtime.
+void stream_bars(RollHost& host, const NativeRunSpec& spec, const NativeFxCurve& curve,
+                 const std::vector<Bar>& bars, int n_warmup) {
+    begin(host, spec, curve);
+    REQUIRE(host.stream_begin(bars.data(), n_warmup, "1", "1"));
+    CHECK(host.last_error().empty());
+    for (std::size_t index = static_cast<std::size_t>(n_warmup); index < bars.size(); ++index) {
+        REQUIRE(host.stream_push_bar(bars[index]));
+    }
+    REQUIRE(host.stream_end(false));
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+}
+
+void check_twin(const RollHost& stream, const RollHost& batch) {
+    REQUIRE(stream.points.size() == batch.points.size());
+    for (std::size_t i = 0; i < batch.points.size(); ++i) {
+        const auto& got = stream.points[i];
+        const auto& want = batch.points[i];
+        CHECK(got.kind == want.kind);
+        CHECK(got.cursor.point.ordinal == want.cursor.point.ordinal);
+        CHECK(got.cursor.point.open_ms == want.cursor.point.open_ms);
+        CHECK(got.cursor.point.effective_time_ms == want.cursor.point.effective_time_ms);
+        CHECK(got.cursor.point.path_phase == want.cursor.point.path_phase);
+        CHECK(got.cursor.t == want.cursor.t);
+        CHECK(got.mark == want.mark);
+        CHECK(got.position.signed_units == want.position.signed_units);
+        CHECK(got.liquidation_resting == want.liquidation_resting);
+    }
+    REQUIRE(stream.views.size() == batch.views.size());
+    for (std::size_t i = 0; i < batch.views.size(); ++i) {
+        CHECK(stream.views[i].kind == batch.views[i].kind);
+        CHECK(stream.views[i].mark == batch.views[i].mark);
+        CHECK(stream.views[i].equity == batch.views[i].equity);
+        CHECK(stream.views[i].required == batch.views[i].required);
+    }
+    REQUIRE(stream.margin_calls.size() == batch.margin_calls.size());
+    for (std::size_t i = 0; i < batch.margin_calls.size(); ++i) {
+        const auto& got = stream.margin_calls[i];
+        const auto& want = batch.margin_calls[i];
+        CHECK(got.cursor.point.ordinal == want.cursor.point.ordinal);
+        CHECK(got.cursor.point.effective_time_ms == want.cursor.point.effective_time_ms);
+        CHECK(got.cursor.point.path_phase == want.cursor.point.path_phase);
+        CHECK(got.units == want.units);
+        CHECK(got.mark == want.mark);
+        CHECK(got.equity == want.equity);
+        CHECK(got.required == want.required);
+        CHECK(got.liquidation_price == want.liquidation_price);
+        CHECK(got.position_before == want.position_before);
+        CHECK(got.position_after == want.position_after);
+    }
+    REQUIRE(stream.rows().size() == batch.rows().size());
+    for (std::size_t i = 0; i < batch.rows().size(); ++i) {
+        CHECK(stream.rows()[i].exit_time == batch.rows()[i].exit_time);
+        CHECK(stream.rows()[i].exit_price == batch.rows()[i].exit_price);
+        CHECK(stream.rows()[i].qty == batch.rows()[i].qty);
+        CHECK(stream.rows()[i].pnl == batch.rows()[i].pnl);
+    }
+    CHECK(stream.fills.size() == batch.fills.size());
+    CHECK(stream.physical_position().signed_units == batch.physical_position().signed_units);
+    CHECK(stream.native_marked_equity(100.0) == batch.native_marked_equity(100.0));
+}
+
+void stream_twin() {
+    struct Row {
+        const char* key;
+        std::vector<Bar> bars;
+        NativeFxCurve curve;
+        NativePathOrder order;
+        NativeLiquidationSizing sizing;
+        std::size_t calls;
+        std::size_t rolls;
+    };
+    const std::vector<Row> rows = {
+        {"fx-roll-twin-flat", {calm(0), calm(1), calm(2), calm(3)},
+         NativeFxCurve{{T + 2 * kMinute}, {2.5}}, NativePathOrder::Auto,
+         NativeLiquidationSizing::RestoreMinimum, 1, 1},
+        {"fx-roll-twin-segment",
+         {calm(0), ohlc(1, 100.0, 104.0, 98.0, 99.0), calm(2, 99.0), calm(3, 99.0)},
+         NativeFxCurve{{T + 2 * kMinute}, {2.0}}, NativePathOrder::LowFirst,
+         NativeLiquidationSizing::Flatten, 1, 1},
+        // Two steps: up into the call, then back down. The second roll is a
+        // check point too, and withdraws nothing it should keep.
+        {"fx-roll-twin-two-steps", {calm(0), calm(1), calm(2), calm(3), calm(4)},
+         NativeFxCurve{{T + 2 * kMinute, T + 4 * kMinute}, {2.5, 1.0}}, NativePathOrder::Auto,
+         NativeLiquidationSizing::RestoreMinimum, 1, 2},
+    };
+    for (const auto& row : rows) {
+        auto spec = roll_spec(row.key);
+        spec.path_order = row.order;
+        spec.margin = model(row.sizing);
+        RollHost batch;
+        batch.open_units = 10.0;
+        run_bars(batch, spec, row.curve, row.bars);
+        REQUIRE(batch.margin_calls.size() == row.calls);
+        REQUIRE(batch.offered(NativeMarginCheckKind::FxRoll).size() == row.rolls);
+        // n_warmup = 1: the entry and every roll are realtime. n_warmup = 3:
+        // the first roll (and its call) happen inside the warmup replay.
+        for (const int n_warmup : {1, 3}) {
+            RollHost stream;
+            stream.open_units = 10.0;
+            stream_bars(stream, spec, row.curve, row.bars, n_warmup);
+            check_twin(stream, batch);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -418,6 +535,7 @@ int main() {
     test("short side and mark check", short_side_and_mark_check);
     test("CalculationOnly is not offered the roll", calculation_only_is_not_offered_the_roll);
     test("roll inside a lower-timeframe walk", roll_inside_a_lower_timeframe_walk);
+    test("FP6 stream twin", stream_twin);
     std::printf("N6 FX roll: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
