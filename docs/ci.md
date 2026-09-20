@@ -40,6 +40,7 @@ Python. CTest must discover tests; an empty suite is a failure.
 | `debug` | Debug, tutorial enabled | The same checks without Release optimization |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
+| `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`KERNEL_MIN_TESTS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
@@ -64,6 +65,15 @@ checksum-pinned curl with WebSocket support and passes `--require-websocket`.
 That flag turns a transport skip into failure. A local native run using system
 curl may report the existing unsupported-WebSocket skip; that is not the required
 Linux transport proof.
+
+The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
+drops every test TU whose include closure reaches `pineforge/source/` or
+`compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
+twin would leave the kernel-only gate without any failure. `KERNEL_MIN_TESTS`
+in `scripts/ci_verify.py` pins the expected row count; the `ctest-floor`
+stage fails when CTest ran fewer rows or printed no count. Raise the constant
+when a source-free row lands, and pass `--min-tests N` to override it for one
+run (the flag gates any profile; only `kernel` has a default).
 
 Pass `--ccache` when ccache is installed. It caches compiler work, not complete
 build directories or verification receipts. Compiler, source, header and flag

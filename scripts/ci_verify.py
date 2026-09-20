@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -37,6 +38,20 @@ DEFAULT_JOBS = 4
 JOBS_MIN, JOBS_MAX = 1, 64
 SCHEMA = 'pineforge-ci-verify/v1'
 SANITIZER_FLAG = '-fsanitize=address,undefined'
+# Kernel-row floor. The kernel profile registers only the source-free CTest
+# rows (tests/CMakeLists.txt drops every test TU whose include closure reaches
+# pineforge/source or compat/pine), so a lane whose native pin sits beside an
+# adapter twin in one TU silently leaves the kernel-only gate. The floor pins
+# the row count the profile is expected to run: adding source-free rows never
+# trips it, losing them does, and a run that reports no count fails closed.
+# 164 = the 158 rows the profile ran before lane N3 plus the six native halves
+# the lane freed (L2 report truth, L4b margin hooks, L5 calc timing, L6 HTF
+# subscriptions, L8/L8b price grid, L11a lot excursion); raise it when a new
+# source-free row lands. --min-tests overrides it for any profile.
+KERNEL_MIN_TESTS = 164
+# CTest's closing summary: '100% tests passed out of N' when nothing failed,
+# '97% tests passed, 3 tests failed out of N' otherwise.
+CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
 # LeakSanitizer is unavailable in Apple's ASan runtime.  Keep the Linux CI
 # lane strict, while allowing the local macOS ASan/UBSan profile to execute
 # its actual instrumented tests instead of failing during runtime startup.
@@ -73,6 +88,8 @@ class Profile:
     live_runner: bool
     tutorial: bool
     source_layer: bool
+    # Minimum CTest rows the profile must run; None leaves the count ungated.
+    min_tests: int | None = None
 
 
 PROFILE = {
@@ -80,7 +97,7 @@ PROFILE = {
     'debug': Profile('debug', 'Debug', False, False, True, True),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
-    'kernel': Profile('kernel', 'Release', False, True, False, False),
+    'kernel': Profile('kernel', 'Release', False, True, False, False, KERNEL_MIN_TESTS),
 }
 
 
@@ -107,6 +124,8 @@ class VerifyConfig:
     runner: Runner
     stream_output: bool = True
     exclude_label: str | None = None
+    # The effective CTest row floor: --min-tests, else the profile's own.
+    min_tests: int | None = None
 
 
 class Parser(argparse.ArgumentParser):
@@ -131,6 +150,14 @@ def call_runner(runner: Runner, argv: list[str], *, extra_env: dict[str, str] | 
                 stream_output: bool = False) -> Completed:
     return runner(argv, extra_env=extra_env, timeout=timeout,
                   combine_stderr=combine_stderr, stream_output=stream_output)
+
+
+def ctest_row_count(output: bytes) -> int | None:
+    """The row count CTest prints in its closing summary line, or None."""
+    match = None
+    for match in CTEST_ROW_COUNT.finditer(output.decode('utf-8', 'replace')):
+        pass
+    return int(match.group(1)) if match else None
 
 
 def ctest_supports_junit(runner: Runner) -> bool:
@@ -218,6 +245,10 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='native only: execute test_native_live_websocket and refuse skip (77)')
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label from this local verification run')
+    parser.add_argument('--min-tests', type=int, default=None,
+                        help='fail the ctest-floor stage unless CTest ran at least N rows; '
+                             f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the others '
+                             'to no floor')
     args = parser.parse_args(argv)
     if args.build_dir is None:
         args.build_dir = default_build_dir(source, args.profile)
@@ -237,6 +268,8 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         args.exclude_label = label
     if args.curl_dir is not None and not args.curl_dir.is_dir():
         raise ConfigError(f'--curl-dir is not a directory: {args.curl_dir}')
+    if args.min_tests is not None and args.min_tests < 1:
+        raise ConfigError('--min-tests must be at least 1')
     ccache_path = None
     if args.ccache:
         found = which('ccache')
@@ -262,6 +295,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         require_websocket=bool(args.require_websocket),
         runner=default_runner,
         exclude_label=args.exclude_label,
+        min_tests=args.min_tests if args.min_tests is not None else PROFILE[args.profile].min_tests,
     )
 
 
@@ -392,6 +426,8 @@ class Driver:
             'ccache': cfg.ccache_path,
             'requireWebsocket': cfg.require_websocket,
             'curlDir': str(cfg.curl_dir) if cfg.curl_dir else None,
+            'minTests': cfg.min_tests,
+            'ctestRows': None,
             'versionSource': 'FILE',
             'cmakeDefinitions': cmake_cache_definitions(cfg),
             'expectedVersion': self.expected_version,
@@ -816,7 +852,8 @@ class Driver:
             ctest += ['-LE', self.cfg.exclude_label]
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
-        self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)
+        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)
+        self.enforce_test_floor(ran)
 
         installed = self.invoke(
             'install',
@@ -846,6 +883,32 @@ class Driver:
                         argv=[str(ws)])
         status = 'passed' if not self.failures else 'failed'
         return self.finish(status, 0 if status == 'passed' else 1)
+
+    def enforce_test_floor(self, ran: Completed) -> None:
+        """Refuse a CTest run that shrank below the profile's row floor.
+
+        The count is CTest's own closing summary; a run that prints none
+        (no tests found, a crash before the summary) fails closed rather
+        than passing an empty or truncated suite through the floor.
+        """
+        count = ctest_row_count(ran.stdout + ran.stderr)
+        self.summary['ctestRows'] = count
+        floor = self.cfg.min_tests
+        if floor is None:
+            self.write_summary()
+            return
+        if count is None:
+            self.fail_stage(
+                'ctest-floor',
+                f'ctest printed no row count; the floor of {floor} rows cannot be verified')
+        elif count < floor:
+            self.fail_stage(
+                'ctest-floor',
+                f'ctest ran {count} rows, below the floor of {floor} for the '
+                f'{self.cfg.profile.name} profile; a source-free test left the suite, '
+                'or lower the floor with --min-tests on purpose')
+        else:
+            self.pass_stage('ctest-floor', f'ctest ran {count} rows (floor {floor})')
 
     def finish(self, status: str, code: int) -> int:
         self.summary['status'] = status

@@ -2457,9 +2457,25 @@ With the option OFF the build excludes, each with a CMake STATUS line:
   `compat/pine/` header, and the receipt-backed ABI rows whose pairing TU
   derives from `PineStrategyHost`. The remaining CTest rows all run.
 
+A lane's kernel witnesses therefore never share a translation unit with its
+adapter twin: the native half is source-free, the twin lives in a sibling
+`tests/test_<lane>_twin.cpp` that the reach check drops, and what both need
+sits in a source-free `tests/<lane>_fixture.hpp`. The R5 lanes follow this
+split — L2 `test_native_report_truth`, L4b `test_native_margin_hooks`, L5
+`test_native_calc_timing`, L6 `test_native_htf_subscriptions`, L8/L8b
+`test_native_price_grid` and L11a `test_l11a_host_excursion` each run
+kernel-only with their twin beside them — so the kernel-only profile proves
+the kernel's own features, not only the rows that happened to be source-free.
+
 `python3 scripts/ci_verify.py kernel` is the profile that verifies this lane
 (Release, live runner ON, tutorial OFF, source layer OFF); CI runs it as the
-`kernel-only` job.
+`kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
+`scripts/ci_verify.py` (164 rows) is the count the kernel-only CTest set is
+expected to run, and the `ctest-floor` stage fails the run when CTest reports
+fewer rows or no count at all, so a test TU that silently becomes source-bound
+(or a filter that empties the suite) is a refusal rather than a smaller green.
+Raise the constant when a new source-free row lands; `--min-tests N` overrides
+it for one run of any profile (the other profiles carry no default floor).
 
 ## Runner JSON and command
 

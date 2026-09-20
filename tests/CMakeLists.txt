@@ -844,6 +844,12 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # has nothing to link against. The reach is resolved here instead of being
 # listed by hand: a switched-route twin that includes its L0 carrier
 # verbatim inherits whatever that carrier includes.
+#
+# A lane's adapter twin therefore lives in a sibling *_twin.cpp, with what
+# both halves share in a source-free *_fixture.hpp, so the lane's native
+# witnesses keep running here while the twin is the TU this filter drops.
+# scripts/ci_verify.py pins the resulting kernel-only row count as
+# KERNEL_MIN_TESTS; a TU that silently becomes source-bound fails that gate.
 function(pineforge_test_reaches_source_layer out_var entry)
     set(_pending "${entry}")
     set(_seen)
