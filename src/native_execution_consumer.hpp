@@ -456,19 +456,27 @@ private:
     std::optional<double> maintenance_fraction(bool short_side) const noexcept;
     // Solve equity(P) == maintenance requirement(P) for the live book.
     std::optional<double> liquidation_level(const BacktestEngine& engine) const;
+    // The equity one maintenance test is made against, on the model's basis.
+    double margin_equity(const BacktestEngine& engine, double mark) const;
+    // The host's gate over one kernel check point. True keeps the check.
+    bool margin_check_admitted(const BacktestEngine& engine, NativeMarginCheckKind kind,
+                               const native_order::MatchCursor& cursor, double mark) const;
     // The price the breach is measured at: the most adverse price the modeled
     // script path still reaches after `phase`, or `fallback` when the point
     // has no remaining modeled path of its own.
     double margin_sizing_price(bool short_side, NativePathPhase phase,
                                double fallback) const noexcept;
-    // Kernel sizing then the host override. nullopt means no liquidation.
+    // Kernel numbers, the host's requirement decision, the breach test, the
+    // kernel sizing, then the host's units override. nullopt means no
+    // liquidation.
     std::optional<double> margin_call_units(
         const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
-        double* out_equity, double* out_required) const;
+        NativeMarginCheckKind kind, double* out_equity, double* out_required) const;
     void withdraw_margin_liquidation(BacktestEngine& engine);
     void maintain_margin_liquidation(BacktestEngine& engine,
                                      const native_order::MatchCursor& cursor,
-                                     NativePathPhase phase, double fallback_price);
+                                     NativePathPhase phase, double fallback_price,
+                                     NativeMarginCheckKind kind);
     void calculation_margin_check(BacktestEngine& engine, const NativeCoordinate& calc,
                                   double mark);
     // One kernel-originated reduction: the margin model's liquidation, and

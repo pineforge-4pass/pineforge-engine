@@ -186,6 +186,25 @@ bool valid_liquidation_check(NativeLiquidationCheck check) noexcept {
     switch (check) {
     case NativeLiquidationCheck::PathAdverseExtreme:
     case NativeLiquidationCheck::CalculationOnly:
+    case NativeLiquidationCheck::PathAdverseExtremeMark:
+        return true;
+    }
+    return false;
+}
+
+bool valid_margin_equity_basis(NativeMarginEquityBasis basis) noexcept {
+    switch (basis) {
+    case NativeMarginEquityBasis::MarkedEquity:
+    case NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission:
+        return true;
+    }
+    return false;
+}
+
+bool valid_liquidation_level_base(NativeLiquidationLevelBase base) noexcept {
+    switch (base) {
+    case NativeLiquidationLevelBase::MarkedEquity:
+    case NativeLiquidationLevelBase::RealizedOnly:
         return true;
     }
     return false;
@@ -220,6 +239,12 @@ Result validate_margin(const NativeRunSpec& spec) noexcept {
     }
     if (!valid_liquidation_check(margin.check)) {
         return {Error::UnknownLiquidationCheck, Field::MarginCheck};
+    }
+    if (!valid_margin_equity_basis(margin.basis)) {
+        return {Error::UnknownMarginEquityBasis, Field::MarginEquityBasis};
+    }
+    if (!valid_liquidation_level_base(margin.level_base)) {
+        return {Error::UnknownLiquidationLevelBase, Field::MarginLevelBase};
     }
     return {};
 }
@@ -608,6 +633,15 @@ std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexce
     d(margin.shortfall_multiple);
     o(margin.liquidation_min_units);
     u(static_cast<std::uint64_t>(margin.check));
+    // The two money bases fold only where a host moved one of them off the
+    // marked-equity model, so a margin model declared before they existed
+    // digests to exactly the same number it did then (the same conditional
+    // shape hash_spec uses for the model as a whole).
+    if (margin.basis != NativeMarginEquityBasis::MarkedEquity
+        || margin.level_base != NativeLiquidationLevelBase::MarkedEquity) {
+        u(static_cast<std::uint64_t>(margin.basis));
+        u(static_cast<std::uint64_t>(margin.level_base));
+    }
     return state;
 }
 

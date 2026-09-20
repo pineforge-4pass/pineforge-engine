@@ -151,9 +151,11 @@ Optional, absent unless set:
 - `max_open_lots`: positive; surviving + new lots
 - `initial_margin_fraction`: finite > 0 as a fraction, not a percent. Opening
   admission only; no maintenance liquidation.
-- `margin`: the generic per-side broker margin model. Mutually exclusive with
-  `initial_margin_fraction` (setting both is `MarginModelConflict`). See
-  *Margin and liquidation* below.
+- `margin`: the generic per-side broker margin model, including its two money
+  bases (`basis`, `level_base`) and its check mode. Mutually exclusive with
+  `initial_margin_fraction` (setting both is `MarginModelConflict`). Its
+  presence is what enables the model at all. See *Margin and liquidation*
+  below.
 - `subscriptions`: declared higher-timeframe series of the run's own symbol.
   Empty is the whole default surface; see "Higher-timeframe series for native
   hosts" below.
@@ -508,8 +510,25 @@ margin.sizing = NativeLiquidationSizing::RestoreMinimum;
 margin.shortfall_multiple = 1.0;           // used by ShortfallMultiple
 margin.liquidation_min_units = 1.0;        // optional broker minimum trade
 margin.check = NativeLiquidationCheck::PathAdverseExtreme;
+margin.basis = NativeMarginEquityBasis::MarkedEquity;          // policy, below
+margin.level_base = NativeLiquidationLevelBase::MarkedEquity;  // policy, below
 spec.margin = margin;
 ```
+
+The kernel owns the margin **mechanism**: the level solve, the check points,
+the kernel-originated request, its `Superseded` re-pricing, the receipt and
+`on_native_margin_call`. It exposes the **policy** through the run spec's two
+money bases and three host hooks, the same way `resolve_execution_terms`
+exposes the fill price. Everything below is opt-in and every default
+reproduces the pre-policy model exactly, digest included: the two bases fold
+into the run-spec digest only once one of them is moved off `MarkedEquity`.
+
+**Whether the model runs at all** is the presence of `spec.margin`. There is
+no separate enable flag: a spec without a model never solves a level, never
+reaches a check point and never issues a request, and a spec with one is
+always live. A host that toggles its broker's margin call at runtime expresses
+that as policy — `margin_check_allowed()` answering false — and not by
+mutating the run spec mid-run.
 
 **Opening admission.** With a model set, `initial_long` / `initial_short`
 replace the single scalar for that run: an opening is refused with
@@ -535,6 +554,12 @@ answers `L`, or `nullopt` when the run declares no model, the side has no
 maintenance fraction, the book is flat, or no finite price solves it. It is
 the exact level: no tick rounding, which is a source-layer spelling.
 
+`level_base` chooses the base that solve starts from. `MarkedEquity` (the
+default) is the intercept of `equity(P)` above — capital plus realized net
+profit, less the open entries' commission. `RealizedOnly` drops that last
+term, for a broker whose liquidation level does not answer for costs the open
+position has already paid. The two agree whenever no open entry paid one.
+
 **Arming (`PathAdverseExtreme`, the default).** At every script-bar open and
 after every applied fill, the kernel measures the requirement against the most
 adverse price the modeled script path still reaches after the current
@@ -544,6 +569,24 @@ mark breaches, the kernel rests its own `Reduce` (or `Flatten`) with
 liquidation level*, where the account actually runs out of margin, while it is
 *sized at* the adverse mark. With a declared `IntrabarPath` there is no
 whole-bar waypoint model: the kernel re-evaluates at each delivered sample.
+
+`basis` chooses the equity side of that comparison, at every check point.
+`MarkedEquity` (the default) is `marked_equity(mark)` itself, which the open
+entries' commission has already reduced. `MarkedEquityBeforeOpenCommission` is
+the same mark-to-market equity taken before that reduction, for a broker that
+does not charge a still-open entry's fee against the margin equity. It is one
+term of one comparison: no cash is booked differently, and `marked_equity()`
+itself does not move.
+
+**Arming (`PathAdverseExtremeMark`).** The period-mark broker. It measures the
+same breach at the same adverse mark, and rests the reduction **at that mark**
+rather than at a solved level, so the fill belongs to the adverse waypoint the
+breach was measured at. It never solves a level, which makes it the one mode
+that still checks where no level exists — a LONG at `maintenance == 1.0`,
+where `PathAdverseExtreme` rests nothing because there is no price to rest at.
+The resting price is that fill's default resolved price, so a host that needs
+a tick ladder or an exit-side slippage on the forced price applies it in
+`resolve_execution_terms` like any other fill.
 
 The units come from `sizing`:
 
@@ -568,19 +611,75 @@ is accepted. A book that is flat or no longer breached withdraws it outright.
 at a script calculation point, against that bar's close. A breach there is
 liquidated immediately as a current execution. Nothing fills mid-path.
 
+**The requirement hook.** At EVERY kernel check point, BEFORE the breach
+test, the host is offered the two numbers the kernel is about to compare:
+
+```cpp
+struct NativeMarginRequirementView {
+    NativeMarginCheckKind kind;        // BarOpen | AfterApplied | Calculation
+    NativePhysicalPosition position;
+    double mark, equity, required;     // equity on the model's basis
+    native_order::MatchCursor cursor;
+};
+struct NativeMarginDecision { double required, equity; bool force_breach; };
+
+virtual std::optional<NativeMarginDecision> resolve_margin_requirement(
+        const NativeMarginRequirementView&) const;   // nullopt = the kernel's own
+```
+
+A returned decision replaces both numbers for that check point only, so a host
+may **raise** a call the kernel would not make — a requirement kept to a
+broker's own money precision, an equity its account model computes
+differently — or **veto** one it would. `force_breach` proceeds past
+`required > equity` even when the answered numbers do not meet it; the sizing
+policy then runs as usual, and where the answered numbers leave no restore of
+their own, `resolve_margin_call_units` is the whole sizing authority. Neither
+answer moves the mechanism: the kernel still evaluates, schedules, places,
+books and reports. Source-language money quirks — TradingView's
+ten-significant-digit rounding, for one — live in this hook, never in the run
+spec.
+
+**The check gate.** Each kernel check point is offered first:
+
+```cpp
+struct NativeMarginCheckPoint {
+    NativeMarginCheckKind kind;
+    NativePhysicalPosition position;
+    double mark;
+    native_order::MatchCursor cursor;  // cursor.point.path_phase is the waypoint
+};
+virtual bool margin_check_allowed(const NativeMarginCheckPoint&) const;  // true
+```
+
+Answering false suppresses the whole point: nothing is measured, the
+requirement hook is not reached, and nothing is re-armed or withdrawn — the
+margin state stays exactly as the last admitted point left it. A broker model
+whose own schedule is not the kernel's expresses that here. Every point the
+run's check mode reaches is offered, the ones where the book is flat or the
+live side has no maintenance fraction included, because withdrawing a resting
+liquidation is part of the check; `CalculationOnly`, which rests nothing,
+offers only the points it could act on.
+
 **Events and hooks.** A kernel-issued request carries
 `RequestDefinition::origin == RequestOrigin::KernelLiquidation`; every host
 request is `RequestOrigin::Host`. When it fills, a `MarginCallEvent` joins the
 command history directly after its own `ExecutionAppliedEvent`, carrying the
-mark, the marked equity and requirement at that mark, the solved liquidation
-price, the filled units and the signed book on either side. The host sees
+mark, the equity on the model's basis and the requirement at that mark, the
+solved liquidation price, the filled units and the signed book on either
+side. The host sees
 `on_native_applied` first and `on_native_margin_call` immediately after, with
 the same cursor.
 
 The TradingView margin call is **not** this model: its rounded-money rules,
-its 4× shortfall default, its one-contract long money call and its
-adverse-extreme fill pricing stay in the Pine adapter, which never sets
-`margin`.
+its 4× shortfall default, its one-contract long money call, its adverse-extreme
+fill pricing and its nineteen scheduling exceptions stay in the Pine adapter,
+which never sets `margin`. What this lane adds is the shape a host would use to
+express rules like those: a policy host that selects the bases, answers
+`resolve_margin_requirement` with its own money, sizes in
+`resolve_margin_call_units`, prices in `resolve_execution_terms` and gates its
+own check points reproduces TradingView's trigger, sizing and placement on this
+kernel bit for bit (`tests/test_native_margin_hooks.cpp`, the TWIN section).
+None of it is a kernel option.
 
 ### Risk limits
 

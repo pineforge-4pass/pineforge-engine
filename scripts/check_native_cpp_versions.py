@@ -372,6 +372,7 @@ def check_texts(files):
                    "NativeLegacyTolerance", "NativeReportPolicy",
                    "NativeTimeframeSubscription", "NativeMarginModel",
                    "NativeLiquidationSizing", "NativeLiquidationCheck",
+                   "NativeMarginEquityBasis", "NativeLiquidationLevelBase",
                    "NativeCalculationTrigger", "NativeOpenBarView",
                    "NativeLossLimit", "NativeRiskDay", "NativeRiskAction",
                    "NativeRiskLimits"),
@@ -421,7 +422,10 @@ def check_texts(files):
                'std::optional<double>maintenance_long;std::optional<double>maintenance_short;'
                'NativeLiquidationSizingsizing=NativeLiquidationSizing::RestoreMinimum;'
                'doubleshortfall_multiple=1.0;std::optional<double>liquidation_min_units;'
-               'NativeLiquidationCheckcheck=NativeLiquidationCheck::PathAdverseExtreme;'):
+               'NativeLiquidationCheckcheck=NativeLiquidationCheck::PathAdverseExtreme;'
+               'NativeMarginEquityBasisbasis=NativeMarginEquityBasis::MarkedEquity;'
+               'NativeLiquidationLevelBaselevel_base='
+               'NativeLiquidationLevelBase::MarkedEquity;'):
         raise ValueError('native margin model must preserve its member order and shape')
     risk = body(spec, r'struct\s+NativeRiskLimits\s*\{', 'native risk limits')
     if (re.sub(r'\s+', '', risk)
@@ -441,6 +445,7 @@ def check_texts(files):
                   'PathOrder', 'ReportPolicy', 'SubscriptionTimeframe', 'SubscriptionBars',
                   'MarginModel', 'MarginInitial', 'MarginMaintenance', 'MarginSizing',
                   'MarginShortfallMultiple', 'MarginMinUnits', 'MarginCheck',
+                  'MarginEquityBasis', 'MarginLevelBase',
                   'Calculation', 'OpenBarView',
                   'RiskLimits', 'RiskDrawdown', 'RiskIntradayLoss', 'RiskLossDays',
                   'RiskFillsPerDay', 'RiskDayBasis', 'RiskAction'):
@@ -456,6 +461,7 @@ def check_texts(files):
                   'DuplicateSubscriptionTimeframe', 'UnorderedSubscriptionBars',
                   'SubscriptionWithoutTimeframe', 'MarginModelConflict',
                   'UnknownLiquidationSizing', 'UnknownLiquidationCheck',
+                  'UnknownMarginEquityBasis', 'UnknownLiquidationLevelBase',
                   'UnknownCalculationTrigger', 'UnknownOpenBarView',
                   'UnknownRiskDay', 'UnknownRiskAction', 'ZeroRiskLimit'):
         if not re.search(r'\b' + error + r'\b', errors):
@@ -472,6 +478,8 @@ def check_texts(files):
             or 'spec.open_bar_view' not in spec_src
             or 'SubscriptionFinerThanInput' not in spec_src
             or 'spec.margin' not in spec_src
+            or 'valid_margin_equity_basis' not in spec_src
+            or 'valid_liquidation_level_base' not in spec_src
             or 'MarginModelConflict' not in spec_src
             or 'spec.risk' not in spec_src
             or 'ZeroRiskLimit' not in spec_src
@@ -596,6 +604,11 @@ def check_texts(files):
                   'tick_callback_context_', 'hash_tick_context',
                   'invoke_tick_callback(engine, tick_bar, tick_context)',
                   'staged_ingress_fx_', 'if (failed() && !recoverable_abort())',
+                  'NativeLiquidationCheck::PathAdverseExtremeMark',
+                  'host->resolve_margin_requirement(view)',
+                  'host->margin_check_allowed(point)',
+                  'NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission',
+                  'NativeLiquidationLevelBase::RealizedOnly',
                   'bool calc_timing_on(const NativeRunSpec& spec) noexcept {',
                   'if (calc_timing_on(spec)) {',
                   'NativeCalculationReason::BarClose',
@@ -617,6 +630,8 @@ def check_texts(files):
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
                    "NativeInputContext", "NativeTickContext",
                    "NativeTimeframeBarContext", "NativeMarginCallView",
+                   "NativeMarginCheckKind", "NativeMarginCheckPoint",
+                   "NativeMarginRequirementView", "NativeMarginDecision",
                    "NativeCalculationReason", "NativeRiskState"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -712,6 +727,11 @@ def check_texts(files):
          r'\s*const\s+NativeMarginCallView\s*&', "resolve_margin_call_units"),
         (r'\bvirtual\s+void\s+on_native_margin_call\s*\('
          r'\s*const\s+native_order::MarginCallEvent\s*&', "on_native_margin_call"),
+        (r'\bvirtual\s+std::optional\s*<\s*NativeMarginDecision\s*>'
+         r'\s+resolve_margin_requirement\s*\('
+         r'\s*const\s+NativeMarginRequirementView\s*&', "resolve_margin_requirement"),
+        (r'\bvirtual\s+bool\s+margin_check_allowed\s*\('
+         r'\s*const\s+NativeMarginCheckPoint\s*&', "margin_check_allowed"),
         (r'\bstd::optional\s*<\s*double\s*>\s+native_liquidation_price\s*\('
          r'\s*\)\s*const\s*;', "native_liquidation_price"),
         (r'\bNativeRiskState\s+native_risk_state\s*\(\s*\)\s*const\s*;',

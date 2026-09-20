@@ -181,6 +181,26 @@ void neutral_without_margin() {
     auto declared = bare;
     declared.margin = NativeMarginModel{};
     CHECK(native_run_spec_digest(declared) != native_run_spec_digest(bare));
+    // L4b: the model's two money bases default to the marked-equity model
+    // this lane's arithmetic is written against, and a model that states them
+    // there folds exactly what a pre-L4b model folded. Only moving one does.
+    CHECK(declared.margin->basis == NativeMarginEquityBasis::MarkedEquity);
+    CHECK(declared.margin->level_base == NativeLiquidationLevelBase::MarkedEquity);
+    auto restated_bases = declared;
+    restated_bases.margin->basis = NativeMarginEquityBasis::MarkedEquity;
+    restated_bases.margin->level_base = NativeLiquidationLevelBase::MarkedEquity;
+    CHECK(native_run_spec_digest(restated_bases) == native_run_spec_digest(declared));
+    auto moved_basis = declared;
+    moved_basis.margin->basis = NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission;
+    CHECK(native_run_spec_digest(moved_basis) != native_run_spec_digest(declared));
+    auto moved_level_base = declared;
+    moved_level_base.margin->level_base = NativeLiquidationLevelBase::RealizedOnly;
+    CHECK(native_run_spec_digest(moved_level_base) != native_run_spec_digest(declared));
+    CHECK(native_run_spec_digest(moved_basis) != native_run_spec_digest(moved_level_base));
+    // The new check mode is folded by the field that always was.
+    auto moved_check = declared;
+    moved_check.margin->check = NativeLiquidationCheck::PathAdverseExtremeMark;
+    CHECK(native_run_spec_digest(moved_check) != native_run_spec_digest(declared));
 
     // The run-level half, compared between two runs in this process rather
     // than against a constant: the same margin-free spec with `margin` spelled
@@ -555,10 +575,13 @@ void twin_of_adapter_margin_call() {
     near(rows[0].closed_units, 4.2105263157894735);
     near(host.physical_position().signed_units, 15.789473684210526);
     // Itemized difference: adapter 95.0 (adverse-extreme fill pricing, MG15),
-    // kernel 100.0 (the liquidation level).
+    // kernel 100.0 (the liquidation level). L4b adds the period-mark check
+    // that books the adapter's price instead, and it is opt-in: this default
+    // model still rests at the level.
     near(rows[0].resolved_price, 100.0);
     CHECK(host.margin_calls.size() == 1);
     if (host.margin_calls.size() == 1) near(host.margin_calls[0].mark, 100.0);
+    CHECK(s.margin->check == NativeLiquidationCheck::PathAdverseExtreme);
 }
 
 }  // namespace

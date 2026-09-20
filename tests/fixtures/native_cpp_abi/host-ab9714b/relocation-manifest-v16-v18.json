@@ -44,7 +44,15 @@
     "NativeLossLimit",
     "NativeRiskState",
     "NativeRiskEvent",
-    "MatchRejectReason::RiskLimit"
+    "MatchRejectReason::RiskLimit",
+    "NativeMarginModel::basis",
+    "NativeMarginModel::level_base",
+    "NativeMarginEquityBasis",
+    "NativeLiquidationLevelBase",
+    "NativeMarginCheckKind",
+    "NativeMarginCheckPoint",
+    "NativeMarginRequirementView",
+    "NativeMarginDecision"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
@@ -55,7 +63,9 @@
     "resolve_margin_call_units",
     "on_native_margin_call",
     "on_native_recalculate",
-    "on_native_sub_bar"
+    "on_native_sub_bar",
+    "resolve_margin_requirement",
+    "margin_check_allowed"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

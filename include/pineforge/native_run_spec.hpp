@@ -132,9 +132,40 @@ enum class NativeLiquidationSizing : std::uint32_t {
 // path still reaches and rests the reduction at the liquidation level, so the
 // fill lands where the account actually runs out of margin. CalculationOnly
 // tests the mark only at a script calculation point and rests nothing.
+// PathAdverseExtremeMark is the period-mark broker: it measures the breach at
+// that same adverse mark and rests the reduction AT THAT MARK, so the fill
+// lands on the adverse waypoint the breach was measured at instead of on a
+// solved level. It never solves a level, which is also what makes it the one
+// mode that still checks where no level exists (a LONG at full maintenance —
+// see NativeMarginModel). The resting price is the default resolved price of
+// that fill, so resolve_execution_terms still has the last word on it.
 enum class NativeLiquidationCheck : std::uint32_t {
     PathAdverseExtreme = 0,
     CalculationOnly = 1,
+    PathAdverseExtremeMark = 2,
+};
+
+// Which equity the maintenance requirement is tested against. MarkedEquity is
+// the account's marked equity exactly as marked_equity() computes it: the open
+// entries' commissions have already reduced it. MarkedEquityBeforeOpenCommission
+// is the same mark-to-market equity taken before that reduction (initial
+// capital + realized net profit + open profit), i.e. a broker whose margin
+// equity does not charge the still-open entries' commission against the
+// account. Nothing else about the account model changes: this is one term of
+// one comparison, never a second accounting truth.
+enum class NativeMarginEquityBasis : std::uint32_t {
+    MarkedEquity = 0,
+    MarkedEquityBeforeOpenCommission = 1,
+};
+
+// Which base the liquidation level is solved from. MarkedEquity is the
+// intercept of marked_equity(): initial capital + realized net profit minus
+// the open entries' commissions. RealizedOnly drops that last term, so the
+// level is solved from initial capital + realized net profit alone. The two
+// agree whenever no open entry has paid a commission.
+enum class NativeLiquidationLevelBase : std::uint32_t {
+    MarkedEquity = 0,
+    RealizedOnly = 1,
 };
 
 // A generic per-side broker margin model (L4). It is entirely opt-in: a spec
@@ -152,11 +183,21 @@ enum class NativeLiquidationCheck : std::uint32_t {
 // with Stop{level} while the requirement is breached on the modeled path.
 // A maintenance fraction equal to 1.0 has no finite level for a LONG: at
 // full maintenance a long's equity and requirement move together, so the
-// breach is a constant and no price solves it. Source-language money rules
-// for that case are source-layer policy, never spelled here.
+// breach is a constant and no price solves it. That degenerate slope rests
+// nothing under PathAdverseExtreme -- there is no price to rest at -- while
+// PathAdverseExtremeMark, which never solves a level, still measures the
+// breach at the adverse mark and still consults the host's requirement hook.
+// Source-language money rules beyond that are source-layer policy, never
+// spelled here.
 //
 // `liquidation_min_units` is the broker's minimum liquidation trade: a
 // computed reduction below it flattens the position instead.
+//
+// `basis` and `level_base` are the two places brokers legitimately disagree
+// about money: which equity the requirement is tested against, and which base
+// the reported level is solved from. Both default to the marked-equity model
+// the kernel has always used, and both fold into the run spec's digest only
+// when moved off it.
 struct NativeMarginModel {
     double initial_long = 0.0;
     double initial_short = 0.0;
@@ -166,6 +207,8 @@ struct NativeMarginModel {
     double shortfall_multiple = 1.0;
     std::optional<double> liquidation_min_units;
     NativeLiquidationCheck check = NativeLiquidationCheck::PathAdverseExtreme;
+    NativeMarginEquityBasis basis = NativeMarginEquityBasis::MarkedEquity;
+    NativeLiquidationLevelBase level_base = NativeLiquidationLevelBase::MarkedEquity;
 };
 
 // One risk threshold (L9). `value` is account currency when `percent` is
@@ -465,6 +508,7 @@ enum class NativeRunSpecField : std::uint8_t {
     SubscriptionTimeframe, SubscriptionBars,
     MarginModel, MarginInitial, MarginMaintenance, MarginSizing,
     MarginShortfallMultiple, MarginMinUnits, MarginCheck,
+    MarginEquityBasis, MarginLevelBase,
     Calculation, OpenBarView,
     RiskLimits, RiskDrawdown, RiskIntradayLoss, RiskLossDays, RiskFillsPerDay,
     RiskDayBasis, RiskAction,
@@ -518,6 +562,9 @@ enum class NativeRunSpecError : std::uint8_t {
     MarginModelConflict,
     UnknownLiquidationSizing,
     UnknownLiquidationCheck,
+    // A margin equity basis / liquidation level base outside its enumeration.
+    UnknownMarginEquityBasis,
+    UnknownLiquidationLevelBase,
     // A calculation trigger / open-bar view outside its enumeration.
     UnknownCalculationTrigger,
     UnknownOpenBarView,

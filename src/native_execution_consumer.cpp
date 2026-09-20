@@ -2535,11 +2535,57 @@ std::optional<double> NativeExecutionConsumer::liquidation_level(
     const double direction = short_side ? -1.0 : 1.0;
     const double slope = *fraction - direction;
     if (!std::isfinite(slope) || std::abs(slope) < 1e-12) return std::nullopt;
-    const double base = engine.initial_capital_ + engine.net_profit_sum_ - commissions;
+    // RealizedOnly solves from closed money alone: the open entries' paid
+    // commission is a cost the level does not answer for. MarkedEquity keeps
+    // the intercept of marked_equity(), which is this run's default.
+    const auto* margin = margin_model();
+    const bool realized_only = margin
+        && margin->level_base == NativeLiquidationLevelBase::RealizedOnly;
+    const double base = engine.initial_capital_ + engine.net_profit_sum_
+        - (realized_only ? 0.0 : commissions);
     const double level = (base - direction * cost * point_value * fx)
         / (units * point_value * fx * slope);
     if (!std::isfinite(level)) return std::nullopt;
     return level;
+}
+
+// The equity one maintenance test is made against. The default IS the
+// account's marked equity, which has already been reduced by the open
+// entries' commission; MarkedEquityBeforeOpenCommission adds that term back,
+// for a broker that does not charge a still-open entry's fee against the
+// margin equity. Neither spelling books anything: this is one term of one
+// comparison.
+double NativeExecutionConsumer::margin_equity(const BacktestEngine& engine,
+                                              double mark) const {
+    const double equity = engine.marked_equity(mark);
+    const auto* margin = margin_model();
+    if (!margin || !std::isfinite(equity)
+        || margin->basis != NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission) {
+        return equity;
+    }
+    double commissions = 0.0;
+    for (const auto& lot : engine.pyramid_entries_) {
+        commissions += engine.open_entry_commission(lot);
+    }
+    if (!std::isfinite(commissions)) return std::numeric_limits<double>::quiet_NaN();
+    return equity + commissions;
+}
+
+// The host's gate over one kernel check point, consulted before anything is
+// evaluated there. A refused point is not a no-op check: nothing is measured,
+// nothing is re-armed and nothing is withdrawn, so the margin state stays
+// exactly as the last admitted point left it.
+bool NativeExecutionConsumer::margin_check_admitted(
+        const BacktestEngine& engine, NativeMarginCheckKind kind,
+        const native_order::MatchCursor& cursor, double mark) const {
+    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    NativeMarginCheckPoint point;
+    point.kind = kind;
+    point.position = position(engine);
+    point.mark = mark;
+    point.cursor = cursor;
+    return host->margin_check_allowed(point);
 }
 
 // The most adverse price the modeled script path still reaches after `phase`,
@@ -2582,7 +2628,7 @@ double NativeExecutionConsumer::margin_sizing_price(
 
 std::optional<double> NativeExecutionConsumer::margin_call_units(
         const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
-        double* out_equity, double* out_required) const {
+        NativeMarginCheckKind kind, double* out_equity, double* out_required) const {
     const auto* margin = margin_model();
     if (!margin || engine.position_side_ == PositionSide::FLAT) return std::nullopt;
     const bool short_side = engine.position_side_ == PositionSide::SHORT;
@@ -2598,12 +2644,36 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         return std::nullopt;
     }
     const double unit_margin = mark * point_value * fx * *fraction;
-    const double equity = engine.marked_equity(mark);
-    const double required = held * unit_margin;
+    double equity = margin_equity(engine, mark);
+    double required = held * unit_margin;
+    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+    // The host's money rule, BEFORE the breach test. The kernel still owns
+    // the mechanism; the two numbers it compares are where brokers differ, so
+    // a host may raise a call this kernel would not make or veto one it
+    // would. Nonfinite answers are refused rather than silently ignored.
+    bool forced = false;
+    if (host && std::isfinite(unit_margin) && unit_margin > 0.0) {
+        NativeMarginRequirementView view;
+        view.kind = kind;
+        view.position = book;
+        view.mark = mark;
+        view.equity = equity;
+        view.required = required;
+        view.cursor = cursor;
+        if (const auto decision = host->resolve_margin_requirement(view)) {
+            if (!std::isfinite(decision->required) || !std::isfinite(decision->equity)) {
+                return std::nullopt;
+            }
+            equity = decision->equity;
+            required = decision->required;
+            forced = decision->force_breach;
+        }
+    }
     if (out_equity) *out_equity = equity;
     if (out_required) *out_required = required;
     if (!std::isfinite(unit_margin) || !(unit_margin > 0.0)
-        || !std::isfinite(equity) || !std::isfinite(required) || !(required > equity)) {
+        || !std::isfinite(equity) || !std::isfinite(required)
+        || !(required > equity || forced)) {
         return std::nullopt;
     }
     const double restore = (required - equity) / unit_margin;
@@ -2619,15 +2689,22 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         units = held;
         break;
     }
-    if (!std::isfinite(units) || !(units > 0.0)) return std::nullopt;
-    units = std::min(units, held);
-    // A restore below the broker's minimum trade is not a broker action: the
-    // position is closed instead of nibbled.
-    if (margin->liquidation_min_units && units < *margin->liquidation_min_units) {
-        units = held;
+    if (!std::isfinite(units) || !(units > 0.0)) {
+        // A breach the kernel's own numbers do not see has no restore of its
+        // own. Only a forced one survives it, and then the units hook is the
+        // whole sizing authority.
+        if (!forced) return std::nullopt;
+        units = 0.0;
+    }
+    if (units > 0.0) {
+        units = std::min(units, held);
+        // A restore below the broker's minimum trade is not a broker action:
+        // the position is closed instead of nibbled.
+        if (margin->liquidation_min_units && units < *margin->liquidation_min_units) {
+            units = held;
+        }
     }
     // The host sees the kernel's own facts and has the last word on the size.
-    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
     if (host) {
         NativeMarginCallView view;
         view.position = book;
@@ -2756,23 +2833,36 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
 
 void NativeExecutionConsumer::maintain_margin_liquidation(
         BacktestEngine& engine, const native_order::MatchCursor& cursor,
-        NativePathPhase phase, double fallback_price) {
+        NativePathPhase phase, double fallback_price, NativeMarginCheckKind kind) {
     const auto* margin = margin_model();
     if (!margin || failed() || consuming_request_) return;
-    if (margin->check != NativeLiquidationCheck::PathAdverseExtreme) return;
+    // PathAdverseExtremeMark measures the same breach at the same mark and
+    // rests AT that mark: the period-mark broker, which never solves a level.
+    const bool at_mark = margin->check == NativeLiquidationCheck::PathAdverseExtremeMark;
+    if (!at_mark && margin->check != NativeLiquidationCheck::PathAdverseExtreme) return;
     try {
+        const bool short_side = engine.position_side_ == PositionSide::SHORT;
+        const double mark = margin_sizing_price(short_side, phase, fallback_price);
+        // The host's gate owns the whole point, including its withdrawal.
+        if (!margin_check_admitted(engine, kind, cursor, mark)) return;
+        if (failed()) return;
         if (engine.position_side_ == PositionSide::FLAT) {
             withdraw_margin_liquidation(engine);
             return;
         }
-        const bool short_side = engine.position_side_ == PositionSide::SHORT;
-        const auto level = liquidation_level(engine);
-        if (!level || !std::isfinite(*level) || !(*level > 0.0)) {
-            withdraw_margin_liquidation(engine);
-            return;
+        std::optional<double> level;
+        if (!at_mark) {
+            // A slope that solves no level rests nothing here -- there is no
+            // price to rest at. A host that needs a call where the level does
+            // not exist (a LONG at full maintenance) selects the mark check,
+            // whose breach test and requirement hook run either way.
+            level = liquidation_level(engine);
+            if (!level || !std::isfinite(*level) || !(*level > 0.0)) {
+                withdraw_margin_liquidation(engine);
+                return;
+            }
         }
-        const double mark = margin_sizing_price(short_side, phase, fallback_price);
-        const auto units = margin_call_units(engine, mark, cursor, nullptr, nullptr);
+        const auto units = margin_call_units(engine, mark, cursor, kind, nullptr, nullptr);
         if (!units) {
             withdraw_margin_liquidation(engine);
             return;
@@ -2782,16 +2872,20 @@ void NativeExecutionConsumer::maintain_margin_liquidation(
             withdraw_margin_liquidation(engine);
             return;
         }
+        // The resting price: the adverse mark itself under the mark check,
+        // the solved level otherwise. margin_call_units has already refused a
+        // nonfinite or nonpositive mark.
+        const double resting = at_mark ? mark : *level;
         if (margin_liquidation_ && requests_.find_live(margin_liquidation_->handle) != nullptr
             && native_matching::double_bits(margin_liquidation_->level)
-                == native_matching::double_bits(*level)
+                == native_matching::double_bits(resting)
             && native_matching::double_bits(margin_liquidation_->units)
                 == native_matching::double_bits(*units)) {
             return;
         }
         withdraw_margin_liquidation(engine);
         if (failed()) return;
-        kernel_submit_liquidation(engine, *level, *units, cursor.point.effective_time_ms);
+        kernel_submit_liquidation(engine, resting, *units, cursor.point.effective_time_ms);
     } catch (const std::exception& e) {
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -2821,7 +2915,12 @@ void NativeExecutionConsumer::calculation_margin_check(
     cursor.point = calc;
     std::optional<double> units;
     try {
-        units = margin_call_units(engine, mark, cursor, nullptr, nullptr);
+        if (!margin_check_admitted(engine, NativeMarginCheckKind::Calculation, cursor, mark)) {
+            return;
+        }
+        if (failed()) return;
+        units = margin_call_units(engine, mark, cursor, NativeMarginCheckKind::Calculation,
+                                  nullptr, nullptr);
     } catch (const std::exception& e) {
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -2849,7 +2948,9 @@ std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
     event.cursor = applied.cursor;
     event.side = position_before < 0.0 ? native_order::Side::Short : native_order::Side::Long;
     event.mark = applied.resolved_price;
-    event.equity = engine.marked_equity(applied.resolved_price);
+    // The receipt reports the equity on the model's own basis, which is the
+    // number the check was made on. Default basis = marked_equity().
+    event.equity = margin_equity(engine, applied.resolved_price);
     const auto fraction = maintenance_fraction(position_before < 0.0);
     event.required = fraction
         ? std::abs(position_after) * applied.resolved_price * engine.syminfo_.pointvalue
@@ -5669,7 +5770,8 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
             cursor.point = last.point.decision.coordinate;
             maintain_margin_liquidation(engine, cursor,
                                         last.point.decision.coordinate.path_phase,
-                                        last.point.price);
+                                        last.point.price,
+                                        NativeMarginCheckKind::AfterApplied);
         }
         // L9: the second evaluation point. Every fill of this drain has
         // already been counted; the account facts are measured once, at the
@@ -5958,7 +6060,8 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
             note_partial_point(base.open_ms, price, 0.0);
             invoke_bar_open_callback(engine, bar, point);
             if (failed()) return;
-            maintain_margin_liquidation(engine, make_cursor(point, 0.0), phase, price);
+            maintain_margin_liquidation(engine, make_cursor(point, 0.0), phase, price,
+                                        NativeMarginCheckKind::BarOpen);
             if (failed()) return;
             // L9: the script bar's own open is one of the two risk evaluation
             // points. Not entered at all for a run that declares no limits.
@@ -6183,7 +6286,8 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                 if (failed()) return;
                 has_margin_path_ = false;
                 maintain_margin_liquidation(
-                    engine, make_cursor(point, 0.0), point.coordinate.path_phase, price);
+                    engine, make_cursor(point, 0.0), point.coordinate.path_phase, price,
+                    NativeMarginCheckKind::BarOpen);
                 if (failed()) return;
                 if (risk_limits() != nullptr) {
                     risk_evaluate(engine, point_frame_view(point), CallbackPhase::PreOpen);

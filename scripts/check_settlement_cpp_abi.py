@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from cpp_abi_pairing import (
@@ -53,10 +54,18 @@ def verify(include: Path) -> dict:
         "on_native_tick", "on_native_timeframe_bar", "on_native_margin_call",
         "on_native_recalculate", "on_native_sub_bar",
     }
-    if not required_virtuals.issubset(set(manifest.get("addedVirtuals", []))):
+    # Policy hooks answer a value, so their declaration is not "virtual void".
+    required_answering_virtuals = {
+        "resolve_margin_requirement", "margin_check_allowed",
+    }
+    declared = set(manifest.get("addedVirtuals", []))
+    if not (required_virtuals | required_answering_virtuals).issubset(declared):
         raise RuntimeError("relocation manifest omits a native hook")
     if not all("virtual void " + name in native for name in required_virtuals):
         raise RuntimeError("current native host omits a required hook")
+    if not all(re.search(r"virtual\s+[^;{]+?\b" + name + r"\s*\(", native)
+               for name in required_answering_virtuals):
+        raise RuntimeError("current native host omits a required policy hook")
     pairs = manifest.get("rejectionPairs")
     if pairs != [["v16-frozen", "v18-current"], ["v18-current", "v16-frozen"]]:
         raise RuntimeError("v16/v18 rejection pairs drift")

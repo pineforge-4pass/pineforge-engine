@@ -334,6 +334,55 @@ struct NativeMarginCallView {
     native_order::MatchCursor cursor;
 };
 
+// Which kernel check point is about to test the maintenance requirement.
+// BarOpen is the script bar's open, after on_native_bar_open and before the
+// bar's own matching; AfterApplied is the re-arm that follows a point's
+// applied fills, which is the kernel's only mid-path check; Calculation is
+// the script calculation of a CalculationOnly model. These are the kernel's
+// own points: a broker model that checks somewhere else is a host policy,
+// expressed by suppressing the points it does not share.
+enum class NativeMarginCheckKind : std::uint32_t {
+    BarOpen = 0,
+    AfterApplied = 1,
+    Calculation = 2,
+};
+
+// Ephemeral factual view of one kernel check point, offered to the host
+// before the check runs. `mark` is the price the kernel would measure the
+// breach at; the modeled path phase is `cursor.point.path_phase`.
+struct NativeMarginCheckPoint {
+    NativeMarginCheckKind kind = NativeMarginCheckKind::BarOpen;
+    NativePhysicalPosition position;
+    double mark = 0.0;
+    native_order::MatchCursor cursor;
+};
+
+// Ephemeral factual view of the numbers the kernel is about to compare, at
+// one check point, BEFORE the breach test. `equity` is the marked equity on
+// the model's own basis and `required` the kernel's maintenance requirement
+// of the whole position at `mark`; both are exactly what the kernel would
+// compare if the host answered nullopt.
+struct NativeMarginRequirementView {
+    NativeMarginCheckKind kind = NativeMarginCheckKind::BarOpen;
+    NativePhysicalPosition position;
+    double mark = 0.0;
+    double equity = 0.0;
+    double required = 0.0;
+    native_order::MatchCursor cursor;
+};
+
+// The host's answer to one requirement view. `required` and `equity` replace
+// the kernel's two numbers for this check point only -- they are a broker's
+// money rule (a rounded requirement, a fee-adjusted equity), never a second
+// account. `force_breach` makes the kernel proceed past `required > equity`
+// even when the answered numbers do not meet it; the sizing policy and
+// resolve_margin_call_units then decide the slice as usual.
+struct NativeMarginDecision {
+    double required = 0.0;
+    double equity = 0.0;
+    bool force_breach = false;
+};
+
 // The run's generic risk ledger (L9), as the kernel holds it. Every field is
 // zero / absent for a run that declares no NativeRunSpec::risk.
 //
@@ -588,9 +637,36 @@ public:
         return NativePrecommitVerdict::Admit;
     }
 
+    // Consulted at EVERY kernel check point, BEFORE the breach test, exactly
+    // as resolve_execution_terms is consulted before a fill is booked. The
+    // kernel still owns the mechanism -- the level solve, the check points,
+    // the kernel-originated request, its Superseded re-pricing, the receipt
+    // and on_native_margin_call; this hook only supplies the two numbers that
+    // comparison is made of, where brokers legitimately differ. nullopt keeps
+    // the kernel's own. A host may therefore raise a call the kernel would
+    // not make (a rounded requirement, a fee-adjusted equity, force_breach)
+    // or veto one it would (answer numbers that do not breach). Source-
+    // language money quirks -- TradingView's ten-significant-digit rounding,
+    // for one -- belong in this hook, never in the run spec.
+    virtual std::optional<NativeMarginDecision> resolve_margin_requirement(
+            const NativeMarginRequirementView&) const {
+        return std::nullopt;
+    }
+    // Consulted at each kernel check point before anything is evaluated. A
+    // host whose broker model does not check there answers false, and the
+    // kernel does not evaluate, re-arm or withdraw at that point: the margin
+    // state is left exactly as the last admitted check point left it.
+    // Every point the run's check mode reaches is offered, including the ones
+    // where the book is flat or the live side has no maintenance fraction --
+    // withdrawing a resting liquidation is part of the check. CalculationOnly
+    // rests nothing, so it offers only the points it could act on.
+    virtual bool margin_check_allowed(const NativeMarginCheckPoint&) const {
+        return true;
+    }
     // The kernel's own liquidation sizing, offered to the host before the
     // reduction rests. Returning nullopt keeps the run spec's sizing policy;
-    // a returned value is clamped into (0, held] and wins over it.
+    // a returned value is clamped into (0, held] and wins over it. It keeps
+    // the last word on units, including over a forced breach.
     virtual std::optional<double> resolve_margin_call_units(
             const NativeMarginCallView&) const {
         return std::nullopt;
