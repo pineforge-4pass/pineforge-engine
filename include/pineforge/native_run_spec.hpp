@@ -119,8 +119,10 @@ enum class NativeGridRounding : std::uint32_t {
 // Which units a kernel-issued liquidation reduces (L4).  RestoreMinimum is
 // the fewest units that restore the marked equity to the maintenance
 // requirement at the sizing mark; ShortfallMultiple books that same restore
-// scaled by `shortfall_multiple` (TradingView's 4.0 is the adapter's choice,
-// never the default here); Flatten closes the whole position.
+// scaled by `shortfall_multiple` (never 4.0 by default: a broker wanting a
+// multiple declares it); Flatten closes the whole position. A host whose
+// slice rule is not one of these answers it through
+// resolve_margin_call_units and declares none of them (the Pine adapter does).
 enum class NativeLiquidationSizing : std::uint32_t {
     RestoreMinimum = 0,
     ShortfallMultiple = 1,
