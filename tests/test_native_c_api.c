@@ -1474,6 +1474,412 @@ static void check_command_spellings(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── The additive hook tail ──────────────────────────────────────
+ *
+ * Six slots past PF_NATIVE_CALLBACKS_V1_BASE_SIZE: two observation hooks and
+ * the four answering hooks, whose return value selects whose answer the
+ * kernel uses rather than reporting success. */
+
+typedef struct hook_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    int      bar_calls;
+    int      recalc_bar_close;
+    int      recalc_order_fill;
+    int      recalc_cause_null_at_close;
+    double   recalc_cause_price;
+    double   applied_price;
+    int      check_bar_open;
+    int      check_after_applied;
+    int      check_calculation;
+    int      requirement_bar_open;
+    int      requirement_after_applied;
+    int      requirement_consistent;
+    int      forced;
+    int      inspected;
+    int      liquidation_origin_rows;
+    double   liquidation_units;
+    int      call_units_calls;
+    double   call_units_view_position;
+    int      call_units_view_facts;
+    int      excursion_calls;
+    int      excursion_facts_ok;
+} hook_state;
+
+/* --- the recalculation hook --- */
+
+static int hook_on_bar_never(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    hook_state* state = (hook_state*)user;
+    (void)bar;
+    (void)at;
+    ++state->bar_calls;
+    return 0;
+}
+
+static int hook_on_applied_price(void* user, const pf_native_applied_v1* applied,
+                                 const pf_native_decision_v1* at) {
+    hook_state* state = (hook_state*)user;
+    (void)at;
+    if (state->applied_price == 0.0) state->applied_price = applied->resolved_price;
+    return 0;
+}
+
+static int hook_on_recalculate(void* user, const pf_bar_t* bar,
+                               const pf_native_decision_v1* at, uint32_t reason,
+                               const pf_native_applied_v1* cause) {
+    hook_state* state = (hook_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (reason == PF_NATIVE_CALC_BAR_CLOSE) {
+        ++state->recalc_bar_close;
+        if (cause == NULL) ++state->recalc_cause_null_at_close;
+        ++state->calculations;
+        if (state->calculations == 4) {
+            request = blank_request();
+            request.intent = PF_NATIVE_INTENT_TRANSACT;
+            request.intent_value = 1.0;
+            request.label = "recalc-entry";
+            LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                              == PF_NATIVE_OK, "the recalculation entry was refused");
+        }
+    } else if (reason == PF_NATIVE_CALC_ORDER_FILL) {
+        ++state->recalc_order_fill;
+        if (cause != NULL && state->recalc_cause_price == 0.0) {
+            state->recalc_cause_price = cause->resolved_price;
+        }
+    }
+    return 0;
+}
+
+static void check_recalculation_hook(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    hook_state state;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = hook_on_bar_never;
+    table.on_recalculate = hook_on_recalculate;
+    table.on_applied = hook_on_applied_price;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "recalculation host create failed");
+    if (!state.host) return;
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_CALCULATION;
+    ext.calculation = 1u;   /* BarCloseAndFills */
+    ext.max_recalculations_per_point = 4u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the recalculation extension was refused");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the recalculation run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback recalculation rows failed");
+
+    /* Installing on_recalculate REPLACES on_bar, exactly as overriding
+     * on_native_recalculate replaces the C++ default forwarding. */
+    CHECK_EQ_INT(state.bar_calls, 0, "on_bar still fired beside on_recalculate");
+    CHECK_EQ_INT(state.recalc_bar_close, n,
+                 "the close calculation did not reach on_recalculate once per bar");
+    CHECK_EQ_INT(state.recalc_cause_null_at_close, n,
+                 "a BAR_CLOSE recalculation carried a cause");
+    CHECK(state.recalc_order_fill >= 1, "BarCloseAndFills drove no ORDER_FILL recalculation");
+    CHECK(state.applied_price > 0.0, "the entry never applied");
+    CHECK(state.recalc_cause_price == state.applied_price,
+          "the ORDER_FILL cause is not the applied execution it is about");
+    strategy_native_host_free(state.host);
+}
+
+/* --- the three margin hooks --- */
+
+static int margin_on_check(void* user, const pf_native_margin_view_v1* at, int32_t* allowed) {
+    hook_state* state = (hook_state*)user;
+    if (at->kind == PF_NATIVE_MARGIN_CHECK_BAR_OPEN) ++state->check_bar_open;
+    if (at->kind == PF_NATIVE_MARGIN_CHECK_CALCULATION) ++state->check_calculation;
+    if (at->kind == PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED) {
+        ++state->check_after_applied;
+        /* A broker model that does not check mid-path suppresses that point;
+         * the kernel then evaluates nothing there. */
+        *allowed = 0;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int margin_on_requirement(void* user, const pf_native_margin_view_v1* view,
+                                 pf_native_margin_decision_v1* out) {
+    hook_state* state = (hook_state*)user;
+    if (view->kind == PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED) ++state->requirement_after_applied;
+    if (view->kind != PF_NATIVE_MARGIN_CHECK_BAR_OPEN) return PF_NATIVE_ANSWER_DEFAULT;
+    ++state->requirement_bar_open;
+    /* The kernel's own two numbers: the requirement is the maintenance
+     * fraction of the whole position at the mark it is about to measure. */
+    if (fabs(view->required - PROBE_MAINTENANCE * fabs(view->signed_units) * view->mark)
+        < 1e-9) {
+        ++state->requirement_consistent;
+    }
+    if (state->requirement_bar_open == 4 && !state->forced) {
+        /* A broker whose money rule calls here even though this kernel would
+         * not: answer numbers that do not breach, and force it anyway. */
+        out->required = view->equity + 1.0;
+        out->equity = view->equity;
+        out->force_breach = 1u;
+        state->forced = 1;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int margin_on_call_units(void* user, const pf_native_margin_view_v1* view,
+                                double* units) {
+    hook_state* state = (hook_state*)user;
+    ++state->call_units_calls;
+    state->call_units_view_position = view->signed_units;
+    if (view->mark > 0.0 && view->equity != 0.0 && view->required > 0.0
+        && view->kind == 0u && view->liquidation_resting == 0u) {
+        state->call_units_view_facts = 1;
+    }
+    /* Half the book, against a spec whose sizing policy says Flatten. */
+    *units = 1.0;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int margin_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    hook_state* state = (hook_state*)user;
+    pf_native_request_v1 request;
+    pf_native_working_v1 working;
+    int len = 0;
+    int i;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == PROBE_ENTRY_BAR) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = PROBE_UNITS;
+        request.label = "margin-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "the margin entry was refused");
+        return 0;
+    }
+    if (!state->forced || state->inspected) return 0;
+    /* The forced breach rested a kernel-originated reduction at the solved
+     * level; the feed only rises, so it is still on the book right here. */
+    state->inspected = 1;
+    len = strategy_native_working_len_v1(state->host);
+    for (i = 0; i < len; ++i) {
+        memset(&working, 0, sizeof(working));
+        working.struct_size = (uint32_t)sizeof(working);
+        if (strategy_native_working_get_v1(state->host, i, &working) != PF_NATIVE_OK) continue;
+        if (working.origin != 1u) continue;
+        ++state->liquidation_origin_rows;
+        state->liquidation_units = working.intent_value;
+    }
+    return 0;
+}
+
+static void check_margin_hooks(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    hook_state state;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = margin_on_bar;
+    table.on_margin_check = margin_on_check;
+    table.on_margin_requirement = margin_on_requirement;
+    table.on_margin_call_units = margin_on_call_units;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "margin hook host create failed");
+    if (!state.host) return;
+
+    spec.initial_capital = PROBE_CAPITAL;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_MARGIN;
+    ext.margin_has_maintenance_long = 1u;
+    ext.margin_maintenance_long = PROBE_MAINTENANCE;
+    ext.margin_has_maintenance_short = 1u;
+    ext.margin_maintenance_short = PROBE_MAINTENANCE;
+    ext.margin_sizing = 2u;   /* Flatten — the policy the units hook overrules */
+    ext.margin_shortfall_multiple = 1.0;
+    ext.margin_check = 0u;    /* PathAdverseExtreme */
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the margin hook extension was refused");
+
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the margin hook run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback margin hook rows failed");
+
+    CHECK(state.check_bar_open > 0, "no bar-open check point was offered");
+    CHECK(state.check_after_applied > 0, "no after-applied check point was offered");
+    CHECK(state.requirement_bar_open > 0, "the requirement hook was never consulted");
+    CHECK_EQ_INT(state.requirement_after_applied, 0,
+                 "a suppressed check point was still evaluated");
+    CHECK_EQ_INT(state.requirement_consistent, state.requirement_bar_open,
+                 "the kernel's own requirement is not maintenance * units * mark");
+    CHECK(state.forced, "the requirement hook never forced a breach");
+    CHECK_EQ_INT(state.call_units_calls, 1, "the units hook was not consulted exactly once");
+    CHECK(state.call_units_view_facts, "the call view carried the wrong facts");
+    CHECK(state.call_units_view_position == PROBE_UNITS,
+          "the call view named another position");
+    CHECK_EQ_INT(state.liquidation_origin_rows, 1,
+                 "the forced breach rested no kernel liquidation");
+    CHECK(state.liquidation_units == 1.0,
+          "the units hook did not overrule the spec's Flatten sizing");
+    strategy_native_host_free(state.host);
+}
+
+/* --- the excursion hook --- */
+
+#define HOOK_FAVORABLE 7.5
+#define HOOK_ADVERSE   2.5
+
+static int excursion_on_lot(void* user, const pf_native_lot_excursion_v1* facts,
+                            double* favorable, double* adverse) {
+    hook_state* state = (hook_state*)user;
+    ++state->excursion_calls;
+    if (facts->struct_size == (uint32_t)sizeof(*facts)
+        && facts->version == PF_NATIVE_API_VERSION
+        && facts->is_long == 1u && facts->lot_qty == 1.0 && facts->closed_qty == 1.0
+        && facts->entry_price > 0.0 && facts->fill_price > 0.0
+        && facts->entry_incarnation != 0u && facts->entry_bar_index >= 0
+        && facts->exit_bar_index > facts->entry_bar_index) {
+        state->excursion_facts_ok = 1;
+    }
+    if (state->forced) return PF_NATIVE_ANSWER_DEFAULT;
+    *favorable = HOOK_FAVORABLE;
+    *adverse = HOOK_ADVERSE;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int excursion_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    hook_state* state = (hook_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == PROBE_ENTRY_BAR) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.label = "excursion-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "the excursion entry was refused");
+    } else if (state->calculations == PROBE_READ_BAR) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_FLATTEN;
+        request.label = "excursion-exit";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "the excursion exit was refused");
+    }
+    return 0;
+}
+
+static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->forced = decline;   /* reused as "answer DEFAULT" */
+    table = blank_callbacks(state);
+    table.on_bar = excursion_on_bar;
+    table.on_lot_excursion = excursion_on_lot;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "excursion host create failed");
+    if (!state->host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "excursion configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, n, report), PF_NATIVE_OK,
+                 "the excursion run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback excursion rows failed");
+}
+
+static void check_excursion_hook(void) {
+    hook_state state;
+    pf_report_t report;
+    int answered_runup = 0;
+    int answered_drawdown = 0;
+    int declined_zero = 0;
+    int i;
+
+    /* Installing the hook IS owns_lot_excursions(): the closing row takes
+     * both magnitudes from it. */
+    memset(&report, 0, sizeof(report));
+    run_excursion(0, &state, &report);
+    if (!state.host) return;
+    /* The kernel consults the hook per closing evaluation, not per closed
+     * row, so the count is a floor: what is pinned is that it was consulted
+     * and that the row kept the answer. */
+    CHECK(state.excursion_calls >= 1, "the excursion hook was never consulted");
+    CHECK(state.excursion_facts_ok, "the excursion facts did not describe the closing lot");
+    CHECK(report.trades_len == 1, "the excursion run booked another number of trades");
+    for (i = 0; i < report.trades_len; ++i) {
+        if (report.trades[i].max_runup == HOOK_FAVORABLE) ++answered_runup;
+        if (report.trades[i].max_drawdown == HOOK_ADVERSE) ++answered_drawdown;
+    }
+    CHECK_EQ_INT(answered_runup, report.trades_len, "the closing row kept another run-up");
+    CHECK_EQ_INT(answered_drawdown, report.trades_len,
+                 "the closing row kept another drawdown");
+    strategy_native_report_free_v1(&report);
+    strategy_native_host_free(state.host);
+
+    /* Ownership is declared for the whole run, so a lot the hook declines
+     * gets zero magnitudes: the consumer has stopped sampling. On this rising
+     * feed an unowned run would have booked a nonzero run-up. */
+    memset(&report, 0, sizeof(report));
+    run_excursion(1, &state, &report);
+    if (!state.host) return;
+    CHECK(report.trades_len == 1, "the declining excursion run booked another trade count");
+    for (i = 0; i < report.trades_len; ++i) {
+        if (report.trades[i].max_runup == 0.0 && report.trades[i].max_drawdown == 0.0) {
+            ++declined_zero;
+        }
+    }
+    CHECK_EQ_INT(declined_zero, report.trades_len,
+                 "a declined lot did not take the kernel's zero magnitudes");
+    strategy_native_report_free_v1(&report);
+    strategy_native_host_free(state.host);
+}
+
+static void check_callback_tail_layouts(void) {
+    pf_native_callbacks_v1 table;
+    pf_strategy_t host;
+
+    /* The base layout the lane first shipped is still accepted, and its
+     * six-hook tail is simply absent. */
+    memset(&table, 0, sizeof(table));
+    table.struct_size = PF_NATIVE_CALLBACKS_V1_BASE_SIZE;
+    table.version = PF_NATIVE_API_VERSION;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "a base-layout callback table was refused");
+    strategy_native_host_free(host);
+
+    CHECK(PF_NATIVE_CALLBACKS_V1_BASE_SIZE < (uint32_t)sizeof(pf_native_callbacks_v1),
+          "the callback tail is not past the base layout");
+
+    /* Any third length is a caller this runtime cannot read. */
+    memset(&table, 0, sizeof(table));
+    table.struct_size = PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 4u;
+    table.version = PF_NATIVE_API_VERSION;
+    CHECK(strategy_native_host_create_v1(&table) == NULL,
+          "a third callback-table length was accepted");
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -1485,5 +1891,9 @@ int pf_native_c_api_checks(void) {
     check_absent_accessors();
     check_live_accessors();
     check_command_spellings();
+    check_callback_tail_layouts();
+    check_recalculation_hook();
+    check_margin_hooks();
+    check_excursion_hook();
     return failures;
 }

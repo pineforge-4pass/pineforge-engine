@@ -37,6 +37,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -118,6 +119,16 @@ static_assert(static_cast<int>(pineforge::NativeLifecycleKind::Failed)
 static_assert(static_cast<int>(pineforge::NativeCurrentRefusal::ConfigurationMismatch)
                   == PF_NATIVE_REFUSAL_CONFIGURATION_MISMATCH, "NativeCurrentRefusal drifted");
 static_assert(sizeof(pf_bar_t) == sizeof(Bar), "pf_bar_t / Bar size mismatch");
+static_assert(static_cast<int>(pineforge::NativeCalculationReason::SubBar)
+                  == PF_NATIVE_CALC_SUB_BAR, "NativeCalculationReason drifted");
+static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
+                  == PF_NATIVE_MARGIN_CHECK_CALCULATION, "NativeMarginCheckKind drifted");
+/* The hook tail is append-only: the base layout must still end exactly where
+ * PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, and the tail must be the six
+ * function pointers below it and nothing else. */
+static_assert(sizeof(pf_native_callbacks_v1)
+                  == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 6u * sizeof(void (*)(void)),
+              "the pf_native_callbacks_v1 hook tail moved");
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
@@ -134,6 +145,10 @@ public:
 const pf_bar_t* as_c_bar(const Bar& bar) {
     return reinterpret_cast<const pf_bar_t*>(&bar);
 }
+
+/* Defined below, beside the other C++ value -> C POD translations; declared
+ * here because the recalculation hook flattens an applied cause. */
+pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied);
 
 /* ── The host ───────────────────────────────────────────────────── */
 
@@ -203,6 +218,149 @@ private:
     }
 
     void on_native_margin_call(const no::MarginCallEvent& call) override;
+
+    void on_native_recalculate(const Bar& bar, const pineforge::NativeDecisionContext& ctx,
+                               pineforge::NativeCalculationReason reason,
+                               const no::ExecutionAppliedEvent* cause) override {
+        /* No hook installed is the established contract: the base forwards
+         * every calculation to on_native_bar, which is table_.on_bar. */
+        if (!table_.on_recalculate) {
+            NativeStrategyHost::on_native_recalculate(bar, ctx, reason, cause);
+            return;
+        }
+        const pf_native_decision_v1 at = decision(ctx);
+        pf_native_applied_v1 cause_pod;
+        const pf_native_applied_v1* cause_ptr = nullptr;
+        if (cause) {
+            cause_pod = applied_pod(*cause);
+            cause_ptr = &cause_pod;
+        }
+        if (table_.on_recalculate(table_.user, as_c_bar(bar), &at,
+                                  static_cast<std::uint32_t>(reason), cause_ptr) != 0) {
+            throw CallbackFailure("on_recalculate");
+        }
+    }
+
+    void on_native_sub_bar(const Bar& sub,
+                           const pineforge::NativeDecisionContext& ctx) override {
+        if (!table_.on_sub_bar) return;
+        const pf_native_decision_v1 at = decision(ctx);
+        if (table_.on_sub_bar(table_.user, as_c_bar(sub), &at) != 0) {
+            throw CallbackFailure("on_sub_bar");
+        }
+    }
+
+    /* The four answering hooks. They are consulted from kernel paths outside
+     * the callback guard, so none of them can throw: the return value selects
+     * whose answer is used and every value is in contract. */
+    std::optional<pineforge::NativeMarginDecision> resolve_margin_requirement(
+            const pineforge::NativeMarginRequirementView& view) const override {
+        if (!table_.on_margin_requirement) return std::nullopt;
+        pf_native_margin_view_v1 pod = margin_view_pod(view.kind, view.position, view.mark,
+                                                       view.equity, view.required,
+                                                       view.cursor, false);
+        pf_native_margin_decision_v1 answer;
+        std::memset(&answer, 0, sizeof(answer));
+        answer.struct_size = static_cast<std::uint32_t>(sizeof(answer));
+        answer.version = PF_NATIVE_API_VERSION;
+        answer.required = view.required;
+        answer.equity = view.equity;
+        if (table_.on_margin_requirement(table_.user, &pod, &answer)
+            == PF_NATIVE_ANSWER_DEFAULT) {
+            return std::nullopt;
+        }
+        pineforge::NativeMarginDecision decision_out;
+        decision_out.required = answer.required;
+        decision_out.equity = answer.equity;
+        decision_out.force_breach = answer.force_breach != 0u;
+        return decision_out;
+    }
+
+    bool margin_check_allowed(const pineforge::NativeMarginCheckPoint& point) const override {
+        if (!table_.on_margin_check) return true;
+        pf_native_margin_view_v1 pod = margin_view_pod(point.kind, point.position, point.mark,
+                                                       0.0, 0.0, point.cursor,
+                                                       point.liquidation_resting);
+        std::int32_t allowed = 1;
+        if (table_.on_margin_check(table_.user, &pod, &allowed) == PF_NATIVE_ANSWER_DEFAULT) {
+            return true;
+        }
+        return allowed != 0;
+    }
+
+    std::optional<double> resolve_margin_call_units(
+            const pineforge::NativeMarginCallView& view) const override {
+        if (!table_.on_margin_call_units) return std::nullopt;
+        pf_native_margin_view_v1 pod = margin_view_pod(
+            pineforge::NativeMarginCheckKind::BarOpen, view.position, view.mark, view.equity,
+            view.required, view.cursor, false);
+        /* A call is not a check point: neither field is a fact here. */
+        pod.kind = 0;
+        double units = 0.0;
+        if (table_.on_margin_call_units(table_.user, &pod, &units)
+            == PF_NATIVE_ANSWER_DEFAULT) {
+            return std::nullopt;
+        }
+        return units;
+    }
+
+    bool owns_lot_excursions() const noexcept override {
+        return table_.on_lot_excursion != nullptr;
+    }
+
+    pineforge::ClosedLotExcursion closed_lot_excursion(
+            const pineforge::ClosedLotExcursionFacts& facts) const override {
+        if (!table_.on_lot_excursion) return {};
+        pf_native_lot_excursion_v1 pod;
+        std::memset(&pod, 0, sizeof(pod));
+        pod.struct_size = static_cast<std::uint32_t>(sizeof(pod));
+        pod.version = PF_NATIVE_API_VERSION;
+        pod.entry_incarnation = facts.entry_incarnation;
+        pod.entry_time_ms = facts.entry_time_ms;
+        pod.entry_price = facts.entry_price;
+        pod.lot_qty = facts.lot_qty;
+        pod.closed_qty = facts.closed_qty;
+        pod.fill_price = facts.fill_price;
+        pod.carried_favorable = facts.carried_favorable;
+        pod.carried_adverse = facts.carried_adverse;
+        pod.entry_bar_index = facts.entry_bar_index;
+        pod.exit_bar_index = facts.exit_bar_index;
+        pod.is_long = facts.is_long ? 1u : 0u;
+        pod.entry_bar_high_masked = facts.entry_bar_high_masked ? 1u : 0u;
+        pod.entry_bar_low_masked = facts.entry_bar_low_masked ? 1u : 0u;
+        double favorable = 0.0;
+        double adverse = 0.0;
+        if (table_.on_lot_excursion(table_.user, &pod, &favorable, &adverse)
+            == PF_NATIVE_ANSWER_DEFAULT) {
+            return {};
+        }
+        return pineforge::ClosedLotExcursion{favorable, adverse};
+    }
+
+    static pf_native_margin_view_v1 margin_view_pod(
+            pineforge::NativeMarginCheckKind kind,
+            const pineforge::NativePhysicalPosition& position, double mark, double equity,
+            double required, const no::MatchCursor& cursor, bool liquidation_resting) {
+        pf_native_margin_view_v1 out;
+        std::memset(&out, 0, sizeof(out));
+        out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+        out.version = PF_NATIVE_API_VERSION;
+        out.kind = static_cast<std::uint32_t>(kind);
+        out.liquidation_resting = liquidation_resting ? 1u : 0u;
+        out.signed_units = position.signed_units;
+        out.average_price = position.average_price;
+        out.lot_count = static_cast<std::uint64_t>(position.lot_count);
+        out.mark = mark;
+        out.equity = equity;
+        out.required = required;
+        out.cursor_ordinal = cursor.point.ordinal;
+        out.cursor_effective_time_ms = cursor.point.effective_time_ms;
+        out.cursor_t = cursor.t;
+        out.cursor_interval_index = cursor.point.interval_index;
+        out.cursor_provenance = static_cast<std::uint8_t>(cursor.point.provenance);
+        out.cursor_path_phase = static_cast<std::uint8_t>(cursor.point.path_phase);
+        return out;
+    }
 
     pf_native_callbacks_v1 table_{};
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
@@ -1022,9 +1180,21 @@ PF_API int strategy_native_api_version(void) { return PF_NATIVE_API_VERSION; }
 PF_API pf_strategy_t strategy_native_host_create_v1(const pf_native_callbacks_v1* callbacks) {
     try {
         if (!callbacks) return nullptr;
-        if (callbacks->struct_size != sizeof(pf_native_callbacks_v1)) return nullptr;
+        /* Two published layouts, and only two: the base one the lane first
+         * shipped and the current one with the six-hook tail. A base-sized
+         * caller's tail is never read; it is zero-filled here, which is
+         * exactly "no hook installed". */
+        const bool has_hook_tail = callbacks->struct_size == sizeof(pf_native_callbacks_v1);
+        if (!has_hook_tail && callbacks->struct_size != PF_NATIVE_CALLBACKS_V1_BASE_SIZE) {
+            return nullptr;
+        }
         if (callbacks->version != PF_NATIVE_API_VERSION) return nullptr;
-        auto host = std::make_unique<CCallbackHost>(*callbacks);
+        pf_native_callbacks_v1 table;
+        std::memset(&table, 0, sizeof(table));
+        std::memcpy(&table, callbacks, callbacks->struct_size);
+        /* The retained copy is always the current layout. */
+        table.struct_size = static_cast<std::uint32_t>(sizeof(table));
+        auto host = std::make_unique<CCallbackHost>(table);
         /* Convert through the base the rest of the C ABI casts back to, so
          * `static_cast<BacktestEngine*>(handle)` in c_abi.cpp is exact. */
         auto* engine = static_cast<pineforge::BacktestEngine*>(host.release());

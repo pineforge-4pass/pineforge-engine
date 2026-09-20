@@ -333,11 +333,15 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. `pf_native_run_spec_ext_v1` has two published lengths — the
-layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`) and the
-same struct with L9's appended risk tail — and the runtime accepts both, so a
-host compiled against the first keeps configuring unchanged. A callback that returns non-zero latches
-`NativeFailureCode::CallbackException` and ends the run `Failed`. Streaming
+mutates nothing. `pf_native_run_spec_ext_v1` and `pf_native_callbacks_v1` each
+have two published lengths — the layout the lane first shipped
+(`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`, `PF_NATIVE_CALLBACKS_V1_BASE_SIZE`) and
+the same struct with its appended tail — and the runtime accepts both, so a
+host compiled against the first keeps working unchanged. An **observation**
+callback that returns non-zero latches
+`NativeFailureCode::CallbackException` and ends the run `Failed`; the four
+**answering** hooks in the table's tail instead return a `pf_native_answer_e`
+choosing whose answer the kernel uses, and can never fail the run. Streaming
 needs no new symbol: the `strategy_stream_*` family takes these handles
 unchanged. Worked example: [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c);
 reference: [`docs/pages/native-engine.md`](docs/pages/native-engine.md).

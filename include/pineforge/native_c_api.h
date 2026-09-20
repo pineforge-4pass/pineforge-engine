@@ -380,6 +380,39 @@ typedef enum pf_native_spec_ext_mask_e {
     PF_NATIVE_SPEC_EXT_RISK          = 1u << 6
 } pf_native_spec_ext_mask_t;
 
+/** Why the kernel is asking the host to calculate — `NativeCalculationReason`
+ *  (L5), the `reason` argument of #pf_native_callbacks_v1::on_recalculate.
+ *  SUB_BAR is reserved and never delivered there: a lower-timeframe sub-bar
+ *  has its own hook, #pf_native_callbacks_v1::on_sub_bar. */
+typedef enum pf_native_calc_reason_e {
+    PF_NATIVE_CALC_BAR_CLOSE  = 0, /**< The script bar's own calculation; `cause` NULL. */
+    PF_NATIVE_CALC_ORDER_FILL = 1, /**< At an applied execution's cursor; `cause` is it. */
+    PF_NATIVE_CALC_TICK       = 2, /**< At a modeled point or print; `cause` NULL. */
+    PF_NATIVE_CALC_SUB_BAR    = 3  /**< Reserved; see on_sub_bar. */
+} pf_native_calc_reason_t;
+
+/** Which kernel check point is about to test the maintenance requirement —
+ *  `NativeMarginCheckKind` (L4b). These are the kernel's own points; a broker
+ *  model that checks somewhere else is host policy, expressed by suppressing
+ *  the points it does not share. */
+typedef enum pf_native_margin_check_kind_e {
+    PF_NATIVE_MARGIN_CHECK_BAR_OPEN      = 0, /**< The script bar's open. */
+    PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED = 1, /**< The re-arm after a point's fills. */
+    PF_NATIVE_MARGIN_CHECK_CALCULATION   = 2  /**< A CalculationOnly model's calculation. */
+} pf_native_margin_check_kind_t;
+
+/** What an ANSWERING callback's return value means.
+ *
+ *  The four answering hooks of #pf_native_callbacks_v1 do not report success:
+ *  their return value selects WHOSE answer the kernel uses, so every value is
+ *  in contract and an answering hook can never fail the run. A host that
+ *  needs to abort does it from an observation callback, which keeps the
+ *  "non-zero ends the run Failed" rule exactly where it already was. */
+typedef enum pf_native_answer_e {
+    PF_NATIVE_ANSWER_DEFAULT  = 0, /**< Keep the kernel's own; the output is ignored. */
+    PF_NATIVE_ANSWER_PROVIDED = 1  /**< Use the output. Any non-zero value means this. */
+} pf_native_answer_t;
+
 /** @} */ /* end of pf_native_c_enums */
 
 /** @defgroup pf_native_c_types Transport types
@@ -541,6 +574,81 @@ typedef struct pf_native_trail_state_v1 {
     double   current_level;      /**< The stop the best is riding; 0 before the arm. */
     uint64_t activation_ordinal; /**< The TrailArm event; 0 before the arm. */
 } pf_native_trail_state_v1;
+
+/** The facts one margin hook is handed — the C spelling of
+ *  `NativeMarginRequirementView`, `NativeMarginCheckPoint` and
+ *  `NativeMarginCallView`, which differ only in which of these facts they
+ *  carry. Every field is documented per hook and is zero where that hook has
+ *  no such fact, exactly as #pf_native_event_v1's union is:
+ *
+ *   - on_margin_check: `kind`, `liquidation_resting`, the position, `mark`
+ *     and the cursor. `equity` and `required` are 0 — nothing has been
+ *     evaluated yet at that point.
+ *   - on_margin_requirement: `kind`, the position, `mark`, and the two
+ *     numbers the kernel is ABOUT to compare (`equity`, `required`) — exactly
+ *     what it would compare if the host answered PF_NATIVE_ANSWER_DEFAULT.
+ *   - on_margin_call_units: the position being liquidated, the sizing `mark`,
+ *     the `equity` and `required` measured there, and the cursor. `kind` and
+ *     `liquidation_resting` are 0: a call is not a check point. */
+typedef struct pf_native_margin_view_v1 {
+    uint32_t struct_size;   /**< sizeof(pf_native_margin_view_v1). */
+    uint32_t version;       /**< PF_NATIVE_API_VERSION. */
+    uint32_t kind;          /**< #pf_native_margin_check_kind_e. */
+    uint32_t liquidation_resting; /**< 0/1: a liquidation rests from an earlier point. */
+    double   signed_units;  /**< The book being measured. */
+    double   average_price;
+    uint64_t lot_count;
+    double   mark;          /**< The price the breach is measured at. */
+    double   equity;        /**< Marked equity on the model's basis. */
+    double   required;      /**< Maintenance requirement of the whole position at `mark`. */
+    uint64_t cursor_ordinal;
+    int64_t  cursor_effective_time_ms;
+    double   cursor_t;
+    int32_t  cursor_interval_index;
+    uint8_t  cursor_provenance; /**< NativePriceProvenance. */
+    uint8_t  cursor_path_phase; /**< NativePathPhase. */
+    uint8_t  reserved0[2];
+} pf_native_margin_view_v1;
+
+/** The host's answer to one requirement view — `NativeMarginDecision`.
+ *  `required` and `equity` replace the kernel's two numbers for that check
+ *  point only: they are a broker's money rule, never a second account.
+ *  `force_breach` makes the kernel proceed past `required > equity` even when
+ *  the answered numbers do not meet it. Read only when the hook answers
+ *  #PF_NATIVE_ANSWER_PROVIDED; a nonfinite `required` or `equity` is refused
+ *  by the kernel and the check point is abandoned, exactly as in C++. */
+typedef struct pf_native_margin_decision_v1 {
+    uint32_t struct_size;   /**< sizeof(pf_native_margin_decision_v1). */
+    uint32_t version;       /**< PF_NATIVE_API_VERSION. */
+    uint32_t force_breach;  /**< 0/1. */
+    uint32_t reserved0;
+    double   required;
+    double   equity;
+} pf_native_margin_decision_v1;
+
+/** One closing lot's booking facts — `ClosedLotExcursionFacts` (RULING A48).
+ *  Handed to #pf_native_callbacks_v1::on_lot_excursion, whose two outputs are
+ *  the favorable and adverse magnitudes the closing row then carries. Facts
+ *  in, magnitudes out: nothing about the host's price model crosses the
+ *  boundary in either direction. */
+typedef struct pf_native_lot_excursion_v1 {
+    uint32_t struct_size;      /**< sizeof(pf_native_lot_excursion_v1). */
+    uint32_t version;          /**< PF_NATIVE_API_VERSION. */
+    uint64_t entry_incarnation; /**< The lot's opening request. */
+    int64_t  entry_time_ms;
+    double   entry_price;
+    double   lot_qty;          /**< The whole lot. */
+    double   closed_qty;       /**< What this fill closes of it. */
+    double   fill_price;
+    double   carried_favorable; /**< What the lot carried in, for a partial close. */
+    double   carried_adverse;
+    int32_t  entry_bar_index;
+    int32_t  exit_bar_index;
+    uint8_t  is_long;
+    uint8_t  entry_bar_high_masked; /**< The entry bar's high is not this trade's. */
+    uint8_t  entry_bar_low_masked;  /**< The entry bar's low is not this trade's. */
+    uint8_t  reserved0;
+} pf_native_lot_excursion_v1;
 
 /** The run's generic risk ledger — the C spelling of `NativeRiskState` (L9).
  *
@@ -753,9 +861,19 @@ typedef struct pf_native_run_spec_ext_v1 {
  *
  *  Every entry may be NULL, which is exactly the C++ default: the kernel does
  *  nothing for that hook. `user` is handed back unchanged to every callback.
- *  A callback returns 0 to continue; any other value ends the run Failed with
- *  PF_NATIVE_FAILURE_CALLBACK. A callback must never let an exception, a
- *  longjmp or any other non-local exit escape.
+ *  A callback must never let an exception, a longjmp or any other non-local
+ *  exit escape.
+ *
+ *  There are two classes of entry, and they read their return value
+ *  differently. An OBSERVATION callback — everything down to and including
+ *  `on_sub_bar` — returns 0 to continue; any other value ends the run Failed
+ *  with PF_NATIVE_FAILURE_CALLBACK. An ANSWERING callback — the four margin
+ *  and excursion hooks at the end — returns a #pf_native_answer_e selecting
+ *  WHOSE answer the kernel uses; every value is in contract, so an answering
+ *  hook can never fail the run. That split is deliberate: the answering hooks
+ *  are consulted from kernel paths that are not inside the callback guard, so
+ *  a failure raised there could not be latched without unwinding through
+ *  them. A host that must abort does it from an observation callback.
  *
  *  Commands are legal inside `on_bar_open`, `on_bar`, `on_tick` and
  *  `on_applied`. `on_run_begin`, `on_input`, `on_timeframe_bar` and
@@ -780,7 +898,81 @@ typedef struct pf_native_callbacks_v1 {
     int (*on_timeframe_bar)(void* user, const pf_bar_t* bar, uint32_t subscription,
                             uint32_t completion, int64_t delivered_at_ms);
     int (*on_margin_call)(void* user, const pf_native_event_v1* margin_call);
+
+    /* ── The additive hook tail. Read only when `struct_size` is the current
+     * sizeof; a caller sending the base layout stops at `on_margin_call`
+     * above and gets exactly the kernel's own defaults for all six, which is
+     * what every host compiled before this tail already had. ── */
+
+    /** EVERY calculation of the run, including the script bar's own close —
+     *  `on_native_recalculate`. `reason` is a #pf_native_calc_reason_e and
+     *  `cause` is the applied execution of an ORDER_FILL recalculation, valid
+     *  only for that call and NULL otherwise. `bar` is the COMPLETE script
+     *  bar even mid-path; #strategy_native_partial_bar_v1 is the
+     *  lookahead-free bar so far. Commands are legal here.
+     *
+     *  Installing it REPLACES `on_bar` for every calculation, exactly as
+     *  overriding `on_native_recalculate` replaces the C++ default forwarding:
+     *  a host that wants both calls `on_bar` itself from here. Leaving it
+     *  NULL keeps the established contract, where the kernel forwards every
+     *  calculation to `on_bar`. Observation callback: non-zero ends the run. */
+    int (*on_recalculate)(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at,
+                          uint32_t reason, const pf_native_applied_v1* cause);
+
+    /** One completed lower-timeframe sub-bar of a run that retains a lower
+     *  feed — `on_native_sub_bar`. Delivered
+     *  after that sub-bar's whole matching path and before the next one's;
+     *  never called for a run with no retained lower feed. The decision point
+     *  is the sub-bar's last modeled point, so commands and
+     *  #strategy_native_execute_current_v1 are legal.
+     *  Observation callback: non-zero ends the run. */
+    int (*on_sub_bar)(void* user, const pf_bar_t* sub, const pf_native_decision_v1* at);
+
+    /** The two numbers one check point is about to compare —
+     *  `resolve_margin_requirement`. ANSWERING callback: return
+     *  #PF_NATIVE_ANSWER_DEFAULT to keep the kernel's own, any other value to
+     *  use @p out. The kernel keeps the whole mechanism — the level solve,
+     *  the check points, its own request, the receipt, `on_margin_call`; this
+     *  supplies only the money rule brokers legitimately differ on. */
+    int (*on_margin_requirement)(void* user, const pf_native_margin_view_v1* view,
+                                 pf_native_margin_decision_v1* out);
+
+    /** Whether this kernel check point is one the host's broker model shares
+     *  — `margin_check_allowed`. ANSWERING callback: return
+     *  #PF_NATIVE_ANSWER_DEFAULT to admit the point (the kernel's own
+     *  answer), any other value to use @p allowed (0 suppresses it). A
+     *  suppressed point is not evaluated, re-armed or withdrawn: the margin
+     *  state is left exactly as the last admitted point left it. */
+    int (*on_margin_check)(void* user, const pf_native_margin_view_v1* at, int32_t* allowed);
+
+    /** The size of a kernel-issued liquidation, before it rests —
+     *  `resolve_margin_call_units`. ANSWERING callback: return
+     *  #PF_NATIVE_ANSWER_DEFAULT to keep the run spec's sizing policy, any
+     *  other value to use @p units, which the kernel clamps into (0, held].
+     *  It has the last word on units, including over a forced breach. */
+    int (*on_margin_call_units)(void* user, const pf_native_margin_view_v1* view,
+                                double* units);
+
+    /** The favorable and adverse magnitudes of one closing lot —
+     *  `closed_lot_excursion`. Installing it at all is
+     *  `owns_lot_excursions() == true`: the consumer then stops sampling
+     *  excursion at matched trigger prices for the WHOLE run and every
+     *  closing row takes both magnitudes from here. ANSWERING callback:
+     *  return #PF_NATIVE_ANSWER_DEFAULT to answer the kernel's own zero
+     *  magnitudes — which, ownership having been declared, is what a declined
+     *  lot gets — or any other value to use @p favorable and @p adverse. */
+    int (*on_lot_excursion)(void* user, const pf_native_lot_excursion_v1* facts,
+                            double* favorable, double* adverse);
 } pf_native_callbacks_v1;
+
+/** Byte length of #pf_native_callbacks_v1 as the L13 lane first published it,
+ *  before the six-hook tail was appended. It is the offset of the first
+ *  appended field, so it stays correct on every target this header builds for
+ *  — it is not a literal. #strategy_native_host_create_v1 accepts this length
+ *  as well as the current `sizeof`, which is what makes the tail additive
+ *  rather than a layout break. */
+#define PF_NATIVE_CALLBACKS_V1_BASE_SIZE \
+    ((uint32_t)offsetof(pf_native_callbacks_v1, on_recalculate))
 
 /** @} */ /* end of pf_native_c_types */
 

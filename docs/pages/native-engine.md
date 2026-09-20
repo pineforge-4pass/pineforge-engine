@@ -2453,6 +2453,45 @@ length is refused outright. `tests/test_native_c_api_frozen_header.cpp`
 configures a host from the frozen v1 copy of the struct, so that acceptance is
 executed rather than asserted.
 
+**The callback table.** `pf_native_callbacks_v1` has **two published
+lengths** and the runtime accepts either: the layout the lane first shipped
+(`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`, again the offset of the first appended
+field rather than a literal) and the current one, which appends six hooks. A
+host compiled against the base layout keeps working and simply has none of
+them installed, which is exactly the kernel's own default for all six.
+
+Two of the six are ordinary observation callbacks. `on_recalculate` is
+`on_native_recalculate`: every calculation of the run arrives there, tagged
+with a `pf_native_calc_reason_e` and, for an `ORDER_FILL`, the applied
+execution that caused it. Installing it **replaces** `on_bar` for every
+calculation, exactly as overriding `on_native_recalculate` replaces the C++
+default forwarding; leaving it NULL keeps the established contract where the
+kernel forwards every calculation to `on_bar`. `on_sub_bar` is
+`on_native_sub_bar`, delivered once per completed lower-timeframe sub-bar of
+a retained lower feed.
+
+The other four are **answering** hooks — `on_margin_requirement`
+(`resolve_margin_requirement`), `on_margin_check` (`margin_check_allowed`),
+`on_margin_call_units` (`resolve_margin_call_units`) and `on_lot_excursion`
+(`owns_lot_excursions` + `closed_lot_excursion`) — and they read their return
+value differently: it is a `pf_native_answer_e` selecting WHOSE answer the
+kernel uses, not a success code. Every value is therefore in contract and an
+answering hook can never fail the run. That split is not cosmetic: those four
+are consulted from kernel paths that are **not** inside the consumer's
+callback guard, so a failure raised there could not be latched without
+unwinding through them, which is the one thing this boundary must never do. A
+host that must abort does it from an observation callback, where the
+established "non-zero ends the run `Failed`" rule is untouched.
+
+Installing `on_lot_excursion` at all is `owns_lot_excursions() == true`
+(RULING A48): the consumer then stops sampling excursion at matched trigger
+prices for the whole run and every closing row takes both magnitudes from the
+hook — so a lot the hook declines gets the kernel's own zero magnitudes,
+because nothing was sampled for it. The three margin hooks share one view
+POD, `pf_native_margin_view_v1`, whose fields are documented per hook and
+zero where that hook has no such fact, exactly as `pf_native_event_v1`'s
+union is.
+
 **Errors and hardening.** Every struct is tagged and size-prefixed
 (`struct_size`, `version`); a mismatch is `PF_NATIVE_E_STRUCT`, an enumerator
 outside its enumeration is `PF_NATIVE_E_TAG`, and neither mutates anything.
