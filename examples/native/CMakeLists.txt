@@ -6,8 +6,11 @@
 # dlopens — runner/CMakeLists.txt builds the same sources with
 # PINEFORGE_EXPORT_NATIVE_STRATEGY providing the C ABI.
 #
-# They link PineForge::pineforge today; the kernel-only target takes over here
-# once it exists.
+# Every example links PineForge::kernel, the archive that holds the kernel
+# alone: a source-layer symbol reaching an example is a link error here in the
+# default build too, not only under PINEFORGE_BUILD_SOURCE_LAYER=OFF. The
+# release and kernel profiles of scripts/ci_verify.py build them and run
+# their example_* rows; the other profiles leave the option OFF.
 
 set(PINEFORGE_NATIVE_EXAMPLES
     hello_kernel
@@ -27,7 +30,7 @@ set(PINEFORGE_NATIVE_C_EXAMPLES
 foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES)
     set(target example_${example})
     add_executable(${target} ${example}.cpp)
-    target_link_libraries(${target} PRIVATE PineForge::pineforge)
+    target_link_libraries(${target} PRIVATE PineForge::kernel)
     # Same floating-point contract as the library: parity depends on it.
     # -Wno-unused-parameter matches the library's own option set: the public
     # headers declare virtuals with named, unused parameters.
@@ -47,7 +50,7 @@ foreach(example IN LISTS PINEFORGE_NATIVE_C_EXAMPLES)
     set(target example_${example})
     add_executable(${target} ${example}.c)
     set_target_properties(${target} PROPERTIES LINKER_LANGUAGE CXX)
-    target_link_libraries(${target} PRIVATE PineForge::pineforge)
+    target_link_libraries(${target} PRIVATE PineForge::kernel)
     target_compile_options(${target} PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter -ffp-contract=off)
     set_target_properties(${target} PROPERTIES
@@ -67,6 +70,10 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME example_${example} COMMAND example_${example})
         set_tests_properties(example_${example} PROPERTIES TIMEOUT 60)
     endforeach()
+    # The regex is the row's assertion (CTest ignores the exit code once one is
+    # set), so each of these hosts prints its "closed trades:" line LAST, after
+    # every check of its own has passed, and prints nothing of the kind when
+    # a check fails.
     set_tests_properties(example_hello_kernel example_hello_kernel_c
         example_native_bracket_strategy PROPERTIES
         PASS_REGULAR_EXPRESSION "closed trades: [1-9]")
