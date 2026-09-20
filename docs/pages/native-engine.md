@@ -460,6 +460,7 @@ for (const auto& row : native_working_requests()) {
 }
 std::size_t ended = cancel_all();              // one CancelledEvent per request
 std::size_t dropped = cancel_where("bracket"); // by the request's comment
+std::size_t gone = cancel_where("entry-7", NativeRequestField::Label);
 ```
 
 `native_working_requests()` copies owning value rows in live order; later
@@ -468,6 +469,17 @@ many requests left the book, dependants of a cancelled owner included;
 `cancel_where(comment)` cancels exactly the live requests carrying that
 comment and answers how many of those it cancelled. An unknown comment is not
 a command.
+
+`NativeRequestField` chooses which of the two identity texts the predicate
+compares: `Comment` is the one-argument form, `Label` addresses the requests
+by `Request::label` — the one call that withdraws every live request a host
+issued under one of its own order ids. Both are free host text the kernel
+only copies and compares, and neither is indexed: each form walks the live
+book once, exactly as `cancel_all` does, so a label may be reused, replaced
+or left empty with no second copy of the book to keep in step. The C spelling
+is `strategy_native_cancel_where_v1(host, text, PF_NATIVE_FIELD_LABEL)`; an
+id → handle book a host wants to *re-price* from, rather than a predicate, is
+`native_toolkit::OrderBook<Key>`.
 
 A leg can be placed before its owner has a price. `Request::anchor` defaults
 to `Absolute{}` — the level written in the trigger. `FromOwnerFill{offset,
@@ -557,7 +569,7 @@ What each reader of the live book sees under `PendingUntilArmed`:
 | matching | never matches (waiting), under either value | matches |
 | `native_working_requests()`, C `strategy_native_working_*` | hidden | listed |
 | `replace` / `cancel` / `trail_state` (by handle) | address it | address it |
-| `cancel_all` / `cancel_where` | cancel and count it | same |
+| `cancel_all` / `cancel_where` (comment or label) | cancel and count it | same |
 | reservation / admission / projected-pending | none in the kernel for a resting request (sibling claims filter by reduction scope; admission reads the physical lots) | same |
 | report / trade accessors | settled trades only, no request rows | same |
 | continuation / broker-state hash | folded (the visibility folds only when set) | same |
@@ -2210,14 +2222,18 @@ one of the eight per-strategy exports the transpiler emits and is absent from
 a runtime a C host links on its own.
 
 **Commands.** `strategy_native_submit_v1`, `_replace_v1`, `_cancel_v1`,
-`_cancel_all_v1` and `_execute_current_v1` follow the kernel's existing
-legality rule: inside a callback, or between realtime inputs. A command issued
+`_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1` follow the
+kernel's existing legality rule: inside a callback, or between realtime inputs. A command issued
 anywhere else answers `PF_NATIVE_E_STATE` and changes nothing — the kernel
 throws there, and the C boundary contains that throw rather than letting it
 unwind through the C frame. `strategy_native_position_v1`,
 `_working_len_v1` / `_working_get_v1` (L7's working view, copied out) and
 `_events_v1` read the run back; `_state_v1` reads the lifecycle and its typed
-failure.
+failure. `_cancel_where_v1` takes the text and a
+`pf_native_request_field_e` (`PF_NATIVE_FIELD_COMMENT` / `_LABEL`): an
+unknown selector is `PF_NATIVE_E_TAG` and a NULL text is
+`PF_NATIVE_E_ARGUMENT`, because `""` is the text every request carrying no
+such field matches.
 
 **The request.** `pf_native_request_v1` is translated field by field into
 `native_order::Request` and is never cast onto it. It carries the intent

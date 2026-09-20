@@ -108,6 +108,18 @@ inline BracketReceipt submit_bracket(NativeStrategyHost& host, const BracketSpec
 // otherwise write to re-price "its" order by name. It owns no engine state,
 // only the handles the host returned. Key must be ordered (a std::string id
 // or an integral id are the usual choices).
+//
+// This book is for a host that wants to REACH one named order again --
+// replace it, re-price it, cancel it, ask whether it is still live. It is not
+// the only way to address an order by name: a host that only ever withdraws
+// them in bulk needs no book at all, because
+// NativeStrategyHost::cancel_where(text, NativeRequestField::Label) cancels
+// exactly the live requests whose Request::label is that text (and
+// NativeRequestField::Comment does the same for the comment) in one call,
+// walking the live book once. The trade is the usual one: the predicate
+// keeps nothing in step and reads the truth the kernel already holds; this
+// book is O(log n) to a handle and survives the request's own terminal
+// states only as the key it forgets.
 template <class Key>
 class OrderBook {
 public:
