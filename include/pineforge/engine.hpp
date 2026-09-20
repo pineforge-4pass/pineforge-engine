@@ -1692,10 +1692,6 @@ protected:
         std::string tf;
         TimeframeAggregator aggregator;
         Bar current_bar{};
-        bool lower_tf_requested = false;
-        bool lower_tf_emulation = false;
-        int lower_tf_ratio = 0;
-        int lower_tf_seconds = 0;
         int current_sub_bar_count = 0;
         int64_t feed_count = 0;
         int64_t eval_complete_count = 0;
@@ -1705,35 +1701,6 @@ protected:
         // before the first dispatch. A host that replays its latest
         // evaluation re-dispatches the same bar under the same index.
         int64_t ta_bar_index = -1;
-        // ``request.security_lower_tf`` returns one element per
-        // synthesised sub-bar of the current chart bar, so the codegen
-        // needs to know which sub-bar inside the current chart bar is
-        // currently being processed by the per-sec_id evaluator method.
-        // ``lower_tf_array_requested`` is set by
-        // ``register_security_lower_tf_eval`` and forces an extra
-        // lower-TF-emulation validity check in
-        // ``validate_security_timeframes``. ``lower_tf_sub_bar_index``
-        // is reset to 0 at the start of every
-        // ``feed_security_eval_state`` invocation in lower-TF
-        // emulation mode and incremented after each per-sub-bar
-        // dispatch so the codegen can clear its accumulator on index
-        // 0 and then push for every subsequent sub-bar.
-        bool lower_tf_array_requested = false;
-        int lower_tf_sub_bar_index = 0;
-        // ``lower_tf_use_input`` selects the input-passthrough LTF path:
-        // when the requested TF is >= input_tf and < script_tf we hand
-        // the per-script-bar window of real input bars to the codegen
-        // (optionally roll-up aggregated when req > input). Mutually
-        // exclusive with ``lower_tf_emulation`` (synthesis) — only one
-        // is set per state. ``lower_tf_input_aggregation_ratio`` is
-        // ``req_seconds / input_seconds`` (>=1; 1 means raw passthrough,
-        // N means N raw input bars roll up into one returned LTF bar).
-        // ``lower_tf_input_buffer`` accumulates raw input bars within
-        // the current script-TF chunk and is flushed at chunk
-        // completion (or at end of feed for trailing partial chunks).
-        bool lower_tf_use_input = false;
-        int lower_tf_input_aggregation_ratio = 1;
-        std::vector<Bar> lower_tf_input_buffer;
         // Plain ``request.security`` with a requested TF strictly finer than
         // script_tf, served by the auxiliary finer feed (the split-feed
         // path), under ``lookahead_on``: TradingView's merge takes the FIRST
@@ -1901,11 +1868,6 @@ protected:
     // subscription's modes are the consumer's delivery rules.
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf);
-    // Sub-bar index (0-based) of the current ``request.security_lower_tf``
-    // synthesis within the current chart bar. Returns 0 outside the
-    // synthesis loop. Used by codegen to clear its per-call vector at
-    // sub-bar 0 and push one element per sub-bar after.
-    int security_lower_tf_sub_bar_index(int sec_id) const;
     // The one path to evaluate_security(): installs the requested context's
     // bar index for the evaluator's TA members (ta::bar_context()) for the
     // duration of the dispatch. `bar_index` is the 0-based index of the

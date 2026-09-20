@@ -232,11 +232,9 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     for (auto& state : security_eval_states_) {
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
-        // Only an aggregating (coarser-than-input) request has buckets to
-        // substitute; passthrough, lower-TF emulation and input passthrough
-        // read the feed itself.
-        if (state.lower_tf_emulation || state.lower_tf_use_input
-            || !state.aggregator.is_active()) {
+        // Only an aggregating (coarser-than-input) evaluator has buckets to
+        // substitute; one without an active aggregator reads the feed itself.
+        if (!state.aggregator.is_active()) {
             continue;
         }
         int requested_seconds = 0;

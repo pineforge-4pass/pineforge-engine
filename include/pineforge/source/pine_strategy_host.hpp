@@ -23,7 +23,7 @@ namespace pineforge::source {
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v4";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v5";
 
 // One projected higher-timeframe bucket of the opt-in historical
 // request.security lookahead projection (PineSecurityEvalState below).
@@ -147,6 +147,44 @@ struct PineSecurityEvalState {
     // Which projection (cursor) has already been dispatched: every later
     // input of the same bucket is a no-op for the evaluator.
     bool historical_projection_dispatched = false;
+    // request.security_lower_tf emulation: a requested TF finer than the
+    // evaluator input is synthesized from each input bar's OHLC path
+    // (``lower_tf_emulation``: ``lower_tf_ratio`` sub-bars of
+    // ``lower_tf_seconds``); ``lower_tf_requested`` marks a site on either
+    // lower-timeframe path.
+    bool lower_tf_requested = false;
+    bool lower_tf_emulation = false;
+    int lower_tf_ratio = 0;
+    int lower_tf_seconds = 0;
+    // ``request.security_lower_tf`` returns one element per
+    // synthesised sub-bar of the current chart bar, so the codegen
+    // needs to know which sub-bar inside the current chart bar is
+    // currently being processed by the per-sec_id evaluator method.
+    // ``lower_tf_array_requested`` is set by
+    // ``register_security_lower_tf_eval`` and forces an extra
+    // lower-TF-emulation validity check in
+    // ``validate_security_timeframes``. ``lower_tf_sub_bar_index``
+    // is reset to 0 at the start of every
+    // ``pine_feed_security_eval_state`` invocation in lower-TF
+    // emulation mode and incremented after each per-sub-bar
+    // dispatch so the codegen can clear its accumulator on index
+    // 0 and then push for every subsequent sub-bar.
+    bool lower_tf_array_requested = false;
+    int lower_tf_sub_bar_index = 0;
+    // ``lower_tf_use_input`` selects the input-passthrough LTF path:
+    // when the requested TF is >= input_tf and < script_tf we hand
+    // the per-script-bar window of real input bars to the codegen
+    // (optionally roll-up aggregated when req > input). Mutually
+    // exclusive with ``lower_tf_emulation`` (synthesis) — only one
+    // is set per state. ``lower_tf_input_aggregation_ratio`` is
+    // ``req_seconds / input_seconds`` (>=1; 1 means raw passthrough,
+    // N means N raw input bars roll up into one returned LTF bar).
+    // ``lower_tf_input_buffer`` accumulates raw input bars within
+    // the current script-TF chunk and is flushed at chunk
+    // completion (or at end of feed for trailing partial chunks).
+    bool lower_tf_use_input = false;
+    int lower_tf_input_aggregation_ratio = 1;
+    std::vector<Bar> lower_tf_input_buffer;
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
@@ -486,6 +524,11 @@ protected:
     // required" error for ``request.security_lower_tf``).
     void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
                                          const std::string& input_tf);
+    // Sub-bar index (0-based) of the current ``request.security_lower_tf``
+    // synthesis within the current chart bar. Returns 0 outside the
+    // synthesis loop. Used by codegen to clear its per-call vector at
+    // sub-bar 0 and push one element per sub-bar after.
+    int security_lower_tf_sub_bar_index(int sec_id) const;
     // TradingView's request.security / request.security_lower_tf timeframe
     // rules for the registered sites against the run's evaluator input
     // timeframe: the diagnostics a script author reads, the lower-timeframe
@@ -535,6 +578,11 @@ private:
     // register_security_eval (none today) reads as a plain site.
     PineSecurityEvalState& pine_security_state(int sec_id) {
         return pine_security_states_[sec_id];
+    }
+    const PineSecurityEvalState& pine_security_state(int sec_id) const {
+        static const PineSecurityEvalState plain{};
+        const auto found = pine_security_states_.find(sec_id);
+        return found == pine_security_states_.end() ? plain : found->second;
     }
     // Drops the entries of sec_ids the evaluator registry no longer holds.
     void prune_pine_security_states();

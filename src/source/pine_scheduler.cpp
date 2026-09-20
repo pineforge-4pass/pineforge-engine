@@ -16,20 +16,20 @@ void PineStrategyHost::init_security_eval_states_for_run(
         state.eval_partial_count = 0;
         state.current_bar = Bar{};
         state.current_sub_bar_count = 0;
-        state.lower_tf_sub_bar_index = 0;
-        state.lower_tf_input_buffer.clear();
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        pine.lower_tf_sub_bar_index = 0;
+        pine.lower_tf_input_buffer.clear();
         state.first_bucket_published = false;
         state.deferred_aux.clear();
         state.slice_open_label = 0;
         state.last_published_label = 0;
-        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         pine.historical_projections.clear();
         pine.historical_projection_cursor = 0;
         pine.historical_projection_dispatched = false;
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
         state.aggregator = TimeframeAggregator();
-        if (state.lower_tf_emulation || state.lower_tf_use_input) continue;
+        if (pine.lower_tf_emulation || pine.lower_tf_use_input) continue;
         const int ratio = tf_ratio(effective_input_tf, state.tf);
         if (ratio > 1 || ratio == -1) {
             state.aggregator = TimeframeAggregator(
@@ -57,8 +57,8 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const bool calendar_month = requested_seconds == -1
             && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
-        const bool eligible = !state.lower_tf_requested && !state.lower_tf_emulation
-            && !state.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
+        const bool eligible = !pine.lower_tf_requested && !pine.lower_tf_emulation
+            && !pine.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
             && !pine.heikinashi
             && (calendar_month || requested_seconds > script_seconds);
         if (!eligible) continue;

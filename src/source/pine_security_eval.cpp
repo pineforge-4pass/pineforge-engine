@@ -57,10 +57,10 @@ void source::PineStrategyHost::register_security_eval(
         // request.security evaluator. The latter retains its own
         // lookahead/gaps contract, so the lower-TF-array restriction is
         // applied only after that identity is known below.
-        state.lower_tf_requested = true;
-        state.lower_tf_emulation = true;
-        state.lower_tf_ratio = lower_ratio;
-        state.lower_tf_seconds = lower_seconds;
+        pine.lower_tf_requested = true;
+        pine.lower_tf_emulation = true;
+        pine.lower_tf_ratio = lower_ratio;
+        pine.lower_tf_seconds = lower_seconds;
         // A lower-timeframe site synthesizes its sub-bars; it has no
         // aggregator of its own.
         state.aggregator = TimeframeAggregator();
@@ -83,7 +83,7 @@ void source::PineStrategyHost::register_security_lower_tf_eval(
     auto before = security_eval_states_.size();
     register_security_eval(sec_id, requested_tf, input_tf, false, false);
     if (security_eval_states_.size() > before) {
-        security_eval_states_.back().lower_tf_array_requested = true;
+        pine_security_state(sec_id).lower_tf_array_requested = true;
     }
 }
 
@@ -102,6 +102,16 @@ bool source::PineStrategyHost::security_series_slot_is_new(int sec_id) const noe
         return !lookahead_on || state.current_sub_bar_count <= 1;
     }
     return true;
+}
+
+
+int source::PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
+    for (const auto& state : security_eval_states_) {
+        if (state.sec_id == sec_id) {
+            return pine_security_state(sec_id).lower_tf_sub_bar_index;
+        }
+    }
+    return 0;
 }
 
 
@@ -150,13 +160,13 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
     int script_seconds = script_tf_seconds_;
     for (auto& state : security_eval_states_) {
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);
-        state.lower_tf_requested = false;
-        state.lower_tf_emulation = false;
-        state.lower_tf_ratio = 0;
-        state.lower_tf_seconds = 0;
-        state.lower_tf_use_input = false;
-        state.lower_tf_input_aggregation_ratio = 1;
-        state.lower_tf_input_buffer.clear();
+        pine.lower_tf_requested = false;
+        pine.lower_tf_emulation = false;
+        pine.lower_tf_ratio = 0;
+        pine.lower_tf_seconds = 0;
+        pine.lower_tf_use_input = false;
+        pine.lower_tf_input_aggregation_ratio = 1;
+        pine.lower_tf_input_buffer.clear();
         pine.publish_gate_tf_seconds = 0;
         pine.calling_close_completes_partial = false;
         state.calling_open_latches_first = false;
@@ -168,15 +178,15 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         int lower_seconds = 0;
         bool ltf_supported = supports_lower_tf_emulation(
             input_tf, state.tf, &lower_ratio, &lower_seconds);
-        if (ltf_supported && state.lower_tf_array_requested) {
+        if (ltf_supported && pine.lower_tf_array_requested) {
             // Only request.security_lower_tf may opt into LTF emulation.
             // Scalar request.security remains a validate-time refusal even
             // when registration recognized an integer-divisor lower TF.
-            state.lower_tf_requested = true;
+            pine.lower_tf_requested = true;
             ensure_supported_lower_tf_emulation_flags(pine.lookahead_on, pine.gaps_on);
-            state.lower_tf_emulation = true;
-            state.lower_tf_ratio = lower_ratio;
-            state.lower_tf_seconds = lower_seconds;
+            pine.lower_tf_emulation = true;
+            pine.lower_tf_ratio = lower_ratio;
+            pine.lower_tf_seconds = lower_seconds;
             continue;
         }
 
@@ -190,9 +200,9 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         // let the CALENDAR TimeframeAggregator (tf_ratio == -1) aggregate it.
         // request.security_lower_tf("M") stays invalid — month is never an
         // intrabar TF. (Weekly/daily already pass: they return positive seconds.)
-        bool is_calendar_month = (requested_seconds == -1 && !state.lower_tf_array_requested);
+        bool is_calendar_month = (requested_seconds == -1 && !pine.lower_tf_array_requested);
         if (requested_seconds <= 0 && !is_calendar_month) {
-            const char* api = state.lower_tf_array_requested
+            const char* api = pine.lower_tf_array_requested
                 ? "request.security_lower_tf" : "request.security";
             throw std::runtime_error(
                 std::string(api) + ": invalid timeframe literal '" + state.tf + "'"
@@ -202,7 +212,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         if (!is_calendar_month && requested_seconds < input_seconds) {
             // Finer than input — only valid for security_lower_tf with
             // an integer divisor ratio.
-            if (!state.lower_tf_array_requested) {
+            if (!pine.lower_tf_array_requested) {
                 throw std::runtime_error(
                     "request.security: requested timeframe '" + state.tf
                     + "' is finer than input '" + input_tf
@@ -233,7 +243,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         // request.security; for request.security_lower_tf this is the
         // input-passthrough path when the requested TF is also strictly
         // finer than the script TF.
-        if (state.lower_tf_array_requested) {
+        if (pine.lower_tf_array_requested) {
             if (script_seconds <= 0) {
                 throw std::runtime_error(
                     "request.security_lower_tf: script timeframe is unknown — cannot validate '"
@@ -261,12 +271,12 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
                     + "' (cannot aggregate raw input bars to requested TF)"
                 );
             }
-            state.lower_tf_requested = true;
-            state.lower_tf_use_input = true;
-            state.lower_tf_input_aggregation_ratio =
+            pine.lower_tf_requested = true;
+            pine.lower_tf_use_input = true;
+            pine.lower_tf_input_aggregation_ratio =
                 requested_seconds / input_seconds;
-            state.lower_tf_ratio = script_seconds / requested_seconds;
-            state.lower_tf_seconds = requested_seconds;
+            pine.lower_tf_ratio = script_seconds / requested_seconds;
+            pine.lower_tf_seconds = requested_seconds;
         } else if (!is_calendar_month && pine.lookahead_on
                    && script_seconds > 0
                    && requested_seconds < script_seconds
@@ -358,6 +368,7 @@ void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
 
 bool source::PineStrategyHost::security_input_precedes_range_start(
         const SecurityEvalState& state, int64_t input_ts) const {
+    const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
     if (security_range_start_na_warmup_) {
         // TradingView's deep-backtest request.security series are built from the
         // HTF bars whose OPEN lies inside the loaded chart range: a bucket that
@@ -394,8 +405,8 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         // native partition with pre-range history (the 15m lanes' explicit
         // daily feed) already opened that bucket before the epoch, so the
         // rule below agrees with the cut above wherever both apply.
-        if (aux_security_feed_enabled() && !state.lower_tf_requested
-            && !state.lower_tf_array_requested) {
+        if (aux_security_feed_enabled() && !pine.lower_tf_requested
+            && !pine.lower_tf_array_requested) {
             const CalendarPeriod period = calendar_period_for(state.tf);
             const CalendarPeriod chart_period = calendar_period_for(script_tf_);
             const bool strictly_coarser = period != CalendarPeriod::NONE
@@ -425,7 +436,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         && security_first_chart_bar_ms_ > 0
         && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400
         && (state.tf == "D" || state.tf == "1D")
-        && !state.lower_tf_requested && !state.lower_tf_array_requested
+        && !pine.lower_tf_requested && !pine.lower_tf_array_requested
         && (syminfo_.type == "forex" || syminfo_.type == "cfd")
         && !stream_warmup_mode_ && stream_phase_ == StreamPhase::IDLE) {
         const int64_t stamp = session_period_open_ms(
@@ -454,7 +465,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
     // evaluator is never cut (its slice begins at the first chart bar), and
     // a single-feed run has no evidence and keeps its feed-start series.
     if (security_first_chart_bar_ms_ <= 0 || !aux_security_feed_enabled()
-        || state.lower_tf_requested || state.lower_tf_array_requested
+        || pine.lower_tf_requested || pine.lower_tf_array_requested
         || script_tf_seconds_ <= 0) {
         return false;
     }
@@ -546,7 +557,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         }
     };
 
-    if (state.lower_tf_use_input) {
+    if (pine.lower_tf_use_input) {
         // Buffer raw input bars until we accumulate one full script-TF
         // chunk, then aggregate (if req > input) and dispatch each
         // resulting LTF bar to the codegen via evaluate_security. The
@@ -568,24 +579,24 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         if (input_seconds <= 0 || script_seconds <= 0) {
             // Cannot compute bucket math — fall back to original
             // count-only behaviour.
-            state.lower_tf_input_buffer.push_back(input_bar);
+            pine.lower_tf_input_buffer.push_back(input_bar);
             return;
         }
         int chunk_size = script_seconds / input_seconds;
         if (chunk_size <= 0) {
-            state.lower_tf_input_buffer.push_back(input_bar);
+            pine.lower_tf_input_buffer.push_back(input_bar);
             return;
         }
         // The buffer fills to at most chunk_size input bars before it is
         // dispatched and cleared. Reserve once (no-op when capacity already
         // suffices) so the repeated fill/clear cycle reuses one allocation.
-        state.lower_tf_input_buffer.reserve(static_cast<std::size_t>(chunk_size));
+        pine.lower_tf_input_buffer.reserve(static_cast<std::size_t>(chunk_size));
         int64_t bucket_ms = static_cast<int64_t>(script_seconds) * 1000;
         int64_t this_bucket = input_bar.timestamp / bucket_ms;
         bool boundary_crossed = false;
-        if (!state.lower_tf_input_buffer.empty()) {
+        if (!pine.lower_tf_input_buffer.empty()) {
             int64_t buffer_bucket =
-                state.lower_tf_input_buffer.front().timestamp / bucket_ms;
+                pine.lower_tf_input_buffer.front().timestamp / bucket_ms;
             if (this_bucket != buffer_bucket) {
                 boundary_crossed = true;
             }
@@ -597,22 +608,22 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // length-driven by the actual buffer size rather than
         // chunk_size, so partial windows don't index out of bounds.
         auto dispatch_and_clear = [&]() {
-            int agg_ratio = state.lower_tf_input_aggregation_ratio;
+            int agg_ratio = pine.lower_tf_input_aggregation_ratio;
             if (agg_ratio < 1) agg_ratio = 1;
-            int buf_len = static_cast<int>(state.lower_tf_input_buffer.size());
+            int buf_len = static_cast<int>(pine.lower_tf_input_buffer.size());
             std::vector<Bar> ltf_bars;
             ltf_bars.reserve(static_cast<std::size_t>(buf_len / agg_ratio + 1));
             if (agg_ratio == 1) {
-                for (const Bar& b : state.lower_tf_input_buffer) {
+                for (const Bar& b : pine.lower_tf_input_buffer) {
                     ltf_bars.push_back(b);
                 }
             } else {
                 for (int i = 0; i + agg_ratio <= buf_len; i += agg_ratio) {
-                    Bar acc = state.lower_tf_input_buffer[
+                    Bar acc = pine.lower_tf_input_buffer[
                         static_cast<std::size_t>(i)];
                     double vol = acc.volume;
                     for (int j = 1; j < agg_ratio; ++j) {
-                        const Bar& nxt = state.lower_tf_input_buffer[
+                        const Bar& nxt = pine.lower_tf_input_buffer[
                             static_cast<std::size_t>(i + j)];
                         if (nxt.high > acc.high) acc.high = nxt.high;
                         if (nxt.low < acc.low) acc.low = nxt.low;
@@ -623,7 +634,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                     ltf_bars.push_back(acc);
                 }
             }
-            state.lower_tf_sub_bar_index = 0;
+            pine.lower_tf_sub_bar_index = 0;
             for (const Bar& b : ltf_bars) {
                 state.feed_count++;
                 state.current_bar = b;
@@ -631,9 +642,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
                 state.eval_complete_count++;
                 dispatch_security_eval(state, b, true,
                                        state.eval_complete_count - 1);
-                state.lower_tf_sub_bar_index++;
+                pine.lower_tf_sub_bar_index++;
             }
-            state.lower_tf_input_buffer.clear();
+            pine.lower_tf_input_buffer.clear();
         };
 
         if (boundary_crossed) {
@@ -642,20 +653,20 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             dispatch_and_clear();
         }
 
-        state.lower_tf_input_buffer.push_back(input_bar);
+        pine.lower_tf_input_buffer.push_back(input_bar);
 
         // Secondary trigger: if the buffer happens to fill to
         // chunk_size mid-bucket (the dense gap-free case), flush
         // immediately. This preserves the original count-based
         // behaviour for the common path.
-        if (static_cast<int>(state.lower_tf_input_buffer.size()) >= chunk_size) {
+        if (static_cast<int>(pine.lower_tf_input_buffer.size()) >= chunk_size) {
             dispatch_and_clear();
         }
         return;
     }
-    if (state.lower_tf_emulation) {
+    if (pine.lower_tf_emulation) {
         std::vector<Bar> synthetic_bars =
-            synthesize_lower_tf_bars(input_bar, state.lower_tf_ratio, state.lower_tf_seconds);
+            synthesize_lower_tf_bars(input_bar, pine.lower_tf_ratio, pine.lower_tf_seconds);
         if (synthetic_bars.empty()) {
             throw std::runtime_error(
                 "request.security lower TF emulation could not synthesize bars for requested "
@@ -667,7 +678,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // detect index 0 and clear its accumulator vector before pushing
         // each per-sub-bar value. The counter is incremented after every
         // dispatch so callers see 0, 1, ..., ratio-1 in sequence.
-        state.lower_tf_sub_bar_index = 0;
+        pine.lower_tf_sub_bar_index = 0;
         for (const auto& synthetic_bar : synthetic_bars) {
             state.feed_count++;
             state.current_bar = synthetic_bar;
@@ -675,7 +686,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
             state.eval_complete_count++;
             dispatch_security_eval(state, synthetic_bar, true,
                                    state.eval_complete_count - 1);
-            state.lower_tf_sub_bar_index++;
+            pine.lower_tf_sub_bar_index++;
         }
         return;
     }

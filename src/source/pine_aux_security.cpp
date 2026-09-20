@@ -253,7 +253,8 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
         security_next_input_ms_ = (i + 1 < aux_security_bars_.size())
             ? aux_security_bars_[i + 1].timestamp : 0;
         for (auto& state : security_eval_states_) {
-            if (!state.lower_tf_array_requested) {
+            PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+            if (!pine.lower_tf_array_requested) {
                 if (state.calling_open_latches_first
                     && state.first_bucket_published) {
                     // TradingView reads the calling bar's FIRST intrabar:
@@ -284,17 +285,17 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
             if (security_input_precedes_range_start(state, aux_bar.timestamp)) {
                 continue;
             }
-            if (state.lower_tf_use_input) {
-                state.lower_tf_input_buffer.push_back(aux_bar);
-            } else if (state.lower_tf_emulation) {
+            if (pine.lower_tf_use_input) {
+                pine.lower_tf_input_buffer.push_back(aux_bar);
+            } else if (pine.lower_tf_emulation) {
                 std::vector<Bar> synthetic = internal::synthesize_lower_tf_bars(
-                    aux_bar, state.lower_tf_ratio, state.lower_tf_seconds);
+                    aux_bar, pine.lower_tf_ratio, pine.lower_tf_seconds);
                 if (synthetic.empty()) {
                     throw std::runtime_error(
                         "request.security_lower_tf could not synthesize auxiliary sub-bars");
                 }
-                state.lower_tf_input_buffer.insert(
-                    state.lower_tf_input_buffer.end(),
+                pine.lower_tf_input_buffer.insert(
+                    pine.lower_tf_input_buffer.end(),
                     synthetic.begin(), synthetic.end());
             } else {
                 throw std::runtime_error(
@@ -315,25 +316,26 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     } warmup_scope(security_range_start_na_warmup_);
 
     for (auto& state : security_eval_states_) {
-        if (!state.lower_tf_array_requested) continue;
-        int aggregate_ratio = state.lower_tf_emulation
-            ? 1 : state.lower_tf_input_aggregation_ratio;
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        if (!pine.lower_tf_array_requested) continue;
+        int aggregate_ratio = pine.lower_tf_emulation
+            ? 1 : pine.lower_tf_input_aggregation_ratio;
         if (aggregate_ratio < 1) aggregate_ratio = 1;
-        const int count = static_cast<int>(state.lower_tf_input_buffer.size());
+        const int count = static_cast<int>(pine.lower_tf_input_buffer.size());
         std::vector<Bar> requested_bars;
         requested_bars.reserve(
             static_cast<std::size_t>(count / aggregate_ratio + 1));
         if (aggregate_ratio == 1) {
-            requested_bars.assign(state.lower_tf_input_buffer.begin(),
-                                  state.lower_tf_input_buffer.end());
+            requested_bars.assign(pine.lower_tf_input_buffer.begin(),
+                                  pine.lower_tf_input_buffer.end());
         } else {
             for (int i = 0; i + aggregate_ratio <= count;
                  i += aggregate_ratio) {
-                Bar aggregate = state.lower_tf_input_buffer[
+                Bar aggregate = pine.lower_tf_input_buffer[
                     static_cast<std::size_t>(i)];
                 double volume = aggregate.volume;
                 for (int j = 1; j < aggregate_ratio; ++j) {
-                    const Bar& next = state.lower_tf_input_buffer[
+                    const Bar& next = pine.lower_tf_input_buffer[
                         static_cast<std::size_t>(i + j)];
                     aggregate.high = std::max(aggregate.high, next.high);
                     aggregate.low = std::min(aggregate.low, next.low);
@@ -345,7 +347,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
             }
         }
 
-        state.lower_tf_sub_bar_index = 0;
+        pine.lower_tf_sub_bar_index = 0;
         for (const Bar& bar : requested_bars) {
             state.feed_count++;
             state.current_bar = bar;
@@ -353,9 +355,9 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
             state.eval_complete_count++;
             dispatch_security_eval(state, bar, true,
                                    state.eval_complete_count - 1);
-            state.lower_tf_sub_bar_index++;
+            pine.lower_tf_sub_bar_index++;
         }
-        state.lower_tf_input_buffer.clear();
+        pine.lower_tf_input_buffer.clear();
     }
 }
 

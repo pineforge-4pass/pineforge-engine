@@ -648,6 +648,19 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
                 f.i(projection.first_child_ms);
                 f.b(projection.is_complete);
             }
+            f.b(pine.lower_tf_requested);
+            f.b(pine.lower_tf_emulation);
+            f.i(pine.lower_tf_ratio);
+            f.i(pine.lower_tf_seconds);
+            f.b(pine.lower_tf_array_requested);
+            f.i(pine.lower_tf_sub_bar_index);
+            f.b(pine.lower_tf_use_input);
+            f.i(pine.lower_tf_input_aggregation_ratio);
+            f.u(pine.lower_tf_input_buffer.size());
+            for (const Bar& bar : pine.lower_tf_input_buffer) {
+                f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close);
+                f.d(bar.volume); f.i(bar.timestamp);
+            }
         }
     }
     // The margin slice's sampling chronology is resolved once per pending
