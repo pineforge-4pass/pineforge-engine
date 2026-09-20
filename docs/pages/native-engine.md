@@ -1180,6 +1180,31 @@ but the coordinates a request born in a recalculation fills at differ — the
 adapter re-presents it at the chart bar's next waypoint, the kernel at the next
 discrete matching point of the delivered path.
 
+#### What left it (R5 lane N10)
+
+The TradingView exit-path resolver did not. `internal::resolve_exit_path_fill`
+— the 930-line intrabar fill simulation `src/source/pine_path_resolve.cpp`
+carried out of the kernel in lane L12 — was a second matcher beside
+`src/native_matching.hpp` and `NativeExecutionConsumer`, and after the R5
+re-lowerings no production caller reached it: its only references left were
+its own declaration, comments, and the resolver-level rows of the trail test
+suites. It is now `tests/exit_path_resolver_oracle.hpp`, a declared test
+oracle; nothing under `src/` may call it, and the rules it still spells
+(open-arming, the sub-tick offset floor, the carried best, activation on the
+tick-quantized bar) are each pinned a second time end to end by the
+host-level fixtures in the same suites. The one function of that file a live
+caller still reaches, `internal::entry_stop_first_touch`, stays in
+`src/source`.
+
+Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
+and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the
+directional tick snap and the slippage step; the kernel fills on
+`native_matching::grid_round_directional` and `native_matching::apply_slippage`
+instead (`native_execution_consumer.cpp`), so the pair had no caller in `src/`
+at all and has been deleted from the public header. A native host that wants a
+computed level on the ladder declares `NativeRunSpec::price_grid`; it does not
+snap by hand.
+
 ## One physical book
 
 There is one engine lot/account book. Native matching inspects settlement,
