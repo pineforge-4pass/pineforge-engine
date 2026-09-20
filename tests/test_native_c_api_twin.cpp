@@ -207,6 +207,107 @@ void compare(const char* arm, const pf_twin_result& c, const pf_twin_result& cpp
     }
 }
 
+// The C++ twin of cancel_where_on_bar in test_native_c_api.c: the same three
+// crossed requests and the same three bulk calls, spelled with the C++
+// overloads.
+class CancelWhereHost final : public pineforge::NativeStrategyHost {
+public:
+    explicit CancelWhereHost(pf_twin_cancel_where& out) : out_(&out) {}
+
+private:
+    void on_native_run_begin() override { calculations_ = 0; }
+
+    void on_native_bar(const pineforge::Bar&,
+                       const pineforge::NativeDecisionContext&) override {
+        ++calculations_;
+        if (calculations_ != 5 || out_->ran) return;
+        out_->ran = 1;
+        put("leg", "entry");
+        put("leg", "exit");
+        put("other", "leg");
+        out_->comment_hits = static_cast<int>(cancel_where("leg"));
+        out_->live_after_comment = static_cast<int>(native_working_requests().size());
+        out_->label_hits =
+            static_cast<int>(cancel_where("leg", pineforge::NativeRequestField::Label));
+        out_->live_after_label = static_cast<int>(native_working_requests().size());
+        out_->unmatched_hits =
+            static_cast<int>(cancel_where("nobody", pineforge::NativeRequestField::Label));
+    }
+
+    void put(const char* label, const char* comment) {
+        no::Request request;
+        request.intent = no::Transact{1.0};
+        request.trigger = no::Limit{1.0};
+        request.label = label;
+        request.comment = comment;
+        if (submit(request).status != no::SubmitStatus::Accepted) {
+            fail("the cancel_where twin could not rest a request", label);
+        }
+    }
+
+    pf_twin_cancel_where* out_;
+    int calculations_ = 0;
+};
+
+void run_cancel_where_twin() {
+    pf_twin_cancel_where from_c;
+    pf_twin_cancel_where from_cpp;
+    std::memset(&from_c, 0, sizeof(from_c));
+    std::memset(&from_cpp, 0, sizeof(from_cpp));
+
+    const int rc = pf_twin_run_c_cancel_where(&from_c);
+    check(rc == 0, "cancel_where: the C arm reported a command error", std::to_string(rc));
+
+    CancelWhereHost host(from_cpp);
+    if (host.configure_native(twin_spec()).status != pineforge::NativeSetupStatus::Applied) {
+        fail("configure_native refused the cancel_where twin", host.last_error());
+        return;
+    }
+    const pf_bar_t* bars = pf_twin_bars(nullptr);
+    int n = 0;
+    pf_twin_bars(&n);
+    host.run(reinterpret_cast<const pineforge::Bar*>(bars), n);
+    from_cpp.completed =
+        host.native_state().kind == pineforge::NativeLifecycleKind::Completed ? 1 : 0;
+
+    // The counts the kernel answered, field by field across the two surfaces.
+    check(from_c.completed == 1, "cancel_where: the C run did not complete");
+    check(from_cpp.completed == 1, "cancel_where: the C++ run did not complete");
+    check(from_c.ran == 1 && from_cpp.ran == 1, "cancel_where: an arm never ran");
+    check(from_c.comment_hits == from_cpp.comment_hits,
+          "cancel_where: comment count differs",
+          std::to_string(from_c.comment_hits) + " vs " + std::to_string(from_cpp.comment_hits));
+    check(from_c.live_after_comment == from_cpp.live_after_comment,
+          "cancel_where: live rows after the comment call differ");
+    check(from_c.label_hits == from_cpp.label_hits,
+          "cancel_where: label count differs",
+          std::to_string(from_c.label_hits) + " vs " + std::to_string(from_cpp.label_hits));
+    check(from_c.live_after_label == from_cpp.live_after_label,
+          "cancel_where: live rows after the label call differ");
+    check(from_c.unmatched_hits == from_cpp.unmatched_hits,
+          "cancel_where: unmatched count differs");
+
+    // What those counts must be: the comment form takes the one request whose
+    // COMMENT is "leg" and leaves the two labelled ones; the label form then
+    // takes exactly those two; an unmatched text is not a command.
+    check(from_c.comment_hits == 1, "cancel_where: the comment form did not take one row",
+          std::to_string(from_c.comment_hits));
+    check(from_c.live_after_comment == 2,
+          "cancel_where: the comment form did not leave the two labelled rows",
+          std::to_string(from_c.live_after_comment));
+    check(from_c.label_hits == 2, "cancel_where: the label form did not take both rows",
+          std::to_string(from_c.label_hits));
+    check(from_c.live_after_label == 0, "cancel_where: the label form left a live request",
+          std::to_string(from_c.live_after_label));
+    check(from_c.unmatched_hits == 0, "cancel_where: an unmatched label cancelled something");
+
+    // C-only rows: the header's two documented refusals.
+    check(from_c.refused_unknown_field == 1,
+          "cancel_where: an unknown field selector was not refused as PF_NATIVE_E_TAG");
+    check(from_c.refused_null_text == 1,
+          "cancel_where: a NULL text was not refused as PF_NATIVE_E_ARGUMENT");
+}
+
 void run_twin(const char* arm, bool sized, int (*c_arm)(pf_twin_result*)) {
     pf_twin_result from_c;
     pf_twin_result from_cpp;
@@ -231,6 +332,7 @@ void run_twin(const char* arm, bool sized, int (*c_arm)(pf_twin_result*)) {
 int main() {
     run_twin("market", false, &pf_twin_run_c_market);
     run_twin("sized", true, &pf_twin_run_c_sized);
+    run_cancel_where_twin();
 
     const int suite = pf_native_c_api_checks();
     if (suite != 0) {

@@ -63,6 +63,27 @@ int pf_twin_run_c_market(pf_twin_result* out);
  *  cash basis) instead of the market Transact. */
 int pf_twin_run_c_sized(pf_twin_result* out);
 
+/** The record of the cancel_where twin: three resting requests whose label
+ *  and comment cross ("leg" is two labels and one comment), then one bulk
+ *  call per field. Both arms report the counts the kernel answered, in the
+ *  order the scenario makes them. */
+typedef struct pf_twin_cancel_where {
+    int completed;           /* 1 when the run reached Completed. */
+    int ran;                 /* 1 when the scenario callback really ran. */
+    int comment_hits;        /* cancel_where("leg", COMMENT) */
+    int live_after_comment;  /* live rows left after it */
+    int label_hits;          /* cancel_where("leg", LABEL) */
+    int live_after_label;    /* live rows left after it */
+    int unmatched_hits;      /* cancel_where("nobody", LABEL) */
+    /* C-only refusals: the C++ overload cannot spell either. */
+    int refused_unknown_field;
+    int refused_null_text;
+} pf_twin_cancel_where;
+
+/** Run the cancel_where scenario through the C API.
+ *  @return 0 on success, non-zero when the C API itself refused. */
+int pf_twin_run_c_cancel_where(pf_twin_cancel_where* out);
+
 /** The pure-C behaviour suite: refusals, replace/cancel/cancel_all,
  *  execute_current, the callback-failure latch and event polling.
  *  @return the number of failed checks. */

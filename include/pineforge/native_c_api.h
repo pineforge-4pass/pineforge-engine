@@ -13,7 +13,7 @@
  * ─────
  * ✓ Create / free a native host backed by a C callback table
  * ✓ Run a batch of OHLCV bars and fill a pf_report_t
- * ✓ submit / replace / cancel / cancel_all / execute_current
+ * ✓ submit / replace / cancel / cancel_all / cancel_where / execute_current
  * ✓ Read the physical position, the live working book and the event history
  * ✓ Read the run's lifecycle state and its typed failure
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
@@ -217,6 +217,17 @@ typedef enum pf_native_group_effect_e {
     PF_NATIVE_GROUP_CANCEL = 0,
     PF_NATIVE_GROUP_REDUCE = 1
 } pf_native_group_effect_t;
+
+/** Which identity text #strategy_native_cancel_where_v1 compares.
+ *
+ *  Both are the free text the request carried: `comment` is the established
+ *  selector, `label` is where a host that names its orders puts its own id,
+ *  so LABEL is the one call that withdraws every live request issued under
+ *  one such id. Neither is indexed; both walk the live book once. */
+typedef enum pf_native_request_field_e {
+    PF_NATIVE_FIELD_COMMENT = 0,
+    PF_NATIVE_FIELD_LABEL   = 1
+} pf_native_request_field_t;
 
 /** Price rule of an immediate execution. */
 typedef enum pf_native_price_rule_e {
@@ -784,6 +795,25 @@ PF_API int strategy_native_cancel_v1(pf_strategy_t s, uint64_t incarnation);
 /** Cancel every live request, dependants included.
  *  @return The number cancelled (>= 0), or PF_NATIVE_E_STATE. */
 PF_API int strategy_native_cancel_all_v1(pf_strategy_t s);
+
+/** Cancel exactly the live requests whose @p field equals @p text.
+ *
+ *  The C spelling of `NativeStrategyHost::cancel_where`. With
+ *  #PF_NATIVE_FIELD_LABEL it is the one call that withdraws every live
+ *  request a host issued under one of its own order ids; with
+ *  #PF_NATIVE_FIELD_COMMENT it is the established comment predicate. A
+ *  dependant of a cancelled owner still leaves the book, but it is counted
+ *  only when its own field matched. Text that matches nothing is not a
+ *  command.
+ *
+ *  @param text   Borrowed for the call only; "" matches the requests that
+ *                carry no such text. NULL is PF_NATIVE_E_ARGUMENT, not "".
+ *  @param field  #pf_native_request_field_e.
+ *  @return The number cancelled (>= 0), PF_NATIVE_E_TAG for a field outside
+ *  the enumeration, PF_NATIVE_E_ARGUMENT for a NULL @p text, or another
+ *  negative status. */
+PF_API int strategy_native_cancel_where_v1(pf_strategy_t s, const char* text,
+                                           uint32_t field);
 
 /** Execute one live request at the current execution point.
  *

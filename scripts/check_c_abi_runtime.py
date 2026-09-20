@@ -101,6 +101,7 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_replace_v1",
     "strategy_native_cancel_v1",
     "strategy_native_cancel_all_v1",
+    "strategy_native_cancel_where_v1",
     "strategy_native_execute_current_v1",
     "strategy_native_position_v1",
     "strategy_native_working_len_v1",
@@ -113,8 +114,8 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_configure_native_ext_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 19
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 19
+EXPECTED_NATIVE_C_API_DECLARATIONS = 20
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 20
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

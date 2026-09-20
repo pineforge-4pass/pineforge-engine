@@ -309,7 +309,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **19 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **20 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
@@ -320,7 +320,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 |---|---|
 | `strategy_native_host_create_v1` / `strategy_native_host_free` | Allocate / release a host backed by a `pf_native_callbacks_v1` table |
 | `strategy_native_run_v1` / `strategy_native_report_free_v1` | Run a batch of bars into a `pf_report_t`; release its arrays (the runtime's own `report_free`, which is otherwise a per-strategy export) |
-| `strategy_native_submit_v1` / `_replace_v1` / `_cancel_v1` / `_cancel_all_v1` | The order commands, legal inside a callback or between realtime inputs |
+| `strategy_native_submit_v1` / `_replace_v1` / `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1` | The order commands, legal inside a callback or between realtime inputs; `cancel_where` withdraws every live request carrying one comment or one label |
 | `strategy_native_execute_current_v1` | Execute one live request at the current execution point |
 | `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book |
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |

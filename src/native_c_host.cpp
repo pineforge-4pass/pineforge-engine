@@ -1124,6 +1124,29 @@ PF_API int strategy_native_cancel_all_v1(pf_strategy_t s) {
     });
 }
 
+PF_API int strategy_native_cancel_where_v1(pf_strategy_t s, const char* text, uint32_t field) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        // NULL is not the empty string here: "" is the text every request
+        // that carries no comment or label matches, so a caller that meant
+        // one and passed the other would cancel a different set.
+        if (!text) return PF_NATIVE_E_ARGUMENT;
+        pineforge::NativeRequestField selector = pineforge::NativeRequestField::Comment;
+        switch (field) {
+        case PF_NATIVE_FIELD_COMMENT:
+            selector = pineforge::NativeRequestField::Comment;
+            break;
+        case PF_NATIVE_FIELD_LABEL:
+            selector = pineforge::NativeRequestField::Label;
+            break;
+        default:
+            return PF_NATIVE_E_TAG;
+        }
+        return static_cast<int>(host->cancel_where(std::string_view(text), selector));
+    });
+}
+
 PF_API int strategy_native_execute_current_v1(pf_strategy_t s, uint64_t incarnation,
                                               uint32_t price_rule, uint32_t* refusal) {
     return guarded([&] {

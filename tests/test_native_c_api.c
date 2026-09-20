@@ -238,6 +238,93 @@ int pf_twin_run_c_market(pf_twin_result* out) { return twin_run(out, 0); }
 
 int pf_twin_run_c_sized(pf_twin_result* out) { return twin_run(out, 1); }
 
+/* ── The cancel_where twin arm ──────────────────────────────────── */
+
+/* Three resting limits nobody can fill, whose identity fields cross: "leg" is
+ * the label of two of them and the comment of the third. A form that read the
+ * wrong field would therefore cancel the wrong rows, not none. */
+typedef struct cancel_where_state {
+    pf_strategy_t          host;
+    int                    calculations;
+    int                    command_error;
+    pf_twin_cancel_where*  out;
+} cancel_where_state;
+
+static int cancel_where_submit(cancel_where_state* state, const char* label,
+                               const char* comment) {
+    pf_native_request_v1 request = blank_request();
+    int rc;
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.p1 = 1.0;
+    request.label = label;
+    request.comment = comment;
+    rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+    if (rc != PF_NATIVE_OK && state->command_error == 0) state->command_error = rc;
+    return rc;
+}
+
+static int cancel_where_on_bar(void* user, const pf_bar_t* bar,
+                               const pf_native_decision_v1* at) {
+    cancel_where_state* state = (cancel_where_state*)user;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations != 5 || state->out->ran) return 0;
+    state->out->ran = 1;
+
+    if (cancel_where_submit(state, "leg", "entry") != PF_NATIVE_OK) return 0;
+    if (cancel_where_submit(state, "leg", "exit") != PF_NATIVE_OK) return 0;
+    if (cancel_where_submit(state, "other", "leg") != PF_NATIVE_OK) return 0;
+
+    state->out->comment_hits = strategy_native_cancel_where_v1(
+        state->host, "leg", PF_NATIVE_FIELD_COMMENT);
+    state->out->live_after_comment = strategy_native_working_len_v1(state->host);
+    state->out->label_hits = strategy_native_cancel_where_v1(
+        state->host, "leg", PF_NATIVE_FIELD_LABEL);
+    state->out->live_after_label = strategy_native_working_len_v1(state->host);
+    state->out->unmatched_hits = strategy_native_cancel_where_v1(
+        state->host, "nobody", PF_NATIVE_FIELD_LABEL);
+
+    /* The two documented C refusals. Neither is a command: the book is
+     * already empty and stays that way. */
+    state->out->refused_unknown_field =
+        strategy_native_cancel_where_v1(state->host, "leg", 77u) == PF_NATIVE_E_TAG;
+    state->out->refused_null_text =
+        strategy_native_cancel_where_v1(state->host, NULL, PF_NATIVE_FIELD_LABEL)
+        == PF_NATIVE_E_ARGUMENT;
+    return 0;
+}
+
+int pf_twin_run_c_cancel_where(pf_twin_cancel_where* out) {
+    cancel_where_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    const pf_bar_t* bars;
+    int n = 0;
+    int rc;
+
+    memset(out, 0, sizeof(*out));
+    memset(&state, 0, sizeof(state));
+    state.out = out;
+
+    table = blank_callbacks(&state);
+    table.on_bar = cancel_where_on_bar;
+
+    state.host = strategy_native_host_create_v1(&table);
+    if (!state.host) return -1;
+    if (strategy_configure_native_v1(state.host, &spec) != 0) {
+        strategy_native_host_free(state.host);
+        return -2;
+    }
+    bars = pf_twin_bars(&n);
+    rc = strategy_native_run_v1(state.host, bars, n, NULL);
+    out->completed = (rc == PF_NATIVE_OK) ? 1 : 0;
+    strategy_native_host_free(state.host);
+    return state.command_error;
+}
+
 /* ── Behaviour suite ────────────────────────────────────────────── */
 
 /* Refusals are decided before the command reaches the kernel, so they are
