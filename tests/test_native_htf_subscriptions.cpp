@@ -30,7 +30,13 @@
 //      identity: its native_run_spec_digest (the consumer's spec fold, without
 //      the machine-specific timezone resources a raw continuation hash carries)
 //      is pinned, is unchanged when the empty series list is stated outright,
-//      and moves as soon as one series is declared.
+//      and moves as soon as one series is declared;
+//   7. the pump is ordered against the SCRIPT interval: a script bar the input
+//      after a feed hole seals lazily is calculated BEFORE that input's
+//      buckets are delivered, reading the series exactly as its own inputs
+//      left them (seal(k) -> deliver(i+1) -> calc(i+1)), against a series
+//      whose bucket completes on that very input, a gapped series it clears,
+//      a boundary it closes and a lookahead bucket it opens.
 
 #include <pineforge/native_host.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -156,7 +162,11 @@ public:
 
     void clear_security(int sec_id) override { ++clears[sec_id]; }
 
-    void on_native_bar(const Bar& bar, const NativeDecisionContext&) override {
+    // How each calculated script bar was sealed: Confirmed by an input of
+    // its own, LazyComplete by the first input of a later interval.
+    std::vector<NativeCompletionKind> completions;
+
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         ++bars_seen;
         if (probes > 0) {
             std::vector<std::optional<Bar>> row;
@@ -164,6 +174,7 @@ public:
             for (std::size_t i = 0; i < probes; ++i) row.push_back(native_series_bar(i));
             series_at_bar.push_back(std::move(row));
         }
+        completions.push_back(context.coordinate.completion);
         log.push_back("bar@" + std::to_string(bar.timestamp));
     }
 };
@@ -975,6 +986,229 @@ void test_hash_neutrality() {
     CHECK(with_series.native_continuation_hash() != hash);
 }
 
+// ---- 7. the pump is ordered against the script interval --------------------
+//
+// Input "15", script "60": the kernel's own aggregated chart, one calculation
+// per hour. The feed has a hole from 0:45 through 1:30 -- the four bars an
+// exchange outage swallows; a batch admits it -- so hour 0's script bar never
+// meets an input of its own that closes it. The first input after the hole,
+// 1:45, is the first input of hour 1: it seals hour 0 LazyComplete (the LAZY
+// SEAL) and, being hour 1's last bar as well, seals hour 1 Confirmed once it
+// has contributed to it. Four series ride on that one input:
+//   0. "120": its [0:00, 2:00) bucket is {0:00, 0:15, 0:30, 1:45} and reaches
+//      its real end ON 1:45 -- a bucket holding the very input that seals
+//      hour 0;
+//   1. "45" gaps_on: [0:00, 0:45) completed on 0:30; 1:45 opens [1:30, 2:15)
+//      and delivers nothing, so 1:45 CLEARS the series;
+//   2. "60": hour 0's bucket closes only at the boundary 1:45 crosses, so it
+//      is delivered LazyComplete on 1:45;
+//   3. "60" lookahead_on: hour 1's bucket, {1:45}, is delivered on its first
+//      input, 1:45.
+// Hour 0's calculation reads the series exactly as its own inputs left them
+// -- 0 empty, 1 the [0:00, 0:45) bucket, 2 empty, 3 hour 0's bucket -- then
+// come 1:45's deliveries, then hour 1's calculation. Before this change the
+// pump ran on 1:45 BEFORE the lazy seal, so hour 0 read 0 = the [0:00, 2:00)
+// bucket holding 1:45, 1 = empty, 2 = its own hour's bucket and 3 = hour 1's
+// bucket: the one-input leak this scenario pins shut (it fails on 87b3b06).
+
+// The 12 quarter hours of 0:00-2:45 without 0:45, 1:00, 1:15 and 1:30.
+std::vector<Bar> holed_quarter_hours() {
+    const std::vector<Bar> all = quarter_hour_bars(12);
+    std::vector<Bar> bars;
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        if (i >= 3 && i <= 6) continue;
+        bars.push_back(all[i]);
+    }
+    return bars;
+}
+
+void check_series(const std::optional<Bar>& got, const std::optional<Bar>& want,
+                  const char* tag) {
+    CHECK(got.has_value() == want.has_value());
+    if (got.has_value() != want.has_value()) {
+        if (got) {
+            std::printf("  %s: got t %lld o %.6g h %.6g l %.6g c %.6g v %.6g; want empty\n",
+                        tag, static_cast<long long>(got->timestamp), got->open, got->high,
+                        got->low, got->close, got->volume);
+        } else {
+            std::printf("  %s: empty, want a bucket\n", tag);
+        }
+        return;
+    }
+    if (got && want) check_bucket(*got, *want, tag);
+}
+
+void test_lazy_seal_precedes_the_pump() {
+    scenario = "lazy seal precedes the pump";
+    const std::vector<Bar> bars = holed_quarter_hours();
+    CHECK(bars.size() == 8);
+    const std::int64_t origin = bars.front().timestamp;
+    CHECK(bars[3].timestamp == origin + 105 * kMinute);
+
+    NativeRunSpec spec = base_spec("15", "60", "native-htf-lazy-seal");
+    NativeTimeframeSubscription two_hourly;
+    two_hourly.tf = "120";
+    NativeTimeframeSubscription gapped;
+    gapped.tf = "45";
+    gapped.gaps = true;
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+    NativeTimeframeSubscription hourly_lookahead;
+    hourly_lookahead.tf = "60";
+    hourly_lookahead.lookahead = true;
+    spec.subscriptions.push_back(two_hourly);
+    spec.subscriptions.push_back(gapped);
+    spec.subscriptions.push_back(hourly);
+    spec.subscriptions.push_back(hourly_lookahead);
+
+    SeriesHost host;
+    host.probes = 4;
+    CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "60", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+    if (!host.last_error().empty()) std::printf("  error: %s\n", host.last_error().c_str());
+
+    // The premise: three script bars, and hour 0's is the lazily sealed one.
+    CHECK(host.bars_seen == 3);
+    CHECK(host.completions.size() == 3);
+    if (host.completions.size() == 3) {
+        CHECK(host.completions[0] == NativeCompletionKind::LazyComplete);
+        CHECK(host.completions[1] == NativeCompletionKind::Confirmed);
+        CHECK(host.completions[2] == NativeCompletionKind::Confirmed);
+    }
+
+    // The buckets, by hand.
+    const Bar hour0 = hand_aggregate(bars, 0, 3, origin);
+    const Bar hour1 = hand_aggregate(bars, 3, 1, origin + kHour);
+    const Bar hour2 = hand_aggregate(bars, 4, 4, origin + 2 * kHour);
+    const Bar two_hours = hand_aggregate(bars, 0, 4, origin);
+    const Bar first45 = hand_aggregate(bars, 0, 3, origin);
+    const Bar second45 = hand_aggregate(bars, 3, 2, origin + 90 * kMinute);
+    const Bar third45 = hand_aggregate(bars, 5, 3, origin + 135 * kMinute);
+
+    // What each calculation read. Hour 0 reads the series as its own three
+    // inputs left them: nothing of 1:45 -- not the bucket it completes, not
+    // the clear it performs, not the boundary it closes, not the lookahead
+    // bucket it opens.
+    CHECK(host.series_at_bar.size() == 3);
+    if (host.series_at_bar.size() == 3) {
+        const auto& hour0_read = host.series_at_bar[0];
+        CHECK(hour0_read.size() == 4);
+        if (hour0_read.size() == 4) {
+            check_series(hour0_read[0], std::nullopt, "hour 0 reads 120");
+            check_series(hour0_read[1], first45, "hour 0 reads 45 gaps");
+            check_series(hour0_read[2], std::nullopt, "hour 0 reads 60");
+            check_series(hour0_read[3], hour0, "hour 0 reads 60 lookahead");
+        }
+        // Hour 1 -- {1:45}, sealed by its own input right after -- reads what
+        // 1:45 delivered: the 120 bucket, the cleared gapped series, hour 0's
+        // bucket, and its own bucket under lookahead.
+        const auto& hour1_read = host.series_at_bar[1];
+        CHECK(hour1_read.size() == 4);
+        if (hour1_read.size() == 4) {
+            check_series(hour1_read[0], two_hours, "hour 1 reads 120");
+            check_series(hour1_read[1], std::nullopt, "hour 1 reads 45 gaps");
+            check_series(hour1_read[2], hour0, "hour 1 reads 60");
+            check_series(hour1_read[3], hour1, "hour 1 reads 60 lookahead");
+        }
+        const auto& hour2_read = host.series_at_bar[2];
+        CHECK(hour2_read.size() == 4);
+        if (hour2_read.size() == 4) {
+            check_series(hour2_read[0], two_hours, "hour 2 reads 120");
+            check_series(hour2_read[1], third45, "hour 2 reads 45 gaps");
+            check_series(hour2_read[2], hour2, "hour 2 reads 60");
+            check_series(hour2_read[3], hour2, "hour 2 reads 60 lookahead");
+        }
+    }
+
+    // The deliveries, in order, each with the number of script bars already
+    // calculated when it arrived: the three riding on 1:45 arrive AFTER hour
+    // 0's calculation (1) and before hour 1's.
+    struct Want {
+        std::size_t subscription;
+        Bar bar;
+        std::int64_t delivered_at_ms;
+        NativeCompletionKind completion;
+        int bars_before;
+    };
+    const std::vector<Want> want_deliveries{
+        {3, hour0, bars[0].timestamp, NativeCompletionKind::LazyComplete, 0},
+        {1, first45, bars[2].timestamp, NativeCompletionKind::Confirmed, 0},
+        {0, two_hours, bars[3].timestamp, NativeCompletionKind::Confirmed, 1},
+        {2, hour0, bars[3].timestamp, NativeCompletionKind::LazyComplete, 1},
+        {3, hour1, bars[3].timestamp, NativeCompletionKind::LazyComplete, 1},
+        {1, second45, bars[4].timestamp, NativeCompletionKind::Confirmed, 2},
+        {2, hour1, bars[4].timestamp, NativeCompletionKind::LazyComplete, 2},
+        {3, hour2, bars[4].timestamp, NativeCompletionKind::Confirmed, 2},
+        {1, third45, bars[7].timestamp, NativeCompletionKind::Confirmed, 2},
+        {2, hour2, bars[7].timestamp, NativeCompletionKind::Confirmed, 2},
+    };
+    CHECK(host.deliveries.size() == want_deliveries.size());
+    if (host.deliveries.size() == want_deliveries.size()) {
+        for (std::size_t i = 0; i < want_deliveries.size(); ++i) {
+            const Delivery& got = host.deliveries[i];
+            const Want& want = want_deliveries[i];
+            CHECK(got.subscription == want.subscription);
+            check_bucket(got.bar, want.bar, "lazy-seal delivery");
+            CHECK(got.context.delivered_at_ms == want.delivered_at_ms);
+            CHECK(got.context.completion == want.completion);
+            CHECK(got.bars_before == want.bars_before);
+            CHECK(got.accessor_matches);
+        }
+    }
+
+    // The whole sequence. On 1:45: the input, hour 0's calculation, 1:45's
+    // three deliveries, hour 1's calculation. (A script bar is presented
+    // under its first contributing input's stamp.)
+    const auto stamp = [&bars](std::size_t i) {
+        return std::to_string(bars[i].timestamp);
+    };
+    const auto label = [origin](std::int64_t offset_ms) {
+        return std::to_string(origin + offset_ms);
+    };
+    const std::vector<std::string> want_log{
+        "input:0@" + stamp(0), "htf:3@" + label(0),
+        "input:1@" + stamp(1),
+        "input:2@" + stamp(2), "htf:1@" + label(0),
+        "input:3@" + stamp(3), "bar@" + stamp(0),
+            "htf:0@" + label(0), "htf:2@" + label(0), "htf:3@" + label(kHour),
+            "bar@" + stamp(3),
+        "input:4@" + stamp(4), "htf:1@" + label(90 * kMinute),
+            "htf:2@" + label(kHour), "htf:3@" + label(2 * kHour),
+        "input:5@" + stamp(5),
+        "input:6@" + stamp(6),
+        "input:7@" + stamp(7), "htf:1@" + label(135 * kMinute),
+            "htf:2@" + label(2 * kHour), "bar@" + stamp(4),
+    };
+    CHECK(host.log == want_log);
+    if (host.log != want_log) {
+        for (std::size_t i = 0; i < std::max(host.log.size(), want_log.size()); ++i) {
+            const std::string got = i < host.log.size() ? host.log[i] : std::string("-");
+            const std::string exp = i < want_log.size() ? want_log[i] : std::string("-");
+            if (got != exp) std::printf("  log[%zu]: got %s want %s\n", i, got.c_str(),
+                                        exp.c_str());
+        }
+    }
+
+    // The same feed with no series declared calculates the same three bars,
+    // sealed the same way: the reordering lives inside the subscription
+    // branch and a run without subscriptions never enters it.
+    NativeRunSpec plain = base_spec("15", "60", "native-htf-lazy-seal-plain");
+    SeriesHost bare;
+    CHECK(bare.configure_native(plain).status == NativeSetupStatus::Applied);
+    bare.run(bars.data(), static_cast<int>(bars.size()), "15", "60", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(bare.last_error().empty());
+    CHECK(bare.deliveries.empty());
+    CHECK(bare.completions == host.completions);
+    std::vector<std::string> bare_log;
+    for (const std::string& entry : host.log) {
+        if (entry.rfind("htf:", 0) != 0) bare_log.push_back(entry);
+    }
+    CHECK(bare.log == bare_log);
+}
+
 }  // namespace
 
 int main() {
@@ -988,6 +1222,7 @@ int main() {
     test_finer_than_input_is_refused();
     test_weekly_matches_the_pine_path();
     test_hash_neutrality();
+    test_lazy_seal_precedes_the_pump();
     std::printf("native HTF subscriptions: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

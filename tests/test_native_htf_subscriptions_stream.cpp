@@ -26,7 +26,13 @@
 //      declares none still takes ticks;
 //   9. a feed installed through the engine's own setter -- the store the C ABI
 //      writes -- is host ingress and survives a second stream_begin, which
-//      re-registers the kernel's own series without taking it away.
+//      re-registers the kernel's own series without taking it away;
+//  10. the pump is ordered against the SCRIPT interval on a stream too: the
+//      last "60" script bar of a 09:30-16:00 session is clipped short of its
+//      nominal end, so the NEXT session's first bar seals it lazily -- once
+//      inside the warmup, once live -- and that calculation reads the series
+//      as its own session left them, before the new session's first bar
+//      reaches any of them (seal(k) -> deliver(i+1) -> calc(i+1)).
 
 #include <pineforge/native_host.hpp>
 
@@ -34,6 +40,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -116,6 +123,14 @@ public:
     std::vector<std::string> log;
     std::vector<Delivery> deliveries;
     int bars_seen = 0;
+    // Optional per-calculation probe: what native_series_bar(i) answered at
+    // each script bar, for every i < probes. Zero -- the default -- records
+    // nothing, so every scenario that does not ask for it is unchanged.
+    std::size_t probes = 0;
+    std::vector<std::vector<std::optional<Bar>>> series_at_bar;
+    // How each calculated script bar was sealed: Confirmed by an input of
+    // its own, LazyComplete by the first input of a later interval.
+    std::vector<NativeCompletionKind> completions;
 
     void on_native_input(const Bar& bar, const NativeInputContext& context) override {
         log.push_back("input:" + std::to_string(context.input_index) + "@"
@@ -139,8 +154,15 @@ public:
                       + std::to_string(bar.timestamp));
     }
 
-    void on_native_bar(const Bar& bar, const NativeDecisionContext&) override {
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         ++bars_seen;
+        if (probes > 0) {
+            std::vector<std::optional<Bar>> row;
+            row.reserve(probes);
+            for (std::size_t i = 0; i < probes; ++i) row.push_back(native_series_bar(i));
+            series_at_bar.push_back(std::move(row));
+        }
+        completions.push_back(context.coordinate.completion);
         log.push_back("bar@" + std::to_string(bar.timestamp));
     }
 };
@@ -778,6 +800,172 @@ void test_installed_feed_survives_a_second_begin() {
     CHECK(host.stream_end(false));
 }
 
+// ---- 10. the pump is ordered against the script interval ------------------
+//
+// Input "15", script "60", a 09:30-16:00 New York session: seven script bars a
+// day, the seventh -- 15:30 -- holding two inputs and clipped by the close
+// half an hour short of its nominal end. No input of its own seals it; the
+// NEXT session's 09:30 bar does, LazyComplete (the LAZY SEAL). No feed hole is
+// involved: this is every session-clipped aggregated chart. Three series ride
+// on that 09:30 bar:
+//   0. "15": the input's own timeframe, so its bucket IS each input bar and
+//      completes on it -- the bucket holding the very input that seals 15:30;
+//   1. "60" gaps_on: the 15:30 bucket completed on 15:45 (the session close);
+//      09:30 opens a new bucket and delivers nothing, so 09:30 CLEARS it;
+//   2. "60": the same series standing (unchanged either way: the control).
+// The 15:30 calculation reads the series as its own session left them: 0 the
+// 15:45 bar, 1 and 2 the 15:30 bucket. Then 09:30 is delivered. Before this
+// change the pump ran on 09:30 BEFORE the lazy seal, so yesterday's last
+// calculation read series 0 = TOMORROW's 09:30 bar and series 1 = empty: the
+// one-input leak this scenario pins shut (it fails on 87b3b06). The warmup
+// stops mid second session, so the first lazy seal is the warmup's and the
+// second one is live.
+
+NativeRunSpec clipped_hour_spec(const char* session_key) {
+    NativeRunSpec spec = base_spec("15", "60", session_key);
+    spec.type = "stock";
+    spec.timezone = "America/New_York";
+    spec.session = "0930-1600";
+    NativeTimeframeSubscription input_tf;
+    input_tf.tf = "15";
+    NativeTimeframeSubscription gapped;
+    gapped.tf = "60";
+    gapped.gaps = true;
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+    spec.subscriptions.push_back(input_tf);
+    spec.subscriptions.push_back(gapped);
+    spec.subscriptions.push_back(hourly);
+    return spec;
+}
+
+void check_series(const std::optional<Bar>& got, const Bar& want, const char* tag) {
+    CHECK(got.has_value());
+    if (!got) {
+        std::printf("  %s: empty, want a bucket\n", tag);
+        return;
+    }
+    check_bucket(*got, want, tag);
+}
+
+void test_lazy_seal_precedes_the_pump() {
+    scenario = "lazy seal precedes the pump";
+    const std::vector<Bar> bars = session_bars(3);
+    const int per_session = 26;
+    const int n_warmup = per_session + 13;
+    const auto stamp = [&bars](int i) {
+        return std::to_string(bars[static_cast<std::size_t>(i)].timestamp);
+    };
+
+    // The sequence by hand. Per input: the input; on a session's first bar,
+    // the previous session's clipped 15:30 script bar, sealed lazily and
+    // BEFORE anything of this input is delivered; this input's own "15"
+    // bucket; on an hour's last bar (the 4th, or 15:45 at the close) the two
+    // "60" buckets and, for a full hour, that hour's own calculation.
+    std::vector<std::string> want_log;
+    std::vector<NativeCompletionKind> want_completions;
+    for (int i = 0; i < static_cast<int>(bars.size()); ++i) {
+        const int day = i / per_session;
+        const int slot = i % per_session;
+        const int hour_first = day * per_session + (slot / 4) * 4;
+        want_log.push_back("input:" + std::to_string(i) + "@" + stamp(i));
+        if (slot == 0 && day > 0) {
+            want_log.push_back("bar@" + stamp((day - 1) * per_session + 24));
+            want_completions.push_back(NativeCompletionKind::LazyComplete);
+        }
+        want_log.push_back("htf:0@" + stamp(i));
+        const bool full_hour_closes = slot % 4 == 3;
+        const bool session_closes = slot == per_session - 1;
+        if (full_hour_closes || session_closes) {
+            want_log.push_back("htf:1@" + stamp(hour_first));
+            want_log.push_back("htf:2@" + stamp(hour_first));
+        }
+        if (full_hour_closes) {
+            want_log.push_back("bar@" + stamp(hour_first));
+            want_completions.push_back(NativeCompletionKind::Confirmed);
+        }
+    }
+    // Seven script bars a day; the last session's clipped one has no
+    // successor to seal it, in a batch and on a stream alike.
+    CHECK(want_completions.size() == 20);
+
+    SeriesHost batch;
+    batch.probes = 3;
+    CHECK(batch.configure_native(clipped_hour_spec("native-htf-stream-lazy-batch")).status
+          == NativeSetupStatus::Applied);
+    batch.run(bars.data(), static_cast<int>(bars.size()), "15", "60", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    CHECK(batch.last_error().empty());
+    if (!batch.last_error().empty()) std::printf("  error: %s\n", batch.last_error().c_str());
+
+    SeriesHost stream;
+    stream.probes = 3;
+    CHECK(stream.configure_native(clipped_hour_spec("native-htf-stream-lazy-live")).status
+          == NativeSetupStatus::Applied);
+    const bool began = stream.stream_begin(bars.data(), n_warmup, "15", "60");
+    CHECK(began);
+    if (!began) {
+        std::printf("  error: %s\n", stream.last_error().c_str());
+        return;
+    }
+    // The first lazy seal is the warmup's: seven script bars of session one
+    // and three full hours of session two.
+    CHECK(stream.bars_seen == 10);
+    for (int i = n_warmup; i < static_cast<int>(bars.size()); ++i) {
+        const bool pushed = stream.stream_push_bar(bars[static_cast<std::size_t>(i)]);
+        CHECK(pushed);
+        if (!pushed) {
+            std::printf("  push %d error: %s\n", i, stream.last_error().c_str());
+            return;
+        }
+    }
+
+    // The stream is the batch, and both are the hand-built sequence.
+    check_logs_equal(batch.log, want_log);
+    check_logs_equal(stream.log, want_log);
+    check_deliveries_equal(stream.deliveries, batch.deliveries);
+    CHECK(batch.completions == want_completions);
+    CHECK(stream.completions == want_completions);
+
+    // What the two lazily sealed calculations read, and how many script bars
+    // had been calculated when the sealing input's own bucket arrived: the
+    // clipped bar's calculation is already among them.
+    for (const SeriesHost* host : {&batch, &stream}) {
+        CHECK(host->series_at_bar.size() == 20);
+        if (host->series_at_bar.size() != 20) continue;
+        for (int day = 0; day < 2; ++day) {
+            const std::size_t calc = static_cast<std::size_t>(day) * 7 + 6;
+            const int last = day * per_session + 25;
+            const Bar clipped_hour = hand_aggregate(
+                bars, last - 1, 2, bars[static_cast<std::size_t>(last - 1)].timestamp);
+            const auto& row = host->series_at_bar[calc];
+            CHECK(row.size() == 3);
+            if (row.size() != 3) continue;
+            check_series(row[0], bars[static_cast<std::size_t>(last)],
+                         "clipped bar reads 15");
+            check_series(row[1], clipped_hour, "clipped bar reads 60 gaps");
+            check_series(row[2], clipped_hour, "clipped bar reads 60");
+        }
+        for (int day = 1; day < 3; ++day) {
+            const std::int64_t sealing = bars[static_cast<std::size_t>(day * per_session)].timestamp;
+            bool found = false;
+            for (const Delivery& delivery : host->deliveries) {
+                if (delivery.subscription != 0 || delivery.bar.timestamp != sealing) continue;
+                found = true;
+                CHECK(delivery.bars_before == day * 7);
+                CHECK(delivery.context.delivered_at_ms == sealing);
+            }
+            CHECK(found);
+        }
+    }
+
+    // stream_end seals nothing and delivers nothing.
+    const std::size_t deliveries_before_end = stream.deliveries.size();
+    CHECK(stream.stream_end(false));
+    CHECK(stream.bars_seen == 20);
+    CHECK(stream.deliveries.size() == deliveries_before_end);
+}
+
 }  // namespace
 
 int main() {
@@ -792,6 +980,7 @@ int main() {
     test_authoritative_bars_cover_the_warmup();
     test_tick_input_is_refused_while_subscribed();
     test_installed_feed_survives_a_second_begin();
+    test_lazy_seal_precedes_the_pump();
     std::printf("native HTF subscriptions (stream): %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;
