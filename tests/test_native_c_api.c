@@ -2596,6 +2596,239 @@ static void check_cohort_roster(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── The auxiliary finer feed ───────────────────────────────────── */
+
+/* Eight 15-minute inputs over 120 one-minute feed bars. The feed rises 0.2 a
+ * minute, so a five-minute bucket's open / low are its first minute's and its
+ * high / close its fifth's: every expected value below is written down by
+ * hand from that, not read back from the runtime. */
+#define AUX_INPUTS 8
+#define AUX_MINUTES (AUX_INPUTS * 15)
+
+static pf_bar_t aux_inputs[AUX_INPUTS];
+static pf_bar_t aux_minutes[AUX_MINUTES];
+
+static void aux_fill(void) {
+    int i;
+    for (i = 0; i < AUX_MINUTES; ++i) {
+        const double open = 100.0 + 0.2 * (double)i;
+        aux_minutes[i].open = open;
+        aux_minutes[i].high = open + 0.3;
+        aux_minutes[i].low = open - 0.2;
+        aux_minutes[i].close = open + 0.1;
+        aux_minutes[i].volume = 1.0;
+        aux_minutes[i].timestamp = (int64_t)i * 60000;
+    }
+    for (i = 0; i < AUX_INPUTS; ++i) {
+        aux_inputs[i].open = aux_minutes[i * 15].open;
+        aux_inputs[i].high = aux_minutes[i * 15 + 14].high;
+        aux_inputs[i].low = aux_minutes[i * 15].low;
+        aux_inputs[i].close = aux_minutes[i * 15 + 14].close;
+        aux_inputs[i].volume = 15.0;
+        aux_inputs[i].timestamp = (int64_t)i * 900000;
+    }
+}
+
+typedef struct aux_state {
+    int from_input;   /* buckets of row 0, the "60" series built from the input */
+    int from_feed;    /* buckets of row 1, the "5" series built from the feed */
+    int wrong;        /* a bucket that is not the hand-derived one */
+} aux_state;
+
+static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
+                                uint32_t completion, int64_t delivered_at_ms) {
+    aux_state* state = (aux_state*)user;
+    if (subscription == 0u) {
+        ++state->from_input;
+        return 0;
+    }
+    {
+        const int k = state->from_feed++;
+        const pf_bar_t* first = &aux_minutes[k * 5];
+        const pf_bar_t* last = &aux_minutes[k * 5 + 4];
+        if (subscription != 1u || completion != 0u
+            || bar->timestamp != (int64_t)k * 300000
+            || bar->open != first->open || bar->low != first->low
+            || bar->high != last->high || bar->close != last->close
+            || bar->volume != 5.0
+            /* Buckets 3j, 3j+1, 3j+2 ride on input j. */
+            || delivered_at_ms != (int64_t)(k / 3) * 900000) {
+            ++state->wrong;
+        }
+    }
+    return 0;
+}
+
+static pf_native_run_spec_ext_v1 aux_ext(const pf_native_subscription_v1* rows,
+                                         const uint32_t* sources, int32_t feed_n) {
+    pf_native_run_spec_ext_v1 ext;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS | PF_NATIVE_SPEC_EXT_AUXILIARY_FEED;
+    ext.subscriptions = rows;
+    ext.subscriptions_n = 2u;
+    ext.subscription_sources = sources;
+    ext.auxiliary_tf = "1";
+    ext.auxiliary_bars = aux_minutes;
+    ext.auxiliary_n = feed_n;
+    return ext;
+}
+
+static void check_auxiliary_feed(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_subscription_v1 rows[2];
+    const uint32_t sources[2] = {PF_NATIVE_SERIES_SOURCE_INPUT,
+                                 PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED};
+    uint32_t bad_sources[2] = {PF_NATIVE_SERIES_SOURCE_INPUT, 9u};
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 lifecycle;
+    aux_state state;
+    pf_strategy_t host;
+    int i;
+
+    aux_fill();
+    spec.session_key = "native-c-api-auxiliary";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    memset(rows, 0, sizeof(rows));
+    rows[0].struct_size = (uint32_t)sizeof(rows[0]);
+    rows[0].tf = "60";
+    rows[1].struct_size = (uint32_t)sizeof(rows[1]);
+    rows[1].tf = "5";
+
+    /* Refusals first, all on one handle that must stay Unconfigured. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_timeframe_bar = aux_on_timeframe_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "auxiliary host create failed");
+    if (!host) return;
+
+    /* The feed lives in the appended tail: a caller sending the risk layout
+     * (the header as it was before the tail) cannot declare it... */
+    ext = aux_ext(rows, sources, AUX_MINUTES);
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_STRUCT,
+                 "the auxiliary feed was accepted from a risk-layout extension");
+    ext = aux_ext(rows, sources, AUX_MINUTES);
+    ext.auxiliary_tf = NULL;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_ARGUMENT,
+                 "an auxiliary feed without a timeframe was accepted");
+    ext = aux_ext(rows, sources, AUX_MINUTES);
+    ext.auxiliary_n = -1;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_ARGUMENT,
+                 "a negative auxiliary bar count was accepted");
+    ext = aux_ext(rows, sources, AUX_MINUTES);
+    ext.reserved1 = 1u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "a non-zero reserved word was accepted");
+    ext = aux_ext(rows, bad_sources, AUX_MINUTES);
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unknown series source was accepted");
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &lifecycle), PF_NATIVE_OK, "auxiliary state read");
+    CHECK_EQ_INT(lifecycle.lifecycle, PF_NATIVE_LIFECYCLE_UNCONFIGURED,
+                 "a refused auxiliary feed configured or failed the host");
+    /* An append has nothing to append to before a realtime stream. */
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_v1(host, aux_minutes, 15),
+                 PF_NATIVE_E_STATE, "an append was accepted before any run");
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_v1(NULL, aux_minutes, 15),
+                 PF_NATIVE_E_HANDLE, "an append was accepted on a NULL handle");
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_v1(host, aux_minutes, -1),
+                 PF_NATIVE_E_ARGUMENT, "a negative append count was accepted");
+
+    /* A series may not name a feed nobody declared, and a feed of the input's
+     * own timeframe is no finer feed at all. Both are the KERNEL's validation,
+     * which fails the host it refuses, so each takes a handle of its own. */
+    {
+        pf_native_callbacks_v1 plain = blank_callbacks(NULL);
+        pf_strategy_t refused = strategy_native_host_create_v1(&plain);
+        CHECK(refused != NULL, "undeclared-feed host create failed");
+        if (refused) {
+            ext = aux_ext(rows, sources, AUX_MINUTES);
+            ext.present_mask = PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS;
+            CHECK_EQ_INT(strategy_configure_native_ext_v1(refused, &spec, &ext),
+                         PF_NATIVE_E_ARGUMENT,
+                         "a series was built from an undeclared auxiliary feed");
+            strategy_native_host_free(refused);
+        }
+        refused = strategy_native_host_create_v1(&plain);
+        CHECK(refused != NULL, "coarse-feed host create failed");
+        if (refused) {
+            ext = aux_ext(rows, sources, AUX_MINUTES);
+            ext.auxiliary_tf = "15";
+            CHECK_EQ_INT(strategy_configure_native_ext_v1(refused, &spec, &ext),
+                         PF_NATIVE_E_ARGUMENT,
+                         "an auxiliary feed no finer than the input was accepted");
+            strategy_native_host_free(refused);
+        }
+    }
+
+    /* Batch: the "60" series from the input, the "5" series from the feed. */
+    ext = aux_ext(rows, sources, AUX_MINUTES);
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the auxiliary feed was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(host, aux_inputs, AUX_INPUTS, NULL), PF_NATIVE_OK,
+                 "the auxiliary batch did not complete");
+    CHECK_EQ_INT(state.from_input, 2, "the input-built hour series");
+    CHECK_EQ_INT(state.from_feed, 24, "the feed-built five-minute series");
+    CHECK_EQ_INT(state.wrong, 0, "a feed-built bucket is not the hand-derived one");
+    strategy_native_host_free(host);
+
+    /* A caller compiled before the tail existed still configures its risk
+     * block: the second published layout stays accepted. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "risk-layout host create failed");
+    if (!host) return;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE;
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_RISK;
+    ext.risk_has_max_fills_per_day = 1u;
+    ext.risk_max_fills_per_day = 3u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "a risk-layout extension is no longer accepted");
+    strategy_native_host_free(host);
+
+    /* Stream: the feed is declared as far as the four warmup inputs reach;
+     * each live input's fifteen finer bars are appended, then the input is
+     * pushed. The series is the batch's, bucket for bucket. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_timeframe_bar = aux_on_timeframe_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "auxiliary stream host create failed");
+    if (!host) return;
+    ext = aux_ext(rows, sources, 60);
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the streaming auxiliary feed was refused");
+    CHECK_EQ_INT(strategy_stream_begin(host, aux_inputs, 4, "15", "15"), 0,
+                 "the auxiliary stream did not begin");
+    CHECK_EQ_INT(state.from_feed, 12, "the warmup's feed-built buckets");
+    /* A bar of a period the warmup already accepted is refused by name and
+     * leaves the stream running. */
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_v1(host, &aux_minutes[59], 1),
+                 PF_NATIVE_E_STATE, "a repeated auxiliary bar was accepted");
+    CHECK(strategy_get_last_error(host) != NULL && strategy_get_last_error(host)[0] != '\0',
+          "a refused append left no reason");
+    for (i = 4; i < AUX_INPUTS; ++i) {
+        CHECK_EQ_INT(strategy_native_append_auxiliary_bars_v1(host, &aux_minutes[i * 15], 15),
+                     PF_NATIVE_OK, "a live append was refused");
+        CHECK_EQ_INT(strategy_stream_push_bar(host, &aux_inputs[i]), 0,
+                     "a live input was refused");
+    }
+    CHECK_EQ_INT(strategy_stream_end(host, 0), 0, "the auxiliary stream did not end");
+    CHECK_EQ_INT(state.from_input, 2, "the streamed input-built hour series");
+    CHECK_EQ_INT(state.from_feed, 24, "the streamed feed-built five-minute series");
+    CHECK_EQ_INT(state.wrong, 0, "a streamed feed-built bucket is not the hand-derived one");
+    strategy_native_host_free(host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -2617,5 +2850,6 @@ int pf_native_c_api_checks(void) {
     check_feed_policies();
     check_margin_tail_fields();
     check_cohort_roster();
+    check_auxiliary_feed();
     return failures;
 }

@@ -122,10 +122,11 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_cohort_add_v1",
     "strategy_native_cohort_remove_v1",
     "strategy_configure_native_ext_v1",
+    "strategy_native_append_auxiliary_bars_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 29
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 29
+EXPECTED_NATIVE_C_API_DECLARATIONS = 30
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 30
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

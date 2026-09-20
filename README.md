@@ -309,7 +309,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **29 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **30 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
@@ -328,7 +328,8 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
 | `strategy_native_declare_subscriptions_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list |
-| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
+| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
+| `strategy_native_append_auxiliary_bars_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
 
 The header's **COVERAGE** block lists every public member of
@@ -340,11 +341,13 @@ declare all fail CI.
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. `pf_native_run_spec_ext_v1` and `pf_native_callbacks_v1` each
-have two published lengths — the layout the lane first shipped
-(`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`, `PF_NATIVE_CALLBACKS_V1_BASE_SIZE`) and
-the same struct with its appended tail — and the runtime accepts both, so a
-host compiled against the first keeps working unchanged. An **observation**
+mutates nothing. `pf_native_run_spec_ext_v1` has three published lengths — the
+layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
+struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`) and
+the current one with the auxiliary-feed tail behind it; `pf_native_callbacks_v1`
+has two — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`)
+and the same struct with its appended tail. The runtime accepts each, so a host
+compiled against an earlier one keeps working unchanged. An **observation**
 callback that returns non-zero latches
 `NativeFailureCode::CallbackException` and ends the run `Failed`; the four
 **answering** hooks in the table's tail instead return a `pf_native_answer_e`

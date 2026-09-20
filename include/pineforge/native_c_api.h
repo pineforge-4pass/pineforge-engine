@@ -17,6 +17,8 @@
  * ✓ Read the physical position, the live working book and the event history
  * ✓ Read the run's lifecycle state and its typed failure
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
+ * ✓ Declare an auxiliary finer feed, build a series from it, and append its
+ *   later bars to a realtime stream
  *
  * ✗ Streaming has no new symbols: strategy_stream_begin / _push_bar /
  *   _push_tick / _advance_time / _end / _fill_report take any handle this
@@ -116,8 +118,9 @@
  *    sizeof of the version the caller compiled against, `version` is that
  *    layout's version constant. A mismatch is refused with PF_NATIVE_E_STRUCT
  *    and mutates nothing. The one exception is the deliberately additive tail
- *    of pf_native_run_spec_ext_v1: that struct has two published layouts and
- *    the runtime accepts either (see PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE).
+ *    of pf_native_run_spec_ext_v1: that struct has three published layouts and
+ *    the runtime accepts each (see PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE and
+ *    PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE).
  *  - Every enum-valued field is translated by an exhaustive switch. A value
  *    outside its enumeration is refused with PF_NATIVE_E_TAG; a value this
  *    version deliberately cannot represent is refused with
@@ -470,8 +473,19 @@ typedef enum pf_native_spec_ext_mask_e {
     /** The four feed-shape and presentation policies: slot labels, feed
      *  tolerance, the forced path order and abort reporting. Needs the N8
      *  tail. */
-    PF_NATIVE_SPEC_EXT_FEED_POLICY   = 1u << 8
+    PF_NATIVE_SPEC_EXT_FEED_POLICY   = 1u << 8,
+    /** The auxiliary finer feed. Only a caller whose
+     *  pf_native_run_spec_ext_v1 carries the auxiliary tail may set this bit;
+     *  a caller sending any earlier layout is refused with
+     *  PF_NATIVE_E_STRUCT. */
+    PF_NATIVE_SPEC_EXT_AUXILIARY_FEED = 1u << 9
 } pf_native_spec_ext_mask_t;
+
+/** The bars a declared series is built from — `NativeSeriesSource`. */
+typedef enum pf_native_series_source_e {
+    PF_NATIVE_SERIES_SOURCE_INPUT          = 0, /**< The accepted input (the default). */
+    PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED = 1  /**< The run's auxiliary finer feed. */
+} pf_native_series_source_t;
 
 /** WHICH price a kernel-sized basis converts at — `native_order::SizePrice`
  *  (L3b). RESOLVED is the established behaviour: the price the kernel would
@@ -1010,16 +1024,20 @@ typedef struct pf_native_subscription_v1 {
  *  #pf_native_run_spec_v1 now travels here. The one deliberate omission is
  *  `identity`, which the base spec owns.
  *
- *  This struct has THREE published layouts and the runtime accepts any of
+ *  This struct has FOUR published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
- *  (#PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE), that layout plus L9's `risk_*`
- *  tail (#PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE), and the current one, which
- *  appends the intrabar path, the four feed-shape and presentation policies,
- *  and the margin model's equity basis, level base and liquidation strings.
- *  A caller compiled against an earlier layout keeps working unchanged and
- *  simply cannot set the mask bits its struct has no fields for: doing so is
- *  PF_NATIVE_E_STRUCT. Any other `struct_size` is PF_NATIVE_E_STRUCT too.
- *  Both tails are append-only: nothing above them moved. */
+ *  (#PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE); that layout plus L9's `risk_*`
+ *  tail (#PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE); that one plus N8's intrabar
+ *  path, the four feed-shape and presentation policies, and the margin
+ *  model's equity basis, level base and liquidation strings
+ *  (#PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE); and the current one, which
+ *  appends the `auxiliary_*` tail after them. A caller compiled against an
+ *  earlier layout keeps working unchanged and simply cannot set the mask
+ *  bits its struct has no fields for (#PF_NATIVE_SPEC_EXT_RISK,
+ *  #PF_NATIVE_SPEC_EXT_INTRABAR, #PF_NATIVE_SPEC_EXT_FEED_POLICY,
+ *  #PF_NATIVE_SPEC_EXT_AUXILIARY_FEED): doing so is PF_NATIVE_E_STRUCT. Any
+ *  other `struct_size` is PF_NATIVE_E_STRUCT too. Every tail is append-only:
+ *  nothing above them moved. */
 typedef struct pf_native_run_spec_ext_v1 {
     uint32_t struct_size;    /**< sizeof(pf_native_run_spec_ext_v1). */
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
@@ -1108,6 +1126,23 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t margin_level_base;   /**< #pf_native_margin_level_base_e. */
     const char* margin_liquidation_label;   /**< Ticket of a kernel liquidation; NULL is "". */
     const char* margin_liquidation_comment; /**< Comment of the same; NULL is "". */
+
+    /* ── The additive auxiliary-feed tail. Read only when `present_mask`
+     * carries PF_NATIVE_SPEC_EXT_AUXILIARY_FEED; a caller sending an earlier
+     * layout stops at `margin_liquidation_comment`, `risk_action` or
+     * `reserved0` above. The feed is the
+     * run's own symbol at a timeframe strictly finer than the input, routed
+     * by time into the series that name it (`NativeAuxiliaryFeed`). ── */
+    const char*     auxiliary_tf;   /**< Non-NULL feed timeframe literal. */
+    const pf_bar_t* auxiliary_bars; /**< Strictly increasing bars; copied. May be
+                                     *   NULL when `auxiliary_n` is 0. */
+    int32_t         auxiliary_n;    /**< Length of `auxiliary_bars`. */
+    uint32_t        reserved1;      /**< Must be 0. */
+    /** Optional, borrowed for the call: `subscriptions_n` entries of
+     *  #pf_native_series_source_e, one per row of `subscriptions`. NULL means
+     *  every series is built from the input. Meaningful only together with
+     *  PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS. */
+    const uint32_t* subscription_sources;
 } pf_native_run_spec_ext_v1;
 
 /** Byte length of #pf_native_run_spec_ext_v1 as the L13 lane first published
@@ -1120,9 +1155,16 @@ typedef struct pf_native_run_spec_ext_v1 {
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, risk_has_max_drawdown))
 
 /** Byte length of #pf_native_run_spec_ext_v1 with L9's risk tail but without
- *  N8's intrabar / policy tail — the second of its three published layouts. */
+ *  N8's intrabar / policy tail — the second of its four published layouts. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE \
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, intrabar_kind))
+
+/** Byte length of #pf_native_run_spec_ext_v1 with N8's intrabar / policy tail
+ *  but before the `auxiliary_*` tail was appended — the third of its four
+ *  published layouts. It is the offset of the first auxiliary field, for the
+ *  same reason #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is an offset. */
+#define PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE \
+    ((uint32_t)offsetof(pf_native_run_spec_ext_v1, auxiliary_tf))
 
 /** The C host's strategy logic.
  *
@@ -1487,6 +1529,25 @@ PF_API int strategy_native_cohort_remove_v1(pf_strategy_t s, uint64_t cohort,
 PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
                                             const pf_native_run_spec_v1* base,
                                             const pf_native_run_spec_ext_v1* ext);
+
+/** Append later bars to the run's declared auxiliary feed on a realtime
+ *  stream (`NativeStrategyHost::append_auxiliary_bars`).
+ *
+ *  Legal between stream inputs, after #strategy_stream_begin, on a host whose
+ *  specification declared PF_NATIVE_SPEC_EXT_AUXILIARY_FEED. The bars are
+ *  copied, join the feed behind every bar it holds, and ride on the next
+ *  pushed bar whose period they opened before — the routing a batch of the
+ *  same bars applies. @p n of 0 is accepted and appends nothing.
+ *
+ *  Refused without mutation, the handle staying usable, for bars that are out
+ *  of order or not after the feed's last bar, a bar with invalid OHLCV, a bar
+ *  that opened inside an input period already accepted, a host that declared
+ *  no feed, and a run that is not realtime: PF_NATIVE_E_STATE, the reason
+ *  readable with #strategy_get_last_error. A call from inside a callback fails the
+ *  run, as every reentrant stream input does.
+ *  @return PF_NATIVE_OK, or a negative status. */
+PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
+                                                    int32_t n);
 
 /** @} */ /* end of pf_native_c_api */
 

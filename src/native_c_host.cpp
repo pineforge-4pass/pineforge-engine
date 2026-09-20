@@ -83,6 +83,16 @@ static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE + 10u * sizeof(std::uint32_t)
                          + 2u * sizeof(double),
               "the pf_native_run_spec_ext_v1 risk tail moved");
+/* So is the auxiliary-feed tail behind it: three pointers and two words. */
+static_assert(sizeof(pf_native_run_spec_ext_v1)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE + 3u * sizeof(void*)
+                         + 2u * sizeof(std::uint32_t),
+              "the pf_native_run_spec_ext_v1 auxiliary tail moved");
+static_assert(static_cast<int>(pineforge::NativeSeriesSource::Input)
+                      == PF_NATIVE_SERIES_SOURCE_INPUT
+                  && static_cast<int>(pineforge::NativeSeriesSource::AuxiliaryFeed)
+                         == PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED,
+              "NativeSeriesSource drifted");
 static_assert(static_cast<int>(pineforge::NativeFailureCode::CallbackException)
                   == PF_NATIVE_FAILURE_CALLBACK,
               "PF_NATIVE_FAILURE_CALLBACK must mirror NativeFailureCode::CallbackException");
@@ -1119,7 +1129,12 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
 
 /* `has_risk_tail` is false for a caller compiled against the base layout of
  * pf_native_run_spec_ext_v1 (PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE): its struct
- * stops at `reserved0`, so the risk fields must not be read at all. */
+ * stops at `reserved0`, so the risk fields must not be read at all.
+ * `has_policy_tail` is false for that caller and for one compiled against the
+ * risk layout, whose struct stops at `risk_action`. `has_auxiliary_tail` is
+ * false for all three earlier layouts (the last of them stops at
+ * `margin_liquidation_comment`): the auxiliary fields must not be read at
+ * all either. */
 /* The retained intrabar execution path. NONE keeps the whole default
  * surface; the two sampled alternatives share their sampler knobs and differ
  * in whether a finer feed is retained, which is also what decides whether
@@ -1192,6 +1207,7 @@ int translate_intrabar(const pf_native_run_spec_ext_v1& ext, pineforge::Intrabar
 /* One subscription list, shared by the configure-time block and the
  * begin-time declaration so both read a row the same way. */
 int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t n,
+                            const std::uint32_t* sources,
                             std::vector<pineforge::NativeTimeframeSubscription>& out) {
     if (n > 0 && !rows) return PF_NATIVE_E_ARGUMENT;
     std::vector<pineforge::NativeTimeframeSubscription> subscriptions;
@@ -1210,6 +1226,19 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
         subscription.tf = row.tf;
         subscription.lookahead = row.lookahead != 0u;
         subscription.gaps = row.gaps != 0u;
+        /* The source column rides in the auxiliary tail, so a caller that
+         * does not carry that tail declares input-built series only. */
+        if (sources) {
+            switch (sources[i]) {
+            case PF_NATIVE_SERIES_SOURCE_INPUT:
+                subscription.source = pineforge::NativeSeriesSource::Input;
+                break;
+            case PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED:
+                subscription.source = pineforge::NativeSeriesSource::AuxiliaryFeed;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
+        }
         const auto* bars = reinterpret_cast<const Bar*>(row.authoritative_bars);
         subscription.authoritative_bars.assign(bars, bars + row.authoritative_n);
         subscriptions.push_back(std::move(subscription));
@@ -1219,10 +1248,25 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
 }
 
 int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
-                   bool has_risk_tail, bool has_policy_tail) {
-    if (ext.present_mask & ~0x1ffu) return PF_NATIVE_E_TAG;
+                   bool has_risk_tail, bool has_policy_tail, bool has_auxiliary_tail) {
+    if (ext.present_mask & ~0x3ffu) return PF_NATIVE_E_TAG;
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) && !has_risk_tail) {
         return PF_NATIVE_E_STRUCT;
+    }
+    if ((ext.present_mask & PF_NATIVE_SPEC_EXT_AUXILIARY_FEED) && !has_auxiliary_tail) {
+        return PF_NATIVE_E_STRUCT;
+    }
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_AUXILIARY_FEED) {
+        if (!ext.auxiliary_tf || ext.auxiliary_n < 0
+            || (ext.auxiliary_n > 0 && !ext.auxiliary_bars)) {
+            return PF_NATIVE_E_ARGUMENT;
+        }
+        if (ext.reserved1 != 0u) return PF_NATIVE_E_TAG;
+        pineforge::NativeAuxiliaryFeed feed;
+        feed.tf = ext.auxiliary_tf;
+        const auto* bars = reinterpret_cast<const Bar*>(ext.auxiliary_bars);
+        feed.bars.assign(bars, bars + ext.auxiliary_n);
+        spec.auxiliary_feed = std::move(feed);
     }
 
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_REPORT) {
@@ -1365,8 +1409,9 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
         spec.risk = risk;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS) {
-        if (int rc = translate_subscriptions(ext.subscriptions, ext.subscriptions_n,
-                                             spec.subscriptions);
+        if (int rc = translate_subscriptions(
+                ext.subscriptions, ext.subscriptions_n,
+                has_auxiliary_tail ? ext.subscription_sources : nullptr, spec.subscriptions);
             rc != PF_NATIVE_OK) {
             return rc;
         }
@@ -1715,7 +1760,11 @@ PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
         if (!host) return PF_NATIVE_E_HANDLE;
         if (n < 0 || (n > 0 && !rows)) return PF_NATIVE_E_ARGUMENT;
         std::vector<pineforge::NativeTimeframeSubscription> declared;
-        if (int rc = translate_subscriptions(rows, static_cast<std::uint32_t>(n), declared);
+        /* The begin-time declaration carries no source column: it rides in
+         * the run spec's auxiliary tail, so a series declared here is built
+         * from the input. */
+        if (int rc = translate_subscriptions(rows, static_cast<std::uint32_t>(n), nullptr,
+                                             declared);
             rc != PF_NATIVE_OK) {
             return rc;
         }
@@ -1889,11 +1938,13 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!base || !ext) return PF_NATIVE_E_ARGUMENT;
         if (base->struct_size != sizeof(pf_native_run_spec_v1)) return PF_NATIVE_E_STRUCT;
-        /* Three published layouts, and only three: the base one the lane
-         * first shipped, that plus L9's risk tail, and the current one with
-         * N8's intrabar / policy tail. Anything else is a caller this runtime
-         * cannot read. */
-        const bool has_policy_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        /* Four published layouts, and only four: the base one the lane
+         * first shipped, that plus L9's risk tail, that plus N8's intrabar /
+         * policy tail, and the current one with the auxiliary-feed tail
+         * behind it. Anything else is a caller this runtime cannot read. */
+        const bool has_auxiliary_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        const bool has_policy_tail =
+            has_auxiliary_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE;
         const bool has_risk_tail =
             has_policy_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE;
         if ((!has_risk_tail && ext->struct_size != PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE)
@@ -1909,13 +1960,27 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         }
         pineforge::NativeRunSpec spec;
         if (int rc = translate_base_spec(*base, spec); rc != PF_NATIVE_OK) return rc;
-        if (int rc = apply_spec_ext(spec, *ext, has_risk_tail, has_policy_tail);
+        if (int rc = apply_spec_ext(spec, *ext, has_risk_tail, has_policy_tail,
+                                    has_auxiliary_tail);
             rc != PF_NATIVE_OK) {
             return rc;
         }
         return host->configure_native(spec).status == pineforge::NativeSetupStatus::Applied
             ? PF_NATIVE_OK
             : PF_NATIVE_E_ARGUMENT;
+    });
+}
+
+PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
+                                                    int32_t n) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (n < 0 || (n > 0 && !bars)) return PF_NATIVE_E_ARGUMENT;
+        return host->append_auxiliary_bars(reinterpret_cast<const Bar*>(bars),
+                                           static_cast<std::size_t>(n))
+            ? PF_NATIVE_OK
+            : PF_NATIVE_E_STATE;
     });
 }
 
