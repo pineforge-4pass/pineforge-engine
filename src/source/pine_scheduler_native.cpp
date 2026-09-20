@@ -229,59 +229,6 @@ void PineScheduler::update_source_series(const Bar& bar) {
     language_._src_hlcc4_.update(hlcc4);
 }
 
-void PineScheduler::snapshot_coof_state(PineStrategyHost& host) {
-    if (language_._src_series_active_) {
-        language_.coof_checkpoint_src_open_ = language_._src_open_;
-        language_.coof_checkpoint_src_high_ = language_._src_high_;
-        language_.coof_checkpoint_src_low_ = language_._src_low_;
-        language_.coof_checkpoint_src_close_ = language_._src_close_;
-        language_.coof_checkpoint_src_volume_ = language_._src_volume_;
-        language_.coof_checkpoint_src_hl2_ = language_._src_hl2_;
-        language_.coof_checkpoint_src_hlc3_ = language_._src_hlc3_;
-        language_.coof_checkpoint_src_ohlc4_ = language_._src_ohlc4_;
-        language_.coof_checkpoint_src_hlcc4_ = language_._src_hlcc4_;
-    }
-    language_.coof_checkpoint_prev_chart_close_ = language_.prev_chart_close_;
-    language_.coof_checkpoint_last_chart_close_ = language_.last_chart_close_;
-    host.snapshot_script_state();
-    language_.coof_checkpoint_contains_current_bar_ = false;
-}
-
-void PineScheduler::restore_coof_state(PineStrategyHost& host) {
-    if (language_._src_series_active_) {
-        language_._src_open_ = language_.coof_checkpoint_src_open_;
-        language_._src_high_ = language_.coof_checkpoint_src_high_;
-        language_._src_low_ = language_.coof_checkpoint_src_low_;
-        language_._src_close_ = language_.coof_checkpoint_src_close_;
-        language_._src_volume_ = language_.coof_checkpoint_src_volume_;
-        language_._src_hl2_ = language_.coof_checkpoint_src_hl2_;
-        language_._src_hlc3_ = language_.coof_checkpoint_src_hlc3_;
-        language_._src_ohlc4_ = language_.coof_checkpoint_src_ohlc4_;
-        language_._src_hlcc4_ = language_.coof_checkpoint_src_hlcc4_;
-    }
-    language_.prev_chart_close_ = language_.coof_checkpoint_prev_chart_close_;
-    language_.last_chart_close_ = language_.coof_checkpoint_last_chart_close_;
-    host.restore_script_state();
-}
-
-void PineScheduler::commit_coof_state(PineStrategyHost& host) {
-    if (language_._src_series_active_) {
-        language_.coof_checkpoint_src_open_ = language_._src_open_;
-        language_.coof_checkpoint_src_high_ = language_._src_high_;
-        language_.coof_checkpoint_src_low_ = language_._src_low_;
-        language_.coof_checkpoint_src_close_ = language_._src_close_;
-        language_.coof_checkpoint_src_volume_ = language_._src_volume_;
-        language_.coof_checkpoint_src_hl2_ = language_._src_hl2_;
-        language_.coof_checkpoint_src_hlc3_ = language_._src_hlc3_;
-        language_.coof_checkpoint_src_ohlc4_ = language_._src_ohlc4_;
-        language_.coof_checkpoint_src_hlcc4_ = language_._src_hlcc4_;
-    }
-    language_.coof_checkpoint_prev_chart_close_ = language_.prev_chart_close_;
-    language_.coof_checkpoint_last_chart_close_ = language_.last_chart_close_;
-    host.commit_script_state();
-    language_.coof_checkpoint_contains_current_bar_ = true;
-}
-
 double PineScheduler::script_position_view(
         int bar_index, PositionSide side, double quantity) const noexcept {
     if (language_.pos_view_freeze_bar_ == bar_index) {
