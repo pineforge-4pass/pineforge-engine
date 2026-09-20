@@ -475,6 +475,145 @@ void spec_hash_is_neutral_by_default() {
     CHECK(validation.field == NativeRunSpecField::ReportPolicy);
 }
 
+// ── Per-bar broker-state hash (§1.8 RP9, native half) ───────────────────
+std::vector<std::uint64_t> hash_rows(const ReportC& report) {
+    if (report.broker_state_hash_len <= 0) return {};
+    return std::vector<std::uint64_t>(
+        report.broker_state_hash, report.broker_state_hash + report.broker_state_hash_len);
+}
+
+void idle_rule(Host&) {}
+
+// 6. KernelRecorded records the whole report, the per-bar broker-state hash
+//    included: with the recording switch on, a bare host reports one row per
+//    script bar, 1:1 with the curve. The rows are the broker state and nothing
+//    but its past — equal while two books are equal, different once they
+//    diverge, and the row after bar k is the row a run that ended at bar k
+//    recorded last.
+void kernel_recorded_broker_hash_per_script_bar() {
+    auto spec = report_spec("l2-report-truth");
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+
+    Host host;
+    host.set_broker_state_hash_recording(true);
+    host.calculation = round_trip_rule;
+    run_feed(host, spec, feed(60));
+    completed(host);
+
+    Report report(host);
+    REQUIRE(report.c.script_bars_processed == 60);
+    CHECK(report.c.broker_state_hash_len == report.c.script_bars_processed);
+    CHECK(report.c.broker_state_hash_len == report.c.equity_curve_len);
+    REQUIRE(report.c.broker_state_hash != nullptr);
+    const auto rows = hash_rows(report.c);
+
+    // Replay: the same run records the same rows.
+    Host replay;
+    replay.set_broker_state_hash_recording(true);
+    replay.calculation = round_trip_rule;
+    run_feed(replay, spec, feed(60));
+    completed(replay);
+    Report replay_report(replay);
+    CHECK(hash_rows(replay_report.c) == rows);
+
+    // The rows follow the book. An idle host and the trading host are the same
+    // book until the first order is submitted inside calculation 10.
+    Host idle;
+    idle.set_broker_state_hash_recording(true);
+    idle.calculation = idle_rule;
+    run_feed(idle, spec, feed(60));
+    completed(idle);
+    Report idle_report(idle);
+    const auto idle_rows = hash_rows(idle_report.c);
+    REQUIRE(idle_rows.size() == rows.size());
+    for (std::size_t i = 0; i < 10; ++i) CHECK(idle_rows[i] == rows[i]);
+    for (std::size_t i = 10; i < rows.size(); ++i) CHECK(idle_rows[i] != rows[i]);
+
+    // A row is a function of the past only: a run that ends at bar 29 recorded,
+    // as its last row, the row this run recorded after bar 29.
+    Host prefix;
+    prefix.set_broker_state_hash_recording(true);
+    prefix.calculation = round_trip_rule;
+    run_feed(prefix, spec, feed(30));
+    completed(prefix);
+    Report prefix_report(prefix);
+    const auto prefix_rows = hash_rows(prefix_report.c);
+    REQUIRE(prefix_rows.size() == 30);
+    for (std::size_t i = 0; i < prefix_rows.size(); ++i) CHECK(prefix_rows[i] == rows[i]);
+}
+
+// 7. The recording switch is the opt-in it always was, and recording is
+//    reporting: switched off the array stays empty and the run is the same run
+//    to the bit; under HostRecorded the report is the host's, so the kernel
+//    appends nothing to it either.
+void broker_hash_rows_are_opt_in_and_move_nothing() {
+    auto spec = report_spec("l2-report-truth");
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+
+    Host recorded;
+    recorded.set_broker_state_hash_recording(true);
+    recorded.calculation = round_trip_rule;
+    run_feed(recorded, spec, feed(60));
+    completed(recorded);
+
+    Host silent;
+    silent.calculation = round_trip_rule;
+    run_feed(silent, spec, feed(60));
+    completed(silent);
+
+    Report recorded_report(recorded);
+    Report silent_report(silent);
+    CHECK(recorded_report.c.broker_state_hash_len == 60);
+    CHECK(silent_report.c.broker_state_hash_len == 0);
+    CHECK(silent_report.c.broker_state_hash == nullptr);
+    CHECK(trades_digest(recorded_report.c) == trades_digest(silent_report.c));
+    REQUIRE(recorded_report.c.equity_curve_len == silent_report.c.equity_curve_len);
+    for (std::int64_t i = 0; i < recorded_report.c.equity_curve_len; ++i) {
+        CHECK(recorded_report.c.equity_curve[i].equity
+              == silent_report.c.equity_curve[i].equity);
+    }
+    CHECK(recorded.native_continuation_hash() == silent.native_continuation_hash());
+    CHECK(recorded.broker_state_hash() == silent.broker_state_hash());
+
+    Host host_owned;
+    host_owned.set_broker_state_hash_recording(true);
+    host_owned.calculation = round_trip_rule;
+    run_feed(host_owned, report_spec("l2-report-truth"), feed(60));
+    completed(host_owned);
+    Report host_owned_report(host_owned);
+    CHECK(host_owned_report.c.script_bars_processed == 60);
+    CHECK(host_owned_report.c.broker_state_hash_len == 0);
+    CHECK(host_owned_report.c.equity_curve_len == 0);
+}
+
+// 8. The same 1:1 on a stream: the warmup leg and the realtime bars of one run
+//    are one report, so the array spans both.
+void kernel_recorded_broker_hash_spans_a_stream() {
+    auto spec = report_spec("l2-report-truth-stream");
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+    const auto bars = feed(60);
+
+    Host host;
+    host.set_broker_state_hash_recording(true);
+    host.calculation = round_trip_rule;
+    REQUIRE(host.configure_native(spec).status == NativeSetupStatus::Applied);
+    REQUIRE(host.stream_begin(bars.data(), 30, "1", "1"));
+    {
+        Report warmup(host);
+        CHECK(warmup.c.script_bars_processed == 30);
+        CHECK(warmup.c.broker_state_hash_len == warmup.c.script_bars_processed);
+    }
+    for (std::size_t i = 30; i < bars.size(); ++i) REQUIRE(host.stream_push_bar(bars[i]));
+    REQUIRE(host.stream_end(false));
+    CHECK(host.last_error().empty());
+
+    Report report(host);
+    CHECK(report.c.script_bars_processed == 60);
+    CHECK(report.c.broker_state_hash_len == report.c.script_bars_processed);
+    CHECK(report.c.broker_state_hash_len == report.c.equity_curve_len);
+    CHECK(report.c.trades_len == 2);
+}
+
 }  // namespace
 
 int main() {
@@ -483,6 +622,12 @@ int main() {
     test("open_position_row_at_range_end", open_position_row_at_range_end);
     test("twin_native_and_adapter_agree", twin_native_and_adapter_agree);
     test("spec_hash_is_neutral_by_default", spec_hash_is_neutral_by_default);
+    test("kernel_recorded_broker_hash_per_script_bar",
+         kernel_recorded_broker_hash_per_script_bar);
+    test("broker_hash_rows_are_opt_in_and_move_nothing",
+         broker_hash_rows_are_opt_in_and_move_nothing);
+    test("kernel_recorded_broker_hash_spans_a_stream",
+         kernel_recorded_broker_hash_spans_a_stream);
     std::printf("test_native_report_truth: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

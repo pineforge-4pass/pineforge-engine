@@ -54,6 +54,24 @@ class Coverage(unittest.TestCase):
                     ("src/native_execution_consumer.cpp", before, after),))
                 self.assertEqual(result, 1, output)
 
+    def test_kernel_recorded_hash_row_is_pinned(self):
+        # R5 N5 (RP9): the KernelRecorded recorder appends the per-bar
+        # broker-state hash behind the recording switch, exactly once. A
+        # dropped, dead, unconditional or relocated append fails closed.
+        append = "engine.broker_state_hashes_.push_back(engine.broker_state_hash());"
+        for before, after in (
+            (append, ""),
+            ("if (engine.broker_state_hash_recording_) {", "if (false) {"),
+            ("if (engine.broker_state_hash_recording_) {", "{"),
+            ("    engine.update_equity_extremes();\n",
+             "    engine.update_equity_extremes();\n"
+             "    engine.broker_state_hashes_.push_back(engine.broker_state_hash());\n"),
+        ):
+            with self.subTest(before=before, after=after):
+                result, output = self.check((
+                    ("src/native_execution_consumer.cpp", before, after),))
+                self.assertEqual(result, 1, output)
+
     def test_generic_domain_is_pinned(self):
         result, output = self.check((
             ("src/engine_state_hash.cpp", "pineforge-broker-state/v18",

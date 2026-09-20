@@ -97,6 +97,23 @@ def _named_body(text: str, kind: str, name: str) -> str:
     return text[start:index - 1]
 
 
+def _function_body(text: str, signature: str, label: str) -> str:
+    match = re.search(signature, text)
+    if not match:
+        raise ValueError(f"cannot find {label}")
+    start = text.find("{", match.end())
+    if start < 0:
+        raise ValueError(f"{label} has no body")
+    depth = 1
+    index = start + 1
+    while index < len(text) and depth:
+        depth += (text[index] == "{") - (text[index] == "}")
+        index += 1
+    if depth:
+        raise ValueError(f"unclosed {label}")
+    return text[start + 1:index - 1]
+
+
 def _top_level_statements(body: str) -> list[str]:
     statements: list[str] = []
     value: list[str] = []
@@ -255,6 +272,26 @@ def main(root: Path = ROOT) -> int:
             "f.u(static_cast<uint64_t>(value.visibility));",
         ):
             require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
+
+        # R5 N5 (RP9): a KernelRecorded run records the per-bar broker-state
+        # hash row itself, in exactly one place — the per-calculation
+        # recorder, behind the recording switch — so a bare host's
+        # broker_state_hash_len stays 1:1 with its curve. The host-marked
+        # recorder shares record_report_point and must stay silent (the
+        # marking host appends its own row after its continuation snapshot),
+        # so the append may not move into the shared helper either.
+        recorder = _function_body(
+            consumer_hash,
+            r"void\s+NativeExecutionConsumer::record_script_report_point\s*\(",
+            "kernel report recorder")
+        for pin in (
+            "if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;",
+            "if (engine.broker_state_hash_recording_) {",
+            "engine.broker_state_hashes_.push_back(engine.broker_state_hash());",
+        ):
+            require_once(recorder, pin, "kernel-recorded broker hash row `" + pin + "`")
+        require_once(consumer_hash, "broker_state_hashes_.push_back(",
+                     "kernel broker hash row append")
 
         scheduler_header = (root / "include/pineforge/source/pine_scheduler.hpp").read_text()
         cache_errors: list[str] = []

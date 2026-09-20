@@ -419,6 +419,7 @@ static void check_spec_extension(void) {
     pf_native_run_spec_ext_v1 ext;
     pf_native_callbacks_v1 table = blank_callbacks(NULL);
     pf_native_state_v1 state;
+    pf_report_t report;
     pf_strategy_t host;
     const pf_bar_t* bars;
     int n = 0;
@@ -491,9 +492,21 @@ static void check_spec_extension(void) {
     CHECK_EQ_INT(state.lifecycle, PF_NATIVE_LIFECYCLE_READY,
                  "the refused second configure failed the host");
 
+    /* A kernel-recorded report carries the per-bar broker-state hash too: the
+     * existing recording switch is all a C host needs, one row per script bar
+     * and per curve point. */
+    strategy_set_broker_state_hash_recording(host, 1);
+    memset(&report, 0, sizeof(report));
     bars = pf_twin_bars(&n);
-    CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_OK,
+    CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, &report), PF_NATIVE_OK,
                  "the extended run did not complete");
+    CHECK(report.script_bars_processed > 0, "the extended run calculated no script bar");
+    CHECK(report.broker_state_hash != NULL, "a kernel-recorded C run recorded no hash row");
+    CHECK(report.broker_state_hash_len == report.script_bars_processed,
+          "broker_state_hash_len is not 1:1 with script_bars_processed");
+    CHECK(report.broker_state_hash_len == report.equity_curve_len,
+          "broker_state_hash_len is not 1:1 with the kernel-recorded curve");
+    strategy_native_report_free_v1(&report);
     strategy_native_host_free(host);
 }
 

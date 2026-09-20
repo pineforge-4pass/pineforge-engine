@@ -6506,11 +6506,24 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 // close, then append the script bar's own point. The label is the script
 // interval's open, not current_bar_.timestamp, which the intrabar walk
 // overwrites — that keeps the curve identical with and without a path.
+//
+// The per-bar broker-state hash is a row of that same report, so the policy
+// that hands the kernel the report hands it this array too: with the
+// recording switch on (set_broker_state_hash_recording, off by default) one
+// row follows each point, after the extremes the point just folded, which
+// keeps broker_state_hash_len 1:1 with the curve and with
+// script_bars_processed. Reporting only — the switch is not continuation
+// state and the row is never read back. Under HostRecorded the report is the
+// host's; under KernelRecordedAtHostMarks the marking host appends its own
+// row, after the continuation snapshot only it can name.
 void NativeExecutionConsumer::record_script_report_point(
         BacktestEngine& engine, int64_t script_open_ms) const {
     const auto* spec = spec_ptr();
     if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;
     record_report_point(engine, script_open_ms);
+    if (engine.broker_state_hash_recording_) {
+        engine.broker_state_hashes_.push_back(engine.broker_state_hash());
+    }
 }
 
 // The same fold and the same append, at an instant only the host can name
