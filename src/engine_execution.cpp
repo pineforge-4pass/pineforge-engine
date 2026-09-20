@@ -600,6 +600,7 @@ void BacktestEngine::build_native_settlement_close_rows(
             stage.current_costs[i], context);
         trade.exit_id = fill.id;
         trade.exit_comment = fill.comment;
+        trade.close_cause = fill.close_cause;
         closed_trades.push_back(std::move(trade));
     }
 }

@@ -1067,6 +1067,21 @@ constexpr char kNativeLiquidationComment[] = "Margin liquidation";
 constexpr char kNativeRiskLabel[] = "__kernel_risk__";
 constexpr char kNativeRiskComment[] = "Risk limit";
 
+// R5 lane L12 (2.ii l): the settling row records why it closed. Authorship is
+// the generic fact — a host request never carries a kernel cause, and a host
+// that runs its own forced-close policy records its own cause afterwards.
+execution::CloseCause close_cause_for_origin(native_order::RequestOrigin origin) {
+    switch (origin) {
+        case native_order::RequestOrigin::KernelLiquidation:
+            return execution::CloseCause::Liquidation;
+        case native_order::RequestOrigin::KernelRisk:
+            return execution::CloseCause::RiskLimit;
+        case native_order::RequestOrigin::Host:
+            break;
+    }
+    return execution::CloseCause::Unspecified;
+}
+
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
 }
@@ -3812,7 +3827,8 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
             candidate.physical = order_action::Reduce{qty};
     }
     candidate.fill = execution::Fill{resolved, live.request().label, live.request().comment,
-                                    live.handle().incarnation, std::nullopt};
+                                    live.handle().incarnation, std::nullopt,
+                                    close_cause_for_origin(live.definition->origin)};
     if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
         candidate.inspect = engine.inspect_native_reversal_v1(*reversal, candidate.fill);
     } else {

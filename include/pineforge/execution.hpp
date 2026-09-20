@@ -16,6 +16,28 @@ namespace pineforge::execution {
 struct Flatten {};
 using Action = std::variant<Flatten, order_action::Reduce, order_action::Transact>;
 
+// Why a closed row exited, as a value the closer records rather than a string
+// a reader decodes. The numbers ARE the public C contract
+// (strategy_closed_trade_close_cause, pineforge.h), so they are append-only:
+// 0 is the documented "no cause recorded" value, never an error.
+//
+// Unspecified leaves the classification to the generic facts already on the
+// row (open_at_end -> RangeEnd, exit_from_bracket -> Bracket, otherwise
+// Script). Liquidation and RiskLimit are what a kernel-originated request
+// carries (native_order::RequestOrigin::KernelLiquidation / KernelRisk); a
+// host that runs its own forced-close policy — the Pine adapter's margin call,
+// its strategy.risk.max_intraday_loss close and its filled-order cap close —
+// records its own cause on the row it produced.
+enum class CloseCause : std::uint8_t {
+    Unspecified = 0,
+    Script = 1,
+    Bracket = 2,
+    Liquidation = 3,
+    RiskLimit = 4,
+    FillCap = 5,
+    RangeEnd = 6,
+};
+
 // The caller has already matched/admitted the action and resolved its price.
 // Settlement does not apply another lot step, price grid, slippage or entry cap.
 struct Fill {
@@ -26,6 +48,8 @@ struct Fill {
     // An observed execution charge in account currency, including rebates.
     // Otherwise the engine's configured schedule quotes the current fill.
     std::optional<double> commission_account = std::nullopt;
+    // Appended last so every existing aggregate initializer keeps its meaning.
+    CloseCause close_cause = CloseCause::Unspecified;
 };
 
 enum class Status {

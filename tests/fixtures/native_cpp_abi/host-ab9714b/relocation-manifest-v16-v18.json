@@ -61,7 +61,10 @@
     "NativeMarginCheckKind",
     "NativeMarginCheckPoint",
     "NativeMarginRequirementView",
-    "NativeMarginDecision"
+    "NativeMarginDecision",
+    "execution::CloseCause",
+    "execution::Fill::close_cause",
+    "Trade::close_cause"
   ],
   "addedVirtuals": [
     "prepare_native_begin",

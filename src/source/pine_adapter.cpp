@@ -1554,11 +1554,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                 : NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission;
         // compute_liquidation_price() solves from closed money alone.
         margin.level_base = NativeLiquidationLevelBase::RealizedOnly;
-        // TradingView's own liquidation ticket. closed_trade_close_cause()
-        // classifies a row as MARGIN_CALL from exactly this exit id
-        // (engine_trade_accessors.cpp), and the C ABI pins it
-        // (pineforge.h: `exit_id == "__margin_call__"` -> 3), so the ticket
-        // the kernel books has to be this one.
+        // TradingView's own liquidation ticket. The adapter's host classifies
+        // a row as MARGIN_CALL from exactly this exit id (R5 lane L12, 2.ii l:
+        // PineStrategyHost::on_native_applied states execution::CloseCause,
+        // which pineforge.h pins as `3`), so the ticket the kernel books has
+        // to be this one.
         margin.liquidation_label = "__margin_call__";
         margin.liquidation_comment = "Margin call";
         spec.margin = margin;
@@ -3172,7 +3172,7 @@ void PineExecutionAdapter::submit_fx_margin_slice(
     if (!(units > 0.0) || !std::isfinite(units)) return;
     native_order::Request request;
     request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
-    request.label = "__margin_call__";
+    request.label = kMarginCallLabel;
     request.comment = "Margin call";
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Margin;
@@ -3180,7 +3180,7 @@ void PineExecutionAdapter::submit_fx_margin_slice(
     snapshot.requested_qty = units;
     snapshot.sizing = sizing_snapshot();
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
-                                            "__margin_call__");
+                                            kMarginCallLabel);
     if (accepted && execute_at_current) {
         (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
     }
@@ -11985,7 +11985,7 @@ bool PineExecutionAdapter::submit_margin_call_units(
     units = std::min(units, held);
     native_order::Request request;
     request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
-    request.label = "__margin_call__";
+    request.label = kMarginCallLabel;
     request.comment = "Margin call";
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Margin;
@@ -12006,7 +12006,7 @@ bool PineExecutionAdapter::submit_margin_call_units(
     }
     snapshot.sizing = sizing_snapshot();
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
-                                            "__margin_call__");
+                                            kMarginCallLabel);
     if (!accepted) return false;
     (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
     return true;
@@ -12330,7 +12330,7 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
     native_order::Request request;
     request.intent = native_order::Reduce{native_order::ExplicitUnits{
         std::min(1.0, position.signed_units)}};
-    request.label = "__margin_call__";
+    request.label = kMarginCallLabel;
     request.comment = "Margin call";
     request.trigger = fire_price <= bar.open
         ? native_order::Trigger{native_order::Stop{fire_price}}
@@ -12757,7 +12757,7 @@ bool PineExecutionAdapter::submit_intraday_loss_close(
     request.intent = native_order::Flatten{};
     // The legacy forced-close report has an empty exit id and this exact
     // comment.  An empty generic label is supported by the request algebra.
-    request.comment = "Close Position (Max intraday Loss)";
+    request.comment = kIntradayLossComment;
     if (!execute_current) request.trigger = native_order::Stop{mark_price};
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Risk;
@@ -15662,7 +15662,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (require_host().physical_position().signed_units != 0.0) {
             native_order::Request request;
             request.intent = native_order::Flatten{};
-            request.comment = "Close Position (Max intraday Loss)";
+            request.comment = kIntradayLossComment;
             PlacementSnapshot snapshot;
             snapshot.family = PineOrderFamily::Risk;
             snapshot.source_id = "__intraday_loss__";

@@ -36,6 +36,17 @@ class PineScheduler;
 
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v3";
 
+// The adapter's forced-close vocabulary. These strings are TradingView report
+// shape, so they are written and read entirely inside the source layer: the
+// kernel records execution::CloseCause instead of decoding them (R5 lane L12,
+// 2.ii l).
+inline constexpr char kMarginCallLabel[] = "__margin_call__";
+inline constexpr char kIntradayLossComment[] = "Close Position (Max intraday Loss)";
+// The published C contract matched this PREFIX, not the whole comment, so the
+// classifier keeps matching the prefix.
+inline constexpr char kFillCapCommentPrefix[] =
+    "Close Position (Max number of filled orders";
+
 // TradingView's calc_on_order_fills cascade guard. It is a Pine literal, not a
 // kernel default: project() hands it to the generic cadence as
 // NativeRunSpec::max_recalculations_per_point, and the adapter's own first-open

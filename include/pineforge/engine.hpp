@@ -186,6 +186,12 @@ struct Trade {
     // bar (record_range_end_close_trades); false for every script-driven
     // or bracket exit. Mirrors pf_trade_t::open_at_end.
     bool open_at_end = false;
+    // Why this row exited, when the closer knew. A kernel-originated
+    // liquidation or risk flatten carries its own cause through the settling
+    // execution::Fill; a host that runs its own forced-close policy records
+    // its cause on the row. Unspecified leaves closed_trade_close_cause() to
+    // the generic facts above (open_at_end, exit_from_bracket).
+    execution::CloseCause close_cause = execution::CloseCause::Unspecified;
 };
 
 struct TradeC {

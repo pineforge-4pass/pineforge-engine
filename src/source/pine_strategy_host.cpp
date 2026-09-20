@@ -546,7 +546,26 @@ void source::PineStrategyHost::on_native_applied(
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
             trades_[index].exit_id.clear();
-            trades_[index].exit_comment = "Close Position (Max intraday Loss)";
+            trades_[index].exit_comment = source::kIntradayLossComment;
+        }
+    }
+    // R5 lane L12 (2.ii l): the kernel used to read these strings back out of
+    // the row to answer strategy_closed_trade_close_cause. They are the
+    // adapter's, so the adapter's host states the cause instead, on the rows
+    // this event produced and after the relabel above has settled them. The
+    // predicates are the retired kernel branches verbatim, including the
+    // empty-exit-id gate and the filled-orders PREFIX match.
+    for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+        const std::size_t index = event.first_trade_index + i;
+        if (index >= trades_.size()) continue;
+        Trade& row = trades_[index];
+        if (row.exit_id == source::kMarginCallLabel) {
+            row.close_cause = execution::CloseCause::Liquidation;
+        } else if (row.exit_id.empty()) {
+            if (row.exit_comment.rfind(source::kFillCapCommentPrefix, 0) == 0)
+                row.close_cause = execution::CloseCause::FillCap;
+            else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
+                row.close_cause = execution::CloseCause::RiskLimit;
         }
     }
     project_short_seed_report_rows(event);

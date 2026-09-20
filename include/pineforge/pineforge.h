@@ -1059,17 +1059,24 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
  *      flag-off run (`open_at_end`, ABI v3) -- this always wins over every
  *      other cause below it.
  *  Derivation order (see `BacktestEngine::closed_trade_close_cause`,
- *  engine_trade_accessors.cpp): `open_at_end` -> 6; `exit_id ==
- *  "__margin_call__"` -> 3; an empty `exit_id` with `exit_comment` starting
- *  `"Close Position (Max number of filled orders"` -> 5, or `"Close
- *  Position (Max intraday Loss)"` -> 4; the row's `exit_from_bracket` flag
- *  -- true only for a REAL `strategy.exit` leg, either an `OrderType::EXIT`
- *  fill whose id does NOT carry the internal `"__close__"` prefix that a
- *  deferred `strategy.close`/`close_all` order is also given (that path
- *  reuses the same `OrderType::EXIT` fill machinery), or a whole-position
- *  bracket revived and fired at the margin-call event price
+ *  engine_trade_accessors.cpp): `open_at_end` -> 6; then the cause the
+ *  CLOSER recorded on the row (`execution::CloseCause`, whose numbers are
+ *  exactly these values) -- a kernel-originated liquidation or risk flatten
+ *  states it through the settling fill, and a host running its own
+ *  forced-close policy states it on the row it produced, which is where the
+ *  Pine adapter's margin-call (3), max-intraday-loss (4) and filled-order-cap
+ *  (5) rows get their value; then the row's `exit_from_bracket` flag -- true
+ *  only for a REAL `strategy.exit` leg, either an `OrderType::EXIT` fill
+ *  whose id does NOT carry the internal `"__close__"` prefix that a deferred
+ *  `strategy.close`/`close_all` order is also given (that path reuses the
+ *  same `OrderType::EXIT` fill machinery), or a whole-position bracket
+ *  revived and fired at the margin-call event price
  *  (`revive_position_brackets_after_margin_call_partial`) -- -> 2;
  *  otherwise 1.
+ *  A Pine/source run's values are unchanged. A bare native host that declares
+ *  a kernel margin model now reads `3` for its own liquidation rows (and `4`
+ *  for a kernel risk flatten) where the retired string derivation, which only
+ *  recognised the adapter's sentinels, answered `1`.
  *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
  *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
  *  convention -- #strategy_pending_order_fill_qty,

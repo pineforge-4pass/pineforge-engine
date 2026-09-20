@@ -138,33 +138,30 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 // index/handle", so 0 stays reserved purely for the documented UNKNOWN
 // "no cause" value on a VALID trade (no live derivation below currently
 // produces it -- every in-range row falls through to at worst SCRIPT).
-// Order matters for the remaining, in-range classification:
+//
+// R5 lane L12 (2.ii l): the kernel no longer decodes any caller's exit
+// strings. A closer that knows why it closed records execution::CloseCause on
+// the row -- a kernel-originated liquidation or risk flatten through the
+// settling Fill, a host forced-close policy (the Pine adapter's margin call,
+// its max-intraday-loss close and its filled-order cap close) on the row it
+// produced. Order matters for the remaining classification:
 //   1. open_at_end -- the range-end synthetic row always wins, even if the
 //      position happens to also carry a stale exit_id from an earlier
 //      partial close of the same physical lot.
-//   2. exit_id == "__margin_call__" -- the sentinel every process_margin_call
-//      / tv_money_long_margin_call forced-liquidation site writes.
-//   3/4. An intraday-cap close never fills through a request record (no
-//      exit_id), so it is identified by its synthesized exit_comment
-//      instead (engine_run.cpp / engine_risk.cpp).
-//   5. exit_from_bracket -- set only at the shared exit-fill site
+//   2. a recorded cause -- the closer's own statement.
+//   3. exit_from_bracket -- set only at the shared exit-fill site
 //      (the native execution application path) when the filling request was
 //      an EXIT leg, i.e. a real strategy.exit leg.
-//   6. Otherwise: a strategy.close/close_all market close or a
+//   4. Otherwise: a strategy.close/close_all market close or a
 //      reversal-driven close -- SCRIPT.
 int BacktestEngine::closed_trade_close_cause(int i) const {
     if (i < 0 || i >= report_trade_count()) return -1;
     const Trade& t = get_report_trade(i);
-    if (t.open_at_end) return 6;
-    if (t.exit_id == "__margin_call__") return 3;
-    if (t.exit_id.empty()
-        && t.exit_comment.rfind("Close Position (Max number of filled orders", 0) == 0)
-        return 5;
-    if (t.exit_id.empty()
-        && t.exit_comment.rfind("Close Position (Max intraday Loss)", 0) == 0)
-        return 4;
-    if (t.exit_from_bracket) return 2;
-    return 1;
+    if (t.open_at_end) return static_cast<int>(execution::CloseCause::RangeEnd);
+    if (t.close_cause != execution::CloseCause::Unspecified)
+        return static_cast<int>(t.close_cause);
+    if (t.exit_from_bracket) return static_cast<int>(execution::CloseCause::Bracket);
+    return static_cast<int>(execution::CloseCause::Script);
 }
 
 } // namespace pineforge
