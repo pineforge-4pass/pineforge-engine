@@ -69,7 +69,8 @@ public:
                                       const native_order::RequestHandle& target);
     std::vector<NativeWorkingRequest> working_requests() const;
     std::size_t cancel_all(BacktestEngine& engine);
-    std::size_t cancel_where(BacktestEngine& engine, std::string_view comment);
+    std::size_t cancel_where(BacktestEngine& engine, std::string_view text,
+                             NativeRequestField field = NativeRequestField::Comment);
     native_order::CohortHandle cohort_open(BacktestEngine& engine);
     void cohort_add(BacktestEngine& engine, native_order::CohortHandle cohort,
                     native_order::RequestHandle origin);

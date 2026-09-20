@@ -473,6 +473,12 @@ struct NativeWorkingRequest {
     native_order::TriggerState trigger_state = native_order::MarketReady{};
 };
 
+// Which of a request's two free-text identity fields a bulk predicate reads.
+// Both are host text the kernel only copies and compares: Comment is the
+// established cancel_where selector and keeps value 0, Label is the field a
+// host that names its orders puts its own id in.
+enum class NativeRequestField : std::uint8_t { Comment = 0, Label = 1 };
+
 enum class NativeCurrentRefusal : std::uint8_t {
     NoExecutionContext = 0, Reentrant = 1, InvalidHandle = 2, NotWorking = 3,
     NotAcceptedInCallback = 4, UnsupportedRequest = 5, UnreadyOwner = 6,
@@ -801,9 +807,19 @@ public:
     // many requests left the book (one CancelledEvent each, dependants
     // included); cancel_where cancels exactly the live requests carrying that
     // comment and returns how many of them it cancelled.
+    //
+    // The second form chooses which identity field the text is compared
+    // against: NativeRequestField::Comment is the one-argument form, and
+    // NativeRequestField::Label addresses the requests by their label, the
+    // one-call equivalent of cancelling every order a host issued under its
+    // own id. Neither form indexes anything: both walk the live book once,
+    // like cancel_all, so a label may be reused, replaced or left empty
+    // without any bookkeeping to keep in step. Text that matches nothing is
+    // not a command.
     std::vector<NativeWorkingRequest> native_working_requests() const;
     std::size_t cancel_all();
     std::size_t cancel_where(std::string_view comment);
+    std::size_t cancel_where(std::string_view text, NativeRequestField field);
     native_order::CohortHandle cohort_open();
     void cohort_add(native_order::CohortHandle cohort, native_order::RequestHandle origin);
     void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);

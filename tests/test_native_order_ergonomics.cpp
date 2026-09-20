@@ -157,6 +157,67 @@ void bulk_cancellation_is_exact() {
     completed(host);
 }
 
+// 2b. The field selector picks WHICH identity text cancel_where compares:
+//     NativeRequestField::Label addresses the requests a host issued under
+//     its own id, and the comment form keeps matching comments only. The
+//     probe crosses the two fields on purpose — the label of one request is
+//     the comment of another — so a form that read the wrong field would
+//     cancel the wrong rows rather than none.
+void label_cancellation_is_exact() {
+    Host host;
+    no::RequestHandle leg_a, leg_b, other;
+    std::size_t label_count = 0, live_after_label = 0, comment_count = 0;
+    std::size_t live_after_comment = 0, unknown_count = 0, comment_hits_label = 0;
+    bool ran = false;
+    host.beginning = [&](Host& base) {
+        auto make = [&](const char* label, const char* comment) {
+            no::Request request{no::Transact{1.0}, label, comment};
+            request.trigger = no::Limit{50.0};
+            return put(base, request);
+        };
+        leg_a = make("leg", "entry");
+        leg_b = make("leg", "exit");
+        other = make("other", "leg");
+    };
+    host.calculation = [&](Host& base) {
+        if (ran) return;
+        ran = true;
+        // The comment form never reads a label: "leg" is two labels here and
+        // exactly one comment.
+        comment_hits_label = base.cancel_where("leg");
+        label_count = base.cancel_where("leg", NativeRequestField::Label);
+        live_after_label = base.native_working_requests().size();
+        comment_count = base.cancel_where("leg", NativeRequestField::Comment);
+        live_after_comment = base.native_working_requests().size();
+        unknown_count = base.cancel_where("leg", NativeRequestField::Label);
+    };
+
+    run(host, spec("l7-cancel-label"), {100.0, 100.0});
+
+    // The comment form cancelled the one request whose COMMENT is "leg".
+    CHECK(comment_hits_label == 1);
+    // The label form then cancelled exactly the two labelled requests.
+    CHECK(label_count == 2);
+    CHECK(live_after_label == 0);
+    // Nothing is left for either form once the book is empty, and an
+    // unmatched text is not a command.
+    CHECK(comment_count == 0);
+    CHECK(live_after_comment == 0);
+    CHECK(unknown_count == 0);
+
+    const auto cancelled = events<no::CancelledEvent>(host);
+    REQUIRE(cancelled.size() == 3);
+    CHECK(cancelled[0].handle() == other);
+    CHECK(cancelled[0].request().label == "other");
+    CHECK(cancelled[0].request().comment == "leg");
+    CHECK(cancelled[1].handle() == leg_a);
+    CHECK(cancelled[1].request().label == "leg");
+    CHECK(cancelled[2].handle() == leg_b);
+    CHECK(cancelled[2].request().label == "leg");
+    for (const auto& row : cancelled) CHECK(row.reason == no::CancelReason::User);
+    completed(host);
+}
+
 // 3. A tick-spelled anchor becomes fill + offset * tick at the arm.
 void anchored_stop_arms_at_the_owner_fill() {
     Host host;
@@ -401,6 +462,7 @@ void submit_bracket_twins_the_hand_written_legs() {
 int main() {
     test("working snapshot tracks the live book", working_snapshot_tracks_the_live_book);
     test("bulk cancellation is exact", bulk_cancellation_is_exact);
+    test("label cancellation is exact", label_cancellation_is_exact);
     test("anchored stop arms at the owner fill", anchored_stop_arms_at_the_owner_fill);
     test("tick offset matches the price offset", tick_offset_matches_the_price_offset);
     test("zero offset trail rides the best", zero_offset_trail_rides_the_best);

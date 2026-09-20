@@ -8143,13 +8143,20 @@ std::size_t NativeExecutionConsumer::cancel_all(BacktestEngine& engine) {
 }
 
 std::size_t NativeExecutionConsumer::cancel_where(BacktestEngine& engine,
-                                                  std::string_view comment) {
-    // Only matching comments are cancelled. A dependent child still ends with
-    // a cancelled owner, but it is not counted unless its own comment matched
-    // and it was still live when the loop reached it.
+                                                  std::string_view text,
+                                                  NativeRequestField field) {
+    // Only the requests whose selected field matches are cancelled. A
+    // dependent child still ends with a cancelled owner, but it is not
+    // counted unless its own field matched and it was still live when the
+    // loop reached it. The walk is the live book, the same one cancel_all
+    // takes: no field is indexed, so a label may be reused or replaced
+    // without any second copy of the book to keep in step.
     std::vector<native_order::RequestHandle> handles;
     for (const auto& live : requests_.live()) {
-        if (std::string_view(live.request().comment) == comment) handles.push_back(live.handle());
+        const auto& request = live.request();
+        const std::string& value =
+            field == NativeRequestField::Label ? request.label : request.comment;
+        if (std::string_view(value) == text) handles.push_back(live.handle());
     }
     std::size_t cancelled = 0;
     for (const auto& handle : handles) {
@@ -8458,6 +8465,10 @@ std::size_t NativeStrategyHost::cancel_all() {
 
 std::size_t NativeStrategyHost::cancel_where(std::string_view comment) {
     return as_native_consumer(execution_consumer()).cancel_where(*this, comment);
+}
+
+std::size_t NativeStrategyHost::cancel_where(std::string_view text, NativeRequestField field) {
+    return as_native_consumer(execution_consumer()).cancel_where(*this, text, field);
 }
 
 native_order::CohortHandle NativeStrategyHost::cohort_open() {
