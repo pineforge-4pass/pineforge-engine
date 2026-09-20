@@ -210,66 +210,6 @@ void BacktestEngine::feed_security_eval_state(
         return;
     }
 
-    if (historical_security_lookahead_projection_active_
-            && !state.historical_projections.empty()) {
-        // Keyed by the input's instant, not by a feed-call index: on the
-        // split-feed path this evaluator is fed the finer auxiliary slice
-        // (hundreds of inputs per chart bar), and the projection of a bucket
-        // is dispatched on the first input at or after its first retained
-        // child (that child's own first auxiliary bar) -- exactly the chart
-        // bar TradingView's lookahead_on leaks the bucket's FINAL values
-        // from. On the single-feed path the first input at or after the
-        // child's timestamp is that child itself, as the index cut was.
-        const int64_t input_ms = input_bar.timestamp;
-        while (state.historical_projection_cursor + 1
-                    < state.historical_projections.size()
-                && state.historical_projections[
-                       state.historical_projection_cursor + 1]
-                       .first_child_ms <= input_ms) {
-            ++state.historical_projection_cursor;
-            state.historical_projection_dispatched = false;
-        }
-        const auto& projection = state.historical_projections[
-            state.historical_projection_cursor];
-        state.feed_count++;
-        if (state.historical_projection_dispatched
-                || input_ms < projection.first_child_ms) {
-            // gaps_off holds the first-child projection unchanged until the
-            // next HTF bucket. No evaluator call means TA/security histories
-            // also advance exactly once per projected bucket.
-            return;
-        }
-        state.historical_projection_dispatched = true;
-
-        Bar projected_bar = projection.bar;
-        // A projected bucket is the exchange's bar wherever a native feed
-        // serves this timeframe -- complete or not. TradingView's
-        // lookahead_on leaks the period's FINAL values from its first chart
-        // bar, so the trailing period still in progress at the range end
-        // carries the whole native period whenever the feed holds it (lab tv
-        // wm-m-f15-jul, 2026-09-05: August's final o/h/l/c 10.92/11.99/
-        // 10.68/11.77 from 08-01 09:30 on a chart ending 08-08). A partial
-        // with no native bar keeps the available aggregate, uncounted as a
-        // miss.
-        substitute_native_security_bar(state, projected_bar,
-                                       /*count_miss=*/projection.is_complete);
-        state.current_bar = projected_bar;
-        // The projected HTF bucket is introduced on its first chart child, so
-        // generated security series must allocate a fresh history/TA slot even
-        // though projected_bar itself already contains every available child.
-        state.current_sub_bar_count = 1;
-        if (projection.is_complete) {
-            state.eval_complete_count++;
-        } else {
-            state.eval_partial_count++;
-        }
-        dispatch_security_eval(state, projected_bar, projection.is_complete,
-                               projection.is_complete
-                                   ? state.eval_complete_count - 1
-                                   : state.eval_complete_count);
-        return;
-    }
-
     // The next input bar's timestamp (0 when unknown) lets a calendar
     // bucket complete on the period's actual last chart bar -- see
     // security_next_input_ms_ -- and the calling chart bar's nominal close

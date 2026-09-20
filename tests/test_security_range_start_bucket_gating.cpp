@@ -703,9 +703,9 @@ public:
     }
     void on_source_bar(const Bar& bar) override {
         if (first_projected_child==0
-            && !security_eval_states_[0].historical_projections.empty()) {
+            && !pine_security_states_[0].historical_projections.empty()) {
             first_projected_child=
-                security_eval_states_[0].historical_projections.front().first_child_ms;
+                pine_security_states_[0].historical_projections.front().first_child_ms;
         }
         reads.push_back({bar.timestamp,visible_close,previous_atr});
     }

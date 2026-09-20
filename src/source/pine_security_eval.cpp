@@ -681,7 +681,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     }
 
     if (historical_security_lookahead_projection_active_
-            && !state.historical_projections.empty()) {
+            && !pine.historical_projections.empty()) {
         // Keyed by the input's instant, not by a feed-call index: on the
         // split-feed path this evaluator is fed the finer auxiliary slice
         // (hundreds of inputs per chart bar), and the projection of a bucket
@@ -691,25 +691,25 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // from. On the single-feed path the first input at or after the
         // child's timestamp is that child itself, as the index cut was.
         const int64_t input_ms = input_bar.timestamp;
-        while (state.historical_projection_cursor + 1
-                    < state.historical_projections.size()
-                && state.historical_projections[
-                       state.historical_projection_cursor + 1]
+        while (pine.historical_projection_cursor + 1
+                    < pine.historical_projections.size()
+                && pine.historical_projections[
+                       pine.historical_projection_cursor + 1]
                        .first_child_ms <= input_ms) {
-            ++state.historical_projection_cursor;
-            state.historical_projection_dispatched = false;
+            ++pine.historical_projection_cursor;
+            pine.historical_projection_dispatched = false;
         }
-        const auto& projection = state.historical_projections[
-            state.historical_projection_cursor];
+        const auto& projection = pine.historical_projections[
+            pine.historical_projection_cursor];
         state.feed_count++;
-        if (state.historical_projection_dispatched
+        if (pine.historical_projection_dispatched
                 || input_ms < projection.first_child_ms) {
             // gaps_off holds the first-child projection unchanged until the
             // next HTF bucket. No evaluator call means TA/security histories
             // also advance exactly once per projected bucket.
             return;
         }
-        state.historical_projection_dispatched = true;
+        pine.historical_projection_dispatched = true;
 
         Bar projected_bar = projection.bar;
         // A projected bucket is the exchange's bar wherever a native feed

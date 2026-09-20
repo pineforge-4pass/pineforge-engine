@@ -16,8 +16,8 @@ commission_value_ # Legacy configuration carrier projected into the immutable na
 current_bar_ # Callback/report convenience copy; native decision context and request birth facts own executable time/price state.
 equity_curve_ # Historical reporting series; current marked equity and live lots are hashed independently.
 first_bar_open_ # Run-report baseline only; no later matching or admission rule reads this cached value.
-historical_security_lookahead_projection_ # Prepared publication output; evaluator state and source scheduler continuation are hashed separately.
-historical_security_lookahead_projection_active_ # Publication cursor for report/source delivery, not an execution-owner decision field.
+historical_security_lookahead_projection_ # Source-host opt-in selector of the historical lookahead projection; the projection in hand and its cursor are folded per site.
+historical_security_lookahead_projection_active_ # Source-host per-run arming of that projection, set by the prepare sequence from the selector and the run shape; the per-site projection fold carries its effect.
 initial_capital_ # Legacy configuration carrier; projected initial capital is part of the immutable native run specification.
 inputs_ # Staged source input map; generated source series and scheduler-owned language state are hashed after provider application.
 is_tail_bar_ # Callback visibility flag derived from the delivered feed, with no independent execution transition.

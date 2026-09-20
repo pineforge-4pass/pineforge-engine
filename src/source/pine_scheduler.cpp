@@ -22,9 +22,10 @@ void PineStrategyHost::init_security_eval_states_for_run(
         state.deferred_aux.clear();
         state.slice_open_label = 0;
         state.last_published_label = 0;
-        state.historical_projections.clear();
-        state.historical_projection_cursor = 0;
-        state.historical_projection_dispatched = false;
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        pine.historical_projections.clear();
+        pine.historical_projection_cursor = 0;
+        pine.historical_projection_dispatched = false;
         state.native_feed_index = -1;
         state.native_bars_by_label.clear();
         state.aggregator = TimeframeAggregator();
@@ -55,7 +56,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const int requested_seconds = tf_to_seconds(state.tf);
         const bool calendar_month = requested_seconds == -1
             && calendar_period_for(state.tf) == CalendarPeriod::MONTH;
-        const PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+        PineSecurityEvalState& pine = pine_security_state(state.sec_id);
         const bool eligible = !state.lower_tf_requested && !state.lower_tf_emulation
             && !state.lower_tf_use_input && pine.lookahead_on && !pine.gaps_on
             && !pine.heikinashi
@@ -84,10 +85,10 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
         const int projection_count = n_input - projection_begin;
         const int expected_children = std::max(
             1, (calendar_month ? 31 * 86400 : requested_seconds) / input_seconds);
-        state.historical_projections.reserve(
+        pine.historical_projections.reserve(
             static_cast<std::size_t>(projection_count / expected_children + 1));
-        state.historical_projection_cursor = 0;
-        state.historical_projection_dispatched = false;
+        pine.historical_projection_cursor = 0;
+        pine.historical_projection_dispatched = false;
 
         auto crosses_requested_boundary = [&](std::int64_t from_ms, std::int64_t to_ms) {
             if (from_ms != 0 && to_ms != 0) {
@@ -107,7 +108,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
             aggregate.volume += child.volume;
         };
         auto publish_group = [&](int begin, const Bar& aggregate, bool complete) {
-            state.historical_projections.push_back(
+            pine.historical_projections.push_back(
                 HistoricalSecurityProjection{aggregate, child_instant_ms(begin), complete});
         };
 
@@ -132,10 +133,10 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
 
 void PineStrategyHost::clear_historical_security_lookahead_projections() {
     historical_security_lookahead_projection_active_ = false;
-    for (auto& state : security_eval_states_) {
-        state.historical_projections.clear();
-        state.historical_projection_cursor = 0;
-        state.historical_projection_dispatched = false;
+    for (auto& entry : pine_security_states_) {
+        entry.second.historical_projections.clear();
+        entry.second.historical_projection_cursor = 0;
+        entry.second.historical_projection_dispatched = false;
     }
 }
 

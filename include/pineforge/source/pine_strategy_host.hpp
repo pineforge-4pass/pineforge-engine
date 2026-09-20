@@ -23,7 +23,20 @@ namespace pineforge::source {
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
 // field set changes.
-inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v3";
+inline constexpr char kSourceSecurityDomain[] = "pineforge-source-security/v4";
+
+// One projected higher-timeframe bucket of the opt-in historical
+// request.security lookahead projection (PineSecurityEvalState below).
+struct HistoricalSecurityProjection {
+    Bar bar{};
+    // The instant the projection is dispatched on: the first retained
+    // chart child's timestamp on the single-feed path, that child's first
+    // auxiliary bar on the split-feed path (the requested-context
+    // evaluator is fed the finer slice there). Keyed by instant, not by
+    // feed-call index, so both paths consume one projection per bucket.
+    int64_t first_child_ms = 0;
+    bool is_complete = false;
+};
 
 // Pine's publication semantics for ONE request.security site, kept beside the
 // kernel's generic evaluator state of the same sec_id
@@ -122,6 +135,18 @@ struct PineSecurityEvalState {
     double ha_prev_open = 0.0;
     double ha_prev_close = 0.0;
     bool ha_seeded = false;
+    // One entry per projected HTF bucket, populated only for an explicitly
+    // opted-in finite historical batch. Empty for every default/streaming
+    // run and for sites outside the narrow HTF lookahead_on+gaps_off
+    // contract. The feed index advances once per retained input bar (bars
+    // before an opt-in security range start are dropped by both producer
+    // and consumer); the projection cursor advances only at the next
+    // bucket's first child.
+    std::vector<HistoricalSecurityProjection> historical_projections;
+    std::size_t historical_projection_cursor = 0;
+    // Which projection (cursor) has already been dispatched: every later
+    // input of the same bucket is a no-op for the evaluator.
+    bool historical_projection_dispatched = false;
 };
 
 class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
@@ -664,6 +689,14 @@ protected:
     // untouched (their slices begin at the first chart bar anyway), and the
     // flag above keeps its explicit epoch plus the EMA na-warmup semantics.
     int64_t security_first_chart_bar_ms_ = 0;
+
+    // Opt-in historical-only request.security lookahead projection. TradingView
+    // can merge a completed higher-timeframe bar onto the first chart child
+    // when a finite historical batch is already known. The normal path
+    // remains progressive, and stream warmup/realtime deliberately ignore this
+    // selector so future data can never leak into a live continuation.
+    bool historical_security_lookahead_projection_ = false;
+    bool historical_security_lookahead_projection_active_ = false;
 
     // Boundary-fallback publication replays the completed caller's already
     // evaluated final requested value. Force generated TA sites down their

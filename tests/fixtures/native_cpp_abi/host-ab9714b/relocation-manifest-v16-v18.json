@@ -29,7 +29,13 @@
     "BacktestEngine::SecurityEvalState::ha_seeded",
     "BacktestEngine::security_range_start_na_warmup_",
     "BacktestEngine::security_range_start_ms_",
-    "BacktestEngine::security_first_chart_bar_ms_"
+    "BacktestEngine::security_first_chart_bar_ms_",
+    "BacktestEngine::HistoricalSecurityProjection",
+    "BacktestEngine::SecurityEvalState::historical_projections",
+    "BacktestEngine::SecurityEvalState::historical_projection_cursor",
+    "BacktestEngine::SecurityEvalState::historical_projection_dispatched",
+    "BacktestEngine::historical_security_lookahead_projection_",
+    "BacktestEngine::historical_security_lookahead_projection_active_"
   ],
   "addedStorage": [],
   "addedValueMembers": [

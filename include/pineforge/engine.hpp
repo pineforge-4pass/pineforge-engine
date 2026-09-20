@@ -507,13 +507,6 @@ protected:
     // calendar bucket compares against the period's nominal close
     // (TimeframeAggregator::feed(bar, next_input_ms, calling_close_ms)).
     int64_t security_calling_close_ms_ = 0;
-    // Opt-in historical-only request.security lookahead projection. TradingView
-    // can merge a completed higher-timeframe bar onto the first chart child
-    // when a finite historical batch is already known. The normal engine path
-    // remains progressive, and stream warmup/realtime deliberately ignore this
-    // selector so future data can never leak into a live continuation.
-    bool historical_security_lookahead_projection_ = false;
-    bool historical_security_lookahead_projection_active_ = false;
     uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple native matching calls (bar magnifier) and dual-pass
@@ -1694,17 +1687,6 @@ protected:
     std::vector<StreamOrderAction> stream_order_actions_;
 
     // --- request.security state ---
-    struct HistoricalSecurityProjection {
-        Bar bar{};
-        // The instant the projection is dispatched on: the first retained
-        // chart child's timestamp on the single-feed path, that child's first
-        // auxiliary bar on the split-feed path (the requested-context
-        // evaluator is fed the finer slice there). Keyed by instant, not by
-        // feed-call index, so both paths consume one projection per bucket.
-        int64_t first_child_ms = 0;
-        bool is_complete = false;
-    };
-
     struct SecurityEvalState {
         int sec_id = 0;
         std::string tf;
@@ -1799,18 +1781,6 @@ protected:
             bool calling_bar_complete = false;
         };
         std::vector<DeferredAuxBar> deferred_aux;
-        // One entry per projected HTF bucket, populated only for an explicitly
-        // opted-in finite historical batch. Empty for every default/streaming
-        // run and for sites outside the narrow HTF lookahead_on+gaps_off
-        // contract. The feed index advances once per retained input bar (bars
-        // before an opt-in security range start are dropped by both producer
-        // and consumer); the projection cursor advances only at the next
-        // bucket's first child.
-        std::vector<HistoricalSecurityProjection> historical_projections;
-        std::size_t historical_projection_cursor = 0;
-        // Which projection (cursor) has already been dispatched: every later
-        // input of the same bucket is a no-op for the evaluator.
-        bool historical_projection_dispatched = false;
         // Native higher-timeframe feed routing, rebuilt per run by
         // prepare_native_security_feeds(): the index into
         // native_security_feeds_ serving this state's requested timeframe

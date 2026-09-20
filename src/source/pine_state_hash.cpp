@@ -632,6 +632,22 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
             f.d(pine.ha_prev_open);
             f.d(pine.ha_prev_close);
             f.b(pine.ha_seeded);
+            // The projection in hand, not the prepared list: later buckets
+            // are a function of input the run has not consumed yet, and a
+            // prefix run must hash like the full run up to its last bar.
+            f.b(!pine.historical_projections.empty());
+            if (!pine.historical_projections.empty()) {
+                f.u(pine.historical_projection_cursor);
+                f.b(pine.historical_projection_dispatched);
+                const auto& projection = pine.historical_projections[std::min(
+                    pine.historical_projection_cursor,
+                    pine.historical_projections.size() - 1)];
+                f.d(projection.bar.open); f.d(projection.bar.high);
+                f.d(projection.bar.low); f.d(projection.bar.close);
+                f.d(projection.bar.volume); f.i(projection.bar.timestamp);
+                f.i(projection.first_child_ms);
+                f.b(projection.is_complete);
+            }
         }
     }
     // The margin slice's sampling chronology is resolved once per pending
