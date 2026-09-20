@@ -1,5 +1,5 @@
 #pragma once
-#include <pineforge/market_admission.hpp>
+#include <pineforge/source/market_admission.hpp>
 #include <map>
 namespace pineforge::compat::pine {
 bool explicit_pair_scope(const admission::Configuration& c);

@@ -2,7 +2,7 @@
 // Test-only structural mutations, independent of the production field visitor.
 // Each test changes one stored leaf/presence/length in a copy. These are encoding
 // controls, not assertions that arbitrary mutated histories are economic states.
-#include <pineforge/market_admission.hpp>
+#include <pineforge/source/market_admission.hpp>
 #include <cmath>
 #include <functional>
 #include <type_traits>

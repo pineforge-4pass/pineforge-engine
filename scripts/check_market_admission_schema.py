@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def check(root: Path = ROOT) -> int:
-    header = (root / "include/pineforge/market_admission.hpp").read_text()
-    source = (root / "src/market_admission.cpp").read_text()
+    header = (root / "include/pineforge/source/market_admission.hpp").read_text()
+    source = (root / "src/source/market_admission.cpp").read_text()
     adapter_hash = (root / "src/source/pine_state_hash.cpp").read_text()
     schema = json.loads((root / "scripts/market_admission_schema.json").read_text())
     required = {

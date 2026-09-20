@@ -1,5 +1,5 @@
 // Literal API/allocator tests. No feed, generated strategy or grader is run.
-#include <pineforge/market_admission.hpp>
+#include <pineforge/source/market_admission.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <new>

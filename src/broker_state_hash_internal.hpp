@@ -17,17 +17,6 @@ inline namespace engine_script_run_v18 {
 // BrokerStateHashSink itself is public (engine.hpp): a host folds its own
 // state through it. What stays here are the kernel's own fold helpers.
 
-inline void hash_admission_field(BrokerStateHashSink& f, const admission::Field& field) {
-    f.s(field.path); f.u(field.value.index());
-    std::visit([&](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, uint64_t>) f.u(value);
-        else if constexpr (std::is_same_v<T, int64_t>) f.i(value);
-        else if constexpr (std::is_same_v<T, double>) f.d(value);
-        else f.s(value);
-    }, field.value);
-}
-
 inline void hash_str_double_map(
         BrokerStateHashSink& f, const std::unordered_map<std::string, double>& m) {
     std::vector<std::pair<std::string, double>> v(m.begin(), m.end());

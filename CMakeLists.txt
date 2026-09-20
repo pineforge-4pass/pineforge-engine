@@ -95,6 +95,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/compat/pine/order_birth.cpp
     src/compat/pine/order_priority.cpp
     src/compat/pine/reservation_expansion.cpp
+    src/source/market_admission.cpp
     src/source/pine_adapter.cpp
     src/source/pine_path_resolve.cpp
     src/source/pine_scheduler_native.cpp
@@ -124,7 +125,6 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_security.cpp
     src/engine_state_hash.cpp
     src/engine_stream.cpp
-    src/market_admission.cpp
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp

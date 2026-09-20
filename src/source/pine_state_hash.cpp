@@ -4,9 +4,25 @@
 #include "../broker_state_hash_internal.hpp"
 
 #include <algorithm>
+#include <type_traits>
+#include <variant>
 
 namespace pineforge {
 namespace {
+
+// The admission journal is source-layer state (R5 lane N14): its reflected
+// fields fold here, through the source host's extension, exactly as they
+// did when this helper lived in the kernel-internal sink header.
+void hash_admission_field(BrokerStateHashSink& f, const admission::Field& field) {
+    f.s(field.path); f.u(field.value.index());
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, uint64_t>) f.u(value);
+        else if constexpr (std::is_same_v<T, int64_t>) f.i(value);
+        else if constexpr (std::is_same_v<T, double>) f.d(value);
+        else f.s(value);
+    }, field.value);
+}
 
 void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
     f.i(series.size());

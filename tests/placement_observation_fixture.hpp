@@ -1,5 +1,6 @@
 #pragma once
 #include <pineforge/engine.hpp>
+#include <pineforge/source/market_admission.hpp>
 
 // Storage counterfactuals only. Production never rewrites an original command.
 // The retired source PendingOrder declaration is deliberately not included:

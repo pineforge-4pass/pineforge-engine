@@ -26,7 +26,6 @@
 #include "execution_projection.hpp"
 #include "execution_reverse_to.hpp"
 #include "position_close_obligation.hpp"
-#include "market_admission.hpp"
 #include "order_cancellation.hpp"
 #include "leg_activation.hpp"
 #include "exit_leg_lifecycle.hpp"

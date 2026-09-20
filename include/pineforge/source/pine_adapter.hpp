@@ -10,6 +10,7 @@
 #include <pineforge/compat/pine/order_birth.hpp>
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
+#include <pineforge/source/market_admission.hpp>
 
 #include <algorithm>
 #include <cstddef>

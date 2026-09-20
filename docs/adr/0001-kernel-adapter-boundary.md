@@ -30,14 +30,18 @@ Three layers, two of them meant to be optional:
    (`CMakeLists.txt:96-134`) that are **not** in `PINEFORGE_SOURCE_LAYER_SOURCES`
    (`CMakeLists.txt:81-94`): the `engine_*`, `native_*`, `ta_*`, `market_driver`, `magnifier`,
    `math`, `matrix`, `session_time`, `timeframe`, `timezone`, `str_utils`, `c_abi`,
-   `market_admission` (`CMakeLists.txt:110`), `reservation_expansion` (`CMakeLists.txt:105`) and
+   `reservation_expansion` (`CMakeLists.txt:105`) and
    `pending_order_mirror` (`CMakeLists.txt:113`); headers under `include/pineforge/`. One file
-   breaks the rule (`CMakeLists.txt:111`). **Three stems exist twice; the kernel copy is the
-   generic half** — `pineforge::admission` (`src/market_admission.cpp:7`), `ReservationExpansion`
-   (`src/reservation_expansion.cpp:7-8`), `include/pineforge/order_birth.hpp` — the
-   TradingView-selection halves keep the stem under `compat/pine/`
-   (`src/compat/pine/market_admission.cpp:6` = scope predicates;
-   `include/pineforge/compat/pine/order_birth.hpp:3-7` includes the kernel header).
+   breaks the rule (`CMakeLists.txt:111`). **Two stems exist twice; the kernel copy is the
+   generic half** — `ReservationExpansion` (`src/reservation_expansion.cpp:7-8`) and
+   `include/pineforge/order_birth.hpp` — the TradingView-selection halves keep the stem under
+   `compat/pine/` (`include/pineforge/compat/pine/order_birth.hpp:3-7` includes the kernel
+   header). The market-admission stem is *not* one of them: `pineforge::admission` — the
+   observation journal whose `Configuration` fields are `strategy()` declaration parameters and
+   whose events are TradingView admission reviews — is source-layer state since R5 lane N14
+   (`include/pineforge/source/market_admission.hpp`, `src/source/market_admission.cpp`; no kernel
+   translation unit ever consumed it), and `src/compat/pine/market_admission.cpp` holds the scope
+   predicates over it.
 2. **Source-adapter parity runtime — optional, TradingView parity.** The
    `PINEFORGE_SOURCE_LAYER_SOURCES` set (`CMakeLists.txt:81-94`): the seven `src/source/` units and
    five of the six `src/compat/pine/` units — the sixth is the boundary bug below

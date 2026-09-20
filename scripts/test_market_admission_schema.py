@@ -25,7 +25,7 @@ class AdmissionSchema(unittest.TestCase):
     def test_missing_reflection_is_rejected(self):
         directory, root = self.clone()
         try:
-            path = root / "src/market_admission.cpp"
+            path = root / "src/source/market_admission.cpp"
             path.write_text(path.read_text().replace("void reflect(const Event& value", "void missing_reflect(const Event& value", 1))
             with self.assertRaises(ValueError):
                 checker.check(root)
