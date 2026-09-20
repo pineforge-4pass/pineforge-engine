@@ -271,18 +271,39 @@ inline bool trail_best_improves(double best, double price, bool buy) noexcept {
     return buy ? price < best : price > best;
 }
 
+// The ladder index of a best on the quantized path (grid_best_print's index):
+// exact on the ladder, else the nearest under HalfUp and the favourable
+// enclosing tick under Directional.
+inline double grid_best_index(double best, bool buy, const GridThreshold& grid) noexcept {
+    const double exact = grid_exact_index(best, grid.tick);
+    if (!std::isnan(exact)) return exact;
+    if (grid.half_up) return std::round(best / grid.tick);
+    return buy ? grid_index_down(best, grid.tick) : grid_index_up(best, grid.tick);
+}
+
 // Zero-offset ride: the level is the best itself, so only a move strictly
 // past it exits. A cursor already strictly past the best exits at the cursor;
 // an adverse remaining suffix exits at the best. A favorable or flat suffix
 // never exits, so arming at the best cannot immediately fire the same trail.
+// Under a grid "strictly past" is on the ladder (L8b): the closed region one
+// tick beyond the best's ladder point, tested exactly like every other
+// trigger, with the crossing still booked at the best.
 inline std::optional<GeometricHit> trail_zero_stop_hit(
-        double from, double to, const GeometricHit& start, double best, bool buy) noexcept {
+        double from, double to, const GeometricHit& start, double best, bool buy,
+        const GridThreshold& grid = {}) noexcept {
     const double t_start = start.t;
     const double current = start.price;
     if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(best)
         || !std::isfinite(current) || !std::isfinite(t_start)
         || t_start < 0.0 || t_start > 1.0) {
         return std::nullopt;
+    }
+    if (grid_active(grid.tick)) {
+        const bool le = !buy;
+        const double past = (grid_best_index(best, buy, grid) + (buy ? 1.0 : -1.0)) * grid.tick;
+        auto hit = first_region_entry(from, to, start, past, le, true, grid);
+        if (hit && hit->at_level) hit->price = best;
+        return hit;
     }
     if (buy ? current > best : current < best) {
         return GeometricHit{t_start, current, false};
@@ -308,7 +329,7 @@ inline std::optional<GeometricHit> trail_stop_hit(
         || t_start < 0.0 || t_start > 1.0) {
         return std::nullopt;
     }
-    if (offset == 0.0) return trail_zero_stop_hit(from, to, start, best, buy);
+    if (offset == 0.0) return trail_zero_stop_hit(from, to, start, best, buy, grid);
     const bool le = !buy;
     return first_region_entry(from, to, start, stop, le, true, grid);
 }
