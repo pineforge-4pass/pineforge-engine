@@ -325,18 +325,6 @@ double source_level_on_price_grid(double level, double tick) noexcept {
     return level;
 }
 
-// A relative strategy.exit level: `ticks` from the parent's fill, toward
-// profit for the limit and toward loss for the stop, snapped to the grid on
-// the side that keeps the level at least that far away. One spelling for the
-// fill-point materialization and for the kernel's arm hook.
-double relative_limit_level(double fill, double profit_ticks, double tick, bool is_long) noexcept {
-    return directional_tick(fill + (is_long ? 1.0 : -1.0) * profit_ticks * tick, tick, is_long);
-}
-
-double relative_stop_level(double fill, double loss_ticks, double tick, bool is_long) noexcept {
-    return directional_tick(fill - (is_long ? 1.0 : -1.0) * loss_ticks * tick, tick, !is_long);
-}
-
 double source_trigger_threshold(double level, double tick,
                                 bool is_buy, bool is_limit) noexcept {
     if (!std::isfinite(level) || !finite_positive(tick)) return level;
@@ -2577,24 +2565,14 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             const auto* group = std::get_if<native_order::Member>(&request.group);
             const bool same_group = mine_group && group && mine_group->group == group->group
                 && mine_group->effect == group->effect;
+            // The armed child is a host-sized close of the book (its arm
+            // scope); so must the request be, or it is another request.
             const auto* sized = std::get_if<native_order::HostSized>(&request.intent);
-            // The kernel sized the child with the units its parent opened.
-            // That is this leg's quantity only when the fill point reserves
-            // the whole of a one-lot position for it (a sibling exit's share,
-            // an explicit quantity or a percentage keeps the source sizing).
-            // A reservation the source pins at placement (another entry id
-            // still pending) is that same whole lot, pinned the same way.
-            const double held = std::abs(physical.signed_units);
-            const bool whole_lot = sized && sized->kind == native_order::HostSizedKind::Close
-                && !sized->side && std::isnan(snapshot.requested_qty)
-                && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0 - 1e-9)
-                && (!std::isfinite(snapshot.projection_remaining_qty)
-                    || snapshot.projection_remaining_qty >= held - internal::kQtyEpsilon)
-                && physical.lot_count == 1U
-                && (std::holds_alternative<native_order::Independent>(request.owner)
-                    || std::holds_alternative<native_order::BindCohort>(request.owner))
+            const bool same_close = sized && sized->kind == native_order::HostSizedKind::Close
+                && !sized->side
+                && std::holds_alternative<native_order::Independent>(request.owner)
                 && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity);
-            if (same_trigger && same_group && whole_lot) {
+            if (same_trigger && same_group && same_close) {
                 accepted = armed->handle;
                 anchored_relative_legs_.erase(armed);
                 ++anchored_relative_stats_.adopted;
@@ -7214,7 +7192,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             && parent.is_long != (physical.signed_units > 0.0);
     };
     bool binds_pending_reversal_entry = false;
-    std::optional<native_order::RequestHandle> pending_parent_handle;
     for (const auto& pending : pending_same_bar_commands_)
         binds_pending_reversal_entry = binds_pending_reversal_entry
             || pending_default_reversal_parent(pending.snapshot);
@@ -7226,7 +7203,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (found != placement_.end()
             && pending_default_reversal_parent(found->second)) {
             binds_pending_reversal_entry = true;
-            if (physical.signed_units == 0.0) pending_parent_handle = handle;
         }
     }
     double reserved_exit_qty = kNaN;
@@ -7404,17 +7380,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     native_order::ExplicitUnits{qty}}};
             request.label = exit_id; request.comment = comment; request.trigger = trigger;
             request.owner = std::move(owner);
-            if (pending_parent_handle) {
-                // Generic WaitForApplied is the exact parent-activation
-                // primitive: a pre-armed child joins the remainder of the
-                // parent's fill bar and inherits only that opening's scope.
-                request.owner = native_order::WaitForApplied{*pending_parent_handle};
-                if (!std::isfinite(qty)
-                    && (!std::isfinite(qty_percent) || qty_percent >= 100.0 - 1e-9)) {
-                    request.intent = native_order::Reduce{
-                        native_order::OwnerOpenedUnits{}};
-                }
-            }
             request.group = std::move(group);
             PlacementSnapshot snapshot;
             snapshot.family = family;
@@ -7691,7 +7656,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 return;
             }
             if (snapshot.reservation_deferred_to_pending_entry
-                && !pending_parent_handle
                 && physical.signed_units == 0.0
                 && !(cohort_exposure_for(snapshot.from_entry) > 0.0)) {
                 auto queued = std::find_if(pending_bracket_legs_.begin(),
@@ -7951,18 +7915,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             && !cycle_cohort->second.opened.empty());
     bool placed_absolute_leg = false;
     if (finite_non_negative(limit_price)) {
-        // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: an
-        // exit limit is tested against the tick-quantized bar, so an ON-grid
-        // level is reached by a raw extreme half a tick short of it (NYSE:F
-        // high 10.175 -> 10.18 fills a 10.18 sell limit).  Only the
-        // calc_on_order_fills scheduler compares the raw bar; there an
-        // on-grid level stays raw.
-        const double snapped_limit = nearest_tick(limit_price, tick);
         submit_leg(PineOrderFamily::ExitLimit, native_order::Limit{
-            !finite_positive(tick)
-                    || (config_.calc_on_order_fills && snapped_limit == limit_price)
-                ? limit_price
-                : source_trigger_threshold(limit_price, tick, exit_is_buy, true)});
+            exit_limit_trigger(limit_price, tick, exit_is_buy)});
         placed_absolute_leg = true;
     } else if (std::isfinite(limit_price) && limit_price < 0.0
                && physical.signed_units > 0.0 && from_entry_filled_this_cycle) {
@@ -8023,49 +7977,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
         }
         if (trail_one_shot) {
-            double one_shot_level = native_trail_price;
-            if (!std::isfinite(source_trail_offset)) {
-                const double slipped = one_shot_level
-                    + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
-                one_shot_level = directional_tick(slipped, tick, exit_is_buy);
-            }
-            // A sell one-shot keeps the k / (1 / mintick) grid spelling so a
-            // chart print sitting exactly on the activation satisfies the
-            // generic `print >= level` bit-for-bit.  A buy one-shot keeps the
-            // directional k * mintick spelling instead: ab9714be books the
-            // crossed activation as a TRAIL event (engine_path_resolve.cpp:
-            // 984-987, fill.is_limit = false), so apply_slippage snaps it
-            // with round_to_mintick_directional, which materializes that same
-            // product, and the immutable generic buy limit accepts it because
-            // fill <= level holds by construction.  Re-spelling the buy level
-            // onto the division grid handed back a value one binary64 ULP
-            // away from the owner's fill and that ULP rode the equity path
-            // into printed PnL
-            // (zz-pop-stevenygabbyperez-fast-scalper-with-stops short exit
-            // 2025-04-02 22:00Z, activation 1870.0 - 3741 * 0.01: owner
-            // 1832.5900000000001, re-spelled 1832.59).
-            // ab9714be pine_fills.cpp:4607-4610: snap_trail_level_to_tick_grid
-            // aligns the trail level to the tick grid (sell one-shot).
-            if (!exit_is_buy) {
-                one_shot_level = source_level_on_price_grid(one_shot_level, tick);
-            }
-            // ab9714be engine_path_resolve.cpp:297-308 and 746-766: an
-            // omitted-offset trail's dormant activation is reached on the
-            // tick-quantized path (design-trail-activation-tick-bar), so a
-            // raw extreme half a tick short of the level already fires it.
-            // Only the arm threshold moves; settlement books the source
-            // level (source_trail_one_shot_fill).
-            // ab9714be engine_path_resolve.cpp:292-308 + 746-766 test the
-            // explicit-zero trail's dormant activation on the same
-            // tick-quantized path, so its arm threshold is the same half-up
-            // projection boundary: a buy one-shot is reached only strictly
-            // below activation + half a tick (NYSE:F 2026-04-10 16:30Z low
-            // 12.075 prints 12.08 and does not reach the 12.07 activation).
-            if ((!std::isfinite(source_trail_offset) || zero_distance)
-                && finite_positive(tick)) {
-                one_shot_level = source_trigger_threshold(
-                    one_shot_level, tick, exit_is_buy, true);
-            }
+            const double one_shot_level = one_shot_trail_trigger(
+                native_trail_price, source_trail_offset, tick, exit_is_buy,
+                !std::isfinite(source_trail_offset) || zero_distance);
             // ab9714be engine_path_resolve.cpp:984-987 books the crossed
             // activation as a TRAIL event (fill.is_limit = false), and
             // pine_fills.cpp:4396-4411 / pine_policy_members.cpp:45-53 then
@@ -9309,13 +9223,17 @@ void PineExecutionAdapter::materialize_relative_exits(
         double limit = kNaN;
         double stop = kNaN;
         double offset = value.trail_offset;
+        // `ticks` from the parent's fill, snapped to the grid on the side that
+        // keeps the level at least that far away (the kernel's Directional
+        // anchor rounding spells the same ladder point for an armed child).
+        const double side = opening.is_long ? 1.0 : -1.0;
         if (finite_positive(value.profit_ticks)) {
-            limit = relative_limit_level(event.resolved_price, value.profit_ticks, tick,
-                                         opening.is_long);
+            limit = directional_tick(event.resolved_price + side * value.profit_ticks * tick,
+                                     tick, opening.is_long);
         }
         if (finite_positive(value.loss_ticks)) {
-            stop = relative_stop_level(event.resolved_price, value.loss_ticks, tick,
-                                       opening.is_long);
+            stop = directional_tick(event.resolved_price - side * value.loss_ticks * tick,
+                                    tick, !opening.is_long);
         }
         // An omitted trail_offset is a one-shot activation leg in Pine.  Do
         // not synthesize a trailing distance from trail_points here; an
@@ -9365,18 +9283,15 @@ void PineExecutionAdapter::withdraw_anchored_relative_legs(
 bool PineExecutionAdapter::anchorable_relative_exit(
         const PendingRelativeExit& value, native_order::RequestHandle& parent,
         bool& parent_long) const {
-    // The kernel's arm binds the child to the lot its parent opened and sizes
-    // it with that lot's units. That is this adapter's fill-point leg only
-    // for the whole of a named parent's own lot, opened from a flat book.
-    if (value.from_entry.empty() || !std::isnan(value.qty)
-        || (std::isfinite(value.qty_percent) && value.qty_percent < 100.0 - 1e-9)) {
+    // The kernel arms the child as a host-sized close of the book its
+    // parent's fill leaves (NativeArmScope::Book), which is this adapter's
+    // fill-point leg under the FIFO close rule. The ANY rule binds that leg
+    // to the named cohort instead, a scope the arm does not spell; and an
+    // explicit quantity is not born at the fill point at all -- exit() stages
+    // it per origin (pending_bracket_legs_) and submits it at a later flush.
+    if (value.from_entry.empty() || config_.close_entries_rule_any || !std::isnan(value.qty))
         return false;
-    }
-    if (config_.calc_on_order_fills || config_.process_orders_on_close || stream_mode_
-        || coof_recalc_active_ || !finite_positive(staged_.syminfo.mintick)) {
-        return false;
-    }
-    if (require_host().physical_position().signed_units != 0.0) return false;
+    if (stream_mode_ || !finite_positive(staged_.syminfo.mintick)) return false;
     const auto staged_same_id = [&](const PlacementSnapshot& row) {
         return row.opening && row.source_id == value.from_entry;
     };
@@ -9525,12 +9440,18 @@ void PineExecutionAdapter::anchor_relative_exits() {
                 leg.parent_long = parent_long;
                 leg.operand_ticks = shape.operand_ticks;
                 leg.trail_offset = value.trail_offset;
-                leg.request.intent = native_order::Reduce{native_order::OwnerOpenedUnits{}};
+                leg.request.intent = native_order::HostSized{
+                    native_order::HostSizedKind::Close, std::nullopt};
                 leg.request.label = value.exit_id;
                 leg.request.comment = value.comment;
                 leg.request.trigger = std::move(shape.trigger);
+                // The leg exit() submits in the parent's fill callback is
+                // born after the fill print and closes the book; so does this
+                // child (AfterArmPrint, Book).
                 leg.request.owner = native_order::WaitForApplied{
-                    parent, native_order::NativeArmVisibility::PendingUntilArmed};
+                    parent, native_order::NativeArmVisibility::PendingUntilArmed,
+                    native_order::NativeArmFirstMatch::AfterArmPrint,
+                    native_order::NativeArmScope::Book};
                 leg.request.group = group_for(group_name, 1,
                                               static_cast<std::int64_t>(shape.family));
                 if (auto* member = std::get_if<native_order::Member>(&leg.request.group)) {
@@ -9567,13 +9488,6 @@ bool PineExecutionAdapter::armed_relative_legs_adoptable(
         || coof_recalc_active_) {
         return false;
     }
-    // The print the kernel's path cursor stands on: the parent's raw fill
-    // print, not the slipped price it booked.
-    const double print = event.raw_price;
-    if (!std::isfinite(print)) return false;
-    // The kernel bound each child to the lot this fill opened and sized it
-    // with that lot's units; the source leg is that only on a one-lot book.
-    if (require_host().physical_position().lot_count != 1U) return false;
     // Leg for leg: every shape of every queued definition has its own armed
     // child on this parent, and this parent carries no other child.
     std::size_t expected = 0;
@@ -9597,18 +9511,69 @@ bool PineExecutionAdapter::armed_relative_legs_adoptable(
             || !std::isfinite(leg.installed_level)) {
             return false;
         }
-        // A request born in this fill's callback starts AFTER the fill print
-        // (the kernel's born-on-the-remaining-path rule), whereas a child
-        // armed by the fill may match AT it. The two only differ when the
-        // level is already inside its region at this cursor.
-        const bool exit_is_buy = !leg.parent_long;
-        const bool region_below = std::holds_alternative<native_order::Stop>(leg.request.trigger)
-            ? !exit_is_buy : exit_is_buy;
-        if (region_below ? print <= leg.installed_level : print >= leg.installed_level)
-            return false;
         ++armed;
     }
     return armed == expected && armed != 0;
+}
+
+double PineExecutionAdapter::exit_limit_trigger(double limit_price, double tick,
+                                                bool exit_is_buy) const noexcept {
+    // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: an
+    // exit limit is tested against the tick-quantized bar, so an ON-grid
+    // level is reached by a raw extreme half a tick short of it (NYSE:F
+    // high 10.175 -> 10.18 fills a 10.18 sell limit).  Only the
+    // calc_on_order_fills scheduler compares the raw bar; there an
+    // on-grid level stays raw.
+    if (!finite_positive(tick)
+        || (config_.calc_on_order_fills && nearest_tick(limit_price, tick) == limit_price)) {
+        return limit_price;
+    }
+    return source_trigger_threshold(limit_price, tick, exit_is_buy, true);
+}
+
+double PineExecutionAdapter::one_shot_trail_trigger(double activation, double source_trail_offset,
+                                                    double tick, bool exit_is_buy,
+                                                    bool quantized_activation) const noexcept {
+    double one_shot_level = activation;
+    if (!std::isfinite(source_trail_offset)) {
+        const double slipped = one_shot_level
+            + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
+        one_shot_level = directional_tick(slipped, tick, exit_is_buy);
+    }
+    // A sell one-shot keeps the k / (1 / mintick) grid spelling so a
+    // chart print sitting exactly on the activation satisfies the
+    // generic `print >= level` bit-for-bit.  A buy one-shot keeps the
+    // directional k * mintick spelling instead: ab9714be books the
+    // crossed activation as a TRAIL event (engine_path_resolve.cpp:
+    // 984-987, fill.is_limit = false), so apply_slippage snaps it
+    // with round_to_mintick_directional, which materializes that same
+    // product, and the immutable generic buy limit accepts it because
+    // fill <= level holds by construction.  Re-spelling the buy level
+    // onto the division grid handed back a value one binary64 ULP
+    // away from the owner's fill and that ULP rode the equity path
+    // into printed PnL
+    // (zz-pop-stevenygabbyperez-fast-scalper-with-stops short exit
+    // 2025-04-02 22:00Z, activation 1870.0 - 3741 * 0.01: owner
+    // 1832.5900000000001, re-spelled 1832.59).
+    // ab9714be pine_fills.cpp:4607-4610: snap_trail_level_to_tick_grid
+    // aligns the trail level to the tick grid (sell one-shot).
+    if (!exit_is_buy) one_shot_level = source_level_on_price_grid(one_shot_level, tick);
+    // ab9714be engine_path_resolve.cpp:297-308 and 746-766: an
+    // omitted-offset trail's dormant activation is reached on the
+    // tick-quantized path (design-trail-activation-tick-bar), so a
+    // raw extreme half a tick short of the level already fires it.
+    // Only the arm threshold moves; settlement books the source
+    // level (source_trail_one_shot_fill).
+    // ab9714be engine_path_resolve.cpp:292-308 + 746-766 test the
+    // explicit-zero trail's dormant activation on the same
+    // tick-quantized path, so its arm threshold is the same half-up
+    // projection boundary: a buy one-shot is reached only strictly
+    // below activation + half a tick (NYSE:F 2026-04-10 16:30Z low
+    // 12.075 prints 12.08 and does not reach the 12.07 activation).
+    if (quantized_activation && finite_positive(tick)) {
+        one_shot_level = source_trigger_threshold(one_shot_level, tick, exit_is_buy, true);
+    }
+    return one_shot_level;
 }
 
 std::optional<double> PineExecutionAdapter::resolve_anchored_level(
@@ -9624,38 +9589,24 @@ std::optional<double> PineExecutionAdapter::resolve_anchored_level(
     // Without a usable tick there is no projection to restate; the kernel
     // keeps its own level and the fill point withdraws the child.
     if (!finite_positive(tick)) return std::nullopt;
-    const bool is_long = leg.parent_long;
-    const bool exit_is_buy = !is_long;
-    const double side = is_long ? 1.0 : -1.0;
+    // The kernel owns the fill-relative arithmetic: view.kernel_level is
+    // fill + ticks on the tick ladder (FromOwnerFill, Directional), the very
+    // ladder point materialize_relative_exits hands the fill-point exit().
+    // What stays here is TradingView's spelling of that point and its
+    // trigger projection, shared with exit().
+    const bool exit_is_buy = !leg.parent_long;
     double installed = kNaN;
     if (leg.family == PineOrderFamily::ExitLimit) {
-        // materialize_relative_exits + exit(): the fill-relative limit on the
-        // grid, then the half-tick arm threshold of the tick-quantized bar.
-        const double limit = source_level_on_price_grid(
-            relative_limit_level(view.owner_fill_price, leg.operand_ticks, tick, is_long), tick);
-        installed = source_trigger_threshold(limit, tick, exit_is_buy, true);
+        installed = exit_limit_trigger(
+            source_level_on_price_grid(view.kernel_level, tick), tick, exit_is_buy);
     } else if (leg.family == PineOrderFamily::ExitStop) {
-        const double stop = source_level_on_price_grid(
-            relative_stop_level(view.owner_fill_price, leg.operand_ticks, tick, is_long), tick);
-        installed = source_trigger_threshold(stop, tick, exit_is_buy, false);
+        installed = source_trigger_threshold(
+            source_level_on_price_grid(view.kernel_level, tick), tick, exit_is_buy, false);
     } else {
-        // exit() resolves trail_points against the live position's average
-        // price, which the parent's own fill has already moved.
-        const double entry_price = require_host().position_avg_price();
-        const double trail_price = directional_tick(
-            entry_price + side * leg.operand_ticks * tick, tick, is_long);
-        if (std::holds_alternative<native_order::Trail>(leg.request.trigger)) {
-            installed = trail_price;
-        } else {
-            double one_shot = trail_price;
-            if (!std::isfinite(leg.trail_offset)) {
-                const double slipped = one_shot
-                    + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
-                one_shot = directional_tick(slipped, tick, exit_is_buy);
-            }
-            if (!exit_is_buy) one_shot = source_level_on_price_grid(one_shot, tick);
-            installed = source_trigger_threshold(one_shot, tick, exit_is_buy, true);
-        }
+        const double trail_price = directional_tick(view.kernel_level, tick, leg.parent_long);
+        installed = std::holds_alternative<native_order::Trail>(leg.request.trigger)
+            ? trail_price
+            : one_shot_trail_trigger(trail_price, leg.trail_offset, tick, exit_is_buy, true);
     }
     // The kernel refuses a level its trigger cannot hold and fails the run.
     // A projection that lands there (a short's relative level below zero) is
@@ -9994,30 +9945,6 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
 }
 
 native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
-        const NativeExecutionTermsFacts& facts) const {
-    native_order::ExecutionTerms result = resolve_source_terms(facts);
-    // R5 lane R4d: an adopted anchored leg is sized by the kernel (the units
-    // its parent opened, bound at the arm), so its quantity is resolved and
-    // the host answers the price alone.
-    if (facts.definition && anchored_relative_request(facts.definition->request)) {
-        result.units.reset();
-        result.grid_policy = native_order::ExecutionGridPolicy::SnapToGrid;
-    }
-    return result;
-}
-
-bool PineExecutionAdapter::anchored_relative_request(
-        const native_order::Request& request) noexcept {
-    // The spelling anchor_relative_exits alone writes, and the arm leaves the
-    // owner relation of a definition untouched: a PendingUntilArmed child
-    // sized with the units its parent opened.
-    const auto* wait = std::get_if<native_order::WaitForApplied>(&request.owner);
-    const auto* reduce = std::get_if<native_order::Reduce>(&request.intent);
-    return wait && wait->visibility == native_order::NativeArmVisibility::PendingUntilArmed
-        && reduce && std::holds_alternative<native_order::OwnerOpenedUnits>(reduce->size);
-}
-
-native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const NativeExecutionTermsFacts& facts) const {
     native_order::ExecutionTerms result{facts.default_resolved_price, std::nullopt,
                                         native_order::OpeningShape::Transact};
@@ -10460,11 +10387,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
     // literal transaction, a reversal target -- takes the explicit path.
     const bool core_sized = std::holds_alternative<native_order::Sized>(
         facts.definition->request.intent);
-    // R5 lane R4d: an adopted anchored leg is a core-sized CLOSE in the same
-    // sense -- the kernel bound its units at the arm (OwnerOpenedUnits), the
-    // source still owns its fill price.
-    const bool core_sized_close = anchored_relative_request(facts.definition->request);
-    if (!core_sized && !core_sized_close
+    if (!core_sized
         && !std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
         if (std::holds_alternative<native_order::Market>(trigger)) {
             result.resolved_price = source_bar_fill();
@@ -10760,9 +10683,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
                 && facts.scope_exposure_units > 0.0
                 && (!source.from_entry.empty()
                     || source.pooc_global_full_exit_dynamic_qty)) {
-                const bool whole_scope_owner = !std::holds_alternative<
-                    native_order::Independent>(facts.definition->request.owner)
-                    || source.from_entry.empty();
+                // An adopted anchored leg is the same book close, armed.
+                const auto& owner = facts.definition->request.owner;
+                const auto* armed = std::get_if<native_order::WaitForApplied>(&owner);
+                const bool book_owner = std::holds_alternative<native_order::Independent>(owner)
+                    || (armed && armed->scope == native_order::NativeArmScope::Book);
+                const bool whole_scope_owner = !book_owner || source.from_entry.empty();
                 if (whole_scope_owner) result.units = std::isfinite(source.requested_qty)
                     ? std::min(*result.units, facts.scope_exposure_units)
                     : cover_full_scope(facts.scope_exposure_units);

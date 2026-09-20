@@ -773,13 +773,13 @@ public:
                const std::string& oca_name = {}, int oca_type = 0);
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
-    native_order::ExecutionTerms resolve_source_terms(const NativeExecutionTermsFacts&) const;
     // R5 lane R4d. anchor_relative_exits runs at the end of a source
     // evaluation: every queued relative strategy.exit whose parent entry is a
     // live kernel request is submitted as that parent's anchored bracket
     // child. resolve_anchored_level is the kernel's once-per-arm level hook:
-    // TradingView's projection of fill + ticks (directional_tick, the price
-    // grid spelling, the half-tick trigger threshold) is applied there.
+    // the kernel computes fill + ticks on the tick ladder, and TradingView's
+    // spelling of that ladder point and its trigger projection (the half-tick
+    // threshold exit() also applies) are restated there.
     void anchor_relative_exits();
     std::optional<double> resolve_anchored_level(const NativeAnchoredLevelView&) const;
     // How many relative legs this run placed as anchored kernel children, how
@@ -1070,13 +1070,16 @@ private:
     };
 
     // R5 lane R4d: one relative leg of a queued strategy.exit, spelled as the
-    // kernel's anchored bracket child (native_order::FromOwnerFill under
-    // WaitForApplied{parent, PendingUntilArmed}). Until its parent fills it is
-    // a kernel request only: no placement row, no live handle, so every source
-    // book (reservations, admission, the pending projection) reads exactly
-    // what it read before. `installed_level` is the trigger level the arm hook
-    // restated; the fill-point exit() re-run adopts the armed request when it
-    // would submit that same trigger, and withdraws it otherwise.
+    // kernel's anchored bracket child: the host-sized book close exit()
+    // submits at the parent's fill, placed ahead of it (FromOwnerFill under
+    // WaitForApplied{parent, PendingUntilArmed, AfterArmPrint, Book}). Until
+    // its parent fills it is a kernel request only: no placement row, no live
+    // handle, so every source book (reservations, admission, the pending
+    // projection) reads exactly what it read before. `installed_level` is the
+    // trigger level the arm hook restated; the fill-point exit() re-run
+    // adopts the armed request when it is the request it would submit (same
+    // trigger bits, same group, a host-sized book close), and withdraws it
+    // otherwise.
     struct AnchoredRelativeLeg {
         SourceId exit_id;
         SourceId from_entry;
@@ -1242,7 +1245,13 @@ private:
     bool armed_relative_legs_adoptable(const PlacementSnapshot& opening,
                                        const native_order::ExecutionAppliedEvent&,
                                        const std::vector<PendingRelativeExit>&) const;
-    static bool anchored_relative_request(const native_order::Request&) noexcept;
+    // TradingView's trigger projection of an exit level, one spelling for
+    // exit() and for the kernel's arm hook: the limit leg's tick-quantized
+    // threshold (raw on-grid under calc_on_order_fills) and the one-shot
+    // trail activation touch.
+    double exit_limit_trigger(double limit_price, double tick, bool exit_is_buy) const noexcept;
+    double one_shot_trail_trigger(double activation, double source_trail_offset, double tick,
+                                  bool exit_is_buy, bool quantized_activation) const noexcept;
     void materialize_pending_bracket_legs(
         const native_order::ExecutionAppliedEvent&);
     void stage_flat_children_before_parent(const SourceId&, std::int32_t,

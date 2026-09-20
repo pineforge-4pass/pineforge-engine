@@ -442,10 +442,11 @@ void adapter_projects_the_tick_the_kernel_resolves_against() {
 // queue until the parent's fill re-ran the whole exit() pipeline. It is now
 // also submitted as the parent's anchored bracket child
 // (native_order::FromOwnerFill in ticks, Directional rounding,
-// WaitForApplied{parent, PendingUntilArmed}); the kernel arms it at the fill,
-// the adapter restates TradingView's level projection in
+// WaitForApplied{parent, PendingUntilArmed, AfterArmPrint, Book}, a
+// host-sized close); the kernel arms it at the fill, the adapter restates
+// TradingView's projection of the kernel's ladder point in
 // resolve_anchored_level, and the fill-point re-run ADOPTS the armed request
-// when it is the very trigger that re-run would have submitted.
+// when it is the very request that re-run would have submitted.
 //
 // Every scenario below queues at least one relative operand against a parent
 // that is still pending. The pinned facts are the closed rows, the equity
@@ -498,6 +499,7 @@ enum class Shape {
     RelSharedOca,
     RelBreakoutPair,
     RelBreakoutPairSetOnce,
+    RelPyramidSetOnce,
 };
 
 struct Fnv {
@@ -533,6 +535,7 @@ public:
         config.commission_value = 0.0;
         config.slippage = shape == Shape::RelSlippage ? 2 : 0;
         config.pyramiding = shape == Shape::RelPyramid || shape == Shape::RelPyramidOtherId
+                || shape == Shape::RelPyramidSetOnce
             ? 2 : 1;
         if (shape == Shape::RelDeclined || shape == Shape::RelDeclinedFlat) {
             config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
@@ -848,6 +851,19 @@ public:
                               150.0, 100.0);
             }
             break;
+        case Shape::RelPyramidSetOnce:
+            // R5 gap lane N13. The bracket is set ONCE for "L" and a second
+            // "L" entry adds a lot afterwards without re-issuing it: the
+            // source leg closes the book, so both lots leave at the target.
+            // A child bound to the first parent's own lot leaves the add
+            // open (the R4d spelling did; see RelPyramidSetOnce's pin note).
+            if (bar == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",
+                              400.0, 400.0);
+            }
+            if (bar == 2) strategy_entry("L", true);
+            break;
         case Shape::RelReissueChanged:
             // The queued definition changes while its limit parent still rests.
             if (signed_units() == 0.0 && bar < 8) strategy_entry("L", true, 97.25);
@@ -1001,6 +1017,48 @@ struct Named {
     Mode mode = Mode::Plain;
 };
 
+// R5 gap lane N13 re-pinned the {anchored, adopted, withdrawn} counts below.
+// The anchored child is now the request exit() submits at the parent's fill
+// (a host-sized close, NativeArmScope::Book, NativeArmFirstMatch::
+// AfterArmPrint), so it is that request for every quantity and every book
+// shape, and the hook restates the kernel's own ladder point. No closed row,
+// equity figure or book digest moved; only these counts did:
+//   rel-declined        expectation corrected: {0,0,0} -> {2,0,2}, because a
+//                       reversal parent is anchorable (the arm binds the book
+//                       the reversal leaves) and the kernel itself retires
+//                       the two children when the parent is declined.
+//   rel-reversal        expectation corrected: {0,0,0} -> {2,2,0}, because of
+//                       the same reversal-owner measurement: no kernel fact
+//                       was missing, the flat-only predicate was.
+//   rel-partial         expectation corrected: {0,0,0} -> {4,4,0}, because a
+//                       Book child is host-sized: the 50 % leg and its
+//                       remainder sibling are sized by the same terms code
+//                       that sizes the fill-point request.
+//   rel-slippage, mag-rel-slippage
+//                       expectation corrected: {4,0,4} -> {4,4,0}, because
+//                       AfterArmPrint gives the armed child the birth rule of
+//                       a callback-born leg, so a level the fill print already
+//                       satisfies no longer forces the fallback.
+//   coof-rel-bracket-tp, coof-rel-trail-offset, pooc-rel-bracket-tp,
+//   pooc-rel-short      expectation corrected: {0,0,0} -> {2,2,0} / {1,1,0},
+//                       because the mode predicate was unmeasured: the hook
+//                       shares exit()'s projection (a raw on-grid limit under
+//                       calc_on_order_fills) and adoption is bit-exact.
+//   rel-breakout-pair, mag-rel-breakout-pair
+//                       expectation corrected: {40,14,26} -> {40,14,24},
+//   rel-breakout-pair-set-once
+//                       expectation corrected: {6,4,2} -> {4,4,0}, because the
+//                       resting opposite parent keeps its children while the
+//                       other side is in position (no flat-only withdrawal).
+// Retained off the kernel path, each with its measurement: rel-qty-explicit
+// (an explicit quantity is staged per origin by exit() and submitted at a
+// later flush, so the fill point has no request for a child to be) and
+// rel-cancel-exit-id (strategy.cancel removes the definition inside the same
+// evaluation: no leg exists to place). The withdrawals that remain are the
+// kernel cancelling a replaced, cancelled or declined parent's children
+// (rel-limit-parent, rel-reissue-changed, the breakout pair, ...), a zero-
+// capacity sibling (rel-two-exits) and an unrepresentable level
+// (rel-negative-short).
 constexpr Named kShapes[] = {
     {"RelBracketTp", "rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}},
     {"RelBracketSl", "rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}},
@@ -1014,11 +1072,11 @@ constexpr Named kShapes[] = {
     {"RelLimitParent", "rel-limit-parent", Shape::RelLimitParent, 1, {12, 4, 8}},
     {"RelParentCancel", "rel-parent-cancel", Shape::RelParentCancel, 1, {4, 2, 2}},
     {"RelPyramid", "rel-pyramid", Shape::RelPyramid, 1, {2, 2, 0}},
-    {"RelDeclined", "rel-declined", Shape::RelDeclined, 1, {0, 0, 0}},
+    {"RelDeclined", "rel-declined", Shape::RelDeclined, 1, {2, 0, 2}},
     {"RelOcaName", "rel-oca-name", Shape::RelOcaName, 1, {2, 2, 0}},
-    {"RelSlippage", "rel-slippage", Shape::RelSlippage, 1, {4, 0, 4}},
-    {"RelPartial", "rel-partial", Shape::RelPartial, 1, {0, 0, 0}},
-    {"RelReversal", "rel-reversal", Shape::RelReversal, 1, {0, 0, 0}},
+    {"RelSlippage", "rel-slippage", Shape::RelSlippage, 1, {4, 4, 0}},
+    {"RelPartial", "rel-partial", Shape::RelPartial, 1, {4, 4, 0}},
+    {"RelReversal", "rel-reversal", Shape::RelReversal, 1, {2, 2, 0}},
     {"RelPyramidOtherId", "rel-pyramid-other-id", Shape::RelPyramidOtherId, 1, {2, 2, 0}},
     {"RelOrderAdd", "rel-order-add", Shape::RelOrderAdd, 1, {2, 2, 0}},
     {"RelPartialClose", "rel-partial-close", Shape::RelPartialClose, 1, {2, 2, 0}},
@@ -1034,10 +1092,10 @@ constexpr Named kShapes[] = {
     {"RelQtyExplicit", "rel-qty-explicit", Shape::RelQtyExplicit, 1, {0, 0, 0}},
     {"RelReissueChanged", "rel-reissue-changed", Shape::RelReissueChanged, 1, {18, 2, 16}},
     {"RelSharedOca", "rel-shared-oca", Shape::RelSharedOca, 1, {6, 4, 2}},
-    {"RelBreakoutPair", "rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 26}},
+    {"RelBreakoutPair", "rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 24}},
     {"RelBreakoutPairSetOnce", "rel-breakout-pair-set-once", Shape::RelBreakoutPairSetOnce, 1,
-     {6, 4, 2}},
-    {"MagRelBreakoutPair", "mag-rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 26},
+     {4, 4, 0}},
+    {"MagRelBreakoutPair", "mag-rel-breakout-pair", Shape::RelBreakoutPair, 1, {40, 14, 24},
      Mode::Magnifier},
     {"MagRelBracketTp", "mag-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::Magnifier},
     {"MagRelBracketSl", "mag-rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}, Mode::Magnifier},
@@ -1046,11 +1104,14 @@ constexpr Named kShapes[] = {
     {"MagRelLimitParent", "mag-rel-limit-parent", Shape::RelLimitParent, 1, {12, 4, 8}, Mode::Magnifier},
     {"MagRelStopParent", "mag-rel-stop-parent", Shape::RelStopParent, 1, {2, 2, 0}, Mode::Magnifier},
     {"MagRelShort", "mag-rel-short", Shape::RelShort, 1, {2, 2, 0}, Mode::Magnifier},
-    {"MagRelSlippage", "mag-rel-slippage", Shape::RelSlippage, 1, {4, 0, 4}, Mode::Magnifier},
-    {"CoofRelBracketTp", "coof-rel-bracket-tp", Shape::RelBracketTp, 1, {0, 0, 0}, Mode::CalcOnOrderFills},
-    {"CoofRelTrailOffset", "coof-rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}, Mode::CalcOnOrderFills},
-    {"PoocRelBracketTp", "pooc-rel-bracket-tp", Shape::RelBracketTp, 1, {0, 0, 0}, Mode::ProcessOnClose},
-    {"PoocRelShort", "pooc-rel-short", Shape::RelShort, 1, {0, 0, 0}, Mode::ProcessOnClose},
+    {"MagRelSlippage", "mag-rel-slippage", Shape::RelSlippage, 1, {4, 4, 0}, Mode::Magnifier},
+    {"CoofRelBracketTp", "coof-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::CalcOnOrderFills},
+    {"CoofRelTrailOffset", "coof-rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}, Mode::CalcOnOrderFills},
+    {"PoocRelBracketTp", "pooc-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::ProcessOnClose},
+    {"PoocRelShort", "pooc-rel-short", Shape::RelShort, 1, {2, 2, 0}, Mode::ProcessOnClose},
+    {"RelPyramidSetOnce", "rel-pyramid-set-once", Shape::RelPyramidSetOnce, 2, {2, 2, 0}},
+    {"MagRelPyramidSetOnce", "mag-rel-pyramid-set-once", Shape::RelPyramidSetOnce, 2, {2, 2, 0},
+     Mode::Magnifier},
 };
 
 #ifdef PINEFORGE_R4D_HARVEST
@@ -1351,6 +1412,17 @@ constexpr Row kPoocRelShort_rows[] = {
     {1700000000000LL, 1700000180000LL, 100, 101.5, 2, -3, 0, 0},
 };
 constexpr Pinned kPoocRelShort = {kPoocRelShort_rows, 1, 9997, 3, 0, 0, 0x47a1401276fc97fcULL};
+constexpr Row kRelPyramidSetOnce_rows[] = {
+    {1700000060000LL, 1700000300000LL, 100, 104, 2, 8, 1, 0},
+    {1700000180000LL, 1700000300000LL, 100.75, 104, 2, 6.5, 1, 0},
+};
+constexpr Pinned kRelPyramidSetOnce = {kRelPyramidSetOnce_rows, 2, 10014.5, 0, 0, 0, 0x3ff244519fd858e8ULL};
+
+constexpr Row kMagRelPyramidSetOnce_rows[] = {
+    {120000LL, 660000LL, 100, 104, 2, 8, 1, 0},
+    {360000LL, 660000LL, 100.75, 104, 2, 6.5, 1, 0},
+};
+constexpr Pinned kMagRelPyramidSetOnce = {kMagRelPyramidSetOnce_rows, 2, 10014.5, 0, 0, 0, 0xa608f3773ef1c340ULL};
 // R4D_PINNED_DATA_END
 
 constexpr const Pinned* kPinned[] = {
@@ -1401,6 +1473,8 @@ constexpr const Pinned* kPinned[] = {
     &kCoofRelTrailOffset,
     &kPoocRelBracketTp,
     &kPoocRelShort,
+    &kRelPyramidSetOnce,
+    &kMagRelPyramidSetOnce,
 };
 static_assert(std::size(kPinned) == std::size(kShapes));
 
