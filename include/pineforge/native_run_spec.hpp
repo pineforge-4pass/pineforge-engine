@@ -435,11 +435,50 @@ struct IntrabarPath {
 // native_series_bar() answers nullopt — the empty that stands for na — on
 // exactly the bars the series does not publish on). It changes nothing about
 // which buckets complete, when they are delivered, or what they contain.
+//
+// `source` names the bars the series is built from. Input (the default, and
+// the whole surface described above) aggregates the accepted input.
+// AuxiliaryFeed aggregates NativeRunSpec::auxiliary_feed instead — the finer
+// bars the input does not have — so `tf` then pairs with the FEED's timeframe
+// exactly as script_tf pairs with input_tf, and may be finer than the input,
+// equal to it or coarser. See NativeAuxiliaryFeed for the routing rule.
+enum class NativeSeriesSource : std::uint8_t {
+    Input = 0,
+    AuxiliaryFeed = 1,
+};
+
 struct NativeTimeframeSubscription {
     std::string tf;
     std::vector<Bar> authoritative_bars;
     bool lookahead = false;
     bool gaps = false;
+    NativeSeriesSource source = NativeSeriesSource::Input;
+};
+
+// An auxiliary feed of the run's OWN symbol at a timeframe strictly finer
+// than the input: the bars the input feed does not have. It drives nothing by
+// itself — no matching point, no calculation, no script bar — and is read
+// only by the declared series whose `source` is AuxiliaryFeed.
+//
+// `tf` must parse, and input_tf must pair over it exactly as a script_tf pairs
+// over an input_tf, strictly coarser: "1" under a "15" input, "15" under "D".
+// `bars` are strictly increasing in time and may be empty (a stream that
+// learns every bar live, NativeStrategyHost::append_auxiliary_bars).
+//
+// Routing is by time and by nothing else. When an input bar is accepted, every
+// feed bar not yet consumed that opened BEFORE that input's period ended
+// (NativeInterval::next_period_open_ms of the input's own interval) is folded,
+// in feed order, into each AuxiliaryFeed series, ahead of that input's
+// aggregation, matching and calculation — the delivery point a series built
+// from the input has. So bars inside the input ride on it; bars in a hole of
+// the input ride on the next accepted input; bars earlier than the first
+// input are folded on that first input, which is how a host supplies history
+// the input does not reach; and bars later than the last input's period are
+// never folded. There is no chart-slice mapping, no label re-keying and no
+// deferred publication: those are a source layer's.
+struct NativeAuxiliaryFeed {
+    std::string tf;
+    std::vector<Bar> bars;
 };
 
 // One complete setup value, staged/copied by NativeStrategyHost before it is
@@ -528,6 +567,11 @@ struct NativeRunSpec {
     // no evaluator is registered, no feed is prepared, and the run spec's
     // continuation digest is the pre-subscription one.
     std::vector<NativeTimeframeSubscription> subscriptions;
+    // Opt-in auxiliary finer feed. Absent is the whole default surface:
+    // nothing is stored, nothing is routed, and the continuation digest is the
+    // pre-feed one. Folded into it only when the block is present, exactly as
+    // `margin` and `risk` are.
+    std::optional<NativeAuxiliaryFeed> auxiliary_feed;
 };
 
 enum class NativeRunSpecField : std::uint8_t {
@@ -552,6 +596,7 @@ enum class NativeRunSpecField : std::uint8_t {
     Calculation, OpenBarView,
     RiskLimits, RiskDrawdown, RiskIntradayLoss, RiskLossDays, RiskFillsPerDay,
     RiskDayBasis, RiskAction,
+    AuxiliaryFeedTimeframe, AuxiliaryFeedBars, SubscriptionSource,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -624,6 +669,25 @@ enum class NativeRunSpecError : std::uint8_t {
     // waiving both states nothing at all, so it is named rather than read as
     // "unlimited leverage, never liquidated".
     MarginSideUndeclared,
+    // An auxiliary feed whose literal does not parse, or whose pairing under
+    // input_tf is not one an input would accept under a script_tf.
+    InvalidAuxiliaryFeedTimeframe,
+    // An auxiliary feed that is not strictly finer than input_tf. The input
+    // already carries its own timeframe and everything coarser.
+    AuxiliaryFeedNotFinerThanInput,
+    // Auxiliary bars that are not strictly increasing in time, or that carry
+    // a non-finite price or volume.
+    UnorderedAuxiliaryFeedBars,
+    InvalidAuxiliaryFeedBar,
+    // An auxiliary feed declared with no detected input timeframe to be
+    // finer than.
+    AuxiliaryFeedWithoutTimeframe,
+    // A series source outside its enumeration.
+    UnknownSeriesSource,
+    // A series built from the auxiliary feed in a spec that declares none.
+    SubscriptionWithoutAuxiliaryFeed,
+    // A series built from the auxiliary feed and strictly finer than it.
+    SubscriptionFinerThanAuxiliaryFeed,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -670,6 +734,26 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
         const std::vector<NativeTimeframeSubscription>& subscriptions,
         const std::string& input_tf, bool timeframe_undetected) noexcept;
 
+// The same judgement for a run that declares an auxiliary feed: the feed is
+// judged first (validate_native_auxiliary_feed), then every series, a series
+// built from the feed pairing with the FEED's timeframe. The three-argument
+// form above is this one with no feed, where such a series is refused as
+// SubscriptionWithoutAuxiliaryFeed.
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed) noexcept;
+
+// Exactly the part of validate_native_run_spec that judges the auxiliary
+// feed, against a stated input timeframe: the literal, the strictly-finer
+// pairing under the input, the order and structure of its bars, and the
+// undetected-timeframe rule. An absent feed is always valid. A host that
+// declares its feed at begin (NativeStrategyHost::declare_auxiliary_feed) is
+// judged by this same function.
+NativeRunSpecValidation validate_native_auxiliary_feed(
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::string& input_tf, bool timeframe_undetected) noexcept;
+
 // Exact FNV-1a content digest for a retained intrabar path. It includes the
 // mode, lower bars in caller order when present, and every sampling parameter,
 // so continuation identity cannot silently reuse a path from another begin.
@@ -681,9 +765,16 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
 // another begin's series. Callers fold it only when `subscriptions` is
 // non-empty, keeping the default spec's continuation identity unchanged, and
 // `gaps` folds only where a series set it, keeping every series declared
-// before that field existed at the digest it already had.
+// before that field existed at the digest it already had. `source` folds the
+// same way: only where a series left the input.
 std::uint64_t native_timeframe_subscriptions_digest(
         const std::vector<NativeTimeframeSubscription>& subscriptions) noexcept;
+
+// Exact FNV-1a content digest for the declared auxiliary feed: its timeframe
+// literal and every bar in caller order, so a continuation cannot silently
+// reuse another begin's feed. Callers fold it only when `auxiliary_feed` is
+// present, keeping the default spec's continuation identity unchanged.
+std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noexcept;
 
 // Machine-independent digest of a run spec: exactly the fields the consumer
 // folds into the continuation identity for the spec, and nothing else — no

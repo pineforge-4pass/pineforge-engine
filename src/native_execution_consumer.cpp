@@ -163,6 +163,11 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (!spec.subscriptions.empty()) {
         f.u(native_timeframe_subscriptions_digest(spec.subscriptions));
     }
+    // The auxiliary finer feed folds only where a host declared one, so a
+    // spec that declares none keeps its pre-feed continuation identity.
+    if (spec.auxiliary_feed) {
+        f.u(native_auxiliary_feed_digest(*spec.auxiliary_feed));
+    }
     // L4: the generic margin model folds only where a host declared one. An
     // absent model folds nothing, so every continuation hash established
     // before it existed survives this spec extension unchanged.
@@ -1476,7 +1481,17 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             f.i(subscription.bucket_first_ms);
             f.u(subscription.projected_bars.size());
             f.u(subscription.projected_cursor);
+            // Only a series built from the auxiliary feed has a feed cursor;
+            // a series built from the input folds exactly what it did.
+            if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
         }
+    }
+    // Bars a realtime stream appended to its declared auxiliary feed are
+    // durable input no spec digest covers. Folded only for a run that
+    // declares a feed.
+    if (auxiliary_tf_) {
+        f.u(auxiliary_appended_.size());
+        f.u(auxiliary_appended_digest_);
     }
     if (const auto* spec = spec_ptr()) {
         hash_spec(f, *spec);
@@ -6849,6 +6864,9 @@ bool NativeExecutionConsumer::contribute_input(
 
 void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engine) {
     subscription_warmup_inputs_ = -1;
+    auxiliary_tf_.reset();
+    auxiliary_appended_.clear();
+    auxiliary_appended_digest_ = 0;
     // A feed THIS consumer installed at an earlier begin is the kernel's to
     // remove. One installed through the engine's own public setter -- the C
     // ABI's strategy_set_native_security_feed writes the same store -- is not:
@@ -6911,6 +6929,22 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     } wiring{wiring_subscriptions_};
     wiring_subscriptions_ = true;
     clear_timeframe_subscriptions(engine);
+    if (spec.auxiliary_feed) {
+        // The feed is the run's from here on, series or none: a stream may
+        // append to it, and those bars are part of the continuation identity.
+        try {
+            auxiliary_tf_ = native_calendar::parse_timeframe(spec.auxiliary_feed->tf);
+        } catch (...) {
+            auxiliary_tf_.reset();
+        }
+        if (!auxiliary_tf_) {
+            fail(engine, NativeFailure{NativeFailureCode::Calendar,
+                                       NativeFailureOperation::Begin});
+            render(engine, "native auxiliary feed parse failed at begin");
+            return false;
+        }
+        auxiliary_appended_digest_ = 1469598103934665603ULL;
+    }
     if (spec.subscriptions.empty()) return true;
     auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
     if (host == nullptr) {
@@ -6957,8 +6991,21 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             subscription.tf_literal = declared.tf;
             subscription.lookahead = declared.lookahead;
             subscription.gaps = declared.gaps;
+            subscription.auxiliary = declared.source == NativeSeriesSource::AuxiliaryFeed;
+            if (subscription.auxiliary && !spec.auxiliary_feed) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Begin});
+                render(engine, "native timeframe subscription names an undeclared auxiliary feed");
+                return false;
+            }
+            const bool from_feed = subscription.auxiliary;
             subscriptions_.push_back(std::move(subscription));
+            // A series built from the auxiliary feed aggregates the FEED's
+            // bars, so its evaluator is registered against the feed's
+            // timeframe; every other series keeps the input's.
+            if (from_feed) engine.security_input_tf_ = spec.auxiliary_feed->tf;
             engine.register_security_eval(sec_id, declared.tf, spec.input_tf);
+            if (from_feed) engine.security_input_tf_ = spec.input_tf;
             if (declared.authoritative_bars.empty()) continue;
             if (!engine.set_native_security_feed(
                     declared.tf, declared.authoritative_bars.data(),
@@ -7026,11 +7073,167 @@ bool NativeExecutionConsumer::declare_timeframe_subscriptions(
     auto* running = std::get_if<NativeRunning>(&state_);
     if (running == nullptr) return false;
     if (!validate_native_timeframe_subscriptions(declared, running->spec.input_tf,
-                                                 running->spec.timeframe_undetected)) {
+                                                 running->spec.timeframe_undetected,
+                                                 running->spec.auxiliary_feed)) {
         return false;
     }
     running->spec.subscriptions = std::move(declared);
     return true;
+}
+
+// The same begin-time hook for the auxiliary feed. The feed REPLACES the
+// staged spec's own (nullopt withdraws it) before the kernel registers, so it
+// is what the run's continuation identity folds. It is judged with the series
+// the staged spec names at that moment: a feed this run's input timeframe
+// would refuse, or one that leaves a staged AuxiliaryFeed series without its
+// bars or finer than them, is refused and changes nothing. A host that names
+// both at begin therefore declares the feed first and the series second.
+bool NativeExecutionConsumer::declare_auxiliary_feed(
+        std::optional<NativeAuxiliaryFeed> declared) {
+    if (!in_run_begin_ || failed()) return false;
+    auto* running = std::get_if<NativeRunning>(&state_);
+    if (running == nullptr) return false;
+    if (!validate_native_timeframe_subscriptions(running->spec.subscriptions,
+                                                 running->spec.input_tf,
+                                                 running->spec.timeframe_undetected,
+                                                 declared)) {
+        return false;
+    }
+    running->spec.auxiliary_feed = std::move(declared);
+    return true;
+}
+
+// A realtime stream learns its finer bars as they complete. They join the
+// declared feed behind every bar it already holds and are folded by the very
+// routing rule a batch applies: on the next accepted input whose period they
+// opened before. A bar that opened before the END of the last accepted
+// input's period belonged to that input's slice, and folding it now would
+// build a series no batch of the same bars could, so it is refused by name --
+// as is every other malformed append -- without failing the host.
+bool NativeExecutionConsumer::append_auxiliary_bars(BacktestEngine& engine, const Bar* bars,
+                                                    std::size_t n) {
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
+    engine.last_error_.clear();
+    engine.last_run_status_ = 0;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running || running->phase != NativeRunPhase::Realtime) {
+        present_refusal(engine, "native append_auxiliary_bars requires realtime");
+        return false;
+    }
+    if (!auxiliary_tf_ || !running->spec.auxiliary_feed) {
+        present_refusal(engine, "native append_auxiliary_bars requires a declared auxiliary feed");
+        return false;
+    }
+    if (n == 0) return true;
+    if (bars == nullptr) {
+        present_refusal(engine, "native auxiliary bar array is invalid");
+        return false;
+    }
+    const std::size_t held = auxiliary_bar_count();
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!native_bar_structurally_valid(bars[i])) {
+            present_refusal(engine, "native auxiliary bar has invalid OHLCV");
+            return false;
+        }
+        const bool ordered = i > 0 ? bars[i].timestamp > bars[i - 1].timestamp
+                                   : held == 0
+                                       || bars[i].timestamp > auxiliary_bar(held - 1).timestamp;
+        if (!ordered) {
+            present_refusal(engine, "native auxiliary bars must be strictly increasing");
+            return false;
+        }
+    }
+    if (last_accepted_input_
+        && bars[0].timestamp < last_accepted_input_->next_period_open_ms) {
+        present_refusal(engine,
+            "native auxiliary bar opened inside an input period that was already accepted");
+        return false;
+    }
+    try {
+        auxiliary_appended_.insert(auxiliary_appended_.end(), bars, bars + n);
+    } catch (const std::bad_alloc&) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Input});
+        render(engine, "native auxiliary feed allocation failed");
+        return false;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        const Bar& bar = bars[i];
+        const auto fold = [this](const void* data, std::size_t count) noexcept {
+            const auto* values = static_cast<const unsigned char*>(data);
+            for (std::size_t at = 0; at < count; ++at) {
+                auxiliary_appended_digest_ ^= values[at];
+                auxiliary_appended_digest_ *= 1099511628211ULL;
+            }
+        };
+        fold(&bar.open, sizeof bar.open); fold(&bar.high, sizeof bar.high);
+        fold(&bar.low, sizeof bar.low); fold(&bar.close, sizeof bar.close);
+        fold(&bar.volume, sizeof bar.volume); fold(&bar.timestamp, sizeof bar.timestamp);
+    }
+    return true;
+}
+
+std::size_t NativeExecutionConsumer::auxiliary_bar_count() const noexcept {
+    const auto* spec = spec_ptr();
+    const std::size_t declared =
+        spec && spec->auxiliary_feed ? spec->auxiliary_feed->bars.size() : 0;
+    return declared + auxiliary_appended_.size();
+}
+
+const Bar& NativeExecutionConsumer::auxiliary_bar(std::size_t at) const noexcept {
+    const auto& declared = spec_ptr()->auxiliary_feed->bars;
+    return at < declared.size() ? declared[at] : auxiliary_appended_[at - declared.size()];
+}
+
+// One input's slice of the auxiliary feed for one series: every feed bar that
+// opened before the input's period ended, in feed order, through the same
+// evaluator step a series built from the input takes. The feed bar's own
+// successor plays the part the next input's stamp plays there (a calendar
+// bucket may complete on the period's actual last bar), and a stream knows it
+// only for bars it has already been handed. `completed(bucket, first_index,
+// first_ms, kind)` receives each completed bucket with the input index and
+// the timestamp of its first contributing feed bar; the bucket bookkeeping is
+// the input pump's.
+template <typename Completed>
+bool NativeExecutionConsumer::feed_auxiliary_slice(
+        BacktestEngine& engine, TimeframeSubscription& subscription, int index,
+        std::int64_t input_period_end_ms, Completed&& completed) {
+    auto& state =
+        engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    const std::size_t total = auxiliary_bar_count();
+    while (subscription.auxiliary_cursor < total) {
+        const Bar feed_bar = auxiliary_bar(subscription.auxiliary_cursor);
+        if (feed_bar.timestamp >= input_period_end_ms) break;
+        const std::size_t at = subscription.auxiliary_cursor++;
+        if (subscription.bucket_first_index < 0) {
+            subscription.bucket_first_index = index;
+            subscription.bucket_first_ms = feed_bar.timestamp;
+        }
+        engine.security_next_input_ms_ =
+            at + 1 < total ? auxiliary_bar(at + 1).timestamp : 0;
+        const std::int64_t before = state.eval_complete_count;
+        engine.feed_security_eval_state(state, feed_bar);
+        engine.security_next_input_ms_ = 0;
+        if (state.eval_complete_count <= before) continue;
+        const bool boundary = state.aggregator.is_active()
+            && state.aggregator.current().timestamp != state.current_bar.timestamp;
+        const Bar bucket = state.current_bar;
+        const int first_index = subscription.bucket_first_index;
+        const std::int64_t first_ms = subscription.bucket_first_ms;
+        if (boundary) {
+            subscription.bucket_first_index = index;
+            subscription.bucket_first_ms = feed_bar.timestamp;
+        } else {
+            subscription.bucket_first_index = -1;
+            subscription.bucket_first_ms = 0;
+        }
+        if (!completed(bucket, first_index, first_ms,
+                       boundary ? NativeCompletionKind::LazyComplete
+                                : NativeCompletionKind::Confirmed)) {
+            return false;
+        }
+    }
+    return !failed();
 }
 
 // barmerge.lookahead_on: resolve the whole series over the historical input
@@ -7043,6 +7246,34 @@ bool NativeExecutionConsumer::declare_timeframe_subscriptions(
 bool NativeExecutionConsumer::project_timeframe_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription,
         const Bar* input_bars, int n_input) {
+    if (subscription.auxiliary) {
+        // The same projection over the auxiliary feed: each historical input
+        // folds its own slice, and a bucket is keyed to the input whose slice
+        // held its first contributing feed bar.
+        for (int i = 0; i < n_input; ++i) {
+            const auto interval = input_interval_at(input_bars[i].timestamp);
+            if (!interval) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Begin});
+                render(engine, "native auxiliary feed projection found an unaligned input");
+                return false;
+            }
+            const auto record = [&subscription](const Bar& bucket, int first_index,
+                                                std::int64_t first_ms,
+                                                NativeCompletionKind completion) {
+                subscription.projected_bars.push_back(bucket);
+                subscription.projected_first_index.push_back(first_index);
+                subscription.projected_first_ms.push_back(first_ms);
+                subscription.projected_completion.push_back(completion);
+                return true;
+            };
+            if (!feed_auxiliary_slice(engine, subscription, i,
+                                      interval->next_period_open_ms, record)) {
+                return false;
+            }
+        }
+        return !failed();
+    }
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
     int first_index = -1;
     std::int64_t first_ms = 0;
@@ -7088,7 +7319,8 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
 }
 
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
-        BacktestEngine& engine, const Bar& bar, int index) {
+        BacktestEngine& engine, const Bar& bar, int index,
+        std::int64_t input_period_end_ms) {
     // barmerge.gaps_on for one series: the input delivered nothing of its
     // own, so the series has no value on it -- on the pull side
     // (native_series_bar answers nullopt) and on the push side
@@ -7125,6 +7357,23 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                 if (!delivered) clear_if_gapped(subscription);
                 continue;
             }
+        }
+        if (subscription.auxiliary) {
+            // Built from the auxiliary feed: this input's slice of it, bar by
+            // bar, each completed bucket delivered on this input. Several may
+            // ride on one input (a series finer than the input always does).
+            const auto deliver = [&](const Bar& bucket, int, std::int64_t first_ms,
+                                     NativeCompletionKind completion) {
+                delivered = true;
+                return deliver_timeframe_bar(engine, subscription, bucket, first_ms,
+                                             bar.timestamp, completion);
+            };
+            if (!feed_auxiliary_slice(engine, subscription, index, input_period_end_ms,
+                                      deliver)) {
+                return false;
+            }
+            if (!delivered) clear_if_gapped(subscription);
+            continue;
         }
         auto& state =
             engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
@@ -7203,8 +7452,12 @@ bool NativeExecutionConsumer::deliver_timeframe_bar(
     if (host == nullptr) return true;
     NativeTimeframeBarContext context;
     context.subscription = subscription.index;
+    // The bucket's span is read over the bars it was built from: the input's
+    // timeframe, or the auxiliary feed's for a series built from that feed.
+    const native_calendar::Timeframe& built_from =
+        subscription.auxiliary && auxiliary_tf_ ? *auxiliary_tf_ : input_tf_;
     if (auto interval = native_calendar::interval_containing(
-            calendar_, subscription.tf, input_tf_, first_contributing_ms)) {
+            calendar_, subscription.tf, built_from, first_contributing_ms)) {
         context.interval = *interval;
     }
     context.completion = completion;
@@ -7385,7 +7638,8 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             processing_input_ = false;
             return false;
         }
-        if (!pump_timeframe_subscriptions(engine, bar, index)) {
+        if (!pump_timeframe_subscriptions(engine, bar, index,
+                                          interval->next_period_open_ms)) {
             processing_input_ = false;
             return false;
         }
@@ -8538,6 +8792,14 @@ bool NativeStrategyHost::declare_timeframe_subscriptions(
         std::vector<NativeTimeframeSubscription> subscriptions) {
     return as_native_consumer(execution_consumer())
         .declare_timeframe_subscriptions(std::move(subscriptions));
+}
+
+bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed) {
+    return as_native_consumer(execution_consumer()).declare_auxiliary_feed(std::move(feed));
+}
+
+bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
+    return as_native_consumer(execution_consumer()).append_auxiliary_bars(*this, bars, n);
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {

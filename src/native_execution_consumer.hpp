@@ -111,6 +111,12 @@ public:
     // NativeStrategyHost::declare_timeframe_subscriptions: replace the staged
     // list from inside on_native_run_begin, before the kernel registers.
     bool declare_timeframe_subscriptions(std::vector<NativeTimeframeSubscription> declared);
+    // NativeStrategyHost::declare_auxiliary_feed: replace the staged feed
+    // from inside on_native_run_begin, before the kernel registers.
+    bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> declared);
+    // NativeStrategyHost::append_auxiliary_bars: a realtime stream's later
+    // bars of the declared feed, queued for the next accepted input.
+    bool append_auxiliary_bars(BacktestEngine& engine, const Bar* bars, std::size_t n);
     // L5 calculation timing readbacks. The partial bar is the lookahead-free
     // bar so far at the current cursor; the two counters are observation of
     // the recalculation cadence, never matching state.
@@ -258,6 +264,12 @@ private:
         // series delivers nothing on. Off by default, and off is the whole
         // established surface.
         bool gaps = false;
+        // NativeSeriesSource::AuxiliaryFeed: the series is built from the
+        // run's auxiliary feed, and `auxiliary_cursor` is the first feed bar
+        // it has not consumed. False, and the cursor inert, for every series
+        // built from the input, which is the whole established surface.
+        bool auxiliary = false;
+        std::size_t auxiliary_cursor = 0;
         // The latest delivered bucket, what native_series_bar() answers.
         std::optional<Bar> latest;
         // lookahead_off: the bucket being accumulated. -1 until an input
@@ -367,7 +379,18 @@ private:
     bool project_timeframe_subscription(BacktestEngine& engine,
                                         TimeframeSubscription& subscription,
                                         const Bar* input_bars, int n_input);
-    bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index);
+    bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index,
+                                      std::int64_t input_period_end_ms);
+    // The declared auxiliary feed followed by a stream's appended bars, read
+    // as one sequence. Zero / never called for a run that declares no feed.
+    std::size_t auxiliary_bar_count() const noexcept;
+    const Bar& auxiliary_bar(std::size_t at) const noexcept;
+    // Fold every feed bar that opened before `input_period_end_ms` into one
+    // AuxiliaryFeed series and hand each completed bucket to `completed`.
+    template <typename Completed>
+    bool feed_auxiliary_slice(BacktestEngine& engine, TimeframeSubscription& subscription,
+                              int index, std::int64_t input_period_end_ms,
+                              Completed&& completed);
     // A declared series is fed by accepted CONFIRMED input only, because that
     // is the only input a batch of the same bars also has. True (refused)
     // exactly when a stream that declares one is asked for tick-driven input.
@@ -663,6 +686,12 @@ private:
     // engine's own public setter (the C ABI writes that same store) is host
     // ingress and survives.
     std::vector<std::string> subscription_feed_tfs_{};
+    // The declared auxiliary feed's parsed timeframe, and the bars a realtime
+    // stream appended to it with their running content digest. All three are
+    // empty for every run that declares no feed.
+    std::optional<native_calendar::Timeframe> auxiliary_tf_{};
+    std::vector<Bar> auxiliary_appended_{};
+    std::uint64_t auxiliary_appended_digest_ = 0;
     // True only inside the kernel's own registration of the declared series,
     // which runs after the run is Running and calls no host callback.
     bool wiring_subscriptions_ = false;

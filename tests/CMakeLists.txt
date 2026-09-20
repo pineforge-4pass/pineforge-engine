@@ -128,6 +128,8 @@ set(TEST_SOURCES
     test_native_calc_timing
     test_native_calc_timing_twin
     test_native_htf_subscriptions_stream
+    test_native_auxiliary_feed
+    test_native_auxiliary_feed_stream
     test_native_risk_limits
     test_native_host_repairs
     test_l8c_short_seed_guards

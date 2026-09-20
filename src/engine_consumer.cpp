@@ -136,6 +136,12 @@ double BacktestEngine::observe_trail_best_price_v1() const {
 }
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+// This setter is the source host's split-feed door: its contract is that
+// host's chart-slice mapping, and the kernel base keeps answering false
+// without a word, as every pre-begin setter pin expects. A host with no
+// source layer declares its finer bars in the run spec instead
+// (NativeRunSpec::auxiliary_feed, or NativeStrategyHost::declare_auxiliary_feed
+// at begin).
 bool BacktestEngine::set_aux_security_feed(const Bar*, int, const std::string&) {
     guard_native_mutation("set_aux_security_feed");
     return false;

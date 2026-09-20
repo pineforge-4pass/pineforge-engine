@@ -1,4 +1,5 @@
 #include <pineforge/native_run_spec.hpp>
+#include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
 
 #include <cmath>
@@ -201,10 +202,10 @@ bool conflicting_bars(const std::vector<Bar>& left, const std::vector<Bar>& righ
 }
 
 // Everything a declared series can be judged on without a calendar: the
-// pairing with a detected input timeframe, the literal itself, and the order
-// of the bars it supplies.
+// pairing with a detected input timeframe, the literal itself, the order of
+// the bars it supplies, and that the bars it is built from were declared.
 Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subscriptions,
-                           bool timeframe_undetected) noexcept {
+                           bool timeframe_undetected, bool has_auxiliary_feed) noexcept {
     if (!subscriptions.empty() && timeframe_undetected) {
         return {Error::SubscriptionWithoutTimeframe, Field::SubscriptionTimeframe};
     }
@@ -218,8 +219,66 @@ Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subsc
                 return {Error::UnorderedSubscriptionBars, Field::SubscriptionBars};
             }
         }
+        switch (subscription.source) {
+        case NativeSeriesSource::Input:
+            break;
+        case NativeSeriesSource::AuxiliaryFeed:
+            if (!has_auxiliary_feed) {
+                return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
+            }
+            break;
+        default:
+            return {Error::UnknownSeriesSource, Field::SubscriptionSource};
+        }
     }
     return {};
+}
+
+// The declared auxiliary feed, judged without a calendar: the detected
+// timeframe it must be finer than, its literal, and the bars themselves.
+Result auxiliary_feed_shapes(const std::optional<NativeAuxiliaryFeed>& feed,
+                             bool timeframe_undetected) noexcept {
+    if (!feed) return {};
+    if (timeframe_undetected) {
+        return {Error::AuxiliaryFeedWithoutTimeframe, Field::AuxiliaryFeedTimeframe};
+    }
+    const auto tf = validate_string(feed->tf, Field::AuxiliaryFeedTimeframe, true);
+    if (!tf) return tf;
+    for (std::size_t i = 0; i < feed->bars.size(); ++i) {
+        if (!native_bar_structurally_valid(feed->bars[i])) {
+            return {Error::InvalidAuxiliaryFeedBar, Field::AuxiliaryFeedBars};
+        }
+        if (i > 0 && feed->bars[i].timestamp <= feed->bars[i - 1].timestamp) {
+            return {Error::UnorderedAuxiliaryFeedBars, Field::AuxiliaryFeedBars};
+        }
+    }
+    return {};
+}
+
+// The input pairs over the auxiliary feed exactly as a script timeframe pairs
+// over an input, and strictly: a feed of the input's own period or coarser
+// states nothing the input does not already carry.
+Result auxiliary_feed_pairing(const NativeAuxiliaryFeed& feed,
+                              const native_calendar::Timeframe& input,
+                              std::optional<native_calendar::Timeframe>& parsed) {
+    const Field active_field = Field::AuxiliaryFeedTimeframe;
+    parsed = native_calendar::parse_timeframe(feed.tf);
+    if (!parsed) return {Error::InvalidAuxiliaryFeedTimeframe, active_field};
+    const auto pairing = native_calendar::compatibility(*parsed, input);
+    switch (pairing.pairing) {
+    case native_calendar::TimeframePairing::SameUnitMultiple:
+    case native_calendar::TimeframePairing::FixedDivisible:
+        if (pairing.group_factor > 1) return {};
+        return {Error::AuxiliaryFeedNotFinerThanInput, active_field};
+    case native_calendar::TimeframePairing::FixedToCalendar:
+    case native_calendar::TimeframePairing::CalendarToCalendar:
+        return {};
+    case native_calendar::TimeframePairing::Passthrough:
+    case native_calendar::TimeframePairing::ScriptFiner:
+        return {Error::AuxiliaryFeedNotFinerThanInput, active_field};
+    default:
+        return {Error::InvalidAuxiliaryFeedTimeframe, active_field};
+    }
 }
 
 // Declared higher-timeframe series pair with the INPUT timeframe exactly as
@@ -229,8 +288,14 @@ Result subscription_shapes(const std::vector<NativeTimeframeSubscription>& subsc
 // timeframe, each with its own evaluator, bucket state and delivery index.
 // Only their feeds are shared, so the one refusal left is two same-period
 // series declaring DIFFERENT authoritative bars.
+//
+// A series built from the auxiliary feed pairs with the FEED's timeframe by
+// the same rule, so it may be finer than the input; `auxiliary` is that
+// parsed timeframe, null for a spec that declares no feed (the shapes pass
+// has then already refused every such series).
 Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& subscriptions,
-                             const native_calendar::Timeframe& input) {
+                             const native_calendar::Timeframe& input,
+                             const native_calendar::Timeframe* auxiliary) {
     const Field active_field = Field::SubscriptionTimeframe;
     std::vector<std::int64_t> keys;
     keys.reserve(subscriptions.size());
@@ -239,7 +304,12 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         if (!requested) {
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }
-        switch (native_calendar::compatibility(input, *requested).pairing) {
+        const bool from_feed = subscription.source == NativeSeriesSource::AuxiliaryFeed;
+        if (from_feed && auxiliary == nullptr) {
+            return {Error::SubscriptionWithoutAuxiliaryFeed, Field::SubscriptionSource};
+        }
+        switch (native_calendar::compatibility(from_feed ? *auxiliary : input, *requested)
+                    .pairing) {
         case native_calendar::TimeframePairing::Passthrough:
         case native_calendar::TimeframePairing::SameUnitMultiple:
         case native_calendar::TimeframePairing::FixedDivisible:
@@ -247,7 +317,9 @@ Result subscription_pairings(const std::vector<NativeTimeframeSubscription>& sub
         case native_calendar::TimeframePairing::CalendarToCalendar:
             break;
         case native_calendar::TimeframePairing::ScriptFiner:
-            return {Error::SubscriptionFinerThanInput, active_field};
+            return {from_feed ? Error::SubscriptionFinerThanAuxiliaryFeed
+                              : Error::SubscriptionFinerThanInput,
+                    active_field};
         default:
             return {Error::InvalidSubscriptionTimeframe, active_field};
         }
@@ -523,8 +595,14 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         return {Error::UnknownCalculationTrigger, Field::Calculation};
     if (!valid_open_bar_view(spec.open_bar_view))
         return {Error::UnknownOpenBarView, Field::OpenBarView};
+    if (const auto feed =
+            auxiliary_feed_shapes(spec.auxiliary_feed, spec.timeframe_undetected);
+        !feed) {
+        return feed;
+    }
     if (const auto series =
-            subscription_shapes(spec.subscriptions, spec.timeframe_undetected);
+            subscription_shapes(spec.subscriptions, spec.timeframe_undetected,
+                                spec.auxiliary_feed.has_value());
         !series) {
         return series;
     }
@@ -608,8 +686,18 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
             default:
                 return {Error::IncompatibleTimeframes, active_field};
             }
+            std::optional<native_calendar::Timeframe> auxiliary;
+            if (spec.auxiliary_feed) {
+                active_field = Field::AuxiliaryFeedTimeframe;
+                if (const auto feed =
+                        auxiliary_feed_pairing(*spec.auxiliary_feed, *input, auxiliary);
+                    !feed) {
+                    return feed;
+                }
+            }
             active_field = Field::SubscriptionTimeframe;
-            if (const auto series = subscription_pairings(spec.subscriptions, *input);
+            if (const auto series = subscription_pairings(
+                    spec.subscriptions, *input, auxiliary ? &*auxiliary : nullptr);
                 !series) {
                 return series;
             }
@@ -756,17 +844,50 @@ std::uint64_t native_risk_limits_digest(const NativeRiskLimits& risk) noexcept {
 NativeRunSpecValidation validate_native_timeframe_subscriptions(
         const std::vector<NativeTimeframeSubscription>& subscriptions,
         const std::string& input_tf, bool timeframe_undetected) noexcept {
-    const auto shapes = subscription_shapes(subscriptions, timeframe_undetected);
+    return validate_native_timeframe_subscriptions(subscriptions, input_tf,
+                                                   timeframe_undetected, std::nullopt);
+}
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed) noexcept {
+    const auto feed = validate_native_auxiliary_feed(auxiliary_feed, input_tf,
+                                                     timeframe_undetected);
+    if (!feed) return feed;
+    const auto shapes = subscription_shapes(subscriptions, timeframe_undetected,
+                                            auxiliary_feed.has_value());
     if (!shapes) return shapes;
     if (subscriptions.empty() || timeframe_undetected) return {};
     try {
         const auto input = native_calendar::parse_timeframe(input_tf);
         if (!input) return {Error::InvalidTimeframe, Field::InputTimeframe};
-        return subscription_pairings(subscriptions, *input);
+        std::optional<native_calendar::Timeframe> auxiliary;
+        if (auxiliary_feed) auxiliary = native_calendar::parse_timeframe(auxiliary_feed->tf);
+        return subscription_pairings(subscriptions, *input,
+                                     auxiliary ? &*auxiliary : nullptr);
     } catch (const std::bad_alloc&) {
         return {Error::AllocationFailure, Field::SubscriptionTimeframe};
     } catch (...) {
         return {Error::CalendarFailure, Field::SubscriptionTimeframe};
+    }
+}
+
+NativeRunSpecValidation validate_native_auxiliary_feed(
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::string& input_tf, bool timeframe_undetected) noexcept {
+    const auto shapes = auxiliary_feed_shapes(auxiliary_feed, timeframe_undetected);
+    if (!shapes) return shapes;
+    if (!auxiliary_feed) return {};
+    try {
+        const auto input = native_calendar::parse_timeframe(input_tf);
+        if (!input) return {Error::InvalidTimeframe, Field::InputTimeframe};
+        std::optional<native_calendar::Timeframe> parsed;
+        return auxiliary_feed_pairing(*auxiliary_feed, *input, parsed);
+    } catch (const std::bad_alloc&) {
+        return {Error::AllocationFailure, Field::AuxiliaryFeedTimeframe};
+    } catch (...) {
+        return {Error::CalendarFailure, Field::AuxiliaryFeedTimeframe};
     }
 }
 
@@ -795,11 +916,40 @@ std::uint64_t native_timeframe_subscriptions_digest(
         // the spec fold uses for its own opt-in blocks — so a series declared
         // before this field existed keeps the digest it already had.
         if (subscription.gaps) u(2u);
+        // The series source folds the same way: only where a series left the
+        // input, so every series declared before the field existed — and
+        // every one still built from the input — keeps its digest.
+        if (subscription.source != NativeSeriesSource::Input) {
+            u(3u);
+            u(static_cast<std::uint64_t>(subscription.source));
+        }
         u(subscription.authoritative_bars.size());
         for (const auto& bar : subscription.authoritative_bars) {
             d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
             i(bar.timestamp);
         }
+    }
+    return state;
+}
+
+std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto i = [&bytes](std::int64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto d = [&bytes](double value) noexcept { bytes(&value, sizeof value); };
+    u(feed.tf.size());
+    bytes(feed.tf.data(), feed.tf.size());
+    u(feed.bars.size());
+    for (const auto& bar : feed.bars) {
+        d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
+        i(bar.timestamp);
     }
     return state;
 }

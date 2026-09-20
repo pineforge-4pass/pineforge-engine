@@ -428,13 +428,15 @@ def check_texts(files):
                    "NativeMarginEquityBasis", "NativeLiquidationLevelBase",
                    "NativeCalculationTrigger", "NativeOpenBarView",
                    "NativeLossLimit", "NativeRiskDay", "NativeRiskAction",
-                   "NativeRiskLimits"),
+                   "NativeRiskLimits", "NativeSeriesSource", "NativeAuxiliaryFeed"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
         spec, ("validate_native_run_spec", "normalize_native_run_spec",
                "validate_native_timeframe_subscriptions",
+               "validate_native_auxiliary_feed",
                "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
+               "native_auxiliary_feed_digest",
                "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     # R5 lane L12 (2.ii c) renamed the feed-tolerance surface. The deprecated
@@ -448,7 +450,9 @@ def check_texts(files):
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
                    "validate_native_timeframe_subscriptions",
+                   "validate_native_auxiliary_feed",
                    "native_intrabar_path_digest", "native_timeframe_subscriptions_digest",
+                   "native_auxiliary_feed_digest",
                    "native_margin_model_digest", "native_risk_limits_digest"),
         "native_run_spec_v3")
     run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
@@ -470,15 +474,27 @@ def check_texts(files):
             'NativeCalculationTriggercalculation=NativeCalculationTrigger::BarClose;',
             'std::uint32_tmax_recalculations_per_point=8;',
             'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;',
-            'std::optional<NativeRiskLimits>risk;'):
+            'std::optional<NativeRiskLimits>risk;',
+            'std::optional<NativeAuxiliaryFeed>auxiliary_feed;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
                         'native timeframe subscription')
     if (re.sub(r'\s+', '', subscription)
             != 'std::stringtf;std::vector<Bar>authoritative_bars;boollookahead=false;'
-               'boolgaps=false;'):
+               'boolgaps=false;NativeSeriesSourcesource=NativeSeriesSource::Input;'):
         raise ValueError('native timeframe subscription must preserve its member order and shape')
+    # The series judge has exactly two spellings: the established one, and
+    # the one that also names the run's auxiliary feed. Both are declared.
+    if len(re.findall(r'\bvalidate_native_timeframe_subscriptions\s*\(', spec)) != 2:
+        raise ValueError('native_run_spec_v3 must declare both series validation overloads')
+    auxiliary_feed = body(spec, r'struct\s+NativeAuxiliaryFeed\s*\{', 'native auxiliary feed')
+    if re.sub(r'\s+', '', auxiliary_feed) != 'std::stringtf;std::vector<Bar>bars;':
+        raise ValueError('native auxiliary feed must preserve its member order and shape')
+    series_source = body(spec, r'enum\s+class\s+NativeSeriesSource\s*:\s*std::uint8_t\s*\{',
+                         'native series source')
+    if re.sub(r'\s+', '', series_source) != 'Input=0,AuxiliaryFeed=1,':
+        raise ValueError('native series source must preserve its enumerators and values')
     margin = body(spec, r'struct\s+NativeMarginModel\s*\{', 'native margin model')
     if (re.sub(r'\s+', '', margin)
             != 'doubleinitial_long=0.0;doubleinitial_short=0.0;'
@@ -512,7 +528,8 @@ def check_texts(files):
                   'MarginEquityBasis', 'MarginLevelBase',
                   'Calculation', 'OpenBarView',
                   'RiskLimits', 'RiskDrawdown', 'RiskIntradayLoss', 'RiskLossDays',
-                  'RiskFillsPerDay', 'RiskDayBasis', 'RiskAction'):
+                  'RiskFillsPerDay', 'RiskDayBasis', 'RiskAction',
+                  'AuxiliaryFeedTimeframe', 'AuxiliaryFeedBars', 'SubscriptionSource'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -528,7 +545,11 @@ def check_texts(files):
                   'UnknownMarginEquityBasis', 'UnknownLiquidationLevelBase',
                   'UnknownCalculationTrigger', 'UnknownOpenBarView',
                   'UnknownRiskDay', 'UnknownRiskAction', 'ZeroRiskLimit',
-                  'MarginSideUndeclared'):
+                  'MarginSideUndeclared',
+                  'InvalidAuxiliaryFeedTimeframe', 'AuxiliaryFeedNotFinerThanInput',
+                  'UnorderedAuxiliaryFeedBars', 'InvalidAuxiliaryFeedBar',
+                  'AuxiliaryFeedWithoutTimeframe', 'UnknownSeriesSource',
+                  'SubscriptionWithoutAuxiliaryFeed', 'SubscriptionFinerThanAuxiliaryFeed'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -543,6 +564,10 @@ def check_texts(files):
             or 'spec.open_bar_view' not in spec_src
             or 'SubscriptionFinerThanInput' not in spec_src
             or 'if (subscription.gaps)' not in spec_src
+            or 'if (subscription.source != NativeSeriesSource::Input) {' not in spec_src
+            or 'spec.auxiliary_feed' not in spec_src
+            or 'AuxiliaryFeedNotFinerThanInput' not in spec_src
+            or 'SubscriptionFinerThanAuxiliaryFeed' not in spec_src
             or 'spec.margin' not in spec_src
             or 'valid_margin_equity_basis' not in spec_src
             or 'valid_liquidation_level_base' not in spec_src
@@ -715,7 +740,17 @@ def check_texts(files):
                   'in_run_begin_ = true;',
                   'wiring_subscriptions_ = true;',
                   'clear_if_gapped(subscription);',
-                  'if (subscription.gaps) subscription.latest.reset();'):
+                  'if (subscription.gaps) subscription.latest.reset();',
+                  # N7: the auxiliary feed folds into the spec identity only
+                  # where one is declared, a series built from it has its own
+                  # feed cursor in the continuation fold, a stream's appended
+                  # bars are hashed, and the slice is cut by the accepted
+                  # input's own period end.
+                  'if (spec.auxiliary_feed) {',
+                  'f.u(native_auxiliary_feed_digest(*spec.auxiliary_feed));',
+                  'if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);',
+                  'f.u(auxiliary_appended_digest_);',
+                  'if (feed_bar.timestamp >= input_period_end_ms) break;'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
@@ -843,6 +878,13 @@ def check_texts(files):
         (r'(?<!virtual )bool\s+declare_timeframe_subscriptions\s*\(\s*'
          r'std::vector\s*<\s*NativeTimeframeSubscription\s*>\s+\w+\s*\)\s*;',
          "declare_timeframe_subscriptions"),
+        # So are the auxiliary feed's two doors: the begin-time declaration
+        # and a realtime stream's append.
+        (r'(?<!virtual )bool\s+declare_auxiliary_feed\s*\(\s*'
+         r'std::optional\s*<\s*NativeAuxiliaryFeed\s*>\s+\w+\s*\)\s*;',
+         "declare_auxiliary_feed"),
+        (r'(?<!virtual )bool\s+append_auxiliary_bars\s*\(\s*const\s+Bar\s*\*\s*\w+\s*,'
+         r'\s*std::size_t\s+\w+\s*\)\s*;', "append_auxiliary_bars"),
         (r'\bvirtual\s+std::optional\s*<\s*double\s*>\s+resolve_margin_call_units\s*\('
          r'\s*const\s+NativeMarginCallView\s*&', "resolve_margin_call_units"),
         (r'\bvirtual\s+void\s+on_native_margin_call\s*\('
@@ -897,6 +939,8 @@ def check_texts(files):
              "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state",
              "NativeStrategyHost::native_series_bar",
              "NativeStrategyHost::declare_timeframe_subscriptions",
+             "NativeStrategyHost::declare_auxiliary_feed",
+             "NativeStrategyHost::append_auxiliary_bars",
              "NativeStrategyHost::native_liquidation_price",
              "NativeStrategyHost::current_partial_bar",
              "NativeStrategyHost::native_recalculation_count",

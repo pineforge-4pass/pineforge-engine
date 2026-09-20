@@ -571,6 +571,9 @@ struct NativeTickContext {
 // `subscription` indexes NativeRunSpec::subscriptions. `interval` is the
 // calendar span of the bucket's FIRST contributing input bar, read through the
 // run's own session calendar; it is left zeroed when that lookup has no answer.
+// For a series built from the auxiliary feed (NativeSeriesSource::AuxiliaryFeed)
+// "contributing bar" reads "contributing FEED bar" here, while `delivered_at_ms`
+// stays the accepted input bar the delivery rides on.
 // `completion` is Confirmed when the bucket completed on its own last
 // contributing input bar and LazyComplete when the next period's first input
 // closed it. `delivered_at_ms` is the timestamp of the input bar the delivery
@@ -630,6 +633,8 @@ public:
     // delivered on an accepted input bar before that input is aggregated,
     // matched or calculated. Never called for a spec whose `subscriptions`
     // are empty. native_series_bar() already answers with this bar here.
+    // A series built from the auxiliary feed may deliver several buckets on
+    // one input, oldest first.
     virtual void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext&) {}
     // Precedes the matching pass at the script bar's open decision point.
     // inspect_current_execution/execute_current are legal in this hook.
@@ -795,6 +800,29 @@ public:
     // other way round.
     bool declare_timeframe_subscriptions(
         std::vector<NativeTimeframeSubscription> subscriptions);
+
+    // The same begin-time hook for NativeRunSpec::auxiliary_feed: the feed
+    // REPLACES the staged spec's own (nullopt withdraws it), and the kernel
+    // registers from the staged spec after on_native_run_begin returns. It is
+    // judged together with the series staged at that moment, so a host that
+    // names both here declares the feed first and its AuxiliaryFeed series
+    // second. Legal only inside on_native_run_begin: anywhere else, for a
+    // feed this run's input timeframe would refuse, and for one that would
+    // leave a staged AuxiliaryFeed series without its bars, it changes
+    // nothing and answers false. Not virtual.
+    bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed);
+
+    // A realtime stream's later bars of its declared auxiliary feed. They
+    // join the feed behind every bar it holds and ride on the next accepted
+    // input whose period they opened before — the routing rule a batch of the
+    // same bars applies. Legal between stream inputs on a Realtime run that
+    // declared a feed. Refused by name, changing nothing and without failing
+    // the host: bars out of order or not after the feed's last bar, a bar
+    // with invalid OHLCV, and a bar that opened inside an input period
+    // already accepted (its slice is closed; no batch could build that
+    // series). Calling it from inside a callback is the contract failure
+    // every reentrant stream input is.
+    bool append_auxiliary_bars(const Bar* bars, std::size_t n);
 
     NativeSetupResult configure_native(const NativeRunSpec& spec);
     NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);

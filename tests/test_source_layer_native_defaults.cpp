@@ -70,8 +70,51 @@ void check_native_metadata_and_aux_staging() {
     } catch (...) {
         aux_threw = true;
     }
+    // expectation corrected: "a bare false is the whole contract: a native
+    // host has no auxiliary-feed door" -> "the source host's setter stays
+    // shut, silently and without throwing, AND the generic door takes the
+    // very same bars", because audit lane N7 gave the kernel the generic
+    // auxiliary finer feed (NativeRunSpec::auxiliary_feed); the chart-slice
+    // setter keeps belonging to the source host alone.
     CHECK(!aux_threw);
     CHECK(!aux_result);
+    CHECK(host.last_error().empty());
+
+    NativeRunSpec spec;
+    spec.identity = {"a28-native-auxiliary-feed", 1};
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    spec.ticker = "A28";
+    spec.tickerid = "TEST:A28";
+    spec.type = "crypto";
+    spec.currency = "USD";
+    spec.basecurrency = "USD";
+    spec.description = "A28 auxiliary feed witness";
+    spec.volumetype = "base";
+    spec.timezone = "UTC";
+    spec.session = "24x7";
+    spec.initial_capital = 10000.0;
+    spec.point_value = 1.0;
+    spec.account_fx = 1.0;
+    spec.price_tick = 0.01;
+    NativeAuxiliaryFeed feed;
+    feed.tf = "1";
+    feed.bars.assign(bars, bars + 1);
+    spec.auxiliary_feed = feed;
+    NativeTimeframeSubscription five;
+    five.tf = "5";
+    five.source = NativeSeriesSource::AuxiliaryFeed;
+    spec.subscriptions.push_back(five);
+    NativeWitness declaring;
+    CHECK(declaring.configure_native(spec).status == NativeSetupStatus::Applied);
+    const auto staged = declaring.native_state();
+    CHECK(staged.kind == NativeLifecycleKind::Ready);
+    CHECK(staged.spec != nullptr && staged.spec->auxiliary_feed.has_value());
+    if (staged.spec != nullptr && staged.spec->auxiliary_feed) {
+        CHECK(staged.spec->auxiliary_feed->tf == "1");
+        CHECK(staged.spec->auxiliary_feed->bars.size() == 1);
+        CHECK(staged.spec->auxiliary_feed->bars[0].timestamp == 1700000000000LL);
+    }
 #else
 #error "A28 witness requires the auxiliary-security feed surface"
 #endif

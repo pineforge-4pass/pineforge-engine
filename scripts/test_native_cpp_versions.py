@@ -108,6 +108,42 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[4], 'validate_native_timeframe_subscriptions',
                     'validate_series')
 
+    def test_auxiliary_feed_is_opt_in_hashed_and_cut_by_the_input_period(self):
+        # N7: the series source and the feed keep their shape and defaults,
+        # both fold into an identity only where a host opted in, a series
+        # built from the feed carries its own hashed cursor, a stream's
+        # appended bars are hashed, and the slice ends with the input period.
+        for before, after in (
+            ('    bool gaps = false;\n    NativeSeriesSource source = NativeSeriesSource::Input;',
+             '    bool gaps = false;'),
+            ('NativeSeriesSource source = NativeSeriesSource::Input;',
+             'NativeSeriesSource source = NativeSeriesSource::AuxiliaryFeed;'),
+            ('    Input = 0,\n    AuxiliaryFeed = 1,', '    AuxiliaryFeed = 0,\n    Input = 1,'),
+            ('struct NativeAuxiliaryFeed {\n    std::string tf;\n    std::vector<Bar> bars;',
+             'struct NativeAuxiliaryFeed {\n    std::vector<Bar> bars;\n    std::string tf;'),
+            ('    std::optional<NativeAuxiliaryFeed> auxiliary_feed;\n', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'if (subscription.source != NativeSeriesSource::Input) {', '{')
+        for before, after in (
+            ('    if (spec.auxiliary_feed) {\n        f.u(native_auxiliary_feed_digest('
+             '*spec.auxiliary_feed));\n    }\n', ''),
+            ('if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);', ''),
+            ('        f.u(auxiliary_appended_digest_);\n', ''),
+            ('if (feed_bar.timestamp >= input_period_end_ms) break;',
+             'if (feed_bar.timestamp > input_period_end_ms) break;'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+        for before, after in (
+            ('    bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed);',
+             '    virtual bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed);'),
+            ('    bool append_auxiliary_bars(const Bar* bars, std::size_t n);', ''),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[8], before, after)
+
     def test_legacy_tolerant_slot_policy_is_explicit_and_hashed(self):
         for before, after in (
             ('NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;', ''),
