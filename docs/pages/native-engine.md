@@ -2671,7 +2671,7 @@ the kernel's own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies this lane
 (Release, live runner ON, tutorial OFF, source layer OFF); CI runs it as the
 `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` (164 rows) is the count the kernel-only CTest set is
+`scripts/ci_verify.py` (176 rows) is the count the kernel-only CTest set is
 expected to run, and the `ctest-floor` stage fails the run when CTest reports
 fewer rows or no count at all, so a test TU that silently becomes source-bound
 (or a filter that empties the suite) is a refusal rather than a smaller green.

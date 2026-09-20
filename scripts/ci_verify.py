@@ -44,11 +44,15 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # adapter twin in one TU silently leaves the kernel-only gate. The floor pins
 # the row count the profile is expected to run: adding source-free rows never
 # trips it, losing them does, and a run that reports no count fails closed.
-# 164 = the 158 rows the profile ran before lane N3 plus the six native halves
-# the lane freed (L2 report truth, L4b margin hooks, L5 calc timing, L6 HTF
-# subscriptions, L8/L8b price grid, L11a lot excursion); raise it when a new
+# 176 = the 158 rows the profile ran before lane N3, plus the six native halves
+# N3 freed (L2 report truth, L4b margin hooks, L5 calc timing, L6 HTF
+# subscriptions, L8/L8b price grid, L11a lot excursion) = 164, plus the ten
+# example_* rows N4 brought into this profile when it turned
+# PINEFORGE_BUILD_EXAMPLES on here, plus N5's test_native_host_hash_extension
+# and N6's test_native_margin_fx_roll. N9 and N8 added no source-free TU of
+# their own: both extended rows the profile already ran. Raise it when a new
 # source-free row lands. --min-tests overrides it for any profile.
-KERNEL_MIN_TESTS = 164
+KERNEL_MIN_TESTS = 176
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
