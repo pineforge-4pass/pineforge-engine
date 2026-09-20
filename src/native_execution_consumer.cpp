@@ -98,6 +98,17 @@ native_matching::GridThreshold grid_threshold(const NativeRunSpec& spec) noexcep
     return grid;
 }
 
+// The same facts for the core's activation re-validation (L8b): the matcher
+// tests a trigger on this ladder, so the core must judge the reached print on
+// it too. Inactive (the raw rule) in every mode but the second.
+native_order::ActivationGrid activation_grid(const NativeRunSpec& spec) noexcept {
+    const auto threshold = grid_threshold(spec);
+    native_order::ActivationGrid grid;
+    grid.price_tick = threshold.tick;
+    grid.half_up = threshold.half_up;
+    return grid;
+}
+
 // L5 calculation timing. A spec that leaves both the trigger and the
 // open-bar view at their defaults is exactly the pre-lane surface: no
 // recalculation is driven, no bar is masked, and nothing of this block is
@@ -3531,6 +3542,8 @@ void NativeExecutionConsumer::observe_trails(
         BacktestEngine& engine, const NativeDriverPoint& point,
         const native_order::MatchCursor& cursor, bool continuous, double price) {
     if (!std::isfinite(price) || failed()) return;
+    const auto* spec = spec_ptr();
+    if (!spec) return;
     // A path with only market/limit/stop requests has no trailing state to
     // advance.  In particular, do not snapshot every live cohort request or
     // resolve its target side at each waypoint merely to discover that fact.
@@ -3565,7 +3578,8 @@ void NativeExecutionConsumer::observe_trails(
         try {
             prep = requests_.prepare_trigger(
                 handle, native_order::ObserveTrailExtremum{cursor, price},
-                evaluation.driver_class, next_timeline_ordinal_, evaluation.cohort_side);
+                evaluation.driver_class, next_timeline_ordinal_, evaluation.cohort_side,
+                activation_grid(*spec));
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
@@ -5104,7 +5118,8 @@ void NativeExecutionConsumer::match_path(
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
                 prep = requests_.prepare_trigger(winner->handle, transition,
-                                                driver_class, next_timeline_ordinal_, eval.cohort_side);
+                                                driver_class, next_timeline_ordinal_, eval.cohort_side,
+                                                activation_grid(*spec));
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});

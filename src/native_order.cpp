@@ -1,8 +1,9 @@
 #include <pineforge/native_order.hpp>
 
-// The price-grid arithmetic an anchored level snaps with is the run's own L8
-// ladder arithmetic, so a rounded anchor and a quantized fill agree tick for
-// tick. The header is value-only geometry; it brings no host into the core.
+// The price-grid arithmetic an anchored level snaps with, and the one an
+// activation is re-validated on, is the run's own L8 ladder arithmetic, so a
+// rounded anchor, a reached print and a quantized fill agree tick for tick.
+// The header is value-only geometry; it brings no host into the core.
 #include "native_matching.hpp"
 
 #include <algorithm>
@@ -389,9 +390,25 @@ const MatchCursor& transition_cursor(const TriggerTransition& transition) noexce
                       transition);
 }
 
-bool stop_price_reached(bool is_buy, double level, double reached) noexcept {
+// The activation grid as the matcher spells it. A default ActivationGrid is
+// an inactive threshold, under which every helper below is the raw compare
+// and the raw print, bit for bit.
+native_matching::GridThreshold matcher_grid(const ActivationGrid& grid) noexcept {
+    native_matching::GridThreshold out;
+    if (!finite_positive(grid.price_tick)) return out;
+    out.tick = grid.price_tick;
+    out.half_up = grid.half_up;
+    return out;
+}
+
+// A buy activation needs the print at or above its level, a sell one at or
+// below. Under an activation grid (L8b) the test is the matcher's own: the
+// level itself, or a print inside the tick-quantized region the matcher
+// reported, so a hit it accepted is never refused here.
+bool stop_price_reached(bool is_buy, double level, double reached,
+                        const native_matching::GridThreshold& grid) noexcept {
     if (!std::isfinite(reached) || !finite_non_negative(level)) return false;
-    return is_buy ? reached >= level : reached <= level;
+    return native_matching::region_reached(reached, level, /*le=*/!is_buy, grid);
 }
 
 bool same_p_continuation(const LiveRequest& live, const MatchCursor& cursor) noexcept {
@@ -2257,7 +2274,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         const TriggerTransition& transition,
         DriverEligibilityClass driver_class,
         uint64_t& next_timeline_ordinal,
-        std::optional<Side> cohort_side) {
+        std::optional<Side> cohort_side,
+        const ActivationGrid& activation_grid) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -2279,6 +2297,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         return NoChange{NoChangeReason::NotEligible};
     }
     const bool is_buy = working_is_buy(updated, cohort_side);
+    const native_matching::GridThreshold grid = matcher_grid(activation_grid);
     MutationPlan plan = begin_plan();
 
     auto emit_activated = [&](ActivationKind kind, TriggerState after, const MatchCursor& cursor,
@@ -2317,13 +2336,25 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
+        // The arm threshold is reached from the favourable side: a sell trail
+        // arms at or above it, a buy trail at or below (le == is_buy).
         if (trail->arm_price
-            && !stop_price_reached(!is_buy, *trail->arm_price, begin->reached_price)) {
+            && !stop_price_reached(!is_buy, *trail->arm_price, begin->reached_price, grid)) {
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
-        return emit_activated(ActivationKind::TrailArm, TrailTrack{begin->reached_price},
-                              begin->cursor, begin->reached_price);
+        // The best the trail starts riding is the arm's quantized print: the
+        // arm level's ladder point on a crossing, the print's tick otherwise
+        // (the print itself without a grid, already checked above).
+        const double best = trail->arm_price
+            ? native_matching::grid_reached_print(begin->reached_price, *trail->arm_price,
+                                                  /*le=*/is_buy, grid)
+            : native_matching::grid_best_print(begin->reached_price, is_buy, grid);
+        if (best != begin->reached_price && !trail_level_ok(best, trail->offset, is_buy, nullptr)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+        return emit_activated(ActivationKind::TrailArm, TrailTrack{best}, begin->cursor, best);
     }
     if (const auto* extremum = std::get_if<ObserveTrailExtremum>(&transition)) {
         auto* track = std::get_if<TrailTrack>(&updated.trigger_state);
@@ -2331,8 +2362,13 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
-        const double next_best = is_buy ? std::min(track->best, extremum->reached_price)
-                                        : std::max(track->best, extremum->reached_price);
+        // The running best follows the quantized path: the observed print's
+        // tick, nearest under HalfUp and the favourable enclosing tick under
+        // Directional, so a print that reads the same tick as the best is no
+        // improvement (grid_best_print is the identity without a grid).
+        const double print = native_matching::grid_best_print(extremum->reached_price, is_buy, grid);
+        const double next_best = is_buy ? std::min(track->best, print)
+                                        : std::max(track->best, print);
         if (next_best == track->best) return NoChange{NoChangeReason::NoTransition};
         const auto* trail = std::get_if<Trail>(&updated.request().trigger);
         if (!trail || !trail_level_ok(next_best, trail->offset, is_buy, nullptr)) {
@@ -2354,11 +2390,13 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                                     target};
         }
         const auto* stop_px = std::get_if<Stop>(&updated.request().trigger);
-        if (!stop_px || !stop_price_reached(is_buy, stop_px->price, stop->reached_price)) {
+        if (!stop_px || !stop_price_reached(is_buy, stop_px->price, stop->reached_price, grid)) {
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
-        return emit_activated(ActivationKind::Stop, StopActive{}, stop->cursor, stop->reached_price);
+        return emit_activated(ActivationKind::Stop, StopActive{}, stop->cursor,
+                              native_matching::grid_reached_print(
+                                  stop->reached_price, stop_px->price, /*le=*/!is_buy, grid));
     }
     if (const auto* stop_limit = std::get_if<ActivateStopLimit>(&transition)) {
         if (!std::holds_alternative<StopLimitPending>(updated.trigger_state)) {
@@ -2370,12 +2408,14 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         }
         const auto* stop_limit_px = std::get_if<StopLimit>(&updated.request().trigger);
         if (!stop_limit_px
-            || !stop_price_reached(is_buy, stop_limit_px->stop, stop_limit->reached_price)) {
+            || !stop_price_reached(is_buy, stop_limit_px->stop, stop_limit->reached_price, grid)) {
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
         return emit_activated(ActivationKind::StopLimit, StopLimitLive{}, stop_limit->cursor,
-                              stop_limit->reached_price);
+                              native_matching::grid_reached_print(
+                                  stop_limit->reached_price, stop_limit_px->stop,
+                                  /*le=*/!is_buy, grid));
     }
     const auto& trail_hit = std::get<ActivateTrail>(transition);
     const auto* track = std::get_if<TrailTrack>(&updated.trigger_state);
@@ -2388,11 +2428,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     const auto* trail = std::get_if<Trail>(&updated.request().trigger);
     double level = 0.0;
     if (!trail || !trail_level_ok(track->best, trail->offset, is_buy, &level)
-        || !stop_price_reached(is_buy, level, trail_hit.reached_price)) {
+        || !stop_price_reached(is_buy, level, trail_hit.reached_price, grid)) {
         return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
     }
     return emit_activated(ActivationKind::TrailTrigger, TrailActive{track->best}, trail_hit.cursor,
-                          trail_hit.reached_price);
+                          native_matching::grid_reached_print(
+                              trail_hit.reached_price, level, /*le=*/!is_buy, grid));
 }
 
 Preparation<PreparedMutation> WorkingRequestCore::prepare_no_effect(

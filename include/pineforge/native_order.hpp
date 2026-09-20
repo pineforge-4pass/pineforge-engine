@@ -1187,6 +1187,21 @@ struct ActivateTrail {
 using TriggerTransition = std::variant<BeginTrailTracking, ObserveTrailExtremum, ActivateStop,
                                        ActivateStopLimit, ActivateTrail>;
 
+// What the consumer hands to prepare_trigger under an opted-in price grid
+// (NativeRunSpec::price_grid == QuantizeFillsAndTriggers), the way acceptance
+// receives CommandContext::price_tick: the tick ladder and the rounding the
+// matcher tested the activation on. The core then re-validates the reached
+// print with the same grid arithmetic (L8b ruling: under that grid the
+// tick-quantized print IS the reached price, so a hit the matcher reports is
+// never refused), records the quantized print as the activation's reached
+// price, and keeps a trail's running best on the ladder. A default-constructed
+// value (no ladder) is exactly the raw compare and the raw print every
+// activation used before. Host-free: values only.
+struct ActivationGrid {
+    double price_tick = 0.0;  // finite and positive when a ladder is in force
+    bool half_up = true;      // nearest tick, ties away from zero; else directional
+};
+
 struct ExecutionProposal {
     MatchCursor cursor{};
     // Carries the generic pre-open delivery authorization from the matching
@@ -1377,11 +1392,14 @@ public:
                                                      const EvaluationContext& context,
                                                      const TargetObservation& observation,
                                                      uint64_t& next_timeline_ordinal);
+    // `grid` carries the run's activation grid (ActivationGrid); the default
+    // is the raw rule, so every existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
                                                   const TriggerTransition& transition,
                                                   DriverEligibilityClass driver_class,
                                                   uint64_t& next_timeline_ordinal,
-                                                  std::optional<Side> cohort_side = std::nullopt);
+                                                  std::optional<Side> cohort_side = std::nullopt,
+                                                  const ActivationGrid& grid = {});
     InstallResult install_mutation(PreparedMutation&& prepared) noexcept;
 
     Preparation<PreparedExecution> prepare_execution(const RequestHandle& target,

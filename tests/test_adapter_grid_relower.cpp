@@ -6,14 +6,16 @@
 // was attempted and measured (adapter submits the raw level, project() sets
 // QuantizeFillsAndTriggers / HalfUp): 6 of 515 ctest units move, this witness
 // among them, and two of the mechanisms have no adapter-side or generic remedy:
-//   B1 the grid's trigger mode is not usable on a sub-tick feed yet: the
-//      matcher reports a cursor print that is inside the QUANTIZED region but
-//      short of the RAW level, and the core re-validates every activation with
-//      the raw compare (native_order.cpp stop_price_reached), so the run fails
+//   B1 (RULED in L8b, no longer open) the grid's trigger mode was not usable
+//      on a sub-tick feed: the matcher reported a cursor print that is inside
+//      the QUANTIZED region but short of the RAW level, and the core
+//      re-validated every activation with the raw compare, so the run failed
 //      closed with "native working-request preparation failed" — 9 pinned
 //      NYSE:F / AAPL zero-offset-trail tapes and the POOC short-close panels
-//      abort. Section 6 pins the generic reproducer; the remedy is a kernel
-//      ruling on what an activation's reached price is under a grid.
+//      aborted. L8b rules that under QuantizeFillsAndTriggers the
+//      tick-quantized print IS the reached price and the core re-validates on
+//      the same grid arithmetic (native_order::ActivationGrid); section 6 now
+//      pins the reproducer's fill. The adapter re-lowering stays blocked on B2.
 //   B2 TradingView's tick quantization is a property of the ORDER KIND — stop
 //      and limit legs and a trail's activation are tested on the quantized
 //      path; a trail's stop (best - offset), the running best, stop-limit
@@ -63,7 +65,7 @@
 //      the run_corpus.sh build); rebuild them the same way, never by hand.
 //   5. the measured divergence: the kernel grid fires the trail stop of
 //      section 4's TrailUlp scenario one tick early (B2).
-//   6. the grid's trigger mode fails closed on a sub-tick cursor print (B1).
+//   6. the grid's trigger mode on a sub-tick cursor print (B1): fills since L8b.
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
@@ -619,14 +621,17 @@ void grid_fires_the_trail_stop_one_tick_early() {
     // one grid, two TradingView rules — the per-kind mask is not generic.
 }
 
-// --- 6. the trigger mode fails closed on a sub-tick cursor print ----------
-// KNOWN KERNEL DEFECT, open (B1): this pins that the run is REFUSED rather
-// than mis-filled, and is the reproducer for the lane that rules on it. A buy
-// stop at 100.50 on a 0.25 ladder; the bar OPENS at 100.40, whose nearest tick
-// is 100.50. The grid matcher reports that cursor print as inside the region,
-// the core's raw re-validation (100.40 < 100.50) refuses the activation, and
-// the run latches. None is unaffected: the raw path never reaches the stop.
-void grid_trigger_mode_fails_closed_on_a_subtick_cursor_print() {
+// --- 6. the trigger mode on a sub-tick cursor print (B1, ruled in L8b) -----
+// This section pinned the defect as fail-closed while it was open; the L8b
+// ruling (the tick-quantized print IS the reached price, the core re-validates
+// on the same grid arithmetic) turns it into the reproducer's positive form. A
+// buy stop at 100.50 on a 0.25 ladder; the bar OPENS at 100.40, whose nearest
+// tick is 100.50. The grid matcher reports that cursor print as inside the
+// region and the core now agrees, so the stop activates at the open and books
+// the gapped open on the ladder: 100.50. None is unaffected: the raw path never
+// reaches the stop. The full per-kind and per-tick witness lives in
+// tests/test_native_price_grid.cpp.
+void grid_trigger_mode_fills_on_a_subtick_cursor_print() {
     scenario = "B1 sub-tick cursor print";
     no::Request buy{no::Transact{1.0}, "buy-stop", ""};
     buy.trigger = no::Stop{100.50};
@@ -651,12 +656,17 @@ void grid_trigger_mode_fails_closed_on_a_subtick_cursor_print() {
         CHECK(h.configure_native(quarter("b1-grid", NativePriceGrid::QuantizeFillsAndTriggers)).status
               == NativeSetupStatus::Applied);
         h.run(&bar, 1);
-        CHECK(h.last_error() == "native working-request preparation failed");
+        CHECK(h.last_error().empty());
         int fills = 0;
         for (const auto& row : h.native_events(0)) {
-            if (row.command && std::get_if<no::ExecutionAppliedEvent>(&*row.command)) ++fills;
+            if (!row.command) continue;
+            if (const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+                ++fills;
+                CHECK(same_bits(e->raw_price, 100.40));
+                CHECK(same_bits(e->resolved_price, 100.50));
+            }
         }
-        CHECK(fills == 0);
+        CHECK(fills == 1);
     }
 }
 
@@ -679,7 +689,7 @@ int main() {
     kernel_books_the_ladder_level_it_reached();
     for (const auto& pinned : kScenarios) compare(pinned);
     grid_fires_the_trail_stop_one_tick_early();
-    grid_trigger_mode_fails_closed_on_a_subtick_cursor_print();
+    grid_trigger_mode_fills_on_a_subtick_cursor_print();
     std::printf("%s adapter grid re-lowering witness: %d checks, %d failures\n",
                 failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

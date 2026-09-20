@@ -262,8 +262,16 @@ def check_texts(files):
                     "CashValue", "EquityFraction", "SizeTime", "SizePrice", "Sized",
                     "ScopeClaim", "ScopeBasis", "ScopeFraction",
                     "NativeAnchorRounding", "FromOwnerFill", "ArmContext",
-                    "NativeArmVisibility", "WaitForApplied"),
+                    "NativeArmVisibility", "WaitForApplied", "ActivationGrid"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    # R5 L8b: the activation grid is a host-free value the consumer hands to
+    # prepare_trigger; a default-constructed one (no ladder) is the raw rule,
+    # so the members keep their inactive defaults and the parameter its default.
+    activation_grid = re.sub(r'\s+', '', body(order, r'struct\s+ActivationGrid\s*\{', 'activation grid'))
+    if activation_grid != 'doubleprice_tick=0.0;boolhalf_up=true;':
+        raise ValueError('ActivationGrid must keep {price_tick = 0.0, half_up = true}')
+    if len(re.findall(r'\bconst\s+ActivationGrid\s*&\s*grid\s*=\s*\{\s*\}\s*\)', order)) != 1:
+        raise ValueError('prepare_trigger must take a defaulted ActivationGrid last')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
             "native_order_v6", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
@@ -615,6 +623,13 @@ def check_texts(files):
             raise ValueError('native driver omits feed-tolerance preflight token: ' + token)
 
     consumer_src = consumer_epoch_source(files)
+    # R5 L8b: the consumer hands the run's activation grid to the core at both
+    # trigger sites (the path matcher and the trail observer), and the grid is
+    # active only under QuantizeFillsAndTriggers (grid_threshold's own gate).
+    if consumer_src.count('activation_grid(*spec)') != 2:
+        raise ValueError('native consumer must hand activation_grid(*spec) to both prepare_trigger sites')
+    if 'const auto threshold = grid_threshold(spec);' not in consumer_src:
+        raise ValueError('activation_grid must derive from grid_threshold, the matcher gate')
     if 'native_margin_model_digest(*spec.margin)' not in consumer_src:
         raise ValueError('native consumer omits the conditional margin-model digest fold')
     if 'native_risk_limits_digest(*spec.risk)' not in consumer_src:

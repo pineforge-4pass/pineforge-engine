@@ -27,6 +27,26 @@ class NativeVersions(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_texts(changed)
 
+    def test_activation_grid_is_pinned_and_handed_to_the_core(self):
+        # R5 L8b: the activation grid is a native_order_v6 value struct with
+        # inactive defaults, prepare_trigger takes it defaulted last, and the
+        # consumer hands it to both trigger sites from the matcher's own gate.
+        for before, after in (
+            ('struct ActivationGrid {\n    double price_tick = 0.0;',
+             'struct ActivationGrid {\n    double price_tick = 1.0;'),
+            ('    bool half_up = true;      // nearest tick, ties away from zero; else directional\n',
+             '    bool half_up = false;\n'),
+            ('const ActivationGrid& grid = {});', 'const ActivationGrid& grid);'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[0], before, after)
+        for before, after in (
+            ('                activation_grid(*spec));\n', '                {});\n'),
+            ('const auto threshold = grid_threshold(spec);', 'const auto threshold = native_matching::GridThreshold{};'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[10], before, after)
+
     def test_current_command_and_preview_have_one_authority(self):
         self.reject(
             FILES[8],

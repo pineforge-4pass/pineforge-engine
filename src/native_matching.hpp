@@ -164,6 +164,47 @@ inline bool in_region(double price, double level, bool le) noexcept {
     return le ? price <= level : price >= level;
 }
 
+// --- The activation rule (L8b ruling) ---------------------------------------
+// Under QuantizeFillsAndTriggers the tick-quantized print IS the reached
+// price: the matcher's verdict is authoritative, and the core re-validates an
+// activation (stop, stop-limit, trail arm, trail stop) with these same two
+// functions on the same print, so a hit the matcher reports is never refused.
+// Without a grid both are the raw compare and the raw print, bit for bit.
+
+// Reached: the level itself always is (a crossing hit books the level, and a
+// quantized path enters the region exactly there); any other print must lie
+// inside the region the matcher tests, i.e. on the level's side of the same
+// grid_region_threshold. A nonfinite print or level is never reached.
+inline bool region_reached(double reached, double level, bool le,
+                           const GridThreshold& grid = {}) noexcept {
+    if (!std::isfinite(reached) || !std::isfinite(level)) return false;
+    if (reached == level) return true;
+    return in_region(reached, grid_region_threshold(level, le, grid), le);
+}
+
+// The quantized print of a reached activation. On a crossing (the print is
+// the level) it is the level's own ladder point: the level when it is one,
+// else the enclosing tick on the region's side, which is where a quantized
+// path first stands inside the region under either rounding. Otherwise it is
+// the print's tick: the nearest under HalfUp, the enclosing tick on the
+// region's side under Directional. Identity without a grid.
+inline double grid_reached_print(double reached, double level, bool le,
+                                 const GridThreshold& grid = {}) noexcept {
+    if (!std::isfinite(reached) || !grid_active(grid.tick)) return reached;
+    if (reached == level) return grid_round_directional(level, grid.tick, !le);
+    if (grid.half_up) return grid_round_half_up(reached, grid.tick);
+    return grid_round_directional(reached, grid.tick, !le);
+}
+
+// A trail's running best on the quantized path: a sell trail's best is a high
+// and extends upward, a buy trail's best is a low and extends downward, so
+// the Directional tick is on the favourable side. Identity without a grid.
+inline double grid_best_print(double price, bool buy, const GridThreshold& grid = {}) noexcept {
+    if (!std::isfinite(price) || !grid_active(grid.tick)) return price;
+    if (grid.half_up) return grid_round_half_up(price, grid.tick);
+    return grid_round_directional(price, grid.tick, !buy);
+}
+
 // First remaining-suffix entry into a closed price region. include_current
 // reports t_start when the cursor is already inside; otherwise the first
 // later crossing uses the threshold as the modeled raw price.
