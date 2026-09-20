@@ -1,183 +1,164 @@
-// R4-D L11a (RULING A48): the source host owns per-lot excursion accounting
-// behind ONE generic kernel capability. The kernel no longer samples the lot
-// at the matched trigger price and no longer folds bar-path extremes into the
-// closing row; both magnitudes come from the host's own sampler. Pins the
-// owner rows around the first divergence of
-// order-stop-entry-reversal-grouping-01 (favorable 13.64, exact — the
-// half-tick kernel overshoot 13.645 is gone) and the entry-bar mask rows of
-// the composite-scalping shape (same-bar priced entry + priced exit).
-// Bars are embedded; this test must never open corpus files.
-#include "l4a_native_route_guard.hpp"
+// R4-D L11a (RULING A48), the kernel half: per-lot excursion accounting is
+// ONE generic capability of NativeStrategyHost, and a bare host gets the
+// kernel's own model without declaring anything.
+//
+// Witnesses, all independent of the feature under test:
+//   1. a bare host does not own the capability — owns_lot_excursions() is
+//      false and closed_lot_excursion() answers zero magnitudes;
+//   2. the kernel's own sampler: on a flat tape (O = H = L = C, so the only
+//      delivered points are the closes) a lot opened at 100 that sees 103,
+//      98 and 105 and closes at 101 reports favorable 10 and adverse 4 in
+//      price-points x quantity — the running extremes, with the exit fill
+//      itself folded in (max(carried, fill) on both sides);
+//   3. a host that declares ownership supplies both magnitudes of the closing
+//      row from the booking facts alone: the row carries the host's numbers
+//      verbatim, every consultation carries the lot's own coordinates (entry
+//      and fill price, lot and closed quantity, side, entry bar and time),
+//      the settling consultation names the closing bar, and the carried
+//      extremes are zero because the kernel keeps no excursion model of its
+//      own for that run. The kernel builds the closing row for its account
+//      projections as well as for the settlement itself, so the owner is
+//      consulted more than once per lot; the count is not part of the
+//      contract, the facts are.
+//
+// Source-free: this TU runs in the kernel-only profile. The source-host twin
+// (the adapter declares ownership; ab9714be rows) is
+// tests/test_l11a_host_excursion_twin.cpp.
+#include "l11a_host_excursion_fixture.hpp"
 
-#include <pineforge/engine.hpp>
-#include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/native_host.hpp>
 
-#include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <vector>
 
 using namespace pineforge;
+namespace no = pineforge::native_order;
 
 namespace {
+using namespace l11a_fixture;
 
-constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-int passed = 0;
-int failed = 0;
+constexpr std::int64_t T = 1736121600000LL;
 
-#define CHECK(x) do { \
-    if (x) { ++passed; } \
-    else { ++failed; std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #x); } \
-} while (0)
-
-bool near(double a, double b, double tol = 1e-6) { return std::abs(a - b) < tol; }
-
-Bar mk(std::int64_t t, double o, double h, double l, double c) {
-    return {o, h, l, c, 1.0, t};
+NativeRunSpec spec(const char* key) {
+    NativeRunSpec s;
+    s.identity = {key, 1};
+    s.input_tf = "1";
+    s.script_tf = "1";
+    s.tickerid = "TEST:L11A";
+    s.timezone = "UTC";
+    s.session = "24x7";
+    s.initial_capital = 10000.0;
+    s.point_value = 1.0;
+    s.account_fx = 1.0;
+    s.price_tick = 0.01;
+    s.fee_kind = NativeFeeKind::CashPerExecution;
+    s.fee_value = 0.0;
+    s.close_execution = NativeCloseExecution::AfterCalculation;
+    return s;
 }
 
-source::PineStrategyConfig cfg(int pyr) {
-    source::PineStrategyConfig c;
-    c.initial_capital = 1000000;
-    c.default_qty_type = static_cast<int>(QtyType::FIXED);
-    c.default_qty_value = 1.0;
-    c.pyramiding = pyr;
-    c.process_orders_on_close = false;
-    c.commission_value = 0.0;
-    c.slippage = 0;
-    return c;
+// Flat bars: every delivered point is a close, so the sampled path is exactly
+// the close sequence below.
+std::vector<Bar> tape() {
+    const double closes[] = {100.0, 100.0, 103.0, 98.0, 105.0, 101.0, 100.0};
+    std::vector<Bar> bars;
+    int index = 0;
+    for (double close : closes) {
+        bars.push_back(mk(T + static_cast<std::int64_t>(index) * 60000, close, close, close, close));
+        ++index;
+    }
+    return bars;
 }
 
-// One generic capability: the source host declares ownership, every other
-// native host keeps the kernel's own generic excursion model.
-class DeclaresOwnership : public source::PineStrategyHost {
-public:
-    DeclaresOwnership() { configure_pine_strategy(cfg(2)); set_syminfo_metadata("ETHUSDT", 0.01); }
-    void on_source_bar(const Bar&) override {}
-};
-
-// order-stop-entry-reversal-grouping-01 around trade #801/#802: a long lot
-// opened at the 01:00 open and stopped out at the very high of that bar.
-// Owner favorable == net pnl == 13.64 exactly (ab9714be engine_trades.csv).
-class StopReversal : public source::PineStrategyHost {
-public:
-    StopReversal() { configure_pine_strategy(cfg(2)); set_syminfo_metadata("ETHUSDT", 0.01); }
-    void on_source_bar(const Bar& bar) override {
-        const int i = pine_bar_index();
-        if (i == 1 && live_position_size() == 0.0)
-            strategy_entry("L1", true, kNaN, kNaN, 1.0, "long lot 1");
-        if (i == 2 && live_position_size() > 0.0)
-            strategy_entry("L2", true, kNaN, kNaN, 1.0, "long lot 2");
-        if (i == 3 && live_position_size() > 0.0)
-            strategy_entry("SREV", false, kNaN, bar.high, 1.0, "short stop reversal");
-        if (i == 5 && live_position_size() < 0.0)
-            strategy_entry("LREV", true, kNaN, bar.low, 1.0, "long stop reversal");
-        if (i == 7 && live_position_size() != 0.0)
-            strategy_close_all();
+// Long 2 units at the close of bar 1 (AfterCalculation), flat at the close of
+// bar 5: entry 100, exit 101, the lot rides 103 / 98 / 105 in between.
+struct RoundTrip : NativeStrategyHost {
+    int bars = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        const int index = bars++;
+        if (index == 1) (void)submit({no::Transact{2.0}, "enter", ""});
+        if (index == 5) (void)submit({no::Flatten{}, "exit", ""});
     }
 };
 
-// composite-scalping shape: a priced short entry and a priced exit on the
-// SAME bar. The entry-bar extreme the assumed path reaches before the entry
-// fill is masked out of the lot (ab9714be pine_fills.cpp:42), so the owner
-// reports mfe 0.00 / mae == the pre-exit path extreme only.
-class SameBarScalp : public source::PineStrategyHost {
-public:
-    SameBarScalp() { configure_pine_strategy(cfg(1)); set_syminfo_metadata("ETHUSDT", 0.01); }
-    void on_source_bar(const Bar&) override {
-        if (placed_) return;
-        strategy_entry("S", false, kNaN, 1810.00, 1.0, "stop short");
-        strategy_exit("X", "S", 1818.00, kNaN, kNaN, kNaN, kNaN, 100.0, "stop buy back");
-        placed_ = true;
+// The same rule, owning its lots' excursion: the closing row must carry
+// these magnitudes verbatim, and the facts must be the booking coordinates.
+struct Owner final : RoundTrip {
+    mutable std::vector<ClosedLotExcursionFacts> facts;
+    bool owns_lot_excursions() const noexcept override { return true; }
+    ClosedLotExcursion closed_lot_excursion(const ClosedLotExcursionFacts& f) const override {
+        facts.push_back(f);
+        return {7.25 * f.closed_qty, 3.5 * f.closed_qty};
     }
-private:
-    bool placed_ = false;
 };
 
-void expect(const char* tag, const Trade& t, bool is_long, double entry_px,
-            double exit_px, double fav, double adv) {
-    std::printf("%s %s @%.4f->%.4f mfe=%.6f mae=%.6f (want mfe=%.6f mae=%.6f)\n",
-                tag, is_long ? "L" : "S", t.entry_price, t.exit_price,
-                t.max_runup, t.max_drawdown, fav, adv);
-    CHECK(t.is_long == is_long);
-    CHECK(near(t.entry_price, entry_px));
-    CHECK(near(t.exit_price, exit_px));
-    CHECK(near(t.max_runup, fav) /* exact: the host owns excursion */);
-    CHECK(near(t.max_drawdown, adv));
+template <class HostType>
+void run_round_trip(HostType& host, const char* key, const std::vector<Bar>& bars) {
+    CHECK(host.configure_native(spec(key)).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.trade_count() == 1);
 }
 
 }  // namespace
 
 int main() {
+    const std::vector<Bar> bars = tape();
     {
-        DeclaresOwnership host;
-        CHECK(host.owns_lot_excursions());
+        // 1. The bare host does not own the capability.
+        RoundTrip bare;
+        CHECK(!bare.owns_lot_excursions());
         ClosedLotExcursionFacts facts;
         facts.carried_favorable = 4.0;
         facts.carried_adverse = 2.0;
-        facts.entry_price = 100.0;
-        facts.fill_price = 103.0;
         facts.lot_qty = 1.0;
         facts.closed_qty = 1.0;
-        facts.is_long = true;
-        // The supplier is the host's own model: carried extremes scaled to the
-        // closed slice, with the exit fill itself always inside the trade.
-        const ClosedLotExcursion owned = host.closed_lot_excursion(facts);
-        CHECK(near(owned.favorable, 4.0));
-        CHECK(near(owned.adverse, 2.0));
-        facts.closed_qty = 0.5;
-        const ClosedLotExcursion half = host.closed_lot_excursion(facts);
-        CHECK(near(half.favorable, 2.0));
-        CHECK(near(half.adverse, 1.0));
+        const ClosedLotExcursion answer = bare.closed_lot_excursion(facts);
+        CHECK(answer.favorable == 0.0);
+        CHECK(answer.adverse == 0.0);
     }
     {
-        StopReversal host;
-        const std::vector<Bar> bars = {
-            mk(1760659200000LL, 3892.02, 3903.63, 3886.15, 3901.02),
-            mk(1760660100000LL, 3901.01, 3913.4, 3896.69, 3912.13),
-            mk(1760661000000LL, 3912.15, 3924.0, 3906.38, 3918.01),
-            mk(1760661900000LL, 3918.01, 3925.79, 3912.0, 3925.79),
-            mk(1760662800000LL, 3925.8, 3948.06, 3920.1, 3933.02),
-            mk(1760663700000LL, 3933.02, 3940.74, 3924.57, 3928.91),
-            mk(1760664600000LL, 3928.92, 3932.0, 3907.93, 3917.78),
-            mk(1760665500000LL, 3917.79, 3921.7, 3904.0, 3918.53),
-        };
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        CHECK(host.last_error().empty());
-        bool found = false;
-        for (int i = 0; i < host.trade_count(); ++i) {
-            const auto& t = host.get_trade(i);
-            if (t.is_long && near(t.entry_price, 3912.15) && near(t.exit_price, 3925.79)) {
-                found = true;
-                // Owner row: favorable == 13.64 exactly, not 13.645.
-                expect("reversal#801", t, true, 3912.15, 3925.79, 13.64, 5.77);
-                break;
-            }
+        // 2. The kernel's own model. Hand arithmetic, 2 units from 100:
+        //   favorable = max((103-100)*2, (105-100)*2, (101-100)*2 at the fill) = 10
+        //   adverse   = max((100-98)*2, -(101-100)*2 at the fill)               = 4
+        RoundTrip host;
+        run_round_trip(host, "l11a-kernel-model", bars);
+        if (host.trade_count() == 1) {
+            expect("kernel-model", host.get_trade(0), true, 100.0, 101.0, 10.0, 4.0);
         }
-        CHECK(found);
     }
     {
-        SameBarScalp host;
-        // Low-first bar (close < open): the path runs open -> low -> high ->
-        // close, so the stop short at 1810.00 fills on the way down and the
-        // 1806.40 low belongs to the lot, while the pre-fill high side is
-        // masked. The stop buy back at 1818.00 fills on the way up.
-        const std::vector<Bar> bars = {
-            mk(1743397200000LL, 1804.00, 1813.00, 1803.33, 1811.96),
-            mk(1743398100000LL, 1812.10, 1819.40, 1806.40, 1817.25),
-            mk(1743399000000LL, 1817.25, 1820.00, 1815.00, 1819.10),
-        };
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        CHECK(host.last_error().empty());
-        CHECK(host.trade_count() == 1);
-        if (host.trade_count() >= 1) {
-            const auto& t = host.get_trade(0);
-            // High-first bar: the 1819.40 high precedes the stop-short fill,
-            // so it is masked out of the lot and out of the exit fold; the
-            // post-fill low 1806.40 gives mfe 3.60 and the buy-back fill
-            // itself gives mae 8.00 (ab9714be pine_fills.cpp:42 + :5741).
-            expect("same-bar-scalp#1", t, false, 1810.00, 1818.00, 3.60, 8.00);
+        // 3. The owning host: its numbers, its facts, nothing carried.
+        Owner host;
+        run_round_trip(host, "l11a-owner", bars);
+        if (host.trade_count() == 1) {
+            expect("owner", host.get_trade(0), true, 100.0, 101.0, 14.5, 7.0);
         }
+        // Consulted for each projection of the closing row and for the
+        // settlement: the same lot coordinates every time, nothing carried.
+        CHECK(!host.facts.empty());
+        bool settling_consultation = false;
+        for (const ClosedLotExcursionFacts& f : host.facts) {
+            CHECK(f.is_long);
+            CHECK(near(f.entry_price, 100.0));
+            CHECK(near(f.fill_price, 101.0));
+            CHECK(near(f.lot_qty, 2.0));
+            CHECK(near(f.closed_qty, 2.0));
+            // The lot's own booking time: an AfterCalculation fill at the close
+            // of bar 1 is stamped at that close, which is bar 2's open, and it
+            // is the time the closed row reports as its entry.
+            CHECK(f.entry_time_ms == bars[2].timestamp);
+            CHECK(f.entry_time_ms == host.get_trade(0).entry_time);
+            CHECK(f.entry_bar_index == 1);
+            CHECK(f.carried_favorable == 0.0);
+            CHECK(f.carried_adverse == 0.0);
+            CHECK(!f.entry_bar_high_masked);
+            CHECK(!f.entry_bar_low_masked);
+            if (f.exit_bar_index == 5) settling_consultation = true;
+        }
+        CHECK(settling_consultation);
     }
     std::printf("test_l11a_host_excursion: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
