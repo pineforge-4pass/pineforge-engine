@@ -338,13 +338,20 @@ struct NativeMarginCallView {
 // BarOpen is the script bar's open, after on_native_bar_open and before the
 // bar's own matching; AfterApplied is the re-arm that follows a point's
 // applied fills, which is the kernel's only mid-path check; Calculation is
-// the script calculation of a CalculationOnly model. These are the kernel's
-// own points: a broker model that checks somewhere else is a host policy,
-// expressed by suppressing the points it does not share.
+// the script calculation of a CalculationOnly model; FxRoll is a step of the
+// run's declared NativeFxCurve: the first driver point the account converts
+// at a different rate than the point before it, offered immediately before
+// that point is matched, with the price where the walk left it -- the
+// requirement moved though no price did. A run that declares no curve has no
+// such point, and a CalculationOnly model, which measures at its calculation
+// alone, is not offered it. These are the kernel's own points: a broker model
+// that checks somewhere else is a host policy, expressed by suppressing the
+// points it does not share.
 enum class NativeMarginCheckKind : std::uint32_t {
     BarOpen = 0,
     AfterApplied = 1,
     Calculation = 2,
+    FxRoll = 3,
 };
 
 // Ephemeral factual view of one kernel check point, offered to the host

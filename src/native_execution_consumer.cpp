@@ -3026,6 +3026,61 @@ void NativeExecutionConsumer::calculation_margin_check(
     (void)execute_current(engine, {target, NativeCurrentPriceRule::AsPresented});
 }
 
+// MG9: a step of the declared FX curve is a check point of its own. The
+// requirement Q * P * pv * fx * m is FX-bearing, so the account can cross its
+// maintenance line with every price exactly where it was; the bar open and
+// the post-fill re-arm would only see that at the NEXT point of their own.
+//
+// The account converts at account_currency_fx_at(effective time), so the rate
+// a driver point is walked under is a function of the immutable curve and of
+// that point alone. A roll is a point whose rate is not its predecessor's in
+// the driver log -- both already durable, digested state, so the detection
+// adds none of its own and no continuation identity moves. The point is
+// offered immediately before it is matched, where the walk still stands: a
+// discrete point at its own price, a segment at its origin with its
+// destination among the waypoints that remain, so a level the new rate moved
+// inside the segment is rested in time for that same segment to reach it.
+//
+// The check reads the rate of the point it precedes and then hands the
+// engine's presented clock back, so nothing but the margin state can differ
+// from a walk that was never offered the point. Inert without a staged curve
+// and a declared model; a CalculationOnly model returns from
+// maintain_margin_liquidation before its gate, as at every other path point.
+void NativeExecutionConsumer::fx_roll_margin_check(
+        BacktestEngine& engine, const NativeDriverPoint& point,
+        bool continuous, double from_price) {
+    if (!staged_fx_curve_ || margin_model() == nullptr || failed()) return;
+    std::size_t walked = driver_log_.size();
+    if (walked != 0
+        && driver_log_[walked - 1].coordinate.ordinal == point.coordinate.ordinal) {
+        --walked;
+    }
+    if (walked == 0) return;
+    const double before = engine.account_currency_fx_at(
+        driver_log_[walked - 1].coordinate.effective_time_ms);
+    const double after = engine.account_currency_fx_at(point.coordinate.effective_time_ms);
+    if (native_matching::double_bits(before) == native_matching::double_bits(after)) return;
+    NativePathPhase standing = point.coordinate.path_phase;
+    double price = point.raw_price;
+    if (continuous) {
+        price = from_price;
+        const NativePathPhase order[4] = {
+            NativePathPhase::Open,
+            margin_path_high_first_ ? NativePathPhase::High : NativePathPhase::Low,
+            margin_path_high_first_ ? NativePathPhase::Low : NativePathPhase::High,
+            NativePathPhase::Close,
+        };
+        for (int index = 1; index < 4; ++index) {
+            if (order[index] == point.coordinate.path_phase) standing = order[index - 1];
+        }
+    }
+    const std::int64_t presented = engine.current_bar_.timestamp;
+    engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
+    maintain_margin_liquidation(engine, make_cursor(point, 0.0), standing, price,
+                                NativeMarginCheckKind::FxRoll);
+    engine.current_bar_.timestamp = presented;
+}
+
 std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
         BacktestEngine& engine, const native_order::ExecutionAppliedEvent& applied,
         const native_order::DefinitionRef& definition, double position_before,
@@ -4613,6 +4668,10 @@ void NativeExecutionConsumer::match_path(
     }
     const auto* spec = spec_ptr();
     if (!spec) return;
+    // MG9: a step of the declared FX curve is measured before this point is
+    // matched, so a liquidation it rests is live for the point itself.
+    fx_roll_margin_check(engine, point, continuous, from_price);
+    if (failed()) return;
     // With no live request there is no trigger, allowance, trail, receipt or
     // callback work to perform. Keep the one physical excursion effect the
     // regular segment path would have applied to an already-open position.

@@ -494,6 +494,11 @@ private:
                                      NativeMarginCheckKind kind);
     void calculation_margin_check(BacktestEngine& engine, const NativeCoordinate& calc,
                                   double mark);
+    // MG9: a step of the declared FX curve is a check point of its own. Run
+    // at the head of every matched driver point; inert without a staged curve
+    // and a margin model, so no other run reaches past its first test.
+    void fx_roll_margin_check(BacktestEngine& engine, const NativeDriverPoint& point,
+                              bool continuous, double from_price);
     // One kernel-originated reduction: the margin model's liquidation, and
     // (L9) the risk block's own flatten. `origin`, `label` and `comment` name
     // which, and only a resting liquidation is retained as margin state.

@@ -12359,6 +12359,12 @@ bool PineExecutionAdapter::source_margin_rounded_tie_veto() const {
 // orders in front of it -- and only carried here.
 bool PineExecutionAdapter::margin_check_allowed(
         const NativeMarginCheckPoint& point) const {
+    // The kernel's FX-roll point is not TradingView's: its account-currency
+    // rollover revaluation is the broker-open slice of
+    // apply_fx_open_margin_slice, taken in on_bar_open on the source's own
+    // sub-bar rate. Refused by kind, ahead of the ordinal test, because a
+    // roll can share its driver point with an armed BarOpen check.
+    if (point.kind == NativeMarginCheckKind::FxRoll) return false;
     // The kernel's BarOpen point and its post-fill AfterApplied re-arm are
     // both points TradingView checks at -- schedule_margin_call_path is
     // called from on_bar_open and from on_applied -- so the admitted point is

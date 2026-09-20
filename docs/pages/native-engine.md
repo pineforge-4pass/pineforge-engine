@@ -830,12 +830,36 @@ is accepted. A book that is flat or no longer breached withdraws it outright.
 at a script calculation point, against that bar's close. A breach there is
 liquidated immediately as a current execution. Nothing fills mid-path.
 
+**The FX roll (`NativeMarginCheckKind::FxRoll`).** `required(P)` carries the
+account rate, so under a declared `NativeFxCurve` an account can cross its
+maintenance line while every price stands still. A step of the curve is
+therefore a check point of its own: the first driver point the account
+converts at a different rate than the point before it, offered immediately
+before that point is matched. The walk has not moved yet — a discrete point is
+measured at its own price, a segment at its origin with its destination among
+the waypoints that remain — so the mark is the unchanged price and only the
+rate is new. From there it is an ordinary path check: the level is re-solved
+at the new rate and the reduction is rested, re-priced or withdrawn. A level
+the new rate moved *inside* the segment that remains is reached by that same
+segment and fills AT the level. A level already through the standing price is
+treated like any slice rested mid-path: it is not owed the print its birth
+segment has consumed and takes the next one. With the confirmed OHLC path, a
+curve point stamped at a script bar's open activates at the PREVIOUS bar's
+Close coordinate, whose effective time is that same instant — the roll the bar
+open used to see one point late, after the Close segment had run under the new
+rate against a level solved under the old one. A curve point that restates the
+running rate is not a step; a run without a curve has no such point; and
+`CalculationOnly`, which measures at its calculation alone, is not offered it
+— its next calculation already converts at the new rate. The detection reads
+the driver log and the immutable curve, so it adds no run state and moves no
+continuation identity (`tests/test_native_margin_fx_roll.cpp`).
+
 **The requirement hook.** At EVERY kernel check point, BEFORE the breach
 test, the host is offered the two numbers the kernel is about to compare:
 
 ```cpp
 struct NativeMarginRequirementView {
-    NativeMarginCheckKind kind;        // BarOpen | AfterApplied | Calculation
+    NativeMarginCheckKind kind;        // BarOpen | AfterApplied | Calculation | FxRoll
     NativePhysicalPosition position;
     double mark, equity, required;     // equity on the model's basis
     native_order::MatchCursor cursor;
@@ -925,7 +949,9 @@ tick-quantized fill price. The presence of `margin` IS
 `set_margin_call_enabled()`. What stays adapter-side is what no check point of
 the kernel's can reach: the bar-open mark checkpoint and the script-close pass
 (the kernel checks once per point, at the remaining path's adverse mark), the
-account-currency FX rollover revaluation, the pre-open admission slice, and the
+account-currency FX rollover revaluation (the adapter refuses the kernel's
+`FxRoll` point by kind: TradingView's rollover is its broker-open slice, taken
+on the source's own sub-bar rate), the pre-open admission slice, and the
 one-contract 1×-long money call — which is not a maintenance liquidation
 at all and fires on the favorable side of the path. Measured against the
 adapter as it stood before the re-lowering, on the same books, bit for bit:
