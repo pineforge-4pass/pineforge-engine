@@ -1536,6 +1536,9 @@ with `input_tf` exactly as `script_tf` does. Named refusals:
 | `DuplicateSubscriptionTimeframe` | two series of the same period declaring **different** `authoritative_bars` (the feed store is keyed by duration, and every monthly literal is one period, so they cannot each own one) |
 | `UnorderedSubscriptionBars` | `authoritative_bars` not strictly increasing in time |
 | `SubscriptionWithoutTimeframe` | declared together with `timeframe_undetected` |
+| `SubscriptionWithoutAuxiliaryFeed` | a series whose `source` is `AuxiliaryFeed` in a spec that declares no feed |
+| `SubscriptionFinerThanAuxiliaryFeed` | a series built from the feed and strictly finer than it |
+| `UnknownSeriesSource` | a `source` outside its enumeration |
 
 **Delivery.** A bucket is delivered on an accepted input bar, before that
 input is aggregated, matched or calculated — so `on_native_input` precedes it
@@ -1714,8 +1717,162 @@ sequence, continuation hash and `stream_state_hash()` are the pre-subscription
 ones.
 
 **Limits.** A series finer than the input is refused at configure, not
-emulated. Only the run's own symbol is addressable; there is no
-auxiliary-symbol feed and no chart-slice mapping.
+emulated, unless it is built from an auxiliary finer feed the host declares
+("The auxiliary finer feed" below). Only the run's own symbol is addressable;
+there is no auxiliary-symbol feed and no chart-slice mapping.
+
+### The auxiliary finer feed
+
+A host whose input is 15-minute bars may also hold the 1-minute bars of the
+same symbol. It hands them to the kernel as the run's **auxiliary feed** and
+names, per series, which bars the series is built from:
+
+```cpp
+NativeAuxiliaryFeed feed;
+feed.tf = "1";                       // strictly finer than input_tf
+feed.bars = one_minute_bars;         // strictly increasing; may be empty
+spec.auxiliary_feed = feed;
+
+NativeTimeframeSubscription five;
+five.tf = "5";                       // finer than the 15-minute input
+five.source = NativeSeriesSource::AuxiliaryFeed;
+spec.subscriptions.push_back(five);
+```
+
+`auxiliary_feed` is absent by default and `source` defaults to
+`NativeSeriesSource::Input`, so every part of this section is inert for a spec
+that uses neither: nothing is stored, nothing is routed, and both the series
+digest and the run-spec digest are the ones they were before the fields
+existed (each folds only where a host opted in). The feed drives nothing by
+itself — no matching point, no calculation, no script bar; it is read only by
+the series that name it.
+
+A series built from the feed pairs with the **feed's** timeframe exactly as
+`script_tf` pairs with `input_tf`, so it may be finer than the input (`"5"`
+over a `"15"` input and a `"1"` feed), equal to it, or coarser (`"60"`, `"D"`)
+— and a series of the feed's own timeframe passes every feed bar through.
+`lookahead`, `gaps`, `authoritative_bars`, the series-instance rule, the
+callback, the pull accessor and the chronology against the script interval
+are all as above; a series still built from the input is unchanged by the
+feed's presence, `SubscriptionFinerThanInput` included.
+
+**Routing is by time, and by nothing else.** When an input bar is accepted,
+every feed bar not yet consumed that opened **before that input's period
+ended** (`NativeInterval::next_period_open_ms` of the input's own interval) is
+folded, in feed order, into each `AuxiliaryFeed` series, at the delivery point
+every series has: after `on_native_input`, before that input is aggregated,
+matched or calculated. So:
+
+- bars inside an input ride on it, and a series finer than the input delivers
+  several buckets on one input, oldest first (`NativeTimeframeBarContext::
+  interval` is then the bucket's own span, read over the feed's timeframe,
+  and `delivered_at_ms` stays the input bar);
+- bars in a hole of the input ride on the next accepted input;
+- bars **earlier than the first input** are folded on that first input — this
+  is how a host supplies history the input does not reach, and a bucket that
+  history completes is delivered there, ahead of the input's own;
+- bars later than the last input's period are never folded;
+- a bucket the *feed* leaves short is learned complete only from the next feed
+  bar (`LazyComplete`), which rides on a later input.
+
+Under `lookahead = true` a bucket's final values are delivered on the input
+whose slice held its **first** feed bar. Deliveries riding on one input arrive
+series by series in declaration order, each series' buckets oldest first.
+
+**Validation.** At `configure_native`, and by the same functions at begin
+(`validate_native_auxiliary_feed`, and
+`validate_native_timeframe_subscriptions` with the feed as its fourth
+argument):
+
+| `NativeRunSpecError` | Cause |
+| --- | --- |
+| `InvalidAuxiliaryFeedTimeframe` | unparseable literal, or a pairing under `input_tf` an input would not accept under a `script_tf` (`"10"` under `"15"`) |
+| `AuxiliaryFeedNotFinerThanInput` | the input's own period, or coarser |
+| `UnorderedAuxiliaryFeedBars` | bars not strictly increasing in time |
+| `InvalidAuxiliaryFeedBar` | a bar `native_bar_structurally_valid` refuses (non-finite or non-positive price, `low`/`high` not bracketing `open`/`close`, negative volume) |
+| `AuxiliaryFeedWithoutTimeframe` | declared together with `timeframe_undetected` |
+
+**Declaring at begin.** `declare_auxiliary_feed(std::optional<
+NativeAuxiliaryFeed>)` is the feed's counterpart of
+`declare_timeframe_subscriptions`: legal only inside `on_native_run_begin`,
+replacing the staged spec's feed (`nullopt` withdraws it) before the kernel
+registers, so the staged spec names what ran and the continuation identity
+folds it. The feed is judged together with the series staged at that moment —
+a host that names both at begin declares the **feed first and its series
+second** — and a declaration that would leave a staged `AuxiliaryFeed` series
+without its bars, or finer than them, changes nothing and answers `false`.
+
+**Streams.** The begin-time feed covers what the host knows then; the warmup
+resolves its series exactly as a `run()` over the same inputs and the same
+feed does. Live, the host appends each input's finer bars and then pushes the
+input:
+
+```cpp
+host.append_auxiliary_bars(finer.data(), finer.size());  // the 15 one-minute bars
+host.stream_push_bar(quarter_hour_bar);                   // the input they belong to
+```
+
+Appended bars join the feed behind every bar it holds and are routed by the
+very rule above, so a stream fed this way reads the batch's series, bucket for
+bucket and delivery point for delivery point
+(`tests/test_native_auxiliary_feed_stream.cpp`). Bars the begin-time feed
+already holds beyond the warmup are consumed by the live inputs the same way.
+`append_auxiliary_bars` refuses **by name, changing nothing and without
+failing the host**: a run that is not realtime, a run that declared no feed,
+bars out of order or not after the feed's last bar, a bar with invalid OHLCV,
+and a bar that opened inside an input period already accepted — its slice is
+closed, and folding it late would build a series no batch of the same bars
+could. Called from inside a callback it is the contract failure every
+reentrant stream input is. Appended bars are durable input and are folded
+into the continuation hash (count and running content digest), as is each
+feed-built series' cursor; the one completion rule a stream cannot use —
+closing a period on its last bar because the *next* bar's stamp is already
+known — applies to the feed's own successor exactly as it does to the input's.
+
+**What this is not.** It is not the Pine source host's split-feed path.
+`BacktestEngine::set_aux_security_feed` — the C ABI's
+`strategy_set_aux_security_feed` — stays that host's door: on a bare host it
+answers `false`, exactly as before, and the generic door is
+`NativeRunSpec::auxiliary_feed`. TradingView's
+chart-slice mapping (chart bars re-keyed by the session they cover, calendar
+charts routed by their actual stamps, pre-range coverage left inert, the
+range-start cut), the calling-bar completions and the deferred first-bucket
+publication are state and code of `source::PineStrategyHost`
+(`src/source/pine_aux_security.cpp`) and are not reachable from a native host.
+
+**The Pine adapter keeps its own auxiliary drive — retained, measured (audit
+lane N7).** The adapter's plain sites already run on kernel subscriptions
+where the kernel step *is* the Pine step ("The Pine adapter on subscriptions"
+above), and an auxiliary feed is one of the shapes that route excludes. It
+stays excluded, on three measurements:
+
+1. **No population can witness the move.** 0 of the corpus' 312 probes install
+   an auxiliary feed (`git -C corpus grep -l aux_security` is empty at both
+   the recorded and the regenerated pin), so whole-corpus byte-identity says
+   nothing about a re-lowered auxiliary path either way.
+2. **The slice is not the generic one.** TradingView leaves feed coverage
+   before the first chart bar inert and cuts the bucket in progress at the
+   range start; the kernel routes by time and folds that history on the first
+   input. Over one feed with an hour of history the adapter publishes two
+   hourly buckets and a bare host three
+   (`tests/test_native_auxiliary_feed_twin.cpp`, row B) — and every
+   split-feed lane the adapter serves carries such history. Under an auxiliary
+   feed every site finer than the chart additionally carries a Pine-only
+   completion rule (`calling_close_completes_partial` /
+   `calling_open_latches_first`), set unconditionally at validation.
+3. **The evaluation point differs on every shape**, the congruent one
+   included. The adapter publishes a chart bar's slice at that bar's
+   *calculation*, after the bar's own matching pass; the kernel delivers a
+   series on the accepted input, *before* it is matched. With a position
+   opened at bar 1's open, the adapter evaluates bar 1's bucket against a
+   position of 1 and the kernel delivers it against 0 (same twin, row C). A
+   generated `evaluate_security` body is opaque to any routing predicate, so
+   no predicate can prove that move neutral.
+
+On the congruent shape — a feed that begins at the first chart bar, a plain
+`lookahead_off` site no finer than the chart — the two series *are* the same
+buckets read at the same calculations (row A): the generic feed can express
+it. Re-lowering it waits on a population that exercises it.
 
 **What the kernel keeps, and what it does not.** The machinery a subscription
 runs on is the kernel's and is generic: the evaluator registry
@@ -2471,7 +2628,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-29 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+30 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -2618,10 +2775,29 @@ offsets are unchanged, a caller that zero-fills it keeps `barmerge.gaps_off`,
 and any value but 0 or 1 is `PF_NATIVE_E_TAG`.
 
 A caller sending the base length keeps working unchanged and is refused with
-`PF_NATIVE_E_STRUCT` if it sets the risk bit it has no fields for; any third
-length is refused outright. `tests/test_native_c_api_frozen_header.cpp`
+`PF_NATIVE_E_STRUCT` if it sets the risk bit it has no fields for.
+`tests/test_native_c_api_frozen_header.cpp`
 configures a host from the frozen v1 copy of the struct, so that acceptance is
 executed rather than asserted.
+
+The auxiliary finer feed (`PF_NATIVE_SPEC_EXT_AUXILIARY_FEED`) is the **last
+additive tail**, behind the risk one and N8's intrabar / policy one:
+`auxiliary_tf`, `auxiliary_bars`, `auxiliary_n`, a reserved word that must be
+zero, and `subscription_sources` — an optional array of
+`pf_native_series_source_e`, one word per subscription row, `NULL` meaning
+every series is built from the input (the subscription row itself has no spare
+word left, so the source rides beside it rather than in it). The struct
+therefore has four published lengths and the runtime accepts each:
+`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`, `PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`,
+`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE` (each the offset of the first field of
+the tail behind it, not a literal) and the current `sizeof`; a caller is
+refused with `PF_NATIVE_E_STRUCT` for a bit whose tail it does not carry, and
+any other length is refused outright. A realtime stream appends later feed
+bars with `strategy_native_append_auxiliary_bars_v1`, the C spelling of
+`append_auxiliary_bars`: `PF_NATIVE_OK`, or `PF_NATIVE_E_STATE` for every
+by-name refusal above with the reason in `strategy_get_last_error`.
+`tests/test_native_c_api.c` runs the batch, the stream and each refusal from
+pure C.
 
 **The callback table.** `pf_native_callbacks_v1` has **two published
 lengths** and the runtime accepts either: the layout the lane first shipped
