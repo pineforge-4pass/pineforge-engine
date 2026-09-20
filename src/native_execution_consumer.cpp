@@ -6816,9 +6816,7 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
             subscription.lookahead = declared.lookahead;
             subscription.gaps = declared.gaps;
             subscriptions_.push_back(std::move(subscription));
-            engine.register_security_eval(sec_id, declared.tf, spec.input_tf,
-                                          /*lookahead_on=*/false, /*gaps_on=*/false,
-                                          /*heikinashi=*/false);
+            engine.register_security_eval(sec_id, declared.tf, spec.input_tf);
             if (declared.authoritative_bars.empty()) continue;
             if (!engine.set_native_security_feed(
                     declared.tf, declared.authoritative_bars.data(),

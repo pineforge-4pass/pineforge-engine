@@ -266,7 +266,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
                     continue;
                 }
                 const int64_t published_before = state.eval_complete_count;
-                feed_security_at_calling_bar_boundary(
+                pine_feed_security_eval_state(
                     state, aux_bar, calling_bar_complete);
                 // The slice's first bucket is published: a completion
                 // labelled at or after the slice's first bucket open. An
@@ -382,8 +382,8 @@ void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int char
         held.swap(state.deferred_aux);
         for (const auto& d : held) {
             security_next_input_ms_ = d.next_input_ms;
-            feed_security_at_calling_bar_boundary(state, d.bar,
-                                                  d.calling_bar_complete);
+            pine_feed_security_eval_state(state, d.bar,
+                                          d.calling_bar_complete);
         }
     }
     security_calling_close_ms_ = 0;

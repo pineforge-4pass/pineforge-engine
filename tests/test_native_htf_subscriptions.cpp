@@ -175,7 +175,7 @@ public:
     void on_native_run_begin() override {
         if (register_own_evaluator) {
             security_eval_states_.clear();
-            register_security_eval(0, "240", "15", false, false);
+            register_security_eval(0, "240", "15");
         }
         declared_at_begin = declare_timeframe_subscriptions(declare);
     }

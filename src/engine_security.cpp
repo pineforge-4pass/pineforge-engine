@@ -20,45 +20,25 @@ using namespace internal;
 
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,
-                                             const std::string& input_tf,
-                                             bool lookahead_on, bool gaps_on,
-                                             bool heikinashi) {
+                                             const std::string& input_tf) {
     SecurityEvalState state;
     state.sec_id = sec_id;
     state.tf = requested_tf;
-    state.gaps_on = gaps_on;
-    state.lookahead_on = lookahead_on;
-    state.heikinashi = heikinashi;
 
     const std::string& evaluator_input_tf =
         security_input_tf_.empty() ? input_tf : security_input_tf_;
     if (!evaluator_input_tf.empty()) {
-        int lower_ratio = 0;
-        int lower_seconds = 0;
-        if (supports_lower_tf_emulation(evaluator_input_tf, requested_tf,
-                                        &lower_ratio, &lower_seconds)) {
-            // Registration precedes the final input-timeframe validation and
-            // cannot yet distinguish request.security_lower_tf from a plain
-            // request.security evaluator. The latter retains its own
-            // lookahead/gaps contract, so the lower-TF-array restriction is
-            // applied only after that identity is known below.
-            state.lower_tf_requested = true;
-            state.lower_tf_emulation = true;
-            state.lower_tf_ratio = lower_ratio;
-            state.lower_tf_seconds = lower_seconds;
-        } else {
-            int ratio = tf_ratio(evaluator_input_tf, requested_tf);
-            if (ratio > 1) {
-                state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
-                    syminfo_.timezone, syminfo_.session);
-            } else if (ratio == -1) {
-                state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
-                    syminfo_.timezone, syminfo_.session);
-            }
-            // ratio <= 0: passthrough (same or unsupported lower TF)
-            state.aggregator.set_early_close_completes(
-                session_template_knows_early_close());
+        int ratio = tf_ratio(evaluator_input_tf, requested_tf);
+        if (ratio > 1) {
+            state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
+                syminfo_.timezone, syminfo_.session);
+        } else if (ratio == -1) {
+            state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
+                syminfo_.timezone, syminfo_.session);
         }
+        // ratio <= 0: passthrough (same or finer timeframe)
+        state.aggregator.set_early_close_completes(
+            session_template_knows_early_close());
     }
     security_eval_states_.push_back(std::move(state));
 }
@@ -70,26 +50,6 @@ bool BacktestEngine::session_template_knows_early_close() const {
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     }
     return kind != "forex" && kind != "cfd" && kind != "crypto";
-}
-
-
-// --- register_security_lower_tf_eval ---
-// ``request.security_lower_tf`` is a strict subset of ``request.security``:
-// the requested TF must be finer than the chart's input TF and lookahead /
-// gaps are pinned off (TV does not expose them on this builtin). We reuse
-// the existing eval-state plumbing and set ``lower_tf_array_requested``
-// so ``validate_security_timeframes`` can produce a precise diagnostic
-// when the chart's input TF makes lower-TF emulation impossible.
-void BacktestEngine::register_security_lower_tf_eval(
-    int sec_id,
-    const std::string& requested_tf,
-    const std::string& input_tf
-) {
-    auto before = security_eval_states_.size();
-    register_security_eval(sec_id, requested_tf, input_tf, false, false);
-    if (security_eval_states_.size() > before) {
-        security_eval_states_.back().lower_tf_array_requested = true;
-    }
 }
 
 

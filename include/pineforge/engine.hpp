@@ -2051,18 +2051,13 @@ protected:
     // unwinds a C++ exception across the extern "C" boundary.
     std::string last_error_;
 
+    // Registers one aggregating evaluator: the requested timeframe's buckets
+    // built from the run's evaluator input timeframe, passthrough when the
+    // two are equal. Publication modes are not the kernel's: a source host
+    // keeps its own per-sec_id semantics beside this state and a native
+    // subscription's modes are the consumer's delivery rules.
     void register_security_eval(int sec_id, const std::string& requested_tf,
-                                const std::string& input_tf, bool lookahead_on,
-                                bool gaps_on = false, bool heikinashi = false);
-    // ``request.security_lower_tf`` registers the same per-sec_id eval
-    // state but with the additional contract that the requested TF must
-    // resolve to a finer-than-input TF emulation. This wrapper sets the
-    // ``lower_tf_array_requested`` flag so ``validate_security_timeframes``
-    // can throw a precise error if the chart's input TF turns out to be
-    // <= the requested TF (mirroring TradingView's "lower timeframe
-    // required" error for ``request.security_lower_tf``).
-    void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
-                                         const std::string& input_tf);
+                                const std::string& input_tf);
     // Sub-bar index (0-based) of the current ``request.security_lower_tf``
     // synthesis within the current chart bar. Returns 0 outside the
     // synthesis loop. Used by codegen to clear its per-call vector at
@@ -2476,35 +2471,6 @@ protected:
     bool aux_security_feed_enabled() const {
         return source_aux_security_feed_enabled();
     }
-
-    // Neutral capability bridge for independent factorial patches. The
-    // two-argument feed exists in the base engine. A completion-aware factor
-    // may add a third bool argument; dependent-expression overload selection
-    // forwards the native chart completion only when that capability exists.
-    // Neither factor names or requires the other's feature macro.
-    template <typename EngineT>
-    static auto feed_security_at_calling_bar_boundary_impl(
-            EngineT* engine, SecurityEvalState& state, const Bar& bar,
-            bool calling_bar_complete, int)
-        -> decltype(engine->feed_security_eval_state(
-                        state, bar, calling_bar_complete), void()) {
-        engine->feed_security_eval_state(state, bar, calling_bar_complete);
-    }
-
-    template <typename EngineT>
-    static void feed_security_at_calling_bar_boundary_impl(
-            EngineT* engine, SecurityEvalState& state, const Bar& bar,
-            bool, long) {
-        engine->feed_security_eval_state(state, bar);
-    }
-
-    void feed_security_at_calling_bar_boundary(
-            SecurityEvalState& state, const Bar& bar,
-            bool calling_bar_complete) {
-        feed_security_at_calling_bar_boundary_impl(
-            this, state, bar, calling_bar_complete, 0);
-    }
-
 #endif
     // Runs the standard per-script-bar order/strategy sequence on current_bar_:
     //   request matching -> update_per_trade_extremes -> on_bar,

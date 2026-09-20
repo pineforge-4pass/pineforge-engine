@@ -338,6 +338,23 @@ protected:
         return pineforge::pine_session_ispostmarket(session, timezone, bar_ms, script_tf_);
     }
     const std::vector<FixtureIntentRow>& source_pending_view() const;
+    // request.security registration, as generated configure_security_evaluators()
+    // spells it. The kernel registers the aggregating evaluator; Pine's
+    // publication semantics for the site (barmerge.lookahead, barmerge.gaps,
+    // ticker.heikinashi, the lower-timeframe emulation a finer request
+    // selects) are this host's, recorded for the sec_id it just registered.
+    void register_security_eval(int sec_id, const std::string& requested_tf,
+                                const std::string& input_tf, bool lookahead_on,
+                                bool gaps_on = false, bool heikinashi = false);
+    // ``request.security_lower_tf`` registers the same per-sec_id eval
+    // state but with the additional contract that the requested TF must
+    // resolve to a finer-than-input TF emulation. This wrapper sets the
+    // ``lower_tf_array_requested`` flag so ``validate_security_timeframes``
+    // can throw a precise error if the chart's input TF turns out to be
+    // <= the requested TF (mirroring TradingView's "lower timeframe
+    // required" error for ``request.security_lower_tf``).
+    void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
+                                         const std::string& input_tf);
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
     void hash_source_extension(BrokerStateHashSink&) const override;
 
@@ -371,6 +388,12 @@ private:
     void scheduler_feed_aux_security(int chart_index);
     void scheduler_feed_deferred_aux_security(int chart_index);
     void scheduler_finish_security_sequence();
+    // Pine's evaluator step for one request.security site and one evaluator
+    // input bar: the kernel's aggregation, native-bar substitution and
+    // dispatch primitives, composed under TradingView's publication rules
+    // (src/source/pine_security_eval.cpp).
+    void pine_feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar,
+                                       bool calling_bar_complete = false);
     void scheduler_record_range_end(const Bar&);
     // One report point per published source slot. The kernel records it
     // (NativeReportPolicy::KernelRecordedAtHostMarks); this host owns only

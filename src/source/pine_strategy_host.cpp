@@ -1405,7 +1405,7 @@ bool source::PineStrategyHost::scheduler_feed_security_input(
             deferred = true;
             continue;
         }
-        feed_security_eval_state(state, bar, calling_bar_complete);
+        pine_feed_security_eval_state(state, bar, calling_bar_complete);
     }
     return deferred;
 }
@@ -1423,7 +1423,7 @@ void source::PineStrategyHost::scheduler_feed_deferred_security_input(
     security_calling_close_ms_ = 0;
     for (auto& state : security_eval_states_) {
         if (state.publish_gate_tf_seconds > 0)
-            feed_security_eval_state(state, bar, false);
+            pine_feed_security_eval_state(state, bar, false);
     }
 }
 

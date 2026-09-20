@@ -102,6 +102,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_strategy_host.cpp
     src/source/pine_strategy_commands.cpp
     src/source/pine_aux_security.cpp
+    src/source/pine_security_eval.cpp
     src/source/pine_state_hash.cpp
 )
 
