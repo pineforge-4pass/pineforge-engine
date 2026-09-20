@@ -45,6 +45,13 @@ public:
         const NativeExecutionTermsFacts&) const final;
     NativePrecommitVerdict validate_execution_precommit(
         const NativePrecommitView&) const final;
+    // R5: the kernel owns the margin mechanism; these three answer with the
+    // TradingView policy the adapter holds.
+    bool margin_check_allowed(const NativeMarginCheckPoint&) const final;
+    std::optional<NativeMarginDecision> resolve_margin_requirement(
+        const NativeMarginRequirementView&) const final;
+    std::optional<double> resolve_margin_call_units(
+        const NativeMarginCallView&) const final;
     // RULING A48: the source host owns per-lot excursion accounting (MFE/MAE)
     // on the switched route. It samples every completed source bar's H/L/C
     // with the owner's entry-bar masks, and supplies the closing row's two

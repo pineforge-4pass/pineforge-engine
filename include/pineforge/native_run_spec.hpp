@@ -198,6 +198,17 @@ enum class NativeLiquidationLevelBase : std::uint32_t {
 // the reported level is solved from. Both default to the marked-equity model
 // the kernel has always used, and both fold into the run spec's digest only
 // when moved off it.
+//
+// `liquidation_label` / `liquidation_comment` name the TICKET the kernel's own
+// liquidation is booked under. A broker's forced liquidation carries the
+// broker's identifiers, and a reporting layer that classifies a closed row by
+// its ticket id -- which is the ordinary way to say "this row was a margin
+// call" -- can only do so if those identifiers are the broker's. Empty keeps
+// the kernel's own ("__kernel_liquidation__" / "Margin liquidation"); a set
+// value is used verbatim for the request's label and comment and therefore
+// for the closed row's exit id and comment. Like the two money bases, each
+// folds into the model's digest only when set, so a model that does not name
+// its ticket digests exactly as it did before they existed.
 struct NativeMarginModel {
     double initial_long = 0.0;
     double initial_short = 0.0;
@@ -209,6 +220,8 @@ struct NativeMarginModel {
     NativeLiquidationCheck check = NativeLiquidationCheck::PathAdverseExtreme;
     NativeMarginEquityBasis basis = NativeMarginEquityBasis::MarkedEquity;
     NativeLiquidationLevelBase level_base = NativeLiquidationLevelBase::MarkedEquity;
+    std::string liquidation_label;
+    std::string liquidation_comment;
 };
 
 // One risk threshold (L9). `value` is account currency when `percent` is

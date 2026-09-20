@@ -425,7 +425,8 @@ def check_texts(files):
                'NativeLiquidationCheckcheck=NativeLiquidationCheck::PathAdverseExtreme;'
                'NativeMarginEquityBasisbasis=NativeMarginEquityBasis::MarkedEquity;'
                'NativeLiquidationLevelBaselevel_base='
-               'NativeLiquidationLevelBase::MarkedEquity;'):
+               'NativeLiquidationLevelBase::MarkedEquity;'
+               'std::stringliquidation_label;std::stringliquidation_comment;'):
         raise ValueError('native margin model must preserve its member order and shape')
     risk = body(spec, r'struct\s+NativeRiskLimits\s*\{', 'native risk limits')
     if (re.sub(r'\s+', '', risk)

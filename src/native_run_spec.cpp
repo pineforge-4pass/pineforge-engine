@@ -642,6 +642,14 @@ std::uint64_t native_margin_model_digest(const NativeMarginModel& margin) noexce
         u(static_cast<std::uint64_t>(margin.basis));
         u(static_cast<std::uint64_t>(margin.level_base));
     }
+    // Same conditional shape for the broker's own ticket names: a model that
+    // leaves them empty keeps the number it had before they existed.
+    if (!margin.liquidation_label.empty() || !margin.liquidation_comment.empty()) {
+        u(margin.liquidation_label.size());
+        bytes(margin.liquidation_label.data(), margin.liquidation_label.size());
+        u(margin.liquidation_comment.size());
+        bytes(margin.liquidation_comment.data(), margin.liquidation_comment.size());
+    }
     return state;
 }
 

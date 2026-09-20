@@ -2775,14 +2775,35 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
     } else {
         double sized = units;
         if (spec->quantity_grid && *spec->quantity_grid > 0.0) {
-            sized = std::floor(units / *spec->quantity_grid) * *spec->quantity_grid;
-            if (!native_order::quantity_on_grid(sized, *spec->quantity_grid)) return false;
+            // A quantity that is ALREADY on the broker's grid is left exactly
+            // as it is. Reconstructing it as floor(q/step)*step can move it a
+            // whole step down, because the quotient of two on-grid binary64
+            // values need not be the integer it represents: 0.0392/0.0001 is
+            // 391.99999999999994, whose floor is 391, i.e. one lot short of
+            // the size the sizing policy (or the host's units hook) decided
+            // on. Only an off-grid quantity is floored onto the grid.
+            if (!native_order::quantity_on_grid(sized, *spec->quantity_grid)) {
+                sized = std::floor(units / *spec->quantity_grid) * *spec->quantity_grid;
+                if (!native_order::quantity_on_grid(sized, *spec->quantity_grid)) return false;
+            }
         }
         if (!std::isfinite(sized) || !(sized > 0.0)) return false;
         request.intent = native_order::Reduce{native_order::ExplicitUnits{sized}};
     }
-    request.label = label != nullptr ? label : kNativeLiquidationLabel;
-    request.comment = comment != nullptr ? comment : kNativeLiquidationComment;
+    // A caller that names the ticket owns it -- (L9) the risk block's flatten
+    // is not a margin liquidation and carries its own id. Otherwise the broker
+    // names its own liquidation ticket where it has one, and the kernel's
+    // constants are the default. This is the id a reporting layer classifies
+    // the closed row by, so it must be the broker's.
+    const auto* ticket = margin_model();
+    request.label = label != nullptr
+        ? label
+        : (ticket && !ticket->liquidation_label.empty()
+               ? ticket->liquidation_label : kNativeLiquidationLabel);
+    request.comment = comment != nullptr
+        ? comment
+        : (ticket && !ticket->liquidation_comment.empty()
+               ? ticket->liquidation_comment : kNativeLiquidationComment);
     if (resting) request.trigger = native_order::Stop{level};
     // The kernel is born AT the point it decided on, exactly as a request
     // submitted from the pre-open callback is. It never inherits the input

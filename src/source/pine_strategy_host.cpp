@@ -596,6 +596,21 @@ native_order::ExecutionTerms source::PineStrategyHost::resolve_execution_terms(
     return adapter_.resolve_terms(facts);
 }
 
+bool source::PineStrategyHost::margin_check_allowed(
+        const NativeMarginCheckPoint& point) const {
+    return adapter_.margin_check_allowed(point);
+}
+
+std::optional<NativeMarginDecision> source::PineStrategyHost::resolve_margin_requirement(
+        const NativeMarginRequirementView& view) const {
+    return adapter_.resolve_margin_requirement(view);
+}
+
+std::optional<double> source::PineStrategyHost::resolve_margin_call_units(
+        const NativeMarginCallView& view) const {
+    return adapter_.resolve_margin_call_units(view);
+}
+
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
     // ab9714be pine_fills.cpp:5741: the exit-bar path prefix belongs to the
@@ -625,7 +640,8 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     excursion_priced_fill_ = priced;
     excursion_level_fill_ = adapter_.source_post_parent_calc_level_fill(
         view.target.incarnation);
-    excursion_margin_call_ = adapter_.source_margin_exit(view.target.incarnation);
+    excursion_margin_call_ = adapter_.source_margin_exit(view.target.incarnation)
+        || source::PineExecutionAdapter::source_kernel_liquidation(view.definition);
     excursion_trail_offset_ticks_ = trail_ticks;
     // ab9714be pine_fills.cpp:5766-5770: the peak a TRAIL fill retraces from is
     // taken off the matcher's pre-slip price, which this view still carries; the

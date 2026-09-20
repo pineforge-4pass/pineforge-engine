@@ -770,12 +770,43 @@ public:
     // instrument and that point; nothing is remembered.
     bool core_sizes_default_opening(bool is_long) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
+    // R5: the three policy answers the kernel's margin model asks of its
+    // host. `margin_check_allowed` is TradingView's scheduling -- the kernel
+    // offers its own check points and the adapter admits only the ones
+    // TradingView would also check at; `resolve_margin_requirement` is
+    // TradingView's money (its fee-adjusted equity basis and its
+    // ten-significant-digit requirement); `resolve_margin_call_units` is its
+    // sizing (the lot-floored 4x restore and the family R whole-drop band).
+    // TradingView's margin money at one mark: the requirement (on its
+    // ten-significant-digit ladder where a lot is worth under one unit of
+    // account) against its fee-adjusted live equity. One implementation, read
+    // by the adapter's own checkpoints and by the kernel's requirement hook.
+    struct SourceMarginMoney {
+        bool valid = false;
+        double mark = 0.0;
+        double held = 0.0;
+        double unit_margin = 0.0;
+        double exact_required = 0.0;
+        double required = 0.0;
+        double equity = 0.0;
+    };
+    SourceMarginMoney source_margin_money(double mark_price,
+                                          std::int64_t sub_bar_open_ms) const;
+    double source_margin_units(const SourceMarginMoney&, bool opening_checkpoint) const;
+    double source_margin_fill_price(double fire, bool close_is_buy) const;
+
+    bool source_margin_rounded_tie_veto() const;
+    bool margin_check_allowed(const NativeMarginCheckPoint&) const;
+    std::optional<NativeMarginDecision> resolve_margin_requirement(
+        const NativeMarginRequirementView&) const;
+    std::optional<double> resolve_margin_call_units(const NativeMarginCallView&) const;
     // True when the request is a source exit leg carrying priced stop, limit
     // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
     bool source_priced_exit(std::uint64_t incarnation) const noexcept;
     bool source_post_parent_calc_level_fill(std::uint64_t incarnation) const noexcept;
     std::optional<double> source_trail_offset_ticks(std::uint64_t incarnation) const noexcept;
     bool source_margin_exit(std::uint64_t incarnation) const noexcept;
+    static bool source_kernel_liquidation(const native_order::DefinitionRef&) noexcept;
     bool has_pending_market_exit(int current_interval_index = -1) const noexcept;
     // The carried 1x long's opening money call precedes the bar's excursion
     // sample only ahead of one resting full-position priced exit that the
@@ -1059,7 +1090,6 @@ private:
                                 bool execute_at_current);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
-                                  bool execute_current,
                                   bool opening_checkpoint = false);
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
                                   double units,
@@ -1320,6 +1350,20 @@ private:
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    // R5: the driver point ordinal whose kernel margin check the adapter's
+    // own scheduling admitted. The kernel offers its check points at every
+    // bar; exactly the one TradingView also checks at is let through, and
+    // only for the driver point it was armed on.
+    //
+    // Deliberately NOT folded into the broker state hash. Driver point
+    // ordinals are strictly monotone within a run and this value is only ever
+    // compared for equality with the current point's, so from the first point
+    // after the one it names it can never match again: it carries no
+    // information across any observation boundary the hash identifies. Folding
+    // it would move every adapter state hash (and R1's pinned hash-neutrality
+    // evidence in tests/test_adapter_report_relower.cpp) for a value that is
+    // dead by the time the next one is taken.
+    std::uint64_t kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
     // Close-time carried-POOC-short checkpoint deferred behind this bar's
     // market fills (ab9714be pine_scheduler.cpp:260 before :278).
     std::int64_t pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();

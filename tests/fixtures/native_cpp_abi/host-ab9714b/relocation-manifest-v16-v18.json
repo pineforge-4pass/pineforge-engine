@@ -47,6 +47,8 @@
     "MatchRejectReason::RiskLimit",
     "NativeMarginModel::basis",
     "NativeMarginModel::level_base",
+    "NativeMarginModel::liquidation_label",
+    "NativeMarginModel::liquidation_comment",
     "NativeMarginEquityBasis",
     "NativeLiquidationLevelBase",
     "NativeMarginCheckKind",

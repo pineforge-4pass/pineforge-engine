@@ -512,6 +512,8 @@ margin.liquidation_min_units = 1.0;        // optional broker minimum trade
 margin.check = NativeLiquidationCheck::PathAdverseExtreme;
 margin.basis = NativeMarginEquityBasis::MarkedEquity;          // policy, below
 margin.level_base = NativeLiquidationLevelBase::MarkedEquity;  // policy, below
+margin.liquidation_label = "";     // empty = "__kernel_liquidation__"
+margin.liquidation_comment = "";   // empty = "Margin liquidation"
 spec.margin = margin;
 ```
 
@@ -670,16 +672,37 @@ side. The host sees
 `on_native_applied` first and `on_native_margin_call` immediately after, with
 the same cursor.
 
-The TradingView margin call is **not** this model: its rounded-money rules,
-its 4× shortfall default, its one-contract long money call, its adverse-extreme
-fill pricing and its nineteen scheduling exceptions stay in the Pine adapter,
-which never sets `margin`. What this lane adds is the shape a host would use to
-express rules like those: a policy host that selects the bases, answers
-`resolve_margin_requirement` with its own money, sizes in
-`resolve_margin_call_units`, prices in `resolve_execution_terms` and gates its
-own check points reproduces TradingView's trigger, sizing and placement on this
-kernel bit for bit (`tests/test_native_margin_hooks.cpp`, the TWIN section).
-None of it is a kernel option.
+**Naming the ticket.** `liquidation_label` and `liquidation_comment` are the
+ticket the kernel books its own liquidation under. Left empty they are the
+kernel's own `"__kernel_liquidation__"` / `"Margin liquidation"`; set, they are
+used verbatim, and they reach the closed row's exit id and comment. That
+matters because the exit id is how a reporting layer says "this row was a
+forced liquidation" — pineforge's own C ABI derives `close_cause`
+`MARGIN_CALL` from exactly that id — and every broker spells its own. Each
+folds into the model's digest only when set, so a model that does not name its
+ticket digests as it did before they existed
+(`tests/test_native_margin_ticket.cpp`).
+
+**The TradingView margin call is this model.** The Pine adapter sets `margin`
+from `strategy(margin_long=, margin_short=)` — the two percents are the
+maintenance fractions — with `ShortfallMultiple` 4.0, the symbol's lot as
+`liquidation_min_units`, `PathAdverseExtremeMark`, the equity basis its
+commission type implies, `RealizedOnly` for the reported level and
+`"__margin_call__"` / `"Margin call"` for the ticket. The kernel then solves,
+schedules, places, re-prices, books and reports every resting liquidation; the
+adapter answers `margin_check_allowed` with TradingView's scheduling,
+`resolve_margin_requirement` with its ten-significant-digit money and
+fee-adjusted equity, `resolve_margin_call_units` with its lot-floored 4×
+restore and whole-drop band, and `resolve_execution_terms` with its
+tick-quantized fill price. The presence of `margin` IS
+`set_margin_call_enabled()`. What stays adapter-side is what no check point of
+the kernel's can reach: the bar-open mark checkpoint and the script-close pass
+(the kernel checks once per point, at the remaining path's adverse mark), the
+account-currency FX rollover revaluation, the pre-open admission slice, and the
+one-contract 1×-long money call — which is not a maintenance liquidation
+at all and fires on the favorable side of the path. Measured against the
+adapter as it stood before the re-lowering, on the same books, bit for bit:
+`tests/test_adapter_margin_relower.cpp`.
 
 ### Risk limits
 

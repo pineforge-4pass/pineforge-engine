@@ -1330,6 +1330,7 @@ void PineExecutionAdapter::reset_for_run() {
     position_open_phase_ = NativePathPhase::None;
     position_open_priced_ = false;
     last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
     pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
     signal_close_mc_position_cycle_ = 0;
@@ -1490,7 +1491,60 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.allowed_open_directions = directions_for(risk_.direction);
     // Pine's frozen default sizing admits against its signal-time tuple.  The
     // generic initial-margin gate only sees the later fill-time FX rate, so
-    // source admission is reproduced in validate_precommit instead.
+    // source admission is reproduced in validate_precommit instead: every
+    // opening verdict below is AdmitWithHostMargin, which is what keeps the
+    // model's own per-side initial fraction out of the admission decision.
+    // R5: the broker model itself is the kernel's. TradingView's two margin
+    // percents ARE the maintenance fractions (strategy(margin_long=,
+    // margin_short=) is the fraction of the position's value the account must
+    // keep, and the emulator liquidates the moment it cannot), the liquidation
+    // is four times the restore, the check is made at the remaining path's
+    // adverse mark and rests there, and the whole model is present exactly
+    // when the call is enabled -- which is how set_margin_call_enabled()
+    // keeps its C-ABI semantics without a second switch. The money rules
+    // TradingView layers on top (its equity basis, its ten-significant-digit
+    // requirement, its whole-drop band, its scheduling) are host policy and
+    // live in the three hooks below, never in this spec.
+    const double margin_long_fraction = config.margin_long / 100.0;
+    const double margin_short_fraction = config.margin_short / 100.0;
+    if (source_margin_call_enabled_
+        && std::isfinite(margin_long_fraction) && margin_long_fraction > 0.0
+        && std::isfinite(margin_short_fraction) && margin_short_fraction > 0.0) {
+        NativeMarginModel margin;
+        margin.initial_long = margin_long_fraction;
+        margin.initial_short = margin_short_fraction;
+        margin.maintenance_long = margin_long_fraction;
+        margin.maintenance_short = margin_short_fraction;
+        margin.sizing = NativeLiquidationSizing::ShortfallMultiple;
+        margin.shortfall_multiple = 4.0;
+        // The broker's minimum liquidation trade is the symbol's lot. The
+        // adapter's own whole-drop band answers through resolve_margin_call_units
+        // and keeps the last word over this flatten.
+        if (staged.quantity_grid && *staged.quantity_grid > 0.0)
+            margin.liquidation_min_units = *staged.quantity_grid;
+        // The slice belongs to the adverse waypoint it was measured at, not to
+        // a solved level -- and a 1x long, whose slope solves no level at all,
+        // still has to be checked.
+        margin.check = NativeLiquidationCheck::PathAdverseExtremeMark;
+        // TradingView's margin equity charges only a PERCENT entry commission
+        // against the account; a cash or per-contract entry fee is added back
+        // (percent_commission_live_equity).
+        margin.basis =
+            (config.commission_type == static_cast<int>(CommissionType::PERCENT)
+             && config.commission_value > 0.0)
+                ? NativeMarginEquityBasis::MarkedEquity
+                : NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission;
+        // compute_liquidation_price() solves from closed money alone.
+        margin.level_base = NativeLiquidationLevelBase::RealizedOnly;
+        // TradingView's own liquidation ticket. closed_trade_close_cause()
+        // classifies a row as MARGIN_CALL from exactly this exit id
+        // (engine_trade_accessors.cpp), and the C ABI pins it
+        // (pineforge.h: `exit_id == "__margin_call__"` -> 3), so the ticket
+        // the kernel books has to be this one.
+        margin.liquidation_label = "__margin_call__";
+        margin.liquidation_comment = "Margin call";
+        spec.margin = margin;
+    }
     if (args.bar_magnifier) {
         // pine_scheduler.cpp:894-899/:1035-1041 supplied the legacy
         // volume-weighted bound.  The native API's generic default remains
@@ -9461,7 +9515,21 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     native_order::ExecutionTerms result{facts.default_resolved_price, std::nullopt,
                                         native_order::OpeningShape::Transact};
     const auto snapshot = placement_.find(facts.target.incarnation);
-    if (snapshot == placement_.end()) return result;
+    if (snapshot == placement_.end()) {
+        // R5: a kernel-originated liquidation carries no source placement row.
+        // Its fill price is still TradingView's: the fire price it was rested
+        // at, on the chart tick ladder, plus the EXIT side's own market
+        // slippage (ab9714be pine_fills.cpp:1712-1726). A short's checkpoint
+        // marked on the ladder, so its fire price is rounded there first.
+        if (facts.definition
+            && facts.definition->origin == native_order::RequestOrigin::KernelLiquidation) {
+            double fire = facts.trigger_level ? *facts.trigger_level : facts.raw_price;
+            if (facts.is_buy) fire = nearest_tick(fire, staged_.syminfo.mintick);
+            if (finite_positive(fire))
+                result.resolved_price = source_margin_fill_price(fire, facts.is_buy);
+        }
+        return result;
+    }
     const auto& source = snapshot->second;
     // The already-armed explicit-zero trail's sibling generic stop (exit():
     // "A sibling generic stop preserves the next-open print decision") is the
@@ -10690,6 +10758,15 @@ bool PineExecutionAdapter::source_margin_exit(std::uint64_t incarnation) const n
     return snapshot->second.family == PineOrderFamily::Margin;
 }
 
+// A request the kernel's own margin model originated. Before on_applied
+// adopts it into the source placement table there is no row to read, so its
+// origin is the only thing that identifies it.
+bool PineExecutionAdapter::source_kernel_liquidation(
+        const native_order::DefinitionRef& definition) noexcept {
+    return static_cast<bool>(definition)
+        && definition->origin == native_order::RequestOrigin::KernelLiquidation;
+}
+
 bool PineExecutionAdapter::has_pending_market_exit(int current_bar) const noexcept {
     const auto physical = require_host().physical_position();
     if (physical.signed_units == 0.0) return false;
@@ -10791,8 +10868,19 @@ bool PineExecutionAdapter::carried_long_money_precedes_priced_exit(
 
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     const auto snapshot = placement_.find(view.target.incarnation);
-    if (snapshot != placement_.end()) {
-        const auto& source = snapshot->second;
+    // R5: a kernel-originated liquidation IS a margin slice, and it reaches
+    // this hook before it is booked -- before on_applied adopts it into the
+    // source placement table. The excursion chronology below is decided here,
+    // so it has to recognise the slice from its origin.
+    const bool kernel_liquidation = source_kernel_liquidation(view.definition);
+    if (snapshot != placement_.end() || kernel_liquidation) {
+        static const PlacementSnapshot kKernelLiquidation = [] {
+            PlacementSnapshot row;
+            row.family = PineOrderFamily::Margin;
+            return row;
+        }();
+        const auto& source = snapshot != placement_.end() ? snapshot->second
+                                                          : kKernelLiquidation;
         const auto physical = require_host().physical_position();
         // ab9714be pine_scheduler.cpp:257-278: process_margin_call runs after
         // update_per_trade_extremes sampled the script bar into every lot that
@@ -11292,7 +11380,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && !finite_positive(source.exit_levels.limit)
             && !std::isfinite(source.requested_qty);
         if (placement_sized_stop && live_slippage_changed) {
-            return NativePrecommitVerdict::Proceed;
+            // The adapter owns this admission (the placement tuple was frozen
+            // at a different slippage); say so, or the run spec's own per-side
+            // initial fraction would decline the opening TradingView takes.
+            return NativePrecommitVerdict::AdmitWithHostMargin;
         }
         // The frozen tuple protects a rate rollover (the FX opening checkpoint
         // owns that later adjustment), but an ordinary price gap is still
@@ -11406,7 +11497,11 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 // same-tick close, the new flat opening is admitted on its
                 // frozen sizing notional. A worse fill is handled by the
                 // post-opening margin slice, not by declining the entry.
-                return NativePrecommitVerdict::Proceed;
+                // AdmitWithHostMargin, not a bare admission: the adapter is
+                // taking responsibility for this opening's margin check, and
+                // the run spec now carries a per-side initial fraction that
+                // would otherwise decline it.
+                return NativePrecommitVerdict::AdmitWithHostMargin;
             }
             double admission_guard = float_guard;
             if (!reversal && staged_.quantity_grid) {
@@ -11594,89 +11689,72 @@ bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const noexc
     return loss + epsilon >= threshold;
 }
 
-bool PineExecutionAdapter::submit_margin_call_slice(
-        double mark_price, const NativeDecisionContext& context,
-        bool execute_current, bool opening_checkpoint) {
+// =========================================================== R5 margin policy
+// The kernel (src/native_execution_consumer.cpp, R5 lanes L4/L4b) owns the
+// margin MECHANISM: when the requirement is tested, the liquidation request it
+// originates, its Superseded re-pricing, its receipt and its MarginCallEvent.
+// The answers below are the only TradingView-specific things left in that
+// loop -- when TradingView would check, what money it compares, and how many
+// units it takes -- and each is answered on the kernel's own facts.
+
+// TradingView's money at one mark, which is what `required > equity` is made
+// of. This is the single implementation: `submit_margin_call_slice` (the
+// checkpoints the kernel has no point for) and `resolve_margin_requirement`
+// (the kernel's own path check) both read it, so the two routes cannot drift.
+PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_money(
+        double mark_price, std::int64_t sub_bar_open_ms) const {
+    SourceMarginMoney money;
     const auto position = require_host().physical_position();
-    const double raw_mark_price = mark_price;
     if (position.signed_units < 0.0) {
+        // ab9714be pine_fills.cpp: a short's checkpoint marks on the chart
+        // tick, while the slice still rests at the raw waypoint.
         mark_price = nearest_tick(mark_price, staged_.syminfo.mintick);
     }
-    const double held = std::abs(position.signed_units);
+    money.mark = mark_price;
+    money.held = std::abs(position.signed_units);
     const double margin_pct = position.signed_units > 0.0
         ? config_.margin_long : config_.margin_short;
-    if (!source_margin_call_enabled_ || !(held > 0.0)
+    if (!source_margin_call_enabled_ || !(money.held > 0.0)
         || !finite_positive(mark_price) || !finite_positive(margin_pct)
         || !finite_positive(staged_.syminfo.pointvalue)) {
-        return false;
+        return money;
     }
-    // ab9714be pine_fills.cpp:5159-5221: a rounded whole-lot tie is rejected
-    // only for the sole opening. A coexisting resting entry excludes that
-    // rejection and the admitted lot must not be immediately liquidated for
-    // the same sub-lot representation residue.
-    if (staged_.quantity_grid && *staged_.quantity_grid == 1.0
-        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
-        && config_.default_qty_value == 100.0 && config_.commission_value == 0.0) {
-        bool rounded_tie_opening = false;
-        for (const auto& cohort_id : cohort_order_) {
-            const auto cohort = cohorts_by_id_.find(cohort_id);
-            if (cohort == cohorts_by_id_.end()) continue;
-            for (const auto& origin : cohort->second.opened) {
-                const auto opening = placement_.find(origin.incarnation);
-                if (opening == placement_.end()) continue;
-                const auto& row = opening->second;
-                const double cost = row.sizing.frozen_units * row.sizing.price
-                    * staged_.syminfo.pointvalue * row.sizing.fx;
-                if (row.opening && std::isfinite(cost)
-                    && cost == source_money_round(row.sizing.equity)
-                    && cost > row.sizing.equity) {
-                    rounded_tie_opening = true;
-                    break;
-                }
-            }
-            if (rounded_tie_opening) break;
-        }
-        bool resting_companion = false;
-        for (const auto& handle : live_handles_) {
-            const auto pending = placement_.find(handle.incarnation);
-            if (pending == placement_.end()) continue;
-            const auto& row = pending->second;
-            if (row.opening && (finite_positive(row.exit_levels.limit)
-                                || finite_positive(row.exit_levels.stop))) {
-                resting_companion = true;
-                break;
-            }
-        }
-        if (rounded_tie_opening && resting_companion) return false;
-    }
-    const double fx = active_staged_fx(context.sub_bar_open_ms);
+    const double fx = active_staged_fx(sub_bar_open_ms);
     const double fraction = margin_pct / 100.0;
-    const double unit_margin = mark_price * staged_.syminfo.pointvalue * fx * fraction;
-    const double exact_required = held * unit_margin;
-    double required = exact_required;
+    money.unit_margin = mark_price * staged_.syminfo.pointvalue * fx * fraction;
+    money.exact_required = money.held * money.unit_margin;
+    money.required = money.exact_required;
     if (staged_.quantity_grid && *staged_.quantity_grid > 0.0
         && staged_.account_fx_effective_from_ms.empty()) {
         const double lot_value = *staged_.quantity_grid * mark_price
             * staged_.syminfo.pointvalue * fx;
         if (std::isfinite(lot_value) && lot_value < 1.0) {
-            required = source_money_round(exact_required);
+            // ab9714be pine_fills.cpp:11491-11499: a sub-unit lot puts the
+            // requirement on TradingView's ten-significant-digit money ladder.
+            money.required = source_money_round(money.exact_required);
         }
     }
-    // ab9714be pine_fills.cpp:1411-1423: fee-adjusted live equity for margin sizing
-    const double equity = percent_commission_live_equity(mark_price);
-    if (!finite_positive(unit_margin) || !std::isfinite(equity)
-        || !(required > equity)) {
-        return false;
-    }
-    const double raw_minimum = opening_checkpoint && required == exact_required
-        ? held - equity / unit_margin
-        : (required - equity) / unit_margin;
-    if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return false;
+    // ab9714be pine_fills.cpp:1411-1423: fee-adjusted live equity.
+    money.equity = percent_commission_live_equity(mark_price);
+    money.valid = finite_positive(money.unit_margin) && std::isfinite(money.equity);
+    return money;
+}
+
+// TradingView's slice quantity from that money: the lot-floored restore taken
+// four times, floored to the lot again, and the family R whole-drop band for a
+// restore that floors below one lot.
+double PineExecutionAdapter::source_margin_units(
+        const SourceMarginMoney& money, bool opening_checkpoint) const {
+    if (!money.valid || !(money.required > money.equity)) return 0.0;
+    const double raw_minimum = opening_checkpoint && money.required == money.exact_required
+        ? money.held - money.equity / money.unit_margin
+        : (money.required - money.equity) / money.unit_margin;
+    if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return 0.0;
     // ab9714be pine_fills.cpp:1572-1575: a dust-sized restore requirement is
     // not a broker action.  It must be discarded before lot quantization, so
     // floating-point residue at a 1x full-margin opening cannot become a
     // 4x epsilon Reduce (and a phantom trade row).
-    if (raw_minimum <= internal::kQtyEpsilon) return false;
+    if (raw_minimum <= internal::kQtyEpsilon) return 0.0;
     double minimum = raw_minimum;
     if (staged_.quantity_grid) {
         minimum = std::floor(raw_minimum / *staged_.quantity_grid)
@@ -11690,85 +11768,171 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     if (!(units > 0.0) && staged_.quantity_grid
         && *staged_.quantity_grid <= 1.0
         && raw_minimum > internal::kQtyEpsilon && raw_minimum < 1.0) {
-        const double candidate = std::min(1.0, held);
+        const double candidate = std::min(1.0, money.held);
         const double rounded = floor_quantity_grid(candidate, staged_.quantity_grid);
         const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
-        if (candidate >= held - guard || std::abs(rounded - candidate) <= guard)
+        if (candidate >= money.held - guard || std::abs(rounded - candidate) <= guard)
             units = candidate;
     }
-    units = std::min(held, units);
+    units = std::min(money.held, units);
     // ab9714be pine_fills.cpp:1708: the final slice quantity carries the same
     // slack gate, so a floored-to-dust restore closes nothing at all.
-    if (!(units > internal::kQtyEpsilon) || !std::isfinite(units)) return false;
+    if (!(units > internal::kQtyEpsilon) || !std::isfinite(units)) return 0.0;
+    return units;
+}
 
-    if (execute_current) {
-        // ab9714be pine_fills.cpp:1712-1726 books the entry-bar margin-call
-        // residual against bar_fill_price(fire) and only then applies the EXIT
-        // side's own market slippage.  The opening checkpoint hands this
-        // helper the already-SLIPPED opening print, so the entry-side slippage
-        // step is undone here first and submit_margin_call_units re-applies the
-        // exit side on top of the raw chart fill.  At zero slippage the
-        // reconstruction is the identity.
-        double close_base = mark_price;
-        if (opening_checkpoint && std::isfinite(config_.slippage)
-            && config_.slippage != 0.0) {
-            close_base = source_bar_fill_tick(
-                mark_price - (position.signed_units > 0.0 ? 1.0 : -1.0)
-                    * config_.slippage * staged_.syminfo.mintick,
-                staged_.syminfo.mintick);
-        }
-        return submit_margin_call_units(close_base, context, units);
+// The forced execution price of a liquidation that fired at `fire`: the fire
+// price on the chart tick ladder, then the EXIT side's own market slippage
+// (ab9714be pine_fills.cpp:1712-1726 and :2649-2658). Reducing a long is a
+// sell (slippage subtracts); reducing a short is a buy (it adds). At zero
+// slippage this is the identity on the ladder.
+double PineExecutionAdapter::source_margin_fill_price(double fire, bool close_is_buy) const {
+    if (config_.slippage == 0) return fire;
+    const double rounded = source_bar_fill_tick(fire, staged_.syminfo.mintick);
+    const double slipped = rounded + (close_is_buy ? 1.0 : -1.0)
+        * config_.slippage * staged_.syminfo.mintick;
+    return directional_tick(slipped, staged_.syminfo.mintick, close_is_buy);
+}
+
+// ab9714be pine_fills.cpp:5159-5221: a rounded whole-lot tie is rejected only
+// for the SOLE opening. A coexisting resting entry excludes that rejection,
+// and the lot that was admitted on the rounded tie must not then be
+// immediately liquidated for the same sub-lot representation residue. This is
+// a rule about when TradingView does not check at all, so it vetoes the
+// adapter's own checkpoints and, through margin_check_allowed, the kernel's
+// check point too.
+bool PineExecutionAdapter::source_margin_rounded_tie_veto() const {
+    if (!staged_.quantity_grid || *staged_.quantity_grid != 1.0
+        || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || config_.default_qty_value != 100.0 || config_.commission_value != 0.0) {
+        return false;
     }
-
-    native_order::Request request;
-    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
-    request.label = "__margin_call__";
-    request.comment = "Margin call";
-    request.trigger = native_order::Stop{raw_mark_price};
-    std::vector<native_order::RequestHandle> owned_openings;
-    for (const auto& id : cohort_order_) {
-        const auto cohort = cohorts_by_id_.find(id);
+    bool rounded_tie_opening = false;
+    for (const auto& cohort_id : cohort_order_) {
+        const auto cohort = cohorts_by_id_.find(cohort_id);
         if (cohort == cohorts_by_id_.end()) continue;
-        for (const auto& opening : cohort->second.opened) {
-            const auto live = cohort->second.live_units_by_origin.find(
-                opening.incarnation);
-            if (live != cohort->second.live_units_by_origin.end()
-                && live->second > 0.0) {
-                owned_openings.push_back(opening);
+        for (const auto& origin : cohort->second.opened) {
+            const auto opening = placement_.find(origin.incarnation);
+            if (opening == placement_.end()) continue;
+            const auto& row = opening->second;
+            const double cost = row.sizing.frozen_units * row.sizing.price
+                * staged_.syminfo.pointvalue * row.sizing.fx;
+            if (row.opening && std::isfinite(cost)
+                && cost == source_money_round(row.sizing.equity)
+                && cost > row.sizing.equity) {
+                rounded_tie_opening = true;
+                break;
             }
         }
+        if (rounded_tie_opening) break;
     }
-    if (!owned_openings.empty() && current_position_cycle_ > 0) {
-        request.owner = native_order::BindOpenings{
-            std::move(owned_openings), current_position_cycle_};
+    if (!rounded_tie_opening) return false;
+    for (const auto& handle : live_handles_) {
+        const auto pending = placement_.find(handle.incarnation);
+        if (pending == placement_.end()) continue;
+        const auto& row = pending->second;
+        if (row.opening && (finite_positive(row.exit_levels.limit)
+                            || finite_positive(row.exit_levels.stop))) {
+            return true;
+        }
     }
-    PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::Margin;
-    snapshot.source_id = request.label;
-    snapshot.requested_qty = units;
-    // ab9714be pine_fills.cpp:1711-1726: the deferred slice books the same
-    // bar_fill_price(fire) plus the EXIT side's own market slippage as the
-    // current-point route (submit_margin_call_units); at zero slippage the
-    // fire price is pinned unchanged.
-    if (config_.slippage == 0) {
-        snapshot.forced_execution_price = mark_price;
-    } else {
-        const bool close_is_buy = position.signed_units < 0.0;
-        const double rounded = source_bar_fill_tick(mark_price, staged_.syminfo.mintick);
-        const double slipped = rounded + (close_is_buy ? 1.0 : -1.0)
-            * config_.slippage * staged_.syminfo.mintick;
-        snapshot.forced_execution_price = directional_tick(
-            slipped, staged_.syminfo.mintick, close_is_buy);
+    return false;
+}
+
+// TradingView's scheduling (MG-I). The kernel offers its own check points;
+// this admits exactly the ones the adapter's own scheduling decided to check
+// at, and refuses the rest. A refused point is inert: the kernel measures
+// nothing, re-arms nothing and withdraws nothing there, so the state stays as
+// the last admitted point left it. The decision itself is taken where
+// TradingView takes it -- inside on_bar_open, with the bar's competing
+// orders in front of it -- and only carried here.
+bool PineExecutionAdapter::margin_check_allowed(
+        const NativeMarginCheckPoint& point) const {
+    // The kernel's BarOpen point and its post-fill AfterApplied re-arm are
+    // both points TradingView checks at -- schedule_margin_call_path is
+    // called from on_bar_open and from on_applied -- so the admitted point is
+    // named by the driver point the decision was taken at, not by its kind.
+    if (kernel_margin_path_point_ != point.cursor.point.ordinal) return false;
+    // The rounded-tie veto is re-read here rather than at the arming site: the
+    // book it inspects is the one standing at the check point.
+    return !source_margin_rounded_tie_veto();
+}
+
+// TradingView's money (MG-A + MG-B), restated for the kernel's breach test at
+// the mark it measured. nullopt would keep the kernel's own unrounded
+// requirement against its own marked equity, which is a different broker.
+std::optional<NativeMarginDecision> PineExecutionAdapter::resolve_margin_requirement(
+        const NativeMarginRequirementView& view) const {
+    const auto money = source_margin_money(view.mark, view.cursor.point.open_ms);
+    if (!money.valid) return std::nullopt;
+    NativeMarginDecision decision;
+    decision.required = money.required;
+    decision.equity = money.equity;
+    return decision;
+}
+
+// TradingView's sizing (MG-F + MG-G), on the kernel's own facts. Answering a
+// value takes the last word over the run spec's ShortfallMultiple and over its
+// liquidation_min_units flatten, which is what the whole-drop band needs.
+std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
+        const NativeMarginCallView& view) const {
+    // Always an answer, never nullopt: nullopt would hand the slice back to
+    // the run spec's own ShortfallMultiple, and the adapter is the sizing
+    // authority for every call this kernel makes on its behalf. A
+    // non-positive answer is the kernel's documented refusal, which withdraws
+    // the reduction instead of booking one.
+    //
+    // TradingView never takes the adverse-path slice on a 1x long: the
+    // one-contract money call owns that book instead
+    // (submit_tv_money_long_margin_call). Every dispatch site guards on that
+    // before it schedules, but the book can turn into a 1x long between the
+    // scheduling decision and the check point -- a reversal at the same
+    // driver point does exactly that -- and the book that decides is the one
+    // the call would be made against. This is a refusal of the CALL, not of
+    // the check point: the point still runs, so a reduction resting from an
+    // earlier book is withdrawn here rather than left behind.
+    if (view.position.signed_units > 0.0 && std::isfinite(config_.margin_long)
+        && std::abs(config_.margin_long - 100.0) < 1e-12) {
+        return 0.0;
     }
-    snapshot.sizing = sizing_snapshot();
-    // ab9714be pine_scheduler.cpp:250-278: a deferred slice settles after
-    // every earlier fill of its bar, and only then does the legacy broker
-    // sample that bar into the surviving lots ahead of the split.  Sampling
-    // here at submit time booked the whole bar into lots that a priced exit
-    // closed earlier on the same bar; validate_precommit owns the sample at
-    // the actual settlement point instead.
-    return static_cast<bool>(submit_or_replace(
-        std::move(request), std::move(snapshot), false, "__margin_call__"));
+    const auto money = source_margin_money(view.mark, view.cursor.point.open_ms);
+    return source_margin_units(money, false);
+}
+
+// A TradingView margin checkpoint the kernel has no check point for (MG-I):
+// the bar-open mark, the script-close pass, the stream tick, the opening
+// print. The money, the mark's chart-tick rounding and the sizing are the
+// shared source_margin_* rules -- the same ones the kernel's own path check
+// reads through the requirement and units hooks -- and the slice is a market
+// execution at the current point, never a resting order: the kernel owns
+// every resting liquidation now.
+bool PineExecutionAdapter::submit_margin_call_slice(
+        double mark_price, const NativeDecisionContext& context,
+        bool opening_checkpoint) {
+    const auto position = require_host().physical_position();
+    const auto money = source_margin_money(mark_price, context.sub_bar_open_ms);
+    mark_price = money.mark;
+    if (!money.valid) return false;
+    if (source_margin_rounded_tie_veto()) return false;
+    const double units = source_margin_units(money, opening_checkpoint);
+    if (!(units > 0.0)) return false;
+
+    // ab9714be pine_fills.cpp:1712-1726 books the checkpoint's residual
+    // against bar_fill_price(fire) and only then applies the EXIT side's own
+    // market slippage.  The opening checkpoint hands this helper the
+    // already-SLIPPED opening print, so the entry-side slippage step is undone
+    // here first and submit_margin_call_units re-applies the exit side on top
+    // of the raw chart fill.  At zero slippage the reconstruction is the
+    // identity.
+    double close_base = mark_price;
+    if (opening_checkpoint && std::isfinite(config_.slippage)
+        && config_.slippage != 0.0) {
+        close_base = source_bar_fill_tick(
+            mark_price - (position.signed_units > 0.0 ? 1.0 : -1.0)
+                * config_.slippage * staged_.syminfo.mintick,
+            staged_.syminfo.mintick);
+    }
+    return submit_margin_call_units(close_base, context, units);
 }
 
 bool PineExecutionAdapter::submit_margin_call_units(
@@ -11799,17 +11963,8 @@ bool PineExecutionAdapter::submit_margin_call_units(
         // subtracts); reducing a short is a buy (slippage adds).  At zero
         // slippage this is the identity, leaving every slippage-free tape
         // byte-identical.
-        if (config_.slippage == 0) {
-            snapshot.forced_execution_price = mark_price;
-        } else {
-            const bool close_is_buy = position.signed_units < 0.0;
-            const double rounded = source_bar_fill_tick(
-                mark_price, staged_.syminfo.mintick);
-            const double slipped = rounded + (close_is_buy ? 1.0 : -1.0)
-                * config_.slippage * staged_.syminfo.mintick;
-            snapshot.forced_execution_price = directional_tick(
-                slipped, staged_.syminfo.mintick, close_is_buy);
-        }
+        snapshot.forced_execution_price =
+            source_margin_fill_price(mark_price, position.signed_units < 0.0);
     }
     snapshot.sizing = sizing_snapshot();
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
@@ -12395,7 +12550,18 @@ bool PineExecutionAdapter::schedule_margin_call_path(
         }
     }
     if (!finite_positive(adverse)) return false;
-    return submit_margin_call_slice(adverse, context, false);
+    // R5: the placement is the kernel's. TradingView's scheduling decision has
+    // just been taken above -- with this bar's competing orders in front of
+    // it, exactly where the legacy broker takes it -- so all that is left is
+    // to admit the kernel's own check point for this driver point. The kernel
+    // then measures the same adverse mark (margin_sizing_price), asks this
+    // adapter for TradingView's money and units, and rests the reduction at
+    // that mark itself (NativeLiquidationCheck::PathAdverseExtremeMark).
+    kernel_margin_path_point_ = context.coordinate.ordinal;
+    // The answer the caller needs is whether a call will be made, which is the
+    // same money the kernel is about to ask for.
+    return source_margin_units(
+        source_margin_money(adverse, context.sub_bar_open_ms), false) > 0.0;
 }
 
 bool PineExecutionAdapter::declined_reversal_at_open(const Bar& bar) const {
@@ -13879,7 +14045,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         const double opening_mark = nearest_tick(bar.open, staged_.syminfo.mintick);
         const bool opening_margin_applied =
             !whole_market_close_waits
-            && submit_margin_call_slice(opening_mark, context, true);
+            && submit_margin_call_slice(opening_mark, context);
         // pine_fills.cpp:2525-2678 gives an opening slice priority over the
         // remaining path.  The surviving book is then evaluated over the
         // suffix: a restored bracket at an earlier level wins naturally, while
@@ -13909,7 +14075,7 @@ void PineExecutionAdapter::on_tick(
     // A realtime print is a current generic decision point. The source
     // policy owns the financial threshold; the native request core still
     // owns request acceptance, settlement, receipts and any later matching.
-    (void)submit_margin_call_slice(tick.close, context.decision, true);
+    (void)submit_margin_call_slice(tick.close, context.decision);
 }
 
 void PineExecutionAdapter::rearm_throttled_reopens() {
@@ -14236,7 +14402,7 @@ void PineExecutionAdapter::on_bar_close(
     if (submit_tv_money_long_margin_call(bar, context)) return;
     if (defer_rounded_pooc_short_margin_until_close(bar)) {
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
-        (void)submit_margin_call_slice(adverse, context, true);
+        (void)submit_margin_call_slice(adverse, context);
         return;
     }
     const auto position = require_host().physical_position();
@@ -14282,10 +14448,10 @@ void PineExecutionAdapter::on_bar_close(
             }
             const double fill_price = require_host().position_avg_price();
             if (openings == 1 && explicit_market_opening && finite_positive(fill_price))
-                (void)submit_margin_call_slice(fill_price, context, true, true);
+                (void)submit_margin_call_slice(fill_price, context, true);
         }
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
-        (void)submit_margin_call_slice(adverse, context, true);
+        (void)submit_margin_call_slice(adverse, context);
     }
     const bool carried_pooc_short = config_.process_orders_on_close
         && !config_.calc_on_order_fills && position.signed_units < 0.0
@@ -14302,7 +14468,7 @@ void PineExecutionAdapter::on_bar_close(
             pooc_close_checkpoint_deferred_ms_ = context.script_bar_open_ms;
             return;
         }
-        (void)submit_margin_call_slice(bar.high, context, true);
+        (void)submit_margin_call_slice(bar.high, context);
     }
     // Ordinary price-path slices are born at the native open/applied points
     // and matched by the generic driver at their actual waypoint.  This
@@ -14320,6 +14486,23 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (const auto placement = placement_.find(event.handle().incarnation);
         placement != placement_.end()) {
         placement_snapshot = placement->second;
+    } else if (event.definition
+               && event.definition->origin
+                      == native_order::RequestOrigin::KernelLiquidation) {
+        // R5: the kernel originates its own liquidation, so there is no
+        // submit through submit_or_replace to record one. Adopt it into the
+        // source placement table on arrival, with the same family the
+        // adapter's own slice carried, so every Margin-family branch below --
+        // the pending-sizing refresh, the bracket revival, the excursion
+        // sample, source_margin_exit -- sees it exactly as before.
+        PlacementSnapshot adopted;
+        adopted.family = PineOrderFamily::Margin;
+        adopted.source_id = "__margin_call__";
+        adopted.requested_qty = event.closed_units;
+        adopted.forced_execution_price = event.resolved_price;
+        adopted.sizing = sizing_snapshot();
+        placement_.try_emplace(event.handle().incarnation, adopted);
+        placement_snapshot = adopted;
     }
     if (placement_snapshot && event.closed_trade_count > 0) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
@@ -15426,7 +15609,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && policy_script_bar_valid_
                 && policy_script_bar_.timestamp == context.script_bar_open_ms
                 && finite_positive(policy_script_bar_.high)) {
-                (void)submit_margin_call_slice(policy_script_bar_.high, context, true);
+                (void)submit_margin_call_slice(policy_script_bar_.high, context);
             }
         }
         if (placement_snapshot->family == PineOrderFamily::Risk
@@ -15594,7 +15777,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // Genuine opening deficits retain the immediate checkpoint.
                 if (!defer_slipped_pooc_rounding) {
                     (void)submit_margin_call_slice(
-                        event.resolved_price, context, true, true);
+                        event.resolved_price, context, true);
                 }
             }
             const bool terminal_pooc_open = config_.process_orders_on_close
