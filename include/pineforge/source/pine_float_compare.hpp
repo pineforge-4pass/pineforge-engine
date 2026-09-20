@@ -1,12 +1,15 @@
 #pragma once
-// DEPRECATED spelling of <pineforge/ta_compare_band.hpp>.
+// DEPRECATED spelling of <pineforge/ta_compare_band.hpp>, kept for the
+// source layer.
 //
 // The 1e-10 absolute comparison band is generic engine numerics, not a source
-// language feature; it now lives under a neutral name. This header stays as a
-// thin alias layer so generated code and the source adapter keep compiling
-// unchanged. New code includes <pineforge/ta_compare_band.hpp> and calls the
-// `float_band_*` helpers. The aliases below are exact forwards: same band,
-// same expressions, same results.
+// language feature; it lives under a neutral name in the kernel include root.
+// This header is a thin alias layer so generated code and the source adapter
+// keep compiling unchanged, and it ships only with the source layer
+// (include/pineforge/source is not installed by a kernel-only build). New
+// code includes <pineforge/ta_compare_band.hpp> and calls the `float_band_*`
+// helpers. The aliases below are exact forwards: same band, same expressions,
+// same results.
 #include <pineforge/ta_compare_band.hpp>
 
 namespace pineforge {
