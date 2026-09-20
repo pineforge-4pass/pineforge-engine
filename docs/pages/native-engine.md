@@ -882,10 +882,44 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
 Declare no `authoritative_bars` and the buckets are a plain aggregation of the
 run's own input, with no calibration to inherit.
 
-**Limits.** Subscriptions are a batch-run feature: a `stream_begin` with a
-non-empty `subscriptions` is refused (`Contract`) because a series is resolved
-over the run's whole input. A series finer than the input is refused at
-configure, not emulated. Only the run's own symbol is addressable; there is no
+**Streams.** `stream_begin` accepts a non-empty `subscriptions`, so a
+forward-execution host reads the same series a backtest of the same bars
+reads. The warmup resolves the series exactly as a `run()` over those same
+warmup bars does — the same buckets, at the same delivery points, in the same
+callback order — and each pushed live bar then extends the bucket the warmup
+left open, delivering it before the calculation of the bar that completed it.
+Live specifics:
+
+- `lookahead = true` changes the **warmup** only. Pine's lookahead is a
+  historical-resolution mode, and a realtime bar has no future to resolve
+  over, so a live bucket is delivered when it completes under both modes.
+- A calendar (`D` / `W` / `M`) bucket closes on its period end or its session
+  close, and a stream reaches both on its own: a session-clipped daily series
+  over a warmup that stops mid-session is the batch's series bucket for
+  bucket. The one completion rule a stream cannot use is the fallback that
+  closes a period on its last input because the *next* input's stamp is
+  already known — a batch has that stamp for every bar but its last, and a
+  stream never has it for the bar it has just received. A period whose input
+  simply stops early therefore waits for the next period's first pushed bar
+  and arrives as `LazyComplete`.
+- `authoritative_bars` are installed once, at begin, and therefore cover the
+  buckets the warmup completes. A live bucket with no authoritative bar of its
+  own aggregates the pushed input and is counted by
+  `native_security_misses()`.
+- A bucket still open when the stream ends is not delivered by `stream_end`,
+  exactly as a batch never delivers the input's trailing partial bucket.
+- A stream that declares a series takes **confirmed bars only**: tick input
+  and `stream_advance_time` are refused by name. An observed-tick slot is
+  finalized after its own matching pass and a quiet-carried slot is a
+  synthesized flat bar, so neither has a batch counterpart a bucket could be
+  built from.
+
+A spec that declares no series is untouched by all of this: its stream event
+sequence, continuation hash and `stream_state_hash()` are the pre-subscription
+ones.
+
+**Limits.** A series finer than the input is refused at configure, not
+emulated. Only the run's own symbol is addressable; there is no
 auxiliary-symbol feed and no chart-slice mapping.
 
 ## Batch OHLCV vs ticks vs quiet
@@ -946,9 +980,9 @@ These are existing refusals, not implied future features:
   setters, `set_input`, and Pine
   entry/exit/cancel commands — native hosts latch `Failed`
   (`UnsupportedSource`) before mutation
-- A non-empty `subscriptions` on `stream_begin` (`Contract`): a declared
-  higher-timeframe series is resolved over the run's whole input; batch runs
-  may declare them
+- Tick input (`stream_push_tick` / `stream_push_ticks` /
+  `stream_advance_time`) on a stream whose spec declares `subscriptions`;
+  confirmed bars carry those series
 - C-level native request submit/replace/cancel
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the

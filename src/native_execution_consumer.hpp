@@ -213,8 +213,9 @@ private:
         // opens one.
         int bucket_first_index = -1;
         std::int64_t bucket_first_ms = 0;
-        // lookahead_on: the whole series, resolved over the batch input at
-        // begin, each bucket keyed to the input index it is delivered on.
+        // lookahead_on: the whole series, resolved at begin over the
+        // historical input (a stream's is its warmup), each bucket keyed to
+        // the input index it is delivered on.
         std::vector<Bar> projected_bars;
         std::vector<int> projected_first_index;
         std::vector<std::int64_t> projected_first_ms;
@@ -316,6 +317,10 @@ private:
                                         TimeframeSubscription& subscription,
                                         const Bar* input_bars, int n_input);
     bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index);
+    // A declared series is fed by accepted CONFIRMED input only, because that
+    // is the only input a batch of the same bars also has. True (refused)
+    // exactly when a stream that declares one is asked for tick-driven input.
+    bool refuse_subscription_tick_input(BacktestEngine& engine);
     bool deliver_timeframe_bar(BacktestEngine& engine, TimeframeSubscription& subscription,
                                const Bar& bucket, std::int64_t first_contributing_ms,
                                std::int64_t delivered_at_ms, NativeCompletionKind completion);
@@ -528,11 +533,16 @@ private:
     // Declared higher-timeframe series: empty for every spec that declares
     // none, which is the whole source-projected population.
     std::vector<TimeframeSubscription> subscriptions_{};
-    // Owned copy of the batch input's forward look, input_next_ms_[i] being
-    // input bar i+1's timestamp (0 for the last). The calendar aggregators
+    // Owned copy of the historical input's forward look, input_next_ms_[i]
+    // being input bar i+1's timestamp (0 for the last, and for every live
+    // stream input, whose successor nobody has yet). The calendar aggregators
     // need it to complete a D/W/M bucket on the period's actual last bar;
     // allocated only for a run that declares a subscription.
     std::vector<std::int64_t> input_next_ms_{};
+    // How many of the inputs the declared series were resolved over at begin
+    // are warmup, i.e. where a stream's historical phase ends and its live
+    // phase starts. -1 for a batch run, whose every input is historical.
+    int subscription_warmup_inputs_ = -1;
     // Borrowed begin arguments, valid only inside one public begin call.
     const Bar* begin_bars_ = nullptr;
     int begin_n_ = 0;

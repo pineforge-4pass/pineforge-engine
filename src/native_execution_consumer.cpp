@@ -1346,6 +1346,24 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(processing_input_);
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
+    // Declared higher-timeframe series carry their own delivery cursors, and
+    // a stream's warmup boundary is where its live phase starts -- neither is
+    // recoverable from the input count alone. Folded only for a run that
+    // declares a series, so every spec without one keeps the pre-subscription
+    // continuation identity (the same rule hash_spec's digest follows).
+    if (!subscriptions_.empty()) {
+        f.i(subscription_warmup_inputs_);
+        for (const auto& subscription : subscriptions_) {
+            f.u(subscription.index);
+            f.b(subscription.lookahead);
+            f.b(subscription.latest.has_value());
+            if (subscription.latest) hash_bar(f, *subscription.latest);
+            f.i(subscription.bucket_first_index);
+            f.i(subscription.bucket_first_ms);
+            f.u(subscription.projected_bars.size());
+            f.u(subscription.projected_cursor);
+        }
+    }
     if (const auto* spec = spec_ptr()) {
         hash_spec(f, *spec);
         // L5: the recalculation cadence is durable decision state only for a
@@ -5982,6 +6000,7 @@ bool NativeExecutionConsumer::contribute_input(
 // trade date's bar (src/engine_aux_security.cpp, docs/pages/native-engine.md).
 
 void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engine) {
+    subscription_warmup_inputs_ = -1;
     if (subscriptions_.empty()) return;
     subscriptions_.clear();
     input_next_ms_.clear();
@@ -6004,17 +6023,15 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         render(engine, "native timeframe subscriptions require a native strategy host");
         return false;
     }
-    if (is_stream) {
-        // A subscription is resolved over the run's whole input: the calendar
-        // aggregators need each bar's successor to close a period on its
-        // actual last bar, and lookahead_on needs the completed bucket before
-        // its first bar. Neither is available to a stream.
-        fail(engine, NativeFailure{NativeFailureCode::Contract,
-                                   NativeFailureOperation::Begin});
-        render(engine, "native timeframe subscriptions require a batch run");
-        return false;
-    }
     if (input_bars == nullptr || n_input < 0) n_input = 0;
+    // A stream resolves its series over the warmup input exactly as a batch of
+    // those same bars does -- including the last one, whose successor a batch
+    // does not know either -- and then continues the same aggregators live.
+    // This is where that phase change happens: a live input has no successor
+    // and no future, so it extends the current bucket and delivers it at
+    // completion under both publication modes (Pine's lookahead is a
+    // historical-resolution mode; the realtime bar has nothing to look into).
+    subscription_warmup_inputs_ = is_stream ? n_input : -1;
     try {
         input_next_ms_.assign(static_cast<std::size_t>(n_input), 0);
         for (int i = 0; i + 1 < n_input; ++i) {
@@ -6087,10 +6104,13 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     return true;
 }
 
-// barmerge.lookahead_on: resolve the whole series over the batch input now, so
-// each completed bucket's FINAL values can be delivered at the input bar that
-// opened it. This pass IS the subscription's only feed; its live pump is
-// skipped, so the substitution/miss diagnostics count each bucket exactly once.
+// barmerge.lookahead_on: resolve the whole series over the historical input
+// now, so each completed bucket's FINAL values can be delivered at the input
+// bar that opened it. This pass IS the subscription's only feed for those
+// inputs; the pump is skipped over them, so the substitution/miss diagnostics
+// count each bucket exactly once. A stream's historical input is its warmup,
+// and the aggregator is left holding whatever bucket the warmup left open --
+// the live phase continues that very bucket through the aggregating pump.
 bool NativeExecutionConsumer::project_timeframe_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription,
         const Bar* input_bars, int n_input) {
@@ -6128,6 +6148,14 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
         }
     }
     engine.security_next_input_ms_ = 0;
+    // The bucket the projected input left open, published as the aggregating
+    // pump's own cursor. Inert for a batch run, where a lookahead_on series
+    // never reaches that pump. For a stream it keeps the documented anchor:
+    // the delivered context's interval is the span of the bucket's FIRST
+    // contributing input bar (native_host.hpp), which for a bucket the warmup
+    // opened is a warmup bar, not the first live one that continues it.
+    subscription.bucket_first_index = first_index;
+    subscription.bucket_first_ms = first_ms;
     return !failed();
 }
 
@@ -6147,7 +6175,13 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
                     return false;
                 }
             }
-            continue;
+            // Historical inputs are served entirely by that projection. A
+            // stream's live inputs are not in it and have no future to be
+            // resolved over, so they fall through to the aggregating pump
+            // below: the same buckets, delivered when they complete.
+            if (subscription_warmup_inputs_ < 0 || index < subscription_warmup_inputs_) {
+                continue;
+            }
         }
         auto& state =
             engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
@@ -6181,6 +6215,20 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
             return false;
         }
     }
+    return true;
+}
+
+// A declared series is a function of the accepted CONFIRMED input, which is
+// the whole input a batch of the same bars has. The tick driver's other two
+// contributions have no batch counterpart to reproduce: an observed-tick slot
+// is finalized after its own matching pass, and a quiet-carried slot is a
+// synthesized flat bar a batch feed would simply not contain. Rather than fold
+// either into a bucket and silently answer with a series no batch could
+// produce, a stream that declares a series takes confirmed bars only.
+bool NativeExecutionConsumer::refuse_subscription_tick_input(BacktestEngine& engine) {
+    if (subscriptions_.empty()) return false;
+    present_refusal(engine,
+        "native timeframe subscriptions require confirmed-bar stream input");
     return true;
 }
 
@@ -6633,6 +6681,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         return false;
     }
     if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
+    if (refuse_subscription_tick_input(engine)) return false;
     if (n == 0) return true;
     uint64_t prev_sequence = last_tick_sequence_;
     bool prev_has_sequence = has_tick_sequence_;
@@ -6942,6 +6991,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
             return false;
         }
         if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
+        if (refuse_subscription_tick_input(engine)) return false;
         if (has_floor_ && timestamp_ms < decision_floor_ms_) {
             present_refusal(engine, "native time advance regresses the decision floor");
             return false;
