@@ -65,9 +65,22 @@ static_assert(std::variant_size_v<no::SizeBasis> == 2, "SizeBasis grew");
 static_assert(std::variant_size_v<no::TriggerAnchor> == 2, "TriggerAnchor grew");
 static_assert(std::variant_size_v<no::RemainingProjection> == 5, "RemainingProjection grew");
 static_assert(std::variant_size_v<no::TriggerState> == 9, "TriggerState grew");
-static_assert(std::variant_size_v<no::CommandEvent> == 18, "CommandEvent grew");
-static_assert(PF_NATIVE_EVENT_MARGIN_CALL == 18,
+static_assert(std::variant_size_v<no::CommandEvent> == 19, "CommandEvent grew");
+static_assert(PF_NATIVE_EVENT_MARGIN_CALL == 18 && PF_NATIVE_EVENT_RISK == 21,
               "the command-event tags must cover every CommandEvent alternative");
+static_assert(static_cast<int>(no::RiskLimitKind::MaxFillsPerDay)
+                  == PF_NATIVE_RISK_MAX_FILLS_PER_DAY, "RiskLimitKind drifted");
+static_assert(static_cast<int>(pineforge::NativeRiskDay::CalendarDayInTimezone)
+                  == PF_NATIVE_RISK_DAY_CALENDAR_TIMEZONE, "NativeRiskDay drifted");
+static_assert(static_cast<int>(pineforge::NativeRiskAction::FlattenAndBlock)
+                  == PF_NATIVE_RISK_FLATTEN_AND_BLOCK, "NativeRiskAction drifted");
+/* The risk tail is append-only: the base layout must still end exactly where
+ * PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE says, and the tail must be the twelve
+ * fields below it and nothing else. */
+static_assert(sizeof(pf_native_run_spec_ext_v1)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE + 10u * sizeof(std::uint32_t)
+                         + 2u * sizeof(double),
+              "the pf_native_run_spec_ext_v1 risk tail moved");
 static_assert(static_cast<int>(pineforge::NativeFailureCode::CallbackException)
                   == PF_NATIVE_FAILURE_CALLBACK,
               "PF_NATIVE_FAILURE_CALLBACK must mirror NativeFailureCode::CallbackException");
@@ -399,6 +412,18 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
             fill_cursor(out, payload.cursor);
         } else if constexpr (std::is_same_v<T, no::MarginCallEvent>) {
             out = margin_call_pod(payload);
+        } else if constexpr (std::is_same_v<T, no::NativeRiskEvent>) {
+            /* An account fact, bound to no request: `incarnation` stays 0 and
+             * the matching point travels in `successor` instead. `limit` is
+             * already in the unit the breach was measured in — a percent
+             * limit was resolved against its basis equity in the kernel. */
+            out = blank_event(PF_NATIVE_EVENT_RISK, ordinal);
+            out.reason = static_cast<std::uint32_t>(payload.kind);
+            out.price = payload.observed;
+            out.raw_price = payload.limit;
+            out.cycle_before = payload.day_ordinal;
+            out.successor = payload.cursor.point.ordinal;
+            fill_cursor(out, payload.cursor);
         } else {
             static_assert(!sizeof(T), "untranslated native command event");
         }
@@ -784,8 +809,15 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
     return PF_NATIVE_OK;
 }
 
-int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext) {
-    if (ext.present_mask & ~0x3fu) return PF_NATIVE_E_TAG;
+/* `has_risk_tail` is false for a caller compiled against the base layout of
+ * pf_native_run_spec_ext_v1 (PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE): its struct
+ * stops at `reserved0`, so the risk fields must not be read at all. */
+int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
+                   bool has_risk_tail) {
+    if (ext.present_mask & ~0x7fu) return PF_NATIVE_E_TAG;
+    if ((ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) && !has_risk_tail) {
+        return PF_NATIVE_E_STRUCT;
+    }
 
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_REPORT) {
         switch (ext.report_policy) {
@@ -851,6 +883,44 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
         default: return PF_NATIVE_E_TAG;
         }
         spec.margin = margin;
+    }
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) {
+        pineforge::NativeRiskLimits risk;
+        if (ext.risk_has_max_drawdown > 1u || ext.risk_max_drawdown_percent > 1u
+            || ext.risk_has_max_intraday_loss > 1u || ext.risk_max_intraday_loss_percent > 1u
+            || ext.risk_has_max_consecutive_loss_days > 1u
+            || ext.risk_has_max_fills_per_day > 1u) {
+            return PF_NATIVE_E_TAG;
+        }
+        if (ext.risk_has_max_drawdown) {
+            pineforge::NativeLossLimit limit;
+            limit.value = ext.risk_max_drawdown;
+            limit.percent = ext.risk_max_drawdown_percent != 0u;
+            risk.max_drawdown = limit;
+        }
+        if (ext.risk_has_max_intraday_loss) {
+            pineforge::NativeLossLimit limit;
+            limit.value = ext.risk_max_intraday_loss;
+            limit.percent = ext.risk_max_intraday_loss_percent != 0u;
+            risk.max_intraday_loss = limit;
+        }
+        if (ext.risk_has_max_consecutive_loss_days) {
+            risk.max_consecutive_loss_days = ext.risk_max_consecutive_loss_days;
+        }
+        if (ext.risk_has_max_fills_per_day) {
+            risk.max_fills_per_day = ext.risk_max_fills_per_day;
+        }
+        switch (ext.risk_day_basis) {
+        case 0: risk.day_basis = pineforge::NativeRiskDay::SessionDay; break;
+        case 1: risk.day_basis = pineforge::NativeRiskDay::CalendarDayInTimezone; break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        switch (ext.risk_action) {
+        case 0: risk.action = pineforge::NativeRiskAction::BlockOpenings; break;
+        case 1: risk.action = pineforge::NativeRiskAction::FlattenAndBlock; break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        spec.risk = risk;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS) {
         if (ext.subscriptions_n > 0 && !ext.subscriptions) return PF_NATIVE_E_ARGUMENT;
@@ -1180,7 +1250,11 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!base || !ext) return PF_NATIVE_E_ARGUMENT;
         if (base->struct_size != sizeof(pf_native_run_spec_v1)) return PF_NATIVE_E_STRUCT;
-        if (ext->struct_size != sizeof(pf_native_run_spec_ext_v1)
+        /* Two published layouts, and only two: the base one the lane first
+         * shipped and the current one with the risk tail. Anything else is a
+         * caller this runtime cannot read. */
+        const bool has_risk_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        if ((!has_risk_tail && ext->struct_size != PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE)
             || ext->version != PF_NATIVE_API_VERSION) {
             return PF_NATIVE_E_STRUCT;
         }
@@ -1193,7 +1267,7 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         }
         pineforge::NativeRunSpec spec;
         if (int rc = translate_base_spec(*base, spec); rc != PF_NATIVE_OK) return rc;
-        if (int rc = apply_spec_ext(spec, *ext); rc != PF_NATIVE_OK) return rc;
+        if (int rc = apply_spec_ext(spec, *ext, has_risk_tail); rc != PF_NATIVE_OK) return rc;
         return host->configure_native(spec).status == pineforge::NativeSetupStatus::Applied
             ? PF_NATIVE_OK
             : PF_NATIVE_E_ARGUMENT;

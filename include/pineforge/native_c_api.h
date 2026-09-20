@@ -29,7 +29,9 @@
  *  - Every struct is tagged and size-prefixed: `struct_size` is the exact
  *    sizeof of the version the caller compiled against, `version` is that
  *    layout's version constant. A mismatch is refused with PF_NATIVE_E_STRUCT
- *    and mutates nothing.
+ *    and mutates nothing. The one exception is the deliberately additive tail
+ *    of pf_native_run_spec_ext_v1: that struct has two published layouts and
+ *    the runtime accepts either (see PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE).
  *  - Every enum-valued field is translated by an exhaustive switch. A value
  *    outside its enumeration is refused with PF_NATIVE_E_TAG; a value this
  *    version deliberately cannot represent is refused with
@@ -233,13 +235,17 @@ typedef enum pf_native_lifecycle_e {
 
 /** Event tag of #pf_native_event_v1.
  *
- *  1..18 are the alternatives of `native_order::CommandEvent`, in variant
- *  order plus one; 19 and 20 are the driver-point and account observations
- *  `native_events()` also carries. Two kinds named in the design are NOT
- *  represented and never appear here: a completed higher-timeframe bucket
- *  (delivered only through `on_timeframe_bar`, never recorded in the event
- *  history) and a risk-limit event (the kernel has no risk event yet — the
- *  L9 lane has not landed). */
+ *  1..18 are the first eighteen alternatives of `native_order::CommandEvent`,
+ *  in variant order plus one; 19 and 20 are the driver-point and account
+ *  observations `native_events()` also carries. 21 is L9's `NativeRiskEvent`,
+ *  the nineteenth CommandEvent alternative: it was added after this header
+ *  froze, so it keeps a tag of its own past the two observations rather than
+ *  taking 19 and renumbering them. A reader compiled before it skips it by
+ *  tag, exactly as it must skip any tag it does not know.
+ *
+ *  One kind named in the design is NOT represented and never appears here: a
+ *  completed higher-timeframe bucket, delivered only through
+ *  `on_timeframe_bar` and never recorded in the event history. */
 typedef enum pf_native_event_kind_e {
     PF_NATIVE_EVENT_ACCEPTED            = 1,
     PF_NATIVE_EVENT_REJECTED            = 2,
@@ -260,8 +266,36 @@ typedef enum pf_native_event_kind_e {
     PF_NATIVE_EVENT_TERMS_RESOLVED      = 17,
     PF_NATIVE_EVENT_MARGIN_CALL         = 18,
     PF_NATIVE_EVENT_DRIVER_POINT        = 19,
-    PF_NATIVE_EVENT_ACCOUNT             = 20
+    PF_NATIVE_EVENT_ACCOUNT             = 20,
+    PF_NATIVE_EVENT_RISK                = 21
 } pf_native_event_kind_t;
+
+/** Which generic risk limit a #PF_NATIVE_EVENT_RISK event reports — the
+ *  `reason` field of #pf_native_event_v1, mirroring
+ *  `native_order::RiskLimitKind` (L9). */
+typedef enum pf_native_risk_limit_e {
+    PF_NATIVE_RISK_MAX_DRAWDOWN              = 0,
+    PF_NATIVE_RISK_MAX_INTRADAY_LOSS         = 1,
+    PF_NATIVE_RISK_MAX_CONSECUTIVE_LOSS_DAYS = 2,
+    PF_NATIVE_RISK_MAX_FILLS_PER_DAY         = 3
+} pf_native_risk_limit_t;
+
+/** Which day a risk limit's "day" is — `NativeRiskDay`. SESSION is the run's
+ *  own session calendar (an overnight session is one day); CALENDAR_TIMEZONE
+ *  is the civil date in the spec's scheduling timezone. */
+typedef enum pf_native_risk_day_e {
+    PF_NATIVE_RISK_DAY_SESSION           = 0,
+    PF_NATIVE_RISK_DAY_CALENDAR_TIMEZONE = 1
+} pf_native_risk_day_t;
+
+/** What a breach does — `NativeRiskAction`. BLOCK_OPENINGS refuses every
+ *  opening while the block lasts and leaves the live book alone;
+ *  FLATTEN_AND_BLOCK first closes the book with one kernel-originated
+ *  Flatten. */
+typedef enum pf_native_risk_action_e {
+    PF_NATIVE_RISK_BLOCK_OPENINGS    = 0,
+    PF_NATIVE_RISK_FLATTEN_AND_BLOCK = 1
+} pf_native_risk_action_t;
 
 /** Remaining projection of a live request — `native_order::RemainingProjection`. */
 typedef enum pf_native_remaining_e {
@@ -292,7 +326,11 @@ typedef enum pf_native_spec_ext_mask_e {
     PF_NATIVE_SPEC_EXT_CALCULATION   = 1u << 2,
     PF_NATIVE_SPEC_EXT_OPEN_BAR_VIEW = 1u << 3,
     PF_NATIVE_SPEC_EXT_MARGIN        = 1u << 4,
-    PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS = 1u << 5
+    PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS = 1u << 5,
+    /** L9's generic risk limits. Only a caller whose
+     *  pf_native_run_spec_ext_v1 carries the risk tail may set this bit; a
+     *  caller sending the base layout is refused with PF_NATIVE_E_STRUCT. */
+    PF_NATIVE_SPEC_EXT_RISK          = 1u << 6
 } pf_native_spec_ext_mask_t;
 
 /** @} */ /* end of pf_native_c_enums */
@@ -360,7 +398,15 @@ typedef struct pf_native_applied_v1 {
  *   - ACTIVATED: `reason` is an ActivationKind, `price` the reached price.
  *   - DRIVER_POINT: cursor fields and `raw_price`.
  *   - ACCOUNT: `price` = marked equity, `raw_price` = realized balance,
- *     `opened_units` = signed position units. */
+ *     `opened_units` = signed position units.
+ *   - RISK: `reason` is a #pf_native_risk_limit_e, `price` = the observed
+ *     value that reached the limit, `raw_price` = the limit it was measured
+ *     against (account currency for the two loss limits — a percent limit is
+ *     already resolved against its basis equity — days or fills for the two
+ *     counts), `cycle_before` = the risk day the breach happened on, on the
+ *     spec's own day basis, `successor` = the cursor's matching-point
+ *     ordinal, cursor fields set. The event names no request: it is an
+ *     account fact, so `incarnation` stays 0. */
 typedef struct pf_native_event_v1 {
     uint32_t struct_size;       /**< sizeof(pf_native_event_v1). */
     uint32_t version;           /**< PF_NATIVE_API_VERSION. */
@@ -368,7 +414,8 @@ typedef struct pf_native_event_v1 {
     uint32_t reason;            /**< Per-kind reason enumerator, 0 when none. */
     uint64_t ordinal;           /**< Event ordinal; strictly increasing. */
     uint64_t incarnation;       /**< Subject request, 0 when the kind has none. */
-    uint64_t successor;         /**< REPLACED only; 0 otherwise. */
+    uint64_t successor;         /**< REPLACED: the new handle. RISK: the cursor's
+                                 *   matching-point ordinal. 0 otherwise. */
     double   raw_price;
     double   resolved_price;
     double   price;
@@ -507,7 +554,15 @@ typedef struct pf_native_subscription_v1 {
  *
  *  Not represented in ext v1: the intrabar path, the slot-label policy, legacy
  *  tolerance, the forced path order and abort reporting. They keep their
- *  defaults. */
+ *  defaults.
+ *
+ *  This struct has TWO published layouts and the runtime accepts either: the
+ *  base layout the L13 lane first shipped, whose length is
+ *  #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE, and the current one, which appends
+ *  the `risk_*` tail L9's limits need. A caller compiled against the base
+ *  layout keeps working unchanged and simply cannot set
+ *  #PF_NATIVE_SPEC_EXT_RISK. Any other `struct_size` is PF_NATIVE_E_STRUCT.
+ *  The tail is append-only: nothing above it moved. */
 typedef struct pf_native_run_spec_ext_v1 {
     uint32_t struct_size;    /**< sizeof(pf_native_run_spec_ext_v1). */
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
@@ -539,7 +594,35 @@ typedef struct pf_native_run_spec_ext_v1 {
     const pf_native_subscription_v1* subscriptions; /**< Borrowed for the call. */
     uint32_t subscriptions_n;
     uint32_t reserved0;
+
+    /* ── The additive risk tail (L9). Read only when `present_mask` carries
+     * PF_NATIVE_SPEC_EXT_RISK; a caller sending the base layout stops at
+     * `reserved0` above. Each limit is opt-in through its own `has_` flag,
+     * and a block whose four flags are all 0 is a declared-but-empty block —
+     * which is exactly what the C++ `NativeRiskLimits{}` is. ── */
+    uint32_t risk_has_max_drawdown;          /**< 0/1. */
+    uint32_t risk_max_drawdown_percent;      /**< 0/1: the value is a percent of the
+                                              *   running equity peak, out of 100. */
+    double   risk_max_drawdown;              /**< Threshold; account currency unless percent. */
+    uint32_t risk_has_max_intraday_loss;     /**< 0/1. */
+    uint32_t risk_max_intraday_loss_percent; /**< 0/1: percent of the day's opening equity. */
+    double   risk_max_intraday_loss;         /**< Threshold; account currency unless percent. */
+    uint32_t risk_has_max_consecutive_loss_days; /**< 0/1. */
+    uint32_t risk_max_consecutive_loss_days;     /**< Days, when the flag is 1. */
+    uint32_t risk_has_max_fills_per_day;     /**< 0/1. */
+    uint32_t risk_max_fills_per_day;         /**< Applied fills, when the flag is 1. */
+    uint32_t risk_day_basis;                 /**< #pf_native_risk_day_e. */
+    uint32_t risk_action;                    /**< #pf_native_risk_action_e. */
 } pf_native_run_spec_ext_v1;
+
+/** Byte length of #pf_native_run_spec_ext_v1 as the L13 lane first published
+ *  it, before the `risk_*` tail was appended. It is the offset of the first
+ *  appended field, so it stays correct on every target this header builds for
+ *  — it is not a literal. The runtime accepts this length as well as the
+ *  current `sizeof`, which is what makes the tail additive rather than a
+ *  layout break. */
+#define PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE \
+    ((uint32_t)offsetof(pf_native_run_spec_ext_v1, risk_has_max_drawdown))
 
 /** The C host's strategy logic.
  *

@@ -1695,16 +1695,31 @@ deliberately refused with `PF_NATIVE_E_UNSUPPORTED`: `HostSized` is the
 adapter's sizing seam, and a C host sizes with `Sized`.
 
 **The run specification.** `strategy_configure_native_v1` still takes the v1
-spec. The fields lanes L2-L8 added — report policy and the open-position row,
+spec. The fields lanes L2-L9 added — report policy and the open-position row,
 the price grid and its rounding, calculation timing and its recalculation
-bound, the open-bar view, the generic margin model, and higher-timeframe
-subscriptions — travel in `pf_native_run_spec_ext_v1`, passed together with
-the base spec to `strategy_configure_native_ext_v1`. It replaces
+bound, the open-bar view, the generic margin model, higher-timeframe
+subscriptions, and L9's generic risk limits — travel in
+`pf_native_run_spec_ext_v1`, passed together with the base spec to
+`strategy_configure_native_ext_v1`. It replaces
 `strategy_configure_native_v1` rather than following it, because the kernel
 configures a host exactly once and fails it on a second attempt. Not
 representable in ext v1, and left at their defaults: the intrabar path, the
 slot-label policy, legacy tolerance, the forced path order and abort
 reporting.
+
+The risk block (`PF_NATIVE_SPEC_EXT_RISK`) is the one **additive tail** in
+this header. It appends `risk_*` fields — the two loss limits as a value plus
+a percent flag, the two counts, the day basis and the breach action, each
+limit opt-in through its own `has_` flag — past `reserved0`, so
+`pf_native_run_spec_ext_v1` now has two published lengths and the runtime
+accepts either: `PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE` (the layout the lane
+first shipped, defined as the offset of the first appended field rather than
+as a literal, so it stays right on every target) and the current `sizeof`.
+A caller sending the base length keeps working unchanged and is refused with
+`PF_NATIVE_E_STRUCT` if it sets the risk bit it has no fields for; any third
+length is refused outright. `tests/test_native_c_api_frozen_header.cpp`
+configures a host from the frozen v1 copy of the struct, so that acceptance is
+executed rather than asserted.
 
 **Errors and hardening.** Every struct is tagged and size-prefixed
 (`struct_size`, `version`); a mismatch is `PF_NATIVE_E_STRUCT`, an enumerator
@@ -1718,15 +1733,29 @@ links it against the current runtime, so an unnoticed layout change shows up
 as the refusal the header promises rather than as silent misreading.
 
 **Events.** `strategy_native_events_v1` flattens `native_events()` into one
-tagged POD: the eighteen `CommandEvent` alternatives, plus the driver point
-and the account observation. Two kinds named in the design are **not**
-represented and never appear: a completed higher-timeframe bucket, which is
+tagged POD: the nineteen `CommandEvent` alternatives, plus the driver point
+and the account observation. One kind named in the design is **not**
+represented and never appears: a completed higher-timeframe bucket, which is
 delivered through the `on_timeframe_bar` callback and never recorded in the
-event history, and a risk-limit event, which the kernel does not have yet (the
-L9 lane has not landed). Ordinals are non-decreasing rather than strictly
-increasing — an applied execution and the account observation it produced
-share one — so a page never ends in the middle of such a group and a poller
-can advance by the last returned ordinal.
+event history. Ordinals are non-decreasing rather than strictly increasing —
+an applied execution and the account observation it produced share one — so a
+page never ends in the middle of such a group and a poller can advance by the
+last returned ordinal.
+
+L9's `NativeRiskEvent` is the nineteenth alternative and arrived after this
+header froze, so it took a tag of its own past the two observations —
+`PF_NATIVE_EVENT_RISK` (21) — rather than taking 19 and renumbering
+`PF_NATIVE_EVENT_DRIVER_POINT` and `_ACCOUNT`. A reader compiled before it
+skips it by tag, which is how any unknown tag must already be treated, and
+only ever meets it in a run whose spec declares `risk` — a spec that reader
+cannot write. The event names no request, because the block it opens is an
+account fact: `incarnation` stays 0, `reason` is the
+`pf_native_risk_limit_e` that breached, `price` is the observed value,
+`raw_price` the limit it reached (already resolved against its basis equity
+when the limit was a percent), `cycle_before` the risk day on the spec's own
+day basis, `successor` the cursor's matching-point ordinal, and the cursor
+fields are set. There is no new callback: the history is the delivery path,
+so `pf_native_callbacks_v1` does not move.
 
 ### Known limits
 

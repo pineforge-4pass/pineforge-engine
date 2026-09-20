@@ -361,6 +361,24 @@ static void check_spec_extension(void) {
     CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
                  "unknown extension block not refused");
 
+    /* The risk block lives in the appended tail, so a caller sending the base
+     * layout cannot declare it: the fields are not in its struct at all. */
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE;
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_RISK;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_STRUCT,
+                 "the risk block was accepted from a base-layout extension");
+
+    /* The mask is bounded before the tail is: an unknown block is E_TAG even
+     * when the risk bit is set without the tail to back it. */
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE;
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_RISK | (1u << 20);
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "an unknown block is judged before the missing tail");
+
     /* None of those refusals may have touched the handle. */
     memset(&state, 0, sizeof(state));
     state.struct_size = (uint32_t)sizeof(state);
@@ -675,6 +693,105 @@ static void check_event_polling(void) {
     strategy_native_host_free(host);
 }
 
+/* ── L9's risk limits, read back through the C event history ────── */
+
+/* One opening per calculation, with a limit of one applied fill per day: the
+ * first fill reaches the limit, the kernel appends a NativeRiskEvent, and
+ * every later opening of that day is refused. All forty twin bars are five
+ * minutes apart from epoch 0, so they are one session day and the block never
+ * lifts inside the run. */
+typedef struct risk_state {
+    pf_strategy_t host;
+    int           calculations;
+    int           submit_error;
+} risk_state;
+
+static int risk_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    risk_state* state = (risk_state*)user;
+    pf_native_request_v1 request;
+    int rc;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations != 1 && state->calculations != 5 && state->calculations != 9) {
+        return 0;
+    }
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    request.label = state->calculations == 1 ? "risk-enter" : "risk-probe";
+    rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+    /* The kernel accepts every one of them: a risk block refuses the MATCH,
+     * not the command. */
+    if (rc != PF_NATIVE_OK && state->submit_error == 0) state->submit_error = rc;
+    return 0;
+}
+
+static void check_risk_event(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    risk_state state;
+    static pf_native_event_v1 events[PF_TWIN_MAX_EVENTS];
+    const pf_bar_t* bars;
+    int n = 0;
+    int written, i;
+    int risk_events = 0;
+    int applied = 0;
+    int first_risk = -1;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = risk_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "risk host create failed");
+    if (!state.host) return;
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_RISK;
+    ext.risk_has_max_fills_per_day = 1u;
+    ext.risk_max_fills_per_day = 1u;
+    ext.risk_day_basis = PF_NATIVE_RISK_DAY_SESSION;
+    ext.risk_action = PF_NATIVE_RISK_BLOCK_OPENINGS;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the risk extension was refused");
+
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the risk run did not complete");
+    CHECK_EQ_INT(state.submit_error, 0, "a command was refused during the risk run");
+
+    memset(events, 0, sizeof(events));
+    written = strategy_native_events_v1(state.host, 0, events, PF_TWIN_MAX_EVENTS);
+    CHECK(written > 0, "the risk run recorded no events");
+    for (i = 0; i < written; ++i) {
+        if (events[i].kind == PF_NATIVE_EVENT_RISK && first_risk < 0) first_risk = i;
+        if (events[i].kind == PF_NATIVE_EVENT_RISK) ++risk_events;
+        if (events[i].kind == PF_NATIVE_EVENT_APPLIED) ++applied;
+    }
+    CHECK_EQ_INT(risk_events, 1, "the breach delivered a different number of risk events");
+    CHECK_EQ_INT(applied, 1, "the risk block did not stop the later openings");
+    if (first_risk >= 0) {
+        const pf_native_event_v1* row = &events[first_risk];
+        CHECK_EQ_INT(row->reason, PF_NATIVE_RISK_MAX_FILLS_PER_DAY,
+                     "the risk event named another limit");
+        CHECK(row->price == 1.0, "the risk event reported another observed value");
+        CHECK(row->raw_price == 1.0, "the risk event reported another limit");
+        CHECK(row->incarnation == 0u, "the risk event named a request");
+        CHECK(row->successor != 0u, "the risk event carried no matching point");
+        CHECK(row->effective_time_ms > 0, "the risk event carried no cursor");
+        CHECK_EQ_INT(row->struct_size, (int)sizeof(pf_native_event_v1),
+                     "the risk event is a different struct");
+        CHECK_EQ_INT(row->version, PF_NATIVE_API_VERSION, "the risk event is another version");
+        /* Epoch day 0 on a 24x7 session: the day key is the session day the
+         * breach was measured in, and every twin bar is in it. */
+        CHECK_EQ_INT(row->cycle_before, 0, "the risk event named another risk day");
+    }
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -682,5 +799,6 @@ int pf_native_c_api_checks(void) {
     check_lifecycle_round_trips();
     check_callback_failure_latch();
     check_event_polling();
+    check_risk_event();
     return failures;
 }

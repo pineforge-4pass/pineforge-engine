@@ -325,12 +325,15 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book |
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters for cohort-bound requests |
-| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions) |
+| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits) |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. A callback that returns non-zero latches
+mutates nothing. `pf_native_run_spec_ext_v1` has two published lengths — the
+layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`) and the
+same struct with L9's appended risk tail — and the runtime accepts both, so a
+host compiled against the first keeps configuring unchanged. A callback that returns non-zero latches
 `NativeFailureCode::CallbackException` and ends the run `Failed`. Streaming
 needs no new symbol: the `strategy_stream_*` family takes these handles
 unchanged. Worked example: [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c);

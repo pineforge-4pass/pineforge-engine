@@ -179,6 +179,34 @@ int main() {
     check(run_state.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED,
           "the frozen reader saw a lifecycle other than Completed");
 
+    // The frozen caller's own pf_native_run_spec_ext_v1 is the BASE layout:
+    // the live header has appended L9's risk tail since. The runtime publishes
+    // both lengths, so this struct_size must still be accepted — that is what
+    // "additive" means here, and a second host proves it without disturbing
+    // the completed run above.
+    FrozenState ext_state;
+    pf_native_callbacks_v1 ext_table;
+    std::memset(&ext_table, 0, sizeof(ext_table));
+    ext_table.struct_size = static_cast<uint32_t>(sizeof(ext_table));
+    ext_table.version = PF_NATIVE_API_VERSION;
+    ext_table.user = &ext_state;
+    ext_state.host = strategy_native_host_create_v1(&ext_table);
+    check(ext_state.host != nullptr, "the current runtime refused a second frozen table");
+    if (ext_state.host) {
+        pf_native_run_spec_v1 ext_spec = frozen_spec();
+        pf_native_run_spec_ext_v1 ext;
+        std::memset(&ext, 0, sizeof(ext));
+        ext.struct_size = static_cast<uint32_t>(sizeof(ext));
+        ext.version = PF_NATIVE_API_VERSION;
+        ext.present_mask = PF_NATIVE_SPEC_EXT_REPORT;
+        ext.report_policy = 1u;  // KernelRecorded
+        check(strategy_configure_native_ext_v1(ext_state.host, &ext_spec, &ext) == PF_NATIVE_OK,
+              "the current runtime refused the frozen spec extension (the tail is not additive)");
+        check(strategy_native_run_v1(ext_state.host, bars, n, nullptr) == PF_NATIVE_OK,
+              "the frozen extended run did not complete");
+        strategy_native_host_free(ext_state.host);
+    }
+
     pf_native_event_v1 events[16];
     std::memset(events, 0, sizeof(events));
     const int written = strategy_native_events_v1(state.host, 0, events, 16);
@@ -188,6 +216,16 @@ int main() {
               "the runtime filled an event POD the frozen reader cannot stride");
         check(events[0].version == PF_NATIVE_API_VERSION,
               "the runtime filled an event POD of another version");
+        // Every tag this run produced is one the frozen header names. A tag
+        // added after the freeze (PF_NATIVE_EVENT_RISK is the first) is only
+        // ever produced by a spec this caller cannot write, and a reader that
+        // met one would skip it by tag — which is why the addition did not
+        // renumber PF_NATIVE_EVENT_DRIVER_POINT or _ACCOUNT.
+        for (int i = 0; i < written; ++i) {
+            check(events[i].kind >= PF_NATIVE_EVENT_ACCEPTED
+                      && events[i].kind <= PF_NATIVE_EVENT_ACCOUNT,
+                  "the frozen reader met a tag its header does not name");
+        }
     }
 
     strategy_native_host_free(state.host);
