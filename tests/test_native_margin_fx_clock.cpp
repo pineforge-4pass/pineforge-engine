@@ -96,6 +96,11 @@ struct ClockHost final : Host {
     int bars = 0;
     std::vector<Offered> points;
     std::vector<NativeMarginRequirementView> views;
+    // Beside each measured view: BacktestEngine::marked_equity() at the same
+    // mark, read at the same moment — the engine's own accessor, converting at
+    // its presented clock — and that clock itself.
+    std::vector<double> accessor_equity;
+    std::vector<std::int64_t> view_presented_ms;
     std::vector<no::MarginCallEvent> margin_calls;
 
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
@@ -112,6 +117,8 @@ struct ClockHost final : Host {
     std::optional<NativeMarginDecision> resolve_margin_requirement(
             const NativeMarginRequirementView& view) const override {
         const_cast<ClockHost&>(*this).views.push_back(view);
+        const_cast<ClockHost&>(*this).accessor_equity.push_back(marked_equity(view.mark));
+        const_cast<ClockHost&>(*this).view_presented_ms.push_back(current_bar_.timestamp);
         return std::nullopt;
     }
 
@@ -294,10 +301,19 @@ void every_kind_converts_at_its_own_cursor() {
         host.open_units = row.units;
         run_bars(host, spec, row.curve, row.bars);
         REQUIRE(!host.views.empty());
-        for (const auto& view : host.views) {
+        REQUIRE(host.accessor_equity.size() == host.views.size());
+        for (std::size_t i = 0; i < host.views.size(); ++i) {
+            const auto& view = host.views[i];
             const double held = std::abs(view.position.signed_units);
             const double fx = host.rate_at(view.cursor.point.effective_time_ms);
             near(view.required, held * view.mark * fx * 0.5);
+            // Wherever the presented clock's rate IS the cursor's, the
+            // rate-explicit equity is BacktestEngine::marked_equity()'s own
+            // number, bit for bit: the rule only ever moves a point whose two
+            // clocks disagree.
+            if (host.rate_at(host.view_presented_ms[i]) == fx) {
+                CHECK(view.equity == host.accessor_equity[i]);
+            }
         }
     }
 }
@@ -348,6 +364,15 @@ void a_run_without_a_curve_is_untouched() {
         for (const auto& view : host.views) {
             const double held = std::abs(view.position.signed_units);
             near(view.required, held * view.mark * account_fx * 0.5);
+        }
+        // The rate-explicit equity the kernel now computes IS
+        // BacktestEngine::marked_equity(), bit for bit, wherever the cursor's
+        // rate and the presented clock's agree — which is every instant of a
+        // run that declares no curve. (The model's basis is the default
+        // MarkedEquity, so margin_equity() adds nothing on top.)
+        REQUIRE(host.accessor_equity.size() == host.views.size());
+        for (std::size_t i = 0; i < host.views.size(); ++i) {
+            CHECK(host.views[i].equity == host.accessor_equity[i]);
         }
         CHECK(host.offered(NativeMarginCheckKind::FxRoll).empty());
     }
