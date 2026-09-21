@@ -139,6 +139,7 @@ slot_dirs() {
             in_slots "$(basename "$s")" && printf '%s\n' "$s"
         done
     done
+    return 0
 }
 
 # One parity run per slot; a failure leaves <slot>/_<engine>_error.log (its
