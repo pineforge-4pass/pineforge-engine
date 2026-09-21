@@ -34,6 +34,10 @@ inline namespace native_order_v6 {
 // used at the core/consumer boundary.
 
 using Flatten = execution::Flatten;
+/// A signed book transaction: finite nonzero units on the side their sign names.
+/// It opens, and it closes against a live opposite book on the way, so a
+/// transaction larger than an opposite position still opens the remainder. An
+/// opening denial rejects the ENTIRE transaction, including that remainder.
 using Transact = order_action::Transact;
 
 /// A host-maintained, run-scoped roster identity.  Zero is invalid and is
@@ -59,6 +63,13 @@ struct ReverseTo {
 
 enum class HostSizedKind : std::uint8_t { Open = 0, Close = 1 };
 enum class Side : std::uint8_t { Long = 0, Short = 1 };
+/// An opening or a closing whose quantity the HOST resolves, in
+/// NativeStrategyHost::resolve_execution_terms. `side` is required for an
+/// opening, which must declare where it trades. A host-sized request that reaches
+/// a candidate with no units answered is MatchRejectReason::TermsUnresolved. It is
+/// the adapter's sizing seam; a bare host that wants the kernel to resolve a cash
+/// or equity basis uses Sized instead, and the C surface refuses HostSized under
+/// any owner but BindCohort.
 struct HostSized {
     HostSizedKind kind = HostSizedKind::Open;
     std::optional<Side> side;
@@ -80,9 +91,14 @@ enum class ExecutionGridPolicy : std::uint8_t {
 struct CashValue {
     double cash = 0.0;                 // account currency
 };
+/// A fraction in (0, 1] of MARKED equity at the sizing point. The other SizeBasis
+/// alternative, CashValue, is an absolute account-currency amount; both resolve as
+/// units = cash / (price * point_value * fx).
 struct EquityFraction {
     double fraction = 0.0;             // of marked equity at the sizing point (0.10 = 10 %)
 };
+/// The two bases a Sized intent may name. Extended only by appending, so an
+/// existing aggregate initializer keeps its meaning.
 using SizeBasis = std::variant<CashValue, EquityFraction>;
 
 /// AtMatch resolves the basis at the matching candidate; AtAcceptance freezes
@@ -163,9 +179,15 @@ struct Sized {
     bool reserve_percent_fee = false;
 };
 
+/// A reduction of exactly these units, finite and positive. Capped by the live
+/// exposure of the scope the reduce is bound to, and floored onto the run's
+/// quantity_grid like every other engine quantity.
 struct ExplicitUnits {
     double units = 0.0;
 };
+/// A reduction of exactly what the owner's fill opened, bound at the arm and
+/// reported by a QuantityBoundEvent. It is the arm-time size, which is why no
+/// SizeTime::AtArm exists.
 struct OwnerOpenedUnits {};
 /// Gross claims the whole bound scope; NetOfSiblings first subtracts the units
 /// already claimed by the live sibling reduces bound to that same scope.  The
@@ -188,12 +210,26 @@ struct ScopeFraction {
     /// Appended last so every existing aggregate initializer keeps its meaning.
     ScopeBasis basis = ScopeBasis::AtMatch;
 };
+/// How much a Reduce takes: literal units, the owner's own opening, or a fraction
+/// of the bound scope.
 using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits, ScopeFraction>;
+/// A closing-only intent. It never opens, so it stays legal while the run's
+/// opening limits are already exceeded, and it uses CURRENT exposure rather than
+/// the acceptance-cycle book. On a flat book it terminalizes a NoEffectEvent: no
+/// execution identity, no fill, no fee, no physical action.
 struct Reduce {
     ReductionSize size;
 };
+/// What a request does. Six alternatives: Flatten (quantity-free whole-book
+/// close), Reduce (closing only), Transact (a signed book transaction), ReverseTo
+/// (an exact signed target exposure), HostSized (the host resolves the quantity)
+/// and Sized (the kernel resolves it from a cash or equity basis). The variant's
+/// size is pinned by the frozen C++ ABI fixtures, so appending an alternative is
+/// an epoch decision.
 using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized, Sized>;
 
+/// Match at the next eligible matching point, with no level to reach. A market
+/// request accepted on bar N cannot fill on that bar's already delivered opening.
 struct Market {};
 /// `fill_through` makes the limit a touch trigger (market-if-touched): the
 /// level still gates when the request becomes executable, but its fill is not
@@ -202,9 +238,17 @@ struct Limit {
     double price = 0.0;
     bool fill_through = false;
 };
+/// A stop trigger: the modeled path has to reach `price` from the adverse side. A
+/// crossing books the level itself; a point already past it (a gapped open) books
+/// that print. Under a quantizing trigger grid the core re-validates the
+/// activation on the same ladder the matcher used, so a hit the matcher reports is
+/// never refused.
 struct Stop {
     double price = 0.0;
 };
+/// A stop that, once reached, becomes a limit at `limit`. The stop gates and the
+/// limit bounds; an anchored FromOwnerFill level is refused for this trigger,
+/// because the anchor materializes one level and this trigger has two.
 struct StopLimit {
     double stop = 0.0;
     double limit = 0.0;
@@ -252,6 +296,13 @@ enum class NativeAnchorRounding : std::uint8_t {
 /// materialized level is then snapped per `rounding`, which is appended last
 /// so every existing aggregate initializer keeps its meaning.
 struct Absolute {};
+/// Defer a level to the owner's fill: at the arm the level becomes fill + offset,
+/// with `offset` signed (adverse is negative) and spelled in price ticks when
+/// `ticks` is set, then rounded by `rounding`. Legal on Limit and Stop prices and
+/// on a Trail arm threshold, and only under a WaitForApplied owner, which is the
+/// one relation that arms. The anchored field carries the placeholder 0.0 until
+/// then, and the ArmedEvent carries the materialized definition — from then on the
+/// request reads as the absolute level it now is.
 struct FromOwnerFill {
     double offset = 0.0;
     bool ticks = false;
@@ -268,7 +319,12 @@ struct ReplaceOptions {
     bool retain_trigger_state = false;
 };
 
+/// Take whatever the point allows, with no per-point cap. The default capacity,
+/// and the only one the Pine adapter emits.
 struct ImmediateRemaining {};
+/// Cap what this request may execute at ONE matching point at `units`. Fixed at
+/// submit and metered per point — including after an arm — so a request cannot be
+/// drained faster than its owner's schedule allows.
 struct PointBudget {
     double units = 0.0;
 };
@@ -320,6 +376,8 @@ enum class NativeArmScope : std::uint8_t {
     Book = 1,
 };
 
+/// No owner: the request stands on its own book authority. Required for Sized, and
+/// the default.
 struct Independent {};
 /// The one owner relation that arms (the ArmedEvent). `visibility`, then
 /// `first_match`, then `scope` are appended last so every existing {parent},
@@ -330,14 +388,25 @@ struct WaitForApplied {
     NativeArmFirstMatch first_match = NativeArmFirstMatch::AtArmPrint;
     NativeArmScope scope = NativeArmScope::OwnerLot;
 };
+/// Bind to ONE already-live opening, by its handle and the positive cycle it is
+/// live in. A reduce bound this way closes that lot and nothing a later add
+/// brings.
 struct BindOpening {
     RequestHandle opening;
     int64_t cycle = 0;
 };
+/// Bind to a fixed cohort of already-live openings. Every handle must be unique,
+/// nonzero, of this run and physically live in `cycle`; enrollment rejects the
+/// ENTIRE request if any member is invalid. The accepted definition keeps the
+/// original cohort in canonical handle order even as later retirement narrows the
+/// live subset, and execution still closes lots in physical FIFO order.
 struct BindOpenings {
     std::vector<RequestHandle> openings;
     int64_t cycle = 0;
 };
+/// Bind to a host-built roster (cohort_open / cohort_add / cohort_remove), read at
+/// the match rather than frozen at submit. The C surface pairs it with exactly one
+/// intent, a host-sized close, whose units the on_close_units hook answers.
 struct BindCohort {
     CohortHandle cohort;
 };
@@ -424,6 +493,9 @@ inline std::uint8_t display_waypoint(const MatchCursor& cursor) noexcept {
 
 struct RemainingUnbound {};
 struct RemainingFlattenAll {};
+/// A resolved remaining quantity, in units. The kernel publishes a Sized intent's
+/// own resolution here, BEFORE the host's terms hook runs, so an override sees the
+/// kernel's number and may answer with a different one.
 struct RemainingUnits {
     double q = 0.0;
 };
@@ -447,6 +519,9 @@ using RemainingProjection =
                      RemainingProjectionNoTarget>;
 
 struct BookTransaction {};
+/// The authority an unarmed WaitForApplied child holds: accepted and live, but
+/// never a matching candidate until its owner's fill arms it — under either
+/// visibility.
 struct Wait {
     RequestHandle parent;
 };
@@ -456,6 +531,10 @@ struct ArmedTransaction {
     MatchCursor cause_cursor{};
 };
 struct UnboundBookClose {};
+/// The authority an armed leg acquires under NativeArmScope::Book: the whole
+/// position its owner's fill left, on this cycle and side, bound at the fill's
+/// cursor. It is the same authority an Independent close has, which is what lets a
+/// protective leg placed with its entry also cover later adds.
 struct BookClose {
     int64_t cycle = 0;
     Side side = Side::Long;
@@ -496,6 +575,11 @@ struct SelectedExposure {
     int64_t cycle = 0;
     std::vector<uint64_t> incarnations;
 };
+/// What one execution acted on: the whole book, one opening's exposure, or a bound
+/// selection. Reported on ExecutionAppliedEvent::scope. The financial
+/// execution::CloseScope remains the original two-alternative type; this is the
+/// native view, and a selected close's committed row range identifies the actual
+/// contributors.
 using ExecutionScope = std::variant<execution::Book, execution::OpeningExposure, SelectedExposure>;
 
 struct MarketReady {};
@@ -567,6 +651,11 @@ enum class RequestOrigin : std::uint8_t {
     KernelRisk = 2,
 };
 
+/// The immutable accepted form of one request: its handle, the request value as
+/// accepted, its birth (acceptance ordinal and decision floor), its origin
+/// (RequestOrigin::Host, or the kernel's own for a liquidation or a risk flatten)
+/// and its authority. Every event carries a shared pointer to it, so a reader
+/// holds the definition the kernel matched against and not a later re-read.
 struct RequestDefinition {
     RequestHandle handle;
     Request request;
@@ -599,6 +688,12 @@ struct LiveRequest {
     }
 };
 
+/// Whether a request may be considered at this driver point: the point's ordinal
+/// must be strictly past the birth acceptance ordinal AND its effective time at or
+/// past the birth's decision-time lower bound. This is the birth gate — it is why
+/// a request accepted on bar N cannot fill on that bar's already delivered
+/// opening — and a request born mid-path in on_native_applied is admitted at the
+/// current cursor instead, on the unconsumed suffix of that segment.
 inline bool point_eligible(const LiveRequest& live,
                            uint64_t point_ordinal,
                            int64_t effective_time_ms) noexcept {
@@ -627,6 +722,11 @@ inline bool quantity_on_grid(double q, double step) noexcept {
     return err <= ulp_bound && err < half_step;
 }
 
+/// Why an acceptance was refused, on a Rejected SubmitResult. These are decided at
+/// submit, before any request record exists: an invalid quantity or basis, an
+/// off-grid quantity, an owner the intent may not take, a trigger spelling the run
+/// cannot resolve, or a frozen quantity the run's own opening admission refuses
+/// (PlacementAdmission).
 enum class RequestRejectReason : std::uint8_t {
     InvalidQuantity = 0,
     OffGrid = 1,
@@ -645,6 +745,11 @@ enum class SubmitStatus { Accepted, Rejected };
 enum class ReplaceStatus { Replaced, ReplaceRejected, NotWorking, InvalidHandle };
 enum class CancelStatus { Cancelled, NotWorking, InvalidHandle };
 
+/// What submit answers. Accepted carries a timeline ordinal and a RequestHandle
+/// (session, run, incarnation); Rejected carries a rejection ordinal, no handle
+/// and a reason. Acceptance is not a fill: no lot, no cash and no fee moves here,
+/// and the ordinary fill appears later as an ExecutionAppliedEvent on the same
+/// command history.
 struct SubmitResult {
     SubmitStatus status = SubmitStatus::Rejected;
     uint64_t event_ordinal = 0;
@@ -664,6 +769,12 @@ struct CancelResult {
     uint64_t event_ordinal = 0;
 };
 
+/// Why a CANDIDATE was refused — a decision taken at a matching point, with the
+/// request still live unless the reason is terminal. OpeningDirection, MaxAbsUnits,
+/// MaxOpenLots, InitialMargin and RiskLimit are the run's admission gates;
+/// TermsUnresolved is a host-sized or basis-sized quantity that could not be
+/// resolved; NoOppositeExposure and InvalidTerms are shapes the answered terms
+/// cannot take.
 enum class MatchRejectReason : std::uint8_t {
     NonpositivePrice = 0,
     OpeningDirection = 1,
@@ -679,6 +790,10 @@ enum class MatchRejectReason : std::uint8_t {
     RiskLimit = 9,
 };
 
+/// Which price a candidate is being offered at: the point's own price, or the
+/// request's trigger level (a crossing that books the level itself). A host reads
+/// it off the terms facts, and the trail suites read it back off the applied event
+/// to tell a level fill from a path fill.
 enum class NativeCandidatePriceKind : std::uint8_t {
     PointPrice = 0,
     TriggerLevel = 1,
@@ -698,6 +813,8 @@ struct ExecutionTerms {
     ExecutionGridPolicy grid_policy = ExecutionGridPolicy::SnapToGrid;
 };
 
+/// The settlement shape one execution takes. Derived by the kernel from the intent
+/// and the answered terms; a host never constructs it.
 using ExecutionPlan = std::variant<execution::Flatten, order_action::Reduce,
                                    order_action::Transact, execution::ReverseTo>;
 
@@ -715,6 +832,10 @@ struct TermsResolvedInput {
     ExecutionTerms terms;
 };
 
+/// Why a request left the book. Host is an explicit cancel; Group an OCA sibling's
+/// effect; OwnerGone a parent that was rejected, replaced or cancelled, which ends
+/// its waiting children; Superseded the kernel withdrawing its own liquidation
+/// before re-pricing it. Every reason is carried on a CancelledEvent.
 enum class CancelReason : std::uint8_t {
     User = 0,
     Group = 1,
@@ -764,6 +885,8 @@ enum class DriverEligibilityClass : std::uint8_t {
 
 enum class CommandSurface : std::uint8_t { General = 0, MarketOnly = 1 };
 
+/// One request was accepted: the definition, and the timeline ordinal it was
+/// accepted at. The first event of every request's history.
 struct AcceptedEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -828,6 +951,9 @@ struct InvalidHandleEvent {
     CommandSurface surface = CommandSurface::General;
 };
 
+/// A reduction or a flatten that had nothing to close: terminal, with no execution
+/// identity, no fill, no fee and no physical action. It is an outcome, not a
+/// failure.
 struct NoEffectEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -855,6 +981,9 @@ struct TermsResolvedEvent {
     const Birth& birth() const noexcept { return definition->birth; }
 };
 
+/// A candidate the run refused, with its MatchRejectReason and the cursor it was
+/// refused at. It carries an event ordinal but no execution identity, and the
+/// request stays live unless the reason is terminal.
 struct MatchRejectedEvent {
     uint64_t ordinal = 0;
     MatchRejectReason reason = MatchRejectReason::OpeningDirection;
@@ -888,6 +1017,11 @@ struct ActivatedEvent {
     MatchCursor cursor{};
 };
 
+/// One committed execution: the definition, the cursor, the resolved price and
+/// units, the scope it acted on, the committed closed-row range, the cycle on
+/// either side, and the ticket it booked under. Delivered to on_native_applied and
+/// recorded in native_events(); the account observation that follows it shares its
+/// ordinal.
 struct ExecutionAppliedEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -948,6 +1082,9 @@ struct DeferredGroupAdjustmentEvent {
     std::optional<EventId> previous_pending_receipt;
 };
 
+/// A Reduce{OwnerOpenedUnits} was bound, at its owner's fill, to what that fill
+/// opened. It is how a bracket child's size becomes a number, and it precedes the
+/// ArmedEvent of the same drain.
 struct QuantityBoundEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -959,6 +1096,12 @@ struct QuantityBoundEvent {
     RemainingProjection remaining = RemainingProjectionUnits{};
 };
 
+/// An anchored leg was materialized, exactly once: fill + offset, then the
+/// rounding, then resolve_anchored_level, then the representability check, and the
+/// resulting level written into the leg's trigger with its anchor becoming
+/// Absolute. Every later reader — the live book, the C working rows, matching —
+/// sees that level. Under NativeArmScope::Book it also carries the BookClose the
+/// leg acquired.
 struct ArmedEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -1017,6 +1160,10 @@ struct NativeRiskEvent {
     MatchCursor cursor{};
 };
 
+/// Every alternative of one request's history, as one value. native_events()
+/// returns them as the NativeEventKind::Command rows, and
+/// strategy_native_events_v1 flattens the same set into one tagged POD. The
+/// variant's size is pinned by the frozen C++ ABI fixtures.
 using CommandEvent = std::variant<AcceptedEvent,
                                   RejectedEvent,
                                   ReplacedEvent,
@@ -1127,6 +1274,9 @@ private:
     std::size_t size_ = 0;
 };
 
+/// What acceptance needs from the run to judge a command: the point's ordinal and
+/// coordinate, the price tick the tick spellings resolve against, the quantity
+/// grid, and the live book. Built by the consumer; a host never constructs one.
 struct CommandContext {
     int64_t decision_time_ms = 0;
     std::optional<double> quantity_grid;
@@ -1291,6 +1441,9 @@ struct NoChange {
     NoChangeReason reason = NoChangeReason::NoTransition;
 };
 
+/// A working-request preparation that could not produce a representable
+/// instruction — a nonrepresentable quantity, most often. Reported as a settlement
+/// failure, which fails the run: it is a contract breach, not a refused candidate.
 struct PreparationError {
     CoreFailure code = CoreFailure::Invariant;
     EventId cause;

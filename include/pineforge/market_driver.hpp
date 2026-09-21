@@ -16,6 +16,13 @@ inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v5";
 inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v7";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
+/// Where a driver point's price came from. Confirmed is a confirmed input bar's
+/// own label; ObservedPrint a realtime tick; the two ModeledOHLC values and
+/// AfterCalculationClose are the modeled waypoints of a confirmed bar's path;
+/// CarriedOpen is a quiet tradable interval's carried last price; PartialFinalized
+/// a partially finalized observed slot; Calculation the script calculation point
+/// itself; CurrentExecution a synchronous execute_current. A host reads it off
+/// NativeDecisionContext::coordinate and never has to infer it.
 enum class NativePriceProvenance : std::uint8_t {
     Confirmed = 0,
     ObservedPrint = 1,
@@ -28,6 +35,10 @@ enum class NativePriceProvenance : std::uint8_t {
     CurrentExecution = 8,
 };
 
+/// Which leg of a modeled OHLC walk a point sits on. None is a discrete point (a
+/// calculation, an observed print); Open, High, Low and Close are the waypoints,
+/// in the order NativeRunSpec::path_order resolves. A margin check point's
+/// cursor.point.path_phase is the waypoint the check was taken at.
 enum class NativePathPhase : std::uint8_t {
     None = 0,
     Open = 1,
@@ -36,6 +47,13 @@ enum class NativePathPhase : std::uint8_t {
     Close = 4,
 };
 
+/// How a script interval or a higher-timeframe bucket was closed. Confirmed means
+/// its own last contributing bar closed it; LazyComplete that the NEXT interval's
+/// first input did — a session-clipped bar, or a hole over the last slot;
+/// SessionShortened that the session close clipped it; PartialFinalized that a
+/// stream end finalized a forming observed slot. Delivered on
+/// NativeTimeframeBarContext::completion for a bucket and on the coordinate for a
+/// calculation.
 enum class NativeCompletionKind : std::uint8_t {
     Confirmed = 0,
     LazyComplete = 1,
@@ -43,6 +61,13 @@ enum class NativeCompletionKind : std::uint8_t {
     PartialFinalized = 3,
 };
 
+/// Everything the kernel knows about WHERE a point is, as one owning value: its
+/// event ordinal, the interval index, the nominal and scheduled-eligible opens,
+/// the last traded close, the next period and next input opens, the effective time
+/// the account converts and hashes at, the source price time, and the three
+/// classifications above. A host reads it through NativeDecisionContext; mutating
+/// a copy cannot move the consumer's floor, matching time or after-calculation
+/// coordinate.
 struct NativeCoordinate {
     uint64_t ordinal = 0;
     int interval_index = 0;
@@ -58,6 +83,11 @@ struct NativeCoordinate {
     NativeCompletionKind completion = NativeCompletionKind::Confirmed;
 };
 
+/// One point the driver produced: its coordinate, the raw price before slippage or
+/// any grid, the provider's sequence for an observed print (nullopt otherwise),
+/// and whether the point is a matching point, an excursion sample, or both.
+/// Recorded in the event history as the NativeEventKind::Driver rows
+/// native_events() returns.
 struct NativeDriverPoint {
     NativeCoordinate coordinate;
     double raw_price = 0.0;
@@ -101,12 +131,27 @@ struct NativeDecisionContext {
 class INativeDriverSink {
 public:
     virtual ~INativeDriverSink() = default;
+    /// The consumer's ordinal allocator, called by the pump for every event it
+    /// produces. Implemented by the kernel's own consumer; a host never implements
+    /// this interface.
     virtual uint64_t allocate_native_ordinal() = 0;
+    /// A point at which live requests may match. The consumer runs the matching pass
+    /// here; excursion-only points do not reach it.
     virtual void on_native_matching_point(const NativeDriverPoint& point) = 0;
+    /// A point that updates open lots' favorable and adverse excursions without
+    /// offering a match.
     virtual void on_native_excursion(const NativeDriverPoint& point) = 0;
+    /// The script bar's calculation point, with the complete script bar and its
+    /// coordinate. The consumer turns it into the host's on_native_bar /
+    /// on_native_recalculate call.
     virtual void on_native_calculation(const Bar& script_bar, const NativeCoordinate& coordinate) = 0;
 };
 
+/// Whether a bar can be admitted at all: finite positive OHLC with
+/// high >= max(open, close) and low <= min(open, close), and a finite nonnegative
+/// volume. A run's NativeFeedTolerance may relax the positivity and the volume
+/// half; this is the strict predicate those bits are measured against. It is also
+/// what refuses a bar of an auxiliary feed (InvalidAuxiliaryFeedBar).
 bool native_bar_structurally_valid(const Bar& bar) noexcept;
 
 // Confirmed-bar labels admitted by v9: the immutable nominal slot origin
@@ -147,6 +192,13 @@ enum class NativeInputPolicy : std::uint8_t {
     StreamWarmup = 1,
 };
 
+/// Why a bar array was refused before the run touched anything. NullArray and
+/// InvalidCount are the argument shape; StructuralInvalid is
+/// native_bar_structurally_valid; Unaligned and OffGridLabel are the slot label;
+/// NotStrictlyIncreasing and OverlappingSlot the ordering; InSessionGap a missing
+/// in-session slot, which only a stream warmup refuses; CalendarFailure a calendar
+/// the spec's own timezone and session could not resolve. A preflight refusal
+/// leaves the host Ready or Running and does NOT raise the decision floor.
 enum class NativeInputPreflightError : std::uint16_t {
     None = 0,
     NullArray = 1,
@@ -161,6 +213,9 @@ enum class NativeInputPreflightError : std::uint16_t {
     TimestampDeltaOverflow = 10,
 };
 
+/// What preflight_native_inputs answers: the error and the first offending bar's
+/// index, or -1 when the refusal is not about one bar. ok() and the explicit
+/// operator bool are the success reads.
 struct NativeInputPreflightResult {
     NativeInputPreflightError error = NativeInputPreflightError::None;
     int index = -1;  // first offending bar, or -1 when not index-specific
@@ -171,6 +226,12 @@ struct NativeInputPreflightResult {
     constexpr explicit operator bool() const noexcept { return ok(); }
 };
 
+/// Judge a whole bar array against a run spec before any of it is consumed, under
+/// NativeInputPolicy::Batch (sparse input is admitted; missing in-session slots
+/// are legal) or ::StreamWarmup (every provided slot must be a complete confirmed
+/// interval and an in-session gap is refused). Every public begin runs it first,
+/// which is why an invalid array leaves the lifecycle where it was instead of
+/// failing the host.
 NativeInputPreflightResult preflight_native_inputs(
         const NativeRunSpec& spec,
         const Bar* bars,

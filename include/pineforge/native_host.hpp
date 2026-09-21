@@ -19,6 +19,12 @@
 namespace pineforge {
 inline namespace engine_script_run_v18 {
 
+/// Where a host stands. Read it off native_state().kind; nothing else reports it.
+/// Unconfigured is a fresh host, Ready a staged spec, Running a consumed begin
+/// (with NativeRunPhase saying which driving), Completed a finished run whose
+/// lots and live requests stay visible but not actionable, and Failed a durable
+/// first failure: discard the host, replay on a fresh instance, never reconfigure
+/// in place. Pinned by tests/test_native_host_repairs.cpp.
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
     Ready = 1,
@@ -27,17 +33,33 @@ enum class NativeLifecycleKind : std::uint8_t {
     Failed = 4,
 };
 
+/// Which driving is Running: a batch run(), a stream's internal warmup, or its
+/// realtime leg. Folded into native_continuation_hash() on purpose — a consumer
+/// mid-warmup and one mid-realtime are not interchangeable continuations — which
+/// is why a batch and a stream over identical bars record different per-bar
+/// broker-state hashes while booking identical trades.
 enum class NativeRunPhase : std::uint8_t {
     Batch = 0,
     Warmup = 1,
     Realtime = 2,
 };
 
+/// How a Completed run ended: a batch reached the last bar, or a stream was
+/// ended. Reporting only; the book, the report and every hash are what the run
+/// left.
 enum class NativeCompletion : std::uint8_t {
     BatchComplete = 0,
     StreamEnded = 1,
 };
 
+/// The durable first failure of a run, in NativeFailure::code. InvalidSpecification
+/// is a refused spec at configure, Contract a lifecycle misuse (a second
+/// configure, a run number at or under the high water), Preflight a bar array the
+/// driver refused, UnsupportedSource a source-only setter or command on a bare
+/// host, CallbackException a host callback that threw or a C callback that
+/// returned non-zero, and Aborted a cooperative abort. The rest are internal
+/// exhaustion states with no rollback promise. Set once and latched: later run /
+/// stream_* / configure_native calls refuse.
 enum class NativeFailureCode : std::uint16_t {
     None = 0,
     InvalidSpecification = 1,
@@ -54,6 +76,9 @@ enum class NativeFailureCode : std::uint16_t {
     Unexpected = 12,
 };
 
+/// Which operation was in flight when the failure latched — the second half of
+/// "what went wrong", beside NativeFailureCode. Presentation only; the kernel
+/// takes no decision on it.
 enum class NativeFailureOperation : std::uint16_t {
     None = 0,
     Configure = 1,
@@ -80,19 +105,30 @@ enum class NativeFailureContextKind : std::uint8_t {
     CauseRecipientCursor = 7,
 };
 
+/// The event ordinal a failure was caused by, 0 when absent. Populated only when
+/// native_failure_has_cause() is true for the context's kind.
 struct NativeInRunCause {
     std::uint64_t ordinal = 0;  // 0 = absent
 };
 
+/// The request incarnation a failure was addressed to, 0 when absent. Populated
+/// only when native_failure_has_recipient() is true.
 struct NativeInRunRecipient {
     std::uint64_t incarnation = 0;  // 0 = absent
 };
 
+/// Where on the modeled path a failure happened: the driver point's coordinate and
+/// its interpolation position t. Populated only when native_failure_has_cursor()
+/// is true.
 struct NativeInRunCursor {
     NativeCoordinate point{};
     double t = 0.0;
 };
 
+/// The three in-run facts a failure may carry, tagged by kind. Copy and move are
+/// allocation-free — this is what a failed host reports from inside a callback —
+/// and the predicates below say which alternatives are populated rather than
+/// asking a caller to decode the bit-union itself.
 struct NativeFailureContext {
     NativeFailureContextKind kind = NativeFailureContextKind::None;
     NativeInRunCause cause{};
@@ -100,34 +136,46 @@ struct NativeFailureContext {
     NativeInRunCursor cursor{};
 };
 
+/// The bit-union under NativeFailureContextKind: Cause=1, Recipient=2, Cursor=4.
+/// Prefer the three predicates below to testing these bits by hand.
 constexpr std::uint8_t native_failure_context_bits(NativeFailureContextKind kind) noexcept {
     return static_cast<std::uint8_t>(kind);
 }
+/// Whether a context of this kind populates its NativeInRunCause.
 constexpr bool native_failure_has_cause(NativeFailureContextKind kind) noexcept {
     return (native_failure_context_bits(kind) & 1u) != 0;
 }
+/// Whether a context of this kind populates its NativeInRunRecipient.
 constexpr bool native_failure_has_recipient(NativeFailureContextKind kind) noexcept {
     return (native_failure_context_bits(kind) & 2u) != 0;
 }
+/// Whether a context of this kind populates its NativeInRunCursor.
 constexpr bool native_failure_has_cursor(NativeFailureContextKind kind) noexcept {
     return (native_failure_context_bits(kind) & 4u) != 0;
 }
+/// Whether this context populates its NativeInRunCause. The overload a reader of
+/// native_state().failure.context wants.
 constexpr bool native_failure_has_cause(const NativeFailureContext& context) noexcept {
     return native_failure_has_cause(context.kind);
 }
+/// Whether this context populates its NativeInRunRecipient.
 constexpr bool native_failure_has_recipient(const NativeFailureContext& context) noexcept {
     return native_failure_has_recipient(context.kind);
 }
+/// Whether this context populates its NativeInRunCursor.
 constexpr bool native_failure_has_cursor(const NativeFailureContext& context) noexcept {
     return native_failure_has_cursor(context.kind);
 }
 
+/// The kind that says exactly these three alternatives are populated.
 constexpr NativeFailureContextKind native_failure_context_kind(
         bool cause, bool recipient, bool cursor) noexcept {
     return static_cast<NativeFailureContextKind>(
             (cause ? 1u : 0u) | (recipient ? 2u : 0u) | (cursor ? 4u : 0u));
 }
 
+/// A context carrying one causing event ordinal. A zero ordinal is "absent" and
+/// yields the None kind rather than a Cause with nothing in it.
 inline NativeFailureContext native_failure_cause(std::uint64_t ordinal) noexcept {
     NativeFailureContext context;
     if (ordinal == 0) return context;
@@ -135,6 +183,8 @@ inline NativeFailureContext native_failure_cause(std::uint64_t ordinal) noexcept
     context.cause.ordinal = ordinal;
     return context;
 }
+/// A context carrying one addressed request incarnation. A zero incarnation is
+/// "absent", as above.
 inline NativeFailureContext native_failure_recipient(std::uint64_t incarnation) noexcept {
     NativeFailureContext context;
     if (incarnation == 0) return context;
@@ -142,6 +192,8 @@ inline NativeFailureContext native_failure_recipient(std::uint64_t incarnation) 
     context.recipient.incarnation = incarnation;
     return context;
 }
+/// A context carrying one path cursor. A cursor is always meaningful, so there is
+/// no absent spelling.
 inline NativeFailureContext native_failure_cursor(NativeCoordinate point, double t = 0.0) noexcept {
     NativeFailureContext context;
     context.kind = NativeFailureContextKind::Cursor;
@@ -178,6 +230,10 @@ inline NativeFailureContext native_failure_context_in_run(
     return context;
 }
 
+/// The durable record native_state().failure answers: the code, the operation it
+/// happened in, an optional event ordinal and discriminator, and the
+/// allocation-free context. last_error() is presentation text beside it and is
+/// never the authority. Copy and move do not allocate.
 struct NativeFailure {
     NativeFailureCode code = NativeFailureCode::None;
     NativeFailureOperation operation = NativeFailureOperation::None;
@@ -186,15 +242,23 @@ struct NativeFailure {
     NativeFailureContext context{};
 };
 
+/// The NativeLifecycle alternatives, one per NativeLifecycleKind. Ready, Running
+/// and Completed own a copy of the staged spec; Failed owns it only when configure
+/// got that far. NativeStateView is the flattened read a host uses; this variant is
+/// the consumer's own storage.
 struct NativeUnconfigured {};
 struct NativeReady { NativeRunSpec spec; };
 struct NativeRunning { NativeRunSpec spec; NativeRunPhase phase = NativeRunPhase::Batch; };
 struct NativeCompleted { NativeRunSpec spec; NativeCompletion completion = NativeCompletion::BatchComplete; };
 struct NativeFailed { std::optional<NativeRunSpec> spec; NativeFailure failure; };
 
+/// The lifecycle as one value. Exhaustive over the five alternatives above.
 using NativeLifecycle = std::variant<NativeUnconfigured, NativeReady, NativeRunning,
                                      NativeCompleted, NativeFailed>;
 
+/// The RunIdentity the failed spec carried, or nullptr when configure failed
+/// before staging one. This is how a caller names the run a failure belongs to
+/// without the failure carrying a second identity string of its own.
 inline const native_order::RunIdentity* native_failed_run_identity(
         const NativeFailed& failed) noexcept {
     return failed.spec ? &failed.spec->identity : nullptr;
@@ -210,6 +274,11 @@ static_assert(std::is_nothrow_copy_assignable_v<NativeFailure>);
 static_assert(std::is_nothrow_move_constructible_v<NativeFailed>);
 static_assert(std::is_nothrow_move_assignable_v<NativeFailed>);
 
+/// The flattened run state native_state() answers: the lifecycle kind, a borrowed
+/// pointer to the staged spec (nullptr when Unconfigured), the phase, how a
+/// Completed run ended, the durable failure, the consumed run-number high water
+/// and the monotonic decision floor. The spec pointer is valid until the next
+/// configure or begin. C spelling: strategy_native_state_v1.
 struct NativeStateView {
     NativeLifecycleKind kind = NativeLifecycleKind::Unconfigured;
     const NativeRunSpec* spec = nullptr;
@@ -220,6 +289,10 @@ struct NativeStateView {
     int64_t decision_floor_ms = 0;
 };
 
+/// The book as one aggregate: signed units, the volume-weighted average entry
+/// price and the number of open physical lots. physical_position() answers it;
+/// native_open_lots(mark) is the same book lot by lot. C spelling:
+/// strategy_native_position_v1.
 struct NativePhysicalPosition {
     double signed_units = 0.0;
     double average_price = 0.0;
@@ -270,6 +343,11 @@ struct NativeOpenLot {
     double adverse_excursion = 0.0;
 };
 
+/// The account row that follows an applied execution in the event history: the
+/// shared ordinal, the effective time, the marked equity, the realized balance and
+/// the signed book after it. One per applied execution, so an applied event and
+/// its observation share an ordinal — advance an event cursor by the last returned
+/// ordinal, never mid-group.
 struct NativeAccountObservation {
     uint64_t ordinal = 0;
     int64_t effective_time_ms = 0;
@@ -278,12 +356,17 @@ struct NativeAccountObservation {
     double signed_units = 0.0;
 };
 
+/// Which of NativeMarketEvent's three alternatives is populated.
 enum class NativeEventKind : std::uint8_t {
     Command = 0,
     Driver = 1,
     Account = 2,
 };
 
+/// One owning row of native_events(after_ordinal): a command event, a driver point
+/// or an account observation, tagged by kind. Later commands and the next run's
+/// reset do not invalidate a row already returned. C spelling:
+/// strategy_native_events_v1, which flattens the same rows into one tagged POD.
 struct NativeMarketEvent {
     NativeEventKind kind = NativeEventKind::Command;
     uint64_t ordinal = 0;
@@ -292,19 +375,33 @@ struct NativeMarketEvent {
     std::optional<NativeAccountObservation> account;
 };
 
+/// Whether a setup call applied its value or refused it. Failed leaves engine
+/// storage untouched.
 enum class NativeSetupStatus : std::uint8_t { Applied = 0, Failed = 1 };
 
+/// What configure_native answers: the status and, on refusal, the first error
+/// field validate_native_run_spec found. A refusal changes nothing — there is no
+/// partial apply.
 struct NativeSetupResult {
     NativeSetupStatus status = NativeSetupStatus::Failed;
     NativeRunSpecValidation validation{};
 };
 
+/// What configure_native_fx_curve answers: the status and, on refusal, the curve
+/// validation with the index of the first bad point. A refusal leaves the staged
+/// curve as it was.
 struct NativeFxCurveSetupResult {
     NativeSetupStatus status = NativeSetupStatus::Failed;
     NativeFxCurveValidation validation{};
 };
 
+/// Which price a current execution settles at: the active callback's quote as
+/// presented, or that quote on the instrument's nearest tick. Configured
+/// directional slippage applies once either way.
 enum class NativeCurrentPriceRule : std::uint8_t { AsPresented = 0, NearestTick = 1 };
+/// Where a price came from: the callback's own market decision point, or the
+/// execution it is anchored to. A current execution inherits its cause's quote, so
+/// a chain does not compound slippage.
 enum class NativeCurrentQuoteKind : std::uint8_t { MarketDecision = 0, ExecutionAnchor = 1 };
 
 /// Read-only owning-value facts for one candidate. The host is already the
@@ -496,6 +593,10 @@ struct NativeRiskState {
     double day_open_equity = 0.0;
 };
 
+/// What current_execution_point() answers inside a callback: the point's decision
+/// context, its price, which quote that price is, and the ordinal the quote came
+/// from. nullopt outside a decision point. C spelling: pf_native_decision_v1's
+/// price and quote_kind, on every callback.
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
     double price = 0.0;
@@ -531,12 +632,21 @@ struct NativeWorkingRequest {
 /// host that names its orders puts its own id in.
 enum class NativeRequestField : std::uint8_t { Comment = 0, Label = 1 };
 
+/// Why a current-execution command cannot be consumed here. Every value is a fact
+/// about the command or the phase, never a host verdict: the host's own veto is
+/// validate_execution_precommit. strategy_native_execute_current_v1 answers the
+/// same verdicts in C.
 enum class NativeCurrentRefusal : std::uint8_t {
     NoExecutionContext = 0, Reentrant = 1, InvalidHandle = 2, NotWorking = 3,
     NotAcceptedInCallback = 4, UnsupportedRequest = 5, UnreadyOwner = 6,
     InvalidSelection = 7, ConfigurationMismatch = 8,
 };
 
+/// A synchronous execution of one request accepted or replaced in this very
+/// callback: a target handle and a price rule, and nothing else. Membership,
+/// quantity and ownership come from the request; this command cannot supply
+/// another selection, a saved cursor, a price, a ticket or a prepared financial
+/// plan. Pinned by tests/test_native_current_execution.cpp.
 struct NativeCurrentExecution {
     native_order::RequestHandle target;
     NativeCurrentPriceRule price_rule = NativeCurrentPriceRule::AsPresented;
@@ -554,6 +664,9 @@ struct NativeCurrentExecutionPreview {
     std::optional<native_order::CancelReason> terms_cancellation;
 };
 
+/// What execute_current answers: a refusal, or the applied outcome. Execution
+/// revalidates, so a preview obtained earlier is an observation and never an
+/// apply token.
 using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
     native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
     native_order::MatchRejectedEvent, native_order::CancelledEvent>;
@@ -655,6 +768,13 @@ enum class NativeCalculationReason : std::uint8_t {
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
 #define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1
+/// The public native host: an abstract subclass of BacktestEngine with no
+/// PineScript on it. Subclass it, override on_native_bar (the only pure-virtual),
+/// configure_native(spec), then run() or the stream_* family. Noncopyable and
+/// nonmovable: the constructor binds the native consumer, and there is no
+/// attach/replace switch. Do not override the inherited on_bar (it is final) and
+/// do not write protected engine fields. The whole surface, feature by feature, is
+/// docs/pages/native-engine.md; a worked host is examples/native/hello_kernel.cpp.
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -664,9 +784,24 @@ public:
     NativeStrategyHost& operator=(NativeStrategyHost&&) = delete;
     ~NativeStrategyHost() override;
 
+    /// The engine's own bar entry, taken over by the native consumer and sealed. A
+    /// native host calculates in on_native_bar; this override is what makes overriding
+    /// on_bar a compile error rather than a silently dead callback.
     void on_bar(const Bar& bar) final;
 
+    /// Offered once per begin, before the run starts, with the begin's own arguments —
+    /// the bars, the timeframe literals, the magnifier settings, and the rich
+    /// overload's InputsMap / SymInfo / opaque overrides. A provider that reads them
+    /// must copy what it needs before returning: the views expire with the call. The
+    /// default does nothing, which is every bare host. No C spelling: a C run is
+    /// declared up front with strategy_configure_native_ext_v1.
     virtual void prepare_native_begin(const NativeBeginArgs&) {}
+    /// Offered once per successful begin, after the reset and before any bar. It is
+    /// the one place declare_timeframe_subscriptions and declare_auxiliary_feed are
+    /// legal, and the kernel registers the declared series only after it returns — so
+    /// a host that registers evaluators of its own here keeps them. native_series_bar
+    /// answers nullopt for every index inside it, because nothing is registered yet.
+    /// C spelling: pf_native_callbacks_v1::on_run_begin.
     virtual void on_native_run_begin() {}
     /// Called once for every accepted confirmed input bar, before that bar is
     /// aggregated or matched. It has no current execution point.
@@ -726,14 +861,32 @@ public:
         (void)ctx;
     }
 
+    /// The calculate-on-fill hook: offered once per applied execution, FIFO, after the
+    /// account record and the group/owner/dependency drains. Commands are legal here,
+    /// and a request born here is eligible on the remaining path suffix of a
+    /// continuous segment. Event values stay valid for the call. Throwing latches
+    /// CallbackException. C spelling: pf_native_callbacks_v1::on_applied.
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
                                    const NativeDecisionContext&) {}
 
+    /// The fill-terms hook, consulted at every matching candidate. Return a resolved
+    /// price, and units for an unresolved HostSized request; the default is the
+    /// identity price with no units, which is what every bare host wants. Answering no
+    /// units for a HostSized candidate is MatchRejectReason::TermsUnresolved. It does
+    /// not supply a second matcher, book or cash path. C spelling: the units half
+    /// only, pf_native_callbacks_v1::on_close_units.
     virtual native_order::ExecutionTerms resolve_execution_terms(
             const NativeExecutionTermsFacts& facts) const {
         return {facts.default_resolved_price, std::nullopt,
                 native_order::OpeningShape::Transact};
     }
+    /// The last gate before a physical effect, offered once per Applied-ready attempt
+    /// and never during inspect_current_execution. Proceed takes the kernel's own
+    /// path, Refuse records a nonfinancial HostPrecommit rejection, and
+    /// AdmitWithHostMargin hands that one opening margin check to the host. The
+    /// default proceeds. No C spelling: its view is a deep C++ aggregate; a C host
+    /// gates an opening with PF_NATIVE_INTENT_SIZED's placement-time admission or
+    /// with on_margin_requirement.
     virtual NativePrecommitVerdict validate_execution_precommit(
             const NativePrecommitView&) const {
         return NativePrecommitVerdict::Admit;
@@ -798,6 +951,12 @@ public:
     /// closed_lot_excursion(). Facts in, magnitudes out; nothing about the
     /// host's price model crosses the boundary in either direction.
     virtual bool owns_lot_excursions() const noexcept { return false; }
+    /// The per-lot excursion a host owns, consulted for every closing row once
+    /// owns_lot_excursions() answers true. Returning the declined value gives that row
+    /// the kernel's own zero magnitudes, because nothing was sampled for it — the
+    /// consumer stops sampling at matched trigger prices for the whole run as soon as
+    /// ownership is declared. C spelling: pf_native_callbacks_v1::on_lot_excursion,
+    /// where installing the hook IS declaring ownership.
     virtual ClosedLotExcursion closed_lot_excursion(
             const ClosedLotExcursionFacts&) const {
         return {};
@@ -817,12 +976,32 @@ public:
     /// suppressed because a point had already spent its
     /// max_recalculations_per_point budget. Observation only.
     std::uint64_t native_recalculation_count() const;
+    /// How many recalculations max_recalculations_per_point dropped at their matching
+    /// point. The executions themselves were still applied and still delivered to
+    /// on_native_applied; only the calculation they would have driven was skipped. C
+    /// spelling: strategy_native_recalculations_v1, beside the driven count.
     std::uint64_t native_recalculations_skipped() const;
 
+    /// The active callback's quote and calendar-derived decision context, as an owning
+    /// value. nullopt outside a decision point. C spelling:
+    /// pf_native_decision_v1::price / ::quote_kind, on every callback.
     std::optional<NativeCurrentPointView> current_execution_point() const;
+    /// Where one live trail's own trigger has reached: activated, the running best,
+    /// the current level and the ordinal it activated at. nullopt when the handle is
+    /// not a live trail. C spelling: strategy_native_trail_state_v1, with
+    /// PF_NATIVE_ABSENT for the empty. Pinned by tests/test_native_trail_state_l5k.cpp.
     std::optional<NativeTrailState> trail_state(
         const native_order::RequestHandle& target) const;
+    /// A read-only preview of a current execution: the settlement readiness, any typed
+    /// refusal or terms outcome, and the ordered closed-row P&L for an Applied-ready
+    /// command. It is never an apply token — execute_current revalidates, and editing
+    /// the preview cannot authorize or alter a fill. No C spelling:
+    /// strategy_native_execute_current_v1 answers the same verdicts.
     NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
+    /// Consume, synchronously, a request accepted or replaced in this very callback.
+    /// Answers a refusal or the applied outcome; applied effects and relationship
+    /// drains are visible before the call returns. Only the named target is consumed.
+    /// C spelling: strategy_native_execute_current_v1.
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
     /// The latest completed bucket delivered for a declared subscription, or
@@ -869,19 +1048,59 @@ public:
     /// every reentrant stream input is.
     bool append_auxiliary_bars(const Bar* bars, std::size_t n);
 
+    /// The only setup call. Copies the candidate spec, normalizes it and stages it
+    /// atomically: Unconfigured or a Completed run with a larger run number becomes
+    /// Ready, and a refusal is Failed with no partial apply. Calling it again while
+    /// Ready is a Contract failure — use a new host to change unconsumed setup. C
+    /// spelling: strategy_configure_native_v1 / strategy_configure_native_ext_v1.
     NativeSetupResult configure_native(const NativeRunSpec& spec);
+    /// Stage the run's immutable FX epoch, legal only while Ready. Parallel
+    /// timestamp/rate arrays of equal length, strictly increasing timestamps, finite
+    /// positive rates; an empty curve clears it and restores the scalar account_fx
+    /// fallback. Refused with WrongPhase once the run is Running. C spelling:
+    /// strategy_configure_native_fx_curve_v1.
     NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);
+    /// The whole run state as one owning read. The only observation of the lifecycle
+    /// and of the durable failure; last_error() is presentation text beside it. C
+    /// spelling: strategy_native_state_v1.
     NativeStateView native_state() const;
 
+    /// Accept one complete request. Answers Accepted with a timeline ordinal and a
+    /// RequestHandle, or Rejected with a rejection ordinal and a reason. Acceptance is
+    /// not a fill: no lot and no fee moves here. Legal from a native callback in
+    /// Batch/Warmup/Realtime, or between realtime inputs on the same thread. C
+    /// spelling: strategy_native_submit_v1.
     native_order::SubmitResult submit(const native_order::Request& request);
+    /// Replace one live request: validate first, then retire that incarnation and
+    /// birth a successor with a new handle, a new priority and a predecessor link. A
+    /// ReplaceRejected leaves the target live; a same-run absent, replaced or terminal
+    /// handle is NotWorking, a foreign or malformed one InvalidHandle. Every outcome
+    /// is an event, and no outcome moves a lot. C spelling:
+    /// strategy_native_replace_v1.
     native_order::ReplaceResult replace(const native_order::RequestHandle& target,
                                         const native_order::Request& request);
+    /// The deliberately narrow market-default convenience: the same acceptance path as
+    /// submit, but it REFUSES a nondefault trigger, capacity, owner or group rather
+    /// than dropping it. No C spelling, by design — the same request is
+    /// strategy_native_submit_v1 with PF_NATIVE_TRIGGER_MARKET and a zero-filled
+    /// struct.
     native_order::SubmitResult submit_market(const native_order::Request& request);
+    /// The same market-default convenience for a replace; see submit_market.
     native_order::ReplaceResult replace_market(const native_order::RequestHandle& target,
                                                const native_order::Request& request);
+    /// Replace with options. ReplaceOptions{retain_trigger_state = true} carries the
+    /// predecessor's live trigger state — a tracking trail's best, an already active
+    /// stop — into the successor instead of restarting it. Predecessor and successor
+    /// must hold the same trigger alternative, and a retained best must still produce
+    /// a representable level; otherwise the replacement is rejected and the
+    /// predecessor stays live.
     native_order::ReplaceResult replace(const native_order::RequestHandle& target,
                                         const native_order::Request& request,
                                         native_order::ReplaceOptions options);
+    /// Cancel one live request by handle. A live request becomes Cancelled; a same-run
+    /// absent, replaced or already terminal handle is NotWorking; a foreign or
+    /// malformed handle is InvalidHandle. Every outcome is an event. C spelling:
+    /// strategy_native_cancel_v1.
     native_order::CancelResult cancel(const native_order::RequestHandle& target);
     /// Working-book snapshot and bulk cancellation. cancel_all returns how
     /// many requests left the book (one CancelledEvent each, dependants
@@ -897,19 +1116,43 @@ public:
     /// without any bookkeeping to keep in step. Text that matches nothing is
     /// not a command.
     std::vector<NativeWorkingRequest> native_working_requests() const;
+    /// Withdraw every live request, dependants of a cancelled owner included, and
+    /// answer how many left the book. One CancelledEvent per request. C spelling:
+    /// strategy_native_cancel_all_v1.
     std::size_t cancel_all();
+    /// Withdraw exactly the live requests carrying this comment, and answer how many
+    /// of those left the book. An unknown comment is not a command. The comment is
+    /// free host text the kernel only copies and compares, and it is not indexed: this
+    /// walks the live book once, exactly as cancel_all does.
     std::size_t cancel_where(std::string_view comment);
+    /// The same predicate over either identity text. NativeRequestField::Label
+    /// addresses requests by Request::label — the one call that withdraws every live
+    /// request a host issued under one of its own order ids. "" is the text a request
+    /// carrying no such field matches. C spelling:
+    /// strategy_native_cancel_where_v1(host, text, PF_NATIVE_FIELD_LABEL).
     std::size_t cancel_where(std::string_view text, NativeRequestField field);
+    /// Open a roster a later close can bind to. The handle is what a
+    /// native_order::BindCohort owner names. C spelling:
+    /// strategy_native_cohort_open_v1.
     native_order::CohortHandle cohort_open();
+    /// Enroll one accepted opening's handle in a roster. C spelling:
+    /// strategy_native_cohort_add_v1.
     void cohort_add(native_order::CohortHandle cohort, native_order::RequestHandle origin);
+    /// Take one opening back off a roster. C spelling:
+    /// strategy_native_cohort_remove_v1.
     void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);
 
+    /// The book as one aggregate, copied out. C spelling:
+    /// strategy_native_position_v1.
     NativePhysicalPosition physical_position() const;
     /// The book lot by lot, oldest first, marked at `mark`: one NativeOpenLot
     /// per physical lot (physical_position().lot_count rows), copied at query
     /// time. Legal wherever physical_position() is; observation only, it
     /// moves no fill, no hash and no row.
     std::vector<NativeOpenLot> native_open_lots(double mark) const;
+    /// The account's equity marked at this price: the realized balance plus every open
+    /// lot's own fee-net term, which is exactly what native_open_lots(mark) sums. It
+    /// moves nothing. C spelling: strategy_native_marked_equity_v1.
     double native_marked_equity(double mark) const;
     /// The units a kernel-sized intent resolves to under this run's spec at a
     /// sizing price, a marked equity and an account FX rate -- as a pure query.
@@ -936,8 +1179,23 @@ public:
     /// Owning snapshots copied at query time. Later commands/reset do not
     /// invalidate already returned values.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
+    /// The run's monotonic decision floor in epoch milliseconds — the same value
+    /// NativeStateView::decision_floor_ms carries. Every request's birth is compared
+    /// against this floor, not against a later lowered clock, and a refused preflight
+    /// does not raise it. C spelling: pf_native_state_v1::decision_floor_ms.
     int64_t native_decision_floor() const;
+    /// The highest run_number this host has consumed. It lives OUTSIDE per-run reset,
+    /// so a later run on the same host needs a strictly larger number; a fresh host
+    /// reads 0 and may therefore replay the same logical run. C spelling:
+    /// pf_native_state_v1::consumed_high_water.
     uint64_t native_consumed_high_water() const;
+    /// The consumer's continuation identity: what a stream resumes against. It folds
+    /// the run's resolved timezone identity, whose zone file paths are absolute paths
+    /// on the machine that ran it, so the same spec over the same bars hashes
+    /// differently on two hosts even for "UTC". Compare it between runs in ONE
+    /// process; never pin it as a constant. For a portable constant use
+    /// native_run_spec_digest(spec). C spelling:
+    /// strategy_native_continuation_hash_v1.
     uint64_t native_continuation_hash() const;
 
     friend class NativeExecutionConsumer;

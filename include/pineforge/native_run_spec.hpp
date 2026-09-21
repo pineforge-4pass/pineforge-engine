@@ -22,6 +22,14 @@ enum class NativeFeeKind : std::uint32_t {
     CashPerExecution = 2,
 };
 
+/// When a request born at a script calculation may first match.
+/// NextEligiblePoint (the default) waits for a later eligible matching point — the
+/// next modeled opening, an observed print, or a carried open — and never fills on
+/// the bar's already presented open/high/low/close. AfterCalculation additionally
+/// offers a modeled close point after that calculation, still obeying the birth
+/// ordinal and floor; it is not a replay of observed prints. The Pine adapter
+/// projects process_orders_on_close onto AfterCalculation. Pinned by
+/// tests/test_native_resting_driver_contract.cpp.
 enum class NativeCloseExecution : std::uint32_t {
     NextEligiblePoint = 0,
     AfterCalculation = 1,
@@ -55,6 +63,11 @@ enum class NativeReportPolicy : std::uint32_t {
     KernelRecordedAtHostMarks = 2,
 };
 
+/// Which opening directions the run admits at all. Both is the default and the
+/// whole established surface; a refused opening is
+/// MatchRejectReason::OpeningDirection, and it rejects the ENTIRE transaction,
+/// including a proposed close remainder. Closing-only reductions stay legal under
+/// None. Pinned by tests/test_native_resting_matching_contract.cpp.
 enum class NativeOpenDirections : std::uint32_t {
     None = 0,
     Long = 1,
@@ -342,6 +355,9 @@ enum class NativeFeedTolerance : std::uint32_t {
 /// hash; kept so existing hosts and the source adapter compile unchanged.
 using NativeLegacyTolerance = NativeFeedTolerance;
 
+/// Whether one NativeFeedTolerance bit is set in a run's mask. Prefer it to
+/// testing the bits by hand; `enabled` is the run's own value and `requested` the
+/// single bit being asked about.
 constexpr bool native_feed_tolerance_enabled(
         NativeFeedTolerance enabled, NativeFeedTolerance requested) noexcept {
     return (static_cast<std::uint32_t>(enabled)
@@ -359,6 +375,8 @@ constexpr bool native_legacy_tolerance_enabled(
 /// begin call returns, whereas native matching may need the lower bars later
 /// while sealing an aggregated script bar.
 struct IntrabarPath {
+    /// No intrabar path: the confirmed OHLC waypoints are the whole modeled walk, and
+    /// on_native_sub_bar never fires. The default.
     struct none {};
     enum class SampleEligibility : std::uint32_t {
         /// Native hosts retain continuous matching between generated samples
@@ -366,6 +384,11 @@ struct IntrabarPath {
         ContinuousSegments = 0,
         DistributionSamples = 1,
     };
+    /// A RETAINED finer feed: the host's own lower-timeframe bars, the literal they
+    /// are at, and the sampling policy over them. It is the only alternative that has
+    /// sub-bars of its own, so it is what makes on_native_sub_bar reachable, and it is
+    /// what gives the margin model a delivered sample to re-evaluate at instead of a
+    /// whole-bar waypoint. C spelling: PF_NATIVE_INTRABAR_LOWER_TF.
     struct lower_tf {
         std::vector<Bar> bars;
         std::string tf;
@@ -387,16 +410,24 @@ struct IntrabarPath {
         int volume_weighted_min_samples = 2;
         int volume_weighted_max_samples = 64;
     };
+    /// The three alternatives as one value. Exhaustive; use the accessors below rather
+    /// than std::get_if at call sites.
     using value_type = std::variant<none, lower_tf, synthesized>;
 
     value_type value = none{};
 
+    /// Whether this run declares no intrabar path at all.
     bool is_none() const noexcept { return std::holds_alternative<none>(value); }
+    /// The retained finer feed, or nullptr when this is not the lower_tf alternative.
     const lower_tf* lower() const noexcept { return std::get_if<lower_tf>(&value); }
+    /// The mutable retained finer feed, or nullptr; a staged spec's feed is copied by
+    /// configure_native, so mutating it afterwards changes nothing about the run.
     lower_tf* lower() noexcept { return std::get_if<lower_tf>(&value); }
+    /// The synthesized sampling policy, or nullptr when this is not that alternative.
     const synthesized* synthesized_path() const noexcept {
         return std::get_if<synthesized>(&value);
     }
+    /// The mutable synthesized sampling policy, or nullptr.
     synthesized* synthesized_path() noexcept { return std::get_if<synthesized>(&value); }
 };
 
@@ -574,6 +605,9 @@ struct NativeRunSpec {
     std::optional<NativeAuxiliaryFeed> auxiliary_feed;
 };
 
+/// Which field a validation refused, in deterministic first-error order. It is
+/// what lets a host report "which field" instead of "invalid"; every enumerator
+/// names a NativeRunSpec member or one of its nested blocks.
 enum class NativeRunSpecField : std::uint8_t {
     None,
     SessionKey, RunNumber, InputTimeframe, ScriptTimeframe,
@@ -599,6 +633,12 @@ enum class NativeRunSpecField : std::uint8_t {
     AuxiliaryFeedTimeframe, AuxiliaryFeedBars, SubscriptionSource,
 };
 
+/// Why a field was refused. Read it beside NativeRunSpecValidation::field: the
+/// error says what is wrong and the field says where. Each feature's own suite
+/// pins the refusals of the fields it owns — the subscription and auxiliary-feed
+/// rows in tests/test_native_auxiliary_feed.cpp, the margin rows in
+/// tests/test_native_margin_model.cpp, the risk rows in
+/// tests/test_native_risk_limits.cpp.
 enum class NativeRunSpecError : std::uint8_t {
     None,
     EmptyRequiredString,
