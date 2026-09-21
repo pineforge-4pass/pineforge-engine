@@ -23,7 +23,7 @@
  * Start at @ref native_host.hpp for the callback surface, @ref
  * native_run_spec.hpp for what a run declares, @ref native_order.hpp for the
  * request and event vocabulary, and @ref native_c_api.h for the same surface
- * in C. `examples/native/` builds ten runnable hosts against exactly these
+ * in C. `examples/native/` builds its runnable hosts against exactly these
  * headers and nothing else.
  */
 

@@ -94,7 +94,7 @@ WARN_LOGFILE           = site/doxygen-warnings.log
 #   ../include/pineforge  the kernel / native API headers, the C API header
 #                       and the C ABI header, plus source/ and compat/pine/
 #                       (the Pine adapter, grouped separately)
-#   ../examples/native  the ten runnable hosts, which are documentation
+#   ../examples/native  the runnable hosts, which are documentation
 #   pages/*.md          the narrative pages, listed so the order is ours
 #   design/ adr/        the design record and the boundary decision
 # RECURSIVE reaches include/pineforge/source and include/pineforge/compat;

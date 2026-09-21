@@ -66,6 +66,8 @@ NATIVE_EXAMPLES = (
     ("native-price-grid", "examples/native/native_price_grid_strategy.cpp"),
     ("native-price-grid-c", "examples/native/native_price_grid_c.c"),
     ("native-risk-limits", "examples/native/native_risk_limits_strategy.cpp"),
+    ("native-auxiliary-feed", "examples/native/native_auxiliary_feed_strategy.cpp"),
+    ("native-open-lots", "examples/native/native_open_lots_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)

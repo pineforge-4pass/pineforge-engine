@@ -25,6 +25,8 @@ set(PINEFORGE_NATIVE_EXAMPLES
     native_trail_risk_strategy
     native_price_grid_strategy
     native_risk_limits_strategy
+    native_auxiliary_feed_strategy
+    native_open_lots_strategy
 )
 
 # The same host written against the C API (R5 lane L13). It is a separate
@@ -108,6 +110,8 @@ if(PINEFORGE_BUILD_TESTS)
     set(_pf_example_line_native_price_grid_strategy "closed trades: [1-9]")
     set(_pf_example_line_native_risk_limits_strategy "closed trades: [1-9]")
     set(_pf_example_line_native_price_grid_c "closed trades: [1-9]")
+    set(_pf_example_line_native_auxiliary_feed_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_open_lots_strategy "closed trades: [1-9]")
     foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES PINEFORGE_NATIVE_C_EXAMPLES)
         if(NOT DEFINED _pf_example_line_${example})
             message(FATAL_ERROR "examples/native: ${example} has no summary line for its "
