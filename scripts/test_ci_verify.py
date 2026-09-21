@@ -25,6 +25,7 @@ from ci_verify import (
     Completed,
     ConfigError,
     KERNEL_MIN_TESTS,
+    RELEASE_MIN_TESTS,
     ROOT,
     SANITIZER_FLAG,
     SANITIZER_RUN_ENV,
@@ -182,8 +183,10 @@ class Scripted:
             if not env_ok:
                 return Completed(1, b'', b'sanitizer env missing\n')
             # CTest's closing summary carries the row count the floor reads;
-            # 'absent' scripts a run that never printed one.
-            rows = self.exits.get('ctest_rows', KERNEL_MIN_TESTS)
+            # 'absent' scripts a run that never printed one. By default a
+            # profile reports exactly its own floor.
+            rows = self.exits.get(
+                'ctest_rows', ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
             summary = f'100% tests passed out of {rows}\n'.encode()
@@ -445,16 +448,22 @@ class RowFloorConfig(unittest.TestCase):
             parse_args(['kernel', '--min-tests', 'many'])
         self.assertEqual(main(['kernel', '--min-tests', '0']), 2)
 
-    def test_kernel_profile_carries_the_row_floor_and_others_do_not(self):
-        self.assertEqual(ci_verify.PROFILE['kernel'].min_tests, KERNEL_MIN_TESTS)
-        for name in ('release', 'debug', 'sanitizers', 'native'):
+    def test_kernel_and_release_carry_a_row_floor_and_the_others_do_not(self):
+        # expectation corrected: release min_tests None -> RELEASE_MIN_TESTS,
+        # because lane P7 gives the release profile a row floor (a row that
+        # left release alone failed nothing).
+        for name, floor in (('kernel', KERNEL_MIN_TESTS), ('release', RELEASE_MIN_TESTS)):
+            with self.subTest(profile=name):
+                self.assertEqual(ci_verify.PROFILE[name].min_tests, floor)
+                self.assertEqual(validate_config(parse_args([name])).min_tests, floor)
+                self.assertEqual(
+                    validate_config(parse_args([name, '--min-tests', '9'])).min_tests, 9)
+        for name in ('debug', 'sanitizers', 'native'):
             with self.subTest(profile=name):
                 self.assertIsNone(ci_verify.PROFILE[name].min_tests)
                 self.assertIsNone(validate_config(parse_args([name])).min_tests)
                 self.assertEqual(
                     validate_config(parse_args([name, '--min-tests', '9'])).min_tests, 9)
-        self.assertEqual(validate_config(parse_args(['kernel'])).min_tests, KERNEL_MIN_TESTS)
-        self.assertEqual(validate_config(parse_args(['kernel', '--min-tests', '9'])).min_tests, 9)
 
     def test_ctest_row_count_reads_the_closing_summary(self):
         # CTest omits the failed clause when nothing failed (ctest 4.4 prints
@@ -1403,8 +1412,34 @@ class RowFloorDriver(unittest.TestCase):
         self.assertIn('ctest-floor', failure_stages(summary))
         self.assertIsNone(summary['ctestRows'])
 
+    def test_release_floor_fails_below_it_without_hiding_package_checks(self):
+        code, summary, scripted, _ = self.run_profile('release', ctest_rows=RELEASE_MIN_TESTS - 1)
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertNotIn('ctest', failure_stages(summary))
+        self.assertIn('install', scripted.names())
+        self.assertIn('smoke-version', scripted.names())
+        error = next(item['error'] for item in summary['failures'] if item['stage'] == 'ctest-floor')
+        self.assertIn(str(RELEASE_MIN_TESTS - 1), error)
+        self.assertIn(str(RELEASE_MIN_TESTS), error)
+        self.assertIn('release profile', error)
+        self.assertEqual(summary['minTests'], RELEASE_MIN_TESTS)
+
+    def test_release_floor_passes_at_it_and_fails_closed_without_a_row_count(self):
+        code, summary, _, _ = self.run_profile('release')
+        self.assertEqual(code, 0, summary['failures'])
+        names = stage_names(summary)
+        self.assertLess(names.index('ctest'), names.index('ctest-floor'))
+        self.assertEqual(summary['ctestRows'], RELEASE_MIN_TESTS)
+        code, summary, _, _ = self.run_profile('release', ctest_rows='absent')
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+
     def test_profiles_without_a_floor_record_rows_but_gate_nothing(self):
-        for profile in ('release', 'debug', 'sanitizers', 'native'):
+        # expectation corrected: a 3-row release run passed ungated -> release
+        # left this loop, because lane P7 gives it a row floor (the two tests
+        # above pin that floor).
+        for profile in ('debug', 'sanitizers', 'native'):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(profile, ctest_rows=3)
                 self.assertEqual(code, 0, summary['failures'])
@@ -1413,14 +1448,20 @@ class RowFloorDriver(unittest.TestCase):
                 self.assertEqual(summary['ctestRows'], 3)
 
     def test_min_tests_gates_any_profile_and_overrides_the_kernel_default(self):
-        code, summary, _, _ = self.run_profile('release', extra=['--min-tests', '4'], ctest_rows=3)
-        self.assertEqual(code, 1)
-        self.assertIn('ctest-floor', failure_stages(summary))
-        self.assertEqual(summary['minTests'], 4)
-        code, summary, _, _ = self.run_profile('kernel', extra=['--min-tests', '2'], ctest_rows=3)
-        self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['minTests'], 2)
-        self.assertIn('ctest-floor', stage_names(summary))
+        for profile in ('release', 'debug'):
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(
+                    profile, extra=['--min-tests', '4'], ctest_rows=3)
+                self.assertEqual(code, 1)
+                self.assertIn('ctest-floor', failure_stages(summary))
+                self.assertEqual(summary['minTests'], 4)
+        for profile in ('kernel', 'release'):
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(
+                    profile, extra=['--min-tests', '2'], ctest_rows=3)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(summary['minTests'], 2)
+                self.assertIn('ctest-floor', stage_names(summary))
 
 
 class DiagnosticsCollection(unittest.TestCase):

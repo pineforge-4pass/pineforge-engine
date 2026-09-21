@@ -36,7 +36,7 @@ Python. CTest must discover tests; an empty suite is a failure.
 
 | Profile | Build | Additional coverage |
 | --- | --- | --- |
-| `release` | Release, tutorial enabled | Standard CI checks, installed package, and installed native include-independence proof |
+| `release` | Release, tutorial enabled | Standard CI checks behind a row floor (`RELEASE_MIN_TESTS`; `--min-tests N` overrides it), installed package, and installed native include-independence proof |
 | `debug` | Debug, tutorial enabled | The same checks without Release optimization |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
 | `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
@@ -71,9 +71,12 @@ drops every test TU whose include closure reaches `pineforge/source/` or
 `compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
 twin would leave the kernel-only gate without any failure. `KERNEL_MIN_TESTS`
 in `scripts/ci_verify.py` pins the expected row count; the `ctest-floor`
-stage fails when CTest ran fewer rows or printed no count. Raise the constant
-when a source-free row lands, and pass `--min-tests N` to override it for one
-run (the flag gates any profile; only `kernel` has a default).
+stage fails when CTest ran fewer rows or printed no count. The release profile
+carries the same gate with `RELEASE_MIN_TESTS`, so a row deleted from the
+default build fails too; `debug` and `sanitizers` register a subset of the
+release rows. Raise the constant when a row lands, and pass `--min-tests N` to
+override it for one run (the flag gates any profile; `kernel` and `release`
+have a default).
 
 Pass `--ccache` when ccache is installed. It caches compiler work, not complete
 build directories or verification receipts. Compiler, source, header and flag

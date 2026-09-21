@@ -80,6 +80,18 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # runner every example_* row goes through; it registers wherever the examples
 # do, so here and in release.
 KERNEL_MIN_TESTS = 190
+# Release-row floor, the same gate for the default profile. Before lane P7
+# only the kernel profile had one, so a row that left release alone (a
+# source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
+# smaller green run. 546 = the 545 rows release registered at b8e7976e plus
+# P7's test_example_runner. The debug and sanitizers profiles register a
+# subset of these rows (the same CMake without the examples), so a row they
+# share cannot vanish unnoticed either. Raise it when a row lands in release;
+# --min-tests overrides it.
+# 553 = those 546 plus the release rows of the gap lanes integrated before P7:
+# P2's test_kernel_residuals, P5's test_native_limit_fill_through, and P6's
+# three example_* rows and two test_native_feature_rulings guard rows.
+RELEASE_MIN_TESTS = 553
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
@@ -131,7 +143,7 @@ class Profile:
 
 
 PROFILE = {
-    'release': Profile('release', 'Release', False, False, True, True),
+    'release': Profile('release', 'Release', False, False, True, True, RELEASE_MIN_TESTS),
     'debug': Profile('debug', 'Debug', False, False, True, True),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
@@ -291,8 +303,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='exclude one CTest label from this local verification run')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless CTest ran at least N rows; '
-                             f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the others '
-                             'to no floor')
+                             f'the kernel profile defaults to {KERNEL_MIN_TESTS}, the release '
+                             f'profile to {RELEASE_MIN_TESTS}, the others to no floor')
     args = parser.parse_args(argv)
     if args.build_dir is None:
         args.build_dir = default_build_dir(source, args.profile)
@@ -957,7 +969,7 @@ class Driver:
             self.fail_stage(
                 'ctest-floor',
                 f'ctest ran {count} rows, below the floor of {floor} for the '
-                f'{self.cfg.profile.name} profile; a source-free test left the suite, '
+                f'{self.cfg.profile.name} profile; a registered row left the suite, '
                 'or lower the floor with --min-tests on purpose')
         else:
             self.pass_stage('ctest-floor', f'ctest ran {count} rows (floor {floor})')
