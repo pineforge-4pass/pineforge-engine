@@ -915,41 +915,9 @@ protected:
         return std::floor(price / syminfo_mintick_ + 0.5) * syminfo_mintick_;
     }
 
-    // round 8 family R scope: the 10-significant-digit money arithmetic
-    // (tv_money_round) is applied where it was pinned and where it can move a
-    // lot — a lot-stepped instrument whose lot is worth less than one unit of
-    // account currency at the sizing price (OANDA:EURUSD 0.01 x 1.1 = 0.011;
-    // BINANCE:BTCUSDT 1e-5 x 85,000 = 0.85; ETHUSDT.P 1e-4 x 2,500 = 0.25).
-    // On integer-lot instruments (F, AAPL, ES, NQ, NIFTY: a lot is 10..250k)
-    // and on the corpus' continuous qty_step 0 the exact arithmetic stays:
-    // there the rounding could only ever bite on a synthetic exact tie.
-    // POOC flat-parent controls: cost rounding also precedes admission at the
-    // terminal close. Named child brackets created after the sole pending
-    // parent have no live owner yet; they cannot compete for its opening cash.
-    // Same-bar POOC money admission for one true-flat long MARKET parent.
-    // Quantity sizing keeps its existing slipped divisor. The money checks
-    // use the recorded signal mark and a tick-built slipped price instead.
-
-    // R24 signal-cost controls: a fractional lot worth >=1 account unit can
-    // still cross the rounded-money admission boundary. BTC Q9.36259 at
-    // 112380.33 costs 1052170.9538547, rounded to 1052170.954; exact signal
-    // equity 1052170.9536054998 therefore keeps only a reversal's close leg.
-    // XAU Q300 at 3443.625 likewise rejects capital cost-0.0001, while exact
-    // cost and cost+0.0001 admit, despite the cheaper next opening price.
-    // R39 BTC/XAU controls also pin the independent price-scale check for
-    // this ordinary market book. Share its scope while keeping the separately
-    // pinned POOC signal-cost extension out of the price-scale extension.
-    // Rule 1's scope (round 10 family AE): the ten-digit equity and the raw
-    // lot floor size EVERY lot-stepped instrument — integer shares included
-    // (NASDAQ:AAPL 2025-09-05 16:15Z: 1094521.68 / 238.77 floors to 4583 on
-    // TradingView, 4584 from the float-accumulated ledger or a nudged
-    // floor). Only a continuous qty_step 0 keeps the exact arithmetic.
-    // The broker's required margin at a mark is money at ten significant
-    // digits where that can move a lot (famr-adm-rev-01000: the 4x trim of
-    // the fill bar's short is 3900.60 from the ROUNDED 1000527.321 required
-    // margin, 3900.56 from the exact 1000527.3207023 — one lot of restore
-    // quantity across the 0.01 floor; rev-00800 / -01079 / revb / S3 keep
-    // their trims either way). Exact outside the scope.
+    // Money rounded to ten significant digits is the source adapter's own
+    // arithmetic; the kernel's money is exact (ADR-0001, detached comment
+    // residue).
 
     // A fill taken AT A RAW BAR PRICE — a market order at the bar close
     // (process_orders_on_close) or at the next open, a resting stop/limit
@@ -1212,172 +1180,20 @@ protected:
         return gridded;
     }
 
-    // The broker's sizing arithmetic runs ON-TICK. Both the price the budget
-    // is divided by and the price the open position is marked at for the
-    // equity term are round_to_mintick() of their raw inputs; the FEED itself
-    // stays raw (ta.*, crossovers, plots and every strategy.* metric TV
-    // reports on raw values keep reading current_bar_.close directly — only
-    // this sizing snapshot and the fill are quantized). The evidence is the
-    // same tape family that pinned the signal-bar freeze below:
-    //
-    //   - taro-s-c-c-ma-simplified-2-color replayed over the NYSE:F and
-    //     NASDAQ:AAPL tapes: qty = floor(E / tick(close_S)) with E marked at
-    //     tick(close_S) reproduces 674/674 F and 832/832 AAPL reversals; the
-    //     raw-close divisor fits only 476/674 on F. The same replay matches
-    //     675/675 TV entries by RAW-close crossovers, which is why the signal
-    //     path is left alone.
-    //   - drgunjan-F trade 1: a 9.565 signal close, TV qty 10460 =
-    //     floor(100000 / 9.56) (9.565 / 0.01 = 956.49999... rounds DOWN under
-    //     the census formula, exactly as 228.765 does); the raw divisor gave
-    //     floor(100000 / 9.565) = 10454.
-    //   - The raw basis also DECLINED entries TV filled: when an x.xx5 close
-    //     rounds UP at the fill (bar_fill_price) while the quantity was
-    //     floored against the raw close, qty * fill exceeds the sizing
-    //     equity by ~qty * mintick/2 and the true-flat gap-reject / reversal
-    //     float-guard arms in apply_filled_order_to_state saw a phantom gap.
-    //     463/463 missing taro-F entries were predicted by that mechanism
-    //     with 0 counterexamples; 26/26 drgunjan-F and 6/6 mazi-F missing
-    //     entries had sub-penny signal closes.
-    //
-    // On a price that is already n*tick (bar_fill_price output, a
-    // directionally-snapped level, or the slipped sizing price
-    // frozen_sizing_price builds) round_to_mintick is identical to within
-    // ONE ULP — not an identity: double(tick) is inexact for every decimal
-    // tick, so floor(x/0.01 + 0.5)*0.01 != x for 6,951 of 49,900 decimal-
-    // parsed 2dp prices 1.00..500.00 (always +1 ulp, double(0.01) > 0.01),
-    // for 35,736 of 70,000 5dp prices at tick 1e-5, and for 0 of 12,000 at
-    // the binary-exact 0.25. The ulp is absorbed by apply_qty_step's 1e-6
-    // nudge (0 floor flips of floor(100000/x) across all 49,900 prices) and
-    // by the 1e-9 / 1e-12 float guards on every admission arm, so no
-    // quantity or verdict moves on an on-tick feed: the fill-time legacy
-    // callers and the frozen path reproduce the pre-fix numbers there, and
-    // only sub-tick prints move — to TV's number.
-    //
-    // QtyType::CASH follows percent_of_equity by construction (the same
-    // broker division, only the numerator differs) and is UNPINNED: every
-    // census above is default percent_of_equity sizing, and no strategy.cash
-    // tape discriminating round(close) from close has been replayed. A
-    // future CASH mismatch on a sub-tick feed is traced here first.
+    // The basis of a default-sized request is the request's own: SizeTime says
+    // WHEN it resolves (AtMatch / AtAcceptance) and SizePrice says WHICH price
+    // it converts at (Resolved / Signal / SignalOnTick), so this class freezes
+    // no sizing of its own (ADR-0001, detached comment residue).
 
-    // TradingView freezes DEFAULT (qty=na) market-order sizing at the SIGNAL
-    // bar — the bar whose on_bar issued the strategy.entry/strategy.order
-    // call — not at the fill:
-    //
-    //   tick(x)      = round_to_mintick(x)          // nearest tick, census form
-    //   equity_S     = initial_capital + realized net profit
-    //                  + open_profit(tick(close(S)))  // position may still be OPEN
-    //   sizing_price = tick(close(S)) + slippage*mintick*(+1 buy / -1 sell)
-    //   qty          = floor_step( commission_reserved(budget)
-    //                              / fx / (sizing_price * pointvalue) )
-    //                  // commission_reserved divides by (1 + commRate) for a
-    //                  // PERCENT commission and is the identity otherwise;
-    //                  // the adapter owns it (docs/pine-adapter-kernel-notes.md)
-    //
-    // The market order then fills at the NEXT bar's open carrying this frozen
-    // quantity. calc_qty(price) implements exactly that shape when evaluated
-    // AT SIGNAL TIME (current_bar_ IS the signal bar: open_profit marks at
-    // tick(close(S)) and the divisor is the rounded argument), so the freeze
-    // is simply calc_qty(slipped rounded signal close) captured at
-    // placement. Evaluating the same expression at FILL time — the
-    // pre-freeze behavior — was wrong in
-    // three separable ways on a reversal/gap: it double-counted the just-
-    // closed position's PnL (current_equity() already realized the exit while
-    // position_* still held the stale lot for open_profit), it marked open
-    // profit at the FILL bar's close (a look-ahead: that close is unknown
-    // when the order fills at the open), and it divided by the fill price
-    // instead of the signal close. Freezing at placement removes all three.
-    //
-    // Only PERCENT_OF_EQUITY / CASH default sizing is price/equity-dependent;
-    // FIXED default sizing stays qty=NaN at placement (identical value at
-    // fill, and keeping NaN preserves the isnan(order.qty)-keyed semantics
-    // elsewhere, e.g. the OCA "fully filled" heuristic).
-    //
-    // Priced (limit/stop) entries are NOT frozen: TV's sizing basis for an
-    // order armed one or more bars before its fill is not empirically
-    // established, so they conservatively keep the legacy fill-time sizing.
-    // The sizing price of the frozen rule above, exposed separately so the
-    // placement sites can retain it as an adapter placement fact (`sizing_price`)
-    // for the fill-time margin-admission re-check.
-    //
-    // The basis is the mintick-ROUNDED signal close. Rounding happens BEFORE
-    // the slippage ticks are added so the result is n*tick for any feed
-    // print, exactly as a bar_fill_price fill carries its slippage: TV's
-    // broker never sees the sub-tick close Pine sees (674/674 F, 832/832
-    // AAPL reversals on the taro tapes fit tick(close_S); the raw close fits
-    // 476/674 — see calc_qty). A feed that is already on-tick is unaffected
-    // in every quantity and verdict, though not bit-for-bit: round_to_mintick
-    // returns the n*tick double to within one ulp (double(tick) is inexact
-    // for decimal ticks — the measurement is in calc_qty's comment), and
-    // that ulp is absorbed by apply_qty_step's 1e-6 nudge and by the
-    // admission arms' float guards.
-
-
-    // round 7 (family M, JOAT BTC@1D; campaign note log-20260905t121513z-
-    // 50167cb8, CORRECTING the m1d-coof-ctx pin): a DEFAULT-sized
-    // (percent_of_equity / cash) MARKET order that a calc_on_order_fills
-    // FILL RECALC places is sized by TradingView at ITS OWN FILL, not at the
-    // signal bar's close and not at the recalc's cursor:
-    //
-    //   lab tv scratchpad/pins/m1d-coof-size-btc (BINANCE:BTCUSDT 1D,
-    //   2025-10-01..12-31, tv-tape-m1d-coof-size-btc-7ee8712b): "B", born in
-    //   the SECOND recalc at the 10-02 open and filled at W1 = the low
-    //   118279.31, has qty 845.4564 = 10% x 1e9 / 118279.31 (cursor O
-    //   118594.99 -> 843.2; the bar's close 120529.35 -> 829.7); thirteen
-    //   entries born in a first-O recalc and filled at O size at O, never at
-    //   the finals close. The probe itself: TV 4 0.09245 = 9802.56 /
-    //   (106011.13 x 1.0001) at the 11-11 open fill (the engine froze 0.0951
-    //   at the 11-11 close 103058.99); TV 10 0.14674 at its W2 fill 69988.83
-    //   (cursor W1 63913.27 -> 0.16069, close 67988.04 -> 0.15106).
-    //
-    // The script context of such a recalc is unchanged — TradingView runs it
-    // on the CURRENT bar's finals (scratchpad/pins/m1d-coof-ctx2-{btc,f}:
-    // 103/103 encoded firings read bar k's high/low/close/volume, bar_index k,
-    // barstate.isconfirmed true, close[1] = bar k-1) — exactly what
-    // execute_coof_script_body presents. Only the SIZING moment differs from
-    // an ordinary close-calc placement: the placement freeze above is skipped
-    // for recalc-born default market orders (strategy.entry MARKET and
-    // strategy.order RAW alike), frozen_default_qty stays NaN, and the fill
-    // kernels size with calc_qty(slipped fill) — open lots marked at the fill
-    // (current_bar_ is the scheduler's point bar there). No KI-54 / gap-reject
-    // / gross-admission snapshot is taken for them: those gates are pinned on
-    // close-calc placements (their frozen invariant qty * sizing_price <=
-    // sizing_equity has no meaning at a fill-time size); the zero-lot decline
-    // and the affordability gate read the fill-time quantity. FIXED default
-    // sizing and explicit quantities are untouched (never frozen); priced
-    // (stop/limit) entries keep their own paths. Ordinary close executions
-    // (coof_fill_recalc_active_ false) freeze exactly as before, so a script
-    // without calc_on_order_fills is byte-identical.
-
-    // KI-54 defect fix: the frozen sizing snapshot must see POST-liquidation
-    // equity. TradingView liquidates intrabar, BEFORE the bar-close script
-    // body runs; the engine's process_margin_call runs at the END of
-    // dispatch_bar, AFTER on_bar placed (and froze) this bar's default-sized
-    // market orders. When a margin call fires on the placement bar, the
-    // frozen qty was computed on pre-liquidation equity — over-sized, so the
-    // next bar's fill opens a position whose notional exceeds equity and the
-    // long_full_margin branch of process_margin_call then emits a phantom
-    // LONG margin call TV does not have. Rather than moving process_margin_call
-    // (which would change what strategy.equity reads inside on_bar for every
-    // strategy), the dispatch loop calls this refresh right after a margin
-    // call actually liquidated something: every still-pending frozen
-    // default-sized market order placed on THIS bar is re-frozen on the
-    // post-liquidation state. Strict no-op on bars without a margin call
-    // (the caller checks), and bit-identical recompute for untouched state.
+    // When a forced liquidation is tested is the spec's NativeLiquidationCheck;
+    // this class keeps no intrabar-liquidation rule of its own (ADR-0001,
+    // detached comment residue).
 
     // --- Strategy variable accessors ---
 
-
-    // KI-64: freeze the pre-close position for the script-visible position
-    // accessor before an ordinary POOC strategy.close/close_all fills in-line
-    // this bar. Capture-once per on_bar (a second same-bar close keeps the
-    // FIRST pre-close snapshot). Caller guards close-timing mode &&
-    // !immediately; this reads position_side_/position_qty_ while they still
-    // hold the pre-close values (execute_immediate_close has not run yet).
-
-    // KI-64: release the freeze so the next script-visible read returns the real
-    // (post-close) position. Called at the top of flush_same_bar_close(), i.e.
-    // immediately after every POOC on_bar returns.
-
+    // What a script-visible position accessor reads around a close is decided
+    // by NativeCloseExecution, not by a freeze in this class (ADR-0001,
+    // detached comment residue).
 
     double net_profit() const { return net_profit_sum_; }
     double gross_profit() const { return gross_profit_sum_; }

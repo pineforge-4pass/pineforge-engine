@@ -193,25 +193,10 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
 // Internal helper: resolve a genuinely deferred percentage at fill time, then
 // close that quantity only from entries matching from_entry.
 
-
-
-
-
-// Internal helper: cancel OCA group members (except the one that just filled)
-
-
-// Pine v6 strategy.oca.reduce: when one sibling fills qty Q, every other
-// sibling's remaining qty is reduced by Q. Siblings whose remaining qty
-// reaches <= 0 are cancelled outright (matches TradingView behaviour and
-// degenerates to oca.cancel when the filling order's qty >= sibling qty).
-// Siblings using default sizing (qty == NaN) cannot have a meaningful
-// per-order qty applied at place time, so we conservatively cancel them
-// (this matches the prior, blanket-cancel behaviour for that subset).
-
-
-
-
-
+// Sibling reduction on a group fill is the request's own
+// native_order::GroupEffect (Cancel or Reduce), resolved by the execution
+// consumer; this file keeps no group helper (ADR-0001, detached comment
+// residue).
 
 // ────────────────────────────────────────────────────────────────────
 // Shared close-side / position-state helpers
@@ -526,173 +511,10 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
 }
 
-
-// ────────────────────────────────────────────────────────────────────
-// execute_market_entry case helpers
-// ────────────────────────────────────────────────────────────────────
-
-// Drop the TV deferred-flip carry on every other pending priced entry that
-// was placed during the same source position cycle. TV consumes the carry
-// from the now-closed source position exactly once, so siblings (matching
-// ``created_position_side``) must fire later with their own explicit qty
-// rather than re-applying the same carry growth.
-//
-// Probe 93 (pyramiding=2, two opposite-direction stops armed during a long
-// cycle): the first sibling grows by |old|+qty=2, the second sibling fires
-// fresh at qty=1. Without this, both siblings would grow and the engine
-// emits an extra-qty pyramid add (or, after the cleanup-loop wipes the
-// survivor, an entire extra round-trip the next day).
-//
-// Cycle scoping: TV consumes carry only when the triggering sibling fires
-// from FLAT. That means a sibling armed in a LATER position cycle (whose
-// own ``tv_carry_qty`` was captured from a different source position
-// later than this firing entry's ``created_bar``) must keep its carry
-// independent — it will apply its own carry when it later fires from
-// flat. Without this scoping, consuming a future-cycle sibling's carry
-// drops one cycle's worth of qty (validation/52, 63, 72, 92, 93, 95, 96
-// pre-fix: row count + qty match TV exactly, but per-leg PnL drifts
-// because the chain qty schedule shifts by one cycle when a sibling is
-// pre-emptively wiped by an earlier-cycle fire).
-
-
-
-// Open a new position from FLAT.
-//
-// TradingView's deferred-flip growth rule (probes 52, 63, 72, 92): a priced
-// (stop/limit) entry that was placed while the strategy held an
-// OPPOSITE-direction position carries that position's qty forward. If the
-// original position is later closed (by strategy.close, close_all, or any
-// exit) and the priced entry now fires from FLAT, the new position opens at
-// ``qty + tv_carry_qty`` rather than just ``qty`` — as if it had been a
-// true flip of the original (now-closed) position.
-//
-// The carry persists across bars: in probe 92 the daily cleanup
-// (``strategy.close_all``) closes the long at chart 12:15 and the SE stop
-// fires hours later at 21:30, still applying the carry. So this helper
-// reads ``tv_carry_qty`` from the pending order itself (snapshotted at
-// placement, see request record struct in engine.hpp) rather than a per-bar
-// transient state.
-//
-// Conditions:
-//   (a) is_priced_entry              -- stop/limit, not market
-//   (b) tv_carry_qty > 0             -- order was placed while a position
-//                                       was open
-//   (c) requested != created direction
-//                                    -- new entry is opposite to the carry
-//                                       position
-//
-// A bracket from ``strategy.exit`` can close the source position too,
-// and adding an unreachable ``strategy.close`` must be semantically inert.
-//
-// After applying the carry, ``consume_tv_carry_from_siblings`` zeroes the
-// same-source-cycle siblings so probe 93 doesn't double-grow.
-//
-// Final guard: TradingView margin check. required_margin = qty * fill_price
-// * margin_pct / 100. If required_margin > available equity, TV silently
-// rejects the fill (the order simply does not appear in the trade list).
-// With default margin_long_/margin_short_ = 100 (1x leverage) this is just
-// "position value <= equity". Reproduces the IES/VCP/ies-probe-08 entry-skip
-// behaviour where dynamic-qty strategies over-leverage on low-ATR bars and
-// TV silently drops the entry while the engine fires it (matched-trade qty
-// ratio in probe 08 was empirically equal to engine_equity / TV_equity,
-// proving the math is right but the gate was missing).
-
-
-
-// Add to an existing same-direction position (pyramiding).
-//
-// Pyramiding limit applies at fill time, EXCEPT for priced (stop/limit)
-// entries that were placed while the position was either FLAT or holding
-// the OPPOSITE direction. Such entries were "armed" pre-position (probe
-// 80's morning short stop firing on top of the afternoon's short entry
-// confirms the flat-armed case) or placed as a flip-prep stop during a
-// previous opposite-direction cycle that has since closed (probe 72's S2
-// placed while LONG'ing via L2 and TV emits the second-sibling short trade
-// despite pyramiding=1). Market entries — and entries placed while already
-// in the SAME direction — still respect the limit (probe 54's two same-bar
-// same-direction market entries with pyramiding=1 must keep only the first
-// one).
-
-
-
-
-
-// close_only_opposite branch: TV semantic for opposite-direction entries
-// where the strategy.entry call was placed with ``close_only_opposite=true``
-// — close part of the existing opposite position by tx_qty, then open the
-// requested-direction remainder if any. `fill_price` is already resolved.
-
-
-
-
-// Opposite direction: close current position trade-by-pyramid then open new
-// position in requested direction at the entry-slipped fill_price.
-//
-// Standard Pine semantic: an in-position flip (``strategy.entry`` while
-// holding the opposite side) closes the existing position and opens a fresh
-// position with ``qty`` from ``strategy.entry``'s ``qty`` parameter — not
-// ``|old| + qty``. Verified empirically with probe 92: TV produces 328
-// qty=1 in-position flips (SE stop firing while still long) and only 20
-// qty=2 flips that all happen AFTER a same-day cleanup closed the long.
-// The qty=2 cases are handled by the paired-close growth rule in
-// ``enter_market_from_flat``; this branch keeps the standard
-// ``new_size = qty`` contract.
-//
-// We deliberately do NOT purge exit orders here. Mutating request_roster
-// mid-iteration of request matching shifts indices and corrupts the
-// filled_indices accounting. Stale exits targeting the old entry id get
-// cleaned up on the next bar by the "from_entry doesn't match any pyramid
-// entry" check in request matching. Newly-placed exits that target
-// the incoming entry id stay and evaluate correctly on the current bar's
-// remaining iterations.
-
-
-
-// TradingView same-tick multi-entry sequential-fill semantics (audit rule
-// R*, jevondijefferson-big-breakout-strategy, 2026-07-02 tv-ceiling audit —
-// validated 26/26 against every in-window race in the TV export):
-//
-//   Same-tick entries fill SEQUENTIALLY in script-call order, each at
-//   plain (non-augmented) qty; the reversal augmentation — close the
-//   opposite position, then enter — attaches ONLY to the LAST
-//   same-direction entry of the tick; the fill that crosses zero / opens
-//   from flat owns the entry ID.
-//
-// This helper handles a market entry filling against an OPPOSITE position
-// when ANOTHER same-direction market entry (distinct id, placed on the
-// same on_bar) fills later at this same processing point:
-//
-//   - tx_qty > |pos|  ("class C"): the plain fill itself crosses zero —
-//     the whole opposite position closes (exit rows tagged with THIS
-//     order's id by the caller) and the REMAINDER (tx_qty - |pos|) opens
-//     under THIS id. The later sibling then executes against the
-//     sequentially-updated same-direction position and is rejected by
-//     the pyramiding gate. TV example (2025-06-17 15:15 UTC race): old
-//     long 7.6834 closes with exit signal "Short", the new short is the
-//     0.2262 remainder — NOT a full q_plain lot.
-//
-//   - tx_qty <= |pos| ("class B"): the plain fill only reduces the
-//     opposite position, so the position is still opposite when the LAST
-//     entry executes — the augmentation attaches there: the remaining
-//     position closes and a full plain lot opens under the LAST id.
-//     TV's trade list reports the old lot's close as ONE row at the
-//     shared fill price attributed to THIS (first) order's signal
-//     (TV#29: short 7.8542 exits with signal "Long"; TV#30: the new long
-//     7.6441 enters as "Wyckoff Swing Long"). To reproduce those rows —
-//     both fills land at the same price, so the PnL split is invisible —
-//     the whole position closes HERE tagged with this order's id, and
-//     the sibling then opens its own plain lot from flat, owning the
-//     entry ID exactly as R* requires.
-//
-// Without this rule the first fill took flip_market_position_to: the new
-// lot opened at full plain qty under the FIRST id, binding the WRONG
-// from_entry bracket (class B) or over-opening q_plain instead of the
-// remainder (class C) — seeding the engine's multi-day tiny-qty
-// stale-remainder desync chains (~10 race chains in the jevondijefferson
-// diff). See tests/test_same_tick_multi_entry_race.cpp.
-
-
-
-
+// The execute_market_entry case helpers are gone: growth on a deferred flip
+// survives only as a frozen pending-row field name, the opening gate is
+// NativeMarginModel::initial_long / initial_short, and the order of two fills
+// at one point is the consumer's acceptance and incarnation ordinals
+// (ADR-0001, detached comment residue).
 
 }  // namespace pineforge

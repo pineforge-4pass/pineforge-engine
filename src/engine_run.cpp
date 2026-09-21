@@ -145,39 +145,14 @@ double BacktestEngine::active_account_currency_fx() const {
 
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
 
-// Invoke the generated chart strategy body under its own EMA warmup mode.
-// The selector is thread-local because multiple engines can run concurrently;
-// restoring the previous value (also during stack unwinding) prevents both
-// cross-engine contamination and leakage between chart and request.security
-// evaluation. The latter installs its own scope around every security
-// evaluator dispatch and restores the prior thread-local value on return.
+// The chart body's EMA warmup mode is the ambient ta::EmaSeeding default the
+// source layer raises around one evaluation context; nothing here raises it
+// (ADR-0001, "Kernel state the adapter sets").
 
-
-
-
-// Standard per-script-bar dispatch sequence, shared by the simple run() loop,
-// run_simple_bar_loop, and the no-magnifier aggregation path. Operates on
-// current_bar_ (already set by the caller).
-//
-// TradingView process_orders_on_close semantics:
-//   1. Evaluate existing stop/limit orders from previous bars
-//   2. Update per-trade extremes so on_bar reads current values
-//   3. Strategy logic runs at bar close (creates new orders)
-//   4. New market orders fill at bar.close; new stop/limit wait for next bar
-// When close-timing mode is false, only steps 1-3 run.
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Whether a bar's own close executes the market orders that bar's script just
+// placed is the spec's NativeCloseExecution (AfterCalculation vs
+// NextEligiblePoint), not a rule of this file (ADR-0001, detached comment
+// residue).
 
 // Reset all per-run STATE (not configuration) so a reused handle's run N is
 // bit-identical to a fresh handle's run 1. See header doc + tests/
