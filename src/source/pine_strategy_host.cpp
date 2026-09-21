@@ -27,18 +27,6 @@ bool priced_opening_trigger(const native_order::Trigger& trigger) {
         || std::holds_alternative<native_order::StopLimit>(trigger);
 }
 
-// ab9714be pine_fills.cpp:35-44: a priced entry masks the extreme traversed
-// before the fill position on the assumed OHLC path.
-void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar, double fill_price) {
-    double fill_pos = 0.0;
-    if (!internal::first_touch_position(bar, fill_price, &fill_pos)) return;
-    const bool high_first = internal::bar_path_uses_high_first(bar);
-    const double high_pos = high_first ? 1.0 : 2.0;
-    const double low_pos  = high_first ? 2.0 : 1.0;
-    pe.skip_entry_bar_high = (high_pos < fill_pos);
-    pe.skip_entry_bar_low  = (low_pos < fill_pos);
-}
-
 // The kernel still samples the delivered path at every driver point, which
 // can book an entry-bar extreme the owner masks out (a gap-through stop is
 // filled 1 ulp beyond the open). On the entry bar of a masked lot the host's
@@ -471,18 +459,17 @@ void source::PineStrategyHost::on_native_applied(
         && ((std::isfinite(p->second.exit_levels.stop) && p->second.exit_levels.stop > 0.0)
             || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
     if (event.opened_units != 0.0) {
+        // ab9714be pine_fills.cpp:42, said to the kernel instead of written
+        // into its lots: a priced entry's fill sits somewhere on the entry
+        // bar's path, and a close-phase fill sits after the whole of it. The
+        // kernel derives the mask from its own path geometry
+        // (declare_opened_lot_entry_bar_mask); this host never touches a lot.
         if (pine_priced) {
-            const Bar& mask_bar = current_bar_;
-            for (auto& lot : pyramid_entries_) {
-                if (lot.entry_incarnation != event.handle().incarnation) continue;
-                set_entry_fill_excursion_masks(lot, mask_bar, lot.price);
-            }
+            declare_opened_lot_entry_bar_mask(event.handle().incarnation, current_bar_,
+                                              OpenedLotFillPoint::OnPath);
         } else if (event.cursor.point.path_phase == NativePathPhase::Close) {
-            for (auto& lot : pyramid_entries_) {
-                if (lot.entry_incarnation != event.handle().incarnation) continue;
-                lot.skip_entry_bar_high = true;
-                lot.skip_entry_bar_low = true;
-            }
+            declare_opened_lot_entry_bar_mask(event.handle().incarnation, current_bar_,
+                                              OpenedLotFillPoint::AfterPath);
         }
         // ab9714be pine_orders.cpp:750-753 and pine_fills.cpp:7189-7193
         // (KI-62): a MARKET entry that adds to a live same-side position is

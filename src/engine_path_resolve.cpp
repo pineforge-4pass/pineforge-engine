@@ -92,4 +92,33 @@ void fill_bar_path_points_ordered(const Bar& bar, bool high_first, double path[4
 
 
 }  // namespace internal
+
+// The entry-side half of the per-lot excursion capability (RULING A48). The
+// owner of a lot's excursion knows one thing the kernel does not — whether
+// its opening fill sat at a price the entry bar's path reaches, or after the
+// whole path — and the kernel knows the rest: which leg the path walks first
+// and where a price is first touched, the same two rules above that the
+// matcher and the closing row already use. So the owner declares the fill
+// point and the kernel derives the mask; no host writes a lot's flags.
+void BacktestEngine::declare_opened_lot_entry_bar_mask(
+        uint64_t entry_incarnation, const Bar& entry_bar,
+        OpenedLotFillPoint fill_point) {
+    for (auto& lot : pyramid_entries_) {
+        if (lot.entry_incarnation != entry_incarnation) continue;
+        if (fill_point == OpenedLotFillPoint::AfterPath) {
+            // The fill is the bar's closing point: the whole path precedes it.
+            lot.skip_entry_bar_high = true;
+            lot.skip_entry_bar_low = true;
+            continue;
+        }
+        double fill_pos = 0.0;
+        if (!internal::first_touch_position(entry_bar, lot.price, &fill_pos)) continue;
+        const bool high_first = internal::bar_path_uses_high_first(entry_bar);
+        const double high_pos = high_first ? 1.0 : 2.0;
+        const double low_pos = high_first ? 2.0 : 1.0;
+        lot.skip_entry_bar_high = (high_pos < fill_pos);
+        lot.skip_entry_bar_low = (low_pos < fill_pos);
+    }
+}
+
 }  // namespace pineforge

@@ -111,6 +111,20 @@ struct ClosedLotExcursion {
 
 using LotExcursionHook = std::function<ClosedLotExcursion(const ClosedLotExcursionFacts&)>;
 
+// Where an opened lot's own fill sits on its entry bar's modeled path — the
+// entry-side half of the excursion capability above, and the only thing the
+// owner of a lot's excursion has to say about it.  OnPath names a fill at a
+// price the path reaches, so the kernel derives which end (if either) the
+// path had already reached before it; AfterPath names a fill at the bar's
+// closing point, after the whole path, so both ends precede it.  The geometry
+// is the kernel's: which leg is walked first and where a price is first
+// touched are the same rules the matcher uses, and a host that forces the leg
+// order does it once, through NativeRunSpec::path_order.
+enum class OpenedLotFillPoint : std::uint8_t {
+    OnPath = 0,
+    AfterPath = 1,
+};
+
 struct PyramidEntry {
     double price;
     int64_t time;
@@ -699,6 +713,16 @@ protected:
     // wiring, not durable broker state: reset_run_state clears it and the
     // consumer reinstalls it once per run when the host declares ownership.
     LotExcursionHook lot_excursion_hook_;
+    // The entry-side declaration of that capability: the owner of a lot's
+    // excursion names where the lot's opening fill sits on its entry bar, and
+    // the kernel derives the two entry-bar mask flags of every lot booked
+    // under `entry_incarnation` from the bar's own path.  A fill the path
+    // never reaches leaves that lot's flags as they were.  The flags are
+    // durable lot state: they are folded into the run hash and handed back to
+    // the owner on the closing row's ClosedLotExcursionFacts.
+    void declare_opened_lot_entry_bar_mask(uint64_t entry_incarnation,
+                                           const Bar& entry_bar,
+                                           OpenedLotFillPoint fill_point);
     // Continuation digest at the last script point. Native batch teardown
     // moves the consumer into Completed and would otherwise change the scalar
     // relative to the recorded array; source state is still folded live so
