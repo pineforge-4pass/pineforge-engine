@@ -20,7 +20,6 @@ struct AggregatedBar {
 };
 
 // ─── TF string helpers ─────────────────────────────────────────────────────────
-
 /// Convert a TradingView timeframe string to seconds.
 /// Minute-based: "1","5","15","30","60","120","240" => minutes * 60
 /// Day-based:    "D","1D" => 86400
@@ -68,7 +67,6 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf);
 int tf_ratio(const std::string& input_tf, const std::string& target_tf);
 
 // ─── Auto-detect timeframe from bar timestamps ────────────────────────────────
-
 /// Detect the timeframe string from an array of bars by computing the median
 /// timestamp delta and mapping to the nearest standard TF.
 /// Returns a TradingView-style TF string (e.g. "1", "5", "15", "60", "D", "W").
@@ -135,7 +133,6 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
 // stay Monday-partitioned and months calendar-partitioned exactly as before.
 // W/M opens are nominal (the Monday / 1st session-day); they do not consult
 // a holiday calendar.
-
 /// Ordinal of the session day containing `ms` (days since epoch on the
 /// session clock). UTC + no session: ms / kMsPerDay.
 int64_t session_day_index(int64_t ms, const std::string& tz,

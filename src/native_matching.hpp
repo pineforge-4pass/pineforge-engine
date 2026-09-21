@@ -170,7 +170,6 @@ inline bool in_region(double price, double level, bool le) noexcept {
 // activation (stop, stop-limit, trail arm, trail stop) with these same two
 // functions on the same print, so a hit the matcher reports is never refused.
 // Without a grid both are the raw compare and the raw print, bit for bit.
-
 // Reached: the level itself always is (a crossing hit books the level, and a
 // quantized path enters the region exactly there); any other print must lie
 // inside the region the matcher tests, i.e. on the level's side of the same

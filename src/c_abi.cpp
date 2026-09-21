@@ -178,7 +178,6 @@ static_assert(offsetof(pf_report_t, broker_state_hash_len) == offsetof(pineforge
               "pf_report_t::broker_state_hash_len offset mismatch");
 
 /* ── Equity-stats deprecated-spelling parity (R5 gap lane P2c) ──── */
-
 /* sharpe_monthly / sortino_monthly are the generic spelling of the fields
  * this ABI shipped as sharpe_tv / sortino_tv. Each pair is ONE double behind a
  * C11 anonymous union of two same-typed members, so the old spelling stays

@@ -191,10 +191,10 @@ ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max)
     } else if (bar - cbar_ >= static_cast<long long>(length_)) {
         // The cached extremum has aged out of the window (by bars, not
         // calls): rescan the slots, aliasing and poison included.
+        // There is no else: a cache younger than `length` bars that src did
+        // not beat is left exactly as it stands.
         rescan();
     }
-    // else: the cache is younger than `length` bars and src did not beat it.
-
     // na until the context has seen `length` bars (TV: bar_index < length - 1;
     // `origin` keeps a range-truncated feed warming up over its own bars).
     if (bar - origin < static_cast<long long>(length_) - 1) return out;
@@ -321,7 +321,6 @@ double PivotLow::compute(double src) {
 }
 
 // --- Cum (Cumulative Sum) ---
-
 // saved_sum_ mirrors the initial committed sum_ (see RMA::RMA) so a
 // recompute() before the first compute() restores a well-defined pristine
 // state instead of reading uninitialized save-state.
@@ -337,7 +336,6 @@ double Cum::compute(double src) {
 }
 
 // --- All-time max/min (chart series) ---
-
 // saved_* mirror the initial committed state (see RMA::RMA) so a recompute()
 // before the first compute() restores a well-defined pristine state.
 AllTimeMax::AllTimeMax()

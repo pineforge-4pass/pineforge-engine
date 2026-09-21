@@ -93,7 +93,6 @@ int64_t timeframe_time_close(int64_t bar_ms,
 // Low-level session helpers (exposed for engine_run.cpp, unit tests,
 // session_trading_day_open_ms, and session predicates).
 // ---------------------------------------------------------------------------
-
 // Convert "HHMM" string to minutes-since-midnight.  Returns -1 on parse error.
 int hhmm_to_minutes(const std::string& hhmm);
 

@@ -417,7 +417,6 @@ public:
 };
 
 // --- StdDev (Standard Deviation) ---
-
 // TradingView's ta.stdev (biased, the default) is NOT the two-pass
 // sum-of-squared-deviations of its documentation: it is
 //     sqrt(Sxx / n - m * m),  m = Sx / n,

@@ -1,5 +1,15 @@
 /*
- * engine_run.cpp — public run() entrypoints + run_magnified_bar + get_input_*
+ * engine_run.cpp — the account-currency FX series, the per-run state reset,
+ * the chart-bar session predicate and the input accessors.
+ *
+ * The bar pumps, the magnifier sampling loop and the run entrypoints are not
+ * here: driving a run is the market driver's and the execution consumer's
+ * work, and the open_trade_* accessors are engine_trade_accessors.cpp's.
+ * Two rules this file no longer states are the spec's: the chart body's EMA
+ * warmup mode is the ambient ta::EmaSeeding default the source layer raises
+ * around one evaluation context, and whether a bar's own close executes the
+ * market orders that bar's script just placed is NativeCloseExecution
+ * (AfterCalculation vs NextEligiblePoint). ADR-0001 rule 5.
  */
 
 #include "engine_internal.hpp"
@@ -142,18 +152,6 @@ double BacktestEngine::active_account_currency_fx() const {
     return account_currency_fx_at(current_bar_.timestamp);
 }
 
-
-// open_trade_* accessors moved to engine_trade_accessors.cpp.
-
-// The chart body's EMA warmup mode is the ambient ta::EmaSeeding default the
-// source layer raises around one evaluation context; nothing here raises it
-// (ADR-0001, "Kernel state the adapter sets").
-
-// Whether a bar's own close executes the market orders that bar's script just
-// placed is the spec's NativeCloseExecution (AfterCalculation vs
-// NextEligiblePoint), not a rule of this file (ADR-0001, detached comment
-// residue).
-
 // Reset all per-run STATE (not configuration) so a reused handle's run N is
 // bit-identical to a fresh handle's run 1. See header doc + tests/
 // test_handle_reuse_reset.cpp. Configuration fields (initial_capital_,
@@ -251,81 +249,10 @@ void BacktestEngine::reset_run_state() {
     trace_name_index_.clear();
 }
 
-
-
-
-
-
-
-// --- run_magnified_bar ---
-
-
-
-
-
-// --- New run() overload with full parameter set ---
-// Public entry: clears last_error_/last_run_status_/abort_requested_ exactly
-// once, then hands off to run_tf_impl, which owns the actual work and must
-// not clear any of those itself (see run_tf_impl's doc comment in
-// engine.hpp -- the SymInfo/overrides overload below calls run_tf_impl
-// directly for the same reason).
-
-
-
-
-
-// Preview pass: when aggregating to a coarser script TF, count how many
-// completed script-TF bars the input feed will produce so the simple-loop /
-// aggregation-loop can flag the final bar with barstate.islast at the right
-// moment. Returns n_input verbatim when no aggregation is needed.
-
-
-
-// Lazily reset per-run security evaluator state and (re)construct the
-// aggregator each evaluator uses based on its requested TF vs. input_tf.
-// Lower-TF emulation evaluators keep their default-constructed (passthrough)
-// aggregator since their per-sub-bar synthesis is driven elsewhere.
-
-
-
-// Build the finite-batch oracle used by the opt-in historical lookahead
-// candidate. Each eligible HTF bucket is aggregated from all input bars that
-// are available in the batch and stored once with its first-child index. The
-// evaluator is dispatched only at that index (engine_security.cpp), so the
-// value is projected there and held for the rest of the bucket. A trailing
-// bucket that has not reached its natural boundary is still projected from the
-// available bars, but remains an incomplete evaluation so committed security
-// history does not advance prematurely.
-
-
-
-
-
-
 bool BacktestEngine::chart_bar_ismarket(int64_t bar_ms) const {
     return pineforge::session_in_market(syminfo_.session, syminfo_.timezone,
                                             bar_ms, script_tf_);
 }
-
-
-
-
-// Bar pump for the no-aggregation, no-magnifier case: every input bar is a
-// script bar, fed straight to on_bar with the standard
-// pending-orders / per-trade-extremes / on_bar / equity-update sequence
-// (with the process_orders_on_close TV variant when configured).
-
-
-
-// Bar pump for the aggregation path (with or without magnifier). Feeds each
-// input bar through ``script_tf_agg_`` and either dispatches each completed
-// script bar straight to on_bar (no magnifier) or hands the collected
-// sub-bars to ``run_magnified_bar`` for price-path sampling. Security
-// evaluators are fed per input bar in the non-magnifier case and deferred
-// to ``run_magnified_bar`` in the magnifier case so each sub-bar runs
-// exactly once before its sampled ticks.
-
-
 
 // --- Input injection helpers ---
 double BacktestEngine::get_input_double(const std::string& key, double default_val) const {

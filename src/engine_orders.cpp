@@ -1,5 +1,13 @@
 /*
- * engine_orders.cpp — execute_market_* and partial-exit fill mechanics
+ * engine_orders.cpp — the physical lot ledger, the close-row builder and the
+ * position-state helpers every settlement path shares
+ *
+ * Which kernel a matched entry or exit runs through is the execution
+ * consumer's choice, settled through this file's lot ledger and close-row
+ * builder; the report rows a position still open when the feed ends produces
+ * are the consumer's too (record_open_position_report_rows, under the spec's
+ * own NativeRunSpec::report_open_position_at_end). This file keeps no entry,
+ * exit or range-end helper of its own (ADR-0001 rule 5).
  */
 
 #include "engine_internal.hpp"
@@ -40,114 +48,6 @@ std::vector<uint64_t> source_opening_membership(
     return incarnations;
 }
 } // namespace
-
-
-// Risk management + per-trade extreme tracking moved to engine_risk.cpp.
-
-
-
-
-
-
-
-
-
-
-// Internal helper: execute a market entry (handles reverse-and-open).
-//
-// Dispatches to one of five case-helpers based on the current position
-// state and the entry's close_only_opposite / later_same_tick_entry flags:
-//   1. enter_market_from_flat       — position FLAT
-//   2. add_to_pyramid_market        — position is same direction as requested
-//   3. close_opposite_then_enter    — close-only-opposite branch
-//   4. sequential_same_tick_reversal_fill — opposite direction, another
-//      same-direction market entry fills later this same tick (TV rule R*)
-//   5. flip_market_position_to      — opposite direction (close-and-flip)
-
-
-
-// Internal helper: execute a market exit (close position at fill price)
-
-
-
-// Range-end accounting for a position still open after the final bar.
-//
-// TradingView's deep-backtest report — the ws-report-v1 tape the campaign
-// grades against — does not leave the last position open. It reports it as
-// a CLOSED trade whose exit leg sits on the range's last bar at that bar's
-// close, with an empty exit Signal, and counts it in closedTrades. The
-// orb-lite probe on NYSE:F 1D is the canonical row: Entry short 2026-03-16
-// @ 11.82, Exit 2026-04-30 @ 12.08 — 12.08 is the last close of the range,
-// the Signal cell is empty, metrics say closedTrades:1 (the browser export
-// writes the same row with Signal "Open", which the verifier already
-// recognises; the ws tape gives it no marker at all). On the f-1d spark
-// set 8/10 engine runs hold the same position to the last bar (the
-// engine's bars-in-market is TV's Duration + 1, the entry bar counted) and
-// 7/10 carry a mark-to-market open_pl equal to TV's row to the cent — the
-// row is exactly the engine's open position marked at the last close.
-//
-// The engine exported closed trades only: trades_ grows in emit_close_trade
-// alone, and neither run loop flattened at end of feed, so every such probe
-// was one trade short against the tape and the verifier scored the missing
-// row as an unmatched TV trade. This is the operator-decided (2026-09-02)
-// emulation of TradingView's range-end accounting: after the last script
-// bar has been dispatched and its equity point recorded, the rows that a
-// close of the open position at the last bar's close would record — one
-// per pyramid slice, as every other full close, through the same
-// build_close_trade arithmetic — are written to range_end_trades_, which
-// fill_trades_section merges behind the script's own closed trades.
-//
-// Reporting only. The live position, the pending orders, trades_ and the
-// realized sums are left exactly as the bar loop left them: a stream's
-// realtime bars continue the warmup position (stream_begin), the Pine
-// accessors never see the row (it is dated after the last on_bar), and the
-// broker-mechanics tests keep inspecting the open lot the run ended with.
-// The report is where TradingView's accounting is emulated.
-//
-// Pricing. The row is a mark at the close, not an order the broker
-// emulator fills: it takes the raw close rounded to the NEAREST tick
-// (bar_fill_price, finding-446 — the tape's 12.08 is the on-tick close; a
-// sub-tick print such as 9.565 books 9.56 like any close-priced fill) and
-// NO slippage ticks, because slippage models the fill uncertainty of a
-// market order and TV prices this row at the bar close itself. The exit
-// commission follows the strategy's rules like any close; the one tape in
-// hand has commission 0, so that part is the operator's call rather than a
-// measured one. The exit is dated on the script bar's label (the equity
-// curve's time_ms — magnifier-invariant, the same instant a
-// process_orders_on_close fill on that bar reports).
-//
-// Accounting. The report's closed-trade count, net profit, win/loss
-// tallies and commission paid include the rows (TV counts them in
-// closedTrades, and its netProfit is net of the row's exit commission). The
-// last equity point is re-marked to the flat account — open_profit 0,
-// equity = capital + net profit including the rows — so the documented
-// identity equity == initial_capital + net_profit + open_profit holds on
-// the last bar (test_metrics pins it), as it does on TradingView's own
-// curve, whose last point is the account after that close. The bar loop
-// had already folded that point's GROSS mark into the scalar drawdown /
-// run-up extremes (update_equity_extremes), and the compute_equity_stats
-// curve walk reproduces those scalars only while the curve holds exactly
-// the values that were folded: a first cut of this change re-marked the
-// point and left the scalars alone, which silently broke that identity on
-// every commissioned run whose last bar was the trough or the peak (the
-// fold had seen the gross mark, the walk saw the net one — review finding,
-// 2026-09-02). The fold is one per script bar, paired with the curve
-// point, so the scalars are re-folded from the curve here (fold_equity_
-// extreme over every point, the re-marked last one included): the walk
-// and the scalars agree again, the extremes now read the range-end close
-// the way the curve does, and every earlier point is untouched. The
-// in-market bar count is the loop's (the last bar was in market). A
-// strategy that is flat after the final bar records nothing. The stream
-// warmup replay is not a range end (the realtime bars continue it) and is
-// skipped.
-
-
-
-// Internal helper: execute a partial exit (reduce position by qty, create trade records)
-// TradingView creates individual trade records for each partial exit.
-
-
-
 // Settle an already resolved same-side fill as a distinct physical lot.
 // Admission, sizing, side selection and source interpretation precede this
 // seam. It neither consults a pyramiding cap nor invents a source-policy bit.
@@ -175,38 +75,12 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
 }
 
-
-
-
-
-// Internal helper: close only entries matching from_entry (close_entries_rule="ANY")
-
-
-
-// Internal helper: close an exact quantity only from entries matching
-// from_entry. Live-position strategy.exit calls freeze their percent-derived
-// reservations into request record::qty; when layered siblings fill on one bar,
-// that absolute reservation must survive earlier reductions of the position.
-
-
-
-// Internal helper: resolve a genuinely deferred percentage at fill time, then
-// close that quantity only from entries matching from_entry.
-
-// Sibling reduction on a group fill is the request's own
-// native_order::GroupEffect (Cancel or Reduce), resolved by the execution
-// consumer; this file keeps no group helper (ADR-0001, detached comment
-// residue).
-
 // ────────────────────────────────────────────────────────────────────
 // Shared close-side / position-state helpers
 // ────────────────────────────────────────────────────────────────────
-
 // Build a close row using the current source context and resolved price.
 // This does not book cash, emit a live trade or update source-day observations;
 // range-end reporting also uses this non-mutating row builder.
-
-
 Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
         double fill_price, bool was_long, double entry_commission,
         double exit_commission,
@@ -472,24 +346,10 @@ void BacktestEngine::settle_position_after_partial_exit(
     }
 }
 
-
-// Exposure transitions resolve activation once. Matchers never refresh a
-// deadline from whichever position happens to be current at read time.
-
-
-
-
-
-
-
 // Establish a fresh position at fill_price/qty after a transition from FLAT
 // or a same-bar close. Resets all per-position state and seeds the first
 // pyramid entry. Used by every entry path that opens a brand-new position
 // (FLAT entry, close-only-opposite remainder, opposite flip).
-
-
-
-
 void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry lot) {
     if (next_position_cycle_seq_ <= 0
         || next_position_cycle_seq_ == std::numeric_limits<int64_t>::max())

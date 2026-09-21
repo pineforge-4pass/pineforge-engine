@@ -1289,7 +1289,6 @@ typedef struct pf_native_callbacks_v1 {
      * sizeof; a caller sending the base layout stops at `on_margin_call`
      * above and gets exactly the kernel's own defaults for all six, which is
      * what every host compiled before this tail already had. ── */
-
     /** EVERY calculation of the run, including the script bar's own close —
      *  `on_native_recalculate`. `reason` is a #pf_native_calc_reason_t and
      *  `cause` is the applied execution of an ORDER_FILL recalculation, valid

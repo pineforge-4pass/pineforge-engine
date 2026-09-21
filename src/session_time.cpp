@@ -567,11 +567,9 @@ bool session_in_postmarket(const std::string& session,
 // ---------------------------------------------------------------------------
 // timeframe_time / timeframe_time_close (existing public API)
 // ---------------------------------------------------------------------------
-
 // =========================================================================
 // Public functions
 // =========================================================================
-
 // A 2-argument time()/time_close() call binds its second string to the
 // `session` parameter, but scripts commonly pass a TIMEZONE there — e.g.
 // `time("D", "America/New_York")`. TradingView does NOT reinterpret that

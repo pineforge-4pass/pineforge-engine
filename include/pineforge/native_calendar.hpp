@@ -7,13 +7,12 @@
 #include <utility>
 #include <vector>
 
-namespace pineforge::native_calendar {
-inline namespace native_calendar_v2 {
-
 // Isolated calendar / interval values for a later native host. This component
 // does not match orders, emit strategy callbacks, aggregate OHLCV, or run a
 // NativeRunSpec. Legacy helpers in session_time.cpp / timeframe.cpp stay
 // unchanged and are not native authority.
+namespace pineforge::native_calendar {
+inline namespace native_calendar_v2 {
 
 // ---------------------------------------------------------------------------
 // Timeframe

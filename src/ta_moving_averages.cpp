@@ -19,7 +19,6 @@
 namespace pineforge {
 
 // --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
-
 // TradingView's sliding-window sum (ta.sma, math.sum), fitted 2026-09-05 on
 // the round-7 synthetic pins (scratchpad r7/pins/sma-pulse-*, sma-ident-*:
 // OANDA:EURUSD 15, pulse series of known doubles, lengths 3 and 20, three
@@ -482,7 +481,6 @@ double SWMA::compute(double src) {
 // ============================================================================
 // recompute() implementations
 // ============================================================================
-
 // --- RMA ---
 void RMA::save() {
     saved_output_val_ = output_val;
