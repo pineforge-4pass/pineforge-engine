@@ -3154,7 +3154,7 @@ off itself. Four of them are `std::optional` in C++, and `PF_NATIVE_ABSENT`
 this cursor, absent in the bar's own close calculation, where the callback
 already holds the complete bar), `_series_bar_v1` (`native_series_bar()` — the
 latest completed bucket of a declared subscription, absent before its first
-delivery and on every bar a `gaps = 1` series publishes nothing on),
+delivery and on every bar a `PF_NATIVE_GAPS_CLEAR` series publishes nothing on),
 `_trail_state_v1` (`trail_state()` — activation, running best, current level,
 absent when the handle is not a live trail) and `_liquidation_price_v1`
 (`native_liquidation_price()`, which also writes NaN when it is absent). The
@@ -3236,12 +3236,16 @@ accepts either: `PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE` (the layout this header
 first shipped, defined as the offset of the first appended field rather than
 as a literal, so it stays right on every target) and the current `sizeof`.
 Each subscription row (`pf_native_subscription_v1`) carries `lookahead` and
-`gaps` as 0/1 words and may repeat a `tf`: the rows are series instances,
+`gaps` as `uint32_t` words holding a `pf_native_lookahead_e`
+(`PF_NATIVE_LOOKAHEAD_AT_COMPLETION` / `_AT_FIRST_INPUT`) and a
+`pf_native_gaps_e` (`PF_NATIVE_GAPS_HOLD` / `_CLEAR`) value, and may repeat a
+`tf`: the rows are series instances,
 delivered under their own index, and only their `authoritative_bars` are
 shared. `gaps` occupies the word the row published as `reserved0` — a
 reserved word every layout required to be zero — so the row's size and field
-offsets are unchanged, a caller that zero-fills it keeps `barmerge.gaps_off`,
-and any value but 0 or 1 is `PF_NATIVE_E_TAG`.
+offsets are unchanged, a caller that zero-fills it keeps `PF_NATIVE_GAPS_HOLD`
+(`barmerge.gaps_off`), and a value outside either enumeration is
+`PF_NATIVE_E_TAG`.
 
 A caller sending the base length keeps working unchanged and is refused with
 `PF_NATIVE_E_STRUCT` if it sets the risk bit it has no fields for.
