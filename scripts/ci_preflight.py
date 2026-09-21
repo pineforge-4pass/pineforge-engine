@@ -11,6 +11,10 @@ and L14-C exist to remove - without failing the integration branch before
 those lanes land. ``--strict-docs`` promotes them to ordinary fail-closed
 stages; L14-B/C flip it on for good once their pages are clean. Their
 self-tests are NOT advisory: a guard that cannot fail is decoration.
+
+``design-inventory`` is fail-closed from the day it lands: it holds a
+convention the design document already follows on every row, so it has no
+drift to report and nothing to wait for.
 """
 from __future__ import annotations
 
@@ -47,6 +51,10 @@ def check_commands(source: Path, *, strict_docs: bool = False) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
          [sys.executable, str(source / 'scripts/test_corpus_trades_identity.py')]),
+        ('design-inventory-tests',
+         [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
+        ('design-inventory',
+         [sys.executable, str(source / 'scripts/check_design_inventory.py')]),
         ('doc-anchors-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',
