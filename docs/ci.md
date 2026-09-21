@@ -71,7 +71,12 @@ drops every test TU whose include closure reaches `pineforge/source/` or
 `compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
 twin would leave the kernel-only gate without any failure. `KERNEL_MIN_TESTS`
 in `scripts/ci_verify.py` pins the expected row count; the `ctest-floor`
-stage fails when CTest ran fewer rows or printed no count. The release profile
+stage fails when fewer rows ran or CTest printed no count it can read. Only
+rows whose test ran count: a row CTest skipped or could not start is listed
+beside the count (`ctest-floor.log`, `ctestSkipped` / `ctestNotRun` in
+`ci-summary.json`), never counted, so the unsupported-WebSocket skip above is
+reported rather than counted, and a row that stops executing fails the floor
+too. The release profile
 carries the same gate with `RELEASE_MIN_TESTS`, so a row deleted from the
 default build fails too; `debug` and `sanitizers` register a subset of the
 release rows. Raise the constant when a row lands, and pass `--min-tests N` to

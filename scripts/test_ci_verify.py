@@ -32,6 +32,7 @@ from ci_verify import (
     cmake_cache_definitions,
     cmake_configure_argv,
     ctest_row_count,
+    ctest_rows,
     ctest_supports_junit,
     default_build_dir,
     default_runner,
@@ -79,6 +80,36 @@ def which_with_ccache(ccache: str | None):
             return ccache
         return shutil.which(name)
     return which
+
+
+def ctest_output(total: int, skipped=(), not_run=()) -> bytes:
+    """CTest 4.4's console shape for a run of `total` rows, as ci_verify reads it.
+
+    Each skipped or not-run row prints its own result line during the run and
+    is listed again after the closing summary, which counts it inside `total`
+    (a skipped row as passed, a not-run row as failed).
+    """
+    lines = ['Test project /scripted/build']
+    for number, name in enumerate(skipped, 1):
+        lines.append(f'{number:3}/{total} Test #{number}: {name} ........***Skipped   0.01 sec')
+    for number, name in enumerate(not_run, len(skipped) + 1):
+        lines.append(f'Unable to find executable: {name}')
+        lines.append(f'{number:3}/{total} Test #{number}: {name} ........***Not Run   0.00 sec')
+    if not_run:
+        percent = min(99, (total - len(not_run)) * 100 // total)
+        lines.append(f'\n{percent}% tests passed, {len(not_run)} tests failed out of {total}')
+    else:
+        lines.append(f'\n100% tests passed out of {total}')
+    lines.append('\nTotal Test time (real) =   1.00 sec')
+    if skipped:
+        lines.append('\nThe following tests did not run:')
+        lines += [f'\t{number:3} - {name} (Skipped)' for number, name in enumerate(skipped, 1)]
+    if not_run:
+        lines.append('\nThe following tests FAILED:')
+        lines += [f'\t{number:3} - {name} (Not Run)'
+                  for number, name in enumerate(not_run, len(skipped) + 1)]
+        lines.append('Errors while running CTest')
+    return ('\n'.join(lines) + '\n').encode()
 
 
 class Scripted:
@@ -185,12 +216,17 @@ class Scripted:
                 return Completed(1, b'', b'sanitizer env missing\n')
             # CTest's closing summary carries the row count the floor reads;
             # 'absent' scripts a run that never printed one. By default a
-            # profile reports exactly its own floor.
+            # profile reports exactly its own floor. 'ctest_skipped' and
+            # 'ctest_not_run' name rows of that count that did not run;
+            # 'ctest_raw' scripts the output verbatim.
+            if 'ctest_raw' in self.exits:
+                return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
             rows = self.exits.get(
                 'ctest_rows', ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
-            summary = f'100% tests passed out of {rows}\n'.encode()
+            summary = ctest_output(rows, self.exits.get('ctest_skipped', ()),
+                                   self.exits.get('ctest_not_run', ()))
             return Completed(int(self.exits.get('ctest', 0)), summary, b'')
         if argv[0].endswith('smoke_version') or Path(argv[0]).name == 'smoke_version':
             stdout = str(self.exits.get('smoke-stdout', expected_version(self.source))).encode() + b'\n'
@@ -476,6 +512,69 @@ class RowFloorConfig(unittest.TestCase):
             b'98% tests passed, 3 tests failed out of 158\n\nThe following tests FAILED:\n'), 158)
         self.assertIsNone(ctest_row_count(b'No tests were found!!!\n'))
         self.assertIsNone(ctest_row_count(b''))
+
+    def test_ctest_rows_reads_a_real_ctest_run(self):
+        # The installed CTest over a hand-written inventory, so the reader is
+        # pinned to CTest's own output rather than a transcription of it. Three
+        # rows run (pass, fail, abort), two skip (return code, regex), one
+        # cannot start and one is disabled. CTest's own count, 6, includes
+        # the skipped and the not-run rows; 3 ran.
+        python = sys.executable
+        inventory = '\n'.join((
+            f'add_test(ran_pass "{python}" "-c" "raise SystemExit(0)")',
+            f'add_test(ran_fail "{python}" "-c" "raise SystemExit(3)")',
+            f'add_test(ran_abort "{python}" "-c" "__import__(\'os\').abort()")',
+            f'add_test(skip_code "{python}" "-c" "raise SystemExit(77)")',
+            'set_tests_properties(skip_code PROPERTIES SKIP_RETURN_CODE 77)',
+            f'add_test(skip_regex "{python}" "-c" "print(\'SKIP ME\')")',
+            'set_tests_properties(skip_regex PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP ME")',
+            f'add_test(disabled_row "{python}" "-c" "raise SystemExit(0)")',
+            'set_tests_properties(disabled_row PROPERTIES DISABLED TRUE)',
+            'add_test(not_run_row "/nonexistent/ci-verify-missing-executable")',
+        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
+            result = default_runner(
+                ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
+                 '--parallel', '2'], timeout=120, stream_output=False)
+        output = result.stdout.decode('utf-8', 'replace')
+        self.assertNotEqual(result.returncode, 0, output)
+        rows = ctest_rows(result.stdout)
+        self.assertEqual(ctest_row_count(result.stdout), 6, output)
+        self.assertEqual(rows.total, 6, output)
+        self.assertEqual(rows.ran, 3, output)
+        self.assertEqual(sorted(rows.skipped), ['skip_code', 'skip_regex'])
+        self.assertEqual(rows.not_run, ('not_run_row',))
+        self.assertEqual(rows.disabled, ('disabled_row',))
+
+    def test_ctest_rows_counts_failed_rows_as_run_and_names_the_rest(self):
+        rows = ctest_rows(b'100% tests passed out of 164\n')
+        self.assertEqual((rows.total, rows.ran, rows.not_counted()), (164, 164, ''))
+        rows = ctest_rows(b'97% tests passed, 1 tests failed out of 30\n\n'
+                          b'The following tests FAILED:\n\t  5 - test_slow (Timeout)\n')
+        self.assertEqual((rows.total, rows.ran, rows.not_run), (30, 30, ()))
+        rows = ctest_rows(ctest_output(9, skipped=['a', 'b'], not_run=['c']))
+        self.assertEqual((rows.total, rows.ran), (9, 6))
+        self.assertEqual(rows.not_counted(), '; not counted: 2 skipped (a, b), 1 not run (c)')
+        self.assertIsNone(ctest_rows(b'No tests were found!!!\n'))
+
+    def test_ctest_rows_fails_closed_on_lists_it_cannot_read(self):
+        # A failed count the FAILED list does not match, a Skipped result line
+        # the did-not-run list does not name (or the reverse), more rows not
+        # run than CTest counted: each raises, so the floor refuses the run
+        # rather than guess which rows ran.
+        unreadable = (
+            b'98% tests passed, 3 tests failed out of 158\n\nThe following tests FAILED:\n',
+            b'  1/5 Test  #1: a .....***Skipped   0.01 sec\n\n100% tests passed out of 5\n',
+            b'100% tests passed out of 5\n\nThe following tests did not run:\n\t  1 - a (Skipped)\n',
+            b'  1/1 Test #1: a ...***Skipped   0.01 sec\n  2/1 Test #2: b ...***Skipped   0.01 sec\n'
+            b'\n100% tests passed out of 1\n\nThe following tests did not run:\n'
+            b'\t  1 - a (Skipped)\n\t  2 - b (Skipped)\n',
+        )
+        for output in unreadable:
+            with self.subTest(output=output):
+                with self.assertRaises(ValueError):
+                    ctest_rows(output)
 
 
 class ProfileOptions(unittest.TestCase):
@@ -1446,6 +1545,86 @@ class RowFloorDriver(unittest.TestCase):
         self.assertLess(names.index('ctest'), names.index('ctest-floor'))
         self.assertEqual(summary['ctestRows'], RELEASE_MIN_TESTS)
         code, summary, _, _ = self.run_profile('release', ctest_rows='absent')
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+
+    def test_floor_counts_rows_that_ran_and_lists_a_skipped_row_beside_them(self):
+        # The kernel profile as it runs where libcurl lacks WebSocket support:
+        # one row more registered than the floor, and that row skipped.
+        code, summary, _, build_dir = self.run_profile(
+            'kernel', ctest_rows=KERNEL_MIN_TESTS + 1,
+            ctest_skipped=['test_native_live_websocket'])
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['ctestRows'], KERNEL_MIN_TESTS)
+        self.assertEqual(summary['ctestTotal'], KERNEL_MIN_TESTS + 1)
+        self.assertEqual(summary['ctestSkipped'], ['test_native_live_websocket'])
+        self.assertEqual(summary['ctestNotRun'], [])
+        self.assertEqual(summary['ctestDisabled'], [])
+        log = (build_dir / 'ci-logs' / 'ctest-floor.log').read_text()
+        self.assertIn(f'ctest ran {KERNEL_MIN_TESTS} rows (floor {KERNEL_MIN_TESTS})', log)
+        self.assertIn('not counted: 1 skipped (test_native_live_websocket)', log)
+
+    def test_a_row_that_stops_running_trips_the_floor_though_ctest_still_counts_it(self):
+        # CTest's own count includes a skipped row, so before lane Q12 a row
+        # that began to skip left the count at the floor and passed.
+        for profile, floor in (('kernel', KERNEL_MIN_TESTS), ('release', RELEASE_MIN_TESTS)):
+            with self.subTest(profile=profile):
+                code, summary, scripted, _ = self.run_profile(
+                    profile, ctest_rows=floor, ctest_skipped=['test_quietly_skipping'])
+                self.assertEqual(code, 1)
+                self.assertIn('ctest-floor', failure_stages(summary))
+                self.assertNotIn('ctest', failure_stages(summary))
+                self.assertIn('install', scripted.names())
+                self.assertEqual(summary['ctestTotal'], floor)
+                self.assertEqual(summary['ctestRows'], floor - 1)
+                error = next(item['error'] for item in summary['failures']
+                             if item['stage'] == 'ctest-floor')
+                self.assertIn(f'ctest ran {floor - 1} rows, below the floor of {floor}', error)
+                self.assertIn('1 skipped (test_quietly_skipping)', error)
+
+    def test_a_row_ctest_could_not_start_is_not_counted_either(self):
+        code, summary, _, _ = self.run_profile(
+            'kernel', ctest=8, ctest_rows=KERNEL_MIN_TESTS, ctest_not_run=['test_missing_binary'])
+        self.assertEqual(code, 1)
+        self.assertIn('ctest', failure_stages(summary))
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertEqual(summary['ctestRows'], KERNEL_MIN_TESTS - 1)
+        self.assertEqual(summary['ctestNotRun'], ['test_missing_binary'])
+
+    def test_the_floor_still_trips_on_a_real_collapse(self):
+        # Every kernel row but one skips, with CTest's count still at the
+        # floor; and a release suite that simply shrank.
+        skipped = [f'test_row_{number}' for number in range(KERNEL_MIN_TESTS - 1)]
+        code, summary, _, _ = self.run_profile(
+            'kernel', ctest_rows=KERNEL_MIN_TESTS, ctest_skipped=skipped)
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertEqual(summary['ctestRows'], 1)
+        code, summary, _, _ = self.run_profile('release', ctest_rows=12)
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertEqual(summary['ctestRows'], 12)
+
+    def test_floor_fails_closed_on_row_lists_it_cannot_read(self):
+        code, summary, _, _ = self.run_profile(
+            'kernel', ctest=8, ctest_raw=b'98% tests passed, 3 tests failed out of 999\n')
+        self.assertEqual(code, 1)
+        self.assertIn('ctest-floor', failure_stages(summary))
+        self.assertIsNone(summary['ctestRows'])
+        self.assertEqual(summary['ctestTotal'], 999)
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'ctest-floor')
+        self.assertIn('cannot read', error)
+
+    def test_min_tests_override_gates_the_rows_that_ran(self):
+        # --min-tests stays the override (fail-closed below 1, see
+        # RowFloorConfig) and gates the same count: 4 rows, 1 skipped.
+        code, summary, _, _ = self.run_profile(
+            'debug', extra=['--min-tests', '3'], ctest_rows=4, ctest_skipped=['test_skip'])
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['ctestRows'], 3)
+        code, summary, _, _ = self.run_profile(
+            'debug', extra=['--min-tests', '4'], ctest_rows=4, ctest_skipped=['test_skip'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
 
