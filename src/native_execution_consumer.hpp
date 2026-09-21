@@ -523,10 +523,20 @@ private:
     // leaves `margin` unset, which is every source-projected spec.
     const NativeMarginModel* margin_model() const noexcept;
     std::optional<double> maintenance_fraction(bool short_side) const noexcept;
-    // Solve equity(P) == maintenance requirement(P) for the live book.
-    std::optional<double> liquidation_level(const BacktestEngine& engine) const;
-    // The equity one maintenance test is made against, on the model's basis.
-    double margin_equity(const BacktestEngine& engine, double mark) const;
+    // E3: the account-currency rate ONE check point converts at -- the one the
+    // declared curve has in force at that point's own cursor. The engine's own
+    // accessor converts at the presented bar clock, which is a later instant
+    // whenever the walk has moved past the point being checked.
+    double margin_check_fx(const BacktestEngine& engine,
+                           const native_order::MatchCursor& cursor) const noexcept;
+    // BacktestEngine::marked_equity() at an explicit rate.
+    double marked_equity_at(const BacktestEngine& engine, double price, double fx) const;
+    // Solve equity(P) == maintenance requirement(P) for the live book, at the
+    // check point's own rate.
+    std::optional<double> liquidation_level(const BacktestEngine& engine, double fx) const;
+    // The equity one maintenance test is made against, on the model's basis
+    // and at the check point's own rate.
+    double margin_equity(const BacktestEngine& engine, double mark, double fx) const;
     // The host's gate over one kernel check point. True keeps the check.
     bool margin_check_admitted(const BacktestEngine& engine, NativeMarginCheckKind kind,
                                const native_order::MatchCursor& cursor, double mark) const;

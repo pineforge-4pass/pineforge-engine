@@ -2601,7 +2601,7 @@ std::optional<double> NativeExecutionConsumer::maintenance_fraction(
 // full maintenance. That case has no liquidation price at all and is reported
 // as such rather than as a very large or negative one.
 std::optional<double> NativeExecutionConsumer::liquidation_level(
-        const BacktestEngine& engine) const {
+        const BacktestEngine& engine, double fx) const {
     if (engine.position_side_ == PositionSide::FLAT || engine.pyramid_entries_.empty()) {
         return std::nullopt;
     }
@@ -2609,7 +2609,6 @@ std::optional<double> NativeExecutionConsumer::liquidation_level(
     const auto fraction = maintenance_fraction(short_side);
     if (!fraction) return std::nullopt;
     const double point_value = engine.syminfo_.pointvalue;
-    const double fx = engine.active_account_currency_fx();
     if (!std::isfinite(point_value) || !(point_value > 0.0)
         || !std::isfinite(fx) || !(fx > 0.0)) {
         return std::nullopt;
@@ -2643,6 +2642,55 @@ std::optional<double> NativeExecutionConsumer::liquidation_level(
     return level;
 }
 
+// E3: the account-currency rate ONE margin check point converts at. Every
+// term of the maintenance test is FX-bearing -- the requirement
+// Q * P * pv * fx * m, the marked equity it is compared with, and the level
+// solved from the two -- so the rate has to be the one the declared curve has
+// in force at the instant being checked. BacktestEngine::active_account_
+// currency_fx() reads the PRESENTED bar clock instead, which is a later
+// instant whenever the walk has moved past the point: an applied fill drained
+// at its script bar's calculation is presented that bar's close coordinate
+// while its cursor still stands at the opening print it filled on, and a
+// requirement measured there is the rate of a bar the account has not reached.
+//
+// The rest of the kernel already converts at the cursor -- a Sized request
+// freezes its units at account_currency_fx_at(the acceptance coordinate), an
+// execution term records active_fx at its own cursor -- so this is the margin
+// model joining a rule the run already keeps everywhere else. Inert by
+// construction for a run that declares no timestamped curve: with no curve
+// account_currency_fx_at() answers the run's scalar rate at every instant.
+double NativeExecutionConsumer::margin_check_fx(
+        const BacktestEngine& engine,
+        const native_order::MatchCursor& cursor) const noexcept {
+    return engine.account_currency_fx_at(cursor.point.effective_time_ms);
+}
+
+// BacktestEngine::marked_equity() (engine_execution.cpp) at an explicit rate
+// rather than at the engine's presented clock: realized balance plus the
+// marked physical lots minus their remaining paid entry costs. Term for term
+// the engine's own arithmetic, and pinned against that accessor wherever the
+// two clocks agree (tests/test_native_margin_fx_clock.cpp).
+double NativeExecutionConsumer::marked_equity_at(const BacktestEngine& engine,
+                                                 double price, double fx) const {
+    if (!std::isfinite(price) || !std::isfinite(fx)
+        || (engine.position_side_ != PositionSide::FLAT
+            && engine.position_side_ != PositionSide::LONG
+            && engine.position_side_ != PositionSide::SHORT)
+        || (engine.position_side_ == PositionSide::FLAT) != engine.pyramid_entries_.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double equity = engine.initial_capital_ + engine.net_profit_sum_;
+    const double direction = engine.position_side_ == PositionSide::SHORT ? -1.0 : 1.0;
+    for (const auto& lot : engine.pyramid_entries_) {
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        equity += direction * (price - lot.price) * lot.qty * engine.syminfo_.pointvalue
+            * fx - engine.open_entry_commission(lot);
+    }
+    return equity;
+}
+
 // The equity one maintenance test is made against. The default IS the
 // account's marked equity, which has already been reduced by the open
 // entries' commission; MarkedEquityBeforeOpenCommission adds that term back,
@@ -2650,8 +2698,8 @@ std::optional<double> NativeExecutionConsumer::liquidation_level(
 // margin equity. Neither spelling books anything: this is one term of one
 // comparison.
 double NativeExecutionConsumer::margin_equity(const BacktestEngine& engine,
-                                              double mark) const {
-    const double equity = engine.marked_equity(mark);
+                                              double mark, double fx) const {
+    const double equity = marked_equity_at(engine, mark, fx);
     const auto* margin = margin_model();
     if (!margin || !std::isfinite(equity)
         || margin->basis != NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission) {
@@ -2733,14 +2781,14 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
     const auto book = position(engine);
     const double held = std::abs(book.signed_units);
     const double point_value = engine.syminfo_.pointvalue;
-    const double fx = engine.active_account_currency_fx();
+    const double fx = margin_check_fx(engine, cursor);
     if (!(held > 0.0) || !std::isfinite(mark) || !(mark > 0.0)
         || !std::isfinite(point_value) || !(point_value > 0.0)
         || !std::isfinite(fx) || !(fx > 0.0)) {
         return std::nullopt;
     }
     const double unit_margin = mark * point_value * fx * *fraction;
-    double equity = margin_equity(engine, mark);
+    double equity = margin_equity(engine, mark, fx);
     double required = held * unit_margin;
     const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
     // The host's money rule, BEFORE the breach test. The kernel still owns
@@ -2973,7 +3021,7 @@ void NativeExecutionConsumer::maintain_margin_liquidation(
             // price to rest at. A host that needs a call where the level does
             // not exist (a LONG at full maintenance) selects the mark check,
             // whose breach test and requirement hook run either way.
-            level = liquidation_level(engine);
+            level = liquidation_level(engine, margin_check_fx(engine, cursor));
             if (!level || !std::isfinite(*level) || !(*level > 0.0)) {
                 withdraw_margin_liquidation(engine);
                 return;
@@ -3067,10 +3115,13 @@ void NativeExecutionConsumer::calculation_margin_check(
 // destination among the waypoints that remain, so a level the new rate moved
 // inside the segment is rested in time for that same segment to reach it.
 //
-// The check reads the rate of the point it precedes and then hands the
-// engine's presented clock back, so nothing but the margin state can differ
-// from a walk that was never offered the point. Inert without a staged curve
-// and a declared model; a CalculationOnly model returns from
+// N6 took this one check under a temporarily swapped engine clock, because
+// the margin model still converted at whatever bar was being presented. E3
+// moved every check kind onto its own cursor's rate (margin_check_fx), so the
+// roll needs no clock of its own any more: the point it is offered at IS the
+// instant it is measured at, and nothing but the margin state can differ from
+// a walk that was never offered the point. Inert without a staged curve and a
+// declared model; a CalculationOnly model returns from
 // maintain_margin_liquidation before its gate, as at every other path point.
 void NativeExecutionConsumer::fx_roll_margin_check(
         BacktestEngine& engine, const NativeDriverPoint& point,
@@ -3100,11 +3151,8 @@ void NativeExecutionConsumer::fx_roll_margin_check(
             if (order[index] == point.coordinate.path_phase) standing = order[index - 1];
         }
     }
-    const std::int64_t presented = engine.current_bar_.timestamp;
-    engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
     maintain_margin_liquidation(engine, make_cursor(point, 0.0), standing, price,
                                 NativeMarginCheckKind::FxRoll);
-    engine.current_bar_.timestamp = presented;
 }
 
 std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
@@ -3121,14 +3169,16 @@ std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
     event.side = position_before < 0.0 ? native_order::Side::Short : native_order::Side::Long;
     event.mark = applied.resolved_price;
     // The receipt reports the equity on the model's own basis, which is the
-    // number the check was made on. Default basis = marked_equity().
-    event.equity = margin_equity(engine, applied.resolved_price);
+    // number the check was made on, at the rate in force where the fill that
+    // booked it landed (E3). Default basis = marked_equity().
+    const double fx = margin_check_fx(engine, applied.cursor);
+    event.equity = margin_equity(engine, applied.resolved_price, fx);
     const auto fraction = maintenance_fraction(position_before < 0.0);
     event.required = fraction
         ? std::abs(position_after) * applied.resolved_price * engine.syminfo_.pointvalue
-              * engine.active_account_currency_fx() * *fraction
+              * fx * *fraction
         : 0.0;
-    if (const auto level = liquidation_level(engine)) event.liquidation_price = *level;
+    if (const auto level = liquidation_level(engine, fx)) event.liquidation_price = *level;
     event.units = applied.closed_units;
     event.position_before = position_before;
     event.position_after = position_after;
@@ -9014,7 +9064,10 @@ NativeRiskState NativeExecutionConsumer::risk_state() const {
 
 std::optional<double> NativeExecutionConsumer::host_liquidation_price(
         const BacktestEngine& engine) const {
-    return liquidation_level(engine);
+    // A host query, not a check point: it has no cursor of its own, so it is
+    // answered at the instant the engine is presenting -- which is what a host
+    // asking "where is my level now" means.
+    return liquidation_level(engine, engine.active_account_currency_fx());
 }
 
 std::optional<double> NativeExecutionConsumer::sized_units_preview(
