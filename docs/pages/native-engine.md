@@ -1058,8 +1058,10 @@ behalf, so `sizing`, `shortfall_multiple` and `liquidation_min_units` would be
 set only to be shadowed, and TradingView's slice — the restore lot-floored
 *before* the 4×, floored again, and the one-contract whole-drop band for a
 sub-lot restore — is not a generic policy the kernel could spell (R5 N11;
-`scripts/check_adapter_spec_shadowing.py` fails the build if a shadowed field
-is ever declared again, and `tests/test_adapter_margin_relower.cpp` MG-F3 pins
+`scripts/check_adapter_spec_shadowing.py` fails the gate if a shadowed field
+is ever declared again — a source guard of every `ci_verify.py` profile and of
+`ci_preflight.py`, before anything is configured, as well as a CTest row —
+and `tests/test_adapter_margin_relower.cpp` MG-F3 pins
 the gridded case where the two orders of floor and multiple part: 4 lots, not
 5). The kernel then solves,
 schedules, places, re-prices, books and reports every resting liquidation; the

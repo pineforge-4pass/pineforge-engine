@@ -1474,7 +1474,8 @@ add_test(NAME test_cancellation_hash_coverage COMMAND ${Python3_EXECUTABLE} -B
 
 # R5 N11: no NativeRunSpec field the Pine adapter's project() sets is then
 # unconditionally shadowed by one of its own host hooks (audit D2), plus the
-# check's mutation self-test.
+# check's mutation self-test. Since lane P7 the check is also a source guard
+# of every scripts/ci_verify.py profile, so it fails before configure.
 add_test(NAME test_adapter_spec_shadowing COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/check_adapter_spec_shadowing.py)
 add_test(NAME test_adapter_spec_shadowing_mutations COMMAND ${Python3_EXECUTABLE} -B

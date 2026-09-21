@@ -156,6 +156,7 @@ class Scripted:
                 'source-guard-pending-mirror': 'gen_pending_order_mirror.py',
                 'source-guard-native-versions': 'check_native_cpp_versions.py',
                 'source-guard-aggregate-versions': 'check_aggregate_cpp_versions.py',
+                'source-guard-adapter-spec-shadowing': 'check_adapter_spec_shadowing.py',
                 'source-guard-twin-parity': 'check_twin_parity.py',
             }
             for key, needle in needles.items():
@@ -946,6 +947,19 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         code, summary, scripted, _ = self.run_profile(**{'source-guard-c-abi': 1})
         self.assertEqual(code, 1)
         self.assertIn('source-guard-c-abi', failure_stages(summary))
+        self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
+
+    def test_adapter_spec_shadowing_guard_failure_skips_configure(self):
+        # R5 N11 registered this check as a CTest row only, so a shadowed spec
+        # field surfaced after a full build; as a source guard (lane P7) it
+        # fails every profile -- the kernel one included -- and ci_preflight
+        # before configure.
+        self.assertIn('source-guard-adapter-spec-shadowing',
+                      [name for name, _ in source_guard_commands(ROOT)])
+        code, summary, scripted, _ = self.run_profile(
+            'kernel', **{'source-guard-adapter-spec-shadowing': 1})
+        self.assertEqual(code, 1)
+        self.assertIn('source-guard-adapter-spec-shadowing', failure_stages(summary))
         self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
     def test_native_include_independence_runs_for_release_native_and_kernel_only(self):

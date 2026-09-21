@@ -111,6 +111,7 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-native-versions', ['scripts/check_native_cpp_versions.py']),
     ('source-guard-native-c-surface', ['scripts/check_native_c_api_surface.py']),
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
+    ('source-guard-adapter-spec-shadowing', ['scripts/check_adapter_spec_shadowing.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 # The kernel-only archive must name no TradingView vocabulary outside ADR-0001's
