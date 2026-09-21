@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from ci_preflight import run_checks
+from ci_preflight import check_commands, run_checks
 
 
 class PreflightFailures(unittest.TestCase):
@@ -40,6 +40,29 @@ class PreflightFailures(unittest.TestCase):
         code, summary, _ = self.run_preflight([])
         self.assertEqual(code, 1)
         self.assertEqual(summary['status'], 'failed')
+
+    def test_advisory_failure_is_reported_without_failing_the_run(self):
+        # R5 L14-A: the documentation guards report today's drift until the
+        # page-rewriting lanes land. Reported, logged, and not binding.
+        code, summary, logs = self.run_preflight([
+            ('docs', [sys.executable, '-c', 'import sys; print("drift"); sys.exit(1)'], True),
+            ('next', [sys.executable, '-c', 'print("next check ran")']),
+        ])
+        self.assertEqual(code, 0)
+        self.assertEqual(summary['status'], 'passed')
+        self.assertEqual(summary['stages'][0]['status'], 'reported')
+        self.assertEqual(summary['stages'][0]['exitCode'], 1)
+        self.assertIn('drift', (logs / 'docs.log').read_text())
+
+    def test_strict_docs_makes_the_documentation_guards_binding(self):
+        relaxed = {name: entry for entry in check_commands(Path('/src')) for name in [entry[0]]}
+        strict = {name: entry
+                  for entry in check_commands(Path('/src'), strict_docs=True)
+                  for name in [entry[0]]}
+        self.assertTrue(relaxed['doc-anchors'][2])
+        self.assertFalse(strict['doc-anchors'][2])
+        # A guard's own must-fail suite is never advisory.
+        self.assertEqual(len(relaxed['doc-anchors-tests']), 2)
 
     def test_success_is_explicitly_only_preflight(self):
         code, summary, _ = self.run_preflight([('ok', [sys.executable, '-c', 'pass'])])

@@ -1501,6 +1501,12 @@ add_test(NAME test_native_feature_rulings COMMAND ${Python3_EXECUTABLE} -B
 add_test(NAME test_native_feature_rulings_mutations COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_native_feature_rulings.py)
 
+# R5 L14-A: the documentation anchor gate's own must-fail suite. Only the
+# self-test is a row: the gate itself runs in ci_preflight, where it stays
+# advisory until the page-rewriting lanes L14-B / L14-C clear today's drift.
+add_test(NAME test_doc_anchors COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_anchors.py)
+
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256)
