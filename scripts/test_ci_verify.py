@@ -144,6 +144,9 @@ class Scripted:
         if any(Path(part).name == 'check_native_include_independence.py' for part in argv):
             return Completed(int(self.exits.get('native-include-independence', 0)),
                              b'native include independence\n', b'')
+        if any(Path(part).name == 'check_kernel_residuals.py' for part in argv):
+            return Completed(int(self.exits.get('kernel-residuals', 0)),
+                             b'kernel residuals\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
                 'source-guard-c-abi': 'check_c_abi_runtime.py',
@@ -953,6 +956,30 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 if expected:
                     archive = argv[argv.index('--kernel-archive') + 1]
                     self.assertEqual(Path(archive).name, 'libpineforge_kernel.a')
+
+    def test_kernel_residuals_gate_runs_for_the_kernel_profile_only(self):
+        for profile, expected in (("kernel", True), ("release", False), ("native", False),
+                                  ("debug", False), ("sanitizers", False)):
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(profile)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual('kernel-residuals' in stage_names(summary), expected)
+
+    def test_kernel_residuals_command_names_the_kernel_archive_and_the_adr(self):
+        cfg = validate_config(parse_args(['kernel', '--build-dir', 'tmp-build']))
+        argv = ci_verify.kernel_residuals_command(cfg)
+        self.assertEqual(Path(argv[1]).name, 'check_kernel_residuals.py')
+        self.assertEqual(Path(argv[argv.index('--archive') + 1]).name, 'libpineforge_kernel.a')
+        self.assertEqual(Path(argv[argv.index('--adr') + 1]).name,
+                         '0001-kernel-adapter-boundary.md')
+
+    def test_kernel_residuals_failure_stops_before_ctest(self):
+        code, summary, scripted, _ = self.run_profile('kernel', **{'kernel-residuals': 1})
+        self.assertEqual(code, 1)
+        self.assertIn('kernel-residuals', failure_stages(summary))
+        names = stage_names(summary)
+        self.assertLess(names.index('native-include-independence'), names.index('kernel-residuals'))
+        self.assertNotIn('ctest', scripted.names())
 
     def test_kernel_skips_the_receipt_backed_abi_providers(self):
         code, summary, scripted, _ = self.run_profile('kernel')

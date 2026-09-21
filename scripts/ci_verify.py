@@ -64,7 +64,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # which left this profile when the admission journal became source-layer state
 # (it still runs in every profile that builds the source layer). N15 adds no
 # CTest row: its corpus-parity gate is a ci_preflight stage and a CI job.
-KERNEL_MIN_TESTS = 182
+# 183 = those 182 plus gap lane P2's test_kernel_residuals, the Python guard
+# that holds ADR-0001's residual-vocabulary table against libpineforge_kernel.a
+# (a source-free row: it reads the archive every profile builds).
+KERNEL_MIN_TESTS = 183
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
@@ -86,6 +89,12 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
+# The kernel-only archive must name no TradingView vocabulary outside ADR-0001's
+# residual table (R5 gap lane P2). The archive exists in every profile and the
+# CTest row test_kernel_residuals checks it there too; this stage is the
+# kernel profile's own claim, run right after the build so a failing name is
+# reported before the suite runs.
+KERNEL_RESIDUALS_PROFILES = frozenset(('kernel',))
 TWIN_PARITY_PROFILES = frozenset(('release', 'native'))
 # The Pine-free hosts under examples/native/ are built, and their example_*
 # ctest rows executed, in the two profiles they are written for: the default
@@ -200,6 +209,12 @@ def native_include_independence_command(cfg: VerifyConfig, prefix: Path) -> list
 
 def twin_parity_command(source: Path) -> list[str]:
     return [sys.executable, str(source / 'scripts/check_twin_parity.py')]
+
+
+def kernel_residuals_command(cfg: VerifyConfig) -> list[str]:
+    return [sys.executable, str(cfg.source / 'scripts/check_kernel_residuals.py'),
+            '--archive', str(cfg.build_dir / 'lib' / 'libpineforge_kernel.a'),
+            '--adr', str(cfg.source / 'docs/adr/0001-kernel-adapter-boundary.md')]
 
 
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
@@ -759,6 +774,12 @@ class Driver:
                 timeout=300)
         return result.returncode == 0
 
+    def enforce_kernel_residuals(self) -> bool:
+        if self.cfg.profile.name not in KERNEL_RESIDUALS_PROFILES:
+            return True
+        result = self.invoke('kernel-residuals', kernel_residuals_command(self.cfg), timeout=300)
+        return result.returncode == 0
+
     def run(self) -> int:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.write_summary()
@@ -826,6 +847,8 @@ class Driver:
             return self.finish('failed', 1)
         self.pass_stage('stale-binaries', f'{archive} is newer than src/, include/, CMakeLists.txt')
         if not self.enforce_native_include_independence():
+            return self.finish('failed', 1)
+        if not self.enforce_kernel_residuals():
             return self.finish('failed', 1)
         live = self.cfg.build_dir / 'bin' / 'pineforge-live'
         if self.cfg.profile.live_runner:

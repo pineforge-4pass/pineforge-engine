@@ -1479,6 +1479,13 @@ add_test(NAME test_adapter_spec_shadowing COMMAND ${Python3_EXECUTABLE} -B
 add_test(NAME test_adapter_spec_shadowing_mutations COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_adapter_spec_shadowing.py)
 
+# R5 P2: the kernel-only archive names no TradingView vocabulary outside the
+# ADR-0001 residual table (strings/nm over libpineforge_kernel.a, which every
+# profile builds), plus the checker's own must-be-able-to-fail self-tests.
+add_test(NAME test_kernel_residuals COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_residuals.py
+    --archive $<TARGET_FILE:pineforge_kernel>)
+
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256)

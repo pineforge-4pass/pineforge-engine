@@ -3025,7 +3025,7 @@ the kernel's own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies this lane
 (Release, live runner ON, tutorial OFF, source layer OFF); CI runs it as the
 `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` (176 rows) is the count the kernel-only CTest set is
+`scripts/ci_verify.py` (183 rows) is the count the kernel-only CTest set is
 expected to run, and the `ctest-floor` stage fails the run when CTest reports
 fewer rows or no count at all, so a test TU that silently becomes source-bound
 (or a filter that empties the suite) is a refusal rather than a smaller green.
@@ -3035,7 +3035,19 @@ it for one run of any profile (the other profiles carry no default floor).
 ### What the kernel-only archive still names
 
 R5 lane N14 audited `strings libpineforge_kernel.a` for Pine / TradingView
-vocabulary. What remains is listed with its ruling in
+vocabulary, and gap lane P2 turned the audit into a gate:
+`scripts/check_kernel_residuals.py --archive build-kernel/lib/libpineforge_kernel.a`
+reads `strings -a` and `nm -C` over the archive, matches a fixed residual
+vocabulary (an identifier containing `pine` other than `pineforge`,
+`tradingview`, `barmerge`, `coof`, `pooc`, `market_admission`,
+`calc_on_order_fills`, `process_orders_on_close` or a `tv` segment; a text
+containing `strategy.<name>`, `ta.<name>`, `request.security`,
+`barmerge.<name>` or `__margin_call__`) and requires every match to be listed,
+by name, in the first column of the ADR's residual tables — and every listed
+match to still be in the archive. The `kernel` profile runs it as the
+`kernel-residuals` stage right after the build; every profile runs it as the
+CTest row `test_kernel_residuals` (with the checker's own must-fail
+self-tests). What remains is listed with its ruling in
 `docs/adr/0001-kernel-adapter-boundary.md` ("Residual TradingView-named
 surface"); the short version:
 
@@ -3050,9 +3062,27 @@ surface"); the short version:
   (`include/pineforge/source/pine_float_compare.hpp`).
 - **Frozen pending-row field names.** The seventeen `pine_exit_activation_*`,
   `pine_frozen_market_instruction_*` and `pine_birth_reach` reflection
-  strings (plus `tv_carry_qty`) belong to the frozen `pf_pending_order_v1_t`
-  mirror, an append-only C ABI contract; the neutral view is
-  `native_working_requests()`.
+  strings, `tv_carry_qty`, the seven `coof_*` (calc-on-order-fills), the
+  three `pooc_*` (process-orders-on-close) and the seventy-eight
+  `market_admission_*` names (the frozen mirror of the source-layer admission
+  journal) belong to the frozen `pf_pending_order_v1_t` mirror, an
+  append-only C ABI contract published by `strategy_pending_order_layout`.
+  The kernel translation unit holds each reflection row — name, C type,
+  offset, size — and never a value: the values are projected by the source
+  layer alone, and a bare host's `strategy_pending_orders_len` is 0. The
+  neutral view is `native_working_requests()`. Each family has its ADR row,
+  listing every name, and the gate above holds the list.
+- **The ambient EMA seeding default.** `ta::EMA` seeds from its first finite
+  input (`EmaSeeding::FirstValue`, the default) or from the simple average
+  of its first `length` inputs (`EmaSeeding::SimpleAverage`, na for the
+  warm-up window the way `RMA` and `SMA` warm up). A host names the seeding
+  per instance, `ta::EMA ema(length, ta::EmaSeeding::SimpleAverage)`, and
+  touches no global. `ta::ema_na_warmup_flag()` is the thread-local ambient
+  default an instance that names no seeding latches on its first
+  `compute()`; the Pine adapter raises it around one evaluation context
+  under its opt-in run flags, the way any host may. It is ruled in the ADR as
+  a generic ambient indicator option (a mechanism the vocabulary gate cannot
+  see); nothing in the kernel raises it.
 - **Host-only modes behind frozen C setters.** `strategy_set_realtime_tail`
   and `strategy_set_probe_suppress_tail_logic` are the Pine source host's
   live-probe protocol. On a bare `NativeStrategyHost` the kernel's virtual

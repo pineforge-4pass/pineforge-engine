@@ -34,6 +34,8 @@ def check_commands(source: Path) -> list[tuple[str, list[str]]]:
         ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
         ('native-c-surface-tests',
          [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')]),
+        ('kernel-residuals-tests',
+         [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
          [sys.executable, str(source / 'scripts/test_corpus_trades_identity.py')]),
     ]
