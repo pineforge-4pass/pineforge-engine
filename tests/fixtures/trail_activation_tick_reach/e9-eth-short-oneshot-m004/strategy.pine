@@ -1,0 +1,33 @@
+// E9 probe (R5 follow-up lane E9): the SHORT twin of lane E5's e5-eth-long-oneshot-p004.
+// A ONE-SHOT trail (trail_offset = 0) whose trail_price is sub-tick: entry fill - 0.004.
+// Which price does TradingView book when the path first reaches it: the level rounded
+// toward the position (fill - 0.00 -> the fill's own tick) or away from it (fill - 0.01)?
+// Same entries as e5-eth-short-arm-m004 (bars.inc kEthShort): on each entry bar the close
+// is above the fill E and a later bar's low equals E exactly.
+// Entry bars (UTC open time; each entry is placed on the bar before it and fills at the
+// entry bar's open):
+//   2025-04-25 19:15
+//   2025-04-26 14:15
+//   2025-06-16 04:30
+//   2025-06-28 13:45
+//   2025-07-03 22:30
+//   2025-08-17 07:30
+//   2026-01-03 23:45
+//   2026-03-23 21:30
+//@version=6
+strategy("E9 ETH short one-shot trail entry-0.004", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+placeEntry = time == timestamp("UTC", 2025, 4, 25, 19, 0) or time == timestamp("UTC", 2025, 4, 26, 14, 0) or time == timestamp("UTC", 2025, 6, 16, 4, 15) or time == timestamp("UTC", 2025, 6, 28, 13, 30) or time == timestamp("UTC", 2025, 7, 3, 22, 15) or time == timestamp("UTC", 2025, 8, 17, 7, 15) or time == timestamp("UTC", 2026, 1, 3, 23, 30) or time == timestamp("UTC", 2026, 3, 23, 21, 15)
+
+if placeEntry and strategy.position_size == 0
+    strategy.entry("S", strategy.short)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size < 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("SX", "S", trail_price=strategy.position_avg_price - 0.004, trail_offset=0)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 16
+    strategy.close("S", comment="timeout")

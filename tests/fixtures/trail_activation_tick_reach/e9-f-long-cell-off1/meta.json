@@ -1,0 +1,17 @@
+{
+  "title": "E9 NYSE:F long trail placement close in the activation cell off1",
+  "slug": "e9-f-long-cell-off1",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T16:31:15.581Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "26f0b76b67738a51634b4d9b9a05734026ae25d1c61697e06309edc6435a596c",
+  "tv_trades_sha256": "638f1170b37c941bb622f09c6f814863d59881a6cd4ce4ed0fdfaac17fc0e1ed",
+  "tv_trades_rows": 14
+}

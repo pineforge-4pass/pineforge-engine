@@ -1,0 +1,54 @@
+// E9 probe (R5 follow-up lane E9): does a PLACEMENT close that sits inside the activation's
+// tick cell count as already reached? Lane E5's still-unpinned question.
+// NYSE:F 15m (sub-cent prints). Each exit is issued at the close of the bar whose open filled
+// the entry (on the grid), trail_points n: the activation A = fill + n ticks is the TICK
+// of that placement close (c in [A - 0.005, A), half-up onto A), while the raw close stops half a tick short of A.
+// The next bar never reaches A's half-tick boundary on its raw path, and it opens below the close and falls a tick or more:
+// a trail armed at placement exits on that next bar; one read raw at placement stays
+// dormant and exits on a later bar whose quantized high reaches A, or at the timeout.
+// trail_offset 1: the offset trail of lane P9's carried-best row.
+// Entry bars (UTC open time; each entry is placed on the bar before it and fills at the
+// entry bar's open):
+//   2025-08-12 14:15  trail_points 3
+//   2025-09-25 17:00  trail_points 3
+//   2025-11-17 16:30  trail_points 1
+//   2026-01-12 14:45  trail_points 1
+//   2026-02-11 16:15  trail_points 5
+//   2026-03-02 18:00  trail_points 4
+//   2026-04-07 17:30  trail_points 3
+//@version=6
+strategy("E9 NYSE:F long trail placement close in the activation cell off1", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 8, 12, 14, 0)
+        pts := 3
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 9, 25, 16, 45)
+        pts := 3
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 11, 17, 16, 15)
+        pts := 1
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2026, 1, 12, 14, 30)
+        pts := 1
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2026, 2, 11, 16, 0)
+        pts := 5
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2026, 3, 2, 17, 45)
+        pts := 4
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2026, 4, 7, 17, 15)
+        pts := 3
+        strategy.entry("L", strategy.long)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size > 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("LX", "L", trail_points=pts, trail_offset=1)
+
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 20
+    strategy.close("L", comment="timeout")

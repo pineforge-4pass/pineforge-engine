@@ -1,0 +1,30 @@
+// E9 probe (R5 follow-up lane E9): does a PLACEMENT close that sits inside the activation's
+// tick cell count as already reached? Lane E5's still-unpinned question.
+// NYSE:F 15m (sub-cent prints). Each exit is issued at the close of the bar whose open filled
+// the entry (on the grid), trail_points n: the activation A = fill - n ticks is the TICK
+// of that placement close (c in (A, A + 0.005), onto A), while the raw close stops half a tick short of A.
+// The next bar never reaches A's half-tick boundary on its raw path, and it opens above the close and rises a tick or more:
+// a trail armed at placement exits on that next bar; one read raw at placement stays
+// dormant and exits on a later bar whose quantized low reaches A, or at the timeout.
+// trail_offset 0: the one-shot; armed at placement its stop is the carried best.
+// Entry bars (UTC open time; each entry is placed on the bar before it and fills at the
+// entry bar's open):
+//   2026-02-25 16:30  trail_points 2
+//@version=6
+strategy("E9 NYSE:F short trail placement close in the activation cell one-shot", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2026, 2, 25, 16, 15)
+        pts := 2
+        strategy.entry("S", strategy.short)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size < 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("SX", "S", trail_points=pts, trail_offset=0)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 20
+    strategy.close("S", comment="timeout")

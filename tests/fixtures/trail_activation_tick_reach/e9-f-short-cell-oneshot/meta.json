@@ -1,0 +1,17 @@
+{
+  "title": "E9 NYSE:F short trail placement close in the activation cell one-shot",
+  "slug": "e9-f-short-cell-oneshot",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T16:31:33.250Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "ea5f12020eb9b64993f64844abe9ed9bf3c4af5a91052a95eaf911916378da4b",
+  "tv_trades_sha256": "a3db94c6ff56cf5df3665716d31212ccfa37a32a6dd70395c7e730c8411fbdf2",
+  "tv_trades_rows": 2
+}
