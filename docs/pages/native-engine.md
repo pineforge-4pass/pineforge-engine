@@ -2689,9 +2689,13 @@ timeout or a missing line; an example registered without a summary line is a
 configure error. The `test_example_runner` row
 (`scripts/test_example_runner.py`) proves the runner fails in each of those
 ways and that no `example_*` row sets a property that would override its
-verdict. The `release` and `kernel` profiles of
-`scripts/ci_verify.py` turn the option on, so every `example_*` row runs in
-the gate both with and without the source layer compiled;
+verdict. Each example is compiled with `-UNDEBUG` after the build-type flags,
+as every test target is, so an `assert()` added to one aborts its row instead
+of compiling to a no-op under Release's `-DNDEBUG`. The `release` and `kernel`
+profiles of `scripts/ci_verify.py` turn the option on, so every `example_*`
+row runs in the gate both with and without the source layer compiled (their
+`examples-assert-live` stage refuses a configure in which an example's
+compile command leaves `NDEBUG` defined);
 `scripts/check_native_include_independence.py` compiles all thirteen sources
 against the installed headers with the source trees removed, the C one with
 the C compiler. The market and selected examples are also built, from the

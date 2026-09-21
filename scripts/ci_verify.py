@@ -144,6 +144,11 @@ TWIN_PARITY_PROFILES = frozenset(('release', 'native'))
 # ctest rows executed, in the two profiles they are written for: the default
 # release build and the kernel-only one. Every example links PineForge::kernel.
 EXAMPLES_PROFILES = frozenset(('release', 'kernel'))
+# An example_* target's object directory, as CMake names it for every
+# generator. The live runner's MODULE builds of two example sources
+# (runner/CMakeLists.txt) have target directories of their own and no
+# example_* row.
+EXAMPLE_OBJECT_DIR = re.compile(r'(?:^|[/\\])CMakeFiles[/\\](example_[^/\\]+)\.dir[/\\]')
 
 
 class ConfigError(Exception):
@@ -485,6 +490,46 @@ def sanitizer_flag_on_library(build_dir: Path) -> bool:
     if not library:
         raise RuntimeError('compile_commands.json has no src/matrix.cpp entry')
     return all(SANITIZER_FLAG in command for command in library)
+
+
+def ndebug_defined(argv: list[str]) -> bool:
+    """Whether NDEBUG is defined once the compiler has read argv in order."""
+    defined = False
+    tokens = iter(argv)
+    for token in tokens:
+        if token in ('-D', '-U'):
+            token += next(tokens, '')
+        if token == '-DNDEBUG' or token.startswith('-DNDEBUG='):
+            defined = True
+        elif token == '-UNDEBUG':
+            defined = False
+    return defined
+
+
+def example_targets_with_ndebug(build_dir: Path) -> tuple[list[str], list[str]]:
+    """The example_* targets compile_commands.json names, and those built with NDEBUG.
+
+    An example's checks are its CTest row's evidence; one whose compile leaves
+    NDEBUG defined turns every assert() in it into a no-op.
+    """
+    path = build_dir / 'compile_commands.json'
+    if not path.is_file():
+        raise RuntimeError("compile_commands.json missing; the examples' assert() state "
+                           'cannot be verified')
+    targets, with_ndebug = set(), set()
+    for entry in json.loads(path.read_text()):
+        argv = entry.get('arguments') or shlex.split(entry.get('command') or '')
+        output = entry.get('output') or next(
+            (value for flag, value in zip(argv, argv[1:]) if flag == '-o'), '')
+        match = EXAMPLE_OBJECT_DIR.search(output)
+        if match is None:
+            continue
+        targets.add(match.group(1))
+        if ndebug_defined(argv):
+            with_ndebug.add(match.group(1))
+    if not targets:
+        raise RuntimeError('compile_commands.json has no example_* compile command')
+    return sorted(targets), sorted(with_ndebug)
 
 
 def stale_archive_sources(source: Path, archive: Path) -> list[str]:
@@ -942,6 +987,22 @@ class Driver:
                 self.fail_stage('sanitizer-public-flag', str(error))
                 return self.finish('failed', 1)
             self.pass_stage('sanitizer-public-flag', f'library compile uses {SANITIZER_FLAG}')
+        if self.cfg.profile.name in EXAMPLES_PROFILES:
+            try:
+                targets, with_ndebug = example_targets_with_ndebug(self.cfg.build_dir)
+            except Exception as error:
+                self.fail_stage('examples-assert-live', str(error))
+                return self.finish('failed', 1)
+            if with_ndebug:
+                self.fail_stage(
+                    'examples-assert-live',
+                    'NDEBUG stays defined in the compile of ' + ', '.join(with_ndebug)
+                    + ', so an assert() there is a no-op; examples/native/CMakeLists.txt '
+                    'gives every example -UNDEBUG after the build-type flags')
+                return self.finish('failed', 1)
+            self.pass_stage('examples-assert-live',
+                            f'assert() is live in all {len(targets)} example targets: '
+                            + ', '.join(targets))
         if self.invoke(
                 'build',
                 ['cmake', '--build', str(self.cfg.build_dir), '--parallel', str(self.cfg.jobs)],

@@ -45,6 +45,13 @@ foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES)
     # headers declare virtuals with named, unused parameters.
     target_compile_options(${target} PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter -ffp-contract=off)
+    # Each example checks its own results, so keep assert() live in it: strip
+    # NDEBUG (appended after the build-type flags, so it wins over Release's
+    # -DNDEBUG), as for every test target, or an assert() added to an example
+    # compiles to a no-op and its example_* row passes vacuously.
+    # scripts/ci_verify.py's examples-assert-live stage checks every example's
+    # compile command for it.
+    target_compile_options(${target} PRIVATE -UNDEBUG)
     set_target_properties(${target} PROPERTIES
         OUTPUT_NAME ${example}
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
@@ -62,6 +69,8 @@ foreach(example IN LISTS PINEFORGE_NATIVE_C_EXAMPLES)
     target_link_libraries(${target} PRIVATE PineForge::kernel)
     target_compile_options(${target} PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter -ffp-contract=off)
+    # assert() stays live here too (<assert.h> reads NDEBUG the same way).
+    target_compile_options(${target} PRIVATE -UNDEBUG)
     set_target_properties(${target} PROPERTIES
         OUTPUT_NAME ${example}
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
