@@ -20,6 +20,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import check_abi_receipt_skips
 import ci_verify
 from ci_verify import (
     Completed,
@@ -1985,6 +1986,22 @@ class StaleBinaries(unittest.TestCase):
         self.assertIn('no compile command of target pineforge', summary['failures'][0]['error'])
         self.assertNotIn('ctest', scripted.names())
 
+
+class ReceiptRecipe(unittest.TestCase):
+    """check_abi_receipt_skips.py --prepare, the recipe for a plain build tree
+    (CLAUDE.md, docs/ci.md), prepares the six providers exactly as ci_verify
+    does, so a tree prepared by hand is one ci_verify would reuse."""
+    run_profile = DriverOrderingAndAggregation.run_profile
+
+    def test_the_recipe_prepares_every_provider_with_ci_verify_argv(self):
+        code, summary, scripted, build_dir = self.run_profile('release')
+        self.assertEqual(code, 0, summary['failures'])
+        prepared = [argv for argv in scripted.calls
+                    if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py'
+                           for part in argv)]
+        self.assertEqual(prepared, [
+            check_abi_receipt_skips.prepare_argv(ROOT, build_dir.resolve(), role, 2)
+            for role in check_abi_receipt_skips.PROVIDER_ROLES])
 
 class DiagnosticsCollection(unittest.TestCase):
     def collect(self, build: Path, output: Path) -> None:

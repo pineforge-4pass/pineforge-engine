@@ -180,6 +180,37 @@ FX, and missing-Cancelled controls are active, and the good caller compiles
 before its intentional negative compile control. Ordinary compile failures
 remain failures, separate from ABI link rejections.
 
+Outside `ci_verify.py`, a build tree configured with
+`PINEFORGE_REQUIRE_ABI_RECEIPTS=OFF` -- the default of every plain configure,
+the one in `CLAUDE.md` included -- registers the four receipt-gated rows
+(`test_script_cpp_abi`, `test_settlement_cpp_abi`,
+`test_aggregate_cpp_versions_runtime`, `test_l4g_runtime_budget`)
+`--skip-if-receipt-missing`. Until the six providers are prepared in that tree,
+each exits 77, and CTest counts a skipped row as passed: `100% tests passed`
+does not include them. `scripts/check_abi_receipt_skips.py --build-dir <dir>`
+names every receipt-gated row that will skip (or, registered
+`--require-receipts`, fail) and exits 1 when there is one. With `--prepare` it
+first prepares the six providers into the tree with the argv `ci_verify.py`
+uses (`ReceiptRecipe` in `scripts/test_ci_verify.py` holds the two equal):
+it fetches a missing pinned commit, reuses a matching provider and refuses a
+mismatched one without deleting it, so a tree prepared this way is one
+`ci_verify.py` would reuse. `test_l4g_runtime_budget` also reads the tree's
+`compile_commands.json` once its receipt exists, so the script names a tree
+configured without `CMAKE_EXPORT_COMPILE_COMMANDS=ON` too. The recipe:
+
+```sh
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DPINEFORGE_BUILD_TESTS=ON
+cmake --build build -j4
+python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare
+ctest --test-dir build --output-on-failure
+python3 scripts/check_abi_receipt_skips.py --build-dir build   # exits 1 if a gated row skipped
+```
+
+The CTest row `test_abi_receipt_skips` (`scripts/test_abi_receipt_skips.py`)
+tests the script against the real `ctest`, including a run CTest reports as
+`100% tests passed` in which gated rows skipped.
+
 ## TradingView parity: the corpus gate
 
 Every profile in `scripts/ci_verify.py` configures

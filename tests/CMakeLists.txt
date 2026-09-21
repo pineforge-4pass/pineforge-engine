@@ -1067,6 +1067,15 @@ endif()
 
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+# A receipt-gated row above skips (exit 77) wherever
+# PINEFORGE_REQUIRE_ABI_RECEIPTS is OFF and its providers are not prepared in
+# this build tree, and CTest counts a skipped row as passed.
+# scripts/check_abi_receipt_skips.py names those rows and prepares the
+# providers (the recipe in CLAUDE.md and docs/ci.md); this row is its test,
+# against the real ctest.
+add_test(NAME test_abi_receipt_skips
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_abi_receipt_skips.py
+        --ctest ${CMAKE_CTEST_COMMAND})
 # Same pairing TU, for the v16/v17 ownership control.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME test_aggregate_cpp_versions_runtime

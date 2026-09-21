@@ -10,14 +10,29 @@ Both C++ unit tests and full corpus verification must pass.
 # 1. Build and run unit tests (ctest)
 cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DPINEFORGE_BUILD_TESTS=ON \
     -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON
 cmake --build build -j$(nproc 2>/dev/null || echo 4)
+python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare
 ctest --test-dir build --output-on-failure
+python3 scripts/check_abi_receipt_skips.py --build-dir build   # must exit 0
 
 # 2. Run full validation corpus sweep (against TV exported trades)
 ./scripts/run_corpus.sh
 ```
+
+> **Receipt-gated rows skip silently:** `test_script_cpp_abi`,
+> `test_settlement_cpp_abi`, `test_aggregate_cpp_versions_runtime` and
+> `test_l4g_runtime_budget` read six historical ABI providers prepared inside
+> the build dir. Without them each row SKIPS (exit 77) and ctest still prints
+> `100% tests passed`. `--prepare` builds the six (15-45 s each, once per
+> build dir, same argv as `ci_verify.py`; fetches a missing pinned commit;
+> reuses a matching provider, refuses a mismatched one without deleting it —
+> use a fresh build dir after changing compiler or flags). The call after
+> ctest exits 1 naming every receipt-gated row that did not run.
+> `test_l4g_runtime_budget` also needs `CMAKE_EXPORT_COMPILE_COMMANDS=ON` once
+> its receipt exists.
 
 > **Stale-test-binary trap:** `cmake --build build --target pineforge` rebuilds
 > ONLY the static lib. Test executables are separate targets that statically
@@ -47,13 +62,15 @@ If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the
 
 ## Build Commands
 
-- Configure CMake: `cmake -B build -S . -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
+- Configure CMake: `cmake -B build -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
+- Prepare the ABI providers (once per build dir): `python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare`
 - Compile: `cmake --build build -j4`
 - Clean: `rm -rf build`
 
 ## Test Commands
 
 - Run all unit tests: `ctest --test-dir build --output-on-failure`
+- Name receipt-gated rows that skip: `python3 scripts/check_abi_receipt_skips.py --build-dir build`
 - Run single test executable: `./build/bin/test_integration`
 
 ## SOP: adding a runtime `PF_API` export (CI gate — recurring failure)
