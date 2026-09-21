@@ -118,9 +118,69 @@ Everything here is one call: `submit(Request)` native_host.hpp:487, or
 | `time`, `bar_index`, session facts | `NativeDecisionContext` market_driver.hpp:84, `NativeCoordinate` market_driver.hpp:46 | Copied onto the callback stack; mutating it changes nothing. |
 | `strategy.position_size`, `strategy.position_avg_price` | `physical_position()` native_host.hpp:498 | |
 | `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:499 | |
-| `strategy.closedtrades.*` | `trade_count()` engine.hpp:3125, `get_trade(i)` engine.hpp:3126 | |
+| `strategy.closedtrades`, `strategy.closedtrades.*` | `closed_trade_count()` / `closed_trade(i)` engine.hpp:2395-2396, a `Trade` row; C: `pf_report_t::trades` (`pf_trade_t`) plus `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` / `_entry_incarnation` pineforge.h:1029-1089 | Field by field in [Open and closed trades](@ref pine_to_native_map_trades). `report_trade_count()` / `get_report_trade(i)` engine.hpp:2403-2406 span the same rows followed by the range-end rows. |
 | `strategy.netprofit`, equity curve, drawdown | partial — `fill_report` engine.hpp:3161 | The trade list and trade statistics are filled; for a bare native host the **equity curve is empty** (the recorders are protected, engine.hpp:2386-2412) so equity metrics degenerate silently engine_metrics.cpp:168, and a position still open at the end has no range-end row engine_run.cpp:191. **Lane L2**. |
-| `strategy.opentrades.*` | **lane L2** | |
+| `strategy.opentrades`, `strategy.opentrades.*` | `native_open_lots(mark)` native_host.hpp:861 → one `NativeOpenLot` native_host.hpp:255 per open physical lot; C: `strategy_native_open_lot_count_v1(s, mark)` / `strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:871-879 → `pf_native_open_lot_v1` native_c_api.h:509 | Owning snapshot of the book lot by lot, oldest first, marked at the price you pass (Pine marks at the current `close`; pass the bar's close in `on_native_bar`, the fill price in `on_native_applied`, the print in `on_native_tick`). Observation only: it moves no fill, no hash and no row. Field by field in [Open and closed trades](@ref pine_to_native_map_trades). |
+
+### Open and closed trades {#pine_to_native_map_trades}
+
+Pine indexes both namespaces by trade number; the native rows carry the
+same facts plus the identity Pine has no word for — the request incarnation
+that opened the lot and the position cycle it belongs to — so a host can
+name a lot in a later `BindOpening` or match it to the closed row it becomes.
+
+**Open trades.** `native_open_lots(mark)` native_host.hpp:861 answers one
+`NativeOpenLot` native_host.hpp:255 per open physical lot, in book order
+(`physical_position().lot_count` rows). The C twin is
+`strategy_native_open_lot_count_v1(s, mark)` then
+`strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:871-879 into a
+`pf_native_open_lot_v1` native_c_api.h:509, whose two strings borrow the
+snapshot until the next count call. `mark` is the price the three marked
+fields are computed at; Pine's builtins mark at the current `close`.
+
+| Pine | `NativeOpenLot` field | Notes |
+| --- | --- | --- |
+| `strategy.opentrades` | `native_open_lots(mark).size()`, `physical_position().lot_count` | C: the count `strategy_native_open_lot_count_v1` returns. |
+| `strategy.opentrades.entry_id(i)` | `entry_label` | The opening request's `label`. `entry_incarnation` is the never-reused identity behind it; `cycle` the position cycle (`BindOpening{handle, cycle}`). |
+| `strategy.opentrades.entry_comment(i)` | `entry_comment` | The opening request's `comment`. |
+| `strategy.opentrades.entry_bar_index(i)` | `entry_bar_index` | Script-bar index of the opening fill. |
+| `strategy.opentrades.entry_time(i)` | `entry_time_ms` | Effective time of the opening fill, Unix ms. |
+| `strategy.opentrades.entry_price(i)` | `entry_price` | The booked price (slippage and grid already applied). |
+| `strategy.opentrades.size(i)` | `signed_units` | Pine's is unsigned with a separate direction; here `> 0` is long, `< 0` short, and `side` says the same. |
+| `strategy.opentrades.commission(i)` | `entry_commission` | The entry fee still on the lot, account currency. A partial close takes its share of it onto the closed row. |
+| `strategy.opentrades.profit(i)` | `unrealized_pnl` | The move from `entry_price` to `mark` in account currency, **net of `entry_commission`** — the lot's own term of `native_marked_equity(mark)`, so the realized balance plus these rows is the marked equity. Gross is `unrealized_pnl + entry_commission`. |
+| `strategy.opentrades.max_runup(i)` | `favorable_excursion` | Largest move for the lot the kernel has sampled along the delivered path, account currency, gross of fees, `mark` folded in. |
+| `strategy.opentrades.max_drawdown(i)` | `adverse_excursion` | Largest move against the lot, likewise; both are magnitudes `>= 0`. |
+| `strategy.opentrades.max_runup_percent(i)` / `max_drawdown_percent(i)` / `profit_percent(i)` | derive: `value / (entry_price * abs(signed_units) * point_value * account_fx) * 100` | Percent of entry cost; the snapshot carries the facts, not the ratio. |
+| `strategy.position_entry_name` | `native_open_lots(mark).back().entry_label` | The newest lot's label. |
+
+A NaN `mark` keeps every booking fact, leaves `unrealized_pnl` NaN and folds
+nothing into the excursions. A host that owns lot excursions
+(`owns_lot_excursions()`) keeps its own sampler, so for that run the two
+excursion fields fold `mark` alone.
+
+**Closed trades.** `closed_trade_count()` / `closed_trade(i)`
+engine.hpp:2395-2396 answer the `Trade` rows this run booked, in booking
+order; `report_trade_count()` / `get_report_trade(i)` engine.hpp:2403-2406
+append the range-end rows `report_open_position_at_end` adds. In C the
+report's `pf_report_t::trades` (`pf_trade_t`) carries the numeric fields and
+`strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` /
+`_close_cause` / `_entry_incarnation` pineforge.h:622-1089 the strings and
+the cause.
+
+| Pine | `Trade` field | Notes |
+| --- | --- | --- |
+| `strategy.closedtrades` | `closed_trade_count()` | C: `pf_report_t::total_trades`. |
+| `strategy.closedtrades.entry_id(i)` / `entry_comment(i)` | `entry_id`, `entry_comment` | The same strings the lot carried as `entry_label` / `entry_comment`; `entry_incarnation` is the same identity. |
+| `strategy.closedtrades.entry_bar_index(i)` / `entry_time(i)` / `entry_price(i)` | `entry_bar_index`, `entry_time`, `entry_price` | Copied from the lot. |
+| `strategy.closedtrades.exit_id(i)` / `exit_comment(i)` | `exit_id`, `exit_comment` | The closing request's `label` / `comment`; `closed_trade_close_cause(i)` says why (script, bracket, liquidation, risk, range end). |
+| `strategy.closedtrades.exit_bar_index(i)` / `exit_time(i)` / `exit_price(i)` | `exit_bar_index`, `exit_time`, `exit_price` | |
+| `strategy.closedtrades.size(i)` | `qty`, `is_long` | Unsigned, with the direction beside it. A partial close books a row for the closed slice only. |
+| `strategy.closedtrades.commission(i)` | `commission` | Entry share plus exit share, account currency. One cash-per-execution ticket is split by units over every slice of that execution — the closed rows and, for a reversal, the lot it opened. |
+| `strategy.closedtrades.profit(i)` | `pnl` | Net of `commission`. `pnl + commission` is the gross move, which equals the lot's `unrealized_pnl + entry_commission` at a `mark` equal to the exit price, scaled to the closed slice. |
+| `strategy.closedtrades.profit_percent(i)` | `pnl_pct` | Net return on entry cost. |
+| `strategy.closedtrades.max_runup(i)` / `max_drawdown(i)` | `max_runup`, `max_drawdown` | TradingView's net-open-profit basis: the lot's gross favorable excursion less the entry share, floored at zero; the adverse excursion plus the entry share. The open-lot fields are the gross values these are derived from. |
+| `strategy.closedtrades.max_runup_percent(i)` / `max_drawdown_percent(i)` | derive from the two fields over `entry_price * qty * point_value` | |
 
 ### Series, indicators, higher timeframes {#pine_to_native_map_series}
 

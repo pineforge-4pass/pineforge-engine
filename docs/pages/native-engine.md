@@ -466,6 +466,21 @@ Query the book with `physical_position()` (`signed_units`, `average_price`,
 returns owning snapshots: command, driver, and account rows. Later
 commands/reset do not invalidate copies already returned.
 
+The same book lot by lot is `native_open_lots(mark)` (R5 gap lane N18): one
+owning `NativeOpenLot` per open physical lot, oldest first, carrying the
+lot's identity (`ordinal`, `entry_incarnation`, `cycle`), its booking facts
+(`entry_label`, `entry_comment`, `entry_time_ms`, `entry_bar_index`,
+`entry_price`, `signed_units`), the entry fee still on it
+(`entry_commission`) and three fields marked at `mark`: `unrealized_pnl` —
+the lot's own term of `native_marked_equity(mark)`, fee-net, so the realized
+balance plus the rows is the marked equity — and the gross
+`favorable_excursion` / `adverse_excursion` the kernel has sampled along the
+delivered path with `mark` folded in. It reads only what the book holds and
+moves nothing (no fill, no hash, no row); a NaN `mark` keeps the booking facts
+and leaves `unrealized_pnl` NaN. It is the `strategy.opentrades.*` surface of
+a bare host; the field-by-field map is in
+[PineScript to native C++](@ref pine_to_native_map_trades).
+
 A run-start request uses the first provided input's opening time as its initial
 decision floor. An empty batch has no market time or price to deliver.
 After the first realtime tick or time-advance call, confirmed-bar input is
@@ -2628,7 +2643,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-30 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+32 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -2670,8 +2685,11 @@ kernel's existing legality rule: inside a callback, or between realtime inputs. 
 anywhere else answers `PF_NATIVE_E_STATE` and changes nothing — the kernel
 throws there, and the C boundary contains that throw rather than letting it
 unwind through the C frame. `strategy_native_position_v1`,
-`_working_len_v1` / `_working_get_v1` (L7's working view, copied out) and
-`_events_v1` read the run back; `_state_v1` reads the lifecycle and its typed
+`_working_len_v1` / `_working_get_v1` (L7's working view, copied out),
+`_open_lot_count_v1(s, mark)` / `_open_lot_get_v1` (N18's open-lot snapshot,
+copied out into `pf_native_open_lot_v1` — the C spelling of
+`native_open_lots(mark)`, with the two strings borrowed until the next count
+call, exactly like the working rows) and `_events_v1` read the run back; `_state_v1` reads the lifecycle and its typed
 failure. `_cancel_where_v1` takes the text and a
 `pf_native_request_field_e` (`PF_NATIVE_FIELD_COMMENT` / `_LABEL`): an
 unknown selector is `PF_NATIVE_E_TAG` and a NULL text is
