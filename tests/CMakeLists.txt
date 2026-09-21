@@ -1483,11 +1483,15 @@ add_test(NAME test_adapter_spec_shadowing_mutations COMMAND ${Python3_EXECUTABLE
     ${PROJECT_SOURCE_DIR}/scripts/test_adapter_spec_shadowing.py)
 
 # R5 P2: the kernel-only archive names no TradingView vocabulary outside the
-# ADR-0001 residual table (strings/nm over libpineforge_kernel.a, which every
-# profile builds), plus the checker's own must-be-able-to-fail self-tests.
+# ADR-0001 residual table (the symbol table and the string literals of
+# libpineforge_kernel.a, which every profile builds), plus the checker's own
+# must-be-able-to-fail self-tests. P2b: --cxx gives the archive-surface cases
+# this build's own compiler, so they build their `-g` probe archive instead of
+# skipping on a host whose PATH has no c++.
 add_test(NAME test_kernel_residuals COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_residuals.py
-    --archive $<TARGET_FILE:pineforge_kernel>)
+    --archive $<TARGET_FILE:pineforge_kernel>
+    --cxx ${CMAKE_CXX_COMPILER})
 # R5 P6: every NativeRunSpec field the Pine adapter's project() never assigns
 # has a ruling row in ADR-0001 naming executed native consumers (the price grid
 # and the risk limits are native-only by ruling), plus the check's mutation
