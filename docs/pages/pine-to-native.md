@@ -660,9 +660,14 @@ risk.action = pineforge::NativeRiskAction::FlattenAndBlock;
 spec.risk = risk;
 ```
 
-`initial_short = 0.0` is legal only because `maintenance_short` is unset on
-that side; a side with neither is refused as `MarginSideUndeclared`
-native_run_spec.hpp:671. The grid is what makes a bracket level a *ladder*
+A side may waive the opening requirement or the liquidation, but not both.
+`initial_* == 0.0` is the **maintenance-only** spelling — the host owns opening
+admission on that side — and it is legal only where that side's `maintenance_*`
+is set. This strategy never shorts, so its short side simply keeps an ordinary
+requirement: `initial_short = 0.0` with no `maintenance_short` states nothing
+at all and `configure_native` refuses the whole spec with
+`MarginSideUndeclared` native_run_spec.hpp:671.
+The grid is what makes a bracket level a *ladder*
 price: `native_price_grid_strategy.cpp` runs one strategy under all four
 answers and `native_margin_strategy.cpp` drives a real liquidation.
 
@@ -691,6 +696,8 @@ sized.time  = pineforge::native_order::SizeTime::AtAcceptance;
 sized.price = pineforge::native_order::SizePrice::SignalOnTick;
 sized.reserve_percent_fee = true;           // divide the cash by (1 + fee)
 const auto entry = submit({sized, "long", ""});
+// SubmitResult::handle native_order.hpp:651 is an optional: empty on a
+// rejection, which the reject reason beside it names.
 ```
 
 `reserve_percent_fee` native_order.hpp:163 is the thing Pine has no spelling
@@ -704,7 +711,7 @@ runnable version.
 
 ```cpp
 namespace no = pineforge::native_order;
-const no::WaitForApplied owner{entry.handle, no::NativeArmVisibility::PendingUntilArmed,
+const no::WaitForApplied owner{*entry.handle, no::NativeArmVisibility::PendingUntilArmed,
                                no::NativeArmFirstMatch::AfterArmPrint,
                                no::NativeArmScope::Book};
 const no::Member oca{1, 0, no::GroupEffect::Cancel};
@@ -720,7 +727,10 @@ stop_loss.trigger = no::Stop{0.0};
 stop_loss.anchor  = no::FromOwnerFill{-20.0, true, no::NativeAnchorRounding::Directional};
 
 no::Request trail{no::Reduce{no::OwnerOpenedUnits{}}, "trail", ""};
-trail.trigger = no::Trail{0.0, std::nullopt, no::TrailTicks{8.0}};
+// An anchored trail moves its ARM threshold, so arm_price must be present and
+// hold the placeholder 0.0 — `std::nullopt` here is RequestRejectReason::InvalidTrigger
+// native_order.hpp:633, exactly as a nonzero level on an anchored limit is.
+trail.trigger = no::Trail{0.0, 0.0, no::TrailTicks{8.0}};
 trail.anchor  = no::FromOwnerFill{+30.0, true, no::NativeAnchorRounding::Directional};
 trail.owner   = owner;  trail.group = oca;
 
