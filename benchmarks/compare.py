@@ -329,6 +329,40 @@ def main() -> int:
                            f"{tv_scope:,} | " + " | ".join(str(counts[l]) for l in LABELS) + " |")
     tallies.append("")
 
+    # Every non-excellent row with the canonical rubric's failing gates (its
+    # notes): count -> missing/extra trades, entry/exit -> fill prices, pnl ->
+    # money drift, coverage -> reproduced only a slice of TV's history.
+    for i, (engine, _) in enumerate(ENGINES):
+        if engine not in graded_engines:
+            continue
+        bad = [(r, r[3][i]) for r in rows if label_of(r[3][i]) not in ("excellent", "pending")]
+        if engine == "vectorbt":
+            bad = [(r, g) for r, g in bad if g.result is not None]
+        if not bad:
+            continue
+        gate_counts: dict[str, int] = {}
+        tallies += [f"## {engine}: non-excellent rows\n",
+                    "| Strategy | Group | Tier | Failing gates / reason | count Δ (abs) | entry p90 | "
+                    "exit p90 | PnL p90 | coverage |",
+                    "|---|---|---|---|---:|---:|---:|---:|---:|"]
+        for (name, group, _tv, _gs), g in bad:
+            if g.result is None:
+                gate_counts["n/a"] = gate_counts.get("n/a", 0) + 1
+                tallies.append(f"| {name} | {group} | n/a | {g.reason} | | | | | |")
+                continue
+            r = g.result
+            gates = [k for k, ok in (("count", r.count_ok), ("entry", r.entry_ok), ("exit", r.exit_ok),
+                                     ("pnl", r.pnl_ok), ("coverage", r.coverage_ok),
+                                     ("distinct-entry", r.distinct_entry_identity_ok)) if not ok]
+            key = "+".join(gates) or "none"
+            gate_counts[key] = gate_counts.get(key, 0) + 1
+            tallies.append(f"| {name} | {group} | {r.label} | {r.notes or key} | "
+                           f"{pct(r.count_delta)} ({r.count_abs_delta}) | {pct(r.entry_p90)} | "
+                           f"{pct(r.exit_p90)} | {pct(r.pnl_p90)} | {r.coverage * 100:.1f}% |")
+        tallies += ["", f"{engine} non-excellent rows by failing-gate set: "
+                    + ", ".join(f"{k} {v}" for k, v in sorted(gate_counts.items(),
+                                                               key=lambda kv: (-kv[1], kv[0]))) + ".", ""]
+
     text_summary = "\n".join(summary + tallies)
     if args.no_write:
         print("\n".join(sections))
@@ -341,7 +375,7 @@ def main() -> int:
         print(f"wrote {out_dir / args.detail_name}")
         print(f"wrote {out_dir / args.summary_name}")
         print()
-        print("\n".join(tallies))
+        print("\n".join(tallies[:tallies.index("") + 1]))
     return 0
 
 
