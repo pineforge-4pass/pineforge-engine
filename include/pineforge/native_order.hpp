@@ -644,7 +644,9 @@ struct TargetObservation {
 /// Who authored a request. Host is every request a host submits, replaces or
 /// cancels, and it is the whole existing population: it folds nothing into the
 /// continuation digest, so no established hash moves. KernelLiquidation marks
-/// the margin model's own Reduce; KernelRisk is reserved for the risk lane.
+/// the margin model's own Reduce or Flatten; KernelRisk marks the Flatten a
+/// NativeRiskAction::FlattenAndBlock breach issues at its breach point
+/// (native_execution_consumer.cpp, pinned by tests/test_native_risk_limits.cpp).
 enum class RequestOrigin : std::uint8_t {
     Host = 0,
     KernelLiquidation = 1,
