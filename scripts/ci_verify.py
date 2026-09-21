@@ -52,7 +52,19 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # and N6's test_native_margin_fx_roll. N9 and N8 added no source-free TU of
 # their own: both extended rows the profile already ran. Raise it when a new
 # source-free row lands. --min-tests overrides it for any profile.
-KERNEL_MIN_TESTS = 176
+# 181 = those 176 rows plus gap wave B's five: N13's test_native_arm_options,
+# N7's test_native_auxiliary_feed and test_native_auxiliary_feed_stream (its
+# adapter twin is a source-layer TU and stays out), and N11's two source-guard
+# rows test_adapter_spec_shadowing / _mutations, which are Python guards over
+# the sources and so register in every profile. N10 and N12 added no
+# source-free row: N10 re-pointed six trail TUs at a tests-only oracle header
+# (they keep running here) and N12's differential is an adapter TU.
+# 182 = those 181 plus N18's test_native_open_lots, plus N14's
+# test_native_tail_override_seam, minus N14's test_market_admission_causality,
+# which left this profile when the admission journal became source-layer state
+# (it still runs in every profile that builds the source layer). N15 adds no
+# CTest row: its corpus-parity gate is a ci_preflight stage and a CI job.
+KERNEL_MIN_TESTS = 182
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')

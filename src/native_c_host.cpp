@@ -83,9 +83,10 @@ static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE + 10u * sizeof(std::uint32_t)
                          + 2u * sizeof(double),
               "the pf_native_run_spec_ext_v1 risk tail moved");
-/* So is the auxiliary-feed tail behind it: three pointers and two words. */
+/* So is the auxiliary-feed tail, last of the three: three pointers and two
+ * words past the layout N8's intrabar / policy tail left. */
 static_assert(sizeof(pf_native_run_spec_ext_v1)
-                  == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE + 3u * sizeof(void*)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE + 3u * sizeof(void*)
                          + 2u * sizeof(std::uint32_t),
               "the pf_native_run_spec_ext_v1 auxiliary tail moved");
 static_assert(static_cast<int>(pineforge::NativeSeriesSource::Input)
@@ -142,8 +143,9 @@ static_assert(static_cast<int>(pineforge::IntrabarPath::SampleEligibility::Distr
 static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)
                   == PF_MAGNIFIER_BACK_LOADED, "MagnifierDistribution drifted");
 /* The N8 tail is append-only in the same way: fourteen words and four
- * pointers past the layout L9 left. */
-static_assert(sizeof(pf_native_run_spec_ext_v1)
+ * pointers past the layout L9 left, and it ends where the auxiliary tail
+ * behind it begins. */
+static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE + 14u * sizeof(std::uint32_t)
                          + 4u * sizeof(const char*),
               "the pf_native_run_spec_ext_v1 intrabar/policy tail moved");

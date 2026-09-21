@@ -30,12 +30,21 @@
 
 #include "../src/engine_internal.hpp"
 
+#include <pineforge/compat/pine/trail_ticks.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace pineforge {
 namespace internal {
+
+// TradingView's trail tick arithmetic moved to compat/pine with R5 lane N14;
+// the oracle's bodies call it unqualified, exactly as they did when it sat in
+// this namespace.
+using compat::pine::snap_trail_level_to_tick_grid;
+using compat::pine::trail_offset_to_ticks;
+using compat::pine::trail_points_to_ticks;
 
 // Kind of price-cross event on the synthesized OHLC path. Used by the
 // helpers in engine_path_resolve.cpp; exposed in this header purely so

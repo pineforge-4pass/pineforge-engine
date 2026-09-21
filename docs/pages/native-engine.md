@@ -2888,16 +2888,19 @@ union is.
 
 **What is not exposed, and why.** The header opens with a **COVERAGE** block:
 one line per public member of `NativeStrategyHost`, carrying either the C
-spelling (`[C]`) or the reason there is none (`[--]`). Six members are
+spelling (`[C]`) or the reason there is none (`[--]`). Eight members are
 excluded today — `prepare_native_begin` (it borrows the codegen ingress a C
 host never supplies), `validate_execution_precommit` and
 `inspect_current_execution` (their views are deep C++ aggregates — an
 `ExecutionPlan`, an `AccountEffectProjection`, a variable-length closed-row
 P&L vector — with no size-prefixed POD, and each names its C-level
 substitute), `resolve_anchored_level` (the generic knob is
-`anchor_rounding`), and `submit_market` / `replace_market` (C++ conveniences
+`anchor_rounding`), `submit_market` / `replace_market` (C++ conveniences
 that refuse non-market extras; the same request is `strategy_native_submit_v1`
-with `PF_NATIVE_TRIGGER_MARKET`). `scripts/check_native_c_api_surface.py`
+with `PF_NATIVE_TRIGGER_MARKET`), `declare_auxiliary_feed` (a C host declares
+the feed up front in the run spec's auxiliary tail; the begin-time
+replacement takes a `std::optional<NativeAuxiliaryFeed>`) and
+`native_sized_units` (its basis is the C++ `native_order::Sized` variant). `scripts/check_native_c_api_surface.py`
 proves the block is exactly that class's public surface and runs as a source
 guard in every `ci_verify.py` profile, so the list cannot silently go stale;
 `scripts/test_check_native_c_api_surface.py` proves the guard can fail.

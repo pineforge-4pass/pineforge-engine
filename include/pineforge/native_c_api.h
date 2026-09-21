@@ -89,6 +89,13 @@
  *   [C]  execute_current                   strategy_native_execute_current_v1
  *   [C]  native_series_bar                 strategy_native_series_bar_v1
  *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1
+ *   [--] declare_auxiliary_feed            a C host declares the run's auxiliary finer feed up front, in
+ *                                          pf_native_run_spec_ext_v1's auxiliary tail under
+ *                                          PF_NATIVE_SPEC_EXT_AUXILIARY_FEED; the begin-time REPLACEMENT
+ *                                          takes a std::optional<NativeAuxiliaryFeed> with no size-
+ *                                          prefixed POD, and withdrawing a feed the spec declared has no
+ *                                          C caller
+ *   [C]  append_auxiliary_bars             strategy_native_append_auxiliary_bars_v1
  *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1
@@ -100,6 +107,7 @@
  *   [--] replace_market                    the same convenience for a replace; see submit_market
  *   [C]  cancel                            strategy_native_cancel_v1
  *   [C]  native_working_requests           strategy_native_working_len_v1 / strategy_native_working_get_v1
+ *   [C]  native_open_lots                  strategy_native_open_lot_count_v1 / strategy_native_open_lot_get_v1
  *   [C]  cancel_all                        strategy_native_cancel_all_v1
  *   [C]  cancel_where                      strategy_native_cancel_where_v1
  *   [C]  cohort_open                       strategy_native_cohort_open_v1
@@ -113,6 +121,11 @@
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
+ *   [--] native_sized_units                the basis it converts is the C++ native_order::Sized variant,
+ *                                          which has no size-prefixed POD of its own (pf_native_request_v1
+ *                                          carries a sizing BLOCK, not the variant); a C host submits
+ *                                          PF_NATIVE_INTENT_SIZED and reads the units the kernel resolved
+ *                                          from the applied execution
  *
  * HARDENING RULES
  * ───────────────
