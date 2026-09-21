@@ -55,6 +55,12 @@ public:
     NativeSetupResult configure(BacktestEngine& engine, const NativeRunSpec& spec);
     NativeFxCurveSetupResult configure_fx_curve(const NativeFxCurve& curve);
     NativeStateView view() const;
+    // The leg order this run walks over `bar`: the declared
+    // NativeRunSpec::path_order, and the open-proximity rule under Auto or
+    // before a spec is configured. It is the order the confirmed-bar driver
+    // walks, and the one a question asked from a host callback is answered
+    // in (BacktestEngine::declare_opened_lot_entry_bar_mask).
+    bool path_high_first(const Bar& bar) const;
     native_order::SubmitResult submit(BacktestEngine& engine, const native_order::Request& request);
     native_order::ReplaceResult replace(BacktestEngine& engine,
                                         const native_order::RequestHandle& target,

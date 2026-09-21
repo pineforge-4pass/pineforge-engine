@@ -24,7 +24,11 @@
 //   5. the declaration is scoped to one entry incarnation: declaring another
 //      incarnation's mask leaves this lot's flags clear;
 //   6. and the mask DRIVES THE SKIP — the owner's magnitudes, and therefore
-//      the closed row's, differ by exactly the masked end.
+//      the closed row's, differ by exactly the masked end;
+//   7. (R5 lane E15) the leg order is the RUN's: under a declared
+//      NativeRunSpec::path_order the mask is derived from the same forced walk
+//      the matcher makes over the bar, for both fill points and over both bar
+//      shapes, not from the bar's open-proximity rule.
 #include "l11a_host_excursion_fixture.hpp"
 
 #include <pineforge/native_host.hpp>
@@ -42,7 +46,7 @@ using namespace l11a_fixture;
 constexpr std::int64_t T = 1736121600000LL;
 constexpr double kQty = 2.0;
 
-NativeRunSpec spec(const char* key) {
+NativeRunSpec spec(const char* key, NativePathOrder order) {
     NativeRunSpec s;
     s.identity = {key, 1};
     s.input_tf = "1";
@@ -57,6 +61,7 @@ NativeRunSpec spec(const char* key) {
     s.fee_kind = NativeFeeKind::CashPerExecution;
     s.fee_value = 0.0;
     s.close_execution = NativeCloseExecution::AfterCalculation;
+    s.path_order = order;
     return s;
 }
 
@@ -145,6 +150,7 @@ struct Case {
     bool want_low_masked;
     double want_favorable;
     double want_adverse;
+    NativePathOrder order = NativePathOrder::Auto;
 };
 
 void run(const Case& c) {
@@ -153,7 +159,7 @@ void run(const Case& c) {
     host.mode = c.mode;
     host.entry_bar_high = c.high;
     host.entry_bar_low = c.low;
-    CHECK(host.configure_native(spec(c.tag)).status == NativeSetupStatus::Applied);
+    CHECK(host.configure_native(spec(c.tag, c.order)).status == NativeSetupStatus::Applied);
     host.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
@@ -167,6 +173,12 @@ void run(const Case& c) {
         CHECK(near(f.closed_qty, kQty));
         CHECK(f.entry_bar_high_masked == c.want_high_masked);
         CHECK(f.entry_bar_low_masked == c.want_low_masked);
+    }
+    if (c.order != NativePathOrder::Auto && !host.facts.empty()) {
+        const ClosedLotExcursionFacts& f = host.facts.front();
+        std::printf("%s masks H=%d L=%d (want H=%d L=%d)\n", c.tag,
+                    f.entry_bar_high_masked ? 1 : 0, f.entry_bar_low_masked ? 1 : 0,
+                    c.want_high_masked ? 1 : 0, c.want_low_masked ? 1 : 0);
     }
     expect(c.tag, host.get_trade(0), true, c.close, c.close,
            c.want_favorable, c.want_adverse);
@@ -202,6 +214,39 @@ int main() {
          true, true, 0.0, 0.0},
     };
     for (const Case& c : low_first) run(c);
+
+    // A run that declares its leg order walks every bar in it, and the mask is
+    // derived from that same walk. Over the low-first bar a forced HIGH_FIRST
+    // path is O(100) -> H(110) -> L(99) -> C(105): the fill at 105 is first
+    // touched on the O->H leg, before either end, so OnPath masks nothing. A
+    // forced LOW_FIRST is this bar's own open-proximity order and masks the
+    // low, as AUTO does. AfterPath masks both ends under either order.
+    const Case forced_over_low_first[] = {
+        {"onpath-low-first-bar-forced-high", Declare::OnPath, 110.0, 99.0, 105.0,
+         false, false, (110.0 - 105.0) * kQty, (105.0 - 99.0) * kQty,
+         NativePathOrder::HighFirst},
+        {"afterpath-low-first-bar-forced-high", Declare::AfterPath, 110.0, 99.0, 105.0,
+         true, true, 0.0, 0.0, NativePathOrder::HighFirst},
+        {"onpath-low-first-bar-forced-low", Declare::OnPath, 110.0, 99.0, 105.0,
+         false, true, (110.0 - 105.0) * kQty, 0.0, NativePathOrder::LowFirst},
+        {"afterpath-low-first-bar-forced-low", Declare::AfterPath, 110.0, 99.0, 105.0,
+         true, true, 0.0, 0.0, NativePathOrder::LowFirst},
+    };
+    for (const Case& c : forced_over_low_first) run(c);
+
+    // The mirror over the high-first bar: a forced LOW_FIRST path is
+    // O(100) -> L(90) -> H(101) -> C(95), and the fill at 95 is touched on the
+    // O->L leg, before either end; a forced HIGH_FIRST keeps AUTO's answer.
+    const Case forced_over_high_first[] = {
+        {"onpath-high-first-bar-forced-low", Declare::OnPath, 101.0, 90.0, 95.0,
+         false, false, (101.0 - 95.0) * kQty, (95.0 - 90.0) * kQty,
+         NativePathOrder::LowFirst},
+        {"afterpath-high-first-bar-forced-low", Declare::AfterPath, 101.0, 90.0, 95.0,
+         true, true, 0.0, 0.0, NativePathOrder::LowFirst},
+        {"onpath-high-first-bar-forced-high", Declare::OnPath, 101.0, 90.0, 95.0,
+         true, false, 0.0, (95.0 - 90.0) * kQty, NativePathOrder::HighFirst},
+    };
+    for (const Case& c : forced_over_high_first) run(c);
 
     std::printf("test_e6_entry_bar_mask_declaration: %d passed, %d failed\n",
                 passed, failed);

@@ -2091,7 +2091,10 @@ static void check_excursion_hook(void) {
  * and the fill at 95 is reached after the high, before the low) and at the
  * close of a low-first one (O 100 H 110 L 99 C 105: O->L->H->C), here as the
  * two lots of ONE run, and an owner whose magnitudes skip the masked end of
- * each lot's entry bar. Every row of that witness is one lot below. */
+ * each lot's entry bar. Every row of that witness is one lot below, and so
+ * are its forced-order rows (R5 lane E15): a run that declares
+ * pf_native_run_spec_ext_v1::path_order walks both bars in that order, and
+ * the masks are derived from that same walk. */
 
 #define MASK_BARS    6
 #define MASK_QTY     2.0
@@ -2134,6 +2137,7 @@ typedef struct mask_case {
     int         want_low_masked[2];
     double      want_favorable[2];
     double      want_adverse[2];
+    uint32_t    path_order;        /* pf_native_path_order_e; AUTO keeps the plain spec */
 } mask_case;
 
 typedef struct mask_lot {
@@ -2269,6 +2273,7 @@ static int mask_on_lot(void* user, const pf_native_lot_excursion_v1* facts,
 
 static void run_mask_case(const mask_case* mc, mask_state* state, pf_report_t* report) {
     pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
     pf_native_callbacks_v1 table;
 
     memset(state, 0, sizeof(*state));
@@ -2282,7 +2287,22 @@ static void run_mask_case(const mask_case* mc, mask_state* state, pf_report_t* r
     if (!state->host) return;
     spec.session_key = "native-c-api-entry-bar-mask";
     spec.close_execution = 1;   /* AfterCalculation: each entry fills at its own bar's close */
-    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "mask configure");
+    if (mc->path_order == PF_NATIVE_PATH_ORDER_AUTO) {
+        CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "mask configure");
+    } else {
+        /* The run's leg order is declared once, in the feed-policy block; its
+         * three other fields keep the kernel's defaults. */
+        memset(&ext, 0, sizeof(ext));
+        ext.struct_size = (uint32_t)sizeof(ext);
+        ext.version = PF_NATIVE_API_VERSION;
+        ext.present_mask = PF_NATIVE_SPEC_EXT_FEED_POLICY;
+        ext.slot_label_policy = PF_NATIVE_SLOT_LABEL_CANONICAL;
+        ext.feed_tolerance = PF_NATIVE_FEED_TOLERANCE_NONE;
+        ext.path_order = mc->path_order;
+        ext.abort_reporting = PF_NATIVE_ABORT_ERROR;
+        CHECK_EQ_INT(strategy_configure_native_ext_v1(state->host, &spec, &ext), PF_NATIVE_OK,
+                     "forced-order mask configure");
+    }
     CHECK_EQ_INT(strategy_native_declare_opened_lot_entry_bar_mask_v1(
                      state->host, 1u, &mask_bars[1], PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH),
                  PF_NATIVE_E_STATE, "a declaration before the run was not refused");
@@ -2309,6 +2329,28 @@ static void check_entry_bar_mask_declaration(void) {
          1, {0, 0}, {0, 0},
          {(101.0 - 95.0) * MASK_QTY, (110.0 - 105.0) * MASK_QTY},
          {(95.0 - 90.0) * MASK_QTY, (105.0 - 99.0) * MASK_QTY}},
+        /* Forced HIGH_FIRST: lot A's bar keeps its own answer (the high), lot
+         * B's path is O->H->L->C, so its fill at 105 is touched on the O->H
+         * leg before either end and masks nothing. */
+        {"forced-high-first, onpath both",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH}, 0,
+         {1, 0}, {0, 0}, {0.0, (110.0 - 105.0) * MASK_QTY},
+         {(95.0 - 90.0) * MASK_QTY, (105.0 - 99.0) * MASK_QTY}, PF_NATIVE_PATH_ORDER_HIGH_FIRST},
+        {"forced-high-first, afterpath-high-first, onpath-low-first",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH}, 0,
+         {1, 0}, {1, 0}, {0.0, (110.0 - 105.0) * MASK_QTY},
+         {0.0, (105.0 - 99.0) * MASK_QTY}, PF_NATIVE_PATH_ORDER_HIGH_FIRST},
+        /* Forced LOW_FIRST: lot A's path is O->L->H->C, so its fill at 95 is
+         * touched on the O->L leg before either end; lot B keeps its own
+         * answer (the low). */
+        {"forced-low-first, onpath both",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH}, 0,
+         {0, 0}, {0, 1}, {(101.0 - 95.0) * MASK_QTY, (110.0 - 105.0) * MASK_QTY},
+         {(95.0 - 90.0) * MASK_QTY, 0.0}, PF_NATIVE_PATH_ORDER_LOW_FIRST},
+        {"forced-low-first, onpath-high-first, afterpath-low-first",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH}, 0,
+         {0, 1}, {0, 1}, {(101.0 - 95.0) * MASK_QTY, 0.0},
+         {(95.0 - 90.0) * MASK_QTY, 0.0}, PF_NATIVE_PATH_ORDER_LOW_FIRST},
     };
     static const double entry[2] = {95.0, 105.0};
     size_t c;

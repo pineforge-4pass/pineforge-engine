@@ -1825,9 +1825,11 @@ PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_ba
  *  excursion capability #pf_native_callbacks_v1::on_lot_excursion owns
  *  (RULING A48).
  *
- *  The host says only WHERE its fill sat. The kernel reads @p entry_bar's own
- *  modeled path — the high first when |high - open| < |open - low|, the low
- *  first otherwise, and where a price is first touched on it — and sets the
+ *  The host says only WHERE its fill sat. The kernel walks @p entry_bar's
+ *  modeled path in the run's own leg order, the one its matcher walks —
+ *  #pf_native_run_spec_ext_v1::path_order when HIGH_FIRST or LOW_FIRST, and
+ *  under AUTO the high first when |high - open| < |open - low|, the low first
+ *  otherwise — finds where a price is first touched on it, and sets the
  *  two entry-bar masks of every open lot booked under @p entry_incarnation:
  *  the ends of the bar the path had already reached before that lot's own
  *  price. They come back on the lot's closing facts,

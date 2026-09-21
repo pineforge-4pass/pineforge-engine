@@ -1317,6 +1317,11 @@ const NativeRunSpec* NativeExecutionConsumer::spec_ptr() const {
     return nullptr;
 }
 
+bool NativeExecutionConsumer::path_high_first(const Bar& bar) const {
+    const auto* spec = spec_ptr();
+    return path_uses_high_first(bar, spec ? spec->path_order : NativePathOrder::Auto);
+}
+
 bool NativeExecutionConsumer::commands_allowed() const {
     if (failed() || consuming_request_) return false;
     const auto* running = std::get_if<NativeRunning>(&state_);
