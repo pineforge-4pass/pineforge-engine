@@ -2156,7 +2156,7 @@ public:
     // answer is "not available" (0 / -1 / NaN): the host that owns the book
     // overrides them, and the C surface documents what each value means
     // (strategy_last_bar_dual_entry_path, strategy_pending_orders_len,
-    // strategy_pending_order_get, strategy_probe_fill_qty,
+    // strategy_pending_order_get, strategy_pending_order_fill_qty,
     // strategy_pending_order_level_resolved,
     // strategy_pending_order_effective_levels, strategy_trail_best_price --
     // include/pineforge/pineforge.h).
