@@ -162,16 +162,23 @@
  * (pf_native_run_spec_ext_v1::margin_liquidation_label) without a new symbol.
  * Executed by the fx-roll scenario of tests/test_native_c_api.c.
  *
- * And one member this list cannot reach, because it is not a member of
- * NativeStrategyHost: the entry-side half of on_lot_excursion's capability
- * (RULING A48) is a protected member of the base,
- * BacktestEngine::declare_opened_lot_entry_bar_mask, through which the owner
- * of a lot's excursion says where the lot's opening fill sat on its entry bar
- * and the kernel derives the lot's entry-bar mask. Its C spelling is
- * strategy_native_declare_opened_lot_entry_bar_mask_v1. The census above is
- * the public surface of NativeStrategyHost, so the check neither requires
- * nor admits a row for a member of its base. Executed by the entry-bar mask
- * scenario of tests/test_native_c_api.c.
+ * BASE-CLASS SEAMS
+ * ────────────────
+ * The rows at the top of this block census NativeStrategyHost's own surface,
+ * so they cannot see a member of its base. The BacktestEngine members a host
+ * is documented to call or override from its callbacks are opted in one by
+ * one: engine.hpp marks each with a `@host-seam` line, and
+ * scripts/check_native_c_api_surface.py proves this list is exactly the
+ * marked set, with a C spelling or a reason for each, exactly as it does for
+ * those rows. A new protected member a host is meant to reach takes the
+ * marker and a row here.
+ *
+ *   [C]  declare_opened_lot_entry_bar_mask strategy_native_declare_opened_lot_entry_bar_mask_v1 -- legal
+ *                                          inside on_applied alone; executed by the entry-bar mask
+ *                                          scenario of tests/test_native_c_api.c
+ *   [--] hash_host_extension               the callback table carries no hash hook, so a C host's broker-
+ *                                          state hash is the kernel's own fold (see SCOPE)
+ *   [--] hash_source_extension             the deprecated spelling of hash_host_extension; the same reason
  *
  * HARDENING RULES
  * ───────────────

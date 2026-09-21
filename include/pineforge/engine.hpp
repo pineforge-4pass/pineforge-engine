@@ -390,11 +390,13 @@ protected:
     // overrides nothing folds exactly what it always folded: the default
     // forwards to the deprecated spelling below, whose default is the
     // "source:none" marker.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
     virtual void hash_host_extension(BrokerStateHashSink&) const;
     // Deprecated spelling of hash_host_extension, named by the source layer
     // before a bare host could extend the fold. Still folded when it is the
     // only one overridden, so an existing subclass compiles and hashes
     // unchanged; the kernel itself calls hash_host_extension only.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
     virtual void hash_source_extension(BrokerStateHashSink&) const;
     virtual std::uint64_t broker_state_hash_projection() const;
     std::uint64_t broker_state_hash_from_execution_hash(std::uint64_t) const;
@@ -606,6 +608,7 @@ protected:
     // were.  The flags are durable lot state: they are folded into the run
     // hash and handed back to the owner on the closing row's
     // ClosedLotExcursionFacts.
+    // @host-seam (native_c_api.h, COVERAGE / BASE-CLASS SEAMS)
     void declare_opened_lot_entry_bar_mask(uint64_t entry_incarnation,
                                            const Bar& entry_bar,
                                            OpenedLotFillPoint fill_point);
