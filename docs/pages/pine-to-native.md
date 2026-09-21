@@ -257,7 +257,16 @@ under, a `BracketLegOutcome` saying whether the leg was never requested, never
 submitted (no allocated parent), accepted, or refused with the kernel's own
 `RequestRejectReason`. Pine drops a leg it cannot place without telling the
 script; a native host reads `every_requested_leg_accepted()`.
-`native_bracket_strategy.cpp` is the runnable version. In C
+`native_bracket_strategy.cpp` is the runnable version.
+
+`native_toolkit::OrderBook<Key>` native_toolkit.hpp:309 is the same idea for a
+host that keeps its own key → handle book (replace, re-price, forget) instead
+of a predicate, and it reports the kernel verbatim too:
+`submit_or_replace_outcome` answers an `OrderBookAction` — `Replaced`,
+`ReplaceRejected`, `SubmitAccepted`, `SubmitRejected` — beside the
+`ReplaceResult` and `SubmitResult` of every command that actually reached the
+kernel, and `cancel_outcome` says whether a cancel was commanded at all. Pine's
+`strategy.cancel` tells a script neither. In C
 each leg is its own `strategy_native_submit_v1` native_c_api.h:1431 with
 `PF_NATIVE_OWNER_WAIT_FOR_APPLIED` native_c_api.h:329 — with one documented
 narrowing: `first_match` and `scope` are not exposed there, so a C bracket

@@ -989,6 +989,44 @@ while it is still working and submits a fresh one when it is gone,
 `cancel(key)` ends it and forgets the key, and `handle(key)` reports the
 current handle. An unknown key never reaches the host.
 
+Those two commands answer one value each, and the book is as honest about
+them as the receipt is about a leg. `submit_or_replace` can issue **two**
+kernel commands for one call — a replace the kernel answers `NotWorking`,
+then a fresh submit — so its optional handle names neither: a present handle
+is a re-pricing in place or a brand new request born behind everything
+already resting, and an empty one is a refused replacement (the previous
+request untouched and still bound to the key) or a refused submit (the key
+unbound), with the kernel's `RequestRejectReason` and event ordinal dropped
+in both. `submit_or_replace_outcome(key, request)` is the same call, same
+commands, same book state, reporting an `OrderBookOutcome`:
+
+| `OrderBookAction` | what the book did | `handle()` | `reason()` |
+| --- | --- | --- | --- |
+| `Replaced` | `ReplaceStatus::Replaced`: the key's own request was amended, nothing was submitted | the successor | — |
+| `ReplaceRejected` | `ReplaceStatus::ReplaceRejected`: nothing was submitted, the previous request is still working and still bound | — | its `RequestRejectReason` |
+| `SubmitAccepted` | `SubmitStatus::Accepted` for a fresh submit; the key holds the new handle | the handle | — |
+| `SubmitRejected` | `SubmitStatus::Rejected` for it; the key is left unbound | — | its `RequestRejectReason` |
+
+`OrderBookOutcome::replace` and `::submit` are the kernel's own
+`ReplaceResult` and `SubmitResult` verbatim and whole — status, event
+ordinal, successor/handle, reason — each present exactly when that command
+reached the kernel, so a replace the book abandoned as `NotWorking` before
+submitting fresh is reported too, and the toolkit spells a refusal in no
+vocabulary of its own. `action` is the one word it adds: the disjoint union
+of the two kernel statuses restricted to the four the book stops on.
+`submit_or_replace(...)` is `submit_or_replace_outcome(...).handle()`,
+exactly.
+
+`cancel_outcome(key)` does the same for the withdrawal. `cancel(key)` answers
+`CancelStatus::NotWorking` for three different things — the kernel's own
+verdict, a key that was never in the book, and a key whose request had
+already left the working enumeration — and the last two reach no host command
+at all. The outcome carries `known` (the key was bound when the call arrived)
+beside `result`, the kernel's own `CancelResult`, present exactly when a
+cancel reached the kernel; `cancel(key)` is `cancel_outcome(key).status()`,
+exactly. `examples/native/native_bracket_strategy.cpp` reads a key through
+all four actions and both cancel answers.
+
 ## Close execution
 
 `NativeCloseExecution::NextEligiblePoint` (default): a request born at a

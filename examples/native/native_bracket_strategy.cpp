@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <variant>
 
 namespace {
@@ -48,6 +49,32 @@ const char* reject_name(no::RequestRejectReason reason) {
     case no::RequestRejectReason::PlacementAdmission: break;
     }
     return "PlacementAdmission";
+}
+
+const char* action_name(tk::OrderBookAction action) {
+    switch (action) {
+    case tk::OrderBookAction::Replaced: return "replaced in place";
+    case tk::OrderBookAction::ReplaceRejected: return "replacement REFUSED";
+    case tk::OrderBookAction::SubmitAccepted: return "submitted fresh";
+    case tk::OrderBookAction::SubmitRejected: break;
+    }
+    return "submit REFUSED";
+}
+
+// The same reading a receipt asks for, one key at a time. A returned handle
+// alone cannot say whether the book re-priced the order the host named or
+// replaced it with a brand new request born behind everything already
+// resting, and an empty one cannot say whether the replacement was refused
+// (the previous order still working) or the submit was (the key now unbound).
+void report_key(const char* key, const tk::OrderBookOutcome& outcome) {
+    std::printf("key %s: %s", key, action_name(outcome.action));
+    if (const auto handle = outcome.handle()) {
+        std::printf(", request %llu", static_cast<unsigned long long>(handle->incarnation));
+    }
+    if (const auto reason = outcome.reason()) {
+        std::printf(" (%s)", reject_name(*reason));
+    }
+    std::printf(", ordinal %llu\n", static_cast<unsigned long long>(outcome.event_ordinal()));
 }
 
 // What a host must do with a receipt: read every leg, not just the handles.
@@ -83,13 +110,81 @@ class BracketExample : public pineforge::NativeStrategyHost {
     int bars_ = 0;
     no::RequestHandle entry_;
     tk::BracketReceipt legs_;
+    std::optional<tk::OrderBook<std::string>> book_;
 
-    void on_native_run_begin() override { bars_ = 0; }
+    void on_native_run_begin() override {
+        bars_ = 0;
+        book_.emplace(*this);
+    }
+
+    // A resting bid far under the market: it never fills, so it is only ever
+    // the book's own order to re-price, refuse and withdraw.
+    static no::Request ladder(double price, const char* label) {
+        no::Request request{no::Transact{1.0}, label, "ladder"};
+        request.trigger = no::Limit{price};
+        return request;
+    }
+
+    // The key the host addresses that order by. Everything below reads the
+    // outcome, never the bare handle.
+    void work_the_book() {
+        switch (bars_) {
+        case 2: {
+            const auto opened = book_->submit_or_replace_outcome("ladder", ladder(90.0, "bid-1"));
+            report_key("ladder", opened);
+            assert(opened.action == tk::OrderBookAction::SubmitAccepted);
+            assert(opened.bound() && !opened.replace.has_value());
+            break;
+        }
+        case 3: {
+            // Re-pricing: the replace decided it and no submit happened, so
+            // the host knows it kept its order rather than queueing a new one.
+            const auto repriced =
+                    book_->submit_or_replace_outcome("ladder", ladder(91.0, "bid-2"));
+            report_key("ladder", repriced);
+            assert(repriced.replaced());
+            assert(repriced.replace && !repriced.submit.has_value());
+
+            // A replacement the kernel must refuse: a reduce of zero units.
+            // The empty handle alone would be indistinguishable from a
+            // refused submit, and would carry no reason; the outcome says
+            // both, and the order the host named is still working.
+            no::Request zero{no::Reduce{no::ExplicitUnits{0.0}}, "bid-bad", "ladder"};
+            zero.trigger = no::Limit{91.0};
+            const auto refused = book_->submit_or_replace_outcome("ladder", zero);
+            report_key("ladder", refused);
+            assert(refused.action == tk::OrderBookAction::ReplaceRejected);
+            assert(refused.reason() == no::RequestRejectReason::InvalidQuantity);
+            assert(!refused.handle().has_value() && !refused.submit.has_value());
+            assert(book_->handle("ladder") == repriced.handle());
+            break;
+        }
+        case 4: {
+            const auto withdrawn = book_->cancel_outcome("ladder");
+            std::printf("key ladder: cancel commanded=%d status=%s\n",
+                        withdrawn.commanded() ? 1 : 0,
+                        withdrawn.status() == no::CancelStatus::Cancelled ? "Cancelled"
+                                                                         : "NotWorking");
+            assert(withdrawn.known && withdrawn.commanded());
+            assert(withdrawn.status() == no::CancelStatus::Cancelled);
+            // An unknown key is the book's own silence, not the kernel's.
+            const auto never = book_->cancel_outcome("no-such-key");
+            assert(!never.known && !never.commanded());
+            assert(never.status() == no::CancelStatus::NotWorking);
+            break;
+        }
+        default:
+            break;
+        }
+    }
 
     void on_native_bar(const pineforge::Bar&,
                        const pineforge::NativeDecisionContext&) override {
         ++bars_;
-        if (bars_ != 1) return;
+        if (bars_ != 1) {
+            work_the_book();
+            return;
+        }
         // The entry: two units at the next open.
         const auto placed = submit({no::Transact{2.0}, "entry", "bracket"});
         if (placed.status != no::SubmitStatus::Accepted || !placed.handle) return;
