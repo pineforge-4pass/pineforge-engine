@@ -321,6 +321,139 @@ void bracket_receipt_separates_absent_from_refused() {
     completed(orphan);
 }
 
+// E12: one submit_or_replace can issue two commands -- a replace the kernel
+// answers NotWorking, then a fresh submit -- and the one optional handle it
+// returns names neither of them. This witness reads the outcome instead: which
+// command decided the call, the kernel's own result for every command that
+// reached it, and the reason for a refusal the bare optional spells as an
+// empty handle indistinguishable from a refused submit.
+void order_book_outcome_names_the_command() {
+    Host host;
+    tk::OrderBookOutcome opened, repriced, refused, bad;
+    std::optional<no::RequestHandle> bound_after_refusal;
+    std::size_t live_after_refusal = 0;
+
+    std::optional<tk::OrderBook<std::string>> book;
+    host.beginning = [&](Host& base) {
+        book.emplace(base);
+        {
+            opened = book->submit_or_replace_outcome("edge", resting("edge-1"));
+            auto amended = resting("edge-2");
+            amended.trigger = no::Limit{40.0};
+            repriced = book->submit_or_replace_outcome("edge", amended);
+            // A replacement the kernel must refuse: a reduce of zero units is
+            // RequestRejectReason::InvalidQuantity at validation, so the
+            // replace reaches the kernel, is refused, and the predecessor is
+            // left working and still bound to the key.
+            no::Request zero{no::Reduce{no::ExplicitUnits{0.0}}, "edge-bad", ""};
+            zero.trigger = no::Limit{40.0};
+            refused = book->submit_or_replace_outcome("edge", zero);
+            bound_after_refusal = book->handle("edge");
+            live_after_refusal = base.native_working_requests().size();
+            // The other empty handle: a fresh submit the kernel refuses.
+            bad = book->submit_or_replace_outcome("bad", tx(0.0, "bad"));
+        }
+    };
+
+    run(host, spec("e12-order-book-outcome"), {100.0});
+
+    // A fresh submit: no replace was attempted, the kernel's SubmitResult is
+    // carried whole, and the handle is the one the key now holds.
+    CHECK(opened.action == tk::OrderBookAction::SubmitAccepted);
+    CHECK(!opened.replace.has_value());
+    REQUIRE(opened.submit.has_value());
+    CHECK(opened.submit->status == no::SubmitStatus::Accepted);
+    CHECK(opened.bound());
+    REQUIRE(opened.handle().has_value());
+    CHECK(opened.event_ordinal() == opened.submit->event_ordinal);
+    CHECK(opened.event_ordinal() != 0);
+    CHECK(!opened.reason().has_value());
+
+    // A replacement in place: the replace decided it and NO submit happened,
+    // so the host knows its named order was re-priced rather than re-created.
+    CHECK(repriced.action == tk::OrderBookAction::Replaced);
+    CHECK(repriced.replaced());
+    REQUIRE(repriced.replace.has_value());
+    CHECK(repriced.replace->status == no::ReplaceStatus::Replaced);
+    CHECK(!repriced.submit.has_value());
+    CHECK(repriced.handle() == repriced.replace->successor);
+    CHECK(repriced.handle() != opened.handle());
+    CHECK(repriced.event_ordinal() == repriced.replace->event_ordinal);
+
+    // The refusal the bare optional cannot express: an empty handle, and with
+    // it the kernel's own status and reason, plus the fact that no fresh
+    // request was born and the predecessor still stands.
+    CHECK(refused.action == tk::OrderBookAction::ReplaceRejected);
+    CHECK(refused.refused());
+    REQUIRE(refused.replace.has_value());
+    CHECK(refused.replace->status == no::ReplaceStatus::ReplaceRejected);
+    CHECK(refused.reason() == no::RequestRejectReason::InvalidQuantity);
+    CHECK(!refused.handle().has_value());
+    CHECK(!refused.bound());
+    CHECK(!refused.submit.has_value());
+    CHECK(bound_after_refusal == repriced.handle());
+    CHECK(live_after_refusal == 1);
+
+    // The same empty handle, the other command: here the key is left unbound.
+    CHECK(bad.action == tk::OrderBookAction::SubmitRejected);
+    CHECK(bad.refused());
+    CHECK(!bad.replace.has_value());
+    REQUIRE(bad.submit.has_value());
+    CHECK(bad.submit->status == no::SubmitStatus::Rejected);
+    CHECK(bad.reason() == no::RequestRejectReason::InvalidQuantity);
+    CHECK(!bad.handle().has_value());
+    CHECK(bad.event_ordinal() == bad.submit->event_ordinal);
+    CHECK(!book->contains("bad"));
+    completed(host);
+}
+
+// E12: the two-command path. A key bound to a PendingUntilArmed child is not
+// in the working enumeration, so the book replaces without asking it; when
+// that child is gone the kernel answers NotWorking and the book submits a
+// fresh request under the key. The legacy optional hands back a handle and a
+// host reads "re-priced"; the outcome reports the replace it abandoned.
+void order_book_outcome_reports_the_abandoned_replace() {
+    Host host;
+    tk::OrderBookOutcome first, revived;
+    std::optional<tk::OrderBook<std::string>> book;
+    no::RequestHandle parent;
+    host.beginning = [&](Host& base) {
+        parent = put(base, tx(1.0, "entry"));
+        book.emplace(base);
+        no::Request keyed{no::Reduce{no::OwnerOpenedUnits{}}, "keyed", "e12"};
+        keyed.trigger = no::Stop{0.0};
+        keyed.anchor = no::FromOwnerFill{-20.0, true};
+        keyed.owner = no::WaitForApplied{parent, no::NativeArmVisibility::PendingUntilArmed};
+        first = book->submit_or_replace_outcome("keyed", keyed);
+        // Kill the child behind the book's back: the key stays bound.
+        base.cancel(*first.handle());
+        keyed.anchor = no::FromOwnerFill{-30.0, true};
+        revived = book->submit_or_replace_outcome("keyed", keyed);
+        (void)book->cancel("keyed");
+    };
+
+    run(host, spec("e12-order-book-abandoned"), {100.0});
+
+    CHECK(first.action == tk::OrderBookAction::SubmitAccepted);
+    // Both commands reached the kernel and both results are reported: the
+    // replace that was abandoned, verbatim, and the submit that decided it.
+    CHECK(revived.action == tk::OrderBookAction::SubmitAccepted);
+    REQUIRE(revived.replace.has_value());
+    CHECK(revived.replace->status == no::ReplaceStatus::NotWorking);
+    CHECK(!revived.replace->successor.has_value());
+    CHECK(!revived.replace->reason.has_value());
+    REQUIRE(revived.submit.has_value());
+    CHECK(revived.submit->status == no::SubmitStatus::Accepted);
+    CHECK(revived.event_ordinal() == revived.submit->event_ordinal);
+    // Not a re-pricing: the key holds a request born after the replace.
+    CHECK(!revived.replaced());
+    CHECK(revived.handle() != first.handle());
+    CHECK(revived.replace->event_ordinal < revived.submit->event_ordinal);
+    // The abandoned replace is on the kernel's own timeline.
+    CHECK(events<no::NotWorkingEvent>(host).size() == 1);
+    completed(host);
+}
+
 }  // namespace
 
 int main() {
@@ -329,6 +462,9 @@ int main() {
     test("bracket knobs and pending order book", bracket_knobs_and_pending_order_book);
     test("bracket receipt separates absent from refused",
          bracket_receipt_separates_absent_from_refused);
+    test("order book outcome names the command", order_book_outcome_names_the_command);
+    test("order book outcome reports the abandoned replace",
+         order_book_outcome_reports_the_abandoned_replace);
     std::printf("L7 native toolkit: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

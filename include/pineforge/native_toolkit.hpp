@@ -182,6 +182,87 @@ inline BracketReceipt submit_bracket(NativeStrategyHost& host, const BracketSpec
     return receipt;
 }
 
+// What the book did for one key. `submit_or_replace` may issue TWO commands
+// for one call -- a replace the kernel answers NotWorking, then a fresh
+// submit -- and the single optional handle it returns names neither of them:
+// a host that reads a handle back believes it re-priced its named order when
+// it may in fact hold a brand new request, born later, behind everything
+// already resting, and an empty handle is a refused replacement and a refused
+// submit at once, with no reason attached to either.
+//
+// This word names the command whose verdict the book acted on, and each half
+// of it is that command's own kernel status:
+//
+//   Replaced         ReplaceStatus::Replaced with a successor; the key now
+//                    holds it and no submit happened.
+//   ReplaceRejected  ReplaceStatus::ReplaceRejected; nothing was submitted,
+//                    the previous request is untouched and still bound.
+//   SubmitAccepted   SubmitStatus::Accepted for the fresh submit; the key
+//                    holds the new handle.
+//   SubmitRejected   SubmitStatus::Rejected for it; the key is left unbound.
+//
+// ReplaceStatus::NotWorking and ReplaceStatus::InvalidHandle are not here
+// because the book does not stop on them: it forgets the key and submits, so
+// the deciding verdict is the submit's. The abandoned replace is still
+// reported, whole, in OrderBookOutcome::replace.
+enum class OrderBookAction : std::uint8_t {
+    Replaced = 0,
+    ReplaceRejected = 1,
+    SubmitAccepted = 2,
+    SubmitRejected = 3,
+};
+
+// One submit_or_replace outcome. `replace` and `submit` are the kernel's own
+// ReplaceResult and SubmitResult verbatim and whole -- status, event ordinal,
+// successor/handle, RequestRejectReason -- and each is present exactly when
+// that command reached the kernel. The toolkit invents no refusal vocabulary
+// of its own: `action` is the only word it adds, and it is the disjoint union
+// of the two kernel statuses restricted to the four the book stops on.
+//
+// At least one of the two is always present: submit_or_replace always
+// commands the host, so every outcome carries the verdict that decided it.
+struct OrderBookOutcome {
+    OrderBookAction action = OrderBookAction::SubmitRejected;
+    std::optional<native_order::ReplaceResult> replace;
+    std::optional<native_order::SubmitResult> submit;
+
+    // The key is bound to a live request this call produced.
+    bool bound() const noexcept {
+        return action == OrderBookAction::Replaced
+            || action == OrderBookAction::SubmitAccepted;
+    }
+    // The key's own request was amended in place; no new request was born.
+    bool replaced() const noexcept { return action == OrderBookAction::Replaced; }
+    // The kernel refused the call, on whichever command decided it.
+    bool refused() const noexcept { return !bound(); }
+
+    // Exactly what submit_or_replace returns: the handle the key now holds,
+    // empty when the kernel refused.
+    std::optional<native_order::RequestHandle> handle() const {
+        if (action == OrderBookAction::Replaced && replace) return replace->successor;
+        if (action == OrderBookAction::SubmitAccepted && submit) return submit->handle;
+        return std::nullopt;
+    }
+    // Why the kernel refused, empty unless it refused.
+    std::optional<native_order::RequestRejectReason> reason() const {
+        if (action == OrderBookAction::ReplaceRejected && replace) return replace->reason;
+        if (action == OrderBookAction::SubmitRejected && submit) return submit->reason;
+        return std::nullopt;
+    }
+    // The timeline ordinal of the command that decided the call.
+    std::uint64_t event_ordinal() const noexcept {
+        switch (action) {
+        case OrderBookAction::Replaced:
+        case OrderBookAction::ReplaceRejected:
+            return replace ? replace->event_ordinal : 0;
+        case OrderBookAction::SubmitAccepted:
+        case OrderBookAction::SubmitRejected:
+            break;
+        }
+        return submit ? submit->event_ordinal : 0;
+    }
+};
+
 // A host-side key to live-handle index: the bookkeeping a strategy would
 // otherwise write to re-price "its" order by name. It owns no engine state,
 // only the handles the host returned. Key must be ordered (a std::string id
@@ -214,37 +295,60 @@ public:
 
     // Replaces the key's request while it is still working, otherwise submits
     // a fresh one under that key. A replacement the host rejects leaves the
-    // previous request working and still bound to the key, and reports
-    // nothing; a rejected submit leaves the key unbound.
+    // previous request working and still bound to the key; a rejected submit
+    // leaves the key unbound.
     //
     // A key bound to a PendingUntilArmed child is not in the working
     // enumeration before its arm, so the book does not ask the enumeration
     // whether it is working: it replaces first and treats NotWorking as
     // "gone, submit afresh". Every key bound to a Working request keeps the
     // enumeration check, so its command footprint is unchanged.
+    //
+    // This spelling answers the handle alone, which cannot say which command
+    // produced it nor why it is empty; submit_or_replace_outcome() is the
+    // same call reporting the kernel's own results. It is the handle of that
+    // outcome, exactly.
     std::optional<native_order::RequestHandle> submit_or_replace(
             const Key& key, const native_order::Request& request,
             native_order::ReplaceOptions options = {}) {
+        return submit_or_replace_outcome(key, request, options).handle();
+    }
+
+    // submit_or_replace with the kernel's verdicts attached: which command
+    // decided the call, the ReplaceResult of a replace that reached the
+    // kernel (including one abandoned as NotWorking), the SubmitResult of a
+    // submit that did, and with them the refusal reason and the ordinal the
+    // handle alone cannot carry. Same commands, same order, same book state.
+    OrderBookOutcome submit_or_replace_outcome(
+            const Key& key, const native_order::Request& request,
+            native_order::ReplaceOptions options = {}) {
+        OrderBookOutcome outcome;
         const auto found = entries_.find(key);
         if (found != entries_.end()) {
             if (found->second.pending_until_armed || working(found->second.handle)) {
                 const auto result = host_->replace(found->second.handle, request, options);
+                outcome.replace = result;
                 if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
                     found->second = Entry{*result.successor, pending_until_armed(request)};
-                    return found->second.handle;
+                    outcome.action = OrderBookAction::Replaced;
+                    return outcome;
                 }
                 if (result.status == native_order::ReplaceStatus::ReplaceRejected) {
-                    return std::nullopt;
+                    outcome.action = OrderBookAction::ReplaceRejected;
+                    return outcome;
                 }
             }
             entries_.erase(found);
         }
         const auto submitted = host_->submit(request);
+        outcome.submit = submitted;
         if (submitted.status != native_order::SubmitStatus::Accepted || !submitted.handle) {
-            return std::nullopt;
+            outcome.action = OrderBookAction::SubmitRejected;
+            return outcome;
         }
         entries_.emplace(key, Entry{*submitted.handle, pending_until_armed(request)});
-        return *submitted.handle;
+        outcome.action = OrderBookAction::SubmitAccepted;
+        return outcome;
     }
 
     // Cancels the key's request and forgets the key. An unknown key is not a
