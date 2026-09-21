@@ -207,6 +207,33 @@ class EvaluatorTests(unittest.TestCase):
                 self.assertEqual([(f.kind, f.token) for f in findings],
                                  [("unruled", "tv_bogus")])
 
+    def test_a_source_file_name_is_not_a_pine_text(self) -> None:
+        """`ta.hpp` is this project's header; `ta.ema` is a Pine call.
+
+        The strip does not settle this one: a sanitizer build writes every
+        source path into rodata as a real string literal (ASan's global
+        descriptors), which is why the ubuntu-24.04 sanitizers job would still
+        have answered `ta.hpp` with the debug information already gone."""
+        paths = ["include/pineforge/ta.hpp", "src/ta.cpp:148", "strategy.hpp",
+                 "/home/runner/work/pineforge-engine/pineforge-engine/"
+                 "include/pineforge/ta.hpp", "ta.ipp"]
+        # (no `barmerge.*` path: `barmerge` is a residual identifier in its own
+        # right, so a file of that stem would fail on the identifier rule and
+        # would be a finding, not a carve-out.)
+        strings, nm = table_archive()
+        findings, _ = self.evaluate(strings + paths, nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        # The carve-out is the file suffix and nothing else: a Pine call on a
+        # line that also names the header still fails, and so does every Pine
+        # call whose member merely starts with one of those letters.
+        for text in ("include/pineforge/ta.hpp: ta.ema length must be positive",
+                     "ta.highest", "strategy.close rejected", "ta.change",
+                     "barmerge.gaps_on is not supported here"):
+            with self.subTest(text=text):
+                findings, _ = self.evaluate(strings + [text], nm)
+                self.assertGreaterEqual(len(findings), 1, [str(f) for f in findings])
+                self.assertEqual({f.kind for f in findings}, {"unruled"})
+
     def test_a_finding_is_reported_once_per_name(self) -> None:
         strings, nm = table_archive()
         findings, _ = self.evaluate(strings + ["pine_dup", "pine_dup"],

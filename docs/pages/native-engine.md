@@ -3195,7 +3195,10 @@ as `C0"TV"` is not a name. The vocabulary (an identifier containing `pine` other
 than `pineforge`, `tradingview`, `barmerge`, `coof`, `pooc`,
 `market_admission`, `calc_on_order_fills`, `process_orders_on_close` or a `tv`
 segment; a text containing `strategy.<name>`, `ta.<name>`, `request.security`,
-`barmerge.<name>` or `__margin_call__`) requires every match to be listed,
+`barmerge.<name>` or `__margin_call__`, where `<name>` is a Pine member and not
+a C/C++ file suffix — `ta.ema` is a call, `ta.hpp` is this project's header, and
+a sanitizer build writes every source path into rodata as a real literal)
+requires every match to be listed,
 by name, in the first column of the ADR's residual tables — and every listed
 match to still be in the archive. The `kernel` profile runs it as the
 `kernel-residuals` stage right after the build; every profile runs it as the

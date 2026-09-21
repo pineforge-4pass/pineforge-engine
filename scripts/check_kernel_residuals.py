@@ -73,11 +73,18 @@ IDENTIFIER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("process_orders_on_close", re.compile(r"process_orders_on_close", re.IGNORECASE)),
     ("tv", re.compile(r"(?:^|_)tv(?:_|$)", re.IGNORECASE)),
 )
+# A dotted Pine namespace call is a text; the project's own source file of the
+# same stem is not. `include/pineforge/ta.hpp` is a header, and an ASan build
+# writes every such path into rodata as a real string literal (the global
+# descriptors), so the strip alone does not settle it -- the suffix does. This
+# is the same carve-out `pine(?!forge)` makes for the project's own name, and
+# it hides no Pine built-in: none is spelled `h`, `hpp`, `cpp`, ...
+NOT_A_SOURCE_FILE = r"(?!(?:h|hpp|hh|hxx|c|cc|cpp|cxx|inc|ipp)(?![A-Za-z0-9_]))"
 PHRASE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("strategy.", re.compile(r"\bstrategy\.[a-z_]{2,}")),
-    ("ta.", re.compile(r"\bta\.[a-z_]{2,}")),
+    ("strategy.", re.compile(r"\bstrategy\." + NOT_A_SOURCE_FILE + r"[a-z_]{2,}")),
+    ("ta.", re.compile(r"\bta\." + NOT_A_SOURCE_FILE + r"[a-z_]{2,}")),
     ("request.security", re.compile(r"request\.security")),
-    ("barmerge.", re.compile(r"\bbarmerge\.[a-z_]{2,}")),
+    ("barmerge.", re.compile(r"\bbarmerge\." + NOT_A_SOURCE_FILE + r"[a-z_]{2,}")),
     ("__margin_call__", re.compile(r"__margin_call__")),
 )
 # A C/C++ name as the ADR spells it, used to read the ruling tables.

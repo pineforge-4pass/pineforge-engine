@@ -256,7 +256,10 @@ The vocabulary is fixed in the script (`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`)
 an identifier containing `pine` (not `pineforge`), `tradingview`, `barmerge`,
 `coof`, `pooc`, `market_admission`, `calc_on_order_fills`,
 `process_orders_on_close` or a `tv` segment; a text containing `strategy.<name>`,
-`ta.<name>`, `request.security`, `barmerge.<name>` or `__margin_call__`. Every
+`ta.<name>`, `request.security`, `barmerge.<name>` or `__margin_call__`, where
+`<name>` is a Pine member and not a C/C++ file suffix (`ta.ema` is a call,
+`ta.hpp` is this project's header, which a sanitizer build writes into rodata as
+a real literal). Every
 match must be listed exactly — an identifier by its name, a text by a phrase it
 contains — and every listed match must still be in the archive, so a lane that
 adds a name adds its row and a lane that removes one removes its row. A name that
