@@ -3477,11 +3477,14 @@ It takes the lot's entry incarnation
 `pf_native_opened_lot_fill_point_e` — `ON_PATH` for a fill at a price the
 bar's path reaches, `AFTER_PATH` for one at the bar's closing point — and the
 kernel derives which ends of the bar the path had reached before the fill,
-handing both flags back as `pf_native_lot_excursion_v1::entry_bar_high_masked` /
+walking the bar in the run's own leg order (the spec extension's
+`path_order`, the order the matcher walks; the open-proximity rule under
+`AUTO`), and hands both flags back as
+`pf_native_lot_excursion_v1::entry_bar_high_masked` /
 `entry_bar_low_masked`. It is legal inside `on_applied` alone and
 `PF_NATIVE_E_STATE` everywhere else. Being a member of the base rather than
-of `NativeStrategyHost`, it sits outside the COVERAGE census below, so the
-block records it in prose. The entry-bar mask scenario of
+of `NativeStrategyHost`, it is a row of the COVERAGE block's second list,
+BASE-CLASS SEAMS (below). The entry-bar mask scenario of
 `tests/test_native_c_api.c` reproduces the C++ witness
 `tests/test_e6_entry_bar_mask_declaration.cpp` number for number.
 
@@ -3502,7 +3505,12 @@ replacement takes a `std::optional<NativeAuxiliaryFeed>`) and
 `native_sized_units` (its basis is the C++ `native_order::Sized` variant). `scripts/check_native_c_api_surface.py`
 proves the block is exactly that class's public surface and runs as a source
 guard in every `ci_verify.py` profile, so the list cannot silently go stale;
-`scripts/test_check_native_c_api_surface.py` proves the guard can fail.
+`scripts/test_check_native_c_api_surface.py` proves the guard can fail. A
+second list, **BASE-CLASS SEAMS**, is the same census for the members of the
+base a host is documented to call or override from its callbacks, opted in
+one by one by a `@host-seam` line in `engine.hpp`: today the entry-bar mask
+declaration (spelled) and `hash_host_extension` with its deprecated spelling
+(excluded: the callback table carries no hash hook).
 
 **Errors and hardening.** Every struct is tagged and size-prefixed
 (`struct_size`, `version`); a mismatch is `PF_NATIVE_E_STRUCT`, an enumerator
