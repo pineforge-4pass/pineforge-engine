@@ -46,8 +46,11 @@ It is the sole mutable window, not a duplicate mirror book. Hold/replacement
 barriers retain their requesting event/domain; completion identifies that exact
 barrier and an actual after-margin hook. Completion cannot follow the action's
 processing receipt; separate events caused by an owner bind retain that hook's
-phase. Ordinary, COOF and both magnifier hooks
-remain explicit. Raw-tick bar advancement supplies no such completion.
+phase. Ordinary, fill-recalculation (`Domain::FillRecalc`, the host's
+re-entry pass after a fill — shipped as the deprecated `Domain::Coof`, for
+TradingView's `calc_on_order_fills`) and both magnifier hooks
+(`Domain::Magnifier`, `Domain::MagnifierFillRecalc`, the latter shipped as
+`Domain::MagnifierCoof`) remain explicit. Raw-tick bar advancement supplies no such completion.
 
 ## Bounded replay contract
 

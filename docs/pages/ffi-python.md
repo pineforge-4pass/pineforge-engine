@@ -80,6 +80,10 @@ class pf_equity_stats_t(ctypes.Structure):
         ("max_equity_drawdown", ctypes.c_double), ("max_equity_drawdown_pct", ctypes.c_double),
         ("max_equity_runup", ctypes.c_double), ("max_equity_runup_pct", ctypes.c_double),
         ("buy_hold_return", ctypes.c_double), ("buy_hold_return_pct", ctypes.c_double),
+        # Historical member names of sharpe_monthly / sortino_monthly. ctypes
+        # matches by offset, never by the C field's name, and these strings are
+        # also the serialized report keys, so the mirror keeps them (ADR-0001,
+        # "Deprecated public spellings").
         ("sharpe_tv", ctypes.c_double), ("sortino_tv", ctypes.c_double),
         ("sharpe_bar", ctypes.c_double), ("sortino_bar", ctypes.c_double),
         ("cagr", ctypes.c_double), ("calmar", ctypes.c_double),

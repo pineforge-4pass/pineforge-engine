@@ -94,7 +94,7 @@ struct PfEquityStats {
     max_equity_drawdown: f64, max_equity_drawdown_pct: f64,
     max_equity_runup: f64, max_equity_runup_pct: f64,
     buy_hold_return: f64, buy_hold_return_pct: f64,
-    sharpe_tv: f64, sortino_tv: f64,
+    sharpe_monthly: f64, sortino_monthly: f64,   // shipped as sharpe_tv / sortino_tv
     sharpe_bar: f64, sortino_bar: f64,
     cagr: f64, calmar: f64,
     recovery_factor: f64, time_in_market_pct: f64,

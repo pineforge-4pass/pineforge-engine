@@ -168,6 +168,26 @@ For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
 
+R5 gap lane P2c gives two TradingView-named public surfaces a generic primary
+spelling without an epoch, because an alias needs none.
+`pf_equity_stats_t::sharpe_tv` / `sortino_tv` are now
+`sharpe_monthly` / `sortino_monthly`: each pair is one `double` behind a C11
+anonymous union of two same-typed members, so `sizeof(pf_equity_stats_t)`
+(120), the field offsets (48, 56) and `offsetof(pf_metrics_t, equity)` (648)
+are unchanged, `static_assert`s in `src/c_abi.cpp` pin them, and a consumer
+compiled against either spelling reads the same storage. The standalone
+`pineforge::exit_legs::lifecycle_v1` enumerators `Domain::Coof` /
+`MagnifierCoof` are now `Domain::FillRecalc` / `MagnifierFillRecalc`, with the
+old names kept as value-identical aliases (`== 1` and `== 3`, underlying type
+still `uint8_t`, `RawTicks` still 4). Both old spellings are DEPRECATED: the C
+fields are removed at the next `PF_ABI_VERSION`, the enumerators at
+`lifecycle_v2`. Serialized report keys are unaffected — a report dictionary
+still carries `sharpe_tv` / `sortino_tv`. Compile the public C header as C11 or
+later (the project's own `CMAKE_C_STANDARD` is 11 and the native C examples
+document `cc -std=c11`); strict C99 accepts the anonymous union with a
+`-Wc11-extensions` warning. Rulings of record: ADR-0001, "Deprecated public
+spellings".
+
 The relocation manifest remains a reviewed description of the v16→v18 source
 and host transition; it is not proof by itself. The proof is the authenticated
 archive/header input plus the acceptance/rejection links above. The frozen

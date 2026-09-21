@@ -61,6 +61,9 @@ class EquityStatsC(ctypes.Structure):  # pf_equity_stats_t
                 ("max_equity_runup_pct", ctypes.c_double),
                 ("buy_hold_return", ctypes.c_double),
                 ("buy_hold_return_pct", ctypes.c_double),
+                # Historical member names of the C fields sharpe_monthly /
+                # sortino_monthly; ctypes matches by offset, and these are also
+                # the serialized report keys (ADR-0001).
                 ("sharpe_tv", ctypes.c_double), ("sortino_tv", ctypes.c_double),
                 ("sharpe_bar", ctypes.c_double), ("sortino_bar", ctypes.c_double),
                 ("cagr", ctypes.c_double), ("calmar", ctypes.c_double),

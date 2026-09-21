@@ -317,6 +317,48 @@ structurally blind to the eighty-nine pending-row names whose spelling contains 
 sets; the families are ruled above by name, the global by mechanism, and
 `scripts/check_kernel_residuals.py` holds the tables.
 
+## Deprecated public spellings (R5 gap lane P2c rulings)
+
+Two public surfaces still spelled a TradingView name, and both are load-bearing: a public C ABI
+field a compiled consumer reads by offset, and an enumerator of a shipped standalone C++ ABI. The
+lane's decision is **alias and deprecate, never break**. The generic name is the primary spelling
+in code and in the documentation; the old name stays a valid, value-identical alias, and its
+removal is scheduled for the next epoch of the ABI that carries it. Nothing here changes a value,
+an offset, a size, a serialized key or a behaviour: `PF_ABI_VERSION` stays 4 and `lifecycle_v1`
+stays `lifecycle_v1`, because an alias needs no epoch.
+
+This table is deliberately OUTSIDE the residual-vocabulary section above.
+`scripts/check_kernel_residuals.py` rules by presence: it reads the first column of every table in
+the section "Residual TradingView-named surface in the kernel-only archive" and fails on a ruled
+name that is no longer in the archive. None of the four names below is a symbol or a string literal
+in `libpineforge_kernel.a` — a struct field name and an enumerator exist only at compile time, and
+neither is written into any `last_error` text — so a row here would be a stale row there. Verified
+on a Release and on a Debug archive: `0 findings`, both profiles, with these aliases in the tree.
+
+| name | generic spelling | ABI that carries it | removal epoch | why retained |
+|---|---|---|---|---|
+| `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 4) | the next `PF_ABI_VERSION` (5) | The field is month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev — a construction whose name is its resampling period, not its calibration source. The published header is the contract of every compiled FFI consumer, so both names are one `double` behind a C11 anonymous union of two same-typed members: identical offset (48), identical `sizeof(pf_equity_stats_t)` (120), identical `offsetof(pf_metrics_t, equity)` (648), pinned by `static_assert` in `src/c_abi.cpp` and exercised from C by `tests/test_c_abi.c`. |
+| `pf_equity_stats_t::sortino_tv` | `sortino_monthly` | public C ABI (as above) | the next `PF_ABI_VERSION` (5) | Same resampling as `sharpe_monthly`, population downside deviation vs the monthly risk-free. Aliased on the same terms; offset 56. |
+| `exit_legs::Domain::Coof` | `FillRecalc` | standalone C++ ABI `pineforge::exit_legs::lifecycle_v1` (`include/pineforge/exit_leg_lifecycle.hpp`) | `lifecycle_v2` | The domain is the fill-recalculation re-entry pass: the host re-runs its script after a fill and observes the rest of the same bar. `coof` abbreviates `calc_on_order_fills`, the Pine adapter's name for it (the same abbreviation the `coof_*` reflection rows carry, ruled above). An enumerator alias adds a name and no value: `Coof == FillRecalc == 1`, the underlying type stays `uint8_t`, `Domain::RawTicks` stays 4 (so `valid_frame`'s range check is unchanged), and no `switch` gains a case. Twin-parity-frozen TUs keep compiling their old spelling unchanged. |
+| `exit_legs::Domain::MagnifierCoof` | `MagnifierFillRecalc` | standalone C++ ABI `lifecycle_v1` (as above) | `lifecycle_v2` | The same re-entry pass on a magnified sub-bar. `MagnifierCoof == MagnifierFillRecalc == 3`. |
+
+**The serialized report keys do not change.** `sharpe_tv` and `sortino_tv` remain the JSON keys of
+the report dictionaries built by `docker/run_json.py` (`_stats_dict`, driven off the ctypes
+`_fields_` list) and of the engine dict `scripts/crossvalidate_metrics.py` builds the same way. They
+are ruled **report-schema names**: a schema key is a wire format, not an identifier, and renaming it
+would break every Python/FFI consumer for no mechanical gain. The ctypes mirrors in
+`scripts/run_strategy.py`, `docker/run_json.py`, `tutorial/run.py`,
+`benchmarks/throughput/grid_search_repro.py` and `docs/pages/ffi-python.md` therefore keep the
+historical member name (ctypes matches by offset, never by the C field's name); each carries a
+comment saying it is the historical spelling of `sharpe_monthly` / `sortino_monthly`.
+
+**Portability note for the C alias.** An anonymous union is C11. This project already compiles C at
+C11 (`CMAKE_C_STANDARD 11`, and the native C examples document `cc -std=c11`), and C++ has had
+anonymous unions since C++98, so every consumer in this repository is covered. A consumer compiling
+the public header as strict C99 gets a warning (`-Wc11-extensions`), not an error. The rejected
+alternative was `#define sharpe_tv sharpe_monthly`: a macro leaks into every translation unit that
+includes the header and would rewrite an unrelated consumer's own `sharpe_tv`.
+
 ## Kernel capabilities the Pine adapter does not declare (R5 lane P6 rulings)
 
 Rule 3 below makes every bare-host capability opt-in, so that adapter runs stay byte-identical by

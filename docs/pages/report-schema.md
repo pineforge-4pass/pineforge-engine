@@ -209,15 +209,24 @@ validated 2026-06-12). Bar-duration averages (`avg_bars_in_*`) count
 
 **Equity stats** (`pf_equity_stats_t`) cover the equity drawdown /
 run-up extremes (currency + percent), `buy_hold_return`, Sharpe and
-Sortino in two constructions — `sharpe_tv` / `sortino_tv` (TV-style
-month-end resampling in the chart timezone, 2%/yr risk-free,
-annualized by sqrt(12)) and `sharpe_bar` / `sortino_bar` (per-script-bar
+Sortino in two constructions — `sharpe_monthly` / `sortino_monthly`
+(month-end resampling in the chart timezone, 2%/yr risk-free, annualized
+by sqrt(12)) and `sharpe_bar` / `sortino_bar` (per-script-bar
 returns annualized by observed bar density) — plus `cagr`, `calmar`,
 `recovery_factor`, `time_in_market_pct`, and `open_pl`.
 
+`sharpe_tv` / `sortino_tv` are the historical spelling of
+`sharpe_monthly` / `sortino_monthly`: one `double` at one offset behind a
+C11 anonymous union, deprecated in the C header and removed at the next
+`PF_ABI_VERSION`. **The serialized keys do not change**: a report
+dictionary still carries `sharpe_tv` and `sortino_tv`, and they are ruled
+report-schema names — the historical spelling of `sharpe_monthly` /
+`sortino_monthly` — so no consumer of this schema has to change. See
+ADR-0001, "Deprecated public spellings".
+
 **NaN convention:** any statistic whose denominator is empty or zero is
 `NaN`, never 0 or an infinity — e.g. `profit_factor` with zero gross
-loss, `avg_win` with no winning trades, `sharpe_tv` with fewer than two
+loss, `avg_win` with no winning trades, `sharpe_monthly` with fewer than two
 monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
 in the report is always a real computed zero. See the per-field doxygen
 in `<pineforge/pineforge.h>` for the exact rule on every field.
