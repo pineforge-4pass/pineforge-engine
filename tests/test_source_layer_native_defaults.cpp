@@ -31,7 +31,7 @@ public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 
     x::PhysicalExecutionContext context() const {
-        return {1700000000000LL, 7, {}, {}};
+        return {1700000000000LL, 7, {}};
     }
 
     x::Result settle(const x::Action& action, const x::Fill& fill) {
