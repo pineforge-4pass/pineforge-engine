@@ -146,7 +146,7 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 | FP3 | Commission: percent / cash per unit / cash per execution (`fee_kind_for` pine_adapter.cpp:415-422) | **yes** — `NativeFeeKind` native_run_spec.hpp:19-23; `quote_execution_commissions` engine_execution.cpp:960-996 | K | — | F:G2 O:H8 S:F1 | — |
 | FP4 | Booked fill quantized to the instrument tick, nearest or directional (`nearest_tick` pine_adapter.cpp:252-255, `source_bar_fill` pine_adapter.cpp:9553-9562, `directional_tick` pine_adapter.cpp:297-301) | **no** — `price_tick` is only a slippage multiplier native_execution_consumer.cpp:3671; `bar_fill_price` engine.hpp:1198 is reachable only through `NativeCurrentPriceRule::NearestTick` native_execution_consumer.cpp:3851-3852; reference helpers are dead engine.hpp:1338, engine.hpp:1348, engine.hpp:1388 | K | L8 | O:H4 O:H6 F:G4 S:F3 | **Disagree:** O kernel / F, S "stays adapter, no promotion". R5-3: own kernel lane. |
 | FP5 | Trigger tested against the tick-quantized bar | **no** — the kernel tests raw prices against raw levels | K+A | L8 | O:H5 F:G4 S:F3 | R5-3: the optional quantized trigger test is K; TV's exact half-tick rule (`source_trigger_threshold` pine_adapter.cpp:328-376) is A on top. |
-| PG | The Pine adapter on the kernel price grid: raw levels submitted, `project()` declaring `QuantizeFillsAndTriggers` + `HalfUp`, `source_trigger_threshold` deleted (lane R7; re-tested after L8b by gap lane N13) | **measured-infeasible for the Pine adapter** — B1 (the sub-tick cursor-print abort) is closed by L8b's `ActivationGrid`: 0 aborted runs under the trial (R7: 9 zero-offset-trail tapes + 6 POOC panels; now `test_zero_offset_trail_rides_l4c` 449/450, `test_pooc_short_close_tick_l4d` 183/183). B2 (TradingView quantizes per order kind, the grid is one run-wide rule) still moves 30 pinned checks in 4 units with no adapter-side remedy: `test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1; 12 more checks in 3 units have an adapter-side cause (`test_trail_fill_snap_l4c` 2, `test_native_margin_hooks` 2, `test_adapter_brackets_relower` 8 book digests). Corpus: 5/312 probes differ, in the engine-only entry-incarnation column only (every probe runs a 0.01 tick on an on-grid feed, so it cannot arbitrate) | A | waived (R7, N13) | — | **Waiver.** No class of triggers is byte-identical on its own: the grid is a run-wide switch and a per-kind mask would spell TradingView's inconsistency into the kernel (not generic, R5-3). The adapter stays on `NativePriceGrid::None` and keeps `source_trigger_threshold` and its call sites; native-engine.md "The Pine adapter's grid re-lowering is waived". |
+| PG | The Pine adapter on the kernel price grid: raw levels submitted, `project()` declaring `QuantizeFillsAndTriggers` + `HalfUp`, `source_trigger_threshold` deleted (lane R7; re-tested after L8b by gap lane N13) | **measured-infeasible for the Pine adapter** — B1 (the sub-tick cursor-print abort) is closed by L8b's `ActivationGrid`: 0 aborted runs under the trial (R7: 9 zero-offset-trail tapes + 6 POOC panels; now `test_zero_offset_trail_rides_l4c` 449/450, `test_pooc_short_close_tick_l4d` 183/183). B2 (TradingView quantizes per order kind, the grid is one run-wide rule) still moves 30 pinned checks in 4 units with no adapter-side remedy: `test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1; 12 more checks in 3 units have an adapter-side cause (`test_trail_fill_snap_l4c` 2, `test_native_margin_hooks` 2, `test_adapter_brackets_relower` 8 book digests). Corpus: 5/312 probes differ, in the engine-only entry-incarnation column only (every probe runs a 0.01 tick on an on-grid feed, so it cannot arbitrate) | A | waived (R7, N13) | — | **Waiver.** No class of triggers is byte-identical on its own: the grid is a run-wide switch and a per-kind mask would spell TradingView's inconsistency into the kernel (not generic, R5-3). The adapter stays on `NativePriceGrid::None` and keeps `source_trigger_threshold` and its call sites; native-engine.md "The Pine adapter's grid re-lowering is waived". **Native-only by ruling (audit lane P6): §3.6.2**, with `examples/native/native_price_grid_strategy.cpp` and its C twin as the feature's hosts. |
 | FP6 | Account-currency FX | **partial** — scalar `account_fx` + immutable `NativeFxCurve` native_host.hpp:484 in batch; the stream refuses a non-empty curve native_execution_consumer.cpp:1251-1261, native-engine.md:415. **Closed by audit lane N6:** the declared curve is the run's immutable FX epoch and a confirmed-bar stream runs under it exactly as a batch does (stream twin in `tests/test_native_margin_fx_roll.cpp`); no realtime rate ingestion and no tick-driven input under a curve are stated as permanent limits with their reasons (native-engine.md, "Stream FX") | K | unassigned → N6 | F:D9 S:F4 | **Disagree:** F out of scope ("O7 clock" native-engine.md:739-744) / S its P10, a stream-safe FX epoch. No R5 lane → §4 U4 (answered by N6: S's "same curve in batch and stream", without a new clock or callback). |
 | FP7 | *(quirk)* TV tick conventions: half-tick threshold pine_adapter.cpp:328-376 (used pine_adapter.cpp:7053-7058, pine_adapter.cpp:7627-7651), `source_bar_fill_tick` pine_adapter.cpp:273-286, raw-vs-booked spelling pine_adapter.cpp:9519-9625, margin-call fill pricing pine_adapter.cpp:11588-11597 | n/a — already isolated behind the terms seam (adapter `resolve_terms` pine_adapter.cpp:9310) | A | — | F:G4 O:H5 S:F3 | R5-1, R5-3 |
 
@@ -372,8 +372,8 @@ Union of F §2.vi (9), O §2.vi (5 + 1) and S §2.6 (7), deduplicated. S had no 
 | L5 | `NativeCalculationTrigger`, `on_native_recalculate(…, reason, cause)`, `on_native_sub_bar`, `current_partial_bar()`, `NativeOpenBarView` → A.4 | the adapter keeps `BarClose` + its own cascade; `born_on_remaining_path` (native_execution_consumer.cpp:3253-3257) and `drain_applied_notifications` (native_execution_consumer.cpp:4146-4159) are frozen; accessors are inert | COOF probe re-expressed natively: same fills where the TV waypoint rule is inactive (F); a host that flips on its own fill produces the adapter's cascade in shape (O); callback reason, cursor, newborn eligibility and event ordinals compared (S) |
 | L6 | `NativeTimeframeSubscription`, `on_native_timeframe_bar`, `native_series_bar` → A.5, §2.iv | `subscriptions` empty for the adapter; registration-gated pump; `engine_security.cpp` and pine_strategy_host.cpp:1316-1400 untouched; corpus diff before / after (O: highest parity risk of any lane) | HTF-filter probe on a 24x7 symbol: exact (F); `"D"` over a 15m feed equals a `TimeframeAggregator` baseline bar for bar (O); installed-feed and no-feed cases (S) |
 | L7 | `native_working_requests()`, `cancel_all()`, `cancel_where(label)`, `TriggerAnchor`, `TrailTicks`, zero offset, `ReplaceOptions`; toolkit `submit_bracket`, `OrderBook` → A.6 | new kinds unused by the adapter; anchor defaults to `Absolute`; the adapter's `tick * 0.5` sentinel keeps working | bracket + trailing probe through the builder: exact where TR5 / FP7 are inactive (on-grid levels) (F); the zero-offset trail test asserts the run no longer fails (O); parent-limit + stop sibling, parent rejection, replacement, parent-cycle revival (S) |
-| L8 | `NativePriceGrid { None, QuantizeFills, QuantizeFillsAndTriggers }`, `NativeGridRounding` → A.7 | `None` for the adapter, permanently | a host with `QuantizeFills` books on-grid prices; a second test pins that `QuantizeFillsAndTriggers` still differs from TV's half-tick threshold (FP5) (O) |
-| L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:650-675) untouched — **retained after measurement, audit lane N12: §3.6** | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
+| L8 | `NativePriceGrid { None, QuantizeFills, QuantizeFillsAndTriggers }`, `NativeGridRounding` → A.7 | `None` for the adapter, permanently — **native-only by ruling, audit lane P6: §3.6.2** | a host with `QuantizeFills` books on-grid prices; a second test pins that `QuantizeFillsAndTriggers` still differs from TV's half-tick threshold (FP5) (O) |
+| L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:650-675) untouched — **retained after measurement, audit lane N12; native-only by ruling, audit lane P6: §3.6.1** | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
 | L10 | `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` (§2.v) | build-only | the examples run in ctest; the independence checker compiles the relocated examples |
 | L11 | — (renames / moves, §2.ii a-i) | rename / move only; hashed enumerator values pinned; sweep unchanged | — |
 | L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (`"pineforge-broker-state/v17"` engine_state_hash.cpp:23, pinned to one occurrence by check_broker_state_hash_coverage.py:205) | trades identical, hashes re-baselined once |
@@ -408,7 +408,33 @@ Flagged:
 | In scope, 1.x | L9 | R5-9; a toolkit stand-in is acceptable meanwhile (F) |
 | Post-v1 | L11 rest, L12, L13 | L12 is required before claiming the adapter is a *thin optional layer* rather than a runtime-dependent sibling (S); L13 only if the promise is widened to C hosts (U2) |
 
-### 3.6 Audit lane N12 — the TradingView risk rules against `NativeRunSpec::risk` (measured, retained)
+### 3.6 Kernel features the Pine adapter never declares — native-only by ruling (audit lanes N12, N13, P6)
+
+The second independent R5 audit (§6, lane P6) asked for a decision on the two
+kernel features no adapter run declares, `NativeRunSpec::price_grid` (L8, L8b)
+and `NativeRunSpec::risk` (L9): either close the measured divergence in the
+kernel so that `project()` can declare them, or record them as native-only by
+ruling, with the measurement and with a native example that exercises each.
+**Both are native-only by ruling.** Neither divergence can be closed by a
+generic kernel capability: what separates the adapter from the kernel is, in
+both cases, a TradingView rule that would have to be spelled into the kernel
+to disappear (ADR-0001 rule 2). §3.6.1 is lane N12's measurement of the risk
+rules with the P6 decision appended; §3.6.2 is the price grid's, drawn from
+lanes R7, L8b and N13; §3.6.3 is the inventory that shows these two are not
+the only fields `project()` leaves unset, and that none of the others is
+undecided either. The normative table is ADR-0001's "Kernel capabilities the
+Pine adapter does not declare"; `scripts/check_native_feature_rulings.py`
+holds it against the header, the adapter and the examples.
+
+A native-only feature is not dead code. Its consumers are the hosts the kernel
+exists for: C++ hosts (`examples/native/native_price_grid_strategy.cpp`,
+`native_risk_limits_strategy.cpp`, `native_trail_risk_strategy.cpp`), C hosts
+(`examples/native/native_price_grid_c.c`; `PF_NATIVE_SPEC_EXT_RISK` in
+`tests/test_native_c_api.c`) and the kernel-only tests
+(`tests/test_native_price_grid.cpp` 1913 checks, `tests/test_native_risk_limits.cpp`
+327 checks), all of which run in the kernel-only CI profile.
+
+#### 3.6.1 `risk` — the TradingView risk rules against `NativeRunSpec::risk` (lane N12: measured, retained)
 
 The independent R5 audit (§6, lane N12) found that no adapter run declares
 `spec.risk` (`rg 'spec\.risk|NativeRiskLimits' src/source/` = 0 hits) while
@@ -478,6 +504,114 @@ the adapter half reproduced bit for bit against the 683a82f harvest, the
 kernel half pinned; corpus byte-identity not applicable (no `src/` or
 `include/` change); the five corpus risk probes measured as above with the
 kernel seeded in an uncommitted, env-gated experiment.
+
+**The P6 decision: native-only.** Re-verified on main `b8e7976e`: the ordering
+stands (`project()` at pine_strategy_host.cpp:315, `configure_native` at :316,
+the `set_pine_risk_*` setters at :867-888, and corpus 442d497
+`cap-risk-gates-allow-max-intraday-01/generated.cpp:188-191` still emits the
+three calls inside `on_source_bar`); `rg 'spec\.risk|NativeRiskLimits' src/source
+include/pineforge/source` is still empty; `test_adapter_risk_relower` still
+reads `62 checks, 0 failures`. Closing the divergence instead would take, in
+order: the transpiler hoisting constant risk statements into the constructor
+(another repository) or a mid-run re-declaration of a digested spec field (an
+epoch decision no lane has been granted); then the four generic additions
+above; and then, per rule, exactly the parts the table calls TradingView's —
+the pre-fill live-book gate, the latched-reversal exemption, the per-trade
+streak, the all-placement block with the unbooked fill and the epsilon, the
+charged-slot budget. Those are not knobs a second broker model would ask for:
+each exists to reproduce one emulator, which is rule 2's test for "belongs in
+the adapter". So the adapter keeps `strategy.risk.*`, the kernel keeps a
+generic account-risk block, and the four additions stay unimplemented until a
+native host asks for one (no consumer today, and adding them would be the
+dead weight this section exists to rule out).
+
+#### 3.6.2 `price_grid` / `grid_rounding` — TradingView's tick rules against the kernel grid (lanes R7, L8b, N13: measured, waived)
+
+**The ruling predates the measurement.** R5-3 made the price grid its own
+kernel lane and left "TV's exact half-tick rule … in the adapter on top"; E7
+(§4.1) states the containment as "`NativePriceGrid::None` for the adapter
+permanently; never 'unify'"; the L8 row of §3.3 gives its neutrality proof as
+"`None` for the adapter, permanently". The adapter was never meant to declare
+the grid. Lane R7 tried the re-lowering anyway, and gap lane N13 repeated the
+trial after L8b; row PG (§1.7) holds the counts. In summary:
+
+| blocker | what it is | state |
+|---|---|---|
+| B1 | under `QuantizeFillsAndTriggers` the matcher reported a cursor print inside the quantized region but short of the raw level, and the core's raw re-validation aborted the run ("native working-request preparation failed": nine zero-offset-trail tapes, six `process_orders_on_close` panels) | **closed generically by L8b**: the tick-quantized print is the reached price, and the core re-validates on the same ladder (`native_order::ActivationGrid`); 0 aborts under the N13 re-run |
+| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation are tested on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
+
+The corpus cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid
+feed, and under the trial 5 of them differ, in the engine-only
+entry-incarnation column only.
+
+**Why B2 is not closed in the kernel (route (a) rejected).** The only kernel
+change that would let `project()` declare the grid is a per-order-kind
+quantization mask: quantize a stop leg but not a trail stop, a trail's
+activation but not its running best, a limit but not a stop-limit. No broker
+model asks for that; it is one emulator's inconsistency, and the kernel's own
+rule (L8b) is the opposite on purpose — one rule for every kind. Rule 2's test
+applies literally: the mask cannot be justified without the word
+"TradingView". And what the adapter keeps is not a duplicate of the kernel
+mechanism that a re-lowering would delete: `source_trigger_threshold`
+(pine_adapter.cpp:329), `source_level_on_price_grid` (:315) and the
+`nearest_tick` / `source_bar_fill_tick` / `directional_tick` spellings (:253,
+:274, :298) are a *different* rule — a half-tick threshold per order kind with
+the fill booked elsewhere (E7) — which is why re-lowering moves outcomes
+instead of preserving them.
+
+**Re-verified on main `b8e7976e`.** `rg 'spec\.price_grid|\.price_grid\b'
+src/source include/pineforge/source src/compat` is empty.
+`test_adapter_grid_relower` — the permanent witness: its section 4 pins
+TradingView's per-kind rule on boundary prints as a neutrality differential
+harvested from the unchanged adapter, and its section 5 pins the measured
+divergence, the grid firing a trail stop one bar early where `best - offset`
+lands one ULP under its ladder point — reads `33878 checks, 0 failures`;
+`test_native_price_grid` `1913 checks, 0 failures`; its adapter twin 9 of 9.
+The trial itself (raw levels submitted, the grid declared) was temporary in
+both lanes and is not in the tree; its counts above are N13's, not re-run here.
+
+**What landed for the ruling.** Until P6 no example exercised the grid (the
+second audit's §5: "lanes with no example: price grid"), and the C spelling
+(`PF_NATIVE_SPEC_EXT_PRICE_GRID`, translated at native_c_host.cpp:1313-1317)
+had no executed consumer anywhere in the repository — no C test and no C
+example set the bit. `examples/native/native_price_grid_strategy.cpp` runs one
+strategy over one sub-tick tape (a 0.25 ladder under a composite feed) in the
+four modes and asserts every fill's raw and booked price against hand-computed
+values; `examples/native/native_price_grid_c.c` is the same host through the C
+API and reads the same numbers back from `strategy_native_events_v1`:
+
+| mode | entry (open 100.10) | target (limit 100.75) | protect (stop 99.50, open 99.40) | breakout (stop 99.75, high 99.65) | its exit (open 99.60) | net |
+|---|---|---|---|---|---|---|
+| `None` | 100.10 | 100.75 | 99.40 | — | — | −0.05 |
+| `QuantizeFills`, `HalfUp` | 100.00 | 100.75 | 99.50 | — | — | +0.25 |
+| `QuantizeFills`, `Directional` | 100.25 | 100.75 | 99.25 | — | — | −0.50 |
+| `QuantizeFillsAndTriggers`, `HalfUp` | 100.00 | 100.75 | 99.50 | 99.75 | 99.50 | 0.00 |
+
+#### 3.6.3 The inventory: every `NativeRunSpec` field `project()` leaves unset
+
+`scripts/check_native_feature_rulings.py --list` on main `b8e7976e` plus this
+lane: 43 fields, 33 assigned by `project()`, 10 not. Each of the ten has a row
+in ADR-0001's ruling table, and the check fails when a field has neither an
+adapter declaration nor a row, when a row's consumers do not exist or never
+spell the field, when a native-only row has no `examples/native/` host or no
+`tests/` unit, or when `project()` starts assigning a field whose ruling is
+still in the table.
+
+| field | ruling | decided by |
+|---|---|---|
+| `price_grid`, `grid_rounding` | native-only | §3.6.2 |
+| `risk` | native-only | §3.6.1 |
+| `max_abs_units` | adapter-policy: the pre-fill live-book gate is TradingView's | row MG2; N12's `PS` measurement (book 4 against 2) |
+| `max_open_lots` | adapter-policy: Pine pyramiding is a per-cycle entry count | row MG3; the contract comment in `project()` |
+| `initial_margin_fraction` | adapter-policy: TradingView's money admission answers `AdmitWithHostMargin`; the declared `margin` model is maintenance-only | row MG4; the wave-4 ruling in `project()` |
+| `report_open_position_at_end` | adapter-policy: TradingView's range-end report is report shape, not a mark-to-market row | row RP5 |
+| `open_bar_view` | adapter-policy: TradingView's open scheduling and its fill callback read the whole bar | rows CT4, E5 |
+| `subscriptions` | adapter-hook: declared through `declare_timeframe_subscriptions` at begin (lane R3b) | §2.iv |
+| `auxiliary_feed` | adapter-policy: the adapter's own auxiliary drive, retained on three measurements (lane N7) | §2.iv |
+
+Out of this inventory's scope: request kinds and host members the adapter
+never emits or calls (`Sized`, `ScopeFraction`, `native_open_lots()`, …). E3
+rules `Sized`; the C header's COVERAGE block rules the host surface.
 
 ---
 

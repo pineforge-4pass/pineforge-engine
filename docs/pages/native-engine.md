@@ -273,6 +273,19 @@ never sets it, so Pine-compatible runs are unchanged.
   column. No class of triggers is byte-identical on its own, because the
   grid is a run-wide switch and a per-kind mask is not generic; the adapter
   stays on `None` and keeps `source_trigger_threshold`.
+- **Native-only by ruling (audit lane P6).** The waiver above is final, and it
+  is not a gap: the grid is a native-host feature whose consumers are native
+  hosts. ADR-0001 ("Kernel capabilities the Pine adapter does not declare")
+  records the ruling and `scripts/check_native_feature_rulings.py` holds it:
+  the check fails if `project()` ever starts assigning `price_grid` while the
+  ruling stands, or if the ruling loses its executed consumers.
+  `examples/native/native_price_grid_strategy.cpp` runs one strategy on one
+  sub-tick tape under `None`, `QuantizeFills` with `HalfUp`, `QuantizeFills`
+  with `Directional` and `QuantizeFillsAndTriggers`, and asserts every booked
+  price against a hand-computed one (the same market entry books 100.10,
+  100.00, 100.25 and 100.00; the breakout stop at 99.75 fills only under the
+  trigger mode, from a raw high of 99.65); `native_price_grid_c.c` is the same
+  host through the C API, with the same numbers.
 
 Timeframe arguments on `run` / `stream_begin` must be **omitted/empty or
 byte-identical** to the spec. Conflicting values are a preflight refusal:
@@ -1177,6 +1190,18 @@ point and keys on the spec timezone). Every difference is pinned, with the
 adapter's rows harvested before the lane, in
 `tests/test_adapter_risk_relower.cpp`; the rulings and the corpus measurement
 are in `docs/design/native-feature-parity.md` §3.6.
+
+**Native-only by ruling (audit lane P6).** That retention is final, and it is
+not a gap: `risk` is a native-host feature whose consumers are native hosts,
+in C++ and in C (`PF_NATIVE_SPEC_EXT_RISK`, `strategy_native_risk_state_v1`).
+ADR-0001 ("Kernel capabilities the Pine adapter does not declare") records the
+ruling and `scripts/check_native_feature_rulings.py` holds it. Two examples
+exercise the block: `native_trail_risk_strategy.cpp` the fill-count cap with
+`BlockOpenings`, and `native_risk_limits_strategy.cpp` the money limits with
+`FlattenAndBlock` — a 1 % intraday loss limit that the kernel enforces with a
+flatten of its own at the breach point (1200 observed against 1000, then 1000
+against 988 of the next day's opening 98800), the re-arm at the next civil
+day, and the consecutive-loss-days block that ends the run's openings.
 
 ## Calculation timing
 
@@ -2638,6 +2663,9 @@ toolkit / module header over it), links `PineForge::kernel` and prints a
 | `native_calc_on_fills_strategy.cpp` | `NativeCalculationTrigger::BarCloseAndFills`, `on_native_recalculate`, `current_partial_bar`, `NativeOpenBarView::OpenOnly` | L5 |
 | `native_htf_strategy.cpp` | `declare_timeframe_subscriptions`, `on_native_timeframe_bar`, `native_series_bar`, `gaps`, a `LazyComplete` bucket | L6, L6c, L6d |
 | `native_trail_risk_strategy.cpp` | `Trail` with `TrailTicks`, `trail_state`, `native_working_requests`, `cancel_where`; `NativeRiskLimits::max_fills_per_day`, `native_risk_state`, `NativeRiskEvent` | L7, L9 |
+| `native_price_grid_strategy.cpp` | `NativePriceGrid` `None` / `QuantizeFills` / `QuantizeFillsAndTriggers` and `NativeGridRounding` `HalfUp` / `Directional` on one sub-tick tape: raw against booked price per fill, a ladder level as a fixed point, the stop only the quantized path reaches, `GridRequiresPriceTick` | L8, L8b, P6 |
+| `native_price_grid_c.c` | the same four runs from C: `PF_NATIVE_SPEC_EXT_PRICE_GRID` through `strategy_configure_native_ext_v1`, fills read back from `strategy_native_events_v1` with the C++ host's numbers | L8, L13, P6 |
+| `native_risk_limits_strategy.cpp` | the money limits: `max_intraday_loss` as a percent of the day's opening equity, `max_consecutive_loss_days`, `max_drawdown`; `FlattenAndBlock` and the kernel's own flatten (`RequestOrigin::KernelRisk`, ticket `__kernel_risk__`); `CalendarDayInTimezone`, the next-day re-arm, the ledger per day | L9, P6 |
 
 ```bash
 cmake -S . -B build -DPINEFORGE_BUILD_EXAMPLES=ON
@@ -2651,7 +2679,7 @@ executable and registers it as a CTest row whose assertion is that
 `closed trades: [1-9]` line. The `release` and `kernel` profiles of
 `scripts/ci_verify.py` turn the option on, so every `example_*` row runs in
 the gate both with and without the source layer compiled;
-`scripts/check_native_include_independence.py` compiles all ten sources
+`scripts/check_native_include_independence.py` compiles all thirteen sources
 against the installed headers with the source trees removed, the C one with
 the C compiler. The market and selected examples are also built, from the
 same sources, as the MODULE targets the live runner `dlopen`s.
@@ -3049,7 +3077,7 @@ the kernel's own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies this lane
 (Release, live runner ON, tutorial OFF, source layer OFF); CI runs it as the
 `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` (183 rows) is the count the kernel-only CTest set is
+`scripts/ci_verify.py` (189 rows) is the count the kernel-only CTest set is
 expected to run, and the `ctest-floor` stage fails the run when CTest reports
 fewer rows or no count at all, so a test TU that silently becomes source-bound
 (or a filter that empties the suite) is a refusal rather than a smaller green.

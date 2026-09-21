@@ -373,6 +373,11 @@ this section to what a run *declares*.
 4. codegen emits translation + attachment, never runtime.
 5. The residual TradingView-shaped state in `engine.hpp` is legacy to be *extracted into the
    adapter over time*, not a precedent to copy.
+6. A `NativeRunSpec` field the adapter does not declare is a decision, not an omission: the change
+   that adds the field adds its row to "Kernel capabilities the Pine adapter does not declare" —
+   native-only (with a native example and a test), adapter-policy or adapter-hook — and the change
+   that makes `project()` declare a ruled field removes the row.
+   `scripts/check_native_feature_rulings.py` fails either way until the table is true.
 
 ## Consequences
 
