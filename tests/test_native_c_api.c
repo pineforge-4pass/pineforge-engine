@@ -3782,6 +3782,227 @@ static void check_subscription_delivery_words(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── A trail's arm, read back ────────────────────────────────────
+ *
+ * pf_native_request_v1 has always said whether a TRAIL carries an arm price
+ * (`trail_has_arm_price`), but pf_native_working_v1 carried only p1 and p2,
+ * so a trail with no arm and a trail armed at 0.0 read back as the same row.
+ * Since lane E1 an anchored trail's absent arm is a spelling of its own,
+ * which made that observable: the two legs below differ in nothing else a C
+ * caller can read. The readout's appended tail carries the request's own
+ * flag, and a caller compiled against the base layout is still served --
+ * only as far as its own struct reaches. */
+
+#define PRESENCE_ENTRY_BAR    3
+#define PRESENCE_TRAIL_OFFSET 5.0
+#define PRESENCE_ANCHOR       1.0
+#define PRESENCE_SENTINEL     0xA5
+
+typedef struct presence_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    uint64_t entry;
+    uint64_t absent;        /* anchored, arm left unwritten */
+    uint64_t placeholder;   /* anchored, arm written as 0.0 */
+    double   entry_fill;    /* the owner's booked fill; NaN until it lands */
+    int      read_waiting;  /* 1 once the two waiting rows were told apart */
+    int      read_armed;    /* 1 once both armed rows read back their level */
+} presence_state;
+
+/* The index of `incarnation` in a fresh working snapshot, or -1. */
+static int presence_index(pf_strategy_t host, uint64_t incarnation) {
+    pf_native_working_v1 row;
+    const int n = strategy_native_working_len_v1(host);
+    int i;
+    for (i = 0; i < n; ++i) {
+        memset(&row, 0, sizeof(row));
+        row.struct_size = (uint32_t)sizeof(row);
+        if (strategy_native_working_get_v1(host, i, &row) == PF_NATIVE_OK
+            && row.incarnation == incarnation) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int presence_row(pf_strategy_t host, uint64_t incarnation, pf_native_working_v1* row) {
+    const int index = presence_index(host, incarnation);
+    memset(row, 0, sizeof(*row));
+    row->struct_size = (uint32_t)sizeof(*row);
+    if (index < 0) return PF_NATIVE_E_ARGUMENT;
+    return strategy_native_working_get_v1(host, index, row);
+}
+
+static int presence_on_applied(void* user, const pf_native_applied_v1* applied,
+                               const pf_native_decision_v1* at) {
+    presence_state* state = (presence_state*)user;
+    (void)at;
+    if (applied->incarnation == state->entry) state->entry_fill = applied->resolved_price;
+    return 0;
+}
+
+static int presence_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    presence_state* state = (presence_state*)user;
+    pf_native_request_v1 request;
+    pf_native_working_v1 absent;
+    pf_native_working_v1 placeholder;
+    pf_native_working_v1 earlier;
+    const unsigned char* bytes;
+    uint64_t owner;
+    int index;
+    int untouched;
+    int rc;
+    size_t i;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+
+    if (state->calculations == PRESENCE_ENTRY_BAR) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.label = "presence-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->entry, NULL)
+                          == PF_NATIVE_OK, "the presence entry was refused");
+        owner = state->entry;
+
+        /* Two protective sell trails on that entry, each arming one point
+         * above its fill. They differ only in how they spell the arm the
+         * fill will supply: left unwritten, or written as the 0.0
+         * placeholder. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+        request.trigger = PF_NATIVE_TRIGGER_TRAIL;
+        request.p1 = PRESENCE_TRAIL_OFFSET;
+        request.anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL;
+        request.anchor_offset = PRESENCE_ANCHOR;
+        request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        request.owner_n = 1u;
+        request.owner_incarnations = &owner;
+        request.label = "presence-absent";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->absent, NULL)
+                          == PF_NATIVE_OK, "the absent-arm anchored trail was refused");
+        request.trail_has_arm_price = 1;
+        request.p2 = 0.0;
+        request.label = "presence-placeholder";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->placeholder,
+                                                NULL) == PF_NATIVE_OK,
+               "the 0.0-arm anchored trail was refused");
+
+        /* Waiting on the entry, each reads back the spelling it was
+         * submitted with, and that flag is the one field telling them
+         * apart. */
+        LCHECK(state, presence_row(state->host, state->absent, &absent) == PF_NATIVE_OK,
+               "the absent-arm trail is not a working row");
+        LCHECK(state, presence_row(state->host, state->placeholder, &placeholder)
+                          == PF_NATIVE_OK, "the 0.0-arm trail is not a working row");
+        LCHECK(state, absent.trigger == PF_NATIVE_TRIGGER_TRAIL
+                          && placeholder.trigger == PF_NATIVE_TRIGGER_TRAIL,
+               "a waiting leg does not read back as a trail");
+        LCHECK(state, absent.intent == placeholder.intent
+                          && absent.intent_value == placeholder.intent_value
+                          && absent.owner == placeholder.owner
+                          && absent.trigger_state == placeholder.trigger_state
+                          && absent.remaining_kind == placeholder.remaining_kind
+                          && absent.p1 == PRESENCE_TRAIL_OFFSET
+                          && placeholder.p1 == PRESENCE_TRAIL_OFFSET
+                          && absent.p2 == 0.0 && placeholder.p2 == 0.0,
+               "the two waiting trails differ in more than their arm spelling");
+        LCHECK(state, absent.trail_has_arm_price == 0u,
+               "the absent-arm trail reads back an arm price");
+        LCHECK(state, placeholder.trail_has_arm_price == 1u,
+               "the 0.0-arm trail reads back no arm price");
+        LCHECK(state, absent.reserved1 == 0u && placeholder.reserved1 == 0u,
+               "the tail's reserved word is not 0");
+        state->read_waiting = absent.trail_has_arm_price == 0u
+                              && placeholder.trail_has_arm_price == 1u;
+
+        /* A caller compiled against the base layout sends the base length.
+         * It is served, and written exactly that far: the bytes past its own
+         * struct keep whatever it left there. */
+        index = presence_index(state->host, state->absent);
+        memset(&earlier, PRESENCE_SENTINEL, sizeof(earlier));
+        earlier.struct_size = PF_NATIVE_WORKING_V1_BASE_SIZE;
+        rc = strategy_native_working_get_v1(state->host, index, &earlier);
+        LCHECK(state, rc == PF_NATIVE_OK, "a base-length working row was refused");
+        if (rc == PF_NATIVE_OK) {
+            LCHECK(state, earlier.struct_size == PF_NATIVE_WORKING_V1_BASE_SIZE,
+                   "a base-length row came back with another length");
+            LCHECK(state, earlier.incarnation == state->absent
+                              && earlier.trigger == PF_NATIVE_TRIGGER_TRAIL
+                              && earlier.p1 == PRESENCE_TRAIL_OFFSET && earlier.p2 == 0.0
+                              && earlier.label != NULL
+                              && strcmp(earlier.label, "presence-absent") == 0,
+                   "a base-length row does not carry the base fields");
+            bytes = (const unsigned char*)&earlier;
+            untouched = 1;
+            for (i = PF_NATIVE_WORKING_V1_BASE_SIZE; i < sizeof(earlier); ++i) {
+                if (bytes[i] != PRESENCE_SENTINEL) untouched = 0;
+            }
+            LCHECK(state, untouched, "the runtime wrote past a base-length caller's struct");
+        }
+
+        /* Any third length is a caller this runtime cannot write. */
+        memset(&earlier, 0, sizeof(earlier));
+        earlier.struct_size = PF_NATIVE_WORKING_V1_BASE_SIZE + 4u;
+        LCHECK(state, strategy_native_working_get_v1(state->host, index, &earlier)
+                          == PF_NATIVE_E_STRUCT,
+               "a third working-row length was accepted");
+        return 0;
+    }
+
+    if (state->calculations == PRESENCE_ENTRY_BAR + 1) {
+        /* The entry filled at this bar's open and armed both legs: the arm
+         * installs fill + anchor into each definition, so both now carry the
+         * same arm price and read it back the same way. */
+        LCHECK(state, !isnan(state->entry_fill), "the presence entry never filled");
+        LCHECK(state, presence_row(state->host, state->absent, &absent) == PF_NATIVE_OK,
+               "the armed absent-arm trail is not a working row");
+        LCHECK(state, presence_row(state->host, state->placeholder, &placeholder)
+                          == PF_NATIVE_OK, "the armed 0.0-arm trail is not a working row");
+        LCHECK(state, absent.trail_has_arm_price == 1u
+                          && placeholder.trail_has_arm_price == 1u,
+               "an armed trail reads back no arm price");
+        LCHECK(state, absent.p2 == state->entry_fill + PRESENCE_ANCHOR
+                          && placeholder.p2 == state->entry_fill + PRESENCE_ANCHOR,
+               "an armed trail reads back another arm level");
+        state->read_armed = absent.trail_has_arm_price == 1u
+                            && placeholder.trail_has_arm_price == 1u;
+    }
+    return 0;
+}
+
+static void check_working_arm_presence(void) {
+    presence_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    const pf_bar_t* bars;
+    int n = 0;
+
+    /* Two published working-row lengths. */
+    CHECK(PF_NATIVE_WORKING_V1_BASE_SIZE < (uint32_t)sizeof(pf_native_working_v1),
+          "the arm-presence tail is not past the base layout");
+
+    memset(&state, 0, sizeof(state));
+    state.entry_fill = NAN;
+    table = blank_callbacks(&state);
+    table.on_bar = presence_on_bar;
+    table.on_applied = presence_on_applied;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "presence host create failed");
+    if (!state.host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "presence configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "the presence run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback arm-presence rows failed");
+    CHECK(state.read_waiting == 1, "the two waiting trails were not told apart");
+    CHECK(state.read_armed == 1, "the two armed trails did not both read back their arm");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -3807,5 +4028,6 @@ int pf_native_c_api_checks(void) {
     check_auxiliary_feed();
     check_fx_roll_margin_point();
     check_subscription_delivery_words();
+    check_working_arm_presence();
     return failures;
 }

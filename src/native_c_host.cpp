@@ -215,6 +215,17 @@ static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
 static_assert(sizeof(pf_native_callbacks_v1)
                   == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 7u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 hook tail moved");
+/* The working readout's tail is append-only too, and it is WRITTEN, so the
+ * base length must be exactly what a base-layout caller's sizeof was: the
+ * tail starts where `comment` ended, and that end carried no padding. The
+ * tail itself is the two words below it and nothing else. */
+static_assert(PF_NATIVE_WORKING_V1_BASE_SIZE
+                      == offsetof(pf_native_working_v1, comment) + sizeof(const char*)
+                  && PF_NATIVE_WORKING_V1_BASE_SIZE % alignof(pf_native_working_v1) == 0u,
+              "PF_NATIVE_WORKING_V1_BASE_SIZE is not the base layout's sizeof");
+static_assert(sizeof(pf_native_working_v1)
+                  == PF_NATIVE_WORKING_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
+              "the pf_native_working_v1 arm-presence tail moved");
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
@@ -1136,6 +1147,9 @@ void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working
     out.incarnation = definition.handle.incarnation;
     out.intent = working_intent_tag(definition.request.intent, out.intent_value);
     out.trigger = working_trigger_tag(definition.request.trigger, out.p1, out.p2);
+    if (const auto* trail = std::get_if<no::Trail>(&definition.request.trigger)) {
+        out.trail_has_arm_price = trail->arm_price ? 1u : 0u;
+    }
     out.owner = static_cast<std::uint32_t>(definition.request.owner.index());
     out.capacity = static_cast<std::uint32_t>(definition.request.capacity.index());
     if (const auto* budget = std::get_if<no::PointBudget>(&definition.request.capacity)) {
@@ -1792,12 +1806,22 @@ PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!out) return PF_NATIVE_E_ARGUMENT;
-        if (out->struct_size != sizeof(pf_native_working_v1)) return PF_NATIVE_E_STRUCT;
+        /* Two published layouts: the base one the L13 lane first shipped and
+         * the current one with the arm-presence tail. A base-layout caller's
+         * struct ends at `comment`, so the row is written exactly that far. */
+        const std::uint32_t struct_size = out->struct_size;
+        if (struct_size != sizeof(pf_native_working_v1)
+            && struct_size != PF_NATIVE_WORKING_V1_BASE_SIZE) {
+            return PF_NATIVE_E_STRUCT;
+        }
         const auto& cache = host->working_cache();
         if (index < 0 || static_cast<std::size_t>(index) >= cache.size()) {
             return PF_NATIVE_E_ARGUMENT;
         }
-        fill_working(cache[static_cast<std::size_t>(index)], *out);
+        pf_native_working_v1 row;
+        fill_working(cache[static_cast<std::size_t>(index)], row);
+        row.struct_size = struct_size;
+        std::memcpy(out, &row, struct_size);
         return PF_NATIVE_OK;
     });
 }

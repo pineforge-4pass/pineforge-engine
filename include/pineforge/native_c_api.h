@@ -113,7 +113,9 @@
  *                                          PF_NATIVE_TRIGGER_MARKET and a zero-filled struct
  *   [--] replace_market                    the same convenience for a replace; see submit_market
  *   [C]  cancel                            strategy_native_cancel_v1
- *   [C]  native_working_requests           strategy_native_working_len_v1 / strategy_native_working_get_v1
+ *   [C]  native_working_requests           strategy_native_working_len_v1 / strategy_native_working_get_v1;
+ *                                          a Trail's arm_price presence is
+ *                                          pf_native_working_v1::trail_has_arm_price
  *   [C]  native_open_lots                  strategy_native_open_lot_count_v1 / strategy_native_open_lot_get_v1
  *   [C]  cancel_all                        strategy_native_cancel_all_v1
  *   [C]  cancel_where                      strategy_native_cancel_where_v1
@@ -161,10 +163,12 @@
  *  - Every struct is tagged and size-prefixed: `struct_size` is the exact
  *    sizeof of the version the caller compiled against, `version` is that
  *    layout's version constant. A mismatch is refused with PF_NATIVE_E_STRUCT
- *    and mutates nothing. The one exception is the deliberately additive tail
- *    of pf_native_run_spec_ext_v1: that struct has three published layouts and
- *    the runtime accepts each (see PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE and
- *    PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE).
+ *    and mutates nothing. The exception is a deliberately additive tail: a
+ *    struct that grew one publishes every earlier layout's length as a
+ *    `*_SIZE` constant and the runtime accepts each — pf_native_request_v1,
+ *    pf_native_run_spec_ext_v1 and pf_native_callbacks_v1 as inputs,
+ *    pf_native_working_v1 as a readout. A readout is written only as far as
+ *    the length its caller sent.
  *  - Every enum-valued field is translated by an exhaustive switch. A value
  *    outside its enumeration is refused with PF_NATIVE_E_TAG; a value this
  *    version deliberately cannot represent is refused with
@@ -809,7 +813,22 @@ typedef struct pf_native_event_v1 {
  *  `label` and `comment` borrow the snapshot taken by the most recent
  *  #strategy_native_working_len_v1 call on this handle. They stay valid until
  *  the next call to that function, or until the host is freed; copy them if
- *  the host keeps them longer. */
+ *  the host keeps them longer.
+ *
+ *  This readout has TWO published layouts and the runtime fills either: the
+ *  base layout the L13 lane first shipped (#PF_NATIVE_WORKING_V1_BASE_SIZE)
+ *  and the current one, which appends `trail_has_arm_price`. A caller
+ *  compiled against the base layout keeps working unchanged: its row is
+ *  written up to `comment` and never past it. Any other `struct_size` is
+ *  PF_NATIVE_E_STRUCT.
+ *
+ *  `trail_has_arm_price` is the request's own flag read back, so a TRAIL with
+ *  no arm price and one armed at 0.0 are two different rows even though both
+ *  read `p2` = 0. An anchored trail (#PF_NATIVE_ANCHOR_FROM_OWNER_FILL) reads
+ *  back the spelling it was submitted with until its owner fills; the arm
+ *  then installs the level, and from there it reads 1 with that level in
+ *  `p2`. A tick-spelled offset needs no such flag: acceptance resolves it
+ *  into `p1` as a price distance. */
 typedef struct pf_native_working_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_working_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
@@ -826,7 +845,8 @@ typedef struct pf_native_working_v1 {
     uint32_t reserved0;
     double   intent_value;    /**< The intent's own scalar, 0 when it has none. */
     double   p1;              /**< Trigger level 1 (limit / stop / trail offset). */
-    double   p2;              /**< Trigger level 2 (stop-limit limit / trail arm). */
+    double   p2;              /**< Trigger level 2 (stop-limit limit / trail arm
+                               *   when `trail_has_arm_price`). */
     double   capacity_units;  /**< Point budget, 0 for immediate capacity. */
     double   remaining_units; /**< Valid when `remaining_kind` is UNITS. */
     uint64_t group_id;
@@ -835,7 +855,25 @@ typedef struct pf_native_working_v1 {
     int64_t  decision_time_lower_bound; /**< Birth: earliest matchable time. */
     const char* label;        /**< Borrowed; see the struct note. */
     const char* comment;      /**< Borrowed; see the struct note. */
+
+    /* ── The additive arm-presence tail. Written only when `struct_size` is
+     * the current sizeof; a caller sending the base layout is filled up to
+     * `comment` above and never past it. ── */
+    uint32_t trail_has_arm_price; /**< TRAIL: 1 when `p2` is the arm price, 0 when
+                                   *   the trail carries none. 0 for every other
+                                   *   trigger. */
+    uint32_t reserved1;           /**< Always 0. */
 } pf_native_working_v1;
+
+/** Byte length of #pf_native_working_v1 as the L13 lane first published it,
+ *  before the arm-presence tail was appended. It is the offset of the first
+ *  appended field, so it stays correct on every target this header builds
+ *  for — it is not a literal. #strategy_native_working_get_v1 accepts this
+ *  length as well as the current `sizeof`, and writes no byte past the
+ *  length it was handed, which is what makes a readout's tail additive
+ *  rather than a layout break. */
+#define PF_NATIVE_WORKING_V1_BASE_SIZE \
+    ((uint32_t)offsetof(pf_native_working_v1, trail_has_arm_price))
 
 /** One open physical lot, copied out by #strategy_native_open_lot_get_v1 —
  *  the C spelling of `NativeOpenLot` (R5 gap lane N18): the book that
@@ -1572,6 +1610,8 @@ PF_API int strategy_native_working_len_v1(pf_strategy_t s);
  *
  *  @p out is an in/out size prefix: set `out->struct_size` to
  *  `sizeof(pf_native_working_v1)` before the call. Everything else is filled.
+ *  A caller built against the base layout sends
+ *  #PF_NATIVE_WORKING_V1_BASE_SIZE and is filled exactly that far.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for an out-of-range index,
  *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status. */
 PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
