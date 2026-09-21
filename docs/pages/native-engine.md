@@ -15,8 +15,8 @@ realtime inputs on the same thread. Do not override the inherited `on_bar`
 
 **The callbacks.** Only `on_native_bar` (`native_host.hpp:825`) is
 pure-virtual: it is the script-bar calculation, and a host that overrides
-nothing else has exactly the surface this page described before any of the
-others existed. The surface is **not** close-only.
+nothing else is a complete, correct host — every other callback below has a
+default that is the established behaviour. The surface is **not** close-only.
 
 | callback | when | section |
 |---|---|---|
