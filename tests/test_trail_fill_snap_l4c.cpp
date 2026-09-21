@@ -435,7 +435,7 @@ void test_product_ford_short_whole_tick_offset_level_touched_by_the_high() {
     // O->H leg (high-first: |H-O| = 0.03 < |O-L| = 0.035) reaches 9.85 ->
     // fill @9.85 (TV trail-eq-S-off3fp2; a tolerant 3t floor would print
     // 9.86). The kernel Trail, already reached at placement, seeds its best
-    // at that carried level (lane E14) instead of restarting at the 9.835
+    // at the carried level (lane E14) instead of restarting at the 9.835
     // open, so its own stop is 9.83 + 2t = 9.85, which is what the adapter's
     // terms policy books.
     const double off3 = 0.3 / (0.01 * 10.0);

@@ -41,6 +41,18 @@
  * best starts at the activation (offset 1 books activation -/+ 1 tick, not
  * close -/+ 1 tick). The adapter read that close raw, left the trail dormant
  * and exited one to twenty bars later.
+ *
+ * R5 follow-up lane E14 added two more NYSE:F tapes, for the residual E5 and
+ * E9 both recorded and neither could hit: WHERE the running best starts. The
+ * eight tapes above all had a next bar that fell far enough for either
+ * reading to exit; these eleven trades have a SHALLOW next bar — it opens
+ * half a tick to a tick short of the activation and never trades back to it,
+ * while its other extreme reaches activation -/+ the 5-tick offset exactly.
+ * A best that starts at the activation exits there; a best that restarts at
+ * the next bar's own first print does not, and exits 2 to 18 bars later.
+ * TradingView exits all eleven on the next bar at activation -/+ 5 ticks, so
+ * the running best starts at the level the position already reached — which
+ * the trailing leg now names in the generic native_order::Trail::best_seed.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -105,24 +117,49 @@ struct Probe {
     const FeedBar* bars;
     int entries;
     int bars_per_entry;
+    // Entries whose engine exit is a RECORDED divergence from the tape, bit
+    // per entry index. A recorded row is asserted to differ: if the engine
+    // ever matches it, this mask is what has to go, deliberately.
+    unsigned recorded_divergences;
+    // Which question the tape answers: a placement close inside the
+    // activation's tick cell (lane E9), or a shallow next bar (lane E14).
+    bool placement_cell;
 };
 
 constexpr double kFordLongCellPoints[] = {3.0, 3.0, 1.0, 1.0, 5.0, 4.0, 3.0};
 constexpr double kFordShortCellPoints[] = {2.0};
+// R5 lane E14's shallow-next-bar events.
+constexpr double kFordLongShallowPoints[] = {4.0, 4.0, 4.0, 2.0, 1.0, 3.0, 1.0};
+constexpr double kFordShortShallowPoints[] = {1.0, 4.0, 5.0, 1.0};
+
+// Entry 5 of the long shallow tape (2025-09-10 19:00Z) is the one recorded
+// divergence in this file, and it is NOT this question: its activation is
+// 11.44 and its stop 11.44 - 5 ticks, whose binary64 value
+// 11.389999999999998792 lies one ULP UNDER the bar's low 11.390000000000000568.
+// The kernel's trail stop is best - ticks * price_tick, raw by ruling (lane
+// E5), so the low does not reach it and the trade runs to the timeout.
+// TradingView books it. That is the tick-product residual lane E5 recorded
+// for the half-up spelling, on the trail stop instead of the arm; it needs
+// its own lane and its own tape.
+constexpr unsigned kLongShallowUlpResidual = 1u << 4;
 
 const Probe kProbes[] = {
     {"e5-eth-long-oneshot-p004", true, 0.01, 1.0, 16, nullptr, 0.0, 0.004,
-     &kEthLong[0][0], 8, 19},
+     &kEthLong[0][0], 8, 19, 0u, false},
     {"e9-eth-short-oneshot-m004", false, 0.01, 1.0, 16, nullptr, 0.0, -0.004,
-     &kEthShort[0][0], 8, 19},
+     &kEthShort[0][0], 8, 19, 0u, false},
     {"e9-f-long-cell-off1", true, 0.01, 100.0, 20, kFordLongCellPoints, 1.0, kNaN,
-     &kFordLongCell[0][0], 7, 23},
+     &kFordLongCell[0][0], 7, 23, 0u, true},
     {"e9-f-long-cell-oneshot", true, 0.01, 100.0, 20, kFordLongCellPoints, 0.0, kNaN,
-     &kFordLongCell[0][0], 7, 23},
+     &kFordLongCell[0][0], 7, 23, 0u, true},
     {"e9-f-short-cell-off1", false, 0.01, 100.0, 20, kFordShortCellPoints, 1.0, kNaN,
-     &kFordShortCell[0][0], 1, 23},
+     &kFordShortCell[0][0], 1, 23, 0u, true},
     {"e9-f-short-cell-oneshot", false, 0.01, 100.0, 20, kFordShortCellPoints, 0.0, kNaN,
-     &kFordShortCell[0][0], 1, 23},
+     &kFordShortCell[0][0], 1, 23, 0u, true},
+    {"e14-f-long-shallow-next", true, 0.01, 100.0, 25, kFordLongShallowPoints, 5.0, kNaN,
+     &kFordLongShallow[0][0], 7, 28, kLongShallowUlpResidual, false},
+    {"e14-f-short-shallow-next", false, 0.01, 100.0, 25, kFordShortShallowPoints, 5.0, kNaN,
+     &kFordShortShallow[0][0], 4, 28, 0u, false},
 };
 
 // ── the tape ──────────────────────────────────────────────────────────
@@ -323,9 +360,19 @@ void test_tapes_replay() {
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             CHECK(host.entry_time(0) == tv.entry_ms);
             CHECK(same_price(host.entry_price(0), tv.entry_price));
+            const bool matches = host.exit_time(0) == tv.exit_ms
+                && same_price(host.exit_price(0), tv.exit_price);
+            if (probe.recorded_divergences & (1u << e)) {
+                CHECK(!matches);
+                std::printf("        trade %d: RECORDED divergence — engine exit %s @%.10g, "
+                            "TradingView %s @%.10g\n",
+                            e + 1, utc(host.exit_time(0)).c_str(), host.exit_price(0),
+                            utc(tv.exit_ms).c_str(), tv.exit_price);
+                continue;
+            }
             CHECK(host.exit_time(0) == tv.exit_ms);
             CHECK(same_price(host.exit_price(0), tv.exit_price));
-            if (host.exit_time(0) != tv.exit_ms || !same_price(host.exit_price(0), tv.exit_price)) {
+            if (!matches) {
                 std::printf("        trade %d: engine exit %s @%.10g, TradingView %s @%.10g\n",
                             e + 1, utc(host.exit_time(0)).c_str(), host.exit_price(0),
                             utc(tv.exit_ms).c_str(), tv.exit_price);
@@ -400,6 +447,7 @@ struct PlacementRecord {
     bool one_shot_limit = false;
     bool trail = false;
     std::optional<double> trail_arm;
+    std::optional<double> trail_best_seed;
     std::optional<std::int64_t> close_bar_ms;
 };
 
@@ -414,6 +462,7 @@ PlacementRecord placement_record(const TapeHost& host, const char* exit_label) {
             if (const auto* t = std::get_if<native_order::Trail>(&accepted->request().trigger)) {
                 record.trail = true;
                 record.trail_arm = t->arm_price;
+                record.trail_best_seed = t->best_seed;
             }
         } else if (const auto* applied =
                        std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
@@ -435,7 +484,7 @@ PlacementRecord placement_record(const TapeHost& host, const char* exit_label) {
 // reaches, and an exit leg closes the trade on that next bar.
 void test_placement_close_in_the_cell_has_reached() {
     for (const Probe& probe : kProbes) {
-        if (!probe.trail_points) continue;
+        if (!probe.trail_points || !probe.placement_cell) continue;
         std::printf("-- %s: the placement close's tick reaches the activation --\n",
                     probe.slug);
         const auto tape = read_tape(probe.slug);
@@ -479,12 +528,92 @@ void test_placement_close_in_the_cell_has_reached() {
     }
 }
 
+
+// ── 4. the running best starts at the level the leg names ────────────
+//
+// R5 follow-up lane E14. The placement close reaches the activation on its
+// tick here too, so the leg is armed at placement; what separates the two
+// readings of the running best is the NEXT bar. It opens half a tick to a
+// tick short of the activation and never trades back to it, so a best that
+// restarts at the leg's first live print rides that lower number, while a
+// best seeded at the carried level stays at the activation. The bar's other
+// extreme reaches activation -/+ 5 ticks exactly — between the two stops —
+// and TradingView exits there, 11 of 11: its running best starts at the
+// activation. The adapter therefore names that level in Trail::best_seed,
+// and the kernel's accepted request carries it.
+void test_the_running_best_starts_where_the_leg_says() {
+    for (const Probe& probe : kProbes) {
+        if (!probe.trail_points || probe.placement_cell) continue;
+        std::printf("-- %s: the shallow next bar separates the two running bests --\n",
+                    probe.slug);
+        const auto tape = read_tape(probe.slug);
+        if (static_cast<int>(tape.size()) != probe.entries) { CHECK(false); continue; }
+        for (int e = 0; e < probe.entries; ++e) {
+            const auto bars = entry_bars(probe, e);
+            TapeHost host(probe, probe.trail_points[e]);
+            host.run(bars.data(), static_cast<int>(bars.size()));
+            const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
+            const double tick = probe.mintick;
+            const double sign = probe.is_long ? 1.0 : -1.0;
+            const double activation = tv.entry_price + sign * probe.trail_points[e] * tick;
+            // bars[0] places the entry, bars[1] fills it at its open and issues
+            // the exit at its close, bars[2] is the shallow next bar.
+            const Bar& next = bars[2];
+            // The carried best: the activation, or the placement print when
+            // that print is already past it. These four shorts close half a
+            // tick past the activation (13.035 under 13.04) and TradingView's
+            // stop is that close + the offset, which the next bar's high
+            // reaches and the activation's own stop never would.
+            const double carried = probe.is_long ? std::fmax(activation, bars[1].close)
+                                                 : std::fmin(activation, bars[1].close);
+            const double restart = probe.is_long ? std::fmax(next.open, next.high)
+                                                 : std::fmin(next.open, next.low);
+            const double reach = probe.is_long ? next.low : next.high;
+            // The placement close has reached the activation on its tick, so
+            // the leg is armed there.
+            CHECK(same_price(tick_of(bars[1].close, tick), activation));
+            // The next bar is shallow: its own best is short of the carried
+            // one, and its other extreme lies BETWEEN the two stops.
+            CHECK(probe.is_long ? restart < carried : restart > carried);
+            CHECK(probe.is_long ? reach <= carried - probe.trail_offset * tick + 1e-9
+                                : reach >= carried + probe.trail_offset * tick - 1e-9);
+            CHECK(probe.is_long ? reach > restart - probe.trail_offset * tick + 1e-9
+                                : reach < restart + probe.trail_offset * tick - 1e-9);
+            // TradingView exits on that bar, at the tick the quantized path
+            // reaches at the carried stop. A trail stop is a STOP, reached
+            // from the adverse side: a long's sell stop books the grid point
+            // at or below it, a short's buy stop the one at or above (the
+            // stop itself when it is on the grid). That is the other
+            // direction from the one-shot limit's reach tick, which lane E9
+            // pinned, and it is why these four shorts book 13.09 for a stop
+            // at 13.085.
+            const double stop = carried - sign * probe.trail_offset * tick;
+            const double stop_nearest = tick_of(stop, tick);
+            const double stop_reach = same_price(stop_nearest, stop) ? stop_nearest
+                : (probe.is_long ? (stop_nearest < stop ? stop_nearest : stop_nearest - tick)
+                                 : (stop_nearest > stop ? stop_nearest : stop_nearest + tick));
+            CHECK(tv.exit_ms == next.timestamp);
+            CHECK(same_price(tv.exit_price, stop_reach));
+            // The accepted leg names the carried level, and carries no arm
+            // threshold because the placement print already reached it.
+            const PlacementRecord record = placement_record(host, probe.is_long ? "LX" : "SX");
+            CHECK(record.trail);
+            CHECK(!record.trail_arm.has_value());
+            CHECK(record.trail_best_seed.has_value());
+            if (record.trail_best_seed) CHECK(same_price(*record.trail_best_seed, carried));
+            if (probe.recorded_divergences & (1u << e)) continue;
+            CHECK(record.close_bar_ms && *record.close_bar_ms == next.timestamp);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
     test_tapes_replay();
     test_booked_price_is_the_reach_tick();
     test_placement_close_in_the_cell_has_reached();
+    test_the_running_best_starts_where_the_leg_says();
     std::printf("\n%s trail activation tick reach: %d checks, %d failures\n",
                 tests_failed == 0 ? "PASS" : "FAIL", tests_passed + tests_failed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

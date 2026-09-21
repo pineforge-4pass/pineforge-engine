@@ -8084,8 +8084,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // next bar's first print when the placement close already reached
             // it (lane E9's eight tapes) -- so the leg names the level its
             // ride starts at. Already armed, the placement print is part of
-            // that ride and joins it on the favourable side, the same
-            // carried best the explicit-zero trail's sibling stop rests at.
+            // that ride and joins it on the favourable side: the same carried
+            // best the explicit-zero trail's sibling stop rests at, raw.
+            // Lane E14's four NYSE:F shorts pin the raw reading: their
+            // placement closes sit half a tick past the activation (13.035
+            // under 13.04, 14.075 under 14.08) and TradingView's stop is
+            // that close + the offset, reached by a high the activation's own
+            // stop never would be.
             double best_seed = trail_price;
             if (trail_already_reached && std::isfinite(placement_print)) {
                 best_seed = exit_is_buy ? std::min(best_seed, placement_print)

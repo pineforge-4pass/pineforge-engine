@@ -1,0 +1,57 @@
+// E14 probe (R5 follow-up lane E14): where does a placement-armed trail's
+// RUNNING BEST start — at the level the position already reached, or at the
+// first print the leg sees afterwards? Lanes E5 and E9 each left this open
+// because none of their fourteen tapes fell in the window.
+// NYSE:F 15m (sub-cent prints). Each exit is issued at the close of the bar
+// whose open filled the entry, trail_points n, trail_offset 5: the
+// placement close reaches the activation A = fill + n ticks on the
+// quantized path, so the leg is armed there. The NEXT bar is SHALLOW — it
+// opens below the activation and never trades back up to it — so its own extreme is half a tick to a tick short of A while
+// its low reaches A - 5 ticks exactly. A best that starts at A
+// exits on that next bar; a best that restarts at the next bar's own first
+// print does not, and exits between 2 and 18 bars later.
+// Entry bars (UTC open time; each entry is placed on the bar before it and
+// fills at the entry bar's open):
+//   2025-05-06 17:00  trail_points 4  (a restarted best exits +4)
+//   2025-05-09 14:00  trail_points 4  (a restarted best exits +6)
+//   2025-07-10 14:00  trail_points 4  (a restarted best exits +6)
+//   2025-09-05 15:30  trail_points 2  (a restarted best exits +18)
+//   2025-09-10 19:00  trail_points 1  (a restarted best exits +10)
+//   2025-09-25 17:00  trail_points 3  (a restarted best exits +4)
+//   2026-01-30 18:15  trail_points 1  (a restarted best exits +4)
+//@version=6
+strategy("E14 NYSE:F long trail shallow next bar off5", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 5, 6, 16, 45)
+        pts := 4
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 5, 9, 13, 45)
+        pts := 4
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 7, 10, 13, 45)
+        pts := 4
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 9, 5, 15, 15)
+        pts := 2
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 9, 10, 18, 45)
+        pts := 1
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2025, 9, 25, 16, 45)
+        pts := 3
+        strategy.entry("L", strategy.long)
+    else if time == timestamp("UTC", 2026, 1, 30, 18, 0)
+        pts := 1
+        strategy.entry("L", strategy.long)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size > 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("LX", "L", trail_points=pts, trail_offset=5)
+
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 25
+    strategy.close("L", comment="timeout")

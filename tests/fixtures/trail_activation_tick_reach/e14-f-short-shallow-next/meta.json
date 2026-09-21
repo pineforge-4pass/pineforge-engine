@@ -1,0 +1,16 @@
+{
+  "title": "E14 NYSE:F short trail shallow next bar off5",
+  "slug": "e14-f-short-shallow-next",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T19:42:23.096Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-04-10"
+  },
+  "pine_sha256": "6a5a9930f833cb44427e7c25c040b99537a0c6dc77016a8989d5ee900bb2e307",
+  "tv_trades_sha256": "36dd0b4bfa8ed4d0a2a07b3b649cfb158071419fcbd22962a9431c5bb74f2fd1",
+  "tv_trades_rows": 8
+}
