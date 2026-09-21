@@ -136,6 +136,11 @@ static_assert(static_cast<int>(pineforge::NativeFeedTolerance::WarmupNonNegative
                   == PF_NATIVE_FEED_TOLERANCE_WARMUP_NONNEGATIVE, "NativeFeedTolerance drifted");
 static_assert(static_cast<int>(pineforge::NativePathOrder::LowFirst)
                   == PF_NATIVE_PATH_ORDER_LOW_FIRST, "NativePathOrder drifted");
+static_assert(static_cast<int>(pineforge::OpenedLotFillPoint::OnPath)
+                      == PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH
+                  && static_cast<int>(pineforge::OpenedLotFillPoint::AfterPath)
+                         == PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH,
+              "OpenedLotFillPoint drifted");
 static_assert(static_cast<int>(pineforge::NativeAbortReporting::Quiet)
                   == PF_NATIVE_ABORT_QUIET, "NativeAbortReporting drifted");
 static_assert(static_cast<int>(pineforge::IntrabarPath::SampleEligibility::DistributionSamples)
@@ -197,6 +202,21 @@ const pf_bar_t* as_c_bar(const Bar& bar) {
     return reinterpret_cast<const pf_bar_t*>(&bar);
 }
 
+/* Marks the frame of one C `on_applied` call on its host, and restores the
+ * outer mark on every exit, the CallbackFailure throw included — so a nested
+ * applied execution cannot close the frame it runs inside. */
+class AppliedFrame {
+public:
+    explicit AppliedFrame(bool& inside) : inside_(inside), outer_(inside) { inside_ = true; }
+    ~AppliedFrame() { inside_ = outer_; }
+    AppliedFrame(const AppliedFrame&) = delete;
+    AppliedFrame& operator=(const AppliedFrame&) = delete;
+
+private:
+    bool& inside_;
+    bool outer_;
+};
+
 /* Defined below, beside the other C++ value -> C POD translations; declared
  * here because the recalculation hook flattens an applied cause. */
 pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied);
@@ -217,6 +237,17 @@ public:
      * like working_cache_: never durable engine state, never hashed. */
     std::vector<pineforge::NativeOpenLot>& open_lot_cache() noexcept {
         return open_lot_cache_;
+    }
+
+    /* The C spelling of the protected kernel seam
+     * BacktestEngine::declare_opened_lot_entry_bar_mask, legal where a host
+     * learns that a fill opened a lot: inside the C `on_applied` alone. Any
+     * other frame answers false and touches nothing. */
+    bool declare_entry_bar_mask(std::uint64_t entry_incarnation, const Bar& entry_bar,
+                                pineforge::OpenedLotFillPoint fill_point) {
+        if (!in_applied_) return false;
+        declare_opened_lot_entry_bar_mask(entry_incarnation, entry_bar, fill_point);
+        return true;
     }
 
     pf_native_decision_v1 decision(const pineforge::NativeDecisionContext& ctx) const;
@@ -449,6 +480,9 @@ private:
     pf_native_callbacks_v1 table_{};
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
     std::vector<pineforge::NativeOpenLot> open_lot_cache_;
+    /* True while the C `on_applied` runs. Host-side, like the two caches:
+     * never durable engine state, never hashed. */
+    bool in_applied_ = false;
 };
 
 pf_native_decision_v1 CCallbackHost::decision(
@@ -558,6 +592,7 @@ void CCallbackHost::on_native_applied(const no::ExecutionAppliedEvent& applied,
     if (!table_.on_applied) return;
     const pf_native_applied_v1 pod = applied_pod(applied);
     const pf_native_decision_v1 at = decision(ctx);
+    const AppliedFrame frame(in_applied_);
     if (table_.on_applied(table_.user, &pod, &at) != 0) throw CallbackFailure("on_applied");
 }
 
@@ -2042,6 +2077,32 @@ PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_ba
         if (n < 0 || (n > 0 && !bars)) return PF_NATIVE_E_ARGUMENT;
         return host->append_auxiliary_bars(reinterpret_cast<const Bar*>(bars),
                                            static_cast<std::size_t>(n))
+            ? PF_NATIVE_OK
+            : PF_NATIVE_E_STATE;
+    });
+}
+
+PF_API int strategy_native_declare_opened_lot_entry_bar_mask_v1(pf_strategy_t s,
+                                                                uint64_t entry_incarnation,
+                                                                const pf_bar_t* entry_bar,
+                                                                uint32_t fill_point) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!entry_bar) return PF_NATIVE_E_ARGUMENT;
+        pineforge::OpenedLotFillPoint point = pineforge::OpenedLotFillPoint::OnPath;
+        switch (fill_point) {
+        case PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH:
+            point = pineforge::OpenedLotFillPoint::OnPath;
+            break;
+        case PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH:
+            point = pineforge::OpenedLotFillPoint::AfterPath;
+            break;
+        default:
+            return PF_NATIVE_E_TAG;
+        }
+        return host->declare_entry_bar_mask(entry_incarnation,
+                                            *reinterpret_cast<const Bar*>(entry_bar), point)
             ? PF_NATIVE_OK
             : PF_NATIVE_E_STATE;
     });

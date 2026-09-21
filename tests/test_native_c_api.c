@@ -2078,6 +2078,290 @@ static void check_excursion_hook(void) {
     strategy_native_host_free(state.host);
 }
 
+/* --- the entry-bar mask, declared from C ---
+ *
+ * strategy_native_declare_opened_lot_entry_bar_mask_v1 is the C spelling of
+ * BacktestEngine::declare_opened_lot_entry_bar_mask: the owner of a lot's
+ * excursion says where the lot's opening fill sat on its entry bar, and the
+ * kernel derives which end of that bar the path had already reached. The
+ * numbers are those of the C++ witness of the same seam,
+ * tests/test_e6_entry_bar_mask_declaration.cpp: two units entered at the
+ * close of a high-first bar (O 100 H 101 L 90 C 95: the path is O->H->L->C
+ * and the fill at 95 is reached after the high, before the low) and at the
+ * close of a low-first one (O 100 H 110 L 99 C 105: O->L->H->C), here as the
+ * two lots of ONE run, and an owner whose magnitudes skip the masked end of
+ * each lot's entry bar. Every row of that witness is one lot below. */
+
+#define MASK_BARS    6
+#define MASK_QTY     2.0
+#define MASK_NOTHING (-1)
+/* 1-based calculations: lot A enters at the close of bar 1, lot B at the
+ * close of bar 2, and both are flattened at the close of bar 4. */
+#define MASK_ENTRY_A 2
+#define MASK_ENTRY_B 3
+#define MASK_EXIT    5
+
+static pf_bar_t mask_bars[MASK_BARS];
+
+static void mask_fill(void) {
+    static const double ohlc[MASK_BARS][4] = {
+        {100.0, 100.0, 100.0, 100.0},
+        {100.0, 101.0, 90.0, 95.0},   /* high-first: |H - O| = 1 < |O - L| = 10 */
+        {100.0, 110.0, 99.0, 105.0},  /* low-first: |H - O| = 10, |O - L| = 1 */
+        {105.0, 105.0, 105.0, 105.0},
+        {105.0, 105.0, 105.0, 105.0},
+        {105.0, 105.0, 105.0, 105.0},
+    };
+    int i;
+    for (i = 0; i < MASK_BARS; ++i) {
+        mask_bars[i].open = ohlc[i][0];
+        mask_bars[i].high = ohlc[i][1];
+        mask_bars[i].low = ohlc[i][2];
+        mask_bars[i].close = ohlc[i][3];
+        mask_bars[i].volume = 5.0;
+        mask_bars[i].timestamp = (int64_t)i * 300000;
+    }
+}
+
+/* What the host declares for lot A (high-first bar) and lot B (low-first
+ * bar), and what each lot's closing facts and closed row must then carry. */
+typedef struct mask_case {
+    const char* tag;
+    int         declare[2];        /* MASK_NOTHING or a pf_native_opened_lot_fill_point_e */
+    int         other_incarnation; /* declare for an incarnation that opened no lot */
+    int         want_high_masked[2];
+    int         want_low_masked[2];
+    double      want_favorable[2];
+    double      want_adverse[2];
+} mask_case;
+
+typedef struct mask_lot {
+    uint64_t incarnation;
+    double   bar_high;     /* the owner's own record of the entry bar */
+    double   bar_low;
+    int      facts;        /* closing facts the owner received */
+    int      high_masked;
+    int      low_masked;
+    double   entry_price;
+    double   closed_qty;
+} mask_lot;
+
+typedef struct mask_state {
+    pf_strategy_t    host;
+    const mask_case* spec;
+    pf_bar_t         current;   /* the bar under calculation: a close fill's entry bar */
+    int              calculations;
+    int              opened;
+    int              failures;
+    int              hook_calls;
+    int              late_refusals;
+    mask_lot         lot[2];
+} mask_state;
+
+static int mask_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    mask_state* state = (mask_state*)user;
+    pf_native_request_v1 request;
+    (void)at;
+    ++state->calculations;
+    state->current = *bar;
+    /* Commands are legal here; the declaration is legal inside on_applied
+     * alone. The target is a live lot once one exists, so a refusal that
+     * leaked would also move that lot's mask. */
+    LCHECK(state, strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                      state->host, state->opened > 0 ? state->lot[0].incarnation : 1u, bar,
+                      PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH) == PF_NATIVE_E_STATE,
+           "a declaration from on_bar was not refused");
+    if (state->calculations != MASK_ENTRY_A && state->calculations != MASK_ENTRY_B
+        && state->calculations != MASK_EXIT) {
+        return 0;
+    }
+    request = blank_request();
+    if (state->calculations == MASK_EXIT) {
+        request.intent = PF_NATIVE_INTENT_FLATTEN;
+        request.label = "mask-exit";
+    } else {
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = MASK_QTY;
+        request.label = state->calculations == MASK_ENTRY_A ? "mask-a" : "mask-b";
+    }
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "a mask-run command was refused");
+    return 0;
+}
+
+static int mask_on_applied(void* user, const pf_native_applied_v1* applied,
+                           const pf_native_decision_v1* at) {
+    mask_state* state = (mask_state*)user;
+    mask_lot* lot;
+    int point;
+    (void)at;
+    if (applied->opened_lot_incarnation == 0u) return 0;   /* the flatten opens nothing */
+    if (state->opened >= 2) {
+        LCHECK(state, 0, "the mask run opened a third lot");
+        return 0;
+    }
+    point = state->spec->declare[state->opened];
+    lot = &state->lot[state->opened++];
+    lot->incarnation = applied->opened_lot_incarnation;
+    lot->bar_high = state->current.high;
+    lot->bar_low = state->current.low;
+    /* The documented refusals, here where the call is legal: each changes
+     * nothing, which the "nothing" case's clear masks then show. */
+    LCHECK(state, strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                      state->host, lot->incarnation, NULL,
+                      PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH) == PF_NATIVE_E_ARGUMENT,
+           "a NULL entry bar was not refused");
+    LCHECK(state, strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                      state->host, lot->incarnation, &state->current, 2u) == PF_NATIVE_E_TAG,
+           "a fill point outside the enumeration was not refused");
+    LCHECK(state, strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                      NULL, lot->incarnation, &state->current,
+                      PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH) == PF_NATIVE_E_HANDLE,
+           "a NULL handle was not refused");
+    if (point == MASK_NOTHING) return 0;
+    LCHECK(state, strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                      state->host,
+                      state->spec->other_incarnation ? lot->incarnation + 1000u
+                                                     : lot->incarnation,
+                      &state->current, (uint32_t)point) == PF_NATIVE_OK,
+           "a declaration from on_applied was refused");
+    return 0;
+}
+
+static int mask_on_lot(void* user, const pf_native_lot_excursion_v1* facts,
+                       double* favorable, double* adverse) {
+    mask_state* state = (mask_state*)user;
+    mask_lot* lot = NULL;
+    double high;
+    double low;
+    int i;
+    ++state->hook_calls;
+    /* Too late to declare here: these facts already carry the mask. */
+    if (strategy_native_declare_opened_lot_entry_bar_mask_v1(
+            state->host, facts->entry_incarnation, &state->current,
+            PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH) == PF_NATIVE_E_STATE) {
+        ++state->late_refusals;
+    }
+    for (i = 0; i < state->opened; ++i) {
+        if (state->lot[i].incarnation == facts->entry_incarnation) lot = &state->lot[i];
+    }
+    if (!lot) {
+        LCHECK(state, 0, "the owner was handed a lot it never opened");
+        return PF_NATIVE_ANSWER_DEFAULT;
+    }
+    LCHECK(state, lot->facts == 0 || (lot->high_masked == facts->entry_bar_high_masked
+                                      && lot->low_masked == facts->entry_bar_low_masked),
+           "one lot's closing facts carried two different masks");
+    ++lot->facts;
+    lot->high_masked = facts->entry_bar_high_masked;
+    lot->low_masked = facts->entry_bar_low_masked;
+    lot->entry_price = facts->entry_price;
+    lot->closed_qty = facts->closed_qty;
+    /* The C++ witness's owner: a masked end of the entry bar is not the
+     * lot's, so it counts from the entry price. */
+    high = facts->entry_bar_high_masked ? facts->entry_price : lot->bar_high;
+    low = facts->entry_bar_low_masked ? facts->entry_price : lot->bar_low;
+    *favorable = (high - facts->entry_price) * facts->closed_qty;
+    *adverse = (facts->entry_price - low) * facts->closed_qty;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static void run_mask_case(const mask_case* mc, mask_state* state, pf_report_t* report) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+
+    memset(state, 0, sizeof(*state));
+    state->spec = mc;
+    table = blank_callbacks(state);
+    table.on_bar = mask_on_bar;
+    table.on_applied = mask_on_applied;
+    table.on_lot_excursion = mask_on_lot;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "mask host create failed");
+    if (!state->host) return;
+    spec.session_key = "native-c-api-entry-bar-mask";
+    spec.close_execution = 1;   /* AfterCalculation: each entry fills at its own bar's close */
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "mask configure");
+    CHECK_EQ_INT(strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                     state->host, 1u, &mask_bars[1], PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH),
+                 PF_NATIVE_E_STATE, "a declaration before the run was not refused");
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, mask_bars, MASK_BARS, report), PF_NATIVE_OK,
+                 "the mask run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback mask rows failed");
+}
+
+static void check_entry_bar_mask_declaration(void) {
+    /* Lot A: (101 - 95) and (95 - 90) per unit of its whole entry bar; lot
+     * B: (110 - 105) and (105 - 99). A masked end counts zero. */
+    static const mask_case cases[] = {
+        {"nothing", {MASK_NOTHING, MASK_NOTHING}, 0, {0, 0}, {0, 0},
+         {(101.0 - 95.0) * MASK_QTY, (110.0 - 105.0) * MASK_QTY},
+         {(95.0 - 90.0) * MASK_QTY, (105.0 - 99.0) * MASK_QTY}},
+        {"onpath-high-first, afterpath-low-first",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH}, 0,
+         {1, 1}, {0, 1}, {0.0, 0.0}, {(95.0 - 90.0) * MASK_QTY, 0.0}},
+        {"afterpath-high-first, onpath-low-first",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH}, 0,
+         {1, 0}, {1, 1}, {0.0, (110.0 - 105.0) * MASK_QTY}, {0.0, 0.0}},
+        {"other-incarnation",
+         {PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH, PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH},
+         1, {0, 0}, {0, 0},
+         {(101.0 - 95.0) * MASK_QTY, (110.0 - 105.0) * MASK_QTY},
+         {(95.0 - 90.0) * MASK_QTY, (105.0 - 99.0) * MASK_QTY}},
+    };
+    static const double entry[2] = {95.0, 105.0};
+    size_t c;
+
+    mask_fill();
+    for (c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c) {
+        const mask_case* mc = &cases[c];
+        const int before = failures;
+        mask_state state;
+        pf_report_t report;
+        int i;
+        int row;
+
+        memset(&report, 0, sizeof(report));
+        run_mask_case(mc, &state, &report);
+        if (!state.host) continue;
+        CHECK_EQ_INT(state.opened, 2, "the mask run opened another number of lots");
+        CHECK_EQ_INT(report.trades_len, 2, "the mask run booked another number of rows");
+        CHECK(state.hook_calls >= 2, "the owner was not handed both lots");
+        CHECK_EQ_INT(state.late_refusals, state.hook_calls,
+                     "a declaration from the excursion hook was not refused");
+        for (i = 0; i < 2; ++i) {
+            const mask_lot* lot = &state.lot[i];
+            int matched = 0;
+            CHECK(lot->facts >= 1, "a lot closed without its owner's facts");
+            CHECK(lot->entry_price == entry[i], "a lot's facts carried another entry price");
+            CHECK(lot->closed_qty == MASK_QTY, "a lot's facts closed another quantity");
+            CHECK_EQ_INT(lot->high_masked, mc->want_high_masked[i],
+                         "a lot's facts carried another entry-bar high mask");
+            CHECK_EQ_INT(lot->low_masked, mc->want_low_masked[i],
+                         "a lot's facts carried another entry-bar low mask");
+            for (row = 0; row < report.trades_len; ++row) {
+                if (report.trades[row].entry_price != entry[i]) continue;
+                ++matched;
+                CHECK_EQ_INT(report.trades[row].is_long, 1, "a mask row closed another side");
+                CHECK(report.trades[row].qty == MASK_QTY, "a mask row closed another quantity");
+                CHECK(fabs(report.trades[row].max_runup - mc->want_favorable[i]) < 1e-9,
+                      "a mask row kept another run-up");
+                CHECK(fabs(report.trades[row].max_drawdown - mc->want_adverse[i]) < 1e-9,
+                      "a mask row kept another drawdown");
+            }
+            CHECK_EQ_INT(matched, 1, "a lot has no closed row of its own");
+        }
+        /* Outside every callback, after the run, it is refused as well. */
+        CHECK_EQ_INT(strategy_native_declare_opened_lot_entry_bar_mask_v1(
+                         state.host, state.lot[0].incarnation, &mask_bars[1],
+                         PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH),
+                     PF_NATIVE_E_STATE, "a declaration after the run was not refused");
+        if (failures != before) fprintf(stderr, "  in the entry-bar mask case \"%s\"\n", mc->tag);
+        strategy_native_report_free_v1(&report);
+        strategy_native_host_free(state.host);
+    }
+}
+
 static void check_callback_tail_layouts(void) {
     pf_native_callbacks_v1 table;
     pf_strategy_t host;
@@ -3313,6 +3597,7 @@ int pf_native_c_api_checks(void) {
     check_recalculation_hook();
     check_margin_hooks();
     check_excursion_hook();
+    check_entry_bar_mask_declaration();
     check_request_sizing_tail();
     check_scope_basis_tail();
     check_intrabar_and_policies();

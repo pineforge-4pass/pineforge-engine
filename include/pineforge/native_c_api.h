@@ -24,6 +24,8 @@
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
  * ✓ Declare an auxiliary finer feed, build a series from it, and append its
  *   later bars to a realtime stream
+ * ✓ Declare, from `on_applied`, where a lot's opening fill sat on its entry
+ *   bar, for a host that owns its lots' excursions
  *
  * ✗ Streaming has no new symbols: strategy_stream_begin / _push_bar /
  *   _push_tick / _advance_time / _end / _fill_report take any handle this
@@ -140,6 +142,17 @@
  * reads back the ticket its own margin model declared
  * (pf_native_run_spec_ext_v1::margin_liquidation_label) without a new symbol.
  * Executed by the fx-roll scenario of tests/test_native_c_api.c.
+ *
+ * And one member this list cannot reach, because it is not a member of
+ * NativeStrategyHost: the entry-side half of on_lot_excursion's capability
+ * (RULING A48) is a protected member of the base,
+ * BacktestEngine::declare_opened_lot_entry_bar_mask, through which the owner
+ * of a lot's excursion says where the lot's opening fill sat on its entry bar
+ * and the kernel derives the lot's entry-bar mask. Its C spelling is
+ * strategy_native_declare_opened_lot_entry_bar_mask_v1. The census above is
+ * the public surface of NativeStrategyHost, so the check neither requires
+ * nor admits a row for a member of its base. Executed by the entry-bar mask
+ * scenario of tests/test_native_c_api.c.
  *
  * HARDENING RULES
  * ───────────────
@@ -656,6 +669,18 @@ typedef enum pf_native_answer_e {
     PF_NATIVE_ANSWER_PROVIDED = 1  /**< Use the output. Any non-zero value means this. */
 } pf_native_answer_t;
 
+/** Where an opened lot's own fill sits on its entry bar's modeled path —
+ *  `OpenedLotFillPoint`, the one fact
+ *  #strategy_native_declare_opened_lot_entry_bar_mask_v1 carries. ON_PATH is
+ *  a fill at a price the path reaches: the kernel derives which end of the
+ *  bar, if either, the path had already reached before it. AFTER_PATH is a
+ *  fill at the bar's closing point, after the whole path: both ends precede
+ *  it. */
+typedef enum pf_native_opened_lot_fill_point_e {
+    PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH    = 0,
+    PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH = 1
+} pf_native_opened_lot_fill_point_t;
+
 /** @} */ /* end of pf_native_c_enums */
 
 /** @defgroup pf_native_c_types Transport types
@@ -933,7 +958,9 @@ typedef struct pf_native_close_view_v1 {
  *  Handed to #pf_native_callbacks_v1::on_lot_excursion, whose two outputs are
  *  the favorable and adverse magnitudes the closing row then carries. Facts
  *  in, magnitudes out: nothing about the host's price model crosses the
- *  boundary in either direction. */
+ *  boundary in either direction. The two entry-bar masks are what
+ *  #strategy_native_declare_opened_lot_entry_bar_mask_v1 derived for the lot,
+ *  and 0 for a lot nobody declared. */
 typedef struct pf_native_lot_excursion_v1 {
     uint32_t struct_size;      /**< sizeof(pf_native_lot_excursion_v1). */
     uint32_t version;          /**< PF_NATIVE_API_VERSION. */
@@ -1265,6 +1292,8 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  `on_applied`. `on_run_begin`, `on_input`, `on_timeframe_bar` and
  *  `on_margin_call` are observation-only: a command there answers
  *  PF_NATIVE_E_STATE and changes nothing.
+ *  #strategy_native_declare_opened_lot_entry_bar_mask_v1 is legal inside
+ *  `on_applied` alone.
  *
  *  `on_bar` is also the recalculation hook: with a calculation trigger above
  *  BarClose the kernel calls it again at each fill cursor or modeled point,
@@ -1684,6 +1713,37 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
  *  @return PF_NATIVE_OK, or a negative status. */
 PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
                                                     int32_t n);
+
+/** Declare where the fill that opened a lot sits on its entry bar —
+ *  `declare_opened_lot_entry_bar_mask()`, the entry-side half of the
+ *  excursion capability #pf_native_callbacks_v1::on_lot_excursion owns
+ *  (RULING A48).
+ *
+ *  The host says only WHERE its fill sat. The kernel reads @p entry_bar's own
+ *  modeled path — the high first when |high - open| < |open - low|, the low
+ *  first otherwise, and where a price is first touched on it — and sets the
+ *  two entry-bar masks of every open lot booked under @p entry_incarnation:
+ *  the ends of the bar the path had already reached before that lot's own
+ *  price. They come back on the lot's closing facts,
+ *  #pf_native_lot_excursion_v1::entry_bar_high_masked and
+ *  `entry_bar_low_masked`. A fill the path never reaches leaves the lot as
+ *  it was, and so does an incarnation that booked no open lot. The masks are
+ *  durable lot state, folded into the broker-state hash.
+ *
+ *  Legal inside `on_applied` alone — the frame in which a host learns that a
+ *  fill opened a lot (#pf_native_applied_v1::opened_lot_incarnation) — and
+ *  refused with PF_NATIVE_E_STATE everywhere else, changing nothing.
+ *
+ *  @param entry_incarnation  The request whose fill opened the lot.
+ *  @param entry_bar          The whole bar the fill sat on; borrowed.
+ *  @param fill_point         #pf_native_opened_lot_fill_point_e.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p entry_bar,
+ *  PF_NATIVE_E_TAG for a fill point outside the enumeration,
+ *  PF_NATIVE_E_STATE outside `on_applied`, or another negative status. */
+PF_API int strategy_native_declare_opened_lot_entry_bar_mask_v1(pf_strategy_t s,
+                                                                uint64_t entry_incarnation,
+                                                                const pf_bar_t* entry_bar,
+                                                                uint32_t fill_point);
 
 /** @} */ /* end of pf_native_c_api */
 
