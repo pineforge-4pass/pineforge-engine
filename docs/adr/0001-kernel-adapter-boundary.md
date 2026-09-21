@@ -236,38 +236,68 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   (`CMakeLists.txt:341-342`). `PINEFORGE_BUILD_EXAMPLES` (`CMakeLists.txt:37`) is passed by CI
   (`scripts/ci_verify.py:167`) but tested by no CMake code: it guards nothing.
 
-## Residual TradingView-named surface in the kernel-only archive (R5 lane N14 rulings)
+## Residual TradingView-named surface in the kernel-only archive (R5 lane N14 rulings, held by lane P2's gate)
 
-Measured on this tree with the audit's own command over `libpineforge_kernel.a` (the archive built
-with `PINEFORGE_BUILD_SOURCE_LAYER=OFF`):
+Measured on this tree over `libpineforge_kernel.a` (the archive built with
+`PINEFORGE_BUILD_SOURCE_LAYER=OFF`) by the checker the `kernel` profile of
+`scripts/ci_verify.py` runs right after the build (stage `kernel-residuals`; the
+same check is the CTest row `test_kernel_residuals` in every profile):
 
 ```
-strings build-ci-kernel/lib/libpineforge_kernel.a | grep -iP 'pine(?!forge)|tradingview|barmerge'
+python3 scripts/check_kernel_residuals.py --archive build-ci-kernel/lib/libpineforge_kernel.a
 ```
 
-Every hit is a field name of the frozen pending-row POD and nothing else. Each is listed here with its
-ruling; a name that is not in this table must not appear in that output, and a lane that adds one
-adds its row.
+The checker reads `strings -a` and `nm -C` over the archive and matches the
+residual vocabulary against the **first column** of the tables in this section.
+The vocabulary is fixed in the script (`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`):
+an identifier containing `pine` (not `pineforge`), `tradingview`, `barmerge`,
+`coof`, `pooc`, `market_admission`, `calc_on_order_fills`,
+`process_orders_on_close` or a `tv` segment; a text containing `strategy.<name>`,
+`ta.<name>`, `request.security`, `barmerge.<name>` or `__margin_call__`. Every
+match must be listed exactly — an identifier by its name, a text by a phrase it
+contains — and every listed match must still be in the archive, so a lane that
+adds a name adds its row and a lane that removes one removes its row. A name that
+is not in these tables fails the `kernel` profile. The audit's original probe is a
+subset of that vocabulary and still reads exactly the seventeen `pine_*` names:
+
+```
+strings -a build-ci-kernel/lib/libpineforge_kernel.a | grep -iP 'pine(?!forge)|tradingview|barmerge'
+```
+
+Every match is a field name of the frozen pending-row POD or one of the three
+`last_error` texts below, and nothing else; the kernel-only archive defines no
+symbol the vocabulary matches. Each is listed here with its ruling.
 
 | archive string | where it comes from | ruling |
 |---|---|---|
-| `pine_exit_activation_present`, `pine_exit_activation_direction_at_birth`, `pine_exit_activation_entry_bar_at_birth`, `pine_exit_activation_cursor_price_at_birth`, `pine_exit_activation_owner_cycle_at_birth`, `pine_exit_activation_stop_level_at_birth`, `pine_exit_activation_limit_level_at_birth`, `pine_exit_activation_limit_continuation_present`, `pine_exit_activation_limit_continuation_fill`, `pine_exit_activation_limit_continuation_cause` | reflection table of `pf_pending_order_v1_t` (`src/pending_order_mirror.cpp`, `include/pineforge/pending_order_mirror.hpp`) | **frozen by ruling** (design §2.ii row i): the POD is an append-only C ABI contract read by `strategy_pending_order_get`; its field names are the contract. The neutral view is `native_working_requests()` / `strategy_native_working_*`. |
+| `pine_exit_activation_present`, `pine_exit_activation_direction_at_birth`, `pine_exit_activation_entry_bar_at_birth`, `pine_exit_activation_cursor_price_at_birth`, `pine_exit_activation_owner_cycle_at_birth`, `pine_exit_activation_stop_level_at_birth`, `pine_exit_activation_limit_level_at_birth`, `pine_exit_activation_limit_continuation_present`, `pine_exit_activation_limit_continuation_fill`, `pine_exit_activation_limit_continuation_cause` | reflection table of `pf_pending_order_v1_t` (`src/pending_order_mirror.cpp`, `include/pineforge/pending_order_mirror.hpp`) | **frozen by ruling** (design §2.ii row i): the POD is an append-only C ABI contract read by `strategy_pending_order_get`; its field names are the contract, and `strategy_pending_order_layout` publishes them so an FFI consumer builds its struct from the runtime's own table. The neutral view is `native_working_requests()` / `strategy_native_working_*`. |
 | `pine_frozen_market_instruction_kind`, `pine_frozen_market_instruction_own_units`, `pine_frozen_market_instruction_target_id`, `pine_frozen_market_instruction_target_id_hash64`, `pine_frozen_market_instruction_target_id_truncated`, `pine_frozen_market_instruction_transaction_units` | same reflection table | **frozen by ruling** (§2.ii row i), as above. |
 | `pine_birth_reach` | same reflection table | **frozen by ruling** (§2.ii row i), as above. |
+| `tv_carry_qty` | same reflection table | **frozen by ruling** (§2.ii row i), as above. |
+| `coof_suppress_stop_on_entry_bar`, `coof_suppress_limit_on_entry_bar`, `created_during_coof_recalc`, `coof_born_at_close_recalc`, `coof_born_mid_bar`, `coof_cascade_seg_i`, `coof_cascade_inflight_fires` | same reflection table | **frozen by ruling** (§2.ii row i), as above. `coof` abbreviates calc-on-order-fills, the adapter's fill re-entry schedule (`PineStrategyHost::on_native_applied`); the kernel translation unit holds the reflection row — name, C type, offset, size — and never a value: the values are projected by the source layer alone (`PendingIntentView::copy_v1`, `src/source/pine_adapter.cpp`), and on a bare host `strategy_pending_orders_len` is 0, so no kernel decision reads or writes these fields. |
+| `pooc_global_full_exit_dynamic_qty`, `pooc_global_full_exit_tracks_bound_adds`, `pooc_global_full_exit_bound_add` | same reflection table | **frozen by ruling** (§2.ii row i), as the `coof_*` row: `pooc` abbreviates process-orders-on-close, the adapter's `NativeCloseExecution::AfterCalculation` projection; values are source-layer projections, the kernel holds the row. |
+| `market_admission_observation_present`, `market_admission_observation_command`, `market_admission_observation_kind`, `market_admission_observation_birth_cause`, `market_admission_observation_birth_bar`, `market_admission_observation_birth_timestamp`, `market_admission_observation_birth_cursor_domain`, `market_admission_observation_birth_cursor_position`, `market_admission_observation_birth_cursor_index`, `market_admission_observation_birth_cursor_count`, `market_admission_observation_birth_cursor_price`, `market_admission_observation_birth_first_fill`, `market_admission_observation_birth_last_fill`, `market_admission_observation_birth_evaluation_ordinal`, `market_admission_observation_id`, `market_admission_observation_id_truncated`, `market_admission_observation_id_hash64`, `market_admission_observation_requested_quantity`, `market_admission_observation_quantity_type`, `market_admission_observation_buy`, `market_admission_observation_prices_limit`, `market_admission_observation_prices_stop`, `market_admission_observation_oca_name`, `market_admission_observation_oca_name_truncated`, `market_admission_observation_oca_name_hash64`, `market_admission_observation_oca_type`, `market_admission_observation_configuration_process_on_close`, `market_admission_observation_configuration_calc_on_fills`, `market_admission_observation_configuration_magnifier`, `market_admission_observation_configuration_fill_recalculation`, `market_admission_observation_configuration_scheduler`, `market_admission_observation_configuration_slippage`, `market_admission_observation_configuration_pyramiding`, `market_admission_observation_configuration_default_quantity_type`, `market_admission_observation_configuration_default_quantity_value`, `market_admission_observation_configuration_long_margin`, `market_admission_observation_configuration_short_margin`, `market_admission_observation_configuration_commission_value`, `market_admission_observation_configuration_commission_type`, `market_admission_observation_configuration_pointvalue`, `market_admission_observation_configuration_fx`, `market_admission_observation_configuration_quantity_step`, `market_admission_observation_configuration_mintick`, `market_admission_observation_configuration_risk_direction`, `market_admission_observation_configuration_loss_days_limit`, `market_admission_observation_configuration_drawdown_limit`, `market_admission_observation_configuration_intraday_loss_limit`, `market_admission_observation_configuration_position_limit`, `market_admission_observation_configuration_fill_cap_active`, `market_admission_observation_configuration_risk_halted`, `market_admission_observation_bar`, `market_admission_observation_placement_side`, `market_admission_observation_placement_cycle`, `market_admission_observation_prior_close_quantity`, `market_admission_observation_held_quantity`, `market_admission_observation_held_entries`, `market_admission_observation_realized_equity`, `market_admission_observation_placement_equity`, `market_admission_observation_signal_close`, `market_admission_observation_quantized_fixed_quantity`, `market_admission_observation_original_sizing_present`, `market_admission_observation_original_sizing_quantity`, `market_admission_observation_original_sizing_equity`, `market_admission_observation_original_sizing_price`, `market_admission_observation_original_sizing_mark`, `market_admission_observation_original_sizing_fx`, `market_admission_observation_explicit_equity`, `market_admission_observation_explicit_price` | same reflection table: the frozen mirror of the source-layer admission journal (`pineforge::admission`, `include/pineforge/source/market_admission.hpp`, source layer since lane N14; design §2.ii row o) | **frozen by ruling** (§2.ii rows i and o): the sixty-eight names are the C contract for the journal's `Draft` observation — its `Configuration` fields are `strategy()` declaration parameters, its events TradingView admission reviews — while the journal itself, its fold into the state hash and every writer are source-layer code (`src/source/market_admission.cpp`, `src/source/pine_state_hash.cpp`, `PendingIntentView::copy_v1`). No kernel translation unit reads or writes a `market_admission_*` field; the kernel holds the reflection rows and nothing else. |
+| `market_admission_review_present`, `market_admission_review_sequence`, `market_admission_review_checkpoint`, `market_admission_review_bar`, `market_admission_review_target_command`, `market_admission_sizing_revision_present`, `market_admission_sizing_revision_sequence`, `market_admission_sizing_revision_cause_fill`, `market_admission_sizing_revision_bar`, `market_admission_sizing_revision_target_command` | same reflection table: the journal's review receipt and sizing revision | **frozen by ruling** (§2.ii rows i and o), as the observation row. |
+| `native request.security feed requires a parseable timeframe`, `native request.security feed requires bars and a positive count`, `native request.security feed timestamps must be strictly increasing` | `src/engine_aux_security.cpp` `set_native_security_feed` (`last_error` texts) | **retained**: the texts name the feature the frozen C export `strategy_set_native_security_feed` documents, and the prefix is pinned by the ab9714be base test `test_native_security_feed` (twin parity). The store itself is the generic authoritative-feed mechanism. |
 
-Names the grep does not match but the audit named, with their rulings:
+Names the vocabulary does not match but the audits named, with their rulings:
 
 | name | where | ruling |
 |---|---|---|
-| `tv_carry_qty` | `pf_pending_order_v1_t` field | **frozen by ruling** (§2.ii row i), as the table above. |
-| `native request.security feed requires …` (three `last_error` texts) | `src/engine_aux_security.cpp` `set_native_security_feed` | **retained**: the texts name the feature the frozen C export `strategy_set_native_security_feed` documents, and the prefix is pinned by the ab9714be base test `test_native_security_feed` (twin parity). The store itself is the generic authoritative-feed mechanism. |
 | the W/M-from-dailies partition and trade-date rule | `src/engine_aux_security.cpp` | **retained as the generic contract** (design §2.iv item 6, §2.ii row s): a feed is the venue's own bars of one timeframe; its stamps are the period partition, a coarser calendar period without its own feed is the aggregate of the finest installed calendar feed, and the policy knob is installing the feed or not. TradingView pins are the calibration evidence, not the mechanism. |
 | `session_template_knows_early_close` (`"forex"` / `"cfd"` / `"crypto"`) | `src/engine_security.cpp` | **retained** (§2.ii row t): `SymInfo::type`'s vocabulary is fixed by the frozen C ABI (`strategy_set_syminfo_type`), so the instrument-class classification is the kernel's own; continuous-session OTC classes complete a calendar period on the next session's first bar. |
 | `is_fixed_intraday_minute_tf`, `supports_lower_tf_emulation`, `synthesize_lower_tf_bars` | `src/engine_lower_tf.cpp` | **retained as generic primitives** (§2.ii row r): a timeframe parser, an integer ratio and evenly sampled sub-bars, pinned by kernel-only tests; the merge-flag rule that used to throw TradingView's sentence from this TU moved to the source evaluator. |
 | `inputs_`, `get_input_*`, `syminfo_metadata_`, `set_syminfo_metadata`, `enum class QtyType`, `SymInfo` | `include/pineforge/engine.hpp` | **retained**: the run-time ingress the frozen C ABI exposes (`strategy_set_input*`, `strategy_set_syminfo_*`). Their comments explain the vocabulary; no kernel decision reads a Pine name. |
 | `[pineforge] WARNING: …`, `on_margin_call` | `src/session_time.cpp`, `native_c_api.h` | not residue: the project's own name and a broker term. |
 
-What N14 moved out of the archive, so the table above is complete: the `barmerge` merge-flag rule
+Kernel state the adapter sets — the mechanism rulings (the vocabulary gate cannot
+see a mechanism, so these rows are held by reading, not by the checker):
+
+| kernel state | who writes it | ruling |
+|---|---|---|
+| `ta::ema_na_warmup_flag()` — the thread-local ambient default for `ta::EmaSeeding`, `false` = `FirstValue`, `true` = `SimpleAverage` (`include/pineforge/ta.hpp`, `src/ta_moving_averages.cpp`) | three source-layer RAII scopes (`PineStrategyHost` chart dispatch, `pine_security_eval.cpp`, `pine_aux_security.cpp`) raise it around one evaluation context under the opt-in `chart_ema_na_warmup` / `security_range_start_na_warmup` run flags; nothing in the kernel raises it | **retained as a generic ambient indicator option** (R5 lane P2). An EMA seeds from its first finite input or from the simple average of its first `length` inputs; both are textbook, and the kernel names them per instance (`EMA(length, EmaSeeding)`), which is a bare host's spelling and touches no global. The ambient default is what an instance that names no seeding latches on its first `compute()`: a thread-local default for a per-computation option, the shape of a floating-point rounding mode, and the only zero-wiring way to seed every instance of one evaluation context when the generated strategy constructs its own `ta::EMA` members (so relocating it into the source layer would take a codegen change). The adapter uses it the way any host may; the kernel's spelling and comments carry no TradingView vocabulary. The accessor's name is kept: `na` is the kernel's own NaN spelling and eight twin-parity-frozen CHECK texts of `test_chart_ema_na_warmup` spell it. |
+
+What N14 moved out of the archive, so the tables above are complete: the `barmerge` merge-flag rule
 (→ `src/source/pine_security_eval.cpp`), the `PineMatrix` / `PineGenericMatrix` names (→
 `NumericMatrix` / `GenericMatrix<T>` with deprecated aliases), the `pine_float_*` shim (→
 `include/pineforge/source/`), the market-admission journal `pineforge::admission` (→ source layer),
@@ -275,7 +305,11 @@ TradingView's trail tick arithmetic (→ `compat/pine/trail_ticks.hpp`) and the 
 probe-suppress overrides (→ `source::PineStrategyHost`, behind two kernel virtual seams the frozen C
 setters call; on a bare host the seams keep the L1 ingress contract, accepted and inert). The Codex audit's remaining rows — the dead fill helpers `round_to_mintick_directional`
 / `apply_slippage` and the `observe_*` source-only observers — are gap lane N10's and the C-surface
-lane's, not residue of this table.
+lane's, not residue of this table. What lane P2 added: the second audit found the N14 probe
+structurally blind to the eighty-nine pending-row names whose spelling contains no `pine`
+(`coof_*`, `pooc_*`, `market_admission_*`, `tv_carry_qty`) and to the one kernel global the adapter
+sets; the families are ruled above by name, the global by mechanism, and
+`scripts/check_kernel_residuals.py` holds the tables.
 
 ## Boundary rules (for contributors)
 
