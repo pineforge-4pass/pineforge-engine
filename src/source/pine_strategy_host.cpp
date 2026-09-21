@@ -1362,6 +1362,29 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     source_last_bar_index_ = last_bar_index_;
 }
 
+// Live-runtime tail (spec §3.1): the horizon freeze of last_bar_index_ /
+// last_bar_time_. Moved verbatim from src/engine_run.cpp (R5 lane N14); the
+// geometry rules are documented on the declaration.
+void source::PineStrategyHost::apply_realtime_tail_horizon(const Bar* bars, int n,
+                                                  bool script_bar_geometry) {
+    if (!realtime_tail_ || realtime_tail_horizon_bars_ <= 0 || n <= 0 || bars == nullptr) return;
+    const int horizon = realtime_tail_horizon_bars_;
+    last_bar_index_ = horizon - 1;
+    const int64_t script_tf_ms =
+        static_cast<int64_t>(script_tf_seconds_ > 0 ? script_tf_seconds_ : 0) * 1000;
+    if (script_bar_geometry) {
+        if (horizon <= n) {
+            last_bar_time_ = bars[horizon - 1].timestamp;
+        } else {
+            last_bar_time_ = bars[n - 1].timestamp
+                + static_cast<int64_t>(horizon - n) * script_tf_ms;
+        }
+    } else {
+        last_bar_time_ = bars[0].timestamp
+            + static_cast<int64_t>(horizon - 1) * script_tf_ms;
+    }
+}
+
 void source::PineStrategyHost::scheduler_configure_security_evaluators() {
     configure_security_evaluators();
     prune_pine_security_states();

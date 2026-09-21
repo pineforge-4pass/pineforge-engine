@@ -457,33 +457,18 @@ protected:
     SymInfo syminfo_;
     int64_t last_bar_time_ = 0;
     int last_bar_index_ = 0;
-    // Live-runtime tail semantics (spec §3.1, ABI v4): when true, the LAST
-    // bar of the fed array is a still-forming bar, not the chart's rightmost
-    // historical bar. See set_realtime_tail() and apply_realtime_tail_horizon().
-    bool realtime_tail_ = false;
-    int realtime_tail_horizon_bars_ = 0;
-    // Live probe tail suppression (spec §3.2, ABI v4): when true, the LAST
-    // array bar (is_tail_bar_) runs only dispatch_bar()'s pre-on_bar broker
-    // steps and returns — the run's last-bar fills are the settled book's
-    // fills against the forming bar, and the post-run book is the in-force
-    // book. See set_probe_suppress_tail_logic(). Independent of
-    // realtime_tail_ (do not couple them).
-    bool probe_suppress_tail_logic_ = false;
     // Forced intrabar path order (ABI v4 live-runtime surface, task 4): 0
     // AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. Any other value is clamped to AUTO by
     // set_path_order() -- this member is always one of {0,1,2}. Persistent
-    // configuration, like realtime_tail_ / probe_suppress_tail_logic_ above
-    // -- reset_run_state() does not touch it. See set_path_order() and the
+    // configuration -- reset_run_state() does not touch it. See
+    // set_path_order() and the
     // legacy PathOrderScope guard in engine_run.cpp. Native-bound source
     // hosts project it into NativeRunSpec::path_order at begin, so the native
     // driver owns the active batch/stream path order.
     int path_order_mode_ = 0;
-    // True while dispatching the last array bar (the three run loops set
-    // this right after bar_index_ = i). Read by dispatch_bar() to decide
-    // whether to apply probe_suppress_tail_logic_. In
-    // run_aggregation_bar_loop this is keyed off the INPUT index i, not the
-    // emitted script-bar count -- see set_probe_suppress_tail_logic() for
-    // why that is only a placeholder today.
+    // Retained last-array-bar visibility flag (waived from the fold). The
+    // probe tail suppression it once gated is the source host's (see
+    // set_probe_suppress_tail_logic below); no kernel path reads it.
     bool is_tail_bar_ = false;
     // Chart's display timezone — separate from ``syminfo_.timezone`` (the
     // exchange TZ). Set by ``set_chart_timezone`` / the C ABI's
@@ -2200,28 +2185,6 @@ protected:
 
 
 
-    // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
-    // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon
-    // bar instead of the fed array's actual last index. No-op unless
-    // realtime_tail_ is on and realtime_tail_horizon_bars_ > 0.
-    //
-    // script_bar_geometry selects which timestamp rule applies to
-    // last_bar_time_ (last_bar_index_ = horizon - 1 either way):
-    //   true  -- `bars` IS the script-bar array (the single-TF run(bars, n)
-    //            path, and run_tf_impl's !needs_aggregation call, where
-    //            input_tf == script_tf so input bars ARE script bars):
-    //            exact bars[horizon - 1].timestamp when horizon <= n, else
-    //            extrapolated from bars[n - 1] one script-TF step per
-    //            missing bar past the array's last bar.
-    //   false -- `bars` is the *input* array under aggregation
-    //            (needs_aggregation, input_tf < script_tf): indexing it by
-    //            a script-bar horizon would land on the wrong input bar
-    //            (final-rereview.md N1), so instead extrapolate from the
-    //            first input bar's timestamp, one script-TF step per
-    //            horizon bar (the pre-fix formula, restored for this path
-    //            only).
-    void apply_realtime_tail_horizon(const Bar* bars, int n,
-                                      bool script_bar_geometry);
     // The TF-aware run()'s actual work (dispatch loop selection, the
     // try/catch, both cleanup paths). Does NOT touch last_error_,
     // last_run_status_, or abort_requested_ -- every public run() overload
@@ -2559,48 +2522,22 @@ public:
     // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.
     const std::string& main_period() const { return script_tf_; }
 
-    // Live-runtime tail semantics (spec §3.1, ABI v4): the caller's fed array
-    // ends with a still-forming bar rather than the chart's rightmost
-    // historical bar. When `on`, the LAST bar of every subsequent run() (this
-    // is persistent configuration, not a one-shot flag -- it stays set until
-    // a caller passes on=false, and reset_run_state() does not touch it)
-    // gets barstate.islast == false, session.islastbar computed from the
-    // bucket calendar (no i+1 bar to peek at), pine_last_bar_index() /
-    // last_bar_time_ frozen at the horizon bar (`horizon_bars - 1`), and no
-    // range-end close row/trade. Default off: every historical run is
-    // byte-identical to before this flag existed.
-    void set_realtime_tail(bool on, int horizon_bars) {
-        guard_native_mutation("set_realtime_tail");
-        realtime_tail_ = on;
-        realtime_tail_horizon_bars_ = horizon_bars;
-    }
-    bool realtime_tail() const { return realtime_tail_; }
-
-    // Live probe tail suppression (spec §3.2, ABI v4): when `on`, the LAST
-    // bar of every subsequent run() runs only dispatch_bar()'s pre-on_bar
-    // broker steps (intraday-cap deferred close, _push_source_series,
-    // request matching, evaluate_max_intraday_loss_over_path,
-    // update_per_trade_extremes) and returns — on_bar is never invoked for
-    // that bar, and nothing after it runs (no flush_same_bar_close, no POOC
-    // second pass, no process_margin_call, no settle_dormant_bracket_
-    // reissues, no sizing refresh). Margin-call / intraday-cap closes
-    // therefore surface only at settlement (the next non-suppressed run),
-    // not against the still-forming probe bar. This is persistent
-    // configuration, like set_realtime_tail, and independent of it — do not
-    // couple the two flags.
-    // Honoured only on the standard dispatch_bar path (single-TF run loop,
-    // run_simple_bar_loop). Silent no-op under calc_on_order_fills (COOF
-    // scheduler) and under the bar magnifier (run_magnified_bar) -- both
-    // gated in live v1. Semantics UNDEFINED on the non-magnifier aggregation
-    // path (input_tf < script_tf) until the partial-bucket forming-bar flag
-    // lands; see pineforge.h.
-    // Default off (@p on == 0): every historical run stays byte-identical to
-    // before this flag existed.
-    void set_probe_suppress_tail_logic(bool on) {
-        guard_native_mutation("set_probe_suppress_tail_logic");
-        probe_suppress_tail_logic_ = on;
-    }
-    bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
+    // Host run-mode overrides behind the frozen C setters
+    // strategy_set_realtime_tail / strategy_set_probe_suppress_tail_logic
+    // (pineforge.h). The kernel keeps no forming-tail state of its own: a
+    // batch is complete input and the forward path is the stream, so
+    // "the last fed bar is still forming" and "run only the broker steps on
+    // the last bar" are a host's live-probe protocol, not a kernel mode. A
+    // host that models one (source::PineStrategyHost, for the live runner's
+    // probe / settle cycle) overrides both, owns the state and answers true.
+    // The kernel default keeps the C ingress contract these setters always
+    // had on a bare host -- accepted before begin, guarded like every other
+    // setter, and inert (no kernel path ever read the flags on a native
+    // host) -- so it stores nothing, leaves last_error() untouched and
+    // answers false, meaning "no such mode here". R5 lane N14: the flags
+    // were BacktestEngine members until then.
+    virtual bool set_realtime_tail(bool on, int horizon_bars);
+    virtual bool set_probe_suppress_tail_logic(bool on);
 
     // Force this run's intrabar path order (ABI v4 live-runtime surface,
     // task 4): 0 AUTO (the unchanged |H-O| vs |O-L| rule), 1 HIGH_FIRST

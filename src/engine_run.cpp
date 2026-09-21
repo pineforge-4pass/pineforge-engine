@@ -280,47 +280,6 @@ void BacktestEngine::reset_run_state() {
 
 
 
-// Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for this
-// run, freeze pine_last_bar_index()/last_bar_time_ at the horizon bar
-// instead of the fed array's actual last index/timestamp. No-op unless
-// realtime_tail_ is on and a positive horizon was configured.
-//
-// The `bars` array passed in is script-bar geometry only when the caller
-// says so (script_bar_geometry == true): the single-TF run(bars, n) path,
-// and run_tf_impl's !needs_aggregation call where input_tf == script_tf
-// makes input bars the same as script bars. There, last_bar_time_ is the
-// EXACT timestamp of bars[horizon_bars - 1] when that bar exists in the fed
-// array (horizon_bars <= n); otherwise it is extrapolated from the array's
-// actual final bar (bars[n - 1]), not the first one -- a feed with any gap
-// (session/weekend boundary, a missing bar, a calendar TF) makes an
-// extrapolation from bars[0] wrong even when the exact timestamp was
-// available.
-//
-// Under aggregation (input_tf < script_tf, script_bar_geometry == false)
-// `bars` is the *input* array, so a script-bar horizon does not index it
-// correctly (final-rereview.md N1): last_bar_time_ is instead extrapolated
-// from the first input bar's timestamp, one script-TF step per horizon bar
-// -- the formula this function used unconditionally before the exact/
-// extrapolate-from-last-bar fix, restored here for this path only.
-void BacktestEngine::apply_realtime_tail_horizon(const Bar* bars, int n,
-                                                  bool script_bar_geometry) {
-    if (!realtime_tail_ || realtime_tail_horizon_bars_ <= 0 || n <= 0 || bars == nullptr) return;
-    const int horizon = realtime_tail_horizon_bars_;
-    last_bar_index_ = horizon - 1;
-    const int64_t script_tf_ms =
-        static_cast<int64_t>(script_tf_seconds_ > 0 ? script_tf_seconds_ : 0) * 1000;
-    if (script_bar_geometry) {
-        if (horizon <= n) {
-            last_bar_time_ = bars[horizon - 1].timestamp;
-        } else {
-            last_bar_time_ = bars[n - 1].timestamp
-                + static_cast<int64_t>(horizon - n) * script_tf_ms;
-        }
-    } else {
-        last_bar_time_ = bars[0].timestamp
-            + static_cast<int64_t>(horizon - 1) * script_tf_ms;
-    }
-}
 
 
 // --- run_magnified_bar ---

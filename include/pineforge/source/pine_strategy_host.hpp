@@ -426,6 +426,55 @@ public:
     }
     bool margin_call_enabled() const { return margin_call_enabled_; }
 
+    // Live-runtime tail semantics (spec §3.1, ABI v4): the caller's fed array
+    // ends with a still-forming bar rather than the chart's rightmost
+    // historical bar. When `on`, the LAST bar of every subsequent run() (this
+    // is persistent configuration, not a one-shot flag -- it stays set until
+    // a caller passes on=false, and reset_run_state() does not touch it)
+    // gets barstate.islast == false, session.islastbar computed from the
+    // bucket calendar (no i+1 bar to peek at), pine_last_bar_index() /
+    // last_bar_time_ frozen at the horizon bar (`horizon_bars - 1`), and no
+    // range-end close row/trade. Default off: every historical run is
+    // byte-identical to before this flag existed.
+    //
+    // R5 lane N14: this and probe tail suppression used to be BacktestEngine
+    // state. Both are the live runner's probe / settle protocol expressed in
+    // Pine language state (barstate, session flags, the range-end row), so
+    // they belong to the host that implements that protocol; the frozen C
+    // setters reach them through the kernel's virtual seams.
+    bool set_realtime_tail(bool on, int horizon_bars) override {
+        guard_native_mutation("set_realtime_tail");
+        realtime_tail_ = on;
+        realtime_tail_horizon_bars_ = horizon_bars;
+        return true;
+    }
+    bool realtime_tail() const { return realtime_tail_; }
+
+    // Live probe tail suppression (spec §3.2, ABI v4): when `on`, the LAST
+    // bar of every subsequent run() runs only the broker's pre-on_bar steps
+    // (intraday-cap deferred close, _push_source_series, request matching,
+    // evaluate_max_intraday_loss_over_path, update_per_trade_extremes) and
+    // returns — on_bar is never invoked for that bar, and nothing after it
+    // runs (no flush_same_bar_close, no POOC second pass, no
+    // process_margin_call, no settle_dormant_bracket_ reissues, no sizing
+    // refresh). Margin-call / intraday-cap closes therefore surface only at
+    // settlement (the next non-suppressed run), not against the
+    // still-forming probe bar. This is persistent configuration, like
+    // set_realtime_tail, and independent of it — do not couple the two
+    // flags. Honoured only on the standard dispatch path (single-TF run
+    // loop, run_simple_bar_loop). Silent no-op under calc_on_order_fills
+    // (COOF scheduler) and under the bar magnifier -- both gated in live v1.
+    // Semantics UNDEFINED on the non-magnifier aggregation path (input_tf <
+    // script_tf) until the partial-bucket forming-bar flag lands; see
+    // pineforge.h. Default off (@p on == 0): every historical run stays
+    // byte-identical to before this flag existed.
+    bool set_probe_suppress_tail_logic(bool on) override {
+        guard_native_mutation("set_probe_suppress_tail_logic");
+        probe_suppress_tail_logic_ = on;
+        return true;
+    }
+    bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
+
 protected:
     // Narrow test-facade configuration slots keep the frozen L0 oracle bodies
     // unchanged while routing their setup through the source configuration
@@ -780,6 +829,34 @@ protected:
     // projected into the adapter at begin, so it is waived from the durable
     // fold like the other configuration slots.
     bool margin_call_enabled_ = true;
+
+    // Live-runtime tail overrides (spec §3.1 / §3.2), provider configuration
+    // like margin_call_enabled_ above: consumed at begin and by the
+    // scheduler's publication of the last script bar, never by broker
+    // settlement. See set_realtime_tail / set_probe_suppress_tail_logic.
+    bool realtime_tail_ = false;
+    int realtime_tail_horizon_bars_ = 0;
+    bool probe_suppress_tail_logic_ = false;
+
+    // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
+    // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon
+    // bar instead of the fed array's actual last index. No-op unless
+    // realtime_tail_ is on and realtime_tail_horizon_bars_ > 0.
+    //
+    // `script_bar_geometry` says whether `bars` is script-bar geometry:
+    //   true  -- the single-TF run(bars, n) path and the !needs_aggregation
+    //            run_tf_impl call (input_tf == script_tf), where the horizon
+    //            indexes `bars` directly; last_bar_time_ is the EXACT
+    //            timestamp of bars[horizon_bars - 1] when that bar exists,
+    //            else extrapolated from the array's actual final bar.
+    //   false -- `bars` is the *input* array under aggregation
+    //            (needs_aggregation, input_tf < script_tf): indexing it by
+    //            a script-bar horizon would land on the wrong input bar
+    //            (final-rereview.md N1), so instead extrapolate from the
+    //            first input bar's timestamp, one script-TF step per
+    //            horizon bar (the pre-fix formula, restored for this path
+    //            only).
+    void apply_realtime_tail_horizon(const Bar* bars, int n, bool script_bar_geometry);
 
     // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
     // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances

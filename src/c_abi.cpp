@@ -359,7 +359,9 @@ PF_API int strategy_last_run_status(pf_strategy_t s) {
 /* Live-runtime tail semantics (spec §3.1): the last bar of the array fed to
  * the next run() is a still-forming bar, not the chart's rightmost
  * historical bar. Default off (on=0): every historical run stays
- * byte-identical to before this flag existed. */
+ * byte-identical to before this flag existed. The mode is the source
+ * host's (a virtual seam on the kernel): on a host that models no forming
+ * tail bar the call is accepted and inert, as it always was there. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars) {
     pf_cabi_void([&] {
         if (!s) return;
@@ -380,7 +382,9 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  * bar magnifier (gated in v1); undefined on input_tf < script_tf until the
  * partial-bucket flag lands -- see pineforge.h.
  * Default off (on=0): every historical run stays byte-identical to before
- * this flag existed. */
+ * this flag existed. Like strategy_set_realtime_tail, the mode is the source
+ * host's; on a host that models no forming tail bar the call is accepted
+ * and inert, as it always was there. */
 PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
     pf_cabi_void([&] {
         if (!s) return;

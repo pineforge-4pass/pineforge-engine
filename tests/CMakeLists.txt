@@ -808,6 +808,11 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # core-plus-override differential.
 list(APPEND TEST_SOURCES test_adapter_sizing_relower)
 
+# R5 N14: the live-runtime tail overrides are the source host's; the kernel
+# exposes only the virtual seams behind the frozen C setters. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_tail_override_seam)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is

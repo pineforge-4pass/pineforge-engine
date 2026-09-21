@@ -52,7 +52,10 @@
     "BacktestEngine::SecurityEvalState::DeferredAuxBar",
     "BacktestEngine::SecurityEvalState::deferred_aux",
     "BacktestEngine::security_calling_close_ms_",
-    "BacktestEngine::chart_ema_na_warmup_"
+    "BacktestEngine::chart_ema_na_warmup_",
+    "BacktestEngine::realtime_tail_",
+    "BacktestEngine::realtime_tail_horizon_bars_",
+    "BacktestEngine::probe_suppress_tail_logic_"
   ],
   "addedStorage": [],
   "addedValueMembers": [
@@ -128,7 +131,9 @@
     "resolve_margin_requirement",
     "margin_check_allowed",
     "resolve_anchored_level",
-    "hash_host_extension"
+    "hash_host_extension",
+    "set_realtime_tail",
+    "set_probe_suppress_tail_logic"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

@@ -135,6 +135,19 @@ double BacktestEngine::observe_trail_best_price_v1() const {
     return trail_best_price_;
 }
 
+// Host run-mode overrides behind the frozen C setters (engine.hpp): the
+// kernel models no forming tail bar. Accepted and inert, exactly what the
+// flags always were on a native host; false tells a C++ caller that no
+// such mode exists here.
+bool BacktestEngine::set_realtime_tail(bool, int) {
+    guard_native_mutation("set_realtime_tail");
+    return false;
+}
+bool BacktestEngine::set_probe_suppress_tail_logic(bool) {
+    guard_native_mutation("set_probe_suppress_tail_logic");
+    return false;
+}
+
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
 // This setter is the source host's split-feed door: its contract is that
 // host's chart-slice mapping, and the kernel base keeps answering false

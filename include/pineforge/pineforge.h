@@ -763,7 +763,9 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *  array until that gap closes, matching
  *  #strategy_set_probe_suppress_tail_logic's dispatch-path-scope caveat.
  *  Default off (@p on == 0): every historical run stays byte-identical to
- *  before this flag existed. */
+ *  before this flag existed. The mode belongs to the Pine source host; on
+ *  a host that models no still-forming tail bar (a bare kernel host) the
+ *  call is accepted and inert, as it always was there. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars);
 /** Live probe tail suppression (spec §3.2): the LAST bar of the array fed to
  *  every subsequent run() runs only the broker's pre-`on_bar` steps and
@@ -802,7 +804,9 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  *  Clear this flag (on = 0) before `strategy_stream_begin`; the warmup
  *  replay is a run().
  *  Default off (@p on == 0): every historical run stays byte-identical to
- *  before this flag existed. */
+ *  before this flag existed. Like #strategy_set_realtime_tail the mode
+ *  belongs to the Pine source host; on a host that models no still-forming
+ *  tail bar the call is accepted and inert, as it always was there. */
 PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on);
 /** Force this run's intrabar path order (ABI v4 live-runtime surface): the
  *  leg order every OHLC-path helper (`bar_path_uses_high_first` and
