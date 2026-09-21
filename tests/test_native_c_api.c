@@ -3059,7 +3059,7 @@ static void check_auxiliary_feed(void) {
  * the C spelling of the kernel test's own acceptance row
  * (tests/test_native_margin_fx_roll.cpp), with the same hand arithmetic --
  * four flat bars at 100 and a long 10 opened at bar 1's open, under a curve
- * whose single step to 2.5 sits at bar 2's close coordinate:
+ * whose single step to 2.5 sits at bar 1's CLOSE coordinate:
  *
  *     equity(100, fx)   = 1000                       (no price ever moves)
  *     required(100, fx) = 10 * 100 * fx * 0.5        = 500 at 1.0, 1250 at 2.5
@@ -3071,6 +3071,17 @@ static void check_auxiliary_feed(void) {
  * which is already through the standing 100. That is MG9's whole claim. The
  * kernel rests the liquidation at the roll and takes it at the next opening
  * print, restoring the minimum: (1250 - 1000) / (100 * 2.5 * 0.5) = 2 units.
+ *
+ * expectation corrected (R5 follow-up lane E3): FX_ROLL_STEP_MS 900000 ->
+ * 600000, because P4 wrote this step one bar LATER than its scenario wanted,
+ * to dodge a kernel defect it had just found -- 600000 is bar 1's close
+ * coordinate, the clock the engine presents while the ENTRY fill's applied
+ * check is drained, and the margin model converted there instead of at the
+ * fill's own cursor (300000), so the entry itself breached at `required 1250`
+ * and the roll never re-measured. E3 made every check point convert at its
+ * own cursor, so the step belongs where the scenario meant it: the entry is
+ * quiet at rate 1.0 and the roll at 600000 is what breaches. The C rows below
+ * are unchanged, and `call_time_ms` is added to pin WHICH point called.
  *
  * The second half reads the TICKET that slice is booked under. A C host has
  * no pf_trade_t::exit_id -- that struct is the codegen ABI's and grows only
@@ -3085,7 +3096,7 @@ static void check_auxiliary_feed(void) {
 #define FX_ROLL_RATE        2.5
 #define FX_ROLL_SLICE       2.0
 #define FX_ROLL_MARK        100.0
-#define FX_ROLL_STEP_MS     900000   /* bar 2's close == bar 3's open coordinate */
+#define FX_ROLL_STEP_MS     600000   /* bar 1's close == bar 2's open coordinate */
 #define FX_ROLL_N           4
 #define FX_ROLL_TICKET      "c-fx-roll-liquidation"
 #define FX_ROLL_COMMENT     "rolled into the maintenance line"
@@ -3116,6 +3127,7 @@ typedef struct fx_roll_state {
     int roll_numbers;         /* ... whose two numbers are the new rate's */
     int margin_calls;
     double called_units;
+    int64_t call_time_ms;     /* the cursor the call was made at */
 } fx_roll_state;
 
 static int fx_roll_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
@@ -3174,6 +3186,7 @@ static int fx_roll_on_margin_call(void* user, const pf_native_event_v1* call) {
     fx_roll_state* state = (fx_roll_state*)user;
     ++state->margin_calls;
     state->called_units = call->closed_units;
+    state->call_time_ms = call->effective_time_ms;
     return 0;
 }
 
@@ -3248,6 +3261,15 @@ static void check_fx_roll_margin_point(void) {
     CHECK_EQ_INT(state.margin_calls, 1, "the roll's breach called no margin");
     CHECK(fabs(state.called_units - FX_ROLL_SLICE) < 1e-9,
           "the liquidation sliced another quantity");
+    /* R5 lane E3: the call belongs to the ROLL's instant. The entry fill's own
+     * applied check stands at 300000, where the curve still says 1.0 and the
+     * requirement is 500 against equity 1000 -- quiet. The engine is
+     * presenting 600000 while that check is drained, and converting there is
+     * what used to breach at the entry. */
+    CHECK(state.offered[PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED] > 0,
+          "no applied check point was offered");
+    CHECK(state.call_time_ms == (int64_t)FX_ROLL_STEP_MS,
+          "the margin call was not made at the roll's own instant");
 
     /* And the closed row it books carries the ticket this run declared. */
     CHECK(report.trades_len > 0, "the fx-roll run booked no closed row");
