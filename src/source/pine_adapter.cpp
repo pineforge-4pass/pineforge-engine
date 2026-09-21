@@ -8016,6 +8016,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // facts and the eventual source fill remain on the original level.
         double native_trail_price = trail_price;
         bool trail_already_reached = false;
+        double placement_print = kNaN;
         const bool zero_distance = native_trail_offset_ticks
             && std::isfinite(source_trail_offset)
             && std::floor(source_trail_offset) == 0.0;
@@ -8029,6 +8030,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool already_reached = point
                 && source_trail_reached_at(point->price, trail_price, tick, buy_close);
             trail_already_reached = already_reached;
+            if (point) placement_print = point->price;
             const bool no_trailing_distance = !native_trail_offset_ticks || zero_distance;
             // An omitted offset and an explicit offset that truncates to zero
             // are both one-shot activation legs until the activation is
@@ -8071,9 +8073,26 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // ab9714be engine_path_resolve.cpp:464-479: trailing exit already reached at placement arms immediately
             if (trail_already_reached)
                 native_arm_price.reset();
-            submit_leg(PineOrderFamily::ExitTrail, native_order::Trail{
+            native_order::Trail native_trail{
                 0.0, native_arm_price,
-                native_order::TrailTicks{*native_trail_offset_ticks}});
+                native_order::TrailTicks{*native_trail_offset_ticks}};
+            // TradingView's running best starts AT the activation, never
+            // short of it: every exit of lane E5's six NYSE:F tapes books
+            // activation +/- 1 tick, not the raw extreme snapped. The generic
+            // arm gives the kernel a worse start in both shapes -- the arm
+            // threshold, half a tick short, when a crossing arms it, and the
+            // next bar's first print when the placement close already reached
+            // it (lane E9's eight tapes) -- so the leg names the level its
+            // ride starts at. Already armed, the placement print is part of
+            // that ride and joins it on the favourable side, the same
+            // carried best the explicit-zero trail's sibling stop rests at.
+            double best_seed = trail_price;
+            if (trail_already_reached && std::isfinite(placement_print)) {
+                best_seed = exit_is_buy ? std::min(best_seed, placement_print)
+                                        : std::max(best_seed, placement_print);
+            }
+            if (finite_positive(best_seed)) native_trail.best_seed = best_seed;
+            submit_leg(PineOrderFamily::ExitTrail, native_trail);
         } else if (trail_already_reached) {
             // ab9714be engine_path_resolve.cpp:634-639: omitted-offset trail already active at placement is marketable at next open
             // An omitted offset that was already activated at placement is

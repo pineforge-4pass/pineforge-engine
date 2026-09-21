@@ -430,9 +430,10 @@ void test_product_ford_short_whole_tick_offset_level_touched_by_the_high() {
     // trough 9.83 -> 9.85 (close 9.835: hold); 14:15Z opens 9.835, the
     // O->H leg (high-first: |H-O| = 0.03 < |O-L| = 0.035) reaches 9.85 ->
     // fill @9.85 (TV trail-eq-S-off3fp2; a tolerant 3t floor would print
-    // 9.86). The kernel Trail, already reached at placement, restarts its
-    // best at the 9.835 open (raw stop 9.855); the adapter's terms policy
-    // books TradingView's carried level 9.83 + 2t.
+    // 9.86). The kernel Trail, already reached at placement, seeds its best
+    // at that carried level (lane E14) instead of restarting at the 9.835
+    // open, so its own stop is 9.83 + 2t = 9.85, which is what the adapter's
+    // terms policy books.
     const double off3 = 0.3 / (0.01 * 10.0);
     TrailExitProjection h1 = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, off3,
                                         10.11, 9.95, 0.01);
@@ -445,7 +446,10 @@ void test_product_ford_short_whole_tick_offset_level_touched_by_the_high() {
     CHECK(g.filled == true);
     CHECK(near(g.exit_price, 9.85));
     CHECK(g.leg_is_trail == true);
-    CHECK(near(g.raw_price, 9.855));
+    // expectation corrected: 9.855 -> 9.85, because lane E14 seeds the
+    // running best at the carried level the leg names rather than at the
+    // first live print; the booked price and bar are the same.
+    CHECK(near(g.raw_price, 9.85));
 }
 
 void test_product_ford_long_twin() {
@@ -468,11 +472,12 @@ void test_product_ford_long_twin() {
     // trail_offset=1: arms at 9.96, trails the 9.985 peak - 1t = 9.975
     // (close 9.985: hold); 13:45Z (O 9.98, low-first) crosses the level on
     // the O->L leg — TV trail-eq-L-off1 @9.97. The kernel Trail, already
-    // reached at placement, restarts its best at the 9.98 open, so its own
-    // stop is 9.97 exactly; the booked 9.97 is TradingView's floored 9.975.
-    // expectation corrected: raw level 9.975 -> 9.97, because the resolver
-    // read the carried best 9.985 into its level while the kernel's best
-    // begins at the first live print; the booked price and bar are the same.
+    // reached at placement, seeds its best at the carried 9.985 (lane E14),
+    // so its own stop is 9.985 - 1t = 9.975; the booked 9.97 is TradingView's
+    // floored 9.975. expectation corrected: raw level 9.97 -> 9.975, because
+    // the kernel's best is the carried one again -- the level the deleted
+    // resolver read -- and no longer begins at the first live print; the
+    // booked price and bar are the same.
     TrailExitProjection hold = trail_fill(kF0402_1330, PositionSide::LONG, 8.0, 1.0,
                                           9.88, 9.93, 0.01);
     CHECK(hold.filled == false);
@@ -481,7 +486,7 @@ void test_product_ford_long_twin() {
     CHECK(g.filled == true);
     CHECK(near(g.exit_price, 9.97));
     CHECK(g.leg_is_trail == true);
-    CHECK(near(g.raw_price, 9.97));
+    CHECK(near(g.raw_price, 9.975));
 }
 
 void test_product_btc_short_activation_after_tolerant_ceil() {

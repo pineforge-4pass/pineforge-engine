@@ -321,23 +321,23 @@
     },
     "test_trail_activation_tick_bar": {
       "baseAssertions": 33,
-      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the offset-trail arm row follows the R5 E5 TradingView tapes (quantized arm) and the carried-best row the R5 E9 tapes (a placement close reaches the activation on its tick)",
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the offset-trail arm row follows the R5 E5 TradingView tapes (quantized arm) and the carried-best row the R5 E9 tapes (a placement close reaches the activation on its tick); the two raw-price rows follow lane E14, which seeds the kernel's running best at the level the leg names so its own crossing is the booked price",
       "twin": "test_trail_activation_tick_bar_l4c.cpp",
-      "twinAssertionSha256": "1e9d3acbebd3d36f9f23d0bfb3410d77cf898cbf79b3bebf78e33d902c005466",
+      "twinAssertionSha256": "56861e4782b4fb54d7910dcb540a3c6ff0862ff4808e7147d4e1a420e0be17e9",
       "twinAssertions": 49
     },
     "test_trail_fill_snap": {
       "baseAssertions": 154,
-      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record",
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the two raw-price rows follow lane E14's seeded running best, which restores the carried level the deleted resolver read",
       "twin": "test_trail_fill_snap_l4c.cpp",
-      "twinAssertionSha256": "58cae480174f1e2ad75149bf2364603341e27db5c5ba6ca71283c1db62827305",
+      "twinAssertionSha256": "718f35eb06fbca18cce039df9069841a054889f80cb2c294b853e9c2c8708d6d",
       "twinAssertions": 170
     },
     "test_trail_open_arm_subtick_offset": {
       "baseAssertions": 77,
-      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record",
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the already-armed zero-distance row follows lane E14, where the seeded Trail books the gapping open its sibling stop used to",
       "twin": "test_trail_open_arm_subtick_offset_l4c.cpp",
-      "twinAssertionSha256": "cc5b80fc98cc5b277d76f54b4a1fc0df6a35f766a70cc5522499dbdbadc83cbc",
+      "twinAssertionSha256": "b6f39ef9540567ddc37079fc2831938894239cbcbd4df319e820ba38c106a131",
       "twinAssertions": 101
     }
   },

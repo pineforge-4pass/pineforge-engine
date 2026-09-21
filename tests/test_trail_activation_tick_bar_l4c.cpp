@@ -279,9 +279,10 @@ void test_product_activation_is_reached_on_the_tick_path() {
 // activations one tick past them, trail_offset 1) exit on the bar whose
 // QUANTIZED extreme reaches the activation, 6 of 6, at activation -/+ offset:
 // the P9 open question is settled against the raw arm. The booked price is
-// 10.00 - 0.02 because TradingView's running best starts at the activation;
-// the kernel's best starts at the arm and rides the raw 9.996, so its own
-// stop, and the crossing it records, is 9.976 (the deleted resolver's number).
+// 10.00 - 0.02 because TradingView's running best starts at the activation --
+// and since lane E14 so does the kernel's: the leg names that level with
+// Trail::best_seed, so the stop the kernel rides, and the crossing it
+// records, are the booked 9.98 itself.
 void test_product_offset_trail_arms_on_the_tick_path() {
     std::printf("-- product: an offset trail's arm is on the tick path - the tick high 10.00 of a 9.996 print arms it --\n");
     const Bar bar = mk(9.98, 9.996, 9.97, 9.975);
@@ -292,9 +293,16 @@ void test_product_offset_trail_arms_on_the_tick_path() {
     CHECK(f.leg_is_trail == true);
     CHECK(f.level_fill == true);
     CHECK_NEAR(f.exit_price, 9.98, 1e-9);
-    CHECK_NEAR(f.raw_price, 9.976, 1e-9);
-    // Segment 2 (H -> C, 9.996 -> 9.975) is crossed 0.02 / 0.021 of the way.
-    CHECK_NEAR(f.path_position, 2.0 + 0.02 / 0.021, 1e-6);
+    // expectation corrected: 9.976 -> 9.98, because lane E14 seeds the
+    // kernel's running best at the activation the leg names instead of
+    // letting it start at the arm and ride the raw 9.996; the booked price
+    // and bar are the same, and the kernel's own crossing now IS the booked
+    // price.
+    CHECK_NEAR(f.raw_price, 9.98, 1e-9);
+    // Segment 2 (H -> C, 9.996 -> 9.975) is crossed 0.016 / 0.021 of the way.
+    // expectation corrected: 0.02 / 0.021 -> 0.016 / 0.021, because that is
+    // where the seeded stop 9.98 sits on the same leg.
+    CHECK_NEAR(f.path_position, 2.0 + 0.016 / 0.021, 1e-6);
     // Control: a raw high ON the activation arms it and the trail runs from
     // that best: H -> C (10.00 -> 9.975) crosses 10.00 - 0.02 = 9.98.
     const Bar reach = mk(9.98, 10.00, 9.97, 9.975);
@@ -318,10 +326,11 @@ void test_product_offset_trail_arms_on_the_tick_path() {
 // 13.055 / 14.135 / 13.705 / 13.385 / 11.565 half a tick under the
 // activations their ticks equal, a short's 14.415 over 14.41) exit on the next
 // bar, 8 of 8, trail_offset 1 and 0 alike, at activation -/+ the offset. The
-// kernel Trail is armed from its first live print as for a best AT the
-// activation (below: stop 9.97 crossed on the falling leg) and the adapter
-// books the carried level 10.00 - 0.02. The two bests that quantize below the
-// activation (9.994, 9.995 -> tick 9.99) stay dormant as before.
+// kernel Trail is armed at placement with its running best seeded at the
+// carried level (lane E14), so its own stop is 10.00 - 0.02 = 9.98, crossed
+// on the falling leg, and the adapter books that same 9.98. The two bests
+// that quantize below the activation (9.994, 9.995 -> tick 9.99) stay dormant
+// as before.
 void test_product_carried_best_arms_on_its_tick() {
     std::printf("-- product: a carried best 9.996 arms the 10.00 activation on its tick, as 10.00 does, and the adapter books the carried level --\n");
     const Bar bar = mk(9.99, 9.99, 9.96, 9.97);
@@ -329,21 +338,26 @@ void test_product_carried_best_arms_on_its_tick() {
     CHECK(f.filled == true);
     CHECK(f.leg_is_trail == true);
     CHECK(f.level_fill == true);
-    CHECK_NEAR(f.raw_price, 9.97, 1e-9);
+    // expectation corrected: 9.97 -> 9.98, because lane E14 seeds the
+    // running best at the carried level instead of restarting it at the 9.99
+    // open; the booked price and bar are the same.
+    CHECK_NEAR(f.raw_price, 9.98, 1e-9);
     CHECK_NEAR(f.exit_price, 9.98, 1e-9);
     for (double best : {9.994, 9.995}) {
         TrailExitProjection dormant = trail_fill(bar, PositionSide::LONG, 10.0, 2.0, 9.90, best, 0.01);
         CHECK(dormant.filled == false);
     }
     // A carried best AT the activation is already reached at placement: the
-    // kernel Trail is armed from its first live print (its best restarts at
-    // the 9.99 open, stop 9.97 crossed on the falling leg) and the adapter's
-    // terms policy books TradingView's carried level 10.00 - 0.02 = 9.98.
+    // kernel Trail is armed there with its best seeded at that same level, so
+    // its stop is 10.00 - 0.02 = 9.98, crossed on the falling leg, and the
+    // adapter's terms policy books TradingView's carried level 9.98.
     TrailExitProjection armed = trail_fill(bar, PositionSide::LONG, 10.0, 2.0, 9.90, 10.00, 0.01);
     CHECK(armed.filled == true);
     CHECK(armed.leg_is_trail == true);
     CHECK(armed.level_fill == true);
-    CHECK_NEAR(armed.raw_price, 9.97, 1e-9);
+    // expectation corrected: 9.97 -> 9.98, as the row above and for the same
+    // reason: the seeded best replaces the restart at the 9.99 open.
+    CHECK_NEAR(armed.raw_price, 9.98, 1e-9);
     CHECK_NEAR(armed.exit_price, 9.98, 1e-9);
 }
 

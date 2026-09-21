@@ -372,9 +372,12 @@ void test_subtick_offset_arms_from_the_carried_best() {
     // A carried best past the activation ARMS every zero-tick offset (round
     // 10 family AC: the product trusts the best the placement point hands
     // it; the command layer's restart keeps the #148 peak out): the open
-    // through the level 1501.03 is the open print. The already-armed
-    // zero-distance leg rests as a kernel STOP, which that open gaps
-    // through — a point price, not a level.
+    // through the level 1501.03 is the open print. Two already-armed legs
+    // stand at that carried best -- the generic Trail, whose running best
+    // lane E14 seeds there, and the sibling kernel STOP the adapter rests
+    // for the touch the zero-distance ride cannot take -- and the gapping
+    // open is strictly past the best, so the Trail books it first. Either
+    // way it is the open print, a point price and not a level.
     for (double off : offsets) {
         TrailExitProjection f = trail_fill(serhan_hold, PositionSide::LONG,
                                            /*trail_points=*/2213.985, off,
@@ -384,7 +387,12 @@ void test_subtick_offset_arms_from_the_carried_best() {
         CHECK(near(f.exit_price, 1475.99));
         CHECK(near(f.raw_price, 1475.99));
         CHECK(f.at_bar_open == true);
-        CHECK(f.leg_is_stop == true);
+        // expectation corrected: leg_is_stop -> leg_is_trail, because lane
+        // E14 seeds the Trail's running best at the carried level, so the
+        // gapping open is already strictly past its zero-distance stop and
+        // the Trail books the print the sibling stop used to. The booked
+        // price, bar and path position are unchanged.
+        CHECK(f.leg_is_trail == true);
         CHECK(f.level_fill == false);
     }
     // Omitted-offset control keeps the durable carried arming: the adapter
