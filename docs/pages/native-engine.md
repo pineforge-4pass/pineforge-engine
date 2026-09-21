@@ -1037,6 +1037,28 @@ required(P) = Q × P × pv × fx × maintenance
 L           : equity(L) == required(L)
 ```
 
+`fx` is the rate of the CHECK POINT being taken, not of the bar the engine
+happens to be presenting: `account_currency_fx_at(cursor.point
+.effective_time_ms)`, what the declared `NativeFxCurve` has in force at that
+point's own instant, on the curve's own step semantics — a step is in force
+from its timestamp onward, and the run's scalar `account_fx` holds before the
+first one. It is the rate BOTH terms convert at, the requirement and the
+marked equity it is compared with, and the rate `L` is solved at; at every
+check kind (`BarOpen`, `AfterApplied`, `Calculation`, `FxRoll`), in batch and
+in stream alike. A run that declares no curve has one rate at every instant,
+so the rule is inert there by construction.
+
+The presented bar clock is a LATER instant whenever the walk has moved past
+the point being checked — an applied fill drained at its script bar's
+calculation is presented that bar's close coordinate while its cursor still
+stands on the opening print it filled on — and converting there calls a margin
+the account never owed (`tests/test_native_margin_fx_clock.cpp`). The rest of
+the kernel already converts at the cursor: a `Sized` request freezes its units
+at the acceptance coordinate's rate, and an execution term records its
+`active_fx` at its own cursor. `native_liquidation_price()` is the one
+exception, and it is the rule restated: a host query has no cursor of its own,
+so it answers at the instant the engine is presenting.
+
 Both sides are affine in `P`, so `L` is unique unless the slopes coincide —
 `maintenance == 1.0` on a LONG, where equity and requirement move together and
 no price solves the breach. `NativeStrategyHost::native_liquidation_price()`
@@ -1123,7 +1145,11 @@ running rate is not a step; a run without a curve has no such point; and
 `CalculationOnly`, which measures at its calculation alone, is not offered it
 — its next calculation already converts at the new rate. The detection reads
 the driver log and the immutable curve, so it adds no run state and moves no
-continuation identity (`tests/test_native_margin_fx_roll.cpp`).
+continuation identity (`tests/test_native_margin_fx_roll.cpp`). It is stated
+in the same cursor time every check is taken in — a point's rate is
+`account_currency_fx_at(its own effective time)` — so "the rate the next match
+will use differs from the one the last point used" and "each point converts at
+its own instant" are one rule, not a special case beside one.
 
 **The requirement hook.** At EVERY kernel check point, BEFORE the breach
 test, the host is offered the two numbers the kernel is about to compare:
@@ -2970,13 +2996,19 @@ Two limits are permanent parts of that contract, not pending work:
   input"`; a refusal, not a failure — the stream keeps running). The reason is
   the conversion clock, not the curve: an observation hook runs before its
   print has moved the engine's presented clock, and a partially finalized slot
-  calculates at its own OPEN, behind prints it has already matched. Measured
-  on this tree with a step at T+30s: the T+40s and T+50s prints, and the
-  slot's own calculation, still converted at the pre-step rate. Rather than
-  convert one run on two clocks, the tick route stays closed. Moving that
-  clock changes what the run's timestamp sinks (the stream state hash, trace
-  rows) present on the tick route, so it is a change of its own, with its own
-  pins, and not a condition this contract waits on.
+  calculates at its own OPEN, behind prints it has already matched. Re-measured
+  with a step at T+90s: the T+100s and T+110s prints were observed with the
+  presented clock still standing at T+70s, so `active_account_currency_fx()`
+  answered the pre-step rate there. That clock is what every SCRIPT-VISIBLE
+  conversion reads — `open_trade_profit()`, `marked_equity()`, the equity
+  curve — which is what the refusal guards, and it is a different surface from
+  the margin model's own conversion: a check point converts at its cursor
+  ("Margin and liquidation", above) and would be correct on the tick route
+  too, but the money the script reads there would not be. Rather than convert one run
+  on two clocks, the tick route stays closed. Moving that clock changes what
+  the run's timestamp sinks (the stream state hash, trace rows) present on the
+  tick route, so it is a change of its own, with its own pins, and not a
+  condition this contract waits on.
 
 The series of the mutable setter ingress (`set_account_currency_fx_series`,
 the source providers' route) keeps its `stream_begin` refusal
