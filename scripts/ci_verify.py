@@ -90,7 +90,22 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # (test_doc_anchors, test_doc_lint) and L14-B's two example hosts
 # (example_native_auxiliary_feed_strategy, example_native_open_lots_strategy).
 # 194 registered, 193 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 193
+# 199 = those 193 plus the six TUs the R5 follow-up wave (INT13, wave D) adds
+# that this profile builds -- one per lane, measured on the integrated tree,
+# not summed from the lanes' own bases:
+#   +1 E1  test_native_anchored_trail_absent_arm
+#   +1 E3  test_native_margin_fx_clock
+#   +1 E4  test_abi_receipt_skips        (registers in every profile)
+#   +1 E6  test_e6_entry_bar_mask_declaration
+#   +1 E10 test_e10_dead_path_prefix
+#   +1 E14 test_native_trail_best_seed
+# Lanes E5 and E9 add a row each as well (test_offset_trail_quantized_arm,
+# test_trail_activation_tick_reach), but both TUs reach the source layer, so
+# they register in release only -- see RELEASE_MIN_TESTS. E2, E7, E8, E11,
+# E12, E13 and E15 add no row: every one of their witnesses is a scenario
+# inside a TU that already existed.
+# 200 registered, 199 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 199
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -113,7 +128,13 @@ KERNEL_MIN_TESTS = 193
 # suites register wherever the tests do, the two example hosts wherever
 # PINEFORGE_BUILD_EXAMPLES is ON. No release row skips, so 558 registered is
 # 558 run.
-RELEASE_MIN_TESTS = 558
+# 566 = those 558 plus the eight TUs of the R5 follow-up wave (INT13, wave D):
+# the six KERNEL_MIN_TESTS lists above, which register here too, plus the two
+# source-bound ones the kernel profile does not build:
+#   +1 E5  test_offset_trail_quantized_arm
+#   +1 E9  test_trail_activation_tick_reach
+# No release row skips, so 566 registered is 566 run.
+RELEASE_MIN_TESTS = 566
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
