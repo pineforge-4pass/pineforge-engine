@@ -1217,11 +1217,11 @@ typedef struct pf_native_request_v1 {
  *  A value outside either word's enumeration is PF_NATIVE_E_TAG. */
 typedef struct pf_native_subscription_v1 {
     uint32_t struct_size;   /**< sizeof(pf_native_subscription_v1). */
-    uint32_t lookahead;     /**< #pf_native_lookahead_e. */
+    uint32_t lookahead;     /**< #pf_native_lookahead_t. */
     const char* tf;         /**< Non-NULL timeframe literal. */
     const pf_bar_t* authoritative_bars; /**< Optional exchange bars; copied. */
     int32_t authoritative_n;            /**< Length of `authoritative_bars`. */
-    uint32_t gaps;          /**< #pf_native_gaps_e. */
+    uint32_t gaps;          /**< #pf_native_gaps_t. */
 } pf_native_subscription_v1;
 
 /** The run-specification fields #pf_native_run_spec_v1 predates.
@@ -1849,9 +1849,10 @@ PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_ba
  *  fill opened a lot (#pf_native_applied_v1::opened_lot_incarnation) — and
  *  refused with PF_NATIVE_E_STATE everywhere else, changing nothing.
  *
+ *  @param s                  The host this run is driving, from #strategy_create.
  *  @param entry_incarnation  The request whose fill opened the lot.
  *  @param entry_bar          The whole bar the fill sat on; borrowed.
- *  @param fill_point         #pf_native_opened_lot_fill_point_e.
+ *  @param fill_point         #pf_native_opened_lot_fill_point_t.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p entry_bar,
  *  PF_NATIVE_E_TAG for a fill point outside the enumeration,
  *  PF_NATIVE_E_STATE outside `on_applied`, or another negative status. */

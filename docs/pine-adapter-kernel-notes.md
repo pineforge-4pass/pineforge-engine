@@ -13,7 +13,9 @@
 
 ## 1. TradingView's ten-significant-digit money rule
 
-Was `include/pineforge/engine.hpp:73-180`. The arithmetic lives in the adapter
+Was `include/pineforge/engine.hpp:918-952`, deleted by R5 lane E6 (the `:73-180` span earlier
+drafts named is and was live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`). The
+arithmetic lives in the adapter
 (`tv_money_round` / `tv_money_floor_lot` in
 `include/pineforge/source/pine_policy_support.hpp`, applied from
 `src/source/pine_adapter.cpp`).
