@@ -110,7 +110,6 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_open_lot_get_v1",
     "strategy_native_events_v1",
     "strategy_native_state_v1",
-    "strategy_native_cancel_where_v1",
     "strategy_native_declare_subscriptions_v1",
     "strategy_native_partial_bar_v1",
     "strategy_native_recalculations_v1",

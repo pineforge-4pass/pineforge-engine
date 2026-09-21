@@ -48,6 +48,7 @@
 #include <pineforge/native_host.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <iostream>
 #include <limits>
@@ -107,6 +108,7 @@ public:
         double max_drawdown = 0.0;    // strategy.max_drawdown
         double max_runup = 0.0;       // strategy.max_runup
         double contracts_held = 0.0;  // strategy.max_contracts_held_all
+        std::size_t curve_points = 0; // recorded equity points
     };
     Statistics statistics;
 
@@ -151,13 +153,17 @@ private:
         statistics.wintrades = count_wintrades();
         statistics.losstrades = count_losstrades();
         statistics.position_size = physical_position().signed_units;
-        // The equity extremes and the position-size peaks are folded by the
-        // kernel's own report point, so they stand at zero unless the run
-        // asked for one (NativeReportPolicy::KernelRecorded). Both are
+        // The equity extremes and the position-size peaks are a property of
+        // the RUN: the kernel folds them at every script calculation under
+        // every NativeReportPolicy, so a host on the HostRecorded default
+        // reads them truthfully without asking the kernel to record anything.
+        // What the policy scopes is the recorded equity CURVE, and with it
+        // every pf_equity_stats_t figure walked out of it. All four are
         // protected members of BacktestEngine, like the accessors above.
         statistics.max_drawdown = max_drawdown_;
         statistics.max_runup = max_runup_;
         statistics.contracts_held = max_contracts_held_all();
+        statistics.curve_points = equity_curve_.size();
     }
 };
 
@@ -334,14 +340,17 @@ int main() {
           "the book peaked at four units (1 + 2 + 1)");
     check(near(stats.position_size, 2.5), "2.5 units are still open at the end");
 
-    // --- who folds the extremes: the report policy, and nothing else --------
+    // --- what the report policy scopes, and what it does not ---------------
     //
-    // max_drawdown / max_runup / max_contracts_held_* are folded at the
-    // kernel's own report point, which exists only under
-    // NativeReportPolicy::KernelRecorded (or KernelRecordedAtHostMarks). The
-    // default HostRecorded leaves the whole report series to the host, so a
-    // bare host that never asks sees them at zero — and sees exactly the same
-    // trades, because recording is reporting.
+    // The policy owns the recorded equity CURVE: the kernel's own report point
+    // exists only under NativeReportPolicy::KernelRecorded (or
+    // KernelRecordedAtHostMarks), and the default HostRecorded leaves that
+    // series — and every pf_equity_stats_t figure walked out of it — to the
+    // host. It does NOT scope max_drawdown / max_runup /
+    // max_contracts_held_*: those are a property of the run, folded at every
+    // script calculation under every policy (R5 gap lane E2), so a bare host
+    // that never asks reads the same three numbers — and closes exactly the
+    // same trades, because recording is reporting.
     OpenLotsExample bare;
     if (!run_once(bare, pineforge::NativeReportPolicy::HostRecorded)) {
         std::cerr << "the HostRecorded run did not complete with one snapshot per bar\n";
@@ -349,17 +358,23 @@ int main() {
     }
     const auto& bare_stats = bare.statistics;
     std::printf("report policy: KernelRecorded folds max_drawdown=%.4f max_runup=%.4f "
-                "max_contracts_held=%.2f; HostRecorded folds %.4f / %.4f / %.2f\n",
+                "max_contracts_held=%.2f over %zu recorded points; HostRecorded folds "
+                "%.4f / %.4f / %.2f over %zu\n",
                 stats.max_drawdown, stats.max_runup, stats.contracts_held,
-                bare_stats.max_drawdown, bare_stats.max_runup, bare_stats.contracts_held);
+                stats.curve_points,
+                bare_stats.max_drawdown, bare_stats.max_runup, bare_stats.contracts_held,
+                bare_stats.curve_points);
     // The marked equity peaks at bar 5 and only falls after it, so this tape's
     // run-up is legitimately zero and the drawdown is the whole fall.
     check(near(stats.max_drawdown, 16.5) && near(stats.max_runup, 0.0)
           && near(stats.contracts_held, 4.0),
           "KernelRecorded folds the equity extremes and the position-size peak");
-    check(bare_stats.max_drawdown == 0.0 && bare_stats.max_runup == 0.0
-          && bare_stats.contracts_held == 0.0,
-          "HostRecorded folds none of them: that series is the host's");
+    check(near(bare_stats.max_drawdown, stats.max_drawdown)
+          && near(bare_stats.max_runup, stats.max_runup)
+          && near(bare_stats.contracts_held, stats.contracts_held),
+          "HostRecorded folds the same three: they are the run's, not the curve owner's");
+    check(stats.curve_points > 0 && bare_stats.curve_points == 0,
+          "only the recorded CURVE is the policy's: HostRecorded records no point");
     check(bare.trade_count() == host.trade_count()
           && near(bare_stats.netprofit, stats.netprofit),
           "recording moves no fill: the two runs close the same trades for the same money");
