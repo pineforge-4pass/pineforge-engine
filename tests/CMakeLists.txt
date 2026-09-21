@@ -1269,10 +1269,11 @@ if(TARGET test_l4g_runtime_budget)
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         set(_pf_runtime_budget_mode --candidate-only)
     elseif("$ENV{PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY}" STREQUAL "1")
-        # A40 rev 6: hosted macOS runners are not stable timing hosts (the same
-        # tree measured 12.8x and 17.2x best-of-five an hour apart), so the CI
-        # workflow sets this for its macOS lane. The relative gate still runs on
-        # every local Release build and on the Linux CI lane.
+        # The escape for a CI lane whose host cannot time the replay. A40 rev 6
+        # set it for hosted macOS while the gated sample was wall clock (the
+        # same tree measured 12.8x and 17.2x best-of-five an hour apart); since
+        # A40 rev 7 the sample is process CPU time and the CI workflow sets it
+        # to 0 on every lane, so the relative gate runs on every Release build.
         set(_pf_runtime_budget_mode --candidate-only)
     endif()
     add_test(NAME test_l4g_runtime_budget

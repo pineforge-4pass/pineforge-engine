@@ -688,6 +688,34 @@ class ProfileOptions(unittest.TestCase):
         self.assertIn('Ninja', argv)
 
 
+class RuntimeBudgetLanes(unittest.TestCase):
+    """Every Release lane of the CI build matrix runs the relative runtime gate.
+
+    A Release configure whose environment sets
+    PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY=1 registers test_l4g_runtime_budget
+    --candidate-only: one correctness sample, no ratio. A40 rev 6 set it for the
+    hosted macOS lane because wall clock was no stable timing host there; since
+    A40 rev 7 (lane Q9) the gated sample is process CPU time, and no lane is
+    exempt. Setting it again is the escape for a runner whose CPU accounting is
+    unusable, and needs its reason in ci.yml, in docs/ci.md and here.
+    """
+    WORKFLOW = ROOT / '.github/workflows/ci.yml'
+    SETTING = re.compile(r'^\s*PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY:(.*)$', re.MULTILINE)
+
+    def test_no_ci_lane_registers_the_runtime_budget_candidate_only(self):
+        values = [value.strip().strip('\'"')
+                  for value in self.SETTING.findall(self.WORKFLOW.read_text())]
+        self.assertEqual([value for value in values if value != '0'], [],
+                         'a ci.yml job sets PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY to other than '
+                         '0, so a Release lane registers test_l4g_runtime_budget --candidate-only')
+
+    def test_the_escape_the_workflow_names_still_reaches_the_row(self):
+        # The ci.yml comment offers the variable as the escape; it only is one
+        # while the row's registration still reads it.
+        self.assertRegex((ROOT / 'tests/CMakeLists.txt').read_text(),
+                         r'"\$ENV\{PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY\}" STREQUAL "1"')
+
+
 class CopyCacheIdentity(unittest.TestCase):
     def test_copy_cache_includes_version_source_and_launchers(self):
         self.assertIn('PINEFORGE_VERSION_SOURCE', COPY_CACHE)

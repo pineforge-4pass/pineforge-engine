@@ -133,9 +133,22 @@ wall ratio of one unchanged tree rose from 12x on a quiet host to 29-35x at
 load average 190 while its CPU ratio stayed at 10x. On a quiet host the two
 clocks agree. `scripts/test_runtime_budget.py` (row
 `test_l4g_runtime_budget_mutations`) pins that the verdict follows CPU time
-and still flips when the candidate's CPU cost doubles. Debug builds and the
-hosted macOS lane run the candidate once for correctness only
-(`--candidate-only`).
+and still flips when the candidate's CPU cost doubles. Debug builds run the
+candidate once for correctness only (`--candidate-only`). Every Release lane
+gates the ratio, the hosted macOS one included: A40 rev 6 had registered that
+lane `--candidate-only` because its wall clock was no stable timing host (one
+tree read 12.8x and 17.2x an hour apart), and CPU time removed that reason.
+`PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY=1` in a Release configure's
+environment is the escape back to a correctness sample. `.github/workflows/ci.yml`
+sets it to `0` on every lane, and `RuntimeBudgetLanes` in
+`scripts/test_ci_verify.py` holds that; the one reason to set it is a runner
+whose CPU accounting cannot time the replay, and that reason, with the log
+lines that show it, belongs here. In the `build (macos-26, Release)` job the
+row prints `runtime budget: candidate=…s ab9714be=…s ratio=…x limit=15.000x
+(process cpu time; wall …; load average …)` and passes at or below 15x. The
+hosted macOS runner's CPU ratio has not been recorded yet (A40 rev 5 recorded
+its wall-clock ratio, 12.84x best-of-five); Apple Silicon reads 9.9-10.7x CPU
+from load average 80 to 532.
 
 CTest writes `settlement-abi-receipt.json`, `script-abi-receipt.json`, and
 `aggregate-abi-receipt.json` for the real v16/v17 controls, plus

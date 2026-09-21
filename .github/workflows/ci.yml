@@ -111,9 +111,13 @@ jobs:
       # scripts/ci_verify.py); debug registers a subset of those rows.
       - name: Verify (${{ matrix.build_type }})
         env:
-          # A40 rev 6: the hosted macOS VM is not a stable timing host; the
-          # relative runtime witness gates on Linux CI and local builds.
-          PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: ${{ runner.os == 'macOS' && '1' || '0' }}
+          # A40 rev 7: the relative runtime witness gates on process CPU time,
+          # so every Release lane runs it, hosted macOS included (A40 rev 6 had
+          # exempted that VM while the gated sample was wall clock). '1' is the
+          # escape -- the row registers --candidate-only, one sample and no
+          # ratio -- for a runner whose CPU accounting is unusable; record the
+          # measured reason here and in docs/ci.md before setting it.
+          PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache
 
       - name: Stage and summarize diagnostics
