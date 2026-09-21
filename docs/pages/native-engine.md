@@ -3327,6 +3327,15 @@ sizing detail: `size_price` (`SizePrice`: `RESOLVED`, `SIGNAL`,
 `SIGNAL_ON_TICK`) and `reduce_basis` (`ScopeBasis`: `AT_MATCH`,
 `AT_ACCEPTANCE`).
 
+`pf_native_working_v1` is the first **readout** with an additive tail:
+`trail_has_arm_price`, the request's own flag read back, so a trail with no
+arm price and one armed at `0.0` — both of which read `p2` = 0 — are different
+rows. An anchored trail reads back the spelling it was submitted with until
+its owner fills and the arm installs the level. A readout owes its caller one
+thing an input does not: the runtime writes it, so a caller sending the base
+length (`PF_NATIVE_WORKING_V1_BASE_SIZE`) is filled exactly that far and never
+past it, and any other length is `PF_NATIVE_E_STRUCT`.
+
 The risk block (`PF_NATIVE_SPEC_EXT_RISK`) was the first **additive tail** in
 this header. It appends `risk_*` fields — the two loss limits as a value plus
 a percent flag, the two counts, the day basis and the breach action, each
