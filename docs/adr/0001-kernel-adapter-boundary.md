@@ -524,8 +524,9 @@ The comment survived the code. They are not rule-2 questions at all; they are ru
 | `include/pineforge/engine.hpp:1352-1381` | TradingView liquidates intrabar, before the bar-close script body | `net_profit()` at `:1382` | **residue.** The live mechanism is `NativeLiquidationCheck` (`native_run_spec.hpp:157`), whose three values are three broker models |
 | `include/pineforge/engine.hpp:73-180` | the ten-significant-digit money rule | the `PyramidEntry` aggregate | **residue** (already recorded above): the arithmetic is `pine_adapter.cpp:396-403` |
 
-**For a code lane, not this document:** eight comment blocks totalling roughly 250 lines
-describe deleted functions. Deleting them is a comment-only change to kernel files, which no
+**For a code lane, not this document:** these blocks total **312 lines** — `engine_orders.cpp`
+`:200-224` and `:556-697`, `engine_run.cpp` `:162-186`, `engine.hpp` `:1262-1381` — and not one
+line of code sits inside any of those four spans. They describe deleted functions. Deleting them is a comment-only change to kernel files, which no
 documentation lane may make. Until then rule 5 covers them, and this table is what a reader
 consults before believing one.
 
@@ -632,7 +633,7 @@ What "without Pine" still does **not** mean:
   indicator conventions carry numbers a TradingView tape fixed. Rule 2's amended test is what
   makes that legitimate, and "TradingView-calibrated kernel mechanisms" above is its account,
   site by site.
-- **Not free of comment residue.** Roughly 250 lines of comment in `engine_orders.cpp`,
+- **Not free of comment residue.** 312 lines of comment in `engine_orders.cpp`,
   `engine_run.cpp` and `engine.hpp` still describe deleted functions. Section A above lists
   them; rule 5 covers them until a code lane deletes them.
 
