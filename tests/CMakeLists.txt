@@ -1486,6 +1486,14 @@ add_test(NAME test_adapter_spec_shadowing_mutations COMMAND ${Python3_EXECUTABLE
 add_test(NAME test_kernel_residuals COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_residuals.py
     --archive $<TARGET_FILE:pineforge_kernel>)
+# R5 P6: every NativeRunSpec field the Pine adapter's project() never assigns
+# has a ruling row in ADR-0001 naming executed native consumers (the price grid
+# and the risk limits are native-only by ruling), plus the check's mutation
+# self-test. Python guards over the sources, so they register in every profile.
+add_test(NAME test_native_feature_rulings COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/check_native_feature_rulings.py)
+add_test(NAME test_native_feature_rulings_mutations COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_native_feature_rulings.py)
 
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"

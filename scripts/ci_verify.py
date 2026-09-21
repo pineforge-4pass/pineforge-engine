@@ -73,7 +73,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 187 = those 184 plus audit lane P6's three example_* rows for the two
 # features the adapter never declares: example_native_price_grid_strategy,
 # example_native_price_grid_c and example_native_risk_limits_strategy.
-KERNEL_MIN_TESTS = 187
+# 189 = those 187 plus P6's two source-guard rows test_native_feature_rulings /
+# _mutations, which are Python guards over the sources and so register in
+# every profile, as N11's two do.
+KERNEL_MIN_TESTS = 189
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')

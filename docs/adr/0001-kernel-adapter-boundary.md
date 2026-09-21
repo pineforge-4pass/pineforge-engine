@@ -311,6 +311,54 @@ structurally blind to the eighty-nine pending-row names whose spelling contains 
 sets; the families are ruled above by name, the global by mechanism, and
 `scripts/check_kernel_residuals.py` holds the tables.
 
+## Kernel capabilities the Pine adapter does not declare (R5 lane P6 rulings)
+
+Rule 3 below makes every bare-host capability opt-in, so that adapter runs stay byte-identical by
+construction. Its cost is a standing question, which the second R5 audit asked of the L8 price grid
+and the L9 risk limits: is a run-spec feature the adapter never sets a *boundary decision*, or *dead
+weight*? This section answers it for every such field, not only those two, and
+`scripts/check_native_feature_rulings.py` (CTest rows `test_native_feature_rulings` and
+`test_native_feature_rulings_mutations`) holds the answer. It reads `struct NativeRunSpec`, reads
+what `PineExecutionAdapter::project()` assigns — the source layer's one spec construction site — and
+fails when a field is neither declared by the adapter nor ruled in the table below, when a ruling
+names no executed native consumer that spells the field, or when a ruling outlives an adapter that
+has started declaring the field.
+
+A kernel capability has two legitimate consumers: the adapter, when TradingView's outcome can be
+reproduced through it byte for byte, and a native host (C++ or C), which is whom the kernel is for.
+"The adapter does not use it" is therefore not a defect by itself; it is one when nobody decided it.
+Three kinds of decision:
+
+- **native-only** — the capability is generic and complete for native hosts. Reproducing TradingView
+  through it was *attempted and measured*; what is left diverges in kind, and closing it would spell
+  TradingView's rule into the kernel (rule 2). The adapter will not declare it, and that is not a gap.
+  A native-only ruling must name a native example that exercises the capability and a test that pins it.
+- **adapter-policy** — the kernel's default is what the adapter needs, and TradingView's own rule runs
+  in the adapter on top of it.
+- **adapter-hook** — the adapter does consume the capability, through a begin-time hook instead of the
+  spec field.
+
+Line numbers are this tree's (main `b8e7976e`).
+
+<!-- native-feature-rulings:begin -->
+| `NativeRunSpec` field | ruling | what the adapter runs instead | measurement and ruling of record | executed native consumers |
+|---|---|---|---|---|
+| `price_grid`, `grid_rounding` | **native-only** | TradingView's per-order-kind tick rules on top of `None`: `source_trigger_threshold` (`pine_adapter.cpp:329`), `source_level_on_price_grid` (`:315`), `nearest_tick` / `source_bar_fill_tick` / `directional_tick` (`:253`, `:274`, `:298`), behind the terms seam | R5-3 and design risk E7 ruled `None` for the adapter before the lane ran; lanes R7 and N13 measured the alternative anyway (raw levels submitted, `QuantizeFillsAndTriggers` with `HalfUp` declared). L8b closed the first blocker (no run aborts). The second has no remedy on either side: TradingView quantizes per order kind (stop and limit legs and a trail's activation on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors raw), the grid is one rule for the run, and it still moves 30 pinned checks in 4 units; a per-kind mask would spell that inconsistency into the kernel. The corpus cannot arbitrate (every probe runs a 0.01 tick on an on-grid feed; 5 of 312 differ in an engine-only column). Permanent witness: `tests/test_adapter_grid_relower.cpp`, whose section 5 pins the trail stop the grid fires a bar early. Design row PG and §3.6 | `examples/native/native_price_grid_strategy.cpp`, `examples/native/native_price_grid_c.c`, `tests/test_native_price_grid.cpp` |
+| `risk` | **native-only** | all of `strategy.risk.*` but the direction: `update_risk_state` (`pine_adapter.cpp:12085`), `SourceDayLedger`, `submit_intraday_loss_close` (`:13165`), the chart-day key (`:11979`), `compat::pine::IntradayCap` with `IntradayOrderBudget` (337 lines) | Structural first: Pine's risk calls are per-bar statements, so a limit reaches the adapter on script bar 0, after `project()` (`pine_strategy_host.cpp:315`) and `configure_native` (`:316`) have fixed and digested the spec. In substance (lane N12, `tests/test_adapter_risk_relower.cpp`, 62 checks over nine paired scenarios): the drawdown latch samples at the close only and still admits a reversal; the loss-day streak counts trades, not days; the intraday loss closes at the path's adverse extreme, refuses every placement and withdraws the book; the fill cap charges slots, transfers quota and closes at the bar's better extreme on the chart timezone's day. With the kernel seeded on the corpus, 3 of 4 cap probes diverge (3840 of 3916, 312 of 604, 2370 of 2384 rows). `strategy.risk.allow_entry_in` is the one rule that is the kernel's already (`allowed_open_directions`). Design §3.6 | `examples/native/native_risk_limits_strategy.cpp`, `examples/native/native_trail_risk_strategy.cpp`, `tests/test_native_risk_limits.cpp`, `tests/test_native_c_api.c` |
+| `max_abs_units` | **adapter-policy** | `strategy.risk.max_position_size` as a gate on the LIVE book before the fill (`pine_adapter.cpp:11499-11500`): an entry is refused once the book already holds the limit | design row MG2 (R5-1): the resulting-book cap is the generic one. Measured by N12's scenario `PS` in `tests/test_adapter_risk_relower.cpp`: two-unit entries against a limit of 3 leave the adapter at 4 and the kernel cap at 2 | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_run_spec.cpp` |
+| `max_open_lots` | **adapter-policy** | Pine pyramiding is a per-cycle entry count in the adapter's command policy; a resting source entry must not consume a physical-lot cap before it fills (`pine_adapter.cpp:1494-1496`) | design row MG3 (R5-1); the contract comment in `project()` | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_margin_model.cpp` |
+| `initial_margin_fraction` | **adapter-policy** | TradingView's ten-significant-digit money admission against the signal-time tuple, answered as `AdmitWithHostMargin`; the `margin` model the adapter does declare is maintenance-only (`pine_adapter.cpp:1498-1506`, `:1524-1537`) | design row MG4 and the wave-4 ruling recorded in `project()`: a positive initial requirement would decline openings TradingView takes | `tests/test_native_precommit_view.cpp`, `tests/test_native_margin_model.cpp` |
+| `report_open_position_at_end` | **adapter-policy** | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it (`scheduler_record_range_end`): report shape, not a mark-to-market row (`pine_adapter.cpp:1486-1493`) | design row RP5; the kernel reads the field under `KernelRecorded` only, which `scripts/check_adapter_spec_shadowing.py` gates | `examples/native/native_sized_report_strategy.cpp`, `tests/test_native_report_truth.cpp` |
+| `open_bar_view` | **adapter-policy** | `Complete`: TradingView's bar-open scheduling and its `calc_on_order_fills` callback read the whole script bar (`pine_adapter.cpp:1477-1478`) | design rows CT4 and E5: the open-only view is opt-in because the adapter needs the full bar | `examples/native/native_calc_on_fills_strategy.cpp`, `tests/test_native_calc_timing.cpp` |
+| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1488`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
+| `auxiliary_feed` | **adapter-policy** | the adapter's own auxiliary drive: the chart-slice mapping and the deferred first bucket (`src/source/pine_aux_security.cpp`) | lane N7, retained on three measurements: 0 of 312 corpus probes install an auxiliary feed; TradingView's chart slice leaves pre-range coverage inert where the kernel folds it by time, and evaluates after the bar's matching pass where the kernel delivers before it (`tests/test_native_auxiliary_feed_twin.cpp`, rows B and C). Design §2.iv | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
+<!-- native-feature-rulings:end -->
+
+What the table does not cover, on purpose: request kinds and host members the adapter never emits or
+calls (`Sized`, `ScopeFraction`, `native_open_lots()`, …). Their rulings live beside the feature
+(design §4.1 E3 for `Sized`; the C header's COVERAGE block for the host surface), and the audit scoped
+this section to what a run *declares*.
+
 ## Boundary rules (for contributors)
 
 1. TradingView/Pine parity for *new* work goes only in `src/source/` / `src/compat/pine/` or in
