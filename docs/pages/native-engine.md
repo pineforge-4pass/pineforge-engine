@@ -1339,7 +1339,7 @@ but the coordinates a request born in a recalculation fills at differ — the
 adapter re-presents it at the chart bar's next waypoint, the kernel at the next
 discrete matching point of the delivered path.
 
-#### What left it (R5 lane N10)
+#### What left it (R5 lanes N10 and P9)
 
 The TradingView exit-path resolver did not. `internal::resolve_exit_path_fill`
 — the 930-line intrabar fill simulation `src/source/pine_path_resolve.cpp`
@@ -1347,13 +1347,33 @@ carried out of the kernel in lane L12 — was a second matcher beside
 `src/native_matching.hpp` and `NativeExecutionConsumer`, and after the R5
 re-lowerings no production caller reached it: its only references left were
 its own declaration, comments, and the resolver-level rows of the trail test
-suites. It is now `tests/exit_path_resolver_oracle.hpp`, a declared test
-oracle; nothing under `src/` may call it, and the rules it still spells
-(open-arming, the sub-tick offset floor, the carried best, activation on the
-tick-quantized bar) are each pinned a second time end to end by the
-host-level fixtures in the same suites. The one function of that file a live
-caller still reaches, `internal::entry_stop_first_touch`, stays in
+suites. Lane N10 deleted it from the shipped layer and kept the body verbatim
+as `tests/exit_path_resolver_oracle.hpp`, because the rows that called it are
+frozen by `scripts/check_twin_parity.py`; lane P9 retired that header too, so
+the repository now holds ONE fill simulation. The one function of that file a
+live caller still reaches, `internal::entry_stop_first_touch`, stays in
 `src/source`.
+
+Those rows are now a matcher-side projection. `tests/trail_exit_product_probe.hpp`
+builds each resolver scenario — a position at an entry price with a carried
+running extreme, one `strategy.exit` trail, one probe bar — as three script
+bars through the real host: the adapter lowers the trail the way it lowers
+every corpus strategy, the consumer walks the bar's synthesized path, and the
+fill is read back from `NativeStrategyHost::native_events` — the applied
+event's modeled price and match cursor, the terms event's price kind, the
+closing request's trigger kind — beside the booked trade row. The four fields
+the resolver reported are projected from that record: `at_bar_open` is the
+cursor's `NativePathPhase::Open`, `path_position` is the cursor's waypoint
+index and `t` in the legacy `first_touch_position` units, `is_trail` is the
+kernel trigger the adapter chose (a generic `Trail`, or the one-shot `Limit`
+spelling of a zero-tick offset), and a level fill is
+`NativeCandidatePriceKind::TriggerLevel`. Where the two disagree on a
+coordinate rather than on a price — a one-shot's crossing is the adapter's
+half-tick arm threshold, half a tick before the activation, not the level —
+the row carries its `expectation corrected:` note, and the three suites are
+registered in `tests/twin_parity_inventory.json`'s `observableRewrites` with
+their new assertion digests. Every TradingView number those suites pin is
+unchanged.
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the
