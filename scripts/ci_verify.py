@@ -101,7 +101,10 @@ KERNEL_MIN_TESTS = 189
 # ci_verify no release row skips -- the four receipt-gated rows run with
 # --require-receipts, which fails rather than skips, and the WebSocket row is
 # a live-runner row this profile does not build.
-RELEASE_MIN_TESTS = 553
+# 554 = those 553 plus gap lane Q6's test_adapter_range_end_relower: its TU
+# includes pineforge/source/, so it registers in release only and the kernel
+# floor does not move.
+RELEASE_MIN_TESTS = 554
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
