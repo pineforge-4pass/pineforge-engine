@@ -891,9 +891,9 @@ void PineExecutionAdapter::update_l4c_lifecycle(
         || snapshot.family == PineOrderFamily::ExitTrail;
     if (!exit || !snapshot.legs.target().incarnation) return;
     const auto domain = context.sub_count > 1
-        ? (config_.calc_on_order_fills ? exit_legs::Domain::MagnifierCoof
+        ? (config_.calc_on_order_fills ? exit_legs::Domain::MagnifierFillRecalc
                                        : exit_legs::Domain::Magnifier)
-        : (config_.calc_on_order_fills ? exit_legs::Domain::Coof
+        : (config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                        : exit_legs::Domain::Ordinary);
     const exit_legs::Frame cause{event.ordinal, context.coordinate.interval_index,
                                  domain, exit_legs::Phase::AfterMargin};
@@ -965,7 +965,7 @@ void PineExecutionAdapter::suspend_declined_reversal_brackets(
     if (!is_declined_market_reversal(event)) return;
     const auto reversal = placement_.find(event.handle().incarnation);
     if (reversal == placement_.end()) return;
-    const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::Coof
+    const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
     const exit_legs::Frame cause{event.ordinal, event.cursor.point.interval_index,
                                  domain, exit_legs::Phase::Observation};
@@ -1043,7 +1043,7 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
         const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
         if (finite_positive(units) && finite_positive(margin) && std::isfinite(required)
             && std::isfinite(equity) && required > equity + guard) {
-            const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::Coof
+            const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                             : exit_legs::Domain::Ordinary;
             const exit_legs::Frame cause{context.coordinate.ordinal,
                 context.coordinate.interval_index, domain,
@@ -1056,7 +1056,7 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
 void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entry) {
     const auto point = require_host().current_execution_point();
     if (!point) return;
-    const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::Coof
+    const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
     const exit_legs::Frame cause{point->decision.coordinate.ordinal,
         point->decision.coordinate.interval_index, domain, exit_legs::Phase::Observation};
@@ -1144,9 +1144,9 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         }
     }
     const auto domain = context.sub_count > 1
-        ? (config_.calc_on_order_fills ? exit_legs::Domain::MagnifierCoof
+        ? (config_.calc_on_order_fills ? exit_legs::Domain::MagnifierFillRecalc
                                        : exit_legs::Domain::Magnifier)
-        : (config_.calc_on_order_fills ? exit_legs::Domain::Coof
+        : (config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                        : exit_legs::Domain::Ordinary);
     const exit_legs::Frame cause{event.ordinal, context.coordinate.interval_index,
                                  domain, exit_legs::Phase::AfterMargin};
@@ -15646,8 +15646,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     && candidate.legs.target().owner != current_position_cycle_) {
                     const exit_legs::Frame cause{event.ordinal,
                         context.coordinate.interval_index,
-                        context.sub_count > 1 ? exit_legs::Domain::MagnifierCoof
-                                              : exit_legs::Domain::Coof,
+                        context.sub_count > 1 ? exit_legs::Domain::MagnifierFillRecalc
+                                              : exit_legs::Domain::FillRecalc,
                         exit_legs::Phase::Observation};
                     const exit_legs::Action bind{candidate.legs.target(),
                         candidate.legs.revision(), cause,

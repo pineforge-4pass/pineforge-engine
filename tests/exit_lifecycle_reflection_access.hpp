@@ -50,7 +50,7 @@ inline Lifecycle rich(int variant){
     case 2:op=StageReplacement{replacement()};break;
     case 3:op=CancelDeferredActivation{};break;
     case 4:op=Restore{{Leg::Stop,Leg::Limit,Leg::Trail}};break;
-    case 5:op=CompleteBarrier{{30,12,Domain::Coof,Phase::AfterMargin},barrier()};break;
+    case 5:op=CompleteBarrier{{30,12,Domain::FillRecalc,Phase::AfterMargin},barrier()};break;
     case 6:op=Observe{112,89,1,Fold::Prefix};break;
     case 7:op=Cancel{{Leg::Stop,Leg::Limit,Leg::Trail}};break;
     }

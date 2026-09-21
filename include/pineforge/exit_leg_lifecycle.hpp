@@ -16,7 +16,18 @@ namespace pineforge::exit_legs {
 inline namespace lifecycle_v1 {
 inline double absent() { return std::numeric_limits<double>::quiet_NaN(); }
 enum class Leg : uint8_t { Stop, Limit, Trail };
-enum class Domain : uint8_t { Ordinary, Coof, Magnifier, MagnifierCoof, RawTicks };
+// The observation domain a frame comes from. `FillRecalc` is the
+// fill-recalculation re-entry pass -- the host re-runs its script after a fill
+// and observes the rest of the same bar; `MagnifierFillRecalc` is that pass on
+// a magnified sub-bar. `Coof` / `MagnifierCoof` are the historical spellings
+// (coof = calc-on-order-fills, the Pine adapter's name for the same pass);
+// they are DEPRECATED aliases with identical values and are removed at
+// lifecycle_v2. See ADR-0001 "Deprecated public spellings".
+enum class Domain : uint8_t {
+    Ordinary, FillRecalc, Magnifier, MagnifierFillRecalc, RawTicks,
+    Coof = FillRecalc,                    // deprecated spelling of FillRecalc
+    MagnifierCoof = MagnifierFillRecalc,  // deprecated spelling of MagnifierFillRecalc
+};
 enum class Phase : uint8_t { Observation, AfterMargin };
 enum class Fold : uint8_t { Prefix, Continue };
 struct Frame {
