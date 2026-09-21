@@ -269,10 +269,29 @@ struct TrailTicks {
 /// anchored spelling, 0.0 is the equivalent placeholder kept legal for hosts
 /// that already write it, and any other written level is refused because the
 /// arm would overwrite it.
+///
+/// best_seed is where the running best STARTS, appended last so every existing
+/// {offset}, {offset, arm_price} and {offset, arm_price, ticks} initializer
+/// keeps its meaning. Absent (the default) is the established behaviour: the
+/// best is the arm's own print -- the arm threshold's own ladder point when a
+/// crossing armed it, the first print the trail sees when it was submitted
+/// already armed. A present seed is a floor on that start: at the arm the best
+/// becomes the favourable one of the seed and the arm print (the higher for a
+/// sell trail, the lower for a buy trail), so a host whose position already
+/// reached a level before this request existed does not restart the ride at a
+/// worse print. It is a generic broker shape -- a trail that rides from its
+/// activation rather than from the next print -- and the level is the host's
+/// own number: the kernel neither derives it nor knows what named it. It is
+/// absolute (an anchor moves the arm threshold, never the seed), it must be
+/// finite and positive, and under a price grid it is put on the ladder exactly
+/// like an observed print. It is folded into the request digest only when
+/// present, so every trail without one keeps the digest it had before the
+/// field existed.
 struct Trail {
     double offset = 0.0;
     std::optional<double> arm_price;
     std::optional<TrailTicks> ticks = std::nullopt;
+    std::optional<double> best_seed = std::nullopt;
 };
 using Trigger = std::variant<Market, Limit, Stop, StopLimit, Trail>;
 

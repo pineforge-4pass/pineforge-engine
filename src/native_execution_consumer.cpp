@@ -560,6 +560,13 @@ void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
         // price-spelled trail keeps its prior digest. Acceptance resolves the
         // spelling away, so only an attempted request can carry one.
         if (trail->ticks) f.d(trail->ticks->ticks);
+        // Likewise the seeded start of the running best, under its own tag so
+        // it can never read as an arm price: every trail without a seed keeps
+        // the digest it had before the field existed.
+        if (trail->best_seed) {
+            f.s("best_seed");
+            f.d(*trail->best_seed);
+        }
     }
 }
 

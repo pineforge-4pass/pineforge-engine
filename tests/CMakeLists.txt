@@ -148,6 +148,7 @@ set(TEST_SOURCES
     test_l9c_broker_hash_recording_independent
     test_native_remaining_path_l5k
     test_native_trail_state_l5k
+    test_native_trail_best_seed
     test_native_zero_price_tick_l5o
     test_native_price_grid
     test_native_price_grid_twin

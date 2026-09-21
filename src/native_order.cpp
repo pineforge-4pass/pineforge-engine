@@ -495,6 +495,12 @@ std::optional<RequestRejectReason> validate_levels(const Trigger& trigger, bool 
         } else if (!valid_trail_offset(trail->offset)) {
             return RequestRejectReason::InvalidTrigger;
         }
+        // The seeded start of the running best is an absolute price level,
+        // whatever the anchor does to the arm threshold, so it is checked
+        // before the anchored shape returns.
+        if (trail->best_seed && !finite_positive(*trail->best_seed)) {
+            return RequestRejectReason::InvalidTrigger;
+        }
         // An anchored trail's arm threshold comes from the owner's fill, so
         // omitting it is the spelling: install_anchored_level assigns the
         // resolved level unconditionally and a waiting request never reaches
@@ -2372,18 +2378,29 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
-        // The best the trail starts riding is the arm's quantized print: the
+        // The print the arm happened at is the arm's quantized print: the
         // arm level's ladder point on a crossing, the print's tick otherwise
         // (the print itself without a grid, already checked above).
-        const double best = trail->arm_price
+        const double arm_print = trail->arm_price
             ? native_matching::grid_reached_print(begin->reached_price, *trail->arm_price,
                                                   /*le=*/is_buy, grid)
             : native_matching::grid_best_print(begin->reached_price, is_buy, grid);
+        // The best the trail starts riding is that print, floored by the
+        // host's seed when it named one: the favourable one of the two, with
+        // the seed put on the ladder exactly like an observed print so the
+        // running best stays on it. The activation still reports the print
+        // it happened at, not the seed.
+        double best = arm_print;
+        if (trail->best_seed) {
+            const double seed =
+                native_matching::grid_best_print(*trail->best_seed, is_buy, grid);
+            best = is_buy ? std::min(best, seed) : std::max(best, seed);
+        }
         if (best != begin->reached_price && !trail_level_ok(best, trail->offset, is_buy, nullptr)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
-        return emit_activated(ActivationKind::TrailArm, TrailTrack{best}, begin->cursor, best);
+        return emit_activated(ActivationKind::TrailArm, TrailTrack{best}, begin->cursor, arm_print);
     }
     if (const auto* extremum = std::get_if<ObserveTrailExtremum>(&transition)) {
         auto* track = std::get_if<TrailTrack>(&updated.trigger_state);
