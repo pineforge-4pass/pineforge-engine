@@ -6,7 +6,7 @@ Hand-written C++ strategies can run a **standalone native** path: one
 `NativeRunSpec`, one working request roster, one physical lot book, and five
 host callbacks — `on_native_input`, `on_native_tick`, `on_native_bar_open`, the
 pure-virtual `on_native_bar`, and the post-fill `on_native_applied`
-(`native_host.hpp:440-452`). The script-bar calculation itself is
+(`native_host.hpp:729-741`). The script-bar calculation itself is
 `on_native_bar`; the surface is **not** close-only. Pine `strategy.*` commands,
 cap/priority adapters, default source sizing, and complete Pine policy
 extraction are **not** this surface.
@@ -295,7 +295,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:3115-3123`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:4990-5028`), which admits the begin, checks the
+(`native_execution_consumer.cpp:7767-7805`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — `overrides` as an opaque
@@ -442,7 +442,7 @@ search then sees only the unconsumed suffix (`born_on_remaining_path`,
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:4394-4396`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:6083-6085`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = bar` (`native_execution_consumer.cpp:4187`) — so its
 high, low and close are the finished bar's, not what is known at the open. A
@@ -1551,7 +1551,7 @@ struct RegimeHost : pineforge::NativeStrategyHost {
   `BacktestEngine`) is called exactly once per hash, last, after the kernel's
   fold. What it writes is part of the scalar `broker_state_hash()`, of every
   per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
-- `BrokerStateHashSink` (`engine.hpp:326`) is a complete public type: FNV-1a
+- `BrokerStateHashSink` (`engine.hpp:325`) is a complete public type: FNV-1a
   over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
   NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
 - An override **replaces** the default. A host that overrides nothing folds
@@ -2297,20 +2297,20 @@ Empty timeframe strings are also valid (`run(bars, n)` and
 ## Higher timeframes for a native host (interim)
 
 There is no native subscription API for `request.security`-style series in this
-slice. `set_native_security_feed` (`engine.hpp:3061`) is public but **inert** for
+slice. `set_native_security_feed` (`engine.hpp:2275`) is public but **inert** for
 a bare host: it only installs bars, and the routing is built per run from
 security evaluators that a native host has no sanctioned way to register —
-`configure_security_evaluators` is an empty virtual (`engine.hpp:2346`) and
-`prepare_native_security_feeds` is protected (`engine.hpp:2897`), each with a
+`configure_security_evaluators` is an empty virtual (`engine.hpp:1813`) and
+`prepare_native_security_feeds` is protected (`engine.hpp:2164`), each with a
 single caller inside the Pine host. In-run the setter is a source mutation and
 **throws**, latching `Failed` (`UnsupportedSource`) via
-`guard_native_mutation` (`engine_aux_security.cpp:91`,
+`guard_native_mutation` (`engine_aux_security.cpp:78`,
 `native_execution_consumer.cpp:991-1007`).
 
 The documented interim is **self-aggregation**. `TimeframeAggregator`
 (`timeframe.hpp:288`) is public and engine-free; feed it from `on_native_input`,
 which is called once per accepted confirmed input bar before that bar is
-aggregated or matched (`native_host.hpp:438-440`). Include
+aggregated or matched (`native_host.hpp:673-675`). Include
 `<pineforge/timeframe.hpp>`:
 
 ```cpp
@@ -3095,7 +3095,7 @@ remains on its compatibility route until the later adapter slice.
 The standalone native host has no Pine decision path at runtime, and the
 constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
-zero-argument (`native_host.hpp:427`); the `CapAttachment` constructor belongs
+zero-argument (`native_host.hpp:658`); the `CapAttachment` constructor belongs
 to `source::PineStrategyHost` (`pine_strategy_host.hpp:21-25`), and the cap type
 itself lives in the adapter (`intraday_cap.hpp:18`).
 
