@@ -51,6 +51,10 @@ def check_commands(source: Path, *, strict_docs: bool = False) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',
          [sys.executable, str(source / 'scripts/check_doc_anchors.py')], advisory),
+        ('doc-lint-tests',
+         [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
+        ('doc-lint',
+         [sys.executable, str(source / 'scripts/check_doc_lint.py')], advisory),
     ]
 
 

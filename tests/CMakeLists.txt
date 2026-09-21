@@ -1506,6 +1506,8 @@ add_test(NAME test_native_feature_rulings_mutations COMMAND ${Python3_EXECUTABLE
 # advisory until the page-rewriting lanes L14-B / L14-C clear today's drift.
 add_test(NAME test_doc_anchors COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_anchors.py)
+add_test(NAME test_doc_lint COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_lint.py)
 
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"

@@ -59,10 +59,12 @@ class PreflightFailures(unittest.TestCase):
         strict = {name: entry
                   for entry in check_commands(Path('/src'), strict_docs=True)
                   for name in [entry[0]]}
-        self.assertTrue(relaxed['doc-anchors'][2])
-        self.assertFalse(strict['doc-anchors'][2])
+        for name in ('doc-anchors', 'doc-lint'):
+            self.assertTrue(relaxed[name][2], name)
+            self.assertFalse(strict[name][2], name)
         # A guard's own must-fail suite is never advisory.
-        self.assertEqual(len(relaxed['doc-anchors-tests']), 2)
+        for name in ('doc-anchors-tests', 'doc-lint-tests'):
+            self.assertEqual(len(relaxed[name]), 2, name)
 
     def test_success_is_explicitly_only_preflight(self):
         code, summary, _ = self.run_preflight([('ok', [sys.executable, '-c', 'pass'])])
