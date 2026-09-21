@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **162× faster than PyneCore** on 99 timed strategies. Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** One header, 65 `extern "C"` functions, append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 97 `extern "C"` functions across two headers — 65 to run a compiled strategy, 32 to drive the kernel yourself — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -113,12 +113,87 @@ Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers
 
 ---
 
-## Native C++ strategy API
+## Three front doors
 
-Use `NativeStrategyHost` with an explicit `NativeRunSpec` for native market
-transactions, reductions and flatten requests. The [native engine guide](docs/pages/native-engine.md)
-provides a complete C++ batch/stream example, calendar and execution contracts,
-and a runnable JSON configuration for the live runner.
+The engine can be driven three ways. All three run the same kernel, so they
+match trigger, price fills, book lots and settle identically; what differs is
+who writes the strategy and who owns TradingView's quirks.
+
+### 1. PineScript, through codegen
+
+Write Pine, transpile it, run the `.so`. The Pine adapter reproduces
+TradingView's execution semantics on top of the kernel; this is the path the
+validation scoreboard below measures.
+
+```bash
+pip install pineforge-codegen
+pineforge-codegen strategy.pine -o generated.cpp
+c++ -std=c++17 -shared -fPIC generated.cpp -lpineforge -o strategy.so
+python3 scripts/run_strategy.py .          # or drive it over the C ABI
+```
+
+### 2. C++, against the kernel
+
+Subclass `NativeStrategyHost`, describe the run once, hand it bars. No Pine,
+no codegen, no `src/source`. The complete file is
+[`examples/native/hello_kernel.cpp`](examples/native/hello_kernel.cpp) —
+the strategy half of it:
+
+```cpp
+#include <pineforge/native_host.hpp>
+
+class HelloKernel : public pineforge::NativeStrategyHost {
+    int bars_ = 0;
+    void on_native_run_begin() override { bars_ = 0; }
+    void on_native_bar(const pineforge::Bar&,
+                       const pineforge::NativeDecisionContext&) override {
+        ++bars_;
+        if (bars_ == 1) {
+            submit_market({pineforge::order_action::Transact{1.0}, "hello-long", ""});
+        } else if (bars_ == 3) {
+            submit_market({pineforge::execution::Flatten{}, "hello-flat", ""});
+        }
+    }
+};
+// configure_native(spec) applies one NativeRunSpec; run(bars, n) drives them;
+// trade_count() / get_trade(i) read the closed rows back.
+```
+
+Thirteen more hosts under [`examples/native/`](examples/native/) cover kernel
+sizing, anchored brackets on a price grid, trails in ticks, a margin model with
+a real liquidation, account risk limits, calculation timing, higher-timeframe
+series, an auxiliary finer feed, the open book lot by lot, and a
+kernel-recorded report. Each is a CTest row: `ctest --test-dir build -R example_`.
+
+### 3. C, against the same kernel
+
+Hand the runtime a callback table and drive the kernel from any language with
+a C FFI — no C++ in your own code. The complete file is
+[`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
+32 `strategy_native_*` functions are declared in
+[`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
+summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
+
+```c
+#include <pineforge/pineforge.h>
+
+pf_native_callbacks_v1 cb = {0};
+cb.struct_size = (uint32_t)sizeof cb;
+cb.version     = PF_NATIVE_API_VERSION;
+cb.user        = &state;
+cb.on_bar      = on_bar;            /* submit / replace / cancel from here */
+
+pf_strategy_t s = strategy_native_host_create_v1(&cb);
+strategy_configure_native_ext_v1(s, &spec, &ext);
+strategy_native_run_v1(s, bars, n, &report);
+```
+
+**Coming from PineScript?** [PineScript to native C++](docs/pages/pine-to-native.md)
+maps every `strategy.*` builtin, every `strategy()` declaration parameter and
+every `request.*` form to its C++ **and** C spelling, names the example that
+exercises each, and walks one six-feature strategy from Pine to a native host
+end to end. The [native engine guide](docs/pages/native-engine.md) is the
+reference underneath it.
 
 ## Native live runner
 
@@ -243,9 +318,55 @@ Generic kernel   src/engine_*, src/native_*, src/ta_*, magnifier, session_time, 
 
 - **codegen** owns Pine → C++ translation: the `GeneratedStrategy` with its indicator math and `strategy.*` calls. It does not own execution, fill, bracket or margin semantics.
 - **The source adapter** owns TradingView parity: how Pine orders live, fill, bracket, revive and trail, expressed as ordinary kernel orders.
-- **The kernel** targets Pine-agnosticism. It changes only for a *generic* capability that carries a recorded ruling — for example per-lot excursion accounting exposed as a kernel capability, or a market-if-touched (fill-through) flag on a limit order. No Pine- or TradingView-specific rule belongs in the kernel; such a rule goes to the source adapter or to codegen. Some TradingView-shaped residue does survive in `engine.hpp` today, and a few kernel capabilities are not yet reachable from a bare host — order sizing is resolved by the host, the equity curve is recorded by the host, and `request.security()` feeds have no native registration API.
+- **The kernel** targets Pine-agnosticism. It changes only for a *generic* capability that carries a recorded ruling — for example per-lot excursion accounting exposed as a kernel capability, or a market-if-touched (fill-through) flag on a limit order. No Pine- or TradingView-specific rule belongs in the kernel; such a rule goes to the source adapter or to codegen. Some TradingView-shaped residue does survive in the kernel archive today; every surviving name is ruled by family in [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) and held there by `scripts/check_kernel_residuals.py`, which reads the built archive and fails on a name the table does not cover.
 
-Bare native engines (`NativeStrategyHost`) run the kernel without the Pine adapter. Pine frontends must attach it explicitly and follow the [execution attachment and regeneration contract](docs/pine-order-priority-boundary.md); cap-only generated constructors do not opt into the full adapter. [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) states the boundary, what the kernel gives a bare host today, and the gap to the target; [the native feature-parity design](docs/design/native-feature-parity.md) is the lane roadmap that closes it.
+Every kernel capability is **opt-in**, so adapter runs stay byte-identical by construction: a bare host asks for what it wants in its `NativeRunSpec`. It can size orders in the kernel (`Sized` with a cash or equity-fraction basis, optionally reserving the percentage fee), ask the kernel to record the equity curve and its metrics (`NativeReportPolicy::KernelRecorded`), declare higher-timeframe `request.security()`-style series (`declare_timeframe_subscriptions`, or `NativeRunSpec::subscriptions`) and a finer auxiliary feed beneath them, declare a per-side margin model with a solved liquidation level, and declare account risk limits. The full map, with the C spelling of each, is in [PineScript to native C++](docs/pages/pine-to-native.md).
+
+A `NativeRunSpec` field the adapter never declares is a recorded decision, not an omission: ADR 0001's ruling table gives every one of them a verdict — native-only (with an example and a test), adapter-policy or adapter-hook — and `scripts/check_native_feature_rulings.py` fails when the table stops being true. Bare native engines (`NativeStrategyHost`) run the kernel without the Pine adapter. Pine frontends must attach it explicitly and follow the [execution attachment and regeneration contract](docs/pine-order-priority-boundary.md); cap-only generated constructors do not opt into the full adapter. [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md) states the boundary and its rules for contributors; [the native feature-parity design](docs/design/native-feature-parity.md) is the inventory and the rulings behind it.
+
+## Building, testing and the gates
+
+```bash
+# The shared local/CI verifier. Configure, build, ctest, source guards,
+# the ABI matrix, the installed-package smoke check — one command per profile.
+python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 6
+python3 scripts/ci_verify.py kernel  --build-dir build-ci-kernel  --jobs 6
+
+# The fast wiring and source checks, no build:
+python3 scripts/ci_preflight.py --output-dir build-ci-preflight
+
+# Or plain CMake, when you only want a library and the tests:
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j && ctest --test-dir build --output-on-failure
+```
+
+Options worth knowing (all default off unless noted):
+
+| Option | Effect |
+|---|---|
+| `PINEFORGE_BUILD_TESTS` | The C++ test suite. **ON** by default. |
+| `PINEFORGE_BUILD_SOURCE_LAYER` | **ON** by default. `OFF` builds the kernel alone: `libpineforge.a` then holds exactly the objects of `PineForge::kernel`, the Pine headers are not installed, and every Pine-bound target is skipped. |
+| `PINEFORGE_BUILD_EXAMPLES` | The Pine-free native hosts under `examples/native/`, each with its CTest row. |
+| `PINEFORGE_BUILD_CORPUS_STRATEGIES` | A `strategy.so` per probe in `corpus/`, for the parity sweep. |
+| `PINEFORGE_BUILD_LIVE_RUNNER` | The `pineforge-live` executable (needs SQLite3, libcurl, OpenSSL). |
+| `PINEFORGE_ENABLE_SANITIZERS` | ASan + UBSan. |
+| `PINEFORGE_ENABLE_COVERAGE` | Source coverage instrumentation; see `scripts/coverage.sh`. |
+
+The gates a pull request passes, one line each:
+
+| Gate | Command | What it refuses |
+|---|---|---|
+| TradingView parity | `./scripts/check_corpus_parity.sh --subset` | A trade that moved: 30 probes re-run and hashed against `scripts/corpus_parity_baseline.txt`. The full 312-probe sweep (`--subset` dropped) runs nightly. |
+| CTest row floors | `ci_verify.py release` / `kernel` | A test row that vanished: each profile counts the rows that actually ran against a floor. |
+| Kernel residuals | `scripts/check_kernel_residuals.py` | A TradingView-shaped name reaching the kernel archive without an ADR 0001 row. |
+| Feature rulings | `scripts/check_native_feature_rulings.py` | A `NativeRunSpec` field the adapter does not declare and the ADR does not rule. |
+| C surface | `scripts/check_c_abi_runtime.py`, `scripts/check_native_c_api_surface.py` | A `PF_API` export added without its inventory row; a public host member with no C spelling and no recorded reason. |
+| Twin parity | `scripts/check_twin_parity.py` | A frozen assertion quietly rewritten instead of a behaviour change being argued. |
+| Documentation | `scripts/check_doc_anchors.py`, `scripts/check_doc_lint.py`, `scripts/check_pine_to_native_coverage.py` | A `file:line` citation that no longer points at its symbol; a stale epoch, roadmap label or negative claim; a Pine builtin with no row on the migration page. |
+
+New here? [CONTRIBUTING.md](CONTRIBUTING.md) is the human walkthrough of all of
+the above; [Contributing as an LLM](docs/pages/contributing-llm.md) is the same
+ground written for an agent that has been handed a brief in this repository.
 
 ## What ships here
 
@@ -392,11 +513,16 @@ src/                    48 .cpp files in two layers
   └── compat/pine/                    exit_activation, exit_lifecycle, market_admission,
                                       order_birth, order_priority, reservation_expansion
 tests/                  C++ unit, TradingView replay and pure-C ABI tests
+examples/native/        Pine-free native hosts, C++ and C, each a CTest row
 corpus/                 public submodule: 312 strategies + the 1-minute feed and derived 15m bars
 benchmarks/             three-way comparison harness, throughput package, results/
-scripts/                run_corpus.sh, verify_corpus.py, run_strategy.py, regen_corpus_cpp.sh, coverage.sh
+scripts/                ci_verify.py, ci_preflight.py, check_corpus_parity.sh, run_corpus.sh,
+                        verify_corpus.py, run_strategy.py, and the check_*.py source guards
 tutorial/               MACD end-to-end + streaming walkthrough
 docs/                   coverage map, Pine v6 audit, Doxygen site (cdocs.pineforge.dev)
+  ├── pages/                          the narrative pages, incl. pine-to-native.md
+  ├── design/                         the native feature-parity inventory and rulings
+  └── adr/                            0001, the kernel/adapter boundary
 cmake/                  PineForgeConfig.cmake.in + the find_package smoke consumer
 ```
 
@@ -418,7 +544,13 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) (includes the Apache-2.0 contribution grant). The short version: every change keeps the parity corpus green; anything exported from `<pineforge/pineforge.h>` needs a major-version bump; internal C++ can change freely. Bug reports with a Pine script, an OHLCV slice and TradingView's trade list are the most valuable thing you can send — that is exactly how every rule above was found.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) (includes the Apache-2.0 contribution grant), or
+[Contributing as an LLM](docs/pages/contributing-llm.md) if you are an agent working from a brief.
+The short version: TradingView parity for new work goes in the adapter or in codegen, never in the
+kernel; every change keeps the parity corpus byte-identical; anything exported from
+`<pineforge/pineforge.h>` or `<pineforge/native_c_api.h>` is append-only within a major version.
+Bug reports with a Pine script, an OHLCV slice and TradingView's trade list are the most valuable
+thing you can send — that is exactly how every rule above was found.
 
 ## License
 
