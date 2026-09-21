@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -357,12 +358,193 @@ void empty_before_any_run() {
     CHECK(h.native_open_lots(kNaN).empty());
 }
 
+// ── A kernel liquidation, seen through the lots (R5 gap lane P5) ────────
+// The snapshot paired with NativeRunSpec::margin: a bare host watches the
+// kernel's own liquidation arrive through native_open_lots() and nothing
+// else. Hand arithmetic (point_value 1, fx 1, no fee; the formulas of
+// test_native_margin_model.cpp):
+//   capital 1000, 20 long @ 100, initial 0.5 (1000 <= 1000 admits), maintenance 0.375
+//   level      L = (1000 - 20*100) / (20 * (0.375 - 1))         = 80
+//   bar 1      {100, 101, 75, 78}: the adverse extreme 75 breaches
+//   equity(75) = 1000 + 20*(75 - 100)                             = 500
+//   required   = 20 * 75 * 0.375                                  = 562.5
+//   restore    = (562.5 - 500) / (75 * 0.375)                     = 20/9
+//   after the restore slice, 160/9 units remain and the level re-solves:
+//   L'         = (1000 - 20*(20/9) - (160/9)*100) / ((160/9)*(0.375 - 1)) = 74
+// The reduction rests at the level and fills there (PathAdverseExtreme), so
+// the lot is seen whole at the bar's open, and gone (Flatten) or shrunk to
+// the survivor (RestoreMinimum) at the bar's calculation.
+constexpr const char* kLiquidationTicket = "p5-liq";
+constexpr const char* kLiquidationNote = "p5 liquidation";
+
+struct LiqHost : Host {
+    int opens = 0;
+    std::vector<NativeOpenLot> at_open;            // bar 1, before its path
+    std::optional<double> level_at_open;
+    double marked_at_open = 0.0;
+    std::map<int, std::vector<NativeOpenLot>> snaps;   // at the calculation, marked at the close
+    std::map<int, double> marked;
+    std::map<int, std::size_t> closed_so_far;
+    std::vector<no::MarginCallEvent> margin_calls;
+
+    void on_native_bar_open(const Bar& bar, const NativeDecisionContext&) override {
+        if (opens++ == 1) {
+            at_open = native_open_lots(bar.open);
+            level_at_open = native_liquidation_price();
+            marked_at_open = native_marked_equity(bar.open);
+        }
+    }
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        Host::on_native_bar(bar, context);
+        // Read after the rule ran: bar 0's entry is still pending here (it
+        // fills after the callback), bar 1's path has already been walked.
+        const int idx = calculations - 1;
+        snaps[idx] = native_open_lots(bar.close);
+        marked[idx] = native_marked_equity(bar.close);
+        closed_so_far[idx] = rows().size();
+    }
+    void on_native_margin_call(const no::MarginCallEvent& event) override {
+        margin_calls.push_back(event);
+    }
+};
+
+NativeRunSpec liquidating_spec(const char* key, NativeLiquidationSizing sizing) {
+    NativeRunSpec s = spec(key, 0.0);
+    s.initial_capital = 1000.0;
+    NativeMarginModel m;
+    m.initial_long = 0.5;
+    m.initial_short = 0.5;
+    m.maintenance_long = 0.375;
+    m.maintenance_short = 0.375;
+    m.sizing = sizing;
+    m.check = NativeLiquidationCheck::PathAdverseExtreme;
+    m.liquidation_label = kLiquidationTicket;
+    m.liquidation_comment = kLiquidationNote;
+    s.margin = m;
+    return s;
+}
+
+void liquidation_seen_through_lots(NativeLiquidationSizing sizing, const char* key,
+                                   double closed, double surviving) {
+    LiqHost h;
+    h.calculation = [](Host& host) {
+        if (host.calculations - 1 == 0) put(host, labelled(tx(20.0), "entry", "leveraged"));
+    };
+    const std::vector<Bar> bars = {
+        {100.0, 100.0, 100.0, 100.0, 1.0, T},
+        {100.0, 101.0, 75.0, 78.0, 1.0, T + 60000},
+    };
+    REQUIRE(h.configure_native(liquidating_spec(key, sizing)).status == NativeSetupStatus::Applied);
+    h.run(bars.data(), static_cast<int>(bars.size()));
+    completed(h);
+
+    // Bar 1's open: the whole lot, marked flat, and the solved level.
+    REQUIRE(h.at_open.size() == 1);
+    expect_lot(h.at_open[0], no::Side::Long, "entry", "leveraged", 0, 100.0, 20.0, 0.0, 0.0, 0.0, 0.0);
+    CHECK(h.at_open[0].ordinal == 0);
+    CHECK(h.at_open[0].entry_incarnation != 0);
+    near(h.marked_at_open, 1000.0);
+    REQUIRE(h.level_at_open.has_value());
+    near(*h.level_at_open, 80.0);
+
+    // The kernel's liquidation is the one fill after the entry, booked at
+    // the level under the broker's own ticket.
+    const auto fills = events<no::ExecutionAppliedEvent>(h);
+    REQUIRE(fills.size() == 2);
+    CHECK(fills[0].request().label == "entry");
+    CHECK(fills[1].request().label == kLiquidationTicket);
+    CHECK(fills[1].request().comment == kLiquidationNote);
+    near(fills[1].resolved_price, 80.0);
+    near(fills[1].closed_units, closed);
+    CHECK(fills[1].opened_units == 0.0);
+    REQUIRE(h.margin_calls.size() == 1);
+    const auto& call = h.margin_calls[0];
+    CHECK(call.side == no::Side::Long);
+    CHECK(call.applied.ordinal == fills[1].ordinal);
+    near(call.mark, 80.0);
+    near(call.units, closed);
+    near(call.position_before, 20.0);
+    near(call.position_after, surviving);
+
+    // Bar 1's calculation, at the close 78: the lot is gone, or it is the
+    // same lot (identity kept) with the survivor's units, marked at 78. The
+    // realized balance carries the slice's loss at the level.
+    REQUIRE(h.snaps.count(1) == 1);
+    const auto& after = h.snaps.at(1);
+    CHECK(h.snaps.at(0).empty());   // the entry fills after bar 0's callback
+    const double realized = closed * (80.0 - 100.0);
+    near(h.balance(), 1000.0 + realized);
+    {
+        double equity = h.balance();
+        for (const auto& lot : after) equity += lot.unrealized_pnl;
+        CHECK(bits_eq(equity, h.marked.at(1)));
+    }
+    if (surviving == 0.0) {
+        CHECK(after.empty());
+        CHECK(h.physical_position().lot_count == 0);
+        CHECK(!h.native_liquidation_price().has_value());
+        near(h.marked.at(1), 1000.0 + realized);
+    } else {
+        REQUIRE(after.size() == 1);
+        CHECK(after[0].entry_incarnation == h.at_open[0].entry_incarnation);
+        CHECK(after[0].cycle == h.at_open[0].cycle);
+        CHECK(after[0].ordinal == 0);
+        CHECK(after[0].entry_label == "entry");
+        near(after[0].entry_price, 100.0);
+        near(after[0].signed_units, surviving);
+        near(after[0].unrealized_pnl, surviving * (78.0 - 100.0));
+        near(h.marked.at(1), 1000.0 + realized + surviving * (78.0 - 100.0));
+        // The level re-solved for what is left, on the event and on the
+        // accessor alike, sits under the extreme the breach was sized at.
+        near(call.liquidation_price, 74.0);
+        REQUIRE(h.native_liquidation_price().has_value());
+        near(*h.native_liquidation_price(), 74.0);
+        CHECK(*h.native_liquidation_price() < 75.0);
+    }
+
+    // The closed row is the liquidated slice of the lot seen at the open:
+    // its identity, its entry, the level as the exit, the broker's ticket
+    // as the exit id, and the kernel's cause.
+    REQUIRE(h.rows().size() == 1);
+    const Trade& row = h.rows()[0];
+    const NativeOpenLot& lot = h.at_open[0];
+    CHECK(row.is_long);
+    near(row.qty, closed);
+    CHECK(bits_eq(row.entry_price, lot.entry_price));
+    CHECK(row.entry_time == lot.entry_time_ms);
+    CHECK(row.entry_bar_index == lot.entry_bar_index);
+    CHECK(row.entry_id == lot.entry_label);
+    CHECK(row.entry_comment == lot.entry_comment);
+    CHECK(row.entry_incarnation == lot.entry_incarnation);
+    CHECK(row.exit_bar_index == 1);
+    near(row.exit_price, 80.0);
+    CHECK(row.exit_id == kLiquidationTicket);
+    CHECK(row.exit_comment == kLiquidationNote);
+    CHECK(row.close_cause == ex::CloseCause::Liquidation);
+    CHECK(row.commission == 0.0);
+    near(row.pnl, closed * (80.0 - 100.0));
+    CHECK(!row.open_at_end);
+    CHECK(h.closed_so_far.at(0) == 0);
+    CHECK(h.closed_so_far.at(1) == 1);
+}
+
+void liquidation_flattens_the_lot() {
+    liquidation_seen_through_lots(NativeLiquidationSizing::Flatten, "p5-open-lots-flatten", 20.0, 0.0);
+}
+
+void liquidation_shrinks_the_lot() {
+    liquidation_seen_through_lots(NativeLiquidationSizing::RestoreMinimum, "p5-open-lots-restore",
+                                  20.0 / 9.0, 160.0 / 9.0);
+}
+
 }  // namespace
 
 int main() {
     test("pyramided-partial-reversal", pyramided_partial_reversal);
     test("reading-moves-nothing", reading_moves_nothing);
     test("empty-before-any-run", empty_before_any_run);
+    test("liquidation-flattens-the-lot", liquidation_flattens_the_lot);
+    test("liquidation-shrinks-the-lot", liquidation_shrinks_the_lot);
     std::printf("test_native_open_lots: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
