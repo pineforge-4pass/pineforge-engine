@@ -1490,6 +1490,22 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // every extreme from it (pine_strategy_host.cpp scheduler_record_range_end)
     // — is report shape, not a mark-to-market row, so the kernel's own
     // range-end producer stays off and report_open_position_at_end with it.
+    //
+    // R5 audit lane Q6 measured what that costs. The ROWS are no longer
+    // duplicated: scheduler_record_range_end calls the kernel's generic
+    // producer (NativeExecutionConsumer::append_open_position_report_rows),
+    // and tests/test_adapter_range_end_relower.cpp asserts both sides get
+    // the identical rows out of it (RE1 pnl=500/300 with no fee; RE2
+    // pnl=479.5 comm=20.5 and 279.30000000000001/20.700000000000003 at
+    // 0.1 %). What this policy value keeps out is the SHAPE, and each piece
+    // is a named divergence in docs/design/native-feature-parity.md §3.7:
+    // the equity re-mark off the NET row P&L (RE2: the curve's last point
+    // reads eq=100758.8 op=0 here against the kernel's eq=100800 op=800 —
+    // 41.2 apart, the round-trip commission of both lots), the extreme
+    // re-fold that follows it (RE3: maxru=1758.8000000000029 against 1800),
+    // the same-bar bracket re-sort, and three marks on the terminal bar
+    // against the kernel's one at run end. RE4, the flat control, agrees on
+    // both sides, so every divergence above belongs to the range end.
     spec.report_policy = NativeReportPolicy::KernelRecordedAtHostMarks;
     // Contract P6: Pine pyramiding is adapter command policy. A resting source
     // entry must not consume a generic physical-lot cap before it fills, so

@@ -1478,6 +1478,18 @@ exactly as the run left them; the rows appear in `fill_report` and in
 `report_trade_count()` / `get_report_trade()`, never in `closed_trade_count()`
 / `closed_trade()`.
 
+The rows come from one generic producer inside the consumer, which appends a
+mark-to-market row per open lot and answers the summed net row P&L. That
+producer is policy-free: it does not choose when to mark, what to clear first,
+or whether anything downstream of the rows is re-derived from them. This is
+what lets a host whose report has a different shape — TradingView's range-end
+report re-marks the equity curve's last point off the net row P&L, re-folds
+every extreme from it and does so at three marks on the terminal bar — drive
+the same producer at its own marks instead of restating the loop, while
+`KernelRecorded` keeps the plain run-end behaviour described above. The two
+shapes are measured against each other in
+`docs/design/native-feature-parity.md` §3.7.
+
 Both fields are opt-in and fold into the continuation hash only under
 `KernelRecorded` — the one policy under which the consumer decides, on its
 own, to act between two points of a run. `HostRecorded` and

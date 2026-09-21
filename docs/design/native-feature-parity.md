@@ -158,7 +158,7 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 | RP2 | Closed-trade list, trade statistics, report struct | **yes** — `fill_report` engine_report.cpp:39-66, `get_trade` engine.hpp:3125-3162, `compute_trade_stats` engine_metrics.cpp:72 | K | — | F:H2 O:I3 S:X2 | — |
 | RP3 | Equity curve | **no** — `update_equity_extremes` / `record_equity_point` are protected engine.hpp:2386-2412 and called only at pine_strategy_host.cpp:1582-1583, pine_strategy_host.cpp:1600-1601 | K | L2 | F:H3 O:I4 S:X2 | S's "partial" folds RP2 in |
 | RP4 | Equity metrics (drawdown, run-up, Sharpe / Sortino, CAGR, time in market) | **no** — `compute_equity_stats` exits early on an empty curve engine_metrics.cpp:168; engine_report.cpp:119-139 | K | L2 | F:H3 O:I5 | silent degenerate metrics, no error (O) |
-| RP5 | Range-end row for a position still open at the end (`scheduler_record_range_end` pine_strategy_host.cpp:1410; the only push is pine_strategy_host.cpp:1435) | **no** — the kernel clears the vector engine_run.cpp:191 and never fills it; `report_trade_count()` includes it engine_report.cpp:75; Completed leaves lots open native-engine.md:40 | K+A | L2 | F:H4 O:I6 S:X2 | **Disagree:** S says kernel range-end rows exist (storage only). TV report shape and short-seed swaps (pine_strategy_host.cpp:1252-1284) are A. |
+| RP5 | Range-end row for a position still open at the end (`scheduler_record_range_end` pine_strategy_host.cpp:1567) | **yes, shared** — one generic producer `NativeExecutionConsumer::append_open_position_report_rows`, called by the kernel's run-end `record_open_position_report_rows` (`KernelRecorded` + `report_open_position_at_end`) and by the adapter at TradingView's mark; `report_trade_count()` includes the rows engine_report.cpp:75 | K + A report shape | L2, Q6 | F:H4 O:I6 S:X2 | **Disagree:** S says kernel range-end rows exist (storage only). The ROWS are now the kernel's (§3.7 part 1); TV report shape — the equity re-mark, the extreme re-fold, the same-bar re-sort, three marks — and the short-seed swaps (pine_strategy_host.cpp:1252-1284) stay A, measured in §3.7 part 2. |
 | RP6 | Per-trade accessors | **partial** — `get_trade` is public; the `closed_trade_*` family is protected engine.hpp:2415 | K | L2 | F:H6 | (single-source) |
 | RP7 | Live order-action stream (runner ledger / webhook) | **yes** — engine_execution.cpp:691, enabled native_execution_consumer.cpp:5111, C ABI c_abi.cpp:561-578 | K | — | F:H5 | (single-source) |
 | RP8 | Continuation hash | **yes** — `native_continuation_hash` native_host.hpp:505, native_execution_consumer.cpp:1037; the spec is folded by `hash_spec` native_execution_consumer.cpp:60-81 | K | — | F:I1 O:J2 S:X3 | — |
@@ -612,6 +612,83 @@ still in the table.
 Out of this inventory's scope: request kinds and host members the adapter
 never emits or calls (`Sized`, `ScopeFraction`, `native_open_lots()`, …). E3
 rules `Sized`; the C header's COVERAGE block rules the host surface.
+
+### 3.7 Audit lane Q6 — the range-end report rows (§1.8 RP5, duplicate D5): one producer, a measured report shape
+
+The second independent R5 audit (§6, lane Q6) found the only first-round
+duplicate neither gap wave touched: `record_open_position_report_rows` ran a
+`build_close_trade_with_costs` loop with `open_at_end = true`, gated to
+`NativeReportPolicy::KernelRecorded`, which the adapter can never select
+because `project()` declares `KernelRecordedAtHostMarks`; and
+`PineStrategyHost::scheduler_record_range_end` ran the same loop again, with
+a prose reason and no measurement. This section is the ruling, in two parts.
+
+**Part 1 — the loop is re-lowered, not measured.** The row loop is now one
+generic producer,
+`NativeExecutionConsumer::append_open_position_report_rows(engine, mark_price,
+mark_time_ms, interval_index)`: one `open_at_end` row per open physical lot
+through the same non-mutating builder a full close uses, returning the summed
+NET row P&L. It is policy-free — the caller decides when to mark, what to
+clear first and what it re-derives from the rows — so the kernel's run-end
+producer and a host with a different report shape share it instead of each
+restating it. The adapter's own loop is gone; `scheduler_record_range_end`
+calls the producer at TradingView's mark. Ruling: **a mark-to-market row per
+open lot is a generic capability; when to mark and what to re-derive from the
+mark is not.**
+
+**Part 2 — the report shape around the loop stays in the adapter, measured.**
+TradingView's range-end report is not a mark-to-market row, so the kernel's
+run-end producer stays gated out of every Pine run
+(`report_policy = KernelRecordedAtHostMarks`,
+`report_open_position_at_end = false`). What the adapter keeps is the shape,
+and every row below is an executed assertion of
+`tests/test_adapter_range_end_relower.cpp` — four paired scenarios, each run
+through a `PineStrategyHost` and through a bare `NativeStrategyHost` with
+`KernelRecorded` + `report_open_position_at_end` on the same tape, the
+adapter half harvested from this lane's base `b8e7976e` and reproduced bit for
+bit after the re-lowering.
+
+Common tape: hourly, capital 100000, 100 units a lot, point value 1, fx 1,
+slippage 0, `process_orders_on_close`; two lots at 100 and 102 marked at 105,
+so the gross open profit is 800.
+
+| retained mechanism | adapter site | kernel counterpart | measured divergence (scenario) | ruling |
+|---|---|---|---|---|
+| **the rows themselves** | `scheduler_record_range_end` → the shared producer | `record_open_position_report_rows` → the same producer | **none — this is the re-lowering.** `RE1`/`RE2`/`RE3` assert both halves produce the identical range-end rows: side, units, entry price, mark price, P&L, commission, run-up, draw-down, `open_at_end`. With no fee: `pnl=500` and `pnl=300`. With 0.1 %: `pnl=479.5 comm=20.5` and `pnl=279.30000000000001 comm=20.700000000000003` on both sides | re-lowered; nothing left to retain |
+| **the equity re-mark** | `last.open_profit = 0; last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl` | none — the kernel leaves the curve exactly as the run marked it | `RE1` (no fee): the adapter reports the curve's last point as `eq=100800 op=0`, the kernel as `eq=100800 op=800` — same equity, the open profit moved into the realized side. `RE2` (0.1 %): `eq=100758.8 op=0` against `eq=100800 op=800`; the adapter's equity is **41.2 lower**, exactly the round-trip commission of both lots (20.5 + 20.7), because the re-mark carries the NET row P&L where the run's own mark carried the GROSS open profit | retained: a report that restates the last equity point off net row P&L is TradingView's report shape. Re-marking the curve from the kernel would move a figure every bare host already reads |
+| **the extreme re-fold** | `max_equity_`/`min_equity_` reset to `initial_capital_`, `max_drawdown_`/`max_runup_` to 0, then `fold_equity_extreme` over the whole curve | none — the extremes stay as `update_equity_extremes` sampled them | `RE3` (a dip to 90 at bar 1, a peak of 108 at bar 3, 0.1 %): both sides agree on `maxeq=101400 mineq=99000 maxdd=2400`, and the run-up diverges — adapter `maxru=1758.8000000000029`, kernel `maxru=1800`. The re-fold is a no-op **except** where the re-marked last point differs, so the divergence is again the 41.2 round trip, modulo the binary fold order | retained: it is a consequence of the re-mark above, not a mechanism of its own; it cannot be re-lowered while the re-mark is adapter policy |
+| **the same-bar exit re-sort** | `sort_same_bar_exit_trades(trades_, adapter_)` — same-bar bracket exits ordered by script command sequence | none — the kernel never reorders `trades_` | not exercised by the four scenarios (it reorders CLOSED rows, not range-end rows); it is TradingView command-sequence ordering by construction (`ab9714be pine_fills.cpp:664-670`) | retained: script command sequence is a source-language fact |
+| **the mark cadence** | three call sites, each clearing and rebuilding: the terminal sub-bar of the last source bar (pine_strategy_host.cpp:432), after every applied execution once terminal (`record_applied_range_end`, :586), and the scheduler's terminal-source-bar hook (pine_scheduler_native.cpp:532, before the bar's broker hash) | once, after the last point of the run (`run_batch` ×3, `stream_end`) | structural, not a number: the adapter's rows are re-derived at each mark so the report reflects the book as of the last event on the terminal bar, and its re-marked equity is visible to that bar's broker hash. A one-shot run-end producer cannot occupy those three points | retained: three marks on a terminal bar is a TradingView report cadence, not a generic run-end fact |
+| **the excursion projection gate** | `excursion_range_end_projection_` suppresses the owner's exit-bar path fold for the projection (pine_strategy_host.cpp:771) | none — the generic builder folds what it folds | `RE1`: identical run-up/draw-down on both halves (`ru=500 dd=0`, `ru=300 dd=0`) because the adapter's own owner hook returns the carried magnitudes for a projection; the gate exists to keep it that way when a host owns lot excursions | retained: it is the host's excursion contract (`owns_lot_excursions`), which the kernel deliberately does not model |
+| **the tail / warm-up suppression** | `if (stream_warmup_mode_ \|\| realtime_tail_ \|\| equity_curve_.empty()) return;` | none — the kernel emits at `stream_end` whatever the run left open | structural: the kernel has no warm-up or realtime-tail notion, and `run_corpus`'s probe-tail suppression (`suppress_probe_tail`) is a harness fact | retained: a tail is a source-layer replay concept |
+
+**Control and witness.** `RE4` closes the lot at bar 2: neither side emits a
+range-end row (`closed=1 report=1`, `op=0`, extremes equal on both), so every
+divergence above is attributable to the range end and not to the tape. `SW`
+asserts the structural blocker directly — an adapter run's projected spec is
+`KernelRecordedAtHostMarks` with `report_open_position_at_end == false`, i.e.
+the kernel's run-end producer is unreachable from Pine by construction.
+
+One difference in the literals is **not** a range-end divergence and shows on
+the flat control too: the adapter dates a row on the script bar's OPEN and the
+bare host on its close-execution point, so every `@hour` label is one bar apart
+between the halves. The mark itself is the same bar on both.
+
+**A dead branch found and reported, not removed.** `fold_exit_trail_peak_`
+(engine.hpp:532) is initialised NaN, reset to NaN at run start
+(engine_run.cpp:211) and **never assigned a finite value anywhere in the
+tree**, so all four `if (!std::isnan(fold_exit_trail_peak_))` carries
+(engine_execution.cpp:478/:493, the former adapter loop, the shared producer)
+are inert. The shared producer keeps the carry so it folds exactly what the
+kernel's settling path folds; removing the member is an epoch question (it is
+hashed at engine_state_hash.cpp:71) and is left to a lane that budgets one.
+
+**Acceptance evidence.** `tests/test_adapter_range_end_relower.cpp`: 12
+checks, the adapter half reproduced bit for bit against the `b8e7976e`
+harvest; a mutation self-test (`marked += row.pnl + 1.0` in the shared
+producer) fails 3 of the 4 scenarios **through the adapter half**, which is
+the executed proof that the adapter now runs the kernel's producer; whole
+corpus byte-identical at gitlink 442d497.
 
 ---
 
