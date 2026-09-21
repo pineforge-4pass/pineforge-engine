@@ -263,6 +263,12 @@ struct TrailTicks {
 /// offset is a price distance: the stop rides `offset` behind the running
 /// best. Zero is legal and means "ride the best": the exit is the first
 /// adverse move past it. Negative and nonfinite offsets are rejected.
+/// arm_price absent means the trail is already armed and starts riding at the
+/// first print. Under a FromOwnerFill anchor it means the owner's fill
+/// supplies the threshold, which is that anchor's whole point: absent is the
+/// anchored spelling, 0.0 is the equivalent placeholder kept legal for hosts
+/// that already write it, and any other written level is refused because the
+/// arm would overwrite it.
 struct Trail {
     double offset = 0.0;
     std::optional<double> arm_price;

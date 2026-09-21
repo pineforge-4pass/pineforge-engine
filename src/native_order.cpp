@@ -462,9 +462,11 @@ bool valid_trail_offset(double offset) noexcept {
     return std::isfinite(offset) && offset >= 0.0;
 }
 
-// The anchored level is supplied by the owner's fill, so the trigger carries
-// the placeholder 0.0 until then; any other written level would be silently
-// overwritten at arm time.
+// The anchored level is supplied by the owner's fill, so the trigger leaves
+// it unwritten until then; any other written level would be silently
+// overwritten at arm time. "Unwritten" is each field's own absence: the 0.0
+// Limit::price and Stop::price already default to, and either the absent
+// std::optional or that same 0.0 for a Trail's arm threshold.
 std::optional<RequestRejectReason> validate_levels(const Trigger& trigger, bool anchored) {
     if (const auto* limit = std::get_if<Limit>(&trigger)) {
         if (!finite_non_negative(limit->price)) return RequestRejectReason::InvalidTrigger;
@@ -493,10 +495,15 @@ std::optional<RequestRejectReason> validate_levels(const Trigger& trigger, bool 
         } else if (!valid_trail_offset(trail->offset)) {
             return RequestRejectReason::InvalidTrigger;
         }
-        // An anchored trail moves its arm threshold, which must therefore be
-        // present and hold the placeholder.
+        // An anchored trail's arm threshold comes from the owner's fill, so
+        // omitting it is the spelling: install_anchored_level assigns the
+        // resolved level unconditionally and a waiting request never reaches
+        // the matcher, so the field is unread until the arm. A WRITTEN level
+        // stays refused for the same reason a written Limit/Stop price is --
+        // the arm would silently overwrite it. The placeholder remains legal
+        // so every host that already spells it keeps its meaning.
         if (anchored) {
-            if (!trail->arm_price || *trail->arm_price != 0.0) {
+            if (trail->arm_price && *trail->arm_price != 0.0) {
                 return RequestRejectReason::InvalidTrigger;
             }
             return std::nullopt;

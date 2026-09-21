@@ -113,6 +113,7 @@ set(TEST_SOURCES
     test_native_limit_fill_through
     test_native_toolkit_bracket
     test_native_anchored_legs
+    test_native_anchored_trail_absent_arm
     test_native_arm_options
     test_native_order_resting_core
     test_native_resting_contract
