@@ -29,6 +29,10 @@
  *   G4  EMA state-continuity across an na run (resume value == no-na control)
  *   G6  KI-55 na_warmup EMA: an na input during warmup neither counts nor
  *       shifts the seed bar (pre-seed behaviour identical either side of fix)
+ *   G7  EmaSeeding named per instance (R5 lane P2): the two-argument
+ *       constructor fixes the seeding regardless of the ambient default, a
+ *       one-argument instance still latches the ambient default, and a
+ *       FirstValue instance is value-for-value the one-argument default
  *
  * NDEBUG-PROOF: no bare assert(); a returning CHECK macro increments a
  * failure counter and main() returns nonzero, so a Release (-DNDEBUG) run
@@ -211,6 +215,45 @@ static void test_ema_na_warmup_preseed_unaffected() {
     ta::ema_na_warmup_flag() = false;                   // restore global for later tests
 }
 
+// --------------------------------------------------------------------
+// G7 — EmaSeeding is a per-instance option (R5 lane P2). A bare host names
+// the seeding at construction and never touches the ambient default; the
+// ambient default is only what an instance that names none latches.
+//
+//   SimpleAverage instance, ambient false: na, na, mean(10,20,30) = 20
+//   FirstValue instance, ambient true:     seeds 10 on the first input
+//   one-argument instance, ambient true:   latches SimpleAverage -> na
+//   FirstValue instance == one-argument instance under ambient false
+// --------------------------------------------------------------------
+static void test_ema_seeding_named_per_instance() {
+    std::printf("test_ema_seeding_named_per_instance\n");
+    CHECK(!ta::ema_na_warmup_flag());                   // ambient default is off
+
+    ta::EMA sma_seeded(3, ta::EmaSeeding::SimpleAverage);
+    CHECK(is_na(sma_seeded.compute(10.0)));             // 1/3, ambient ignored
+    CHECK(is_na(sma_seeded.compute(20.0)));             // 2/3
+    CHECK(eq(sma_seeded.compute(30.0), 20.0));          // mean seed on the 3rd
+    CHECK(eq(sma_seeded.compute(30.0), 25.0));          // alpha = 0.5: 0.5*30 + 0.5*20
+
+    ta::ema_na_warmup_flag() = true;                    // raise the ambient default
+    ta::EMA first_value(3, ta::EmaSeeding::FirstValue);
+    CHECK(eq(first_value.compute(10.0), 10.0));         // named seeding wins
+    CHECK(eq(first_value.compute(20.0), 15.0));
+    ta::EMA unnamed(3);
+    CHECK(is_na(unnamed.compute(10.0)));                // latched the raised default
+    ta::ema_na_warmup_flag() = false;                   // restore for later tests
+    CHECK(is_na(unnamed.compute(20.0)));                // latch is for life
+    CHECK(eq(unnamed.compute(30.0), 20.0));
+
+    ta::EMA by_default(3);
+    ta::EMA named_default(3, ta::EmaSeeding::FirstValue);
+    const double inputs[] = {10.0, 20.0, 30.0, 40.0, 50.0};
+    for (double v : inputs) {
+        CHECK(eq(by_default.compute(v), named_default.compute(v)));
+    }
+    CHECK(!ta::ema_na_warmup_flag());                   // left as found
+}
+
 int main() {
     test_ema_warm_na_returns_na_and_resumes();          // R1
     test_sma_seeded_na_returns_held_mean();             // R2
@@ -220,6 +263,7 @@ int main() {
     test_ema_state_continuity_across_na_run();          // G4
     test_sma_32bar_na_run_holds();                      // G5 (RED on HEAD)
     test_ema_na_warmup_preseed_unaffected();            // G6
+    test_ema_seeding_named_per_instance();              // G7
 
     std::printf("\ntest_ta_na_source_rules: %d passed, %d failed\n",
                 tests_passed, tests_failed);

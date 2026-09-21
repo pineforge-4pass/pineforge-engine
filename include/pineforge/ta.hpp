@@ -11,23 +11,31 @@ namespace pineforge {
 
 namespace ta {
 
-// Opt-in TradingView-built-in EMA warmup toggle (thread-local, default false).
+// How an ``EMA`` seeds its recursion. A per-instance option
+// (``EMA(length, seeding)``); an instance that names none latches the
+// ambient default below on its first ``compute()``.
+enum class EmaSeeding : unsigned char {
+    // ``ema := src`` on the first finite input, so the output is never na.
+    // The default, and byte-identical to every EMA before the option existed.
+    FirstValue = 0,
+    // na until ``length`` finite inputs have accumulated, then their simple
+    // average, then the ordinary recursion: an SMA-seeded EMA, warming up the
+    // way ``RMA`` and ``SMA`` already do (na for the whole warm-up window).
+    SimpleAverage = 1,
+};
+
+// Ambient default seeding for ``EMA`` instances constructed without one
+// (thread-local; ``false`` = ``EmaSeeding::FirstValue``, ``true`` =
+// ``EmaSeeding::SimpleAverage``; default ``false``).
 //
-// TradingView's *built-in* ``ta.ema`` returns ``na`` until ``length`` values
-// have accumulated, then seeds with the SMA of those first ``length`` values —
-// unlike the documented ``pine_ema`` reference impl (and this engine's default),
-// which seed ``ema := src`` on the first bar and are therefore never ``na``.
-// The difference matters for range-start-truncated chart and
-// ``request.security`` series (KI-55): the relevant ``ta.ema`` must be ``na``
-// for its whole warmup window to match TV, exactly as ``ta.rma`` / ``ta.sma``
-// already are.
-//
-// An ``EMA`` instance latches this flag on its first ``compute()`` and keeps
-// that mode for life. The engine scopes the flag independently around chart
-// ``on_bar`` dispatch (``chart_ema_na_warmup``) and request.security evaluation
-// (``security_range_start_na_warmup``), so either context can opt in without
-// contaminating the other. When neither run flag is set, every EMA is
-// byte-identical to the prior src-seed behavior.
+// An instance reads it once, on its first ``compute()``, and keeps that
+// seeding for life, so a host that wants the instances of one evaluation
+// context SMA-seeded without naming the seeding at each construction raises
+// the reference around that context and restores it on exit (an RAII scope;
+// the restore must also run during unwinding). Thread-local so parallel
+// in-process engines never cross-contaminate. Nothing in the kernel raises
+// it: with the default, every EMA that names no seeding is the first-value
+// recursion, byte-identical to the behaviour before the option existed.
 bool& ema_na_warmup_flag();
 
 // Per-context bar index for bar-addressed window state (thread-local).
@@ -239,9 +247,9 @@ class EMA {
     double alpha;
     double sum;
     int bar_count;
-    // Retained only for the opt-in TradingView-built-in na-warmup path (below),
-    // which must count `length` values before seeding with their SMA. The
-    // default src-seed recursion uses `alpha` alone and never reads this.
+    // Read only by EmaSeeding::SimpleAverage, which counts `length` finite
+    // inputs before seeding with their mean. The FirstValue recursion uses
+    // `alpha` alone and never reads this.
     int length_;
 
     // saved state for recompute
@@ -249,15 +257,18 @@ class EMA {
     double saved_sum_;
     int saved_bar_count_;
 
-    // TradingView-built-in warmup latch (see ema_na_warmup_flag above). Latched
-    // once on the first compute() and never revisited, so recompute()'s
-    // restore() (which only rewinds output_val/sum/bar_count) cannot flip the
-    // mode mid-series. Deliberately NOT part of save()/restore().
+    // The instance's seeding (true = EmaSeeding::SimpleAverage): named by the
+    // two-argument constructor, or latched from ema_na_warmup_flag() on the
+    // first compute() and never revisited, so recompute()'s restore() (which
+    // only rewinds output_val/sum/bar_count) cannot flip the seeding
+    // mid-series. Deliberately NOT part of save()/restore().
     bool na_warmup_ = false;
     bool warmup_latched_ = false;
 
 public:
     explicit EMA(int length);
+    // Names the seeding at construction; the ambient default is never read.
+    EMA(int length, EmaSeeding seeding);
     double compute(double src);
     void save();
     void restore();

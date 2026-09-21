@@ -201,10 +201,11 @@ double KahanWindowSum::repush(double src) {
 namespace pineforge {
 namespace ta {
 
-// Thread-local so parallel in-process engines never cross-contaminate. Default
-// false → src-seed EMA (byte-identical to prior behavior); the engine scopes it
-// independently around chart on_bar and request.security evaluation under
-// their respective opt-in flags. See <pineforge/ta.hpp> for the full rationale.
+// Ambient default seeding for EMA instances that name none (see
+// <pineforge/ta.hpp>). Thread-local so parallel in-process engines never
+// cross-contaminate. Default false → EmaSeeding::FirstValue, byte-identical
+// to the recursion before the option existed; a host raises it around the
+// evaluation context whose instances should latch EmaSeeding::SimpleAverage.
 bool& ema_na_warmup_flag() {
     static thread_local bool flag = false;
     return flag;
@@ -288,33 +289,38 @@ EMA::EMA(int length)
       // state instead of reading uninitialized save-state members.
       saved_output_val_(na<double>()), saved_sum_(0.0), saved_bar_count_(0) {}
 
+EMA::EMA(int length, EmaSeeding seeding)
+    : EMA(length) {
+    // The instance names its seeding: the ambient default is never consulted.
+    na_warmup_ = seeding == EmaSeeding::SimpleAverage;
+    warmup_latched_ = true;
+}
+
 double EMA::compute(double src) {
     save();
-    // Latch the warmup mode once, on the first compute(). Chart and
-    // security-embedded EMAs first compute inside their respective engine
-    // dispatch scopes, so the latch is consistent for the instance's whole
-    // life without threading per-instance wiring through codegen.
+    // An instance that named no seeding latches the ambient default once, on
+    // its first compute(), so a host that raises the default around one
+    // evaluation context gets that context's instances SMA-seeded for life
+    // without naming the seeding at each construction.
     if (!warmup_latched_) {
         na_warmup_ = ema_na_warmup_flag();
         warmup_latched_ = true;
     }
     if (is_na(src)) {
-        // Pine ta.ema (KI-66): an na input neither updates nor resets the
-        // recursion — the function itself RETURNS NA on this bar and resumes
-        // over the valid inputs on the next valid bar. Mirrors ta.rma
-        // (RMA::compute, the pinned reference). State is left untouched, so
-        // the KI-55 na_warmup pre-seed accumulation is unaffected: output_val
-        // is still na during warmup, so the return is na either way.
+        // An na input neither updates nor resets the recursion: the output is
+        // na on this bar and the recursion resumes over the finite inputs on
+        // the next finite bar (KI-66; the same rule as RMA::compute). State is
+        // left untouched, so a SimpleAverage warm-up count is unaffected:
+        // output_val is still na during warm-up, so the return is na either way.
         return na<double>();
     }
 
     if (na_warmup_) {
-        // TradingView *built-in* ta.ema warmup: return na until `length` values
-        // have accumulated since series start, then seed with the SMA of those
-        // first `length` values, then run the ordinary EMA recursion. Mirrors
-        // ta.rma/ta.sma warmup (RMA::compute above) so a range-start-truncated
-        // request.security(ta.ema(...)) reads na for its whole warmup window,
-        // matching TV (KI-55). Once output_val is non-na the series is seeded.
+        // EmaSeeding::SimpleAverage: na until `length` finite inputs have
+        // accumulated since the series start, then seed with their mean, then
+        // run the ordinary recursion — the warm-up RMA::compute / SMA already
+        // have, so a series truncated at its start reads na for its whole
+        // warm-up window. Once output_val is finite the series is seeded.
         if (is_na(output_val)) {
             sum += src;
             bar_count++;
@@ -330,9 +336,9 @@ double EMA::compute(double src) {
         return output_val;
     }
 
-    // Pine ta.ema reference:
+    // EmaSeeding::FirstValue (the default):
     //   ema := na(ema[1]) ? src : alpha * src + (1 - alpha) * ema[1]
-    // Seed from the first non-na source value (not SMA warmup).
+    // Seed from the first finite source value, so the output is never na.
     if (is_na(output_val)) {
         output_val = src;
         sum = src;
