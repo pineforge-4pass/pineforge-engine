@@ -16,6 +16,7 @@
 
 #include <pineforge/native_toolkit.hpp>
 
+#include <cassert>
 #include <cstdio>
 #include <iostream>
 #include <optional>
@@ -25,6 +26,58 @@ namespace {
 
 namespace no = pineforge::native_order;
 namespace tk = pineforge::native_toolkit;
+
+const char* leg_name(tk::BracketLeg which) {
+    switch (which) {
+    case tk::BracketLeg::TakeProfit: return "take-profit";
+    case tk::BracketLeg::StopLoss: return "stop-loss";
+    case tk::BracketLeg::Trail: break;
+    }
+    return "trail";
+}
+
+const char* reject_name(no::RequestRejectReason reason) {
+    switch (reason) {
+    case no::RequestRejectReason::InvalidQuantity: return "InvalidQuantity";
+    case no::RequestRejectReason::OffGrid: return "OffGrid";
+    case no::RequestRejectReason::InvalidTrigger: return "InvalidTrigger";
+    case no::RequestRejectReason::InvalidCapacity: return "InvalidCapacity";
+    case no::RequestRejectReason::InvalidOwner: return "InvalidOwner";
+    case no::RequestRejectReason::InvalidQuantityBasis: return "InvalidQuantityBasis";
+    case no::RequestRejectReason::InvalidGroup: return "InvalidGroup";
+    case no::RequestRejectReason::PlacementAdmission: break;
+    }
+    return "PlacementAdmission";
+}
+
+// What a host must do with a receipt: read every leg, not just the handles.
+// An empty handle alone cannot say whether the leg was never asked for or
+// whether the kernel refused it -- and a refused exit leg that goes unread is
+// a position left running without the protection its strategy believes it
+// placed.
+void report_legs(const tk::BracketReceipt& legs) {
+    for (const tk::BracketLeg which : {tk::BracketLeg::TakeProfit, tk::BracketLeg::StopLoss,
+                                       tk::BracketLeg::Trail}) {
+        const tk::BracketLegOutcome& leg = legs.outcome(which);
+        switch (leg.state) {
+        case tk::BracketLegState::NotRequested:
+            std::printf("leg %s: not requested\n", leg_name(which));
+            break;
+        case tk::BracketLegState::NotSubmitted:
+            std::printf("leg %s: not submitted (the parent was never allocated)\n",
+                        leg_name(which));
+            break;
+        case tk::BracketLegState::Accepted:
+            std::printf("leg %s: accepted as request %llu\n", leg_name(which),
+                        static_cast<unsigned long long>(leg.handle()->incarnation));
+            break;
+        case tk::BracketLegState::Rejected:
+            std::printf("leg %s: REFUSED (%s)\n", leg_name(which),
+                        leg.reason() ? reject_name(*leg.reason()) : "no reason given");
+            break;
+        }
+    }
+}
 
 class BracketExample : public pineforge::NativeStrategyHost {
     int bars_ = 0;
@@ -57,6 +110,23 @@ class BracketExample : public pineforge::NativeStrategyHost {
         bracket.anchor_rounding = no::NativeAnchorRounding::Directional;
         bracket.visibility = no::NativeArmVisibility::PendingUntilArmed;
         legs_ = tk::submit_bracket(*this, bracket);
+
+        // The receipt, leg by leg. A host that reads only the handles cannot
+        // tell a refused leg from one it never asked for, which is how an
+        // anchored leg can vanish while the strategy keeps running: assert
+        // instead that every leg this bracket asked for is resting.
+        report_legs(legs_);
+        assert(legs_.every_requested_leg_accepted());
+        assert(legs_.outcome(tk::BracketLeg::TakeProfit).state
+               == tk::BracketLegState::Accepted);
+        assert(legs_.outcome(tk::BracketLeg::StopLoss).state == tk::BracketLegState::Accepted);
+        assert(legs_.outcome(tk::BracketLeg::TakeProfit).handle() == legs_.take_profit);
+        assert(!legs_.outcome(tk::BracketLeg::TakeProfit).reason().has_value());
+        // This bracket asks for no trailing leg, and the receipt says that
+        // rather than leaving an empty handle to be read as a refusal.
+        assert(legs_.outcome(tk::BracketLeg::Trail).state == tk::BracketLegState::NotRequested);
+        assert(!legs_.outcome(tk::BracketLeg::Trail).result.has_value());
+        assert(!legs_.trail.has_value());
 
         // Before the fill the legs are live but not working orders: only the
         // entry is enumerated.
