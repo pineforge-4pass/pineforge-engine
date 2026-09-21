@@ -8,7 +8,7 @@
 // owns_lot_excursions), and the only thing the owner has to say is WHERE on
 // the bar its fill sits: on the path, or after the whole of it. The geometry
 // — which leg the path walks first and where a price is first touched — is
-// the kernel's own (`bar_path_uses_high_first`, `first_touch_position`), and
+// the kernel's own (the run's leg order, `first_touch_position`), and
 // it is the kernel that derives the two flags from it.
 //
 // Witnesses, source-free (this TU runs in the kernel-only profile):
