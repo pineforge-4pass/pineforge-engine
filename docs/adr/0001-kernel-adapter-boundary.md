@@ -247,8 +247,11 @@ same check is the CTest row `test_kernel_residuals` in every profile):
 python3 scripts/check_kernel_residuals.py --archive build-ci-kernel/lib/libpineforge_kernel.a
 ```
 
-The checker reads `strings -a` and `nm -C` over the archive and matches the
-residual vocabulary against the **first column** of the tables in this section.
+The checker reads the archive's linkable surface — `nm -C` over the archive
+(defined and undefined symbols, demangled) and `strings -a` over a copy whose
+debug information has been stripped, so a `-g` build's DWARF names are not
+mistaken for residue (gap lane P2b) — and matches the residual vocabulary,
+whole identifiers only, against the **first column** of the tables in this section.
 The vocabulary is fixed in the script (`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`):
 an identifier containing `pine` (not `pineforge`), `tradingview`, `barmerge`,
 `coof`, `pooc`, `market_admission`, `calc_on_order_fills`,
