@@ -1,22 +1,30 @@
 # PineForge Runtime — API Reference {#mainpage}
 
-> **Deterministic PineScript v6 backtest runtime, validated trade-for-trade against TradingView.**
+> **Deterministic backtest and forward-execution runtime, validated
+> trade-for-trade against TradingView.**
 
-PineForge is the **C++ runtime** that PineForge-compiled strategies link
-against. It implements PineScript v6 strategy semantics — order
-matching, fills, the bar magnifier, technical indicators, time / session
-math — as a static C++ library with a stable C ABI.
+PineForge is a **C++17 engine** in two layers. The **kernel** matches triggers,
+prices fills, sizes orders, books lots, settles margin and computes indicators,
+time and session math — and knows nothing about PineScript or TradingView. The
+**Pine adapter** reproduces TradingView's execution semantics on top of it, and
+is what a PineForge-compiled strategy attaches.
 
-This site is the **public consumer reference**: the C ABI declared in
-`<pineforge/pineforge.h>`, the lifecycle of a strategy handle, the shape
-of the report returned by a backtest, and how to integrate the library
-from CMake or via FFI.
+That gives three front doors, all documented here:
 
-@note The internal C++ headers (`<pineforge/engine.hpp>`,
-`<pineforge/ta.hpp>`, ...) are used by the closed PineForge transpiler
-and are **deliberately omitted** from this reference. They are not part
-of the stability guarantee and not recommended for direct external
-consumption.
+1. **PineScript through codegen** — compile a `.pine` to a `.so` and drive it
+   over the C ABI in `<pineforge/pineforge.h>`. This is the path the
+   TradingView parity results measure.
+2. **C++ against the kernel** — subclass `NativeStrategyHost` and describe the
+   run in one `NativeRunSpec`. No PineScript, no codegen, no adapter.
+3. **C against the kernel** — hand the runtime a callback table through
+   `<pineforge/native_c_api.h>` and drive it from any language with a C FFI.
+
+@note The Pine adapter's own headers (`<pineforge/source/…>`,
+`<pineforge/compat/pine/…>`) are internal to the parity layer and carry no
+stability guarantee. The kernel and native API headers — `native_host.hpp`,
+`native_run_spec.hpp`, `native_order.hpp`, `native_toolkit.hpp`,
+`native_c_api.h` and `pineforge.h` — are the surface this site documents and
+the one a host programs against.
 
 ---
 
@@ -32,10 +40,10 @@ consumption.
 
 - <b class="tab-title">I'm writing a native strategy</b>
   Read **[Native engine](@ref native_engine)** for `NativeStrategyHost`,
-  `configure_native`, execution terms, and the C ABI contract query.
-  Coming from PineScript, start with
-  **[PineScript to native C++](@ref pine_to_native)** — the concept map,
-  a worked migration, and how to diff a port against its Pine twin.
+  `configure_native`, execution terms and the C ABI contract. Coming from
+  PineScript, start with **[PineScript to native C++](@ref pine_to_native)** —
+  every `strategy.*` builtin mapped to its C++ and C spelling, the runnable
+  host that exercises each, and a six-feature strategy migrated end to end.
 
 - <b class="tab-title">I'm integrating from CMake</b>
   Jump straight to **[Install](@ref install)** and
@@ -50,7 +58,7 @@ consumption.
 
 - <b class="tab-title">I'm connecting a realtime feed</b>
   Start with **[Historical to realtime streaming](@ref streaming)** for
-  the warmup, ordered-trade, clock, and report lifecycle, then run
+  the warmup, ordered-trade, clock and report lifecycle, then run
   `tutorial/run_stream.py` against the bundled MACD strategy. The optional
   native C++ runner is documented in `runner/README.md`. For the separate
   Python `pineforge-live` recompute project, read
@@ -65,9 +73,14 @@ consumption.
 
 - <b class="tab-title">I'm a transpiler / backend author</b>
   Read **[Order execution model](@ref fill_model)** for native ownership,
-  reservation and ordering contracts and the remaining frontend boundary work.
-  Read **[Coverage](@ref coverage)** — the complete map of which Pine v6
-  surface this runtime owns versus what your codegen has to emit inline.
+  reservation and ordering contracts. Read **[Coverage](@ref coverage)** — the
+  complete map of which Pine v6 surface this runtime owns versus what your
+  codegen has to emit inline.
+
+- <b class="tab-title">I want to contribute</b>
+  Read `CONTRIBUTING.md` in the repository root for the workflow, the gates and
+  the parity contract, or **[Contributing as an LLM](@ref contributing_llm)**
+  if you are an agent working from a brief.
 
 </div>
 
@@ -75,7 +88,9 @@ consumption.
 
 ## Worked examples
 
-End-to-end, runnable examples that go beyond the MACD tutorial:
+End-to-end, runnable examples that go beyond the MACD tutorial.
+
+**Driving a compiled strategy over the C ABI:**
 
 | Example | Use case |
 | --- | --- |
@@ -88,13 +103,45 @@ End-to-end, runnable examples that go beyond the MACD tutorial:
 | [Historical to realtime streaming](@ref streaming) | Warm on confirmed OHLCV and continue the same strategy on ordered trades. |
 | [Calling from Rust](@ref examples_rust) | Idiomatic `libloading` wrapper with safe Rust types. |
 
+**Driving the kernel yourself.** Every host under `examples/native/` is a
+complete, self-contained program that checks its own results and is run as a
+CTest row (`ctest --test-dir build -R example_`). They link `PineForge::kernel`
+directly, so a Pine-layer symbol reaching one is a link error.
+
+| Host | What it demonstrates |
+| --- | --- |
+| `hello_kernel.cpp` | The smallest complete host: subclass, describe the run, submit, read the trades. |
+| `hello_kernel_c.c` | The same host written against the C API — a callback table, no C++. |
+| `native_market_strategy.cpp` | One entry, one flatten, as both a standalone program and a loadable module; batch then stream. |
+| `native_selected_strategy.cpp` | Host-sized openings, a child bound to one opening's cycle, a selected close, an exact reversal. |
+| `native_bracket_strategy.cpp` | Anchored bracket legs placed before the entry has a price, on a tick ladder. |
+| `native_sized_report_strategy.cpp` | Kernel sizing by cash and by equity fraction, and a kernel-recorded report. |
+| `native_margin_strategy.cpp` | A per-side margin model, a solved liquidation price and a kernel-issued liquidation. |
+| `native_calc_on_fills_strategy.cpp` | Calculation timing: recalculating on each fill, and the open-only bar view. |
+| `native_htf_strategy.cpp` | Higher-timeframe series for a bare host, with and without gaps. |
+| `native_auxiliary_feed_strategy.cpp` | A series *finer* than the run's input, built from an auxiliary feed. |
+| `native_trail_risk_strategy.cpp` | A trail spelled in ticks, the working book, and a fill-count risk limit. |
+| `native_risk_limits_strategy.cpp` | Account money limits, the kernel's own flatten, and the risk day. |
+| `native_price_grid_strategy.cpp` | One strategy under all four instrument price-grid answers. |
+| `native_price_grid_c.c` | The same four answers from C, read back off the event history. |
+| `native_open_lots_strategy.cpp` | The open book lot by lot, and who folds the equity extremes. |
+
 ---
 
 ## API at a glance
 
-The entire public surface fits in **one header** and **65 public `PF_API`
-declarations** (57 runtime implementations plus eight per-strategy generated
-exports):
+The public C surface is **97 `PF_API` declarations** across two headers:
+
+- `<pineforge/pineforge.h>` — **65**: 57 runtime implementations plus eight
+  per-strategy generated exports. This is what a compiled strategy `.so`
+  exports and what a harness calls.
+- `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **32**: the other
+  direction, where the host drives the kernel itself. Submit, replace, cancel,
+  execute, read the book, read the lots. Additive: no symbol, struct or
+  behaviour of the first set changes.
+
+`scripts/check_c_abi_runtime.py` pins the first inventory and
+`scripts/check_native_c_api_surface.py` the second, so neither can drift.
 
 | Group | Symbols | Reference |
 | --- | --- | --- |
@@ -105,9 +152,10 @@ exports):
 | Diagnostics | `strategy_get_last_error` | #strategy_get_last_error |
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
+| Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` | `native_c_api.h` |
 
-Every PineForge-generated strategy `.so` exports all 65 public symbols and
-zero internal C++ symbols — see
+Every PineForge-generated strategy `.so` exports the 65 public symbols of
+`pineforge.h` and zero internal C++ symbols — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 
 ---
@@ -142,6 +190,65 @@ Build: `cc demo.c -lpineforge -lstdc++ -lm`. That's it.
 
 ---
 
+## Every page on this site
+
+**Getting going**
+
+| Page | What it covers |
+| --- | --- |
+| [Getting Started](@ref getting_started) | Build, test, install and link in under a minute. |
+| [Install](@ref install) | What `cmake --install` puts where, and the package layout. |
+| [CMake integration](@ref integration_cmake) | `find_package(PineForge)` in a downstream project. |
+| [Tutorial: MACD on BTCUSDT](@ref tutorial_macd) | One strategy from `.pine` to a graded trade list. |
+
+**Driving a compiled strategy**
+
+| Page | What it covers |
+| --- | --- |
+| [Strategy lifecycle](@ref lifecycle) | Handle ownership, run reuse and report freeing. |
+| [Configuration](@ref configuration) | Inputs, `strategy()` overrides, symbol metadata, timezones and sessions. |
+| [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
+| [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
+| [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |
+| [ABI v4 live surface](@ref live_surface) | The default-off live accessors: abort, realtime tail, broker-state hash, pending-order mirror. |
+| [FFI from Python](@ref ffi_python) | A ctypes mirror of every POD in `pineforge.h`. |
+
+**Writing a native host**
+
+| Page | What it covers |
+| --- | --- |
+| [Native engine](@ref native_engine) | The reference: lifecycle, run spec, request vocabulary, the C ABI contract. |
+| [PineScript to native C++](@ref pine_to_native) | Every Pine builtin mapped to its C++ and C spelling, with a worked migration. |
+| [Contributing as an LLM](@ref contributing_llm) | The repo map, the boundary invariants and the lane recipe, for an agent. |
+
+**How execution works**
+
+| Page | What it covers |
+| --- | --- |
+| [Order execution model](@ref fill_model) | Ownership, reservation and ordering contracts for fills. |
+| [Market admission](@ref market_admission) | What is checked before an opening reaches the book. |
+| [Exit-leg lifecycle](@ref exit_leg_lifecycle) | How a bracket leg is born, armed, matched and retired. |
+| [Exit lifecycle reflection](@ref exit_lifecycle_reflection) | Reading that lifecycle back, and what completion means. |
+| [Bar magnifier](@ref magnifier) | Intrabar path synthesis and the six distribution modes. |
+| [Timeframes](@ref timeframes) | Parsing, aggregation and session-aware bucketing. |
+| [Multi-timeframe (MTF)](@ref mtf) | `request.security`, `script_tf` switching and lower-TF synthesis. |
+| [Historical to realtime streaming](@ref streaming) | Warm on OHLCV, continue on ordered trades, keep one state. |
+| `pages/exit-leg-activation.md` | The activation bounds an exit leg's matching consumes. |
+| `pages/quantity-intent.md` | Requested amount versus native working reservation, in the placement snapshot. |
+
+**Coverage and worked examples**
+
+| Page | What it covers |
+| --- | --- |
+| [PineScript v6 coverage](@ref coverage) | What this runtime owns, what codegen emits inline, what is out of scope. |
+| [Pure C harness](@ref examples_c) | `dlopen` a strategy, feed it a CSV, print the trades. |
+| [Parameter sweep in Python](@ref examples_python_sweep) | Re-running one `.so` over a grid. |
+| [Multi-strategy harness](@ref examples_multi) | N strategies, ranked, in a thread pool. |
+| [Magnifier on vs off](@ref examples_magnifier) | The A/B that shows what the magnifier changes. |
+| [Calling from Rust](@ref examples_rust) | A safe `libloading` wrapper. |
+
+---
+
 ## Project links
 
 - Source: <https://github.com/pineforge-4pass/pineforge-engine>
@@ -150,4 +257,5 @@ Build: `cc demo.c -lpineforge -lstdc++ -lm`. That's it.
 
 @note PineForge ships as a **static library** (`libpineforge.a`). The
 PineScript-to-C++ **transpiler** is a separate, source-available product (PolyForm Noncommercial);
-this runtime is what every compiled strategy `.so` links against.
+this runtime is what every compiled strategy `.so` links against, and it also
+runs hosts written directly against the kernel with no transpiler in sight.
