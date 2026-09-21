@@ -77,14 +77,42 @@ WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
 WARN_IF_INCOMPLETE_DOC = YES
-WARN_NO_PARAMDOC       = NO
+WARN_NO_PARAMDOC       = YES
+# NOT FAIL_ON_WARNINGS: Doxygen has no per-file warning policy, and the Pine
+# adapter's legacy headers must not be able to stop the site from building.
+# The scoped gate lives in docs/build.sh instead: it reads WARN_LOGFILE and
+# fails the build only for a warning in the guarded set (the kernel / native
+# API headers, the C API header, the C ABI header, groups.dox and the
+# examples). Everything else is printed and counted.
 WARN_AS_ERROR          = NO
 WARN_FORMAT            = "$file:$line: $text"
+WARN_LOGFILE           = site/doxygen-warnings.log
 
 # ── Inputs ────────────────────────────────────────────────────────────────
-# Public C ABI header + manually-written narrative pages. The internal
-# C++ headers are deliberately excluded (no stability guarantee).
-INPUT                  = ../include/pineforge/pineforge.h \
+# The whole public surface, in the order the site navigates it:
+#   groups.dox          the two layers and which file is in which
+#   ../include/pineforge  the kernel / native API headers, the C API header
+#                       and the C ABI header, plus source/ and compat/pine/
+#                       (the Pine adapter, grouped separately)
+#   ../examples/native  the ten runnable hosts, which are documentation
+#   pages/*.md          the narrative pages, listed so the order is ours
+#   design/ adr/        the design record and the boundary decision
+# RECURSIVE reaches include/pineforge/source and include/pineforge/compat;
+# EXCLUDE below keeps the generated and vendored trees out.
+#
+# pineforge.h is named FIRST, before the directory that also contains it, for
+# the reason engine.hpp:37 states about C translation units: engine.hpp defines
+# PINEFORGE_NO_STRATEGY_DECLS, and Doxygen's preprocessor carries a define
+# across the whole run. Parsed after engine.hpp, pineforge.h loses
+# strategy_create / strategy_free / run_backtest / run_backtest_full /
+# report_free, and the ~50 `#run_backtest` references in the headers and the
+# pages resolve to nothing. Order is the fix, exactly as it is in src/c_abi.cpp.
+INPUT                  = groups.dox \
+                         ../include/pineforge/pineforge.h \
+                         ../include/pineforge \
+                         ../examples/native \
+                         ../src/source \
+                         ../src/compat \
                          pages/index.md \
                          pages/getting-started.md \
                          pages/install.md \
@@ -112,13 +140,19 @@ INPUT                  = ../include/pineforge/pineforge.h \
                          pages/examples-magnifier.md \
                          pages/examples-rust.md \
                          pages/abi-stability.md \
-                         pages/coverage.md
+                         pages/coverage.md \
+                         pages/exit-leg-activation.md \
+                         pages/quantity-intent.md \
+                         native-settlement.md \
+                         design \
+                         adr
 
 USE_MDFILE_AS_MAINPAGE = pages/index.md
 INPUT_ENCODING         = UTF-8
-FILE_PATTERNS          = *.h *.hpp *.md
-RECURSIVE              = NO
-EXCLUDE_PATTERNS       =
+FILE_PATTERNS          = *.h *.hpp *.c *.cpp *.md *.dox
+RECURSIVE              = YES
+EXCLUDE                = ../include/pineforge/version.h.in
+EXCLUDE_PATTERNS       = */site/* */_theme/* */build*/*
 EXCLUDE_SYMBOLS        =
 
 EXAMPLE_PATH           = ../tutorial \

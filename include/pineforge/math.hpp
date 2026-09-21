@@ -29,8 +29,8 @@ inline double pine_random(double lo, uint32_t call_site, double hi, uint32_t see
 namespace math {
 
 /// Rolling sum over the last `length` non-na sources for PineScript
-/// `math.sum(source, length)` (not a `ta.*` builtin). Returns na until seeded,
-/// then holds the seeded sum on na-input bars.
+/// `math.sum(source, length)` (not one of the `ta` builtins). Returns na
+/// until seeded, then holds the seeded sum on na-input bars.
 class Sum {
     KahanWindowSum window_;   // TradingView's sliding-window arithmetic (window_sum.hpp)
     int length_;

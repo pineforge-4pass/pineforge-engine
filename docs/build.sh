@@ -41,8 +41,44 @@ fi
 echo "==> Building docs for PineForge $VERSION"
 
 # 3. Run doxygen with PROJECT_NUMBER injected.
+#
+# Through a config FILE, not `doxygen -`: doxygen 1.18 aborts with a bus error
+# on some configurations read from stdin, and the file form costs nothing.
 rm -rf site
-( cat Doxyfile; echo "PROJECT_NUMBER = $VERSION" ) | doxygen -
+mkdir -p site
+CONFIG="$(mktemp "${TMPDIR:-/tmp}/pineforge-doxyfile.XXXXXX")"
+trap 'rm -f "$CONFIG"' EXIT
+{ cat Doxyfile; echo "PROJECT_NUMBER = $VERSION"; } > "$CONFIG"
+doxygen "$CONFIG"
+
+# 3b. The scoped warning gate (R5 lane L14-A).
+#
+# Doxygen has one global WARN_AS_ERROR, so FAIL_ON_WARNINGS would let a stale
+# comment in a legacy Pine-adapter header stop the site from building. The
+# guarded set is the surface this project asks a new contributor to read: the
+# kernel / native API headers, the C API header, the C ABI header, the layer
+# map and the examples. A warning there is an error; anywhere else it is
+# printed, counted, and left for the page lanes.
+GUARDED='include/pineforge/native_host\.hpp|include/pineforge/native_run_spec\.hpp'
+GUARDED="$GUARDED"'|include/pineforge/native_order\.hpp|include/pineforge/native_order_identity\.hpp'
+GUARDED="$GUARDED"'|include/pineforge/native_toolkit\.hpp|include/pineforge/native_c_api\.h'
+GUARDED="$GUARDED"'|include/pineforge/pineforge\.h|docs/groups\.dox|examples/native/'
+
+LOG="site/doxygen-warnings.log"
+TOTAL=0
+if [[ -f "$LOG" ]]; then
+    TOTAL="$(grep -c 'warning:' "$LOG" || true)"
+fi
+echo "==> Doxygen warnings: $TOTAL"
+if [[ -f "$LOG" ]] && grep -E "$GUARDED" "$LOG" | grep -q 'warning:'; then
+    echo "==> FAIL: a warning in the guarded public surface" >&2
+    grep -E "$GUARDED" "$LOG" | grep 'warning:' >&2
+    exit 1
+fi
+if [[ "$TOTAL" != "0" ]]; then
+    echo "==> unguarded warnings (page lanes L14-B / L14-C own these):"
+    grep 'warning:' "$LOG" || true
+fi
 
 # 4. Copy a default favicon if the user hasn't shipped one.
 if [[ ! -f site/html/favicon.png ]] && [[ -f _theme/favicon.png ]]; then

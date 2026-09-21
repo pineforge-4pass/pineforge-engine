@@ -122,7 +122,7 @@ Everything here is one call: `submit(Request)` native_host.hpp:876, or
 | `strategy.equity` | `native_marked_equity(mark)` native_host.hpp:913 | |
 | `strategy.closedtrades`, `strategy.closedtrades.*` | `closed_trade_count()` / `closed_trade(i)` engine.hpp:2353-2354, a `Trade` row; C: `pf_report_t::trades` (`pf_trade_t`) plus `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` / `_entry_incarnation` pineforge.h:1043-1089 | Field by field in [Open and closed trades](@ref pine_to_native_map_trades). `report_trade_count()` / `get_report_trade(i)` engine.hpp:2363-2366 span the same rows followed by the range-end rows. |
 | `strategy.netprofit`, equity curve, drawdown | partial — `fill_report` engine.hpp:2388 | The trade list and trade statistics are filled; for a bare native host the **equity curve is empty** (the recorders are protected, engine.hpp:2386-2412) so equity metrics degenerate silently engine_metrics.cpp:168, and a position still open at the end has no range-end row engine_run.cpp:191. **Lane L2**. |
-| `strategy.opentrades`, `strategy.opentrades.*` | `native_open_lots(mark)` native_host.hpp:912 → one `NativeOpenLot` native_host.hpp:255 per open physical lot; C: `strategy_native_open_lot_count_v1(s, mark)` / `strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:1510-1518 → `pf_native_open_lot_v1` native_c_api.h:807 | Owning snapshot of the book lot by lot, oldest first, marked at the price you pass (Pine marks at the current `close`; pass the bar's close in `on_native_bar`, the fill price in `on_native_applied`, the print in `on_native_tick`). Observation only: it moves no fill, no hash and no row. Field by field in [Open and closed trades](@ref pine_to_native_map_trades). |
+| `strategy.opentrades`, `strategy.opentrades.*` | `native_open_lots(mark)` native_host.hpp:912 → one `NativeOpenLot` native_host.hpp:255 per open physical lot; C: `strategy_native_open_lot_count_v1(s, mark)` / `strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:1545-1553 → `pf_native_open_lot_v1` native_c_api.h:807 | Owning snapshot of the book lot by lot, oldest first, marked at the price you pass (Pine marks at the current `close`; pass the bar's close in `on_native_bar`, the fill price in `on_native_applied`, the print in `on_native_tick`). Observation only: it moves no fill, no hash and no row. Field by field in [Open and closed trades](@ref pine_to_native_map_trades). |
 
 ### Open and closed trades {#pine_to_native_map_trades}
 
@@ -135,7 +135,7 @@ name a lot in a later `BindOpening` or match it to the closed row it becomes.
 `NativeOpenLot` native_host.hpp:255 per open physical lot, in book order
 (`physical_position().lot_count` rows). The C twin is
 `strategy_native_open_lot_count_v1(s, mark)` then
-`strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:1510-1518 into a
+`strategy_native_open_lot_get_v1(s, i, &row)` native_c_api.h:1545-1553 into a
 `pf_native_open_lot_v1` native_c_api.h:807, whose two strings borrow the
 snapshot until the next count call. `mark` is the price the three marked
 fields are computed at; Pine's builtins mark at the current `close`.

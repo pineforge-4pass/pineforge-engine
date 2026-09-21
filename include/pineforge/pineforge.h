@@ -1172,31 +1172,31 @@ PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz);
  *  ``session.ismarket`` / ``time(session)`` predicates. Defaults to "UTC"
  *  (crypto). Distinct from #strategy_set_chart_timezone — the chart TZ
  *  drives wall-clock builtins and intraday-cap day rollover; this drives
- *  session membership. `NULL` is ignored. Call before #run_backtest*. */
+ *  session membership. `NULL` is ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz);
 
 /** Set the symbol's session string (e.g. "0930-1600:23456", default
  *  "24x7"). Feeds ``session.ismarket`` / ``time(session)``. `NULL`
- *  ignored. Call before #run_backtest*. */
+ *  ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session);
 
 /** Set the instrument class (``syminfo.type``: "forex", "stock", "crypto",
  *  "futures", "index", "fund", "cfd", ...; default "crypto"). Scripts branch
  *  on it for instrument conventions (e.g. the forex pip size). `NULL` /
- *  empty ignored. Call before #run_backtest*. */
+ *  empty ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type);
 
-/** Set one of the remaining string ``syminfo.*`` members by Pine member
+/** Set one of the remaining string members of ``syminfo`` by Pine member
  *  name: "ticker", "tickerid", "currency", "basecurrency", "description",
  *  "volumetype" (and "type"). Returns 0 when set, -1 for an unknown key,
- *  empty value or NULL. Call before #run_backtest*. */
+ *  empty value or NULL. Call before #run_backtest / #run_backtest_full. */
 PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
                                        const char* value);
 
 /** Set the instrument tick size (``syminfo.mintick``, default 0.01). Drives the
  *  directional stop-entry snap and ``slippage = N*mintick`` economics. Set
  *  per-instrument (e.g. 0.25 for ES, 0.00001 for FX). Non-positive ignored.
- *  Call before #run_backtest*. */
+ *  Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
 
 /** Set the instrument point value (``syminfo.pointvalue``, default 1.0) — the
@@ -1204,13 +1204,13 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  PnL and MFE/MAE, open profit / mark-to-market equity (and the drawdown /
  *  runup extremes), percent-of-equity and cash position sizing, percent
  *  commission notionals, and the margin admission check. Set per-instrument
- *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest*. */
+ *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
 /** Inject a fundamental/exchange metadata value by Pine member name
  *  (e.g. "shares_outstanding_total", "target_price_average"). These have
  *  no OHLCV source; reads of un-injected members return na. Call before
- *  #run_backtest*. */
+ *  #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
@@ -1290,7 +1290,7 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
  *
  *  Returns an empty string when the run completed normally, or `NULL`
  *  only when `s` itself is `NULL`. The pointer is owned by the engine
- *  and remains valid until the next #run_backtest* call (which clears
+ *  and remains valid until the next #run_backtest / #run_backtest_full call (which clears
  *  the captured error before it begins).
  *
  *  The runtime catches every `std::exception` derivative inside the

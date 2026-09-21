@@ -36,8 +36,8 @@ inline namespace native_order_v6 {
 using Flatten = execution::Flatten;
 using Transact = order_action::Transact;
 
-// A host-maintained, run-scoped roster identity.  Zero is invalid and is
-// never allocated by WorkingRequestCore.
+/// A host-maintained, run-scoped roster identity.  Zero is invalid and is
+/// never allocated by WorkingRequestCore.
 struct CohortHandle {
     std::uint64_t value = 0;
 };
@@ -51,8 +51,8 @@ inline bool operator<(CohortHandle left, CohortHandle right) noexcept {
     return left.value < right.value;
 }
 
-// Exact target exposure for an explicit reversal request. This is distinct
-// from execution::ReverseTo, which is the transient resolved execution plan.
+/// Exact target exposure for an explicit reversal request. This is distinct
+/// from execution::ReverseTo, which is the transient resolved execution plan.
 struct ReverseTo {
     double signed_units = 0.0;
 };
@@ -64,19 +64,19 @@ struct HostSized {
     std::optional<Side> side;
 };
 
-// Resolved host sizing normally remains subject to the run's quantity grid.
-// A host may instead authenticate literal units for a pure reduction; the
-// consumer still proves that the positive quantity is representable within
-// the selected exposure before it can reach settlement.
+/// Resolved host sizing normally remains subject to the run's quantity grid.
+/// A host may instead authenticate literal units for a pure reduction; the
+/// consumer still proves that the positive quantity is representable within
+/// the selected exposure before it can reach settlement.
 enum class ExecutionGridPolicy : std::uint8_t {
     SnapToGrid = 0,
     ExplicitUnits = 1,
 };
 
-// Native sizing bases (L3).  The kernel resolves them into units at the
-// sizing point.  A source adapter lowers its own declaration-level default
-// quantity onto them and keeps only its rounding and admission quirks
-// (R5 R2); a host that owns its whole quantity still emits HostSized.
+/// Native sizing bases (L3).  The kernel resolves them into units at the
+/// sizing point.  A source adapter lowers its own declaration-level default
+/// quantity onto them and keeps only its rounding and admission quirks
+/// (R5 R2); a host that owns its whole quantity still emits HostSized.
 struct CashValue {
     double cash = 0.0;                 // account currency
 };
@@ -85,81 +85,81 @@ struct EquityFraction {
 };
 using SizeBasis = std::variant<CashValue, EquityFraction>;
 
-// AtMatch resolves the basis at the matching candidate; AtAcceptance freezes
-// the resolved units when the request is accepted.
+/// AtMatch resolves the basis at the matching candidate; AtAcceptance freezes
+/// the resolved units when the request is accepted.
 enum class SizeTime : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
 
-// WHICH price the basis is converted at. This is the generic "size against the
-// expected fill price" rule; it names no source language.
-//
-// Resolved (today's behaviour) uses the price the kernel would otherwise
-// settle at: the candidate's default resolved price for AtMatch, the raw
-// acceptance-point price for AtAcceptance.
-//
-// Signal is the decision-point price at placement -- the current bar's close,
-// or the last print, at submit -- carried to the expected market fill: it is
-// adjusted by the run's slippage for the request's own side
-// (price +/- slippage_ticks * price_tick) and then rounded onto the run's
-// price grid when NativeRunSpec::price_grid is on (HalfUp is the nearest
-// tick; NativePriceGrid::None leaves it unrounded). It is frozen when the
-// request is accepted, so it composes with SizeTime::AtAcceptance and, with
-// SizeTime::AtMatch, the basis still converts at that frozen signal price at
-// every later candidate. A Signal request accepted outside a decision point
-// has no price to freeze and stays unresolvable.
-//
-// SignalOnTick is the same decision-point rule measured on the INSTRUMENT's
-// own tick ladder (NativeRunSpec::price_tick) instead of the run's fill grid:
-// the decision price is rounded onto the ladder (nearest tick, ties away from
-// zero), carried to the expected fill by the side's tick slippage, and rounded
-// onto the ladder again. Two rulings are folded into it, both generic:
-//
-//   * price_tick is the instrument's own resolution and the run already
-//     declares it as the slippage multiplier, so a price the market PRINTS
-//     lives on that ladder whether or not the run also quantizes the prices it
-//     BOOKS. NativeRunSpec::price_grid governs fills; it does not govern what
-//     a signal was worth. A run that books unquantized fills can therefore
-//     still size against the printed price, which Signal cannot express.
-//   * the ladder is applied BEFORE the slippage, not only after. Slippage is
-//     a whole number of ticks, so it carries a ladder price to another ladder
-//     price: pre-rounding makes `round(p) +/- n*tick` exact and leaves the
-//     second rounding a pure binary64 re-normalization, where rounding only
-//     after composes two different quantizations of the same print.
-//
-// Resolved and Signal are unchanged by this alternative, so every established
-// Sized resolution keeps its value.
+/// WHICH price the basis is converted at. This is the generic "size against the
+/// expected fill price" rule; it names no source language.
+///
+/// Resolved (today's behaviour) uses the price the kernel would otherwise
+/// settle at: the candidate's default resolved price for AtMatch, the raw
+/// acceptance-point price for AtAcceptance.
+///
+/// Signal is the decision-point price at placement -- the current bar's close,
+/// or the last print, at submit -- carried to the expected market fill: it is
+/// adjusted by the run's slippage for the request's own side
+/// (price +/- slippage_ticks * price_tick) and then rounded onto the run's
+/// price grid when NativeRunSpec::price_grid is on (HalfUp is the nearest
+/// tick; NativePriceGrid::None leaves it unrounded). It is frozen when the
+/// request is accepted, so it composes with SizeTime::AtAcceptance and, with
+/// SizeTime::AtMatch, the basis still converts at that frozen signal price at
+/// every later candidate. A Signal request accepted outside a decision point
+/// has no price to freeze and stays unresolvable.
+///
+/// SignalOnTick is the same decision-point rule measured on the INSTRUMENT's
+/// own tick ladder (NativeRunSpec::price_tick) instead of the run's fill grid:
+/// the decision price is rounded onto the ladder (nearest tick, ties away from
+/// zero), carried to the expected fill by the side's tick slippage, and rounded
+/// onto the ladder again. Two rulings are folded into it, both generic:
+///
+///   * price_tick is the instrument's own resolution and the run already
+///     declares it as the slippage multiplier, so a price the market PRINTS
+///     lives on that ladder whether or not the run also quantizes the prices it
+///     BOOKS. NativeRunSpec::price_grid governs fills; it does not govern what
+///     a signal was worth. A run that books unquantized fills can therefore
+///     still size against the printed price, which Signal cannot express.
+///   * the ladder is applied BEFORE the slippage, not only after. Slippage is
+///     a whole number of ticks, so it carries a ladder price to another ladder
+///     price: pre-rounding makes `round(p) +/- n*tick` exact and leaves the
+///     second rounding a pure binary64 re-normalization, where rounding only
+///     after composes two different quantizations of the same print.
+///
+/// Resolved and Signal are unchanged by this alternative, so every established
+/// Sized resolution keeps its value.
 enum class SizePrice : std::uint8_t { Resolved = 0, Signal = 1, SignalOnTick = 2 };
 
-// A kernel-sized opening.  units = cash / (price * point_value * fx), where
-// cash is the basis value or fraction * marked equity, and price is the
-// sizing-point price SizePrice names.  A host override of
-// resolve_execution_terms still has the last word: it sees the kernel-resolved
-// units as the facts' RemainingUnits and may return its own.
-//
-// SizeTime chooses WHEN the basis is resolved, SizePrice chooses WHICH price
-// it converts at, and the two compose.  Either way the request reaches the
-// candidate with a deferred quantity and exactly one terms pass: the kernel
-// resolves (or republishes the acceptance-frozen) units, publishes them as the
-// facts' RemainingUnits before resolve_execution_terms and
-// validate_execution_precommit run, and uses the host's units when the host
-// returns any.  An acceptance-time quantity is additionally an admission input
-// at placement, so an opening the run cannot admit is
-// RequestRejectReason::PlacementAdmission at submit rather than a rejected
-// candidate later.
+/// A kernel-sized opening.  units = cash / (price * point_value * fx), where
+/// cash is the basis value or fraction * marked equity, and price is the
+/// sizing-point price SizePrice names.  A host override of
+/// resolve_execution_terms still has the last word: it sees the kernel-resolved
+/// units as the facts' RemainingUnits and may return its own.
+///
+/// SizeTime chooses WHEN the basis is resolved, SizePrice chooses WHICH price
+/// it converts at, and the two compose.  Either way the request reaches the
+/// candidate with a deferred quantity and exactly one terms pass: the kernel
+/// resolves (or republishes the acceptance-frozen) units, publishes them as the
+/// facts' RemainingUnits before resolve_execution_terms and
+/// validate_execution_precommit run, and uses the host's units when the host
+/// returns any.  An acceptance-time quantity is additionally an admission input
+/// at placement, so an opening the run cannot admit is
+/// RequestRejectReason::PlacementAdmission at submit rather than a rejected
+/// candidate later.
 struct Sized {
     Side side = Side::Long;
     SizeBasis basis{};
     SizeTime time = SizeTime::AtMatch;
-    // Which price the basis converts at; see SizePrice. Appended after `time`
-    // because Sized has no positional aggregate initializer outside tests that
-    // stop at the basis.
+    /// Which price the basis converts at; see SizePrice. Appended after `time`
+    /// because Sized has no positional aggregate initializer outside tests that
+    /// stop at the basis.
     SizePrice price = SizePrice::Resolved;
-    // SnapToGrid floors the resolved units onto the run's quantity grid.
-    // ExplicitUnits keeps the literal quotient, which the ordinary on-grid
-    // terms gate then refuses when a grid is configured and the quotient is
-    // off it; the two are identical on an ungridded run.
+    /// SnapToGrid floors the resolved units onto the run's quantity grid.
+    /// ExplicitUnits keeps the literal quotient, which the ordinary on-grid
+    /// terms gate then refuses when a grid is configured and the quotient is
+    /// off it; the two are identical on an ungridded run.
     ExecutionGridPolicy grid_policy = ExecutionGridPolicy::SnapToGrid;
-    // Divide the sizing cash by (1 + fee) when the run's fee kind is
-    // NativeFeeKind::Percent.  Every other fee kind is an exact no-op.
+    /// Divide the sizing cash by (1 + fee) when the run's fee kind is
+    /// NativeFeeKind::Percent.  Every other fee kind is an exact no-op.
     bool reserve_percent_fee = false;
 };
 
@@ -167,25 +167,25 @@ struct ExplicitUnits {
     double units = 0.0;
 };
 struct OwnerOpenedUnits {};
-// Gross claims the whole bound scope; NetOfSiblings first subtracts the units
-// already claimed by the live sibling reduces bound to that same scope.  The
-// keys are opaque request/owner handles, never source identifiers.
+/// Gross claims the whole bound scope; NetOfSiblings first subtracts the units
+/// already claimed by the live sibling reduces bound to that same scope.  The
+/// keys are opaque request/owner handles, never source identifiers.
 enum class ScopeClaim : std::uint8_t { Gross = 0, NetOfSiblings = 1 };
-// Which measurement of the bound scope the fraction is taken of. AtMatch (the
-// default) reads the scope as it stands at the matching candidate.
-// AtAcceptance freezes the scope SIZE when the request is accepted -- the
-// placement-time live basis -- so two 50 % siblings on one 10-unit lot both
-// claim 5 under Gross even after the first has already executed. NetOfSiblings
-// then subtracts the live sibling claims from that frozen basis.
+/// Which measurement of the bound scope the fraction is taken of. AtMatch (the
+/// default) reads the scope as it stands at the matching candidate.
+/// AtAcceptance freezes the scope SIZE when the request is accepted -- the
+/// placement-time live basis -- so two 50 % siblings on one 10-unit lot both
+/// claim 5 under Gross even after the first has already executed. NetOfSiblings
+/// then subtracts the live sibling claims from that frozen basis.
 enum class ScopeBasis : std::uint8_t { AtMatch = 0, AtAcceptance = 1 };
-// A fraction in (0, 1] of the bound scope, resolved at the matching candidate.
-// The resolution is units = scope * fraction, one binary64 multiplication: a
-// caller that spells its size as a percent converts percent -> fraction
-// itself, so no second rounding step is introduced here.
+/// A fraction in (0, 1] of the bound scope, resolved at the matching candidate.
+/// The resolution is units = scope * fraction, one binary64 multiplication: a
+/// caller that spells its size as a percent converts percent -> fraction
+/// itself, so no second rounding step is introduced here.
 struct ScopeFraction {
     double fraction = 1.0;
     ScopeClaim claim = ScopeClaim::Gross;
-    // Appended last so every existing aggregate initializer keeps its meaning.
+    /// Appended last so every existing aggregate initializer keeps its meaning.
     ScopeBasis basis = ScopeBasis::AtMatch;
 };
 using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits, ScopeFraction>;
@@ -195,9 +195,9 @@ struct Reduce {
 using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized, Sized>;
 
 struct Market {};
-// `fill_through` makes the limit a touch trigger (market-if-touched): the
-// level still gates when the request becomes executable, but its fill is not
-// bounded by the level, so slippage may carry it past the level.
+/// `fill_through` makes the limit a touch trigger (market-if-touched): the
+/// level still gates when the request becomes executable, but its fill is not
+/// bounded by the level, so slippage may carry it past the level.
 struct Limit {
     double price = 0.0;
     bool fill_through = false;
@@ -209,16 +209,16 @@ struct StopLimit {
     double stop = 0.0;
     double limit = 0.0;
 };
-// Trail offset spelled in price ticks instead of a price distance. The
-// acceptance path resolves it against the run's price tick, writes the
-// product into Trail::offset and clears the spelling, so a stored definition
-// always carries a plain price distance and can never resolve twice.
+/// Trail offset spelled in price ticks instead of a price distance. The
+/// acceptance path resolves it against the run's price tick, writes the
+/// product into Trail::offset and clears the spelling, so a stored definition
+/// always carries a plain price distance and can never resolve twice.
 struct TrailTicks {
     double ticks = 0.0;
 };
-// offset is a price distance: the stop rides `offset` behind the running
-// best. Zero is legal and means "ride the best": the exit is the first
-// adverse move past it. Negative and nonfinite offsets are rejected.
+/// offset is a price distance: the stop rides `offset` behind the running
+/// best. Zero is legal and means "ride the best": the exit is the first
+/// adverse move past it. Negative and nonfinite offsets are rejected.
 struct Trail {
     double offset = 0.0;
     std::optional<double> arm_price;
@@ -226,31 +226,31 @@ struct Trail {
 };
 using Trigger = std::variant<Market, Limit, Stop, StopLimit, Trail>;
 
-// How a materialized anchored level is snapped onto the run's price tick
-// ladder (NativeRunSpec::price_tick). Raw keeps `fill + offset` exactly,
-// which is the established behaviour. HalfUp is the nearest tick with ties
-// away from zero. Directional rounds toward the price region the resting leg
-// needs, relative to the leg's trigger kind and side exactly as
-// NativeGridRounding documents it: a buy limit down and a sell limit up, a
-// stop the other way; a trail arm threshold is reached from the favourable
-// side like a limit and rounds like one. Either rounding needs a positive
-// price tick, checked at acceptance exactly like a tick-spelled offset. This
-// is a generic instrument grid: a source language's own trigger projection
-// is not spelled here (a host restates the level through its arm hook).
+/// How a materialized anchored level is snapped onto the run's price tick
+/// ladder (NativeRunSpec::price_tick). Raw keeps `fill + offset` exactly,
+/// which is the established behaviour. HalfUp is the nearest tick with ties
+/// away from zero. Directional rounds toward the price region the resting leg
+/// needs, relative to the leg's trigger kind and side exactly as
+/// NativeGridRounding documents it: a buy limit down and a sell limit up, a
+/// stop the other way; a trail arm threshold is reached from the favourable
+/// side like a limit and rounds like one. Either rounding needs a positive
+/// price tick, checked at acceptance exactly like a tick-spelled offset. This
+/// is a generic instrument grid: a source language's own trigger projection
+/// is not spelled here (a host restates the level through its arm hook).
 enum class NativeAnchorRounding : std::uint8_t {
     Raw = 0,
     HalfUp = 1,
     Directional = 2,
 };
 
-// Where a request's trigger level comes from. Absolute is the level written
-// in the trigger itself. FromOwnerFill defers it to the owner's fill: the
-// level becomes fill + offset when the owner arms the request, so a bracket
-// leg can be placed before its parent has a price. offset is signed (adverse
-// is negative) and is spelled in price ticks when `ticks` is set; acceptance
-// resolves a tick spelling exactly like TrailTicks, in place, once. The
-// materialized level is then snapped per `rounding`, which is appended last
-// so every existing aggregate initializer keeps its meaning.
+/// Where a request's trigger level comes from. Absolute is the level written
+/// in the trigger itself. FromOwnerFill defers it to the owner's fill: the
+/// level becomes fill + offset when the owner arms the request, so a bracket
+/// leg can be placed before its parent has a price. offset is signed (adverse
+/// is negative) and is spelled in price ticks when `ticks` is set; acceptance
+/// resolves a tick spelling exactly like TrailTicks, in place, once. The
+/// materialized level is then snapped per `rounding`, which is appended last
+/// so every existing aggregate initializer keeps its meaning.
 struct Absolute {};
 struct FromOwnerFill {
     double offset = 0.0;
@@ -259,11 +259,11 @@ struct FromOwnerFill {
 };
 using TriggerAnchor = std::variant<Absolute, FromOwnerFill>;
 
-// Replacement behaviour that is not expressible in the successor request.
-// retain_trigger_state carries the predecessor's live trigger state (a
-// tracking trail's best, an already active stop) into the successor instead
-// of restarting it; predecessor and successor must hold the same trigger
-// alternative.
+/// Replacement behaviour that is not expressible in the successor request.
+/// retain_trigger_state carries the predecessor's live trigger state (a
+/// tracking trail's best, an already active stop) into the successor instead
+/// of restarting it; predecessor and successor must hold the same trigger
+/// alternative.
 struct ReplaceOptions {
     bool retain_trigger_state = false;
 };
@@ -274,56 +274,56 @@ struct PointBudget {
 };
 using Capacity = std::variant<ImmediateRemaining, PointBudget>;
 
-// Whether an owner-related request that arms is a working order before its
-// arm. Working (the default) is the established book: the request is listed
-// by native_working_requests() from acceptance on. PendingUntilArmed keeps
-// it out of that enumeration until its ArmedEvent; it is still a live
-// request the whole time -- accepted, addressable by handle (replace,
-// cancel, trail_state), counted by cancel_all / cancel_where, and folded
-// into the continuation identity -- and it never matches before the arm
-// under either value. Visibility governs enumeration, not addressing.
+/// Whether an owner-related request that arms is a working order before its
+/// arm. Working (the default) is the established book: the request is listed
+/// by native_working_requests() from acceptance on. PendingUntilArmed keeps
+/// it out of that enumeration until its ArmedEvent; it is still a live
+/// request the whole time -- accepted, addressable by handle (replace,
+/// cancel, trail_state), counted by cancel_all / cancel_where, and folded
+/// into the continuation identity -- and it never matches before the arm
+/// under either value. Visibility governs enumeration, not addressing.
 enum class NativeArmVisibility : std::uint8_t {
     Working = 0,
     PendingUntilArmed = 1,
 };
 
-// When an armed request may first match. The arm happens inside its owner's
-// fill settlement, at the owner's fill print. AtArmPrint (the default) is the
-// established book: the armed request is a candidate at that very cursor, so
-// a level the fill print already satisfies matches at the print. AfterArmPrint
-// gives the armed request the birth rule of a request submitted from the
-// owner's fill callback: on the driver point that armed it, it sees only the
-// path after the print -- a level the print already satisfies does not match
-// there, a later crossing on that point still does -- and from the next
-// driver point on it is an ordinary working request. It governs the level
-// test of a priced trigger (limit, stop, stop-limit, trail arm); a market
-// trigger has no level and is unaffected. Both are broker models: a
-// contingent child that enters the book after its parent's trade cannot
-// trade on that print, a simulated bracket commonly may.
+/// When an armed request may first match. The arm happens inside its owner's
+/// fill settlement, at the owner's fill print. AtArmPrint (the default) is the
+/// established book: the armed request is a candidate at that very cursor, so
+/// a level the fill print already satisfies matches at the print. AfterArmPrint
+/// gives the armed request the birth rule of a request submitted from the
+/// owner's fill callback: on the driver point that armed it, it sees only the
+/// path after the print -- a level the print already satisfies does not match
+/// there, a later crossing on that point still does -- and from the next
+/// driver point on it is an ordinary working request. It governs the level
+/// test of a priced trigger (limit, stop, stop-limit, trail arm); a market
+/// trigger has no level and is unaffected. Both are broker models: a
+/// contingent child that enters the book after its parent's trade cannot
+/// trade on that print, a simulated bracket commonly may.
 enum class NativeArmFirstMatch : std::uint8_t {
     AtArmPrint = 0,
     AfterArmPrint = 1,
 };
 
-// What an armed CLOSING request (Reduce, Flatten, a HostSized close) closes.
-// OwnerLot (the default) is the established relation: the lot its owner's
-// fill opened, and nothing a later add brings. Book binds it, at the arm, to
-// the whole position that fill left -- the very book authority an
-// Independent close submitted from the owner's fill callback acquires -- so
-// a protective leg placed with its entry covers later adds and settles
-// through the book like any other close. A HostSized close may wait for its
-// owner only under Book: the owner-lot relation sizes from the units the
-// owner opened, whereas a book close is sized by the host at the match.
-// A waiting transaction closes nothing, so it must keep OwnerLot.
+/// What an armed CLOSING request (Reduce, Flatten, a HostSized close) closes.
+/// OwnerLot (the default) is the established relation: the lot its owner's
+/// fill opened, and nothing a later add brings. Book binds it, at the arm, to
+/// the whole position that fill left -- the very book authority an
+/// Independent close submitted from the owner's fill callback acquires -- so
+/// a protective leg placed with its entry covers later adds and settles
+/// through the book like any other close. A HostSized close may wait for its
+/// owner only under Book: the owner-lot relation sizes from the units the
+/// owner opened, whereas a book close is sized by the host at the match.
+/// A waiting transaction closes nothing, so it must keep OwnerLot.
 enum class NativeArmScope : std::uint8_t {
     OwnerLot = 0,
     Book = 1,
 };
 
 struct Independent {};
-// The one owner relation that arms (the ArmedEvent). `visibility`, then
-// `first_match`, then `scope` are appended last so every existing {parent},
-// {parent, visibility} initializer keeps its meaning.
+/// The one owner relation that arms (the ArmedEvent). `visibility`, then
+/// `first_match`, then `scope` are appended last so every existing {parent},
+/// {parent, visibility} initializer keeps its meaning.
 struct WaitForApplied {
     RequestHandle parent;
     NativeArmVisibility visibility = NativeArmVisibility::Working;
@@ -352,14 +352,14 @@ struct Member {
 };
 using Group = std::variant<NoGroup, Member>;
 
-// Aggregate field order keeps market construction:
-//   Request{Transact{1.0}, "buy", "comment"}
-//   Request{Flatten{}, "flat", ""}
-//   Request{Reduce{ExplicitUnits{3}}, "close", ""}
-// New fields default to Market / ImmediateRemaining / Independent / NoGroup.
-// market_request() converts a physical execution::Action (explicit Reduce
-// units only) into that same market Request. Host market-only methods must
-// reject nondefault extras; they must not drop them.
+/// Aggregate field order keeps market construction:
+///   Request{Transact{1.0}, "buy", "comment"}
+///   Request{Flatten{}, "flat", ""}
+///   Request{Reduce{ExplicitUnits{3}}, "close", ""}
+/// New fields default to Market / ImmediateRemaining / Independent / NoGroup.
+/// market_request() converts a physical execution::Action (explicit Reduce
+/// units only) into that same market Request. Host market-only methods must
+/// reject nondefault extras; they must not drop them.
 struct Request {
     OrderIntent intent{};
     std::string label{};
@@ -428,8 +428,8 @@ struct RemainingUnits {
     double q = 0.0;
 };
 struct RemainingDeferred {};
-// A dynamic cohort has no currently live member.  This is a live deferral,
-// not a terminal receipt: the consumer retries it at the next candidate.
+/// A dynamic cohort has no currently live member.  This is a live deferral,
+/// not a terminal receipt: the consumer retries it at the next candidate.
 struct NoTarget {};
 using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,
                                RemainingDeferred, NoTarget>;
@@ -476,8 +476,8 @@ struct OpeningClose {
     Side side = Side::Long;
     Enrollment enrollment;
 };
-// Immutable fixed cohort. Current physical liveness is observed, never stored
-// here; later fragments of an enrolled provenance remain authorized.
+/// Immutable fixed cohort. Current physical liveness is observed, never stored
+/// here; later fragments of an enrolled provenance remain authorized.
 struct OpeningsClose {
     std::vector<RequestHandle> openings;
     int64_t cycle = 0;
@@ -490,8 +490,8 @@ struct CohortClose {
 using Authority = std::variant<BookTransaction, Wait, ArmedTransaction, UnboundBookClose, BookClose,
                                OpeningClose, OpeningsClose, CohortClose>;
 
-// Native authorization receipt, converted to a call-local financial
-// SelectedOpeningSet only at the consumer's settlement boundary.
+/// Native authorization receipt, converted to a call-local financial
+/// SelectedOpeningSet only at the consumer's settlement boundary.
 struct SelectedExposure {
     int64_t cycle = 0;
     std::vector<uint64_t> incarnations;
@@ -557,10 +557,10 @@ struct TargetObservation {
     std::vector<OpeningObservation> openings;
 };
 
-// Who authored a request. Host is every request a host submits, replaces or
-// cancels, and it is the whole existing population: it folds nothing into the
-// continuation digest, so no established hash moves. KernelLiquidation marks
-// the margin model's own Reduce; KernelRisk is reserved for the risk lane.
+/// Who authored a request. Host is every request a host submits, replaces or
+/// cancels, and it is the whole existing population: it folds nothing into the
+/// continuation digest, so no established hash moves. KernelLiquidation marks
+/// the margin model's own Reduce; KernelRisk is reserved for the risk lane.
 enum class RequestOrigin : std::uint8_t {
     Host = 0,
     KernelLiquidation = 1,
@@ -572,7 +572,7 @@ struct RequestDefinition {
     Request request;
     Birth birth;
     std::optional<RequestHandle> predecessor;
-    // Appended last so every existing aggregate initializer keeps its meaning.
+    /// Appended last so every existing aggregate initializer keeps its meaning.
     RequestOrigin origin = RequestOrigin::Host;
 };
 using DefinitionRef = std::shared_ptr<const RequestDefinition>;
@@ -584,9 +584,9 @@ struct LiveRequest {
     TriggerState trigger_state = MarketReady{};
     Allowance allowance = AllowanceUnset{};
     PendingAdjustments pending = PendingNone{};
-    // Placement-time sizing measurements frozen from the accepting command
-    // context. Both stay empty for every request that did not ask to freeze
-    // one, and an empty optional folds nothing into the continuation digest.
+    /// Placement-time sizing measurements frozen from the accepting command
+    /// context. Both stay empty for every request that did not ask to freeze
+    /// one, and an empty optional folds nothing into the continuation digest.
     std::optional<double> sizing_units;   // SizeTime::AtAcceptance
     std::optional<double> sizing_scope;   // ScopeBasis::AtAcceptance
     std::optional<double> sizing_price;   // SizePrice::Signal / SignalOnTick
@@ -605,9 +605,9 @@ inline bool point_eligible(const LiveRequest& live,
     return point_eligible(live.birth(), point_ordinal, effective_time_ms);
 }
 
-// v2 exact binary64 grid: r=abs(q)/s, n=round(r) half away from zero, g=n*s.
-// Intermediates finite, 1<=n<=2^53, abs(abs(q)-g) <= 4*ulp(max(abs(q),abs(g)))
-// and < s/2. ulp is nextafter toward +inf. Does not rewrite q.
+/// v2 exact binary64 grid: r=abs(q)/s, n=round(r) half away from zero, g=n*s.
+/// Intermediates finite, 1<=n<=2^53, abs(abs(q)-g) <= 4*ulp(max(abs(q),abs(g)))
+/// and < s/2. ulp is nextafter toward +inf. Does not rewrite q.
 inline bool quantity_on_grid(double q, double step) noexcept {
     if (!std::isfinite(q) || !std::isfinite(step) || step <= 0.0) return false;
     const double abs_q = std::abs(q);
@@ -635,9 +635,9 @@ enum class RequestRejectReason : std::uint8_t {
     InvalidOwner = 4,
     InvalidQuantityBasis = 5,
     InvalidGroup = 6,
-    // A Sized{SizeTime::AtAcceptance} whose acceptance-resolved quantity does
-    // not pass the run's opening admission (allowed directions, max_abs_units,
-    // max_open_lots, initial margin) at the sizing price.
+    /// A Sized{SizeTime::AtAcceptance} whose acceptance-resolved quantity does
+    /// not pass the run's opening admission (allowed directions, max_abs_units,
+    /// max_open_lots, initial margin) at the sizing price.
     PlacementAdmission = 7,
 };
 
@@ -674,8 +674,8 @@ enum class MatchRejectReason : std::uint8_t {
     InvalidTerms = 6,
     NoOppositeExposure = 7,
     HostPrecommit = 8,
-    // An opening refused while the run spec's generic risk limits are
-    // blocking (L9). Reduces never reach this gate.
+    /// An opening refused while the run spec's generic risk limits are
+    /// blocking (L9). Reduces never reach this gate.
     RiskLimit = 9,
 };
 
@@ -720,8 +720,8 @@ enum class CancelReason : std::uint8_t {
     Group = 1,
     OwnerGone = 2,
     UnsupportedRelation = 3,
-    // A kernel-originated request the kernel itself withdrew: the liquidation
-    // level or its units moved, or the requirement is no longer breached.
+    /// A kernel-originated request the kernel itself withdrew: the liquidation
+    /// level or its units moved, or the requirement is no longer breached.
     Superseded = 4,
 };
 
@@ -968,13 +968,13 @@ struct ArmedEvent {
     std::optional<EventId> quantity_resolution;
 };
 
-// A kernel-issued liquidation that actually filled. It carries the margin
-// facts of that fill, so a host reconstructs the outcome without recomputing
-// the account: `mark` is the booked resolved price, `equity` and `required`
-// are the marked equity and the maintenance requirement of the SURVIVING book
-// at that price, `liquidation_price` is the level re-solved for what is left,
-// and `position_before` / `position_after` are the signed book on either side
-// of the reduction. `applied` names the ExecutionAppliedEvent that booked it.
+/// A kernel-issued liquidation that actually filled. It carries the margin
+/// facts of that fill, so a host reconstructs the outcome without recomputing
+/// the account: `mark` is the booked resolved price, `equity` and `required`
+/// are the marked equity and the maintenance requirement of the SURVIVING book
+/// at that price, `liquidation_price` is the level re-solved for what is left,
+/// and `position_before` / `position_after` are the signed book on either side
+/// of the reduction. `applied` names the ExecutionAppliedEvent that booked it.
 struct MarginCallEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -992,7 +992,7 @@ struct MarginCallEvent {
     const Request& request() const noexcept { return definition->request; }
 };
 
-// Which generic risk limit of NativeRunSpec::risk a NativeRiskEvent reports.
+/// Which generic risk limit of NativeRunSpec::risk a NativeRiskEvent reports.
 enum class RiskLimitKind : std::uint8_t {
     MaxDrawdown = 0,
     MaxIntradayLoss = 1,
@@ -1000,14 +1000,14 @@ enum class RiskLimitKind : std::uint8_t {
     MaxFillsPerDay = 3,
 };
 
-// One generic risk limit breaching (L9). It is not bound to a request: the
-// block it opens is an account fact, so this event carries no definition.
-// `limit` is the threshold in the unit the breach was measured in — account
-// currency for the two loss limits (a percent limit is already resolved
-// against its basis equity here), days or fills for the two counts — and
-// `observed` is the measured value that reached it. `day_ordinal` is the
-// risk day the breach happened on, on the spec's own day basis, and `cursor`
-// is the point it was measured at.
+/// One generic risk limit breaching (L9). It is not bound to a request: the
+/// block it opens is an account fact, so this event carries no definition.
+/// `limit` is the threshold in the unit the breach was measured in — account
+/// currency for the two loss limits (a percent limit is already resolved
+/// against its basis equity here), days or fills for the two counts — and
+/// `observed` is the measured value that reached it. `day_ordinal` is the
+/// risk day the breach happened on, on the spec's own day basis, and `cursor`
+/// is the point it was measured at.
 struct NativeRiskEvent {
     uint64_t ordinal = 0;
     RiskLimitKind kind = RiskLimitKind::MaxDrawdown;
@@ -1037,9 +1037,9 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   MarginCallEvent,
                                   NativeRiskEvent>;
 
-// Almost every prepared command yields one history event. Keep that ordinary
-// transactional payload inline; the overflow vector preserves the existing
-// arbitrary-length behavior for group/lifecycle plans that emit more events.
+/// Almost every prepared command yields one history event. Keep that ordinary
+/// transactional payload inline; the overflow vector preserves the existing
+/// arbitrary-length behavior for group/lifecycle plans that emit more events.
 class InlineCommandEvents {
 public:
     InlineCommandEvents() = default;
@@ -1133,30 +1133,30 @@ struct CommandContext {
     std::optional<OpeningObservation> opening;
     CommandSurface surface = CommandSurface::General;
     std::vector<OpeningObservation> openings;
-    // Kernel-resolved acceptance-time units for a Sized{AtAcceptance} request.
-    // The execution consumer owns the account facts, so it supplies them here;
-    // a producer that leaves it unset accepts the request with a size the
-    // matching path then reports as TermsUnresolved.  The accepted request
-    // carries the value in LiveRequest::sizing_units and still reaches the
-    // candidate with a deferred remaining, so the host keeps its one override
-    // pass.  Appended last so the existing positional aggregate initializers
-    // keep their meaning.
+    /// Kernel-resolved acceptance-time units for a Sized{AtAcceptance} request.
+    /// The execution consumer owns the account facts, so it supplies them here;
+    /// a producer that leaves it unset accepts the request with a size the
+    /// matching path then reports as TermsUnresolved.  The accepted request
+    /// carries the value in LiveRequest::sizing_units and still reaches the
+    /// candidate with a deferred remaining, so the host keeps its one override
+    /// pass.  Appended last so the existing positional aggregate initializers
+    /// keep their meaning.
     std::optional<double> sizing_units;
-    // The run's price tick, needed only to resolve a tick-spelled trail
-    // offset or trigger anchor. A tick spelling without a usable tick here is
-    // rejected rather than silently read as a price distance.
+    /// The run's price tick, needed only to resolve a tick-spelled trail
+    /// offset or trigger anchor. A tick spelling without a usable tick here is
+    /// rejected rather than silently read as a price distance.
     std::optional<double> price_tick;
-    // Placement-time sizing measurements the execution consumer owns, supplied
-    // only for the intent that asks for them. Appended last, exactly like
-    // sizing_units, so the existing positional aggregate initializers keep
-    // their meaning.
-    //
-    // sizing_scope: the bound scope's exposure at acceptance, for a
-    //   Reduce{ScopeFraction{ScopeBasis::AtAcceptance}}.
-    // sizing_price: the frozen signal price, for a Sized whose SizePrice is
-    //   Signal or SignalOnTick.
-    // sizing_admissible: false when the acceptance-resolved quantity of a
-    //   Sized{SizeTime::AtAcceptance} fails the run's placement admission.
+    /// Placement-time sizing measurements the execution consumer owns, supplied
+    /// only for the intent that asks for them. Appended last, exactly like
+    /// sizing_units, so the existing positional aggregate initializers keep
+    /// their meaning.
+    ///
+    /// sizing_scope: the bound scope's exposure at acceptance, for a
+    ///   Reduce{ScopeFraction{ScopeBasis::AtAcceptance}}.
+    /// sizing_price: the frozen signal price, for a Sized whose SizePrice is
+    ///   Signal or SignalOnTick.
+    /// sizing_admissible: false when the acceptance-resolved quantity of a
+    ///   Sized{SizeTime::AtAcceptance} fails the run's placement admission.
     std::optional<double> sizing_scope;
     std::optional<double> sizing_price;
     bool sizing_admissible = true;
@@ -1166,35 +1166,35 @@ struct EvaluationContext {
     MatchCursor cursor{};
     DriverEligibilityClass driver_class = DriverEligibilityClass::ObservedPrint;
     bool existing_matching_bit = false;
-    // Generic current-point delivery. At Open, the consumer sets this only for
-    // a market/immediate request born by the pre-open provider. On a continuous
-    // OHLC segment, it also admits a request born by an applied callback onto
-    // the unconsumed suffix. It is transient and never retained in a request.
+    /// Generic current-point delivery. At Open, the consumer sets this only for
+    /// a market/immediate request born by the pre-open provider. On a continuous
+    /// OHLC segment, it also admits a request born by an applied callback onto
+    /// the unconsumed suffix. It is transient and never retained in a request.
     bool pre_open_birth_eligible = false;
-    // Set only while resolving a CohortClose candidate.  It carries the
-    // physical side of the currently live selected roster and is not retained
-    // in a request definition.
+    /// Set only while resolving a CohortClose candidate.  It carries the
+    /// physical side of the currently live selected roster and is not retained
+    /// in a request definition.
     std::optional<Side> cohort_side;
 };
 
-// The one policy point of an anchored materialization. The core knows it
-// only as a callable over its own values: the leg's live row, the owner's
-// fill, the leg's side, the resolved offset (price units) and the kernel
-// level after the anchor rounding. It is consulted exactly once per
-// materialization, before the ArmedEvent is built, so the ArmedEvent and
-// every later reader see the installed level. A returned value is the level
-// to install (the kernel's representability check still applies and a
-// failure is the existing PreparationError path); nullopt keeps the kernel
-// level. An empty callable is exactly the pre-hook behaviour.
+/// The one policy point of an anchored materialization. The core knows it
+/// only as a callable over its own values: the leg's live row, the owner's
+/// fill, the leg's side, the resolved offset (price units) and the kernel
+/// level after the anchor rounding. It is consulted exactly once per
+/// materialization, before the ArmedEvent is built, so the ArmedEvent and
+/// every later reader see the installed level. A returned value is the level
+/// to install (the kernel's representability check still applies and a
+/// failure is the existing PreparationError path); nullopt keeps the kernel
+/// level. An empty callable is exactly the pre-hook behaviour.
 using AnchoredLevelResolver = std::function<std::optional<double>(
         const LiveRequest& leg, const ExecutionAppliedEvent& owner_fill, Side leg_side,
         double offset, double kernel_level)>;
 
-// What the consumer hands to prepare_owner_applied for an anchored leg's
-// materialization, the way acceptance receives CommandContext::price_tick.
-// price_tick is the ladder a rounded anchor snaps to; an anchor whose
-// rounding is Raw never reads it. resolve_level is the host's restatement,
-// carried as a value so the core stays host-free.
+/// What the consumer hands to prepare_owner_applied for an anchored leg's
+/// materialization, the way acceptance receives CommandContext::price_tick.
+/// price_tick is the ladder a rounded anchor snaps to; an anchor whose
+/// rounding is Raw never reads it. resolve_level is the host's restatement,
+/// carried as a value so the core stays host-free.
 struct ArmContext {
     std::optional<double> price_tick;
     AnchoredLevelResolver resolve_level;
@@ -1223,16 +1223,16 @@ struct ActivateTrail {
 using TriggerTransition = std::variant<BeginTrailTracking, ObserveTrailExtremum, ActivateStop,
                                        ActivateStopLimit, ActivateTrail>;
 
-// What the consumer hands to prepare_trigger under an opted-in price grid
-// (NativeRunSpec::price_grid == QuantizeFillsAndTriggers), the way acceptance
-// receives CommandContext::price_tick: the tick ladder and the rounding the
-// matcher tested the activation on. The core then re-validates the reached
-// print with the same grid arithmetic (L8b ruling: under that grid the
-// tick-quantized print IS the reached price, so a hit the matcher reports is
-// never refused), records the quantized print as the activation's reached
-// price, and keeps a trail's running best on the ladder. A default-constructed
-// value (no ladder) is exactly the raw compare and the raw print every
-// activation used before. Host-free: values only.
+/// What the consumer hands to prepare_trigger under an opted-in price grid
+/// (NativeRunSpec::price_grid == QuantizeFillsAndTriggers), the way acceptance
+/// receives CommandContext::price_tick: the tick ladder and the rounding the
+/// matcher tested the activation on. The core then re-validates the reached
+/// print with the same grid arithmetic (L8b ruling: under that grid the
+/// tick-quantized print IS the reached price, so a hit the matcher reports is
+/// never refused), records the quantized print as the activation's reached
+/// price, and keeps a trail's running best on the ladder. A default-constructed
+/// value (no ladder) is exactly the raw compare and the raw print every
+/// activation used before. Host-free: values only.
 struct ActivationGrid {
     double price_tick = 0.0;  // finite and positive when a ladder is in force
     bool half_up = true;      // nearest tick, ties away from zero; else directional
@@ -1240,8 +1240,8 @@ struct ActivationGrid {
 
 struct ExecutionProposal {
     MatchCursor cursor{};
-    // Carries the generic pre-open delivery authorization from the matching
-    // evaluation through the synchronous execution preparation.
+    /// Carries the generic pre-open delivery authorization from the matching
+    /// evaluation through the synchronous execution preparation.
     bool pre_open_birth_eligible = false;
     double raw_price = 0.0;
     double resolved_price = 0.0;
@@ -1332,9 +1332,9 @@ struct EligibilityFacts {
 
 struct CohortRoster {
     CohortHandle handle{};
-    // Canonical origin handles, ordered by origin incarnation rather than by
-    // host insertion order.  A successor is normalized to its predecessor
-    // root before entering this table.
+    /// Canonical origin handles, ordered by origin incarnation rather than by
+    /// host insertion order.  A successor is normalized to its predecessor
+    /// root before entering this table.
     std::vector<RequestHandle> origins;
 };
 
@@ -1357,9 +1357,9 @@ public:
     explicit WorkingRequestCore(RunIdentity identity);
     WorkingRequestCore(const WorkingRequestCore&) = delete;
     WorkingRequestCore& operator=(const WorkingRequestCore&) = delete;
-    // Move transfers the complete run. The source becomes empty/unbound;
-    // commands throw invalid_argument without mutation until reset rebinds it.
-    // Self move-assignment preserves the current run.
+    /// Move transfers the complete run. The source becomes empty/unbound;
+    /// commands throw invalid_argument without mutation until reset rebinds it.
+    /// Self move-assignment preserves the current run.
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
 
@@ -1375,15 +1375,15 @@ public:
     const LiveRequest* find_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
 
-    // Command-boundary roster maintenance.  A rejected add/remove records a
-    // durable generic receipt but never emits a market event.
+    /// Command-boundary roster maintenance.  A rejected add/remove records a
+    /// durable generic receipt but never emits a market event.
     CohortHandle cohort_open();
     void cohort_add(CohortHandle cohort, RequestHandle origin);
     void cohort_remove(CohortHandle cohort, RequestHandle origin);
     bool cohort_contains(CohortHandle cohort, const RequestHandle& opening) const;
 
-    // R1 producer convenience: prepare then install one command. Bound opening
-    // enrollment requires CommandContext observations via prepare_submit.
+    /// R1 producer convenience: prepare then install one command. Bound opening
+    /// enrollment requires CommandContext observations via prepare_submit.
     SubmitResult submit(const Request& request,
                         int64_t decision_time_ms,
                         uint64_t& next_order_incarnation,
@@ -1400,10 +1400,10 @@ public:
 
     CancelResult cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal);
 
-    // Consumer-only typed prepare/install. Prepare may reserve storage and
-    // invalidate live/history references; it does not change logical state.
-    // Tokens are move-only, bound to this instance/run/epoch, and do not
-    // survive another prepare/install, reset, or move.
+    /// Consumer-only typed prepare/install. Prepare may reserve storage and
+    /// invalidate live/history references; it does not change logical state.
+    /// Tokens are move-only, bound to this instance/run/epoch, and do not
+    /// survive another prepare/install, reset, or move.
     PreparedSubmit prepare_submit(const Request& request,
                                   const CommandContext& context,
                                   uint64_t& next_order_incarnation,
@@ -1415,8 +1415,8 @@ public:
                                     uint64_t& next_order_incarnation,
                                     uint64_t& next_timeline_ordinal,
                                     ReplaceOptions options = {});
-    // `reason` lets the kernel withdraw its own request under the durable
-    // Superseded receipt. Host cancels keep the default User reason.
+    /// `reason` lets the kernel withdraw its own request under the durable
+    /// Superseded receipt. Host cancels keep the default User reason.
     PreparedCancel prepare_cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal,
                                   CancelReason reason = CancelReason::User);
 
@@ -1428,8 +1428,8 @@ public:
                                                      const EvaluationContext& context,
                                                      const TargetObservation& observation,
                                                      uint64_t& next_timeline_ordinal);
-    // `grid` carries the run's activation grid (ActivationGrid); the default
-    // is the raw rule, so every existing caller keeps its meaning.
+    /// `grid` carries the run's activation grid (ActivationGrid); the default
+    /// is the raw rule, so every existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
                                                   const TriggerTransition& transition,
                                                   DriverEligibilityClass driver_class,
@@ -1461,24 +1461,24 @@ public:
                                                  const TermsResolvedInput& input,
                                                  uint64_t& next_timeline_ordinal);
 
-    // Append one MarginCallEvent to the immutable history. The target is the
-    // kernel-originated request that filled, which is already terminal by the
-    // time its margin facts are recorded, so no live row moves.
+    /// Append one MarginCallEvent to the immutable history. The target is the
+    /// kernel-originated request that filled, which is already terminal by the
+    /// time its margin facts are recorded, so no live row moves.
     Preparation<PreparedMutation> prepare_margin_call(const MarginCallEvent& event,
                                                       uint64_t& next_timeline_ordinal);
 
-    // Append one NativeRiskEvent to the immutable history. It names an
-    // account-level breach rather than a request, so it moves no live row and
-    // carries no definition; the kernel's own response (an opening block, and
-    // with FlattenAndBlock a KernelRisk Flatten) is separate from the record.
+    /// Append one NativeRiskEvent to the immutable history. It names an
+    /// account-level breach rather than a request, so it moves no live row and
+    /// carries no definition; the kernel's own response (an opening block, and
+    /// with FlattenAndBlock a KernelRisk Flatten) is separate from the record.
     Preparation<PreparedMutation> prepare_risk_event(const NativeRiskEvent& event,
                                                      uint64_t& next_timeline_ordinal);
 
-    // The allowance that prepare_evaluation would install for this point.
+    /// The allowance that prepare_evaluation would install for this point.
     static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
-    // Consumer-only no-event form of the ordinary allowance
-    // refresh. It preserves prepare_evaluation's eligibility and liveness
-    // checks while avoiding a transient mutation envelope per driver point.
+    /// Consumer-only no-event form of the ordinary allowance
+    /// refresh. It preserves prepare_evaluation's eligibility and liveness
+    /// checks while avoiding a transient mutation envelope per driver point.
     void refresh_point_allowances(uint64_t point, const PositionIdentity& position) noexcept;
     bool refresh_allowance(const RequestHandle& target,
                            const EvaluationContext& context,
@@ -1486,8 +1486,8 @@ public:
     bool refresh_cohort_allowance(const RequestHandle& target,
                                   const EvaluationContext& context,
                                   const TargetObservation& observation);
-    // Pure arithmetic over the cached pending total. Outputs are assigned only
-    // after every validation and subtraction succeeds.
+    /// Pure arithmetic over the cached pending total. Outputs are assigned only
+    /// after every validation and subtraction succeeds.
     static bool effective_host_units(const PendingAdjustments& pending,
                                      double resolved_units,
                                      double* deduction,
@@ -1503,10 +1503,10 @@ public:
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
                                                        const RequestHandle& recipient,
                                                        uint64_t& next_timeline_ordinal);
-    // `arm` carries the materialization facts of an anchored leg (the price
-    // tick a rounded anchor snaps to, the host's level restatement); a
-    // default-constructed value is exactly the pre-lane behaviour, so every
-    // existing caller keeps its meaning.
+    /// `arm` carries the materialization facts of an anchored leg (the price
+    /// tick a rounded anchor snaps to, the host's level restatement); a
+    /// default-constructed value is exactly the pre-lane behaviour, so every
+    /// existing caller keeps its meaning.
     Preparation<PreparedMutation> prepare_owner_applied(
             const EventId& applied,
             const RequestHandle& child,
@@ -1548,9 +1548,9 @@ private:
             const Request& request,
             const CommandContext& context,
             const std::optional<RequestHandle>& replace_target) const;
-    // Resolves tick-spelled trail offsets and trigger anchors in place
-    // against context.price_tick. Runs after validate_request, on the staged
-    // copy that becomes the stored definition.
+    /// Resolves tick-spelled trail offsets and trigger anchors in place
+    /// against context.price_tick. Runs after validate_request, on the staged
+    /// copy that becomes the stored definition.
     static std::optional<RequestRejectReason> resolve_tick_spellings(
             Request& request, const CommandContext& context);
     LiveRequest make_live(DefinitionRef definition,

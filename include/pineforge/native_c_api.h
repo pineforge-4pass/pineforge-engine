@@ -197,7 +197,7 @@ extern "C" {
  *  Negative values are errors and never mutate run state.  Non-negative
  *  values are outcomes: 0 is success everywhere, and
  *  #strategy_native_execute_current_v1 additionally answers the positive
- *  #pf_native_execute_outcome_e codes.
+ *  #pf_native_execute_outcome_t codes.
  *  @{ */
 #define PF_NATIVE_OK                 0   /**< Success. */
 #define PF_NATIVE_E_HANDLE          -1   /**< NULL handle, or not a C-callback native host. */
@@ -219,7 +219,7 @@ extern "C" {
  *  legitimate answer (no path walk, an unarmed trail, a series that has not
  *  delivered, a run with no margin model). Only the accessors whose own
  *  documentation names it can return it; #strategy_native_execute_current_v1
- *  never does, its positive codes being #pf_native_execute_outcome_e. */
+ *  never does, its positive codes being #pf_native_execute_outcome_t. */
 #define PF_NATIVE_ABSENT             1
 /** @} */
 
@@ -235,7 +235,7 @@ extern "C" {
 /** Order intent — the alternative index of `native_order::OrderIntent`. */
 typedef enum pf_native_intent_e {
     PF_NATIVE_INTENT_FLATTEN    = 0, /**< Close the whole book. */
-    PF_NATIVE_INTENT_REDUCE     = 1, /**< Reduce; see #pf_native_reduction_e. */
+    PF_NATIVE_INTENT_REDUCE     = 1, /**< Reduce; see #pf_native_reduction_t. */
     PF_NATIVE_INTENT_TRANSACT   = 2, /**< `intent_value` signed units. */
     PF_NATIVE_INTENT_REVERSE_TO = 3, /**< `intent_value` target signed exposure. */
     PF_NATIVE_INTENT_HOST_SIZED = 4, /**< The cohort close, and nothing else;
@@ -722,7 +722,7 @@ typedef struct pf_native_applied_v1 {
  *   - DRIVER_POINT: cursor fields and `raw_price`.
  *   - ACCOUNT: `price` = marked equity, `raw_price` = realized balance,
  *     `opened_units` = signed position units.
- *   - RISK: `reason` is a #pf_native_risk_limit_e, `price` = the observed
+ *   - RISK: `reason` is a #pf_native_risk_limit_t, `price` = the observed
  *     value that reached the limit, `raw_price` = the limit it was measured
  *     against (account currency for the two loss limits — a percent limit is
  *     already resolved against its basis equity — days or fills for the two
@@ -733,7 +733,7 @@ typedef struct pf_native_applied_v1 {
 typedef struct pf_native_event_v1 {
     uint32_t struct_size;       /**< sizeof(pf_native_event_v1). */
     uint32_t version;           /**< PF_NATIVE_API_VERSION. */
-    uint32_t kind;              /**< #pf_native_event_kind_e. */
+    uint32_t kind;              /**< #pf_native_event_kind_t. */
     uint32_t reason;            /**< Per-kind reason enumerator, 0 when none. */
     uint64_t ordinal;           /**< Event ordinal; strictly increasing. */
     uint64_t incarnation;       /**< Subject request, 0 when the kind has none. */
@@ -764,14 +764,14 @@ typedef struct pf_native_working_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_working_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
     uint64_t incarnation;     /**< The request's handle. */
-    uint32_t intent;          /**< #pf_native_intent_e as accepted. */
-    uint32_t trigger;         /**< #pf_native_trigger_e as accepted. */
-    uint32_t owner;           /**< #pf_native_owner_e as accepted. */
-    uint32_t capacity;        /**< #pf_native_capacity_e as accepted. */
-    uint32_t group_kind;      /**< #pf_native_group_e as accepted. */
-    uint32_t group_effect;    /**< #pf_native_group_effect_e, 0 when no group. */
-    uint32_t remaining_kind;  /**< #pf_native_remaining_e. */
-    uint32_t trigger_state;   /**< #pf_native_trigger_state_e. */
+    uint32_t intent;          /**< #pf_native_intent_t as accepted. */
+    uint32_t trigger;         /**< #pf_native_trigger_t as accepted. */
+    uint32_t owner;           /**< #pf_native_owner_t as accepted. */
+    uint32_t capacity;        /**< #pf_native_capacity_t as accepted. */
+    uint32_t group_kind;      /**< #pf_native_group_t as accepted. */
+    uint32_t group_effect;    /**< #pf_native_group_effect_t, 0 when no group. */
+    uint32_t remaining_kind;  /**< #pf_native_remaining_t. */
+    uint32_t trigger_state;   /**< #pf_native_trigger_state_t. */
     uint32_t origin;          /**< RequestOrigin: 0 host, 1 kernel liquidation, 2 kernel risk. */
     uint32_t reserved0;
     double   intent_value;    /**< The intent's own scalar, 0 when it has none. */
@@ -812,7 +812,7 @@ typedef struct pf_native_open_lot_v1 {
                                   *   reused; 0 only for a legacy synthetic lot. */
     int64_t  cycle;              /**< The position cycle the lot belongs to — the
                                   *   `owner_cycle` a BIND_OPENING(S) request names. */
-    uint32_t side;               /**< #pf_native_side_e. */
+    uint32_t side;               /**< #pf_native_side_t. */
     int32_t  entry_bar_index;    /**< Script-bar index of the opening fill. */
     int64_t  entry_time_ms;      /**< Effective time of the opening fill. */
     double   entry_price;        /**< Booked entry price. */
@@ -831,7 +831,7 @@ typedef struct pf_native_open_lot_v1 {
 typedef struct pf_native_state_v1 {
     uint32_t struct_size;      /**< sizeof(pf_native_state_v1). */
     uint32_t version;          /**< PF_NATIVE_API_VERSION. */
-    uint32_t lifecycle;        /**< #pf_native_lifecycle_e. */
+    uint32_t lifecycle;        /**< #pf_native_lifecycle_t. */
     uint32_t failure_code;     /**< NativeFailureCode; PF_NATIVE_FAILURE_CALLBACK for a
                                 *   callback that returned non-zero. */
     uint32_t failure_operation; /**< NativeFailureOperation. */
@@ -876,7 +876,7 @@ typedef struct pf_native_trail_state_v1 {
 typedef struct pf_native_margin_view_v1 {
     uint32_t struct_size;   /**< sizeof(pf_native_margin_view_v1). */
     uint32_t version;       /**< PF_NATIVE_API_VERSION. */
-    uint32_t kind;          /**< #pf_native_margin_check_kind_e. */
+    uint32_t kind;          /**< #pf_native_margin_check_kind_t. */
     uint32_t liquidation_resting; /**< 0/1: a liquidation rests from an earlier point. */
     double   signed_units;  /**< The book being measured. */
     double   average_price;
@@ -966,7 +966,7 @@ typedef struct pf_native_risk_state_v1 {
     uint32_t version;       /**< PF_NATIVE_API_VERSION. */
     uint32_t blocked;       /**< 0/1: openings are refused right now. */
     uint32_t has_reason;    /**< 0/1: `reason` is meaningful. */
-    uint32_t reason;        /**< #pf_native_risk_limit_e that blocked. */
+    uint32_t reason;        /**< #pf_native_risk_limit_t that blocked. */
     uint32_t has_day;       /**< 0/1: the ledger has reached a day. */
     uint32_t consecutive_loss_days; /**< Days that closed with a realized loss. */
     uint32_t reserved0;
@@ -994,19 +994,19 @@ typedef struct pf_native_request_v1 {
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
 
     /* Intent */
-    uint32_t intent;              /**< #pf_native_intent_e. */
-    uint32_t reduce_size;         /**< #pf_native_reduction_e, REDUCE only. */
-    uint32_t reduce_claim;        /**< #pf_native_scope_claim_e, SCOPE_FRACTION only. */
-    uint32_t side;                /**< #pf_native_side_e, SIZED only. */
-    uint32_t size_basis;          /**< #pf_native_size_basis_e, SIZED only. */
-    uint32_t size_time;           /**< #pf_native_size_time_e, SIZED only. */
-    uint32_t grid_policy;         /**< #pf_native_grid_policy_e, SIZED only. */
+    uint32_t intent;              /**< #pf_native_intent_t. */
+    uint32_t reduce_size;         /**< #pf_native_reduction_t, REDUCE only. */
+    uint32_t reduce_claim;        /**< #pf_native_scope_claim_t, SCOPE_FRACTION only. */
+    uint32_t side;                /**< #pf_native_side_t, SIZED only. */
+    uint32_t size_basis;          /**< #pf_native_size_basis_t, SIZED only. */
+    uint32_t size_time;           /**< #pf_native_size_time_t, SIZED only. */
+    uint32_t grid_policy;         /**< #pf_native_grid_policy_t, SIZED only. */
     uint32_t reserve_percent_fee; /**< 0/1, SIZED only. */
-    double   intent_value;        /**< The intent's own scalar; see #pf_native_intent_e. */
+    double   intent_value;        /**< The intent's own scalar; see #pf_native_intent_t. */
 
     /* Trigger */
-    uint32_t trigger;             /**< #pf_native_trigger_e. */
-    uint32_t anchor;              /**< #pf_native_anchor_e (L7). */
+    uint32_t trigger;             /**< #pf_native_trigger_t. */
+    uint32_t anchor;              /**< #pf_native_anchor_t (L7). */
     double   p1;                  /**< Limit/stop price, or trail offset. */
     double   p2;                  /**< Stop-limit limit, or trail arm price. */
     double   anchor_offset;       /**< FROM_OWNER_FILL: signed offset. */
@@ -1016,19 +1016,19 @@ typedef struct pf_native_request_v1 {
     uint8_t  anchor_offset_in_ticks; /**< FROM_OWNER_FILL: the offset is a tick count. */
 
     /* Capacity */
-    uint32_t capacity;            /**< #pf_native_capacity_e. */
+    uint32_t capacity;            /**< #pf_native_capacity_t. */
     double   capacity_units;      /**< POINT_BUDGET only. */
 
     /* Owner */
-    uint32_t owner;               /**< #pf_native_owner_e. */
+    uint32_t owner;               /**< #pf_native_owner_t. */
     uint32_t owner_n;             /**< Length of `owner_incarnations`. */
     const uint64_t* owner_incarnations; /**< Borrowed for the call only. */
     int64_t  owner_cycle;         /**< BIND_OPENING / BIND_OPENINGS. */
     uint64_t cohort;              /**< BIND_COHORT. */
 
     /* Group */
-    uint32_t group_kind;          /**< #pf_native_group_e. */
-    uint32_t group_effect;        /**< #pf_native_group_effect_e. */
+    uint32_t group_kind;          /**< #pf_native_group_t. */
+    uint32_t group_effect;        /**< #pf_native_group_effect_t. */
     uint64_t group_id;            /**< MEMBER only. */
     int64_t  group_cohort;        /**< MEMBER only. */
 
@@ -1040,15 +1040,15 @@ typedef struct pf_native_request_v1 {
     /* ── The additive anchored-leg tail (L7b). Read only when `struct_size`
      * is the current sizeof; a caller sending the base layout stops at
      * `comment` above and gets every default (RAW, WORKING). ── */
-    uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_e, FROM_OWNER_FILL only. */
-    uint32_t visibility;          /**< #pf_native_arm_visibility_e, WAIT_FOR_APPLIED only. */
+    uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_t, FROM_OWNER_FILL only. */
+    uint32_t visibility;          /**< #pf_native_arm_visibility_t, WAIT_FOR_APPLIED only. */
 
     /* ── The additive sizing-detail tail (L3b). Read only when `struct_size`
      * is the current sizeof; a caller sending either earlier layout stops
      * above and gets both defaults (RESOLVED, AT_MATCH), which is what every
      * request accepted before this tail already resolved as. ── */
-    uint32_t size_price;          /**< #pf_native_size_price_e, SIZED only. */
-    uint32_t reduce_basis;        /**< #pf_native_scope_basis_e, SCOPE_FRACTION only. */
+    uint32_t size_price;          /**< #pf_native_size_price_t, SIZED only. */
+    uint32_t reduce_basis;        /**< #pf_native_scope_basis_t, SCOPE_FRACTION only. */
 } pf_native_request_v1;
 
 /** Byte length of #pf_native_request_v1 as the L13 lane first published it,
@@ -1118,7 +1118,7 @@ typedef struct pf_native_subscription_v1 {
 typedef struct pf_native_run_spec_ext_v1 {
     uint32_t struct_size;    /**< sizeof(pf_native_run_spec_ext_v1). */
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
-    uint32_t present_mask;   /**< #pf_native_spec_ext_mask_e bits. */
+    uint32_t present_mask;   /**< #pf_native_spec_ext_mask_t bits. */
 
     uint32_t report_policy;               /**< NativeReportPolicy. */
     uint32_t report_open_position_at_end; /**< 0/1; KernelRecorded only. */
@@ -1132,7 +1132,7 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t open_bar_view;   /**< NativeOpenBarView. */
 
     uint32_t margin_sizing;   /**< NativeLiquidationSizing. */
-    uint32_t margin_check;    /**< #pf_native_liquidation_check_e. */
+    uint32_t margin_check;    /**< #pf_native_liquidation_check_t. */
     uint32_t margin_has_maintenance_long;
     uint32_t margin_has_maintenance_short;
     uint32_t margin_has_min_units;
@@ -1170,8 +1170,8 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t risk_max_consecutive_loss_days;     /**< Days, when the flag is 1. */
     uint32_t risk_has_max_fills_per_day;     /**< 0/1. */
     uint32_t risk_max_fills_per_day;         /**< Applied fills, when the flag is 1. */
-    uint32_t risk_day_basis;                 /**< #pf_native_risk_day_e. */
-    uint32_t risk_action;                    /**< #pf_native_risk_action_e. */
+    uint32_t risk_day_basis;                 /**< #pf_native_risk_day_t. */
+    uint32_t risk_action;                    /**< #pf_native_risk_action_t. */
 
     /* ── The additive intrabar / policy tail (N8). Read only when
      * `struct_size` is the current sizeof; a caller sending either earlier
@@ -1179,28 +1179,28 @@ typedef struct pf_native_run_spec_ext_v1 {
      * The two blocks below have mask bits of their own; the four margin
      * fields at the end extend the EXISTING PF_NATIVE_SPEC_EXT_MARGIN block
      * and are read only when that bit is set AND this tail is present. ── */
-    uint32_t intrabar_kind;          /**< #pf_native_intrabar_kind_e. */
+    uint32_t intrabar_kind;          /**< #pf_native_intrabar_kind_t. */
     int32_t  intrabar_samples;       /**< Samples per script bar; LOWER_TF and SYNTHESIZED. */
     uint32_t intrabar_distribution;  /**< #pf_magnifier_distribution_t. */
     uint32_t intrabar_volume_weighted;             /**< 0/1. */
     int32_t  intrabar_volume_weighted_min_samples;
     int32_t  intrabar_volume_weighted_max_samples;
-    uint32_t intrabar_sample_eligibility; /**< #pf_native_sample_eligibility_e, LOWER_TF only. */
+    uint32_t intrabar_sample_eligibility; /**< #pf_native_sample_eligibility_t, LOWER_TF only. */
     int32_t  intrabar_n;             /**< Length of `intrabar_bars`; LOWER_TF only. */
     const char* intrabar_tf;         /**< The finer timeframe; LOWER_TF only, non-NULL. */
     const pf_bar_t* intrabar_bars;   /**< The finer feed; borrowed for the call, copied. */
 
-    uint32_t slot_label_policy;   /**< #pf_native_slot_label_e. FEED_TOLERANT keeps
+    uint32_t slot_label_policy;   /**< #pf_native_slot_label_t. FEED_TOLERANT keeps
                                    *   the caller's own labels, and a
                                    *   #PF_NATIVE_INTRABAR_LOWER_TF path then
                                    *   delivers no sub-bar: its bars are not
                                    *   keyed to canonical input slots. */
-    uint32_t feed_tolerance;      /**< #pf_native_feed_tolerance_e bits. */
-    uint32_t path_order;          /**< #pf_native_path_order_e. */
-    uint32_t abort_reporting;     /**< #pf_native_abort_reporting_e. */
+    uint32_t feed_tolerance;      /**< #pf_native_feed_tolerance_t bits. */
+    uint32_t path_order;          /**< #pf_native_path_order_t. */
+    uint32_t abort_reporting;     /**< #pf_native_abort_reporting_t. */
 
-    uint32_t margin_equity_basis; /**< #pf_native_margin_equity_basis_e. */
-    uint32_t margin_level_base;   /**< #pf_native_margin_level_base_e. */
+    uint32_t margin_equity_basis; /**< #pf_native_margin_equity_basis_t. */
+    uint32_t margin_level_base;   /**< #pf_native_margin_level_base_t. */
     const char* margin_liquidation_label;   /**< Ticket of a kernel liquidation; NULL is "". */
     const char* margin_liquidation_comment; /**< Comment of the same; NULL is "". */
 
@@ -1216,7 +1216,7 @@ typedef struct pf_native_run_spec_ext_v1 {
     int32_t         auxiliary_n;    /**< Length of `auxiliary_bars`. */
     uint32_t        reserved1;      /**< Must be 0. */
     /** Optional, borrowed for the call: `subscriptions_n` entries of
-     *  #pf_native_series_source_e, one per row of `subscriptions`. NULL means
+     *  #pf_native_series_source_t, one per row of `subscriptions`. NULL means
      *  every series is built from the input. Meaningful only together with
      *  PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS. */
     const uint32_t* subscription_sources;
@@ -1254,7 +1254,7 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  differently. An OBSERVATION callback — everything down to and including
  *  `on_sub_bar` — returns 0 to continue; any other value ends the run Failed
  *  with PF_NATIVE_FAILURE_CALLBACK. An ANSWERING callback — the four margin
- *  and excursion hooks at the end — returns a #pf_native_answer_e selecting
+ *  and excursion hooks at the end — returns a #pf_native_answer_t selecting
  *  WHOSE answer the kernel uses; every value is in contract, so an answering
  *  hook can never fail the run. That split is deliberate: the answering hooks
  *  are consulted from kernel paths that are not inside the callback guard, so
@@ -1291,7 +1291,7 @@ typedef struct pf_native_callbacks_v1 {
      * what every host compiled before this tail already had. ── */
 
     /** EVERY calculation of the run, including the script bar's own close —
-     *  `on_native_recalculate`. `reason` is a #pf_native_calc_reason_e and
+     *  `on_native_recalculate`. `reason` is a #pf_native_calc_reason_t and
      *  `cause` is the applied execution of an ORDER_FILL recalculation, valid
      *  only for that call and NULL otherwise. `bar` is the COMPLETE script
      *  bar even mid-path; #strategy_native_partial_bar_v1 is the
@@ -1414,18 +1414,38 @@ PF_API void strategy_native_report_free_v1(pf_report_t* report);
 
 /** Submit @p request.
  *
+ *  Legal from inside a native callback; the request joins the working book
+ *  and is matched by the consumer from the next execution point on. The
+ *  handle it answers with is the request's identity for the rest of the run:
+ *  replace, cancel and every event carry it.
+ *
+ *  @param s            The host this run is driving, from #strategy_create.
+ *  @param request      Borrowed for the call only; the kernel copies what it
+ *                      keeps.
  *  @param incarnation  Optional; receives the accepted request's handle.
  *  @param reject       Optional; receives a RequestRejectReason on rejection.
  *  @return PF_NATIVE_OK when accepted, PF_NATIVE_E_REJECTED when the kernel
- *  rejected it, PF_NATIVE_E_STATE when commands are not legal here. */
+ *  rejected it, PF_NATIVE_E_STATE when commands are not legal here.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_native_submit_v1(pf_strategy_t s, const pf_native_request_v1* request,
                                      uint64_t* incarnation, uint32_t* reject);
 
 /** Replace the live request @p incarnation with @p request.
  *
- *  @param successor  Optional; receives the successor's handle.
+ *  Amendment, not cancel-and-resubmit: the predecessor leaves the book and
+ *  the successor takes its place in one step, and the REPLACED event names
+ *  both. A target that is no longer working is PF_NATIVE_E_NOT_WORKING.
+ *
+ *  @param s           The host this run is driving, from #strategy_create.
+ *  @param incarnation The live request to amend, as #strategy_native_submit_v1
+ *                     handed it back.
+ *  @param request     Borrowed for the call only.
+ *  @param successor   Optional; receives the successor's handle.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_REJECTED, PF_NATIVE_E_NOT_WORKING,
- *  PF_NATIVE_E_INVALID_TARGET, or PF_NATIVE_E_STATE. */
+ *  PF_NATIVE_E_INVALID_TARGET, or PF_NATIVE_E_STATE.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
                                       const pf_native_request_v1* request,
                                       uint64_t* successor);
@@ -1449,21 +1469,36 @@ PF_API int strategy_native_cancel_all_v1(pf_strategy_t s);
  *  only when its own field matched. Text that matches nothing is not a
  *  command.
  *
+ *  @param s      The host this run is driving, from #strategy_create.
  *  @param text   Borrowed for the call only; "" matches the requests that
  *                carry no such text. NULL is PF_NATIVE_E_ARGUMENT, not "".
- *  @param field  #pf_native_request_field_e.
+ *  @param field  #pf_native_request_field_t.
  *  @return The number cancelled (>= 0), PF_NATIVE_E_TAG for a field outside
  *  the enumeration, PF_NATIVE_E_ARGUMENT for a NULL @p text, or another
- *  negative status. */
+ *  negative status.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_native_cancel_where_v1(pf_strategy_t s, const char* text,
                                            uint32_t field);
 
 /** Execute one live request at the current execution point.
  *
- *  @param price_rule  #pf_native_price_rule_e.
- *  @param refusal     Optional; receives a #pf_native_refusal_e when the
+ *  Legal only inside a callback the kernel has opened an execution point for
+ *  (`on_bar`, `on_bar_open`, `on_tick`, `on_applied`, `on_recalculate`);
+ *  anywhere else the answer is PF_NATIVE_E_STATE. The request is filled at
+ *  this cursor rather than waiting for the consumer's own matching pass.
+ *
+ *  @param s           The host this run is driving, from #strategy_create.
+ *  @param incarnation The live request to execute, as
+ *                     #strategy_native_submit_v1 handed it back. A handle
+ *                     that is not in the working book is
+ *                     PF_NATIVE_E_INVALID_TARGET.
+ *  @param price_rule  #pf_native_price_rule_t.
+ *  @param refusal     Optional; receives a #pf_native_refusal_t when the
  *                     return is PF_NATIVE_E_REFUSED.
- *  @return A non-negative #pf_native_execute_outcome_e, or a negative status. */
+ *  @return A non-negative #pf_native_execute_outcome_t, or a negative status.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_native_execute_current_v1(pf_strategy_t s, uint64_t incarnation,
                                               uint32_t price_rule, uint32_t* refusal);
 

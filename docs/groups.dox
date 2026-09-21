@@ -1,0 +1,80 @@
+/**
+ * @file groups.dox
+ *
+ * The two layers this repository is built around, and which file belongs to
+ * which. Doxygen has no way to infer the boundary from the include graph, so
+ * it is declared here once rather than repeated in every header: adding a
+ * header to a layer is one line in this file.
+ *
+ * The boundary itself is normative and is argued in ADR-0001,
+ * `docs/adr/0001-kernel-adapter-boundary.md`, which this site publishes.
+ */
+
+/**
+ * @defgroup kernel Kernel / native API
+ *
+ * The backtest and forward-execution engine, and the API a host drives it
+ * with. Nothing here knows what PineScript is: a host declares a
+ * `NativeRunSpec`, implements the `NativeStrategyHost` callbacks, submits
+ * `native_order::Request` values and reads back events, trades and a report.
+ * TradingView parity is not a property of this layer — it is a policy the
+ * @ref pine_adapter applies on top of it.
+ *
+ * Start at @ref native_host.hpp for the callback surface, @ref
+ * native_run_spec.hpp for what a run declares, @ref native_order.hpp for the
+ * request and event vocabulary, and @ref native_c_api.h for the same surface
+ * in C. `examples/native/` builds ten runnable hosts against exactly these
+ * headers and nothing else.
+ */
+
+/**
+ * @defgroup pine_adapter Pine adapter (TradingView-parity policy layer)
+ *
+ * The layer that turns a transpiled PineScript strategy into kernel commands
+ * and reproduces TradingView's own behaviour where it differs from a neutral
+ * engine — order priority within a bar, intraday caps, entry admission,
+ * rounding thresholds, the quirks a parity corpus measures.
+ *
+ * It is a *consumer* of @ref kernel, never a privileged one: every rule here
+ * is expressible through the same public native API a third-party host uses.
+ * A reader migrating away from PineScript wants @ref kernel; a reader chasing
+ * a TradingView divergence wants this layer.
+ */
+
+/** @file native_host.hpp   @ingroup kernel */
+/** @file native_run_spec.hpp @ingroup kernel */
+/** @file native_order.hpp   @ingroup kernel */
+/** @file native_order_identity.hpp @ingroup kernel */
+/** @file native_toolkit.hpp @ingroup kernel */
+/** @file native_calendar.hpp @ingroup kernel */
+/** @file native_fx_curve.hpp @ingroup kernel */
+/** @file native_module.hpp  @ingroup kernel */
+/** @file native_c_api.h     @ingroup kernel */
+/** @file pineforge.h        @ingroup kernel */
+/** @file engine.hpp         @ingroup kernel */
+/** @file execution.hpp      @ingroup kernel */
+/** @file execution_consumer.hpp @ingroup kernel */
+/** @file market_driver.hpp  @ingroup kernel */
+/** @file order_action.hpp   @ingroup kernel */
+/** @file order_cancellation.hpp @ingroup kernel */
+/** @file bar.hpp            @ingroup kernel */
+/** @file metrics.hpp        @ingroup kernel */
+/** @file quantity_intent.hpp @ingroup kernel */
+
+/** @file source/pine_adapter.hpp      @ingroup pine_adapter */
+/** @file source/pine_native_host.hpp  @ingroup pine_adapter */
+/** @file source/pine_strategy_host.hpp @ingroup pine_adapter */
+/** @file source/pine_scheduler.hpp    @ingroup pine_adapter */
+/** @file source/pine_policy_support.hpp @ingroup pine_adapter */
+/** @file source/pine_language_state.hpp @ingroup pine_adapter */
+/** @file source/pine_float_compare.hpp @ingroup pine_adapter */
+/** @file source/market_admission.hpp  @ingroup pine_adapter */
+/** @file compat/pine/exit_activation.hpp @ingroup pine_adapter */
+/** @file compat/pine/exit_lifecycle.hpp  @ingroup pine_adapter */
+/** @file compat/pine/intraday_cap.hpp    @ingroup pine_adapter */
+/** @file compat/pine/intraday_order_budget.hpp @ingroup pine_adapter */
+/** @file compat/pine/market_admission.hpp @ingroup pine_adapter */
+/** @file compat/pine/order_birth.hpp     @ingroup pine_adapter */
+/** @file compat/pine/order_priority.hpp  @ingroup pine_adapter */
+/** @file compat/pine/reservation_expansion.hpp @ingroup pine_adapter */
+/** @file compat/pine/trail_ticks.hpp     @ingroup pine_adapter */
