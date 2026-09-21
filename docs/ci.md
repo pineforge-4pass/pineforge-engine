@@ -118,6 +118,25 @@ historical evidence; they are not presented as a live v13/v14/v15 link matrix.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
 
+One row does run a caller of the frozen `ab9714b` archive:
+`test_l4g_runtime_budget` compiles `tests/test_l4g_runtime_budget.cpp` once
+against the authenticated v16 closure and once against the tree, replays the
+same 43 008-bar workload through both, and requires the tree's replay to cost
+at most 15x the frozen one (`scripts/check_runtime_budget.py`, A40 rev 5).
+The gated sample is each replay's process CPU time (user + system), taken as
+the minimum of five interleaved runs per side; the wall-clock time and the
+host's one-minute load average are printed beside it as diagnostics only.
+Wall clock was the gated quantity until A40 rev 7 (Q9): it counts the time a
+leg spent descheduled, and the minimum of five runs recovers an undisturbed
+0.03 s baseline far more often than an undisturbed 0.5 s candidate, so the
+wall ratio of one unchanged tree rose from 12x on a quiet host to 29-35x at
+load average 190 while its CPU ratio stayed at 10x. On a quiet host the two
+clocks agree. `scripts/test_runtime_budget.py` (row
+`test_l4g_runtime_budget_mutations`) pins that the verdict follows CPU time
+and still flips when the candidate's CPU cost doubles. Debug builds and the
+hosted macOS lane run the candidate once for correctness only
+(`--candidate-only`).
+
 CTest writes `settlement-abi-receipt.json`, `script-abi-receipt.json`, and
 `aggregate-abi-receipt.json` for the real v16/v17 controls, plus
 `native-abi-receipt.json` for native controls. The native receipt includes the
