@@ -70,7 +70,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 184 = those 183 plus P5's test_native_limit_fill_through (the market-if-
 # touched geometry of Limit{price, fill_through}); P5's closed_trade(i) and
 # liquidation-through-the-lots witnesses extend existing source-free TUs.
-KERNEL_MIN_TESTS = 184
+# 187 = those 184 plus audit lane P6's three example_* rows for the two
+# features the adapter never declares: example_native_price_grid_strategy,
+# example_native_price_grid_c and example_native_risk_limits_strategy.
+KERNEL_MIN_TESTS = 187
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')

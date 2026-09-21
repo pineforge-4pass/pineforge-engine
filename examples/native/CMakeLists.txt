@@ -22,6 +22,8 @@ set(PINEFORGE_NATIVE_EXAMPLES
     native_calc_on_fills_strategy
     native_htf_strategy
     native_trail_risk_strategy
+    native_price_grid_strategy
+    native_risk_limits_strategy
 )
 
 # The same host written against the C API (R5 lane L13). It is a separate
@@ -30,6 +32,7 @@ set(PINEFORGE_NATIVE_EXAMPLES
 # links with CXX for the runtime's own standard-library symbols.
 set(PINEFORGE_NATIVE_C_EXAMPLES
     hello_kernel_c
+    native_price_grid_c
 )
 
 foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES)
@@ -85,6 +88,9 @@ if(PINEFORGE_BUILD_TESTS)
         example_native_margin_strategy
         example_native_calc_on_fills_strategy
         example_native_htf_strategy
-        example_native_trail_risk_strategy PROPERTIES
+        example_native_trail_risk_strategy
+        example_native_price_grid_strategy
+        example_native_price_grid_c
+        example_native_risk_limits_strategy PROPERTIES
         PASS_REGULAR_EXPRESSION "closed trades: [1-9]")
 endif()

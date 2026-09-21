@@ -60,6 +60,12 @@ NATIVE_EXAMPLES = (
     ("native-calc-on-fills", "examples/native/native_calc_on_fills_strategy.cpp"),
     ("native-htf", "examples/native/native_htf_strategy.cpp"),
     ("native-trail-risk", "examples/native/native_trail_risk_strategy.cpp"),
+    # The two kernel features the Pine adapter never declares, native-only by
+    # ruling (audit lane P6): the L8/L8b price grid, in C++ and from C, and the
+    # L9 money limits with the kernel's own flatten.
+    ("native-price-grid", "examples/native/native_price_grid_strategy.cpp"),
+    ("native-price-grid-c", "examples/native/native_price_grid_c.c"),
+    ("native-risk-limits", "examples/native/native_risk_limits_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)
