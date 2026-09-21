@@ -1,0 +1,16 @@
+{
+  "title": "E5 NYSE:F short offset trail arm quantized low",
+  "slug": "e5-f-short-arm-qlow",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:12:55.720Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17"
+  },
+  "pine_sha256": "ee394334d7f4fb11de1daef0409852eb245d98158da8169c3b0bfd288d7475ee",
+  "tv_trades_sha256": "6561d3abc58c121cb014e0244aa55dc109bd2c09310fd90920505434fdffacd4",
+  "tv_trades_rows": 6
+}

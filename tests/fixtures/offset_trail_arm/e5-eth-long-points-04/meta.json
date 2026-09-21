@@ -1,0 +1,16 @@
+{
+  "title": "E5 ETH long offset trail trail_points 0.4",
+  "slug": "e5-eth-long-points-04",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:11:00.257Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-20",
+    "to": "2026-04-25"
+  },
+  "pine_sha256": "f9fff5725bc9d9e9ff33eae818e902d151ac97cd81318b0975ec1ec46ba820c3",
+  "tv_trades_sha256": "503dda71befd5c7d949743f39f35a7c9e156de4ef66da902860371faaa65349c",
+  "tv_trades_rows": 16
+}

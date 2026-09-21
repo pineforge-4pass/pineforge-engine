@@ -1,0 +1,16 @@
+{
+  "title": "E5 ETH short offset trail arm entry-0.006",
+  "slug": "e5-eth-short-arm-m006",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:11:15.741Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-20",
+    "to": "2026-04-25"
+  },
+  "pine_sha256": "026e6f6e3b4541328a2065d54f0dbdb1542d00aded1549126fc3e7e5aed75b21",
+  "tv_trades_sha256": "b5a9251d1e00e9fa0d81050752ad0a8cca312b9004b9ee6aea99ee4947d6ae01",
+  "tv_trades_rows": 16
+}

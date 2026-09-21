@@ -1,0 +1,16 @@
+{
+  "title": "E5 NYSE:F short one-shot trail quantized low",
+  "slug": "e5-f-short-oneshot-qlow",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:12:59.884Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17"
+  },
+  "pine_sha256": "fcbca1844c7e53a19ffdc373b1e2e0a3047e4560fb1b9afdb336647cd864c7ef",
+  "tv_trades_sha256": "2c0b64331b7ecd57e8928869ee755b60f5221f2de3f7ac6350f18836adb4a45d",
+  "tv_trades_rows": 6
+}

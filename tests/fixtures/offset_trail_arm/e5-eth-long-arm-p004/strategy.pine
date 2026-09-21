@@ -1,0 +1,33 @@
+// E5 probe (R5 follow-up lane E5): does an OFFSET trail's arm compare against the raw
+// price path or against the tick-quantized one?
+// Long, trail_price = entry fill + 0.004, trail_offset = 1 tick. On each entry bar k the
+// close is below the fill E; a later bar j has high == E exactly and no bar before it gets
+// higher. Raw arm: first high >= E + 0.004 (on this on-grid feed: >= E + 0.01). Arm on the
+// level rounded half-up (E): bar j.
+// Entry bars (UTC open time; each entry is placed on the bar before it and fills at the
+// entry bar's open):
+//   2025-05-13 14:30
+//   2025-05-16 20:30
+//   2025-06-30 04:30
+//   2025-07-02 08:30
+//   2025-08-24 06:45
+//   2025-12-11 00:00
+//   2026-01-16 05:45
+//   2026-04-19 15:15
+//@version=6
+strategy("E5 ETH long offset trail arm entry+0.004", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+placeEntry = time == timestamp("UTC", 2025, 5, 13, 14, 15) or time == timestamp("UTC", 2025, 5, 16, 20, 15) or time == timestamp("UTC", 2025, 6, 30, 4, 15) or time == timestamp("UTC", 2025, 7, 2, 8, 15) or time == timestamp("UTC", 2025, 8, 24, 6, 30) or time == timestamp("UTC", 2025, 12, 10, 23, 45) or time == timestamp("UTC", 2026, 1, 16, 5, 30) or time == timestamp("UTC", 2026, 4, 19, 15, 0)
+
+if placeEntry and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size > 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("LX", "L", trail_price=strategy.position_avg_price + 0.004, trail_offset=1)
+
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 16
+    strategy.close("L", comment="timeout")

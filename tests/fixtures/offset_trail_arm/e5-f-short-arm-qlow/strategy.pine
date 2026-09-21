@@ -1,0 +1,35 @@
+// E5 probe (R5 follow-up lane E5): does an OFFSET trail's arm compare against the raw
+// price path or against the tick-quantized one?
+// Short, trail_points = n ticks (activation A = entry fill - n ticks, on the grid),
+// trail_offset = 1 tick. A later bar j has a raw low above A whose tick-quantized low is A
+// (9.415 -> 9.41, 13.041 -> 13.04, 12.641 -> 12.64); no bar before it reaches A either way.
+// Quantized-path arm: bar j. Raw arm: the first raw low <= A.
+// Entry bars (UTC open time; each entry is placed on the bar before it and fills at the
+// entry bar's open):
+//   2025-04-15 14:45  trail_points 8
+//   2025-12-08 15:00  trail_points 5
+//   2026-04-15 16:30  trail_points 2
+//@version=6
+strategy("E5 NYSE:F short offset trail arm quantized low", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 4, 15, 14, 30)
+        pts := 8
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 12, 8, 14, 45)
+        pts := 5
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2026, 4, 15, 16, 15)
+        pts := 2
+        strategy.entry("S", strategy.short)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size < 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("SX", "S", trail_points=pts, trail_offset=1)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 20
+    strategy.close("S", comment="timeout")

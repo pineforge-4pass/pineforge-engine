@@ -1,0 +1,16 @@
+{
+  "title": "E5 NYSE:F long offset trail arm quantized high",
+  "slug": "e5-f-long-arm-qhigh",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:12:47.495Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17"
+  },
+  "pine_sha256": "e5b59c48352ecb1509263f994d21486ee56743939b73a2523c919f0ab9e8e71e",
+  "tv_trades_sha256": "d888b985073ecd99deebca8c006f5ff58b2a0ecb8822dff0aa86482d6f2d335b",
+  "tv_trades_rows": 6
+}

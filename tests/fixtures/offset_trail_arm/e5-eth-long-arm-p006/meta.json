@@ -1,0 +1,16 @@
+{
+  "title": "E5 ETH long offset trail arm entry+0.006",
+  "slug": "e5-eth-long-arm-p006",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-21T14:10:47.270Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-20",
+    "to": "2026-04-25"
+  },
+  "pine_sha256": "e49a27242dc35707129fb7e7721fab91de95a01aa21cfc6ffba4666890d12344",
+  "tv_trades_sha256": "503dda71befd5c7d949743f39f35a7c9e156de4ef66da902860371faaa65349c",
+  "tv_trades_rows": 16
+}
