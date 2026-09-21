@@ -849,6 +849,20 @@ running best itself and the exit is the first move strictly past it. Negative
 and nonfinite offsets remain rejected, and a tick spelling without a usable
 price tick is rejected rather than read as a price.
 
+`Trail::best_seed` says where the running best STARTS (R5 lane E14). Absent —
+every trail before the field — the best is the arm's own print: the arm
+threshold's ladder point when a crossing armed it, the first print the trail
+sees when it was submitted already armed. Present, it is a floor on that
+start: at the arm the best becomes the favourable one of the seed and the arm
+print, the higher for a sell trail and the lower for a buy trail. That is the
+broker shape of a trail that rides from its activation instead of from the
+next print, and the level is the host's own number — absolute (an anchor
+moves the arm threshold, not the seed), finite and positive, and put on the
+ladder like an observed print when the run declares a price grid. The
+activation event still reports the print the arm happened at. The request
+digest folds the seed only when it is present, so no established hash moves;
+its C spelling is `pf_native_request_v1::trail_best_seed`.
+
 Re-pricing a trail normally restarts it. `replace(handle, request,
 ReplaceOptions{/*retain_trigger_state=*/true})` instead carries the
 predecessor's live trigger state — a tracking trail's best, an already active
@@ -1650,6 +1664,20 @@ activation: 8 of 8 trades exit on the next bar, `trail_offset` 1 and 0 alike,
 so P9's carried-best row (9.996 under 10.00) now asserts the fill @9.98, with
 its `expectation corrected:` note. Both stay adapter policy; the kernel is
 unchanged.
+
+Lane E14 closed the residual both of them left. TradingView's running best
+starts AT the activation; the kernel's started at the arm — half a tick short
+of it on a crossing, at the next bar's first print when the placement close
+armed it — so a print between the two fires TradingView's stop and not the
+kernel's. None of the fourteen tapes fell in that window, but a shallower
+next bar would. The generic answer is `Trail::best_seed` above: the leg names
+the level its ride starts at, and the adapter names the activation, or the
+favourable one of the activation and the placement print when that print
+already armed it. The kernel's own crossing is then the price the adapter
+books, which is what the three trail twin suites now assert. The sibling stop
+an explicit-zero trail rests beside its `Trail` stays: a `Stop` is reached by
+a touch and a zero-distance ride needs a move strictly past the best, so they
+differ exactly on a print that lands ON the carried best.
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the

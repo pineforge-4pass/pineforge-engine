@@ -574,7 +574,7 @@ trial after L8b; row PG (§1.7) holds the counts. In summary:
 | blocker | what it is | state |
 |---|---|---|
 | B1 | under `QuantizeFillsAndTriggers` the matcher reported a cursor print inside the quantized region but short of the raw level, and the core's raw re-validation aborted the run ("native working-request preparation failed": nine zero-offset-trail tapes, six `process_orders_on_close` panels) | **closed generically by L8b**: the tick-quantized print is the reached price, and the core re-validates on the same ladder (`native_order::ActivationGrid`); 0 aborts under the N13 re-run |
-| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5; the placement close included: lane E9) are tested on the quantized bar, and a one-shot books the tick that bar reaches, its resting half-tick level rounded away from the position (lane E9); the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
+| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5; the placement close included: lane E9) are tested on the quantized bar, and a one-shot books the tick that bar reaches, its resting half-tick level rounded away from the position (lane E9); the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause. The one part of the row that WAS closable is closed (lane E14): where the running best STARTS is not a quantization at all but a level the leg names, so `Trail::best_seed` carries it generically and the kernel no longer begins a ride half a tick short of the activation |
 
 The corpus cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid
 feed, and under the trial 5 of them differ, in the engine-only
@@ -600,11 +600,11 @@ threshold its one-shot leg rests at (`source_trail_arm_level`) and books from
 a running best that is never short of the activation, because TradingView's
 starts there. The kernel is unchanged and the corpus byte-identical (on-grid,
 the two arms admit the same prints); the population sweep over sub-tick feeds
-is the real gate. One residual is left, of the same kind: the kernel's best
-starts at the arm, half a tick short of the activation, so while the raw
-extreme stays inside the activation's tick cell its stop sits up to half a
-tick further out than TradingView's and a print between the two fires only
-TradingView's (0 of the 6 tapes).
+is the real gate. One residual was left, of the same kind: the kernel's best
+started at the arm, half a tick short of the activation, so while the raw
+extreme stayed inside the activation's tick cell its stop sat up to half a
+tick further out than TradingView's and a print between the two fired only
+TradingView's (0 of the 6 tapes). Lane E14 closed it, below.
 
 **The one-shot's booked price and the placement print (lane E9, closing
 E5's findings).** Two more `lab tv` sets
@@ -623,12 +623,40 @@ the activation whose tick IS the activation (NYSE:F 11.295 under 11.30, seven
 longs and a short) counts as already reached: 8 of 8 trades exit on the next
 bar, `trail_offset` 1 and 0 alike, at activation -/+ the offset, so the best
 of a trail armed at placement starts at the activation too
-(`source_trail_reached_at`). Both are adapter policy for the reason above and
+(`source_trail_reached_at`), which until lane E14 the kernel's own best did
+not. Both are adapter policy for the reason above and
 byte-identical on the on-grid corpus (no print lies in a half cell; the
 corpus sets no sub-tick `trail_price`); the population sweep over sub-tick
 feeds is the real gate. TradingView's compiler refuses a trail without
 `trail_offset` on its own, so the omitted-offset shape has no tape and follows
 the same compare.
+
+**Where the running best starts (lane E14, closing both lanes' residual).**
+E5's residual and E9's second finding are one sentence: TradingView's running
+best starts AT the activation, the kernel's started wherever the arm landed —
+the half-tick threshold on a crossing, the next bar's first print when the
+placement close armed it. Neither is a quantization, so neither is B2's mask;
+they are the absence of any way for a leg to say where its ride begins. The
+kernel gained one, `native_order::Trail::best_seed`: absent it is the arm
+print, byte for byte as before, and present it is a floor on the start — the
+favourable one of the seed and the arm print. It passes rule 2 as amended.
+Mechanism: a trail that rides from its activation instead of from the next
+print is a broker shape a second venue asks for, and the level is data the
+host hands over, as an `arm_price` is; the kernel neither derives it nor
+knows what named it. Knob: today's start was not a choice the run had already
+made another way — there is no second spelling of it — so a request field is
+admissible rather than a hook. The adapter names the activation, or the
+favourable one of the activation and the placement print when that print
+armed the leg, and the kernel's own crossing then IS the price the adapter
+books: three trail twin suites move their `raw_price` / `path_position` /
+leg-kind rows onto it, with no booked price, bar or quantity changing. The
+corpus stays byte-identical 312/312 (on-grid: the arming bar's own extreme is
+folded into the best before any adverse move, so the seed changes nothing
+there); the sub-tick sweep is the gate. What is NOT redundant afterwards is
+the sibling stop an explicit-zero trail rests beside its `Trail`: a `Stop` is
+reached by a touch and a zero-distance ride needs a move strictly past the
+best, and a print landing ON the carried best separates them in the booked
+price's last bits.
 
 **Why B2 is not closed in the kernel (route (a) rejected).** The only kernel
 change that would let `project()` declare the grid is a per-order-kind
