@@ -31,7 +31,8 @@ Usage:
     python benchmarks/compare.py --strategy 001-analyzer-anvil-percent-costs-01
     python benchmarks/compare.py --quiet
     # stage one engine's grades, the other columns marked pending:
-    python benchmarks/compare.py --engines PyneCore --pending "pending wave D (BENCH2)" \
+    python benchmarks/compare.py --engines PyneCore \
+        --pending "PineForge=pending wave D (BENCH2)" --pending "vectorbt=runs in BENCH2" \
         --out-dir benchmarks/results/staged --summary-name pynecore_summary.md \
         --detail-name pynecore_trade_comparison.md
 """
@@ -232,14 +233,19 @@ def main() -> int:
                     help="Don't write Markdown reports — print to stdout instead")
     ap.add_argument("--engines", default=",".join(e for e, _ in ENGINES),
                     help="Comma list of engines to grade (default: all); the others read --pending")
-    ap.add_argument("--pending", default="not graded",
-                    help="Cell text for the engines left out of --engines")
+    ap.add_argument("--pending", action="append", default=[], metavar="ENGINE=TEXT",
+                    help="Cell text for an engine left out of --engines (repeatable; "
+                         "default 'not graded')")
     ap.add_argument("--out-dir", type=Path, default=BENCH_DIR / "results")
     ap.add_argument("--summary-name", default="summary.md")
     ap.add_argument("--detail-name", default="trade_comparison.md")
     args = ap.parse_args()
     graded_engines = {e.strip() for e in args.engines.split(",") if e.strip()}
-    unknown = graded_engines - {e for e, _ in ENGINES}
+    pending = {e: "not graded" for e, _ in ENGINES}
+    for item in args.pending:
+        engine, _, text = item.partition("=")
+        pending[engine.strip()] = text.strip()
+    unknown = (graded_engines | set(pending)) - {e for e, _ in ENGINES}
     if unknown:
         ap.error(f"unknown engine(s): {', '.join(sorted(unknown))}")
 
@@ -254,7 +260,7 @@ def main() -> int:
                 print(f"SKIP {slot.name}: no TV tape", file=sys.stderr)
                 continue
             grades = [grade(slot, e, f, scratch, errors) if e in graded_engines
-                      else Grade(e, "pending", reason=args.pending)
+                      else Grade(e, "pending", reason=pending[e])
                       for e, f in ENGINES]
             rows.append((slot.name, group, closed_trades(tape), grades))
             if not args.quiet:
@@ -267,7 +273,8 @@ def main() -> int:
     present = [g for g in groups if any(r[1] == g for r in rows)]
     scope_note = ("" if graded_engines == {e for e, _ in ENGINES} else
                   f"**Staged:** graded here: {', '.join(e for e, _ in ENGINES if e in graded_engines)}; "
-                  f"the other engines read ⏳ *{args.pending}*.\n")
+                  + "; ".join(f"{e}: ⏳ *{pending[e]}*" for e, _ in ENGINES if e not in graded_engines)
+                  + ".\n")
     sections = [
         "# Trade comparison\n",
         scope_note,
@@ -331,8 +338,8 @@ def main() -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / args.detail_name).write_text("\n".join(sections), encoding="utf-8")
         (out_dir / args.summary_name).write_text(text_summary, encoding="utf-8")
-        print(f"wrote {out_dir.relative_to(REPO_ROOT)}/{args.detail_name}")
-        print(f"wrote {out_dir.relative_to(REPO_ROOT)}/{args.summary_name}")
+        print(f"wrote {out_dir / args.detail_name}")
+        print(f"wrote {out_dir / args.summary_name}")
         print()
         print("\n".join(tallies))
     return 0
