@@ -325,6 +325,18 @@ cycle identity through scoped settlement. Group cancellation/reduction is
 caused by committed execution events. See the request header for the exact
 value types; source-specific Pine lowering remains codegen/adapter work.
 
+A limit is two facts. Its level gates the fill: the modeled path has to reach
+it, and a crossing books the level itself while a point already inside the
+region (a gap open) books that print. Its bound caps the resolved fill at the
+level after slippage. `Limit{price, fill_through}` keeps the gate and drops
+the bound (market-if-touched): slippage, or a host's own
+`resolve_execution_terms` answer, may carry the fill past the level, where a
+bounded limit is capped or — for host terms past the level — refused with
+`InvalidTerms`. Without slippage the two book the same fill; the flag is
+durable request state and is folded into the identities whether or not it
+mattered. Pinned from a bare host, both sides, in
+`tests/test_native_limit_fill_through.cpp` (R5 gap lane P5).
+
 At host epoch v17 (`native_host.hpp:18`), general requests also support explicit
 `native_order::ReverseTo{signed_units}` and `HostSized`. A `HostSized{Open,
 Side}` request binds its units at a matching candidate through the host's
@@ -479,7 +491,14 @@ delivered path with `mark` folded in. It reads only what the book holds and
 moves nothing (no fill, no hash, no row); a NaN `mark` keeps the booking facts
 and leaves `unrealized_pnl` NaN. It is the `strategy.opentrades.*` surface of
 a bare host; the field-by-field map is in
-[PineScript to native C++](@ref pine_to_native_map_trades).
+[PineScript to native C++](@ref pine_to_native_map_trades). A kernel
+liquidation is seen through it and through nothing else: the whole lot at
+the bar's open with the level `native_liquidation_price()` solved, then —
+after the path breached it — an empty book (`Flatten`) or the same lot,
+identity kept, shrunk to the survivor with the level re-solved
+(`RestoreMinimum`), and one closed row under the broker's own ticket with
+`CloseCause::Liquidation`. Pinned by the two liquidation scenarios of
+`tests/test_native_open_lots.cpp` (R5 gap lane P5).
 
 A run-start request uses the first provided input's opening time as its initial
 decision floor. An empty batch has no market time or price to deliver.
@@ -1406,6 +1425,11 @@ extremes it folds are durable engine state.
 Per-trade reads: `closed_trade_count()` / `closed_trade(i)` return the closed
 rows this run booked; `report_trade_count()` / `get_report_trade(i)` span those
 rows followed by the range-end rows, in the order `fill_report` lays them out.
+`closed_trade(i)` is the row itself, by reference — the object `get_trade(i)`
+and `get_report_trade(i)` read at the same index and the row `fill_report`
+publishes there, field for field; a range-end row counts in the report space
+only. Pinned by `closed_rows_by_index` in `tests/test_native_report_truth.cpp`
+(R5 gap lane P5).
 
 ### Folding host state into the broker-state hash
 
