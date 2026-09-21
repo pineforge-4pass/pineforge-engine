@@ -34,10 +34,12 @@
  *         — the old finite-zero distance armed at the low and filled there
  *         although the activation was first reached intrabar.
  *
- * Resolver-level pins go straight through resolve_exit_path_fill (the
- * runtime-private header, as test_path_resolve_extra.cpp does); engine-level
- * pins run BacktestEngine end to end, including the POOC close-fill entry
- * whose carried best is the entry price itself.
+ * One-bar pins run the product probe (tests/trail_exit_product_probe.hpp:
+ * the adapter's own lowering of strategy.exit, the kernel consumer's walk of
+ * the bar's synthesized path, and the fill read back from the kernel's public
+ * event record — R5 lane P9 retired the TradingView exit-path resolver these
+ * rows used to call); engine-level pins run the host end to end, including
+ * the POOC close-fill entry whose carried best is the entry price itself.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -47,11 +49,10 @@
 #include <string>
 #include <vector>
 
-#include "../src/engine_internal.hpp"
-#include "exit_path_resolver_oracle.hpp"
+#include "trail_exit_product_probe.hpp"
 
 using namespace pineforge;
-using namespace pineforge::internal;
+using namespace pineforge::trail_probe;
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -81,19 +82,24 @@ Bar mk(double o, double h, double l, double c, int64_t ts = 0) {
     return b;
 }
 
-// Resolver call for a lone trailing exit (no stop / limit legs) resting on
-// a NON-entry bar from the open, in the plain (non-magnifier) path.
-ExitPathFill trail_fill(const Bar& bar, PositionSide side,
-                        double trail_points, double trail_offset,
-                        double entry, double best_start, double mintick) {
-    return resolve_exit_path_fill(
-        bar, side, /*stop=*/kNaN, /*limit=*/kNaN,
-        trail_points, /*trail_price=*/kNaN, trail_offset, entry,
-        best_start, /*is_entry_bar=*/false, /*magnifier_active=*/false,
-        mintick);
+// The one-bar product probe for a lone trailing exit (no stop / limit legs)
+// resting on a NON-entry bar from the open, in the plain (non-magnifier)
+// path: a position at `entry` whose carried running extreme is `best_start`.
+TrailExitProjection trail_fill(const Bar& bar, PositionSide side,
+                               double trail_points, double trail_offset,
+                               double entry, double best_start, double mintick) {
+    TrailExitScenario scenario;
+    scenario.bar = bar;
+    scenario.is_long = side == PositionSide::LONG;
+    scenario.trail_points = trail_points;
+    scenario.trail_offset = trail_offset;
+    scenario.entry = entry;
+    scenario.best_start = best_start;
+    scenario.mintick = mintick;
+    return trail_exit(scenario);
 }
 
-// ── (B) resolver: the open arms the trail ─────────────────────────────
+// ── (B) the product: the open arms the trail ──────────────────────────
 
 void test_open_arms_trail_xauusd_long() {
     std::printf("test_open_arms_trail_xauusd_long\n");
@@ -102,14 +108,16 @@ void test_open_arms_trail_xauusd_long() {
     // the open, best = open. |O-L| = 1.16 < |H-O| = 26.375 -> low-first path
     // O -> L -> H -> C; the O->L leg crosses open - 0.015 = 3110.385.
     Bar xau = mk(3110.40, 3136.775, 3109.24, 3134.46);
-    ExitPathFill f = trail_fill(xau, PositionSide::LONG,
-                                /*trail_points=*/15.0, /*trail_offset=*/15.0,
-                                /*entry=*/3110.31, /*best_start=*/3110.31,
-                                /*mintick=*/0.001);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 3110.385));
-    CHECK(f.is_trail == true);
-    CHECK(f.is_limit == false);
+    TrailExitProjection f = trail_fill(xau, PositionSide::LONG,
+                                       /*trail_points=*/15.0, /*trail_offset=*/15.0,
+                                       /*entry=*/3110.31, /*best_start=*/3110.31,
+                                       /*mintick=*/0.001);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 3110.385));
+    CHECK(near(f.raw_price, 3110.385));
+    CHECK(f.leg_is_trail == true);
+    CHECK(f.level_fill == true);
+    CHECK(f.leg_is_limit == false);
     CHECK(f.at_bar_open == false);
     // On the O->L leg: (3110.385 - 3110.40) / (3109.24 - 3110.40).
     CHECK(near(f.path_position, 0.015 / 1.16, 1e-6));
@@ -121,14 +129,17 @@ void test_open_arms_trail_aapl_short() {
     // armed at the open; offset floor -> 1t = 0.01. |H-O| = 1.46 <
     // |O-L| = 3.02 -> high-first path; the O->H leg crosses open + 0.01.
     Bar aapl = mk(205.54, 207.00, 202.52, 204.00);
-    ExitPathFill f = trail_fill(aapl, PositionSide::SHORT,
-                                /*trail_points=*/1.7, /*trail_offset=*/1.7,
-                                /*entry=*/222.93, /*best_start=*/222.93,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 205.55));
-    CHECK(f.is_trail == true);
+    TrailExitProjection f = trail_fill(aapl, PositionSide::SHORT,
+                                       /*trail_points=*/1.7, /*trail_offset=*/1.7,
+                                       /*entry=*/222.93, /*best_start=*/222.93,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 205.55));
+    CHECK(near(f.raw_price, 205.55));
+    CHECK(f.leg_is_trail == true);
     CHECK(f.at_bar_open == false);
+    // On the O->H leg: (205.55 - 205.54) / (207.00 - 205.54).
+    CHECK(near(f.path_position, 0.01 / 1.46, 1e-6));
 }
 
 void test_open_arms_trail_ford_daily_long() {
@@ -136,12 +147,14 @@ void test_open_arms_trail_ford_daily_long() {
     // activation = 9.47 + 2*0.01 = 9.49 <= open 9.55; offset 1t. Adverse-first
     // path (|O-L| = 0.05 < |H-O| = 0.17) crosses open - 0.01 = 9.54.
     Bar ford = mk(9.55, 9.72, 9.50, 9.70);
-    ExitPathFill f = trail_fill(ford, PositionSide::LONG,
-                                /*trail_points=*/1.5, /*trail_offset=*/1.5,
-                                /*entry=*/9.47, /*best_start=*/9.47,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 9.54));
+    TrailExitProjection f = trail_fill(ford, PositionSide::LONG,
+                                       /*trail_points=*/1.5, /*trail_offset=*/1.5,
+                                       /*entry=*/9.47, /*best_start=*/9.47,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 9.54));
+    CHECK(f.leg_is_trail == true);
+    CHECK(near(f.path_position, 0.01 / 0.05, 1e-6));
 }
 
 void test_open_is_a_new_best_for_an_armed_trail() {
@@ -152,12 +165,14 @@ void test_open_is_a_new_best_for_an_armed_trail() {
     // 103 - 0.5 = 102.5 rather than trailing the stale 102 - 0.5 = 101.5
     // (which this bar never reaches — the old walk produced NO fill here).
     Bar gap_up = mk(103.0, 104.0, 102.4, 103.8);
-    ExitPathFill f = trail_fill(gap_up, PositionSide::LONG,
-                                /*trail_points=*/100, /*trail_offset=*/50,
-                                /*entry=*/100.0, /*best_start=*/102.0,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 102.5));
+    TrailExitProjection f = trail_fill(gap_up, PositionSide::LONG,
+                                       /*trail_points=*/100, /*trail_offset=*/50,
+                                       /*entry=*/100.0, /*best_start=*/102.0,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 102.5));
+    CHECK(f.leg_is_trail == true);
+    CHECK(f.level_fill == true);
 }
 
 void test_open_below_activation_does_not_arm() {
@@ -166,15 +181,19 @@ void test_open_below_activation_does_not_arm() {
     // still arms at the high and retraces from it (the established
     // test_resolve_exit_trail_fills pin: fill 101.5).
     Bar bar = mk(100.5, 102, 100, 100.2);
-    ExitPathFill f = trail_fill(bar, PositionSide::LONG,
-                                /*trail_points=*/100, /*trail_offset=*/50,
-                                /*entry=*/100.0, /*best_start=*/kNaN,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 101.5));
+    TrailExitProjection f = trail_fill(bar, PositionSide::LONG,
+                                       /*trail_points=*/100, /*trail_offset=*/50,
+                                       /*entry=*/100.0, /*best_start=*/kNaN,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 101.5));
+    CHECK(f.leg_is_trail == true);
+    // Low-first path O->L->H->C; the trail arms on the L->H leg and the
+    // H->C leg crosses 102 - 0.5 = 101.5.
+    CHECK(near(f.path_position, 2.0 + 0.5 / 1.8, 1e-6));
 }
 
-// ── (A) resolver: sub-tick offset == explicit zero ────────────────────
+// ── (A) the product: sub-tick offset == explicit zero ─────────────────
 
 void test_subtick_offset_fills_at_activation_eurusd_short() {
     std::printf("test_subtick_offset_fills_at_activation_eurusd_short\n");
@@ -182,17 +201,27 @@ void test_subtick_offset_fills_at_activation_eurusd_short() {
     // 0.9 / 0.6 all floor to 0 ticks -> the one-shot rule fills AT 1.08329
     // on the O->L leg (|H-O| = 0.0002 >= |O-L| = 0.00016 -> low-first path).
     // The old finite-zero distance armed at the low and filled at 1.08314.
+    //
+    // expectation corrected: the leg is a TRAIL crossing its level ->
+    // a one-shot kernel LIMIT crossing the adapter's half-tick arm threshold
+    // (1.083295, where the tick-quantized path first prints the activation),
+    // because the product lowers a zero-tick-offset trail to that one-shot
+    // and books the source activation from it; TradingView's 1.08329 is the
+    // same number the resolver pinned.
     Bar eur = mk(1.08330, 1.08350, 1.08314, 1.08320);
     const double offsets[] = {0.0, 0.5, 0.9, 0.6};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(eur, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.08329));
-        CHECK(f.is_trail == true);
+        TrailExitProjection f = trail_fill(eur, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1.08329));
+        CHECK(f.leg_is_limit == true);
+        CHECK(f.level_fill == true);
+        CHECK(near(f.raw_price, 1.083295));
         CHECK(f.at_bar_open == false);
+        CHECK(near(f.path_position, 0.000005 / 0.00016, 1e-6));
     }
 }
 
@@ -204,12 +233,17 @@ void test_subtick_offset_fills_at_activation_long() {
     Bar bar = mk(100.00, 100.10, 99.95, 100.05);
     const double offsets[] = {0.0, 0.5, 0.9};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(bar, PositionSide::LONG,
-                                    /*trail_points=*/3.0, off,
-                                    /*entry=*/100.0, /*best_start=*/100.0,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 100.03));
+        TrailExitProjection f = trail_fill(bar, PositionSide::LONG,
+                                           /*trail_points=*/3.0, off,
+                                           /*entry=*/100.0, /*best_start=*/100.0,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 100.03));
+        CHECK(f.leg_is_limit == true);
+        CHECK(near(f.raw_price, 100.025));
+        // The L->H leg (segment 2 of O->L->H->C) crosses the threshold
+        // halfway: (100.025 - 99.95) / (100.10 - 99.95).
+        CHECK(near(f.path_position, 1.0 + 0.075 / 0.15, 1e-9));
     }
 }
 
@@ -226,12 +260,13 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     Bar gap = mk(1.08320, 1.08340, 1.08305, 1.08330);
     const double offsets[] = {0.0, 0.5, 0.9};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(gap, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.08320));
+        TrailExitProjection f = trail_fill(gap, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1.08320));
+        CHECK(near(f.raw_price, 1.08320));
         CHECK(f.at_bar_open == true);
         CHECK(near(f.path_position, 0.0));
     }
@@ -242,12 +277,13 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     // 11 on-grid tapes in test_zero_offset_trail_rides refute it here.)
     Bar gap_hf = mk(1.08320, 1.08330, 1.08300, 1.08310);
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(gap_hf, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.08320));
+        TrailExitProjection f = trail_fill(gap_hf, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1.08320));
+        CHECK(near(f.raw_price, 1.08320));
         CHECK(f.at_bar_open == true);
         CHECK(near(f.path_position, 0.0));
     }
@@ -260,18 +296,23 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     // O->L leg lowers the best to the 1.08305 low and the L->H leg crosses
     // it. NYSE:F g2-0321-S-tp5 (open 9.915 -> TV fills the 9.86 low) and
     // s-dsub-0313-tp2 (9.575 -> the 9.51 low) are the tapes this stands for.
+    //
+    // expectation corrected: the kernel cursor is the L->H leg's start
+    // (is_trail, path position 1.0) -> the bar's OPEN point (path position
+    // 0.0), because the product rests this shape as a one-shot whose region
+    // the open already sits in, and the adapter's terms policy answers with
+    // TradingView's ridden level; the booked 1.08305 is unchanged.
     Bar gap_sub = mk(1.083205, 1.08340, 1.08305, 1.08330);
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(gap_sub, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.08305));
-        CHECK(f.is_trail == true);
-        CHECK(f.at_bar_open == false);
-        // The start of the L->H leg (segment 2 of O->L->H->C).
-        CHECK(near(f.path_position, 1.0));
+        TrailExitProjection f = trail_fill(gap_sub, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1.08305));
+        CHECK(near(f.raw_price, 1.083205));
+        CHECK(f.at_bar_open == true);
+        CHECK(near(f.path_position, 0.0));
     }
     // 1.083215 / 0.00001 = 108321.5 prints 1.08322 = the ceiled level: the
     // print sits AT the short's stop and the exit fills at the open, a level
@@ -280,14 +321,14 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
     // NYSE:F 03-06 14:30Z 9.515 -> 9.52: round 10 family AC pins4 / pins5).
     Bar gap_sub_at = mk(1.083215, 1.08340, 1.08305, 1.08330);
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(gap_sub_at, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.083215));
+        TrailExitProjection f = trail_fill(gap_sub_at, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.raw_price, 1.083215));
+        CHECK(near(f.exit_price, 1.08322));
         CHECK(f.at_bar_open == true);
-        CHECK(f.open_is_trail_level == true);
         CHECK(near(f.path_position, 0.0));
     }
 }
@@ -300,12 +341,15 @@ void test_whole_tick_offsets_keep_floored_trailing_distance() {
     Bar eur = mk(1.08330, 1.08350, 1.08314, 1.08320);
     const double offsets[] = {1.0, 1.4};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(eur, PositionSide::SHORT,
-                                    /*trail_points=*/0.6, off,
-                                    /*entry=*/1.08330, /*best_start=*/1.08330,
-                                    /*mintick=*/0.00001);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1.08315));
+        TrailExitProjection f = trail_fill(eur, PositionSide::SHORT,
+                                           /*trail_points=*/0.6, off,
+                                           /*entry=*/1.08330, /*best_start=*/1.08330,
+                                           /*mintick=*/0.00001);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1.08315));
+        CHECK(f.leg_is_trail == true);
+        CHECK(f.level_fill == true);
+        CHECK(near(f.path_position, 1.0 + 0.00001 / 0.00036, 1e-6));
     }
 }
 
@@ -319,34 +363,40 @@ void test_subtick_offset_arms_from_the_carried_best() {
     Bar serhan_hold = mk(1475.99, 1491.82, 1475.89, 1486.23);
     const double offsets[] = {0.0, 0.5, 0.9};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(serhan_hold, PositionSide::LONG,
-                                    /*trail_points=*/2213.985, off,
-                                    /*entry=*/1478.84, /*best_start=*/1475.99,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == false);
+        TrailExitProjection f = trail_fill(serhan_hold, PositionSide::LONG,
+                                           /*trail_points=*/2213.985, off,
+                                           /*entry=*/1478.84, /*best_start=*/1475.99,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == false);
     }
     // A carried best past the activation ARMS every zero-tick offset (round
-    // 10 family AC: the resolver trusts the best it is handed; the command
-    // layer's restart keeps the #148 peak out): the open through the level
-    // 1501.03 is the open print.
+    // 10 family AC: the product trusts the best the placement point hands
+    // it; the command layer's restart keeps the #148 peak out): the open
+    // through the level 1501.03 is the open print. The already-armed
+    // zero-distance leg rests as a kernel STOP, which that open gaps
+    // through — a point price, not a level.
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(serhan_hold, PositionSide::LONG,
-                                    /*trail_points=*/2213.985, off,
-                                    /*entry=*/1478.84, /*best_start=*/1501.03,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 1475.99));
+        TrailExitProjection f = trail_fill(serhan_hold, PositionSide::LONG,
+                                           /*trail_points=*/2213.985, off,
+                                           /*entry=*/1478.84, /*best_start=*/1501.03,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 1475.99));
+        CHECK(near(f.raw_price, 1475.99));
         CHECK(f.at_bar_open == true);
-        CHECK(f.open_is_trail_level == false);
+        CHECK(f.leg_is_stop == true);
+        CHECK(f.level_fill == false);
     }
-    // Omitted-offset control keeps the durable carried arming (gap-fill at
-    // the open), exactly as pinned in test_path_resolve_extra.
-    ExitPathFill omitted = trail_fill(serhan_hold, PositionSide::LONG,
-                                      /*trail_points=*/2213.985, kNaN,
-                                      /*entry=*/1478.84, /*best_start=*/1501.03,
-                                      /*mintick=*/0.01);
-    CHECK(omitted.should_fill == true);
-    CHECK(near(omitted.fill_price, 1475.99));
+    // Omitted-offset control keeps the durable carried arming: the adapter
+    // makes it marketable at the next open (a kernel Market), which books
+    // the same open print.
+    TrailExitProjection omitted = trail_fill(serhan_hold, PositionSide::LONG,
+                                             /*trail_points=*/2213.985, kNaN,
+                                             /*entry=*/1478.84, /*best_start=*/1501.03,
+                                             /*mintick=*/0.01);
+    CHECK(omitted.filled == true);
+    CHECK(near(omitted.exit_price, 1475.99));
+    CHECK(omitted.leg_is_market == true);
 }
 
 // ── engine-level fixtures ─────────────────────────────────────────────

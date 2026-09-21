@@ -318,6 +318,27 @@
       "twin": "test_small_money_margin_residual_l4a.cpp",
       "twinAssertionSha256": "1df8698e56ee25f25af4e6c7f6700fb9c3d5b594a8cfb61f005f081b6f082418",
       "twinAssertions": 25
+    },
+    "test_trail_activation_tick_bar": {
+      "baseAssertions": 33,
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record",
+      "twin": "test_trail_activation_tick_bar_l4c.cpp",
+      "twinAssertionSha256": "160b748152a4b3ce4f81cc8d70ed72a18612a9744cebc1b4c70a1a1d30ceda0c",
+      "twinAssertions": 41
+    },
+    "test_trail_fill_snap": {
+      "baseAssertions": 154,
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record",
+      "twin": "test_trail_fill_snap_l4c.cpp",
+      "twinAssertionSha256": "58cae480174f1e2ad75149bf2364603341e27db5c5ba6ca71283c1db62827305",
+      "twinAssertions": 170
+    },
+    "test_trail_open_arm_subtick_offset": {
+      "baseAssertions": 77,
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record",
+      "twin": "test_trail_open_arm_subtick_offset_l4c.cpp",
+      "twinAssertionSha256": "cc5b80fc98cc5b277d76f54b4a1fc0df6a35f766a70cc5522499dbdbadc83cbc",
+      "twinAssertions": 101
     }
   },
   "removed": [

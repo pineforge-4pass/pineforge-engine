@@ -46,9 +46,11 @@
  *     open + 1t == the bar's 9.90 high; trail-eq-S-off1), the long fills
  *     04-02 13:45Z @9.97 (peak 9.985 - 1t = 9.975, floored; trail-eq-L-off1).
  *
- * Resolver-level pins go straight through resolve_exit_path_fill (as
- * test_trail_open_arm_subtick_offset.cpp does); engine-level pins run
- * BacktestEngine end to end over the registry feed bars (`lab bars`).
+ * One-bar pins run the product probe (tests/trail_exit_product_probe.hpp:
+ * the adapter's lowering, the kernel consumer's walk, the fill read from the
+ * kernel's public event record — R5 lane P9 retired the TradingView exit-path
+ * resolver these rows used to call); engine-level pins run the host end to
+ * end over the registry feed bars (`lab bars`).
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -58,11 +60,12 @@
 #include <string>
 #include <vector>
 
-#include "../src/engine_internal.hpp"
-#include "exit_path_resolver_oracle.hpp"
+#include "trail_exit_product_probe.hpp"
+#include <pineforge/compat/pine/trail_ticks.hpp>
 
 using namespace pineforge;
-using namespace pineforge::internal;
+using namespace pineforge::trail_probe;
+using namespace pineforge::compat::pine;
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -92,16 +95,21 @@ Bar mk(double o, double h, double l, double c, int64_t ts = 0) {
     return b;
 }
 
-// Resolver call for a lone trailing exit (no stop / limit legs) resting on
-// a NON-entry bar from the open, in the plain (non-magnifier) path.
-ExitPathFill trail_fill(const Bar& bar, PositionSide side,
-                        double trail_points, double trail_offset,
-                        double entry, double best_start, double mintick) {
-    return resolve_exit_path_fill(
-        bar, side, /*stop=*/kNaN, /*limit=*/kNaN,
-        trail_points, /*trail_price=*/kNaN, trail_offset, entry,
-        best_start, /*is_entry_bar=*/false, /*magnifier_active=*/false,
-        mintick);
+// The one-bar product probe for a lone trailing exit (no stop / limit legs)
+// resting on a NON-entry bar from the open, in the plain (non-magnifier)
+// path: a position at `entry` whose carried running extreme is `best_start`.
+TrailExitProjection trail_fill(const Bar& bar, PositionSide side,
+                               double trail_points, double trail_offset,
+                               double entry, double best_start, double mintick) {
+    TrailExitScenario scenario;
+    scenario.bar = bar;
+    scenario.is_long = side == PositionSide::LONG;
+    scenario.trail_points = trail_points;
+    scenario.trail_offset = trail_offset;
+    scenario.entry = entry;
+    scenario.best_start = best_start;
+    scenario.mintick = mintick;
+    return trail_exit(scenario);
 }
 
 // ── registry feed bars (UTC labels; lab bars) ─────────────────────────
@@ -111,7 +119,6 @@ const Bar kAaplSignal0421_1930 = mk(191.13, 192.09, 191.06, 191.92, 174526380000
 const Bar kAaplEntry0421_1945  = mk(191.91, 193.43, 191.61, 193.03, 1745264700000);
 const Bar kAapl0422_1330       = mk(196.135, 197.5, 195.96, 197.25, 1745328600000);
 const Bar kAapl0422_1345       = mk(197.28, 197.855, 197.14, 197.81, 1745329500000);
-
 const Bar kAaplSignal0522_1715 = mk(201.3, 201.94, 201.28, 201.88, 1747934100000);
 const Bar kAaplEntry0522_1730  = mk(201.9, 202.08, 201.67, 202.06, 1747935000000);
 const Bar kAapl0522_1745 = mk(202.09, 202.18, 201.78, 201.89, 1747935900000);
@@ -238,215 +245,261 @@ void test_trail_level_tick_grid_snap() {
     CHECK(snap_trail_level_to_tick_grid(9.9, 0.0) == 9.9);
 }
 
-// ── (1) resolver: the one-shot trail arming at a sub-tick open ───────
+// ── (1) the product: the one-shot trail arming at a sub-tick open ─────
 
-void test_resolver_aapl_long_arms_at_subtick_open() {
-    std::printf("test_resolver_aapl_long_arms_at_subtick_open\n");
-    // activation 191.91 + 384t = 195.75 < open 196.135. OMITTED offset: fires
-    // at the open as the trail's LEVEL (open_is_trail_level). The raw open is
-    // reported; the consumer snaps it directionally.
+void test_product_aapl_long_arms_at_subtick_open() {
+    std::printf("test_product_aapl_long_arms_at_subtick_open\n");
+    // activation 191.91 + 384t = 195.75 < open 196.135. OMITTED offset: the
+    // adapter lowers the one-shot to a kernel limit that is already inside
+    // its region at the open, so the kernel fills it at the open PRINT
+    // (PointPrice, raw 196.135) and the adapter's terms policy books the
+    // trail's LEVEL — the open snapped directionally, 196.13 (TV), not the
+    // nearest-rounded 196.14.
     const double tp = scalper_trail_points(191.92, 0.01);
     {
-        ExitPathFill f = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, kNaN,
-                                    /*entry=*/191.91, /*best_start=*/193.43,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == true);
-        CHECK(f.fill_price == 196.135);
+        TrailExitProjection f = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, kNaN,
+                                           /*entry=*/191.91, /*best_start=*/193.43,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == true);
+        CHECK(f.raw_price == 196.135);
         CHECK(f.at_bar_open == true);
-        CHECK(f.open_is_trail_level == true);
-        CHECK(f.is_limit == false);
+        CHECK(f.level_fill == false);
+        CHECK(f.leg_is_limit == true);
+        CHECK(near(f.exit_price, 196.13));
         CHECK(near(f.path_position, 0.0));
     }
-    // EXPLICIT 0 (round 10 family AC, test_zero_offset_trail_rides): the open
-    // ARMS the trail with best = open and it rides; the adverse-first leg
-    // crosses the level 196.135 at once — a path LEVEL fill at position 0,
-    // not an open print (the consumer floors it to the same TV 196.13; the
-    // print rounding would give 196.14, which the aapl-pre-tp100 tape refutes).
+    // EXPLICIT 0 (round 10 family AC, test_zero_offset_trail_rides): the same
+    // one-shot lowering until the activation is reached, the same open print,
+    // the same booked 196.13 (the aapl-pre-tp100 tape refutes the print
+    // rounding's 196.14). expectation corrected: a path LEVEL fill at
+    // position 0 that is not at the open (the resolver's is_trail = true,
+    // at_bar_open = false) -> the one-shot limit's open print, because the
+    // resolver spelled the explicit-zero trail as arming at the open and
+    // crossing its own level at once, while the product has one lowering for
+    // the omitted and the zero offset; TradingView's 196.13 is the same.
     {
-        ExitPathFill f = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, 0.0,
-                                    /*entry=*/191.91, /*best_start=*/193.43,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == true);
-        CHECK(f.fill_price == 196.135);
-        CHECK(f.is_trail == true);
-        CHECK(f.at_bar_open == false);
-        CHECK(f.open_is_trail_level == false);
-        CHECK(f.is_limit == false);
+        TrailExitProjection f = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, 0.0,
+                                           /*entry=*/191.91, /*best_start=*/193.43,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == true);
+        CHECK(f.raw_price == 196.135);
+        CHECK(f.at_bar_open == true);
+        CHECK(f.level_fill == false);
+        CHECK(f.leg_is_limit == true);
+        CHECK(near(f.exit_price, 196.13));
         CHECK(near(f.path_position, 0.0));
     }
-    // trail_offset=1: arms at the open with best = open, the adverse-first
-    // leg (|O-L| = 0.175 < |H-O| = 1.365) crosses 196.135 - 1t = 196.125 —
-    // a level fill (TV prints the floored 196.12).
-    ExitPathFill f1 = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, 1.0,
-                                 191.91, 193.43, 0.01);
-    CHECK(f1.should_fill == true);
-    CHECK(near(f1.fill_price, 196.125));
-    CHECK(f1.is_trail == true);
+    // trail_offset=1: a generic kernel Trail, armed at the open with best =
+    // open; the adverse-first leg (|O-L| = 0.175 < |H-O| = 1.365) crosses
+    // 196.135 - 1t = 196.125 — a level crossing (TV books the floored 196.12).
+    TrailExitProjection f1 = trail_fill(kAapl0422_1330, PositionSide::LONG, tp, 1.0,
+                                        191.91, 193.43, 0.01);
+    CHECK(f1.filled == true);
+    CHECK(near(f1.raw_price, 196.125));
+    CHECK(f1.leg_is_trail == true);
+    CHECK(f1.level_fill == true);
     CHECK(f1.at_bar_open == false);
-    CHECK(f1.open_is_trail_level == false);
+    CHECK(near(f1.exit_price, 196.12));
 }
 
-void test_resolver_aapl_short_arms_at_subtick_open() {
-    std::printf("test_resolver_aapl_short_arms_at_subtick_open\n");
-    // activation 201.9 - 404t = 197.86 > open 193.665.
+void test_product_aapl_short_arms_at_subtick_open() {
+    std::printf("test_product_aapl_short_arms_at_subtick_open\n");
+    // activation 201.9 - 404t = 197.86 > open 193.665: the one-shot's open
+    // print, booked as the level's directional snap 193.67 (== nearest here).
     const double tp = scalper_trail_points(201.88, 0.01);
-    ExitPathFill f = trail_fill(kAapl0523_1330, PositionSide::SHORT, tp, kNaN,
-                                /*entry=*/201.9, /*best_start=*/201.0,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(f.fill_price == 193.665);
+    TrailExitProjection f = trail_fill(kAapl0523_1330, PositionSide::SHORT, tp, kNaN,
+                                       /*entry=*/201.9, /*best_start=*/201.0,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(f.raw_price == 193.665);
     CHECK(f.at_bar_open == true);
-    CHECK(f.open_is_trail_level == true);
+    CHECK(f.level_fill == false);
+    CHECK(near(f.exit_price, 193.67));
 }
 
-void test_resolver_adverse_gap_through_armed_level_is_a_raw_print() {
-    std::printf("test_resolver_adverse_gap_through_armed_level_is_a_raw_print\n");
+void test_product_adverse_gap_through_armed_level_is_a_raw_print() {
+    std::printf("test_product_adverse_gap_through_armed_level_is_a_raw_print\n");
     // Control: a trail ARMED from the carried best (omitted offset, best 99.5
-    // past the 99.97 activation) that the open gaps through in the adverse
-    // direction is a resting level the print went through — raw open, no
-    // level flag (the #148 / corpus discriminator booking, unchanged).
+    // past the 99.97 activation) is marketable at the next open in the
+    // adapter's lowering (native_order::Market): the open the order gapped
+    // through in the adverse direction is a raw PRINT, booked as such (the
+    // #148 / corpus discriminator booking, unchanged).
     Bar gap_up = mk(100.20, 100.30, 100.05, 100.10);
-    ExitPathFill f = trail_fill(gap_up, PositionSide::SHORT,
-                                /*trail_points=*/3.0, /*trail_offset=*/kNaN,
-                                /*entry=*/100.0, /*best_start=*/99.5,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 100.20));
+    TrailExitProjection f = trail_fill(gap_up, PositionSide::SHORT,
+                                       /*trail_points=*/3.0, /*trail_offset=*/kNaN,
+                                       /*entry=*/100.0, /*best_start=*/99.5,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.raw_price, 100.20));
     CHECK(f.at_bar_open == true);
-    CHECK(f.open_is_trail_level == false);
+    CHECK(f.leg_is_market == true);
+    CHECK(f.level_fill == false);
+    CHECK(near(f.exit_price, 100.20));
 }
 
-// ── (3) resolver: the activation is a tick-grid level ────────────────
+// ── (3) the product: the activation is a tick-grid level ──────────────
 
-void test_resolver_ford_short_activation_touched_by_the_low() {
-    std::printf("test_resolver_ford_short_activation_touched_by_the_low\n");
-    // 21t from 10.11 -> 9.90 == the bar's low (high-first path O->H->L->C,
-    // the H->L leg ends ON the level): TV fills @9.90 on this bar. The
-    // probe's own trail_points (20.22) and a literal 21 agree.
+void test_product_ford_short_activation_touched_by_the_low() {
+    std::printf("test_product_ford_short_activation_touched_by_the_low\n");
+    // 21t from 10.11 -> 9.90 == the bar's low (high-first path O->H->L->C).
+    // The adapter's one-shot limit rests at the half-tick threshold 9.905 —
+    // where the tick-quantized path first prints 9.90 — which the H->L leg
+    // crosses just before its end; the adapter books the activation 9.90
+    // (TV fills @9.90 on this bar). The probe's own trail_points (20.22) and
+    // a literal 21 agree.
     const double tps[] = {scalper_trail_points(10.11, 0.01), 21.0};
     for (double tp : tps) {
-        ExitPathFill f = trail_fill(kF0403_1345, PositionSide::SHORT, tp, kNaN,
-                                    /*entry=*/10.11, /*best_start=*/9.95,
-                                    /*mintick=*/0.01);
-        CHECK(f.should_fill == true);
-        CHECK(f.fill_price == 9.9);
-        CHECK(f.is_trail == true);
+        TrailExitProjection f = trail_fill(kF0403_1345, PositionSide::SHORT, tp, kNaN,
+                                           /*entry=*/10.11, /*best_start=*/9.95,
+                                           /*mintick=*/0.01);
+        CHECK(f.filled == true);
+        CHECK(f.exit_price == 9.9);
+        CHECK(f.leg_is_limit == true);
+        CHECK(f.level_fill == true);
         CHECK(f.at_bar_open == false);
-        // End of the H->L leg (segment 2 of the O->H->L->C path).
-        CHECK(near(f.path_position, 2.0, 1e-9));
+        CHECK(near(f.raw_price, 9.905));
+        // expectation corrected: path position 2.0 (the resolver's H->L leg
+        // ENDING on the level) -> 1 + (10.18 - 9.905) / (10.18 - 9.9), because
+        // the kernel's cursor is the raw path's crossing of the adapter's
+        // threshold, half a tick before the low; the booked price and bar are
+        // the same.
+        CHECK(near(f.path_position, 1.0 + (10.18 - 9.905) / (10.18 - 9.9), 1e-9));
     }
     // Explicit 0 is the same one-shot.
-    ExitPathFill f0 = trail_fill(kF0403_1345, PositionSide::SHORT, 21.0, 0.0,
-                                 10.11, 9.95, 0.01);
-    CHECK(f0.should_fill == true);
-    CHECK(f0.fill_price == 9.9);
+    TrailExitProjection f0 = trail_fill(kF0403_1345, PositionSide::SHORT, 21.0, 0.0,
+                                        10.11, 9.95, 0.01);
+    CHECK(f0.filled == true);
+    CHECK(f0.exit_price == 9.9);
 }
 
-void test_resolver_ford_short_fills_at_activation_not_at_the_extreme() {
-    std::printf("test_resolver_ford_short_fills_at_activation_not_at_the_extreme\n");
+void test_product_ford_short_fills_at_activation_not_at_the_extreme() {
+    std::printf("test_product_ford_short_fills_at_activation_not_at_the_extreme\n");
     // trail_points 18 -> activation 9.93, crossed on the H->L leg: the fill
     // is the activation (TV 9.93, trail-eq-S-off0 / trail-eq-S-omit), NOT
     // the 9.90 trough / close. Refutes the "stop == trough == close"
     // equality reading of the probe row.
     const double offsets[] = {kNaN, 0.0};
     for (double off : offsets) {
-        ExitPathFill f = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, off,
-                                    10.11, 9.95, 0.01);
-        CHECK(f.should_fill == true);
-        CHECK(near(f.fill_price, 9.93));
-        CHECK(f.is_trail == true);
-        CHECK(near(f.path_position, 1.0 + (9.93 - 10.18) / (9.9 - 10.18), 1e-9));
+        TrailExitProjection f = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, off,
+                                           10.11, 9.95, 0.01);
+        CHECK(f.filled == true);
+        CHECK(near(f.exit_price, 9.93));
+        CHECK(f.leg_is_limit == true);
+        CHECK(f.level_fill == true);
+        CHECK(near(f.raw_price, 9.935));
+        // expectation corrected: 1 + (9.93 - 10.18) / (9.9 - 10.18) ->
+        // 1 + (9.935 - 10.18) / (9.9 - 10.18), because the crossing the
+        // kernel records is the half-tick threshold's, not the level's.
+        CHECK(near(f.path_position, 1.0 + (9.935 - 10.18) / (9.9 - 10.18), 1e-9));
     }
-    // Tolerant ceil at the resolver: 14.00001 -> 14t = 9.97 on the 13:30Z
-    // bar (low-first path, the O->L leg 10.01 -> 9.95 crosses it);
+    // Tolerant ceil through the adapter: 14.00001 -> 14t = 9.97 on the
+    // 13:30Z bar (low-first path, the O->L leg 10.01 -> 9.95 crosses it);
     // 14.0001 -> 15t = 9.96. 0.14 / syminfo.mintick -> 9.97.
-    ExitPathFill a = trail_fill(kF0403_1330, PositionSide::SHORT, 14.00001, 0.0,
-                                10.11, 10.075, 0.01);
-    CHECK(a.should_fill == true);
-    CHECK(near(a.fill_price, 9.97));
-    ExitPathFill b = trail_fill(kF0403_1330, PositionSide::SHORT, 14.0001, 0.0,
-                                10.11, 10.075, 0.01);
-    CHECK(b.should_fill == true);
-    CHECK(near(b.fill_price, 9.96));
-    ExitPathFill c = trail_fill(kF0403_1330, PositionSide::SHORT, 0.14 / 0.01, 0.0,
-                                10.11, 10.075, 0.01);
-    CHECK(c.should_fill == true);
-    CHECK(near(c.fill_price, 9.97));
+    TrailExitProjection a = trail_fill(kF0403_1330, PositionSide::SHORT, 14.00001, 0.0,
+                                       10.11, 10.075, 0.01);
+    CHECK(a.filled == true);
+    CHECK(near(a.exit_price, 9.97));
+    TrailExitProjection b = trail_fill(kF0403_1330, PositionSide::SHORT, 14.0001, 0.0,
+                                       10.11, 10.075, 0.01);
+    CHECK(b.filled == true);
+    CHECK(near(b.exit_price, 9.96));
+    TrailExitProjection c = trail_fill(kF0403_1330, PositionSide::SHORT, 0.14 / 0.01, 0.0,
+                                       10.11, 10.075, 0.01);
+    CHECK(c.filled == true);
+    CHECK(near(c.exit_price, 9.97));
 }
 
-void test_resolver_ford_short_whole_tick_offset_level_touched_by_the_high() {
-    std::printf("test_resolver_ford_short_whole_tick_offset_level_touched_by_the_high\n");
+void test_product_ford_short_whole_tick_offset_level_touched_by_the_high() {
+    std::printf("test_product_ford_short_whole_tick_offset_level_touched_by_the_high\n");
     // trail_offset=1: the 13:45Z bar arms at 9.93 and trails to 9.90 + 1t =
     // 9.91 (close 9.90: no fill). 14:00Z opens 9.89 (new trough, level
-    // 9.90), the O->H leg ends ON 9.90 -> fill @9.90 (TV trail-eq-S-off1).
-    ExitPathFill hold = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, 1.0,
-                                   10.11, 9.95, 0.01);
-    CHECK(hold.should_fill == false);
-    ExitPathFill f = trail_fill(kF0403_1400, PositionSide::SHORT, 18.0, 1.0,
-                                10.11, /*best_start=*/9.9, 0.01);
-    CHECK(f.should_fill == true);
-    CHECK(f.fill_price == 9.9);
-    CHECK(f.is_trail == true);
+    // 9.90), the O->H leg ends ON 9.90 -> fill @9.90 (TV trail-eq-S-off1): a
+    // generic kernel Trail whose stop the leg's end touches.
+    TrailExitProjection hold = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, 1.0,
+                                          10.11, 9.95, 0.01);
+    CHECK(hold.filled == false);
+    TrailExitProjection f = trail_fill(kF0403_1400, PositionSide::SHORT, 18.0, 1.0,
+                                       10.11, /*best_start=*/9.9, 0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 9.9));
+    CHECK(f.leg_is_trail == true);
+    CHECK(f.level_fill == true);
     CHECK(near(f.path_position, 1.0));
     // trail_offset = 0.3 / (syminfo.mintick * 10) (2.9999999999999996 ->
     // 2t, exact floor): 14:00Z trails 9.89 + 2t = 9.91 (high 9.90: hold),
     // trough 9.83 -> 9.85 (close 9.835: hold); 14:15Z opens 9.835, the
     // O->H leg (high-first: |H-O| = 0.03 < |O-L| = 0.035) reaches 9.85 ->
     // fill @9.85 (TV trail-eq-S-off3fp2; a tolerant 3t floor would print
-    // 9.86).
+    // 9.86). The kernel Trail, already reached at placement, restarts its
+    // best at the 9.835 open (raw stop 9.855); the adapter's terms policy
+    // books TradingView's carried level 9.83 + 2t.
     const double off3 = 0.3 / (0.01 * 10.0);
-    ExitPathFill h1 = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, off3,
-                                 10.11, 9.95, 0.01);
-    CHECK(h1.should_fill == false);
-    ExitPathFill h2 = trail_fill(kF0403_1400, PositionSide::SHORT, 18.0, off3,
-                                 10.11, 9.9, 0.01);
-    CHECK(h2.should_fill == false);
-    ExitPathFill g = trail_fill(kF0403_1415, PositionSide::SHORT, 18.0, off3,
-                                10.11, 9.83, 0.01);
-    CHECK(g.should_fill == true);
-    CHECK(g.fill_price == 9.85);
+    TrailExitProjection h1 = trail_fill(kF0403_1345, PositionSide::SHORT, 18.0, off3,
+                                        10.11, 9.95, 0.01);
+    CHECK(h1.filled == false);
+    TrailExitProjection h2 = trail_fill(kF0403_1400, PositionSide::SHORT, 18.0, off3,
+                                        10.11, 9.9, 0.01);
+    CHECK(h2.filled == false);
+    TrailExitProjection g = trail_fill(kF0403_1415, PositionSide::SHORT, 18.0, off3,
+                                       10.11, 9.83, 0.01);
+    CHECK(g.filled == true);
+    CHECK(near(g.exit_price, 9.85));
+    CHECK(g.leg_is_trail == true);
+    CHECK(near(g.raw_price, 9.855));
 }
 
-void test_resolver_ford_long_twin() {
-    std::printf("test_resolver_ford_long_twin\n");
+void test_product_ford_long_twin() {
+    std::printf("test_product_ford_long_twin\n");
     // Long @9.88, trail_points 8 -> 9.96. 04-02 13:30Z (O 9.835 H 9.985
     // L 9.83 C 9.985, low-first) crosses it on the L->H leg: fill @9.96
-    // (TV trail-eq-L-off0), not the 9.985 peak == close.
-    ExitPathFill f = trail_fill(kF0402_1330, PositionSide::LONG, 8.0, 0.0,
-                                /*entry=*/9.88, /*best_start=*/9.93, 0.01);
-    CHECK(f.should_fill == true);
-    CHECK(f.fill_price == 9.96);
-    CHECK(f.is_trail == true);
-    CHECK(near(f.path_position, 1.0 + (9.96 - 9.83) / (9.985 - 9.83), 1e-9));
+    // (TV trail-eq-L-off0), not the 9.985 peak == close. The one-shot limit
+    // rests at the half-tick threshold 9.955.
+    TrailExitProjection f = trail_fill(kF0402_1330, PositionSide::LONG, 8.0, 0.0,
+                                       /*entry=*/9.88, /*best_start=*/9.93, 0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 9.96));
+    CHECK(f.leg_is_limit == true);
+    CHECK(f.level_fill == true);
+    CHECK(near(f.raw_price, 9.955));
+    // expectation corrected: 1 + (9.96 - 9.83) / (9.985 - 9.83) ->
+    // 1 + (9.955 - 9.83) / (9.985 - 9.83), because the kernel's cursor is
+    // the threshold crossing, half a tick before the level.
+    CHECK(near(f.path_position, 1.0 + (9.955 - 9.83) / (9.985 - 9.83), 1e-9));
     // trail_offset=1: arms at 9.96, trails the 9.985 peak - 1t = 9.975
-    // (close 9.985: hold); 13:45Z (O 9.98, low-first) crosses 9.975 on the
-    // O->L leg — a sub-tick level, floored to 9.97 by the consumer (TV
-    // trail-eq-L-off1 @9.97).
-    ExitPathFill hold = trail_fill(kF0402_1330, PositionSide::LONG, 8.0, 1.0,
-                                   9.88, 9.93, 0.01);
-    CHECK(hold.should_fill == false);
-    ExitPathFill g = trail_fill(kF0402_1345, PositionSide::LONG, 8.0, 1.0,
-                                9.88, /*best_start=*/9.985, 0.01);
-    CHECK(g.should_fill == true);
-    CHECK(near(g.fill_price, 9.975));
-    CHECK(g.is_trail == true);
+    // (close 9.985: hold); 13:45Z (O 9.98, low-first) crosses the level on
+    // the O->L leg — TV trail-eq-L-off1 @9.97. The kernel Trail, already
+    // reached at placement, restarts its best at the 9.98 open, so its own
+    // stop is 9.97 exactly; the booked 9.97 is TradingView's floored 9.975.
+    // expectation corrected: raw level 9.975 -> 9.97, because the resolver
+    // read the carried best 9.985 into its level while the kernel's best
+    // begins at the first live print; the booked price and bar are the same.
+    TrailExitProjection hold = trail_fill(kF0402_1330, PositionSide::LONG, 8.0, 1.0,
+                                          9.88, 9.93, 0.01);
+    CHECK(hold.filled == false);
+    TrailExitProjection g = trail_fill(kF0402_1345, PositionSide::LONG, 8.0, 1.0,
+                                       9.88, /*best_start=*/9.985, 0.01);
+    CHECK(g.filled == true);
+    CHECK(near(g.exit_price, 9.97));
+    CHECK(g.leg_is_trail == true);
+    CHECK(near(g.raw_price, 9.97));
 }
 
-void test_resolver_btc_short_activation_after_tolerant_ceil() {
-    std::printf("test_resolver_btc_short_activation_after_tolerant_ceil\n");
+void test_product_btc_short_activation_after_tolerant_ceil() {
+    std::printf("test_product_btc_short_activation_after_tolerant_ceil\n");
     // 235120t from 117559.99 -> 115208.79, crossed on the O->H->L->C path's
     // H->L leg of 08-18 03:30Z. std::ceil's 235121t would put it at .78.
     const double tp = scalper_trail_points(117560.0, 0.01);
-    ExitPathFill f = trail_fill(kBtc0818_0330, PositionSide::SHORT, tp, kNaN,
-                                /*entry=*/117559.99, /*best_start=*/115292.67,
-                                /*mintick=*/0.01);
-    CHECK(f.should_fill == true);
-    CHECK(near(f.fill_price, 115208.79));
-    CHECK(f.is_trail == true);
-    ExitPathFill g = trail_fill(kBtc0818_0330, PositionSide::SHORT, 235121.0, kNaN,
-                                117559.99, 115292.67, 0.01);
-    CHECK(g.should_fill == true);
-    CHECK(near(g.fill_price, 115208.78));
+    TrailExitProjection f = trail_fill(kBtc0818_0330, PositionSide::SHORT, tp, kNaN,
+                                       /*entry=*/117559.99, /*best_start=*/115292.67,
+                                       /*mintick=*/0.01);
+    CHECK(f.filled == true);
+    CHECK(near(f.exit_price, 115208.79));
+    CHECK(f.leg_is_limit == true);
+    CHECK(f.level_fill == true);
+    TrailExitProjection g = trail_fill(kBtc0818_0330, PositionSide::SHORT, 235121.0, kNaN,
+                                       117559.99, 115292.67, 0.01);
+    CHECK(g.filled == true);
+    CHECK(near(g.exit_price, 115208.78));
 }
 
 // ── engine-level fixtures ─────────────────────────────────────────────
@@ -704,15 +757,15 @@ int main() {
     test_trail_offset_floor_is_exact();
     test_trail_level_tick_grid_snap();
 
-    test_resolver_aapl_long_arms_at_subtick_open();
-    test_resolver_aapl_short_arms_at_subtick_open();
-    test_resolver_adverse_gap_through_armed_level_is_a_raw_print();
+    test_product_aapl_long_arms_at_subtick_open();
+    test_product_aapl_short_arms_at_subtick_open();
+    test_product_adverse_gap_through_armed_level_is_a_raw_print();
 
-    test_resolver_ford_short_activation_touched_by_the_low();
-    test_resolver_ford_short_fills_at_activation_not_at_the_extreme();
-    test_resolver_ford_short_whole_tick_offset_level_touched_by_the_high();
-    test_resolver_ford_long_twin();
-    test_resolver_btc_short_activation_after_tolerant_ceil();
+    test_product_ford_short_activation_touched_by_the_low();
+    test_product_ford_short_fills_at_activation_not_at_the_extreme();
+    test_product_ford_short_whole_tick_offset_level_touched_by_the_high();
+    test_product_ford_long_twin();
+    test_product_btc_short_activation_after_tolerant_ceil();
 
     test_engine_aapl_long_exit_floors_at_subtick_open();
     test_engine_aapl_short_exit_ceils_at_subtick_open();
@@ -722,5 +775,5 @@ int main() {
     test_engine_on_tick_open_and_resting_stop_gap_unchanged();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
-    return (tests_failed > 0) ? 1 : 0;
+    return tests_failed == 0 ? 0 : 1;
 }
