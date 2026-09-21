@@ -297,12 +297,26 @@ def main(root: Path = ROOT) -> int:
         # recorder shares record_report_point and must stay silent (the
         # marking host appends its own row after its continuation snapshot),
         # so the append may not move into the shared helper either.
+        #
+        # R5 E2: the extremes fold in that same recorder is NOT the curve's
+        # gate. The equity and position extremes are a property of the run, so
+        # the recorder folds them under every policy that still owns the mark
+        # cadence, and only the curve append and the hash row stay behind
+        # KernelRecorded. expectation corrected:
+        # `if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;`
+        # -> `if (!spec) return;` plus a separate
+        # `if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;`
+        # below an unconditional-by-policy `engine.update_equity_extremes();`,
+        # because a single combined guard cannot express two scopes; the third
+        # row pins the fold itself so re-gating it fails closed here.
         recorder = _function_body(
             consumer_hash,
             r"void\s+NativeExecutionConsumer::record_script_report_point\s*\(",
             "kernel report recorder")
         for pin in (
-            "if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;",
+            "if (!spec) return;",
+            "engine.update_equity_extremes();",
+            "if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;",
             "if (engine.broker_state_hash_recording_) {",
             "engine.broker_state_hashes_.push_back(engine.broker_state_hash());",
         ):

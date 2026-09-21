@@ -431,9 +431,14 @@ private:
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
-    // Report truth for bare hosts (NativeReportPolicy::KernelRecorded). Both
-    // are reporting-only: they mark equity and synthesize report rows, and
-    // never book cash, place an order or move the broker book.
+    // Report truth at the kernel's own cadence, one per script calculation.
+    // Reporting-only throughout: these mark equity and synthesize report
+    // rows, and never book cash, place an order or move the broker book. The
+    // split inside record_script_report_point is deliberate — the equity and
+    // position extremes are folded under every report policy that has not
+    // handed the mark cadence to the host, because they are a property of the
+    // run; appending the curve point and the open-position rows is
+    // NativeReportPolicy::KernelRecorded's alone.
     void record_script_report_point(BacktestEngine& engine, int64_t script_open_ms) const;
     void record_report_point(BacktestEngine& engine, int64_t report_ts) const;
     void record_open_position_report_rows(BacktestEngine& engine) const;

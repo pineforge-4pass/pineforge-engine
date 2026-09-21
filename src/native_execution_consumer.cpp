@@ -6618,6 +6618,17 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 // interval's open, not current_bar_.timestamp, which the intrabar walk
 // overwrites — that keeps the curve identical with and without a path.
 //
+// The two halves are not scoped alike. The equity and position extremes are
+// a property of the RUN — what it drew down, what it ran up, the most it
+// ever held — and not of who records the curve, so the kernel folds them at
+// every script calculation whatever the report policy says. Appending the
+// point is the recording, and that stays the policy's: a HostRecorded host
+// owns its series and gets no point from here. KernelRecordedAtHostMarks is
+// the one policy that has handed the mark cadence away, and its fold travels
+// with it (mark_script_report_point below) — folding here as well would
+// count an instant the marking host never reports, which is a different run
+// truth, not a truer one.
+//
 // The per-bar broker-state hash is a row of that same report, so the policy
 // that hands the kernel the report hands it this array too: with the
 // recording switch on (set_broker_state_hash_recording, off by default) one
@@ -6630,8 +6641,11 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 void NativeExecutionConsumer::record_script_report_point(
         BacktestEngine& engine, int64_t script_open_ms) const {
     const auto* spec = spec_ptr();
-    if (!spec || spec->report_policy != NativeReportPolicy::KernelRecorded) return;
-    record_report_point(engine, script_open_ms);
+    if (!spec) return;
+    if (spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks)
+        engine.update_equity_extremes();
+    if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    engine.record_equity_point(script_open_ms);
     if (engine.broker_state_hash_recording_) {
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());
     }
@@ -6653,6 +6667,8 @@ void NativeExecutionConsumer::mark_script_report_point(
     record_report_point(engine, script_bar_ts);
 }
 
+// The fold and the append together, at one instant: the shape a policy whose
+// mark cadence is the host's needs, because there the two are never apart.
 void NativeExecutionConsumer::record_report_point(
         BacktestEngine& engine, int64_t report_ts) const {
     engine.update_equity_extremes();

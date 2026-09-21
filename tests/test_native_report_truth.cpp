@@ -63,6 +63,59 @@ void ends_long_rule(Host& host) {
     if (host.calculations - 1 == 10) host.submit(market(2.0, "enter-long"));
 }
 
+// ── Extremes probe ──────────────────────────────────────────────────────
+// The equity and position extremes a host reads back at the end of a run.
+// They are folded by update_equity_extremes (engine.hpp) over protected
+// state, so the probe publishes them through its own accessors.
+struct Extremes {
+    double drawdown = 0.0;
+    double runup = 0.0;
+    double drawdown_percent = 0.0;
+    double runup_percent = 0.0;
+    double held_all = 0.0;
+    double held_long = 0.0;
+    double held_short = 0.0;
+};
+
+bool same_extremes(const Extremes& a, const Extremes& b) {
+    return a.drawdown == b.drawdown && a.runup == b.runup
+        && a.drawdown_percent == b.drawdown_percent
+        && a.runup_percent == b.runup_percent
+        && a.held_all == b.held_all && a.held_long == b.held_long
+        && a.held_short == b.held_short;
+}
+
+void print_extremes(const char* label, const Extremes& e) {
+    std::printf("  %-14s dd=%.17g ru=%.17g dd%%=%.17g ru%%=%.17g"
+                " all=%.17g long=%.17g short=%.17g\n",
+                label, e.drawdown, e.runup, e.drawdown_percent,
+                e.runup_percent, e.held_all, e.held_long, e.held_short);
+}
+
+struct ExtremesHost final : Host {
+    std::vector<Extremes> samples;
+    Extremes read() const {
+        Extremes out;
+        out.drawdown = max_drawdown_;
+        out.runup = max_runup_;
+        out.drawdown_percent = max_drawdown_percent();
+        out.runup_percent = max_runup_percent();
+        out.held_all = max_contracts_held_all();
+        out.held_long = max_contracts_held_long();
+        out.held_short = max_contracts_held_short();
+        return out;
+    }
+};
+
+// Scenario 1/2's tape, with the extremes sampled at the top of every
+// calculation: sample i is everything the run had folded when calculation i
+// began.
+void extremes_rule(Host& host) {
+    auto& probe = static_cast<ExtremesHost&>(host);
+    probe.samples.push_back(probe.read());
+    round_trip_rule(host);
+}
+
 // ── Report digest ───────────────────────────────────────────────────────
 struct Fnv1a {
     std::uint64_t h = 1469598103934665603ULL;
@@ -231,6 +284,84 @@ void kernel_recorded_curve_and_metrics() {
     completed(plain);
     Report baseline(plain);
     CHECK(trades_digest(report.c) == trades_digest(baseline.c));
+}
+
+// 2b. The equity and position extremes are a property of the RUN, not of who
+//     records the curve. One tape, two report policies: the same extremes at
+//     every calculation and at the end, and equal to an independent walk of
+//     the curve the KernelRecorded half recorded — which is what keeps
+//     compute_equity_stats (engine_metrics.cpp, "MUST mirror
+//     update_equity_extremes") one statement under both policies. The curve
+//     itself stays policy-scoped: the HostRecorded half still has none, and
+//     owns its own series.
+void extremes_are_run_truth_under_every_policy() {
+    const auto bars = feed(60);
+
+    ExtremesHost host_recorded;
+    host_recorded.calculation = extremes_rule;
+    run_feed(host_recorded, report_spec("l2-report-truth-extremes"), bars);
+    completed(host_recorded);
+
+    auto kernel_spec = report_spec("l2-report-truth-extremes");
+    kernel_spec.report_policy = NativeReportPolicy::KernelRecorded;
+    ExtremesHost kernel_recorded;
+    kernel_recorded.calculation = extremes_rule;
+    run_feed(kernel_recorded, kernel_spec, bars);
+    completed(kernel_recorded);
+
+    Report host_report(host_recorded);
+    Report kernel_report(kernel_recorded);
+    CHECK(host_report.c.equity_curve_len == 0);
+    CHECK(host_report.c.equity_curve == nullptr);
+    REQUIRE(kernel_report.c.equity_curve_len == 60);
+
+    // At every calculation.
+    REQUIRE(host_recorded.samples.size() == 60u);
+    REQUIRE(kernel_recorded.samples.size() == 60u);
+    std::size_t diverged = host_recorded.samples.size();
+    for (std::size_t i = 0; i < host_recorded.samples.size(); ++i) {
+        if (!same_extremes(host_recorded.samples[i], kernel_recorded.samples[i])) {
+            diverged = i;
+            break;
+        }
+    }
+    if (diverged != host_recorded.samples.size()) {
+        std::printf("extremes diverge at calculation %zu:\n", diverged);
+        print_extremes("HostRecorded", host_recorded.samples[diverged]);
+        print_extremes("KernelRecorded", kernel_recorded.samples[diverged]);
+    }
+    CHECK(diverged == host_recorded.samples.size());
+
+    // And at the end.
+    const Extremes host_end = host_recorded.read();
+    const Extremes kernel_end = kernel_recorded.read();
+    if (!same_extremes(host_end, kernel_end)) {
+        std::printf("extremes diverge at run end:\n");
+        print_extremes("HostRecorded", host_end);
+        print_extremes("KernelRecorded", kernel_end);
+    }
+    CHECK(same_extremes(host_end, kernel_end));
+
+    // The pin is not vacuous, and the scalars the bare host reads are the
+    // walk of the curve the other half recorded: the mirror holds across the
+    // policy split. The engine seeds its peak/trough at initial capital and
+    // the walk seeds at curve[0], which agree because this tape is flat on
+    // bar 0 (the first order is at bar 10).
+    const Walk walked = walk_curve(kernel_report.c);
+    CHECK(walked.drawdown > 0.0);
+    CHECK(walked.runup > 0.0);
+    CHECK(host_end.drawdown == walked.drawdown);
+    CHECK(host_end.runup == walked.runup);
+    CHECK(kernel_report.c.metrics.equity.max_equity_drawdown == host_end.drawdown);
+    CHECK(kernel_report.c.metrics.equity.max_equity_runup == host_end.runup);
+    CHECK(host_end.drawdown_percent > 0.0);
+    CHECK(host_end.runup_percent > 0.0);
+
+    // The position extremes are this tape's: long 2 from bar 10, short 1 from
+    // bar 40, and the run never held more than that.
+    CHECK(host_end.held_all == 2.0);
+    CHECK(host_end.held_long == 2.0);
+    CHECK(host_end.held_short == 1.0);
 }
 
 // 3. A position the feed ends with becomes exactly one reported row per lot,
@@ -744,6 +875,8 @@ void closed_rows_by_index() {
 int main() {
     test("host_recorded_default_is_unchanged", host_recorded_default_is_unchanged);
     test("kernel_recorded_curve_and_metrics", kernel_recorded_curve_and_metrics);
+    test("extremes_are_run_truth_under_every_policy",
+         extremes_are_run_truth_under_every_policy);
     test("open_position_row_at_range_end", open_position_row_at_range_end);
     test("spec_hash_is_neutral_by_default", spec_hash_is_neutral_by_default);
     test("kernel_recorded_broker_hash_per_script_bar",

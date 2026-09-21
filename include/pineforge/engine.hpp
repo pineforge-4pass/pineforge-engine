@@ -1832,11 +1832,18 @@ protected:
     // --- Equity extremes update (called after each on_bar) ---
     // NOTE: the dd/runup walk in src/engine_metrics.cpp (compute_equity_stats)
     // MUST mirror this trough-reset logic; keep in lockstep. The fold is
-    // exactly one per script bar and always paired with record_equity_point,
-    // so the curve holds the very values folded here and a re-walk of the
-    // curve through fold_equity_extreme reproduces the scalars bit for bit
-    // — record_range_end_close_trades (engine_orders.cpp) relies on that
-    // when it re-marks the last point.
+    // exactly one per script calculation, and the kernel performs it under
+    // every report policy (native_execution_consumer.cpp
+    // record_script_report_point / mark_script_report_point): what these
+    // scalars measure is the run, not the report, so a host that records its
+    // own equity series still reads a truthful drawdown, run-up and position
+    // peak. Where a policy DOES record the curve, the fold and
+    // record_equity_point happen at the same instant, so the curve holds the
+    // very values folded here and a re-walk of the curve through
+    // fold_equity_extreme reproduces the scalars bit for bit — the Pine
+    // range-end re-mark (scheduler_record_range_end, src/source/
+    // pine_strategy_host.cpp) relies on that when it re-marks the last point
+    // and re-folds every extreme from the curve.
     void fold_equity_extreme(double eq) {
         if (eq > max_equity_) {
             max_equity_ = eq;
