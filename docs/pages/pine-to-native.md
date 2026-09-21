@@ -226,7 +226,11 @@ once. Natively they are separate and each is nameable:
 
 - **Placed before the entry has a price.** Each leg is a child with
   `WaitForApplied` native_order.hpp:385 naming the parent, and a
-  `FromOwnerFill` native_order.hpp:306 anchor instead of an absolute level. At
+  `FromOwnerFill` native_order.hpp:306 anchor instead of an absolute level. The
+  trigger's own level field is then left **unwritten**: the `0.0` a
+  `Limit::price` / `Stop::price` already defaults to, and an absent
+  `Trail::arm_price` — or that same `0.0` — for a trail. Writing any other
+  level is refused, because the arm would overwrite it. At
   the parent's fill the kernel materializes `fill + offset` — in ticks when
   `FromOwnerFill::ticks` native_order.hpp:308 is set — snaps it per
   `NativeAnchorRounding` native_order.hpp:284, offers it once to

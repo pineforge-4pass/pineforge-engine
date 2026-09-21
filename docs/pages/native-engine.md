@@ -708,9 +708,13 @@ to `Absolute{}` — the level written in the trigger. `FromOwnerFill{offset,
 ticks}` instead defers it: when the owner's fill arms the request, the level
 becomes `fill + offset`, with `offset` signed (adverse is negative) and
 spelled in price ticks when `ticks` is set. The anchor applies to `Limit` and
-`Stop` prices and to a `Trail` arm threshold; the anchored field carries the
-placeholder `0.0` until then, and `Market`, `StopLimit`, and any owner other
-than `WaitForApplied` are rejected, because only that relation arms. The
+`Stop` prices and to a `Trail` arm threshold. **The rule for the anchored
+field is that you do not write it**: leave it at its own absence — the `0.0`
+`Limit::price` and `Stop::price` already default to, and either an absent
+`std::optional` or that same `0.0` for a `Trail`'s `arm_price`. Writing any
+other level is rejected, because the arm would silently overwrite it.
+`Market`, `StopLimit`, and any owner other
+than `WaitForApplied` are rejected too, because only that relation arms. The
 `ArmedEvent` carries the materialized definition: from then on the request
 reads as the absolute level it now is.
 
