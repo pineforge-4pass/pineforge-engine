@@ -473,6 +473,89 @@ void kernel_recorded_broker_hash_spans_a_stream() {
     CHECK(report.c.trades_len == 2);
 }
 
+// ── Closed rows by index (§1.8 RP6, R5 gap lane P5) ─────────────────────
+// 9. closed_trade_count() / closed_trade(i) are the closed rows this run
+//    booked, by index and by reference: the i-th row is the very object the
+//    blotter holds, the one get_trade(i) reads, and the one fill_report
+//    publishes at the same index, field for field. A range-end row is report
+//    space only: report_trade_count() / get_report_trade(i) see it after the
+//    closed rows, closed_trade() never does.
+void closed_rows_by_index() {
+    Host host;
+    host.calculation = round_trip_rule;
+    run_feed(host, report_spec("l2-report-truth"), feed(60));
+    completed(host);
+
+    REQUIRE(host.closed_trade_count() == 2);
+    CHECK(host.closed_trade_count() == host.rows().size());
+    CHECK(static_cast<int>(host.closed_trade_count()) == host.trade_count());
+    CHECK(host.report_trade_count() == 2);   // flat at the end: no range-end row
+
+    Report report(host);
+    REQUIRE(report.c.trades_len == 2);
+    const char* const entry_ids[] = {"enter-long", "enter-short"};
+    const char* const exit_ids[] = {"exit-long", "exit-short"};
+    for (std::size_t i = 0; i < host.closed_trade_count(); ++i) {
+        const Trade& row = host.closed_trade(i);
+        CHECK(&row == &host.rows()[i]);
+        CHECK(&row == &host.get_trade(static_cast<int>(i)));
+        CHECK(&row == &host.get_report_trade(static_cast<int>(i)));
+        CHECK(row.entry_id == entry_ids[i]);
+        CHECK(row.exit_id == exit_ids[i]);
+        CHECK(row.is_long == (i == 0));
+        CHECK(row.qty == (i == 0 ? 2.0 : 1.0));
+        CHECK(!row.open_at_end);
+        CHECK(row.entry_incarnation != 0);
+        CHECK(row.entry_bar_index < row.exit_bar_index);
+        CHECK(row.entry_time < row.exit_time);
+        // Two cash tickets per round trip, and the P&L is the signed move of
+        // the row's own prices net of them.
+        CHECK(row.commission == 4.0);
+        const double direction = row.is_long ? 1.0 : -1.0;
+        near(row.pnl, direction * row.qty * (row.exit_price - row.entry_price) - row.commission);
+
+        const TradeC& published = report.c.trades[i];
+        CHECK(published.entry_time == row.entry_time);
+        CHECK(published.exit_time == row.exit_time);
+        CHECK(published.entry_price == row.entry_price);
+        CHECK(published.exit_price == row.exit_price);
+        CHECK(published.pnl == row.pnl);
+        CHECK(published.pnl_pct == row.pnl_pct);
+        CHECK(published.qty == row.qty);
+        CHECK(published.commission == row.commission);
+        CHECK(published.max_runup == row.max_runup);
+        CHECK(published.max_drawdown == row.max_drawdown);
+        CHECK(published.entry_bar_index == row.entry_bar_index);
+        CHECK(published.exit_bar_index == row.exit_bar_index);
+        CHECK(published.is_long == (row.is_long ? 1 : 0));
+        CHECK(published.open_at_end == 0);
+    }
+    // The rows are booked in closing order: the long closed before the short
+    // was even opened.
+    CHECK(host.closed_trade(0).exit_time <= host.closed_trade(1).entry_time);
+
+    // A position the feed ends with is one reported row and zero closed rows.
+    auto reported = report_spec("l2-report-truth-open");
+    reported.report_policy = NativeReportPolicy::KernelRecorded;
+    reported.report_open_position_at_end = true;
+    Host open;
+    open.calculation = ends_long_rule;
+    run_feed(open, reported, feed(60));
+    completed(open);
+    CHECK(open.closed_trade_count() == 0);
+    CHECK(open.trade_count() == 0);
+    REQUIRE(open.report_trade_count() == 1);
+    CHECK(open.get_report_trade(0).open_at_end);
+    CHECK(open.get_report_trade(0).entry_id == "enter-long");
+    Report open_report(open);
+    CHECK(open_report.c.trades_len == 1);
+
+    // A host that never ran has no closed rows to index.
+    Host idle;
+    CHECK(idle.closed_trade_count() == 0);
+    CHECK(idle.report_trade_count() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -486,6 +569,7 @@ int main() {
          broker_hash_rows_are_opt_in_and_move_nothing);
     test("kernel_recorded_broker_hash_spans_a_stream",
          kernel_recorded_broker_hash_spans_a_stream);
+    test("closed_rows_by_index", closed_rows_by_index);
     std::printf("test_native_report_truth: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
