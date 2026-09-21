@@ -3279,7 +3279,8 @@ answers `PF_NATIVE_E_STATE`.
 `native_order::Request` and is never cast onto it. It carries the intent
 (including `Sized`, with basis, side, time and grid policy), the trigger
 (`Market` / `Limit` with `fill_through` / `Stop` / `StopLimit` / `Trail`, with
-the tick spellings and the arm price), the `FromOwnerFill` anchor, the
+the tick spellings, the arm price and the seeded start of the running best),
+the `FromOwnerFill` anchor, the
 capacity, the owner relation with its incarnations and cycle, the group and
 its effect, and the label and comment. The two anchored-leg knobs ride an
 additive tail behind `PF_NATIVE_REQUEST_V1_BASE_SIZE` (`anchor_rounding`,
@@ -3321,11 +3322,12 @@ The intrabar block is also what makes `on_sub_bar` reachable: only
 has sub-bars of its own. A `PF_NATIVE_SLOT_LABEL_FEED_TOLERANT` run keeps the
 caller's own labels and delivers none.
 
-`pf_native_request_v1` likewise has three published lengths now — base, plus
+`pf_native_request_v1` likewise has four published lengths now — base, plus
 the anchored-leg tail (`PF_NATIVE_REQUEST_V1_ANCHOR_SIZE`), plus the
-sizing detail: `size_price` (`SizePrice`: `RESOLVED`, `SIGNAL`,
-`SIGNAL_ON_TICK`) and `reduce_basis` (`ScopeBasis`: `AT_MATCH`,
-`AT_ACCEPTANCE`).
+sizing detail (`PF_NATIVE_REQUEST_V1_SIZING_SIZE`): `size_price` (`SizePrice`:
+`RESOLVED`, `SIGNAL`, `SIGNAL_ON_TICK`) and `reduce_basis` (`ScopeBasis`:
+`AT_MATCH`, `AT_ACCEPTANCE`), plus the trail seed: `trail_best_seed` and
+`trail_has_best_seed` (`Trail::best_seed`, where the running best starts).
 
 `pf_native_working_v1` is the first **readout** with an additive tail:
 `trail_has_arm_price`, the request's own flag read back, so a trail with no

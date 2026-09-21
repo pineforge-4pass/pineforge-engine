@@ -139,15 +139,18 @@ static_assert(static_cast<int>(no::NativeArmVisibility::Working)
                   && static_cast<int>(no::NativeArmVisibility::PendingUntilArmed)
                          == PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED,
               "NativeArmVisibility drifted");
-/* Both request tails are append-only: each published layout must still end
- * exactly where its size constant says, and each tail must be the two fields
+/* Every request tail is append-only: each published layout must still end
+ * exactly where its size constant says, and each tail must be the fields
  * below it and nothing else. */
 static_assert(PF_NATIVE_REQUEST_V1_ANCHOR_SIZE
                   == PF_NATIVE_REQUEST_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_request_v1 anchored-leg tail moved");
-static_assert(sizeof(pf_native_request_v1)
+static_assert(PF_NATIVE_REQUEST_V1_SIZING_SIZE
                   == PF_NATIVE_REQUEST_V1_ANCHOR_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_request_v1 sizing-detail tail moved");
+static_assert(offsetof(pf_native_request_v1, trail_has_best_seed)
+                  == PF_NATIVE_REQUEST_V1_SIZING_SIZE + sizeof(double),
+              "the pf_native_request_v1 trail-seed tail moved");
 static_assert(static_cast<int>(no::SizePrice::SignalOnTick)
                   == PF_NATIVE_SIZE_PRICE_SIGNAL_ON_TICK, "SizePrice drifted");
 static_assert(static_cast<int>(no::ScopeBasis::AtAcceptance)
@@ -882,9 +885,11 @@ int translate_intent(const pf_native_request_v1& in, bool has_sizing_tail,
     }
 }
 
-int translate_trigger(const pf_native_request_v1& in, no::Trigger& out) {
+int translate_trigger(const pf_native_request_v1& in, bool has_trail_seed_tail,
+                      no::Trigger& out) {
     if (in.fill_through > 1u || in.trail_offset_in_ticks > 1u
-        || in.trail_has_arm_price > 1u) {
+        || in.trail_has_arm_price > 1u
+        || (has_trail_seed_tail && in.trail_has_best_seed > 1u)) {
         return PF_NATIVE_E_TAG;
     }
     switch (in.trigger) {
@@ -909,6 +914,11 @@ int translate_trigger(const pf_native_request_v1& in, no::Trigger& out) {
             trail.offset = in.p1;
         }
         if (in.trail_has_arm_price != 0u) trail.arm_price = in.p2;
+        /* The seed is the last tail: an earlier caller's trail has none, and
+         * rides from its arm print exactly as it did before the field. */
+        if (has_trail_seed_tail && in.trail_has_best_seed != 0u) {
+            trail.best_seed = in.trail_best_seed;
+        }
         out = trail;
         return PF_NATIVE_OK;
     }
@@ -954,11 +964,13 @@ int translate_owner(const pf_native_request_v1& in, const no::RunIdentity& run,
 
 int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run,
                       no::Request& out) {
-    /* Three published layouts: the base one the L13 lane first shipped, that
-     * plus L7b's anchored-leg tail, and the current one with L3b's sizing
-     * detail. An earlier caller's later tails are never read; it gets their
-     * defaults. */
-    const bool has_sizing_tail = in.struct_size == sizeof(pf_native_request_v1);
+    /* Four published layouts: the base one the L13 lane first shipped, that
+     * plus L7b's anchored-leg tail, that plus L3b's sizing detail, and the
+     * current one with E14's trail seed. An earlier caller's later tails are
+     * never read; it gets their defaults. */
+    const bool has_trail_seed_tail = in.struct_size == sizeof(pf_native_request_v1);
+    const bool has_sizing_tail =
+        has_trail_seed_tail || in.struct_size == PF_NATIVE_REQUEST_V1_SIZING_SIZE;
     const bool has_anchor_tail =
         has_sizing_tail || in.struct_size == PF_NATIVE_REQUEST_V1_ANCHOR_SIZE;
     if ((!has_anchor_tail && in.struct_size != PF_NATIVE_REQUEST_V1_BASE_SIZE)
@@ -968,7 +980,10 @@ int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run
     if (int rc = translate_intent(in, has_sizing_tail, out.intent); rc != PF_NATIVE_OK) {
         return rc;
     }
-    if (int rc = translate_trigger(in, out.trigger); rc != PF_NATIVE_OK) return rc;
+    if (int rc = translate_trigger(in, has_trail_seed_tail, out.trigger);
+        rc != PF_NATIVE_OK) {
+        return rc;
+    }
     if (int rc = translate_owner(in, run, out.owner); rc != PF_NATIVE_OK) return rc;
 
     switch (in.capacity) {

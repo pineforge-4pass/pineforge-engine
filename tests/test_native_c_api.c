@@ -2496,11 +2496,13 @@ static void check_request_sizing_tail(void) {
     tail_state resolved;
     tail_state signal;
 
-    /* Three published request layouts. */
+    /* Four published request layouts. */
     CHECK(PF_NATIVE_REQUEST_V1_BASE_SIZE < PF_NATIVE_REQUEST_V1_ANCHOR_SIZE,
           "the anchored-leg tail is not past the base layout");
-    CHECK(PF_NATIVE_REQUEST_V1_ANCHOR_SIZE < (uint32_t)sizeof(pf_native_request_v1),
+    CHECK(PF_NATIVE_REQUEST_V1_ANCHOR_SIZE < PF_NATIVE_REQUEST_V1_SIZING_SIZE,
           "the sizing tail is not past the anchored-leg layout");
+    CHECK(PF_NATIVE_REQUEST_V1_SIZING_SIZE < (uint32_t)sizeof(pf_native_request_v1),
+          "the trail-seed tail is not past the sizing layout");
 
     table = blank_callbacks(NULL);
     host = strategy_native_host_create_v1(&table);
@@ -2548,6 +2550,158 @@ static void check_request_sizing_tail(void) {
           "the SIGNAL arm did not size against the frozen decision price");
     strategy_native_host_free(resolved.host);
     strategy_native_host_free(signal.host);
+}
+
+/* --- the trail seed (E14): where a trail's running best starts --- */
+
+/* Five bars. The lot opens on the first, the host's own level 101.00 is
+ * reached on the second, and the trail is submitted on the third already
+ * armed -- so the kernel's own start is the fourth bar's open, 100.60. With a
+ * 0.50 offset that is a stop at 100.20 and the shallow fifth bar, whose low is
+ * 100.45, never reaches it. Seeded at 101.00 the stop is 100.50 and the
+ * shallow bar books it. */
+static pf_bar_t seed_bars_storage[5];
+static int seed_bars_ready = 0;
+
+static const pf_bar_t* seed_feed(int* n) {
+    if (!seed_bars_ready) {
+        static const double rows[5][4] = {
+            {100.00, 100.00, 100.00, 100.00},
+            {100.20, 101.00, 100.10, 100.60},
+            {100.60, 100.70, 100.55, 100.60},
+            {100.60, 100.60, 100.45, 100.50},
+            {100.50, 100.50, 100.50, 100.50},
+        };
+        int i;
+        for (i = 0; i < 5; ++i) {
+            seed_bars_storage[i].open = rows[i][0];
+            seed_bars_storage[i].high = rows[i][1];
+            seed_bars_storage[i].low = rows[i][2];
+            seed_bars_storage[i].close = rows[i][3];
+            seed_bars_storage[i].volume = 1.0;
+            seed_bars_storage[i].timestamp = (int64_t)i * 300000;
+        }
+        seed_bars_ready = 1;
+    }
+    if (n) *n = 5;
+    return seed_bars_storage;
+}
+
+typedef struct seed_state {
+    pf_strategy_t host;
+    int      calculations;
+    int      failures;
+    int      has_seed;        /* 0 no seed, 1 seeded, 2 seeded past an old layout */
+    double   final_units;
+} seed_state;
+
+static int seed_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    seed_state* state = (seed_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == 1) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.label = "seed-entry";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "the seed entry was refused");
+        return 0;
+    }
+    if (state->calculations != 2) return 0;
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_TRAIL;
+    request.p1 = 0.5;
+    request.label = "seed-trail";
+    if (state->has_seed != 0) {
+        request.trail_best_seed = 101.0;
+        request.trail_has_best_seed = 1;
+    }
+    if (state->has_seed == 2) {
+        /* A caller compiled before the seed existed sends the third layout.
+         * The bytes are in this struct, but the runtime must not read a tail
+         * its caller does not carry. */
+        request.struct_size = PF_NATIVE_REQUEST_V1_SIZING_SIZE;
+    }
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "the seed trail was refused");
+    return 0;
+}
+
+static void run_seeded_trail(int has_seed, seed_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->has_seed = has_seed;
+    table = blank_callbacks(state);
+    table.on_bar = seed_on_bar;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "trail-seed host create failed");
+    if (!state->host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "trail-seed configure");
+    bars = seed_feed(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, n, NULL), PF_NATIVE_OK,
+                 "the trail-seed run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback trail-seed rows failed");
+    CHECK_EQ_INT(strategy_native_position_v1(state->host, &state->final_units, NULL, NULL),
+                 PF_NATIVE_OK, "the trail-seed position was refused");
+}
+
+static void check_trail_best_seed_tail(void) {
+    pf_native_request_v1 request;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_strategy_t host;
+    seed_state without;
+    seed_state with;
+    seed_state old_layout;
+
+    /* An out-of-range flag is a tag error, and a seed that is not a price
+     * level is the kernel's own rejection. */
+    table = blank_callbacks(NULL);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "trail-seed tag host create failed");
+    if (!host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "trail-seed tag configure");
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_TRAIL;
+    request.p1 = 0.5;
+    request.trail_has_best_seed = 2;
+    CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                 "an out-of-range trail_has_best_seed was accepted");
+    request.trail_has_best_seed = 1;
+    request.trail_best_seed = 0.0;
+    CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_STATE,
+                 "a nonpositive trail seed was judged before the command legality rule");
+    strategy_native_host_free(host);
+
+    run_seeded_trail(0, &without);
+    run_seeded_trail(1, &with);
+    run_seeded_trail(2, &old_layout);
+    if (!without.host || !with.host || !old_layout.host) return;
+    /* Without a seed the ride restarts at the next print and the shallow bar
+     * never reaches the stop: the lot is still open at the end. */
+    CHECK(fabs(without.final_units - 1.0) < 1e-9,
+          "the unseeded trail closed the lot after all");
+    CHECK(fabs(with.final_units) < 1e-9, "the seeded trail did not close the lot");
+    /* The third layout is the whole append-only claim: identical bytes above
+     * the tail, the tail unread, the unseeded outcome. */
+    CHECK(fabs(old_layout.final_units - without.final_units) < 1e-9,
+          "an older-layout caller was given a tail it does not carry");
+    strategy_native_host_free(without.host);
+    strategy_native_host_free(with.host);
+    strategy_native_host_free(old_layout.host);
 }
 
 /* --- the frozen scope basis --- */
@@ -4020,6 +4174,7 @@ int pf_native_c_api_checks(void) {
     check_excursion_hook();
     check_entry_bar_mask_declaration();
     check_request_sizing_tail();
+    check_trail_best_seed_tail();
     check_scope_basis_tail();
     check_intrabar_and_policies();
     check_feed_policies();

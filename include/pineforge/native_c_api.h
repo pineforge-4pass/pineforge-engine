@@ -136,8 +136,23 @@
  *                                          PF_NATIVE_INTENT_SIZED and reads the units the kernel resolved
  *                                          from the applied execution
  *
- * One asymmetry this list does not reach, recorded here because a C host will
- * look for it: pf_trade_t carries no exit ticket. That POD is the codegen
+ * Two asymmetries this list does not reach, recorded here because a C host
+ * will look for them.
+ *
+ * pf_native_working_v1 has two trigger numbers, p1 and p2 -- plus, in its own
+ * additive tail, trail_has_arm_price, which tells an absent arm from an arm at
+ * 0.0 -- while a trail now has three numbers: offset, arm price and
+ * pf_native_request_v1::trail_best_seed. The readback keeps the first two and
+ * the presence flag; it does NOT carry the seed. The seed is a SUBMISSION
+ * input -- a floor on where the ride starts, consumed once at the arm -- and
+ * what a host wants back afterwards is the ride itself, which
+ * strategy_native_trail_state_v1 already answers as best_price and
+ * current_level. Another readout tail would cost every caller that sends the
+ * current sizeof a recompile, for a number the caller wrote.
+ * Executed by the trail-seed and arm-presence scenarios of
+ * tests/test_native_c_api.c.
+ *
+ * pf_trade_t carries no exit ticket. That POD is the codegen
  * ABI's, runtime-allocated and iterated with the caller's own sizeof, so a
  * tail costs a PF_ABI_VERSION bump for every existing consumer — and it needs
  * none. strategy_closed_trade_entry_id / _exit_id / _exit_comment /
@@ -307,7 +322,8 @@ typedef enum pf_native_trigger_e {
     PF_NATIVE_TRIGGER_LIMIT      = 1, /**< p1 = price; `fill_through` makes it market-if-touched. */
     PF_NATIVE_TRIGGER_STOP       = 2, /**< p1 = price. */
     PF_NATIVE_TRIGGER_STOP_LIMIT = 3, /**< p1 = stop, p2 = limit. */
-    PF_NATIVE_TRIGGER_TRAIL      = 4  /**< p1 = offset, p2 = arm price when `trail_has_arm_price`. */
+    PF_NATIVE_TRIGGER_TRAIL      = 4  /**< p1 = offset, p2 = arm price when `trail_has_arm_price`;
+                                       *   `trail_best_seed` when `trail_has_best_seed`. */
 } pf_native_trigger_t;
 
 /** Where a trigger level comes from — `native_order::TriggerAnchor` (L7). */
@@ -1070,15 +1086,16 @@ typedef struct pf_native_risk_state_v1 {
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
  *  set only the fields the chosen `intent` and `trigger` document.
  *
- *  This struct has THREE published layouts and the runtime accepts any of
+ *  This struct has FOUR published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
  *  (#PF_NATIVE_REQUEST_V1_BASE_SIZE), that layout plus L7b's anchored-leg
- *  tail (#PF_NATIVE_REQUEST_V1_ANCHOR_SIZE), and the current one, which
- *  appends L3b's sizing detail (`size_price`, `reduce_basis`). A caller
- *  compiled against an earlier layout keeps working unchanged and simply gets
- *  the later tails' defaults (RAW, WORKING, RESOLVED, AT_MATCH). Any other
- *  `struct_size` is PF_NATIVE_E_STRUCT. Both tails are append-only: nothing
- *  above them moved. */
+ *  tail (#PF_NATIVE_REQUEST_V1_ANCHOR_SIZE), that plus L3b's sizing detail
+ *  `size_price`, `reduce_basis` (#PF_NATIVE_REQUEST_V1_SIZING_SIZE), and the
+ *  current one, which appends E14's trail seed (`trail_best_seed`,
+ *  `trail_has_best_seed`). A caller compiled against an earlier layout keeps
+ *  working unchanged and simply gets the later tails' defaults (RAW, WORKING,
+ *  RESOLVED, AT_MATCH, no seed). Any other `struct_size` is
+ *  PF_NATIVE_E_STRUCT. Every tail is append-only: nothing above it moved. */
 typedef struct pf_native_request_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_request_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
@@ -1139,6 +1156,21 @@ typedef struct pf_native_request_v1 {
      * request accepted before this tail already resolved as. ── */
     uint32_t size_price;          /**< #pf_native_size_price_t, SIZED only. */
     uint32_t reduce_basis;        /**< #pf_native_scope_basis_t, SCOPE_FRACTION only. */
+
+    /* ── The additive trail-seed tail (E14). Read only when `struct_size`
+     * is the current sizeof; a caller sending any earlier layout stops above
+     * and gets no seed, which is what every trail accepted before this tail
+     * already rode. ── */
+    double   trail_best_seed;     /**< TRAIL: where the running best starts —
+                                   *   a floor on it, the favourable one of
+                                   *   this level and the arm's own print.
+                                   *   Absolute (an anchor moves the arm
+                                   *   threshold, not this), finite and
+                                   *   positive, else PF_NATIVE_E_REJECTED.
+                                   *   It is a submission input: the working
+                                   *   readback carries the live best, not the
+                                   *   seed — see the asymmetry note above. */
+    uint8_t  trail_has_best_seed; /**< TRAIL: `trail_best_seed` is set. */
 } pf_native_request_v1;
 
 /** Byte length of #pf_native_request_v1 as the L13 lane first published it,
@@ -1156,6 +1188,14 @@ typedef struct pf_native_request_v1 {
  *  the same reason #PF_NATIVE_REQUEST_V1_BASE_SIZE is. */
 #define PF_NATIVE_REQUEST_V1_ANCHOR_SIZE \
     ((uint32_t)offsetof(pf_native_request_v1, size_price))
+
+/** Byte length of #pf_native_request_v1 with L3b's sizing-detail tail but
+ *  without E14's trail seed — the third of its four published layouts, and
+ *  the `sizeof` every caller compiled before that seed existed sends.
+ *  Defined as the offset of the first field appended after it, for the same
+ *  reason #PF_NATIVE_REQUEST_V1_BASE_SIZE is. */
+#define PF_NATIVE_REQUEST_V1_SIZING_SIZE \
+    ((uint32_t)offsetof(pf_native_request_v1, trail_best_seed))
 
 /** One declared higher-timeframe series of #pf_native_run_spec_ext_v1.
  *
