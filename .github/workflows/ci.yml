@@ -233,11 +233,27 @@ jobs:
     needs: preflight
     uses: ./.github/workflows/native-live.yml
 
+  # TradingView parity, on the population a pull request can wait for. No
+  # ci_verify.py profile compiles a corpus strategy, so without this job
+  # nothing between a src/** change and a merge re-derives the engine's
+  # parity: the whole sweep is ~32 min and can only run nightly
+  # (corpus-parity.yml). This one re-runs the 30 probes
+  # scripts/corpus_parity_subset.txt names against the same pinned sha256
+  # rows, and feeds the required `build` context below — which is what makes
+  # a trade-moving change unmergeable rather than caught the next night.
+  # Deliberately unfiltered by path: `build` requires success, and a skipped
+  # dependency is not success.
+  corpus-parity-subset:
+    needs: preflight
+    uses: ./.github/workflows/corpus-parity.yml
+    with:
+      mode: subset
+
   # Keep the required `build` context while making it cover every proof lane.
   # Failure, cancellation or skipping in any dependency must fail this gate.
   build-gate:
     name: build
-    needs: [preflight, build, sanitizers, native-live, kernel-only]
+    needs: [preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -250,10 +266,11 @@ jobs:
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
           printf '%s\n' "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "kernel: $KERNEL_RESULT"
+            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
           [[ "$PREFLIGHT_RESULT" == "success" && "$BUILD_RESULT" == "success" \
             && "$SANITIZER_RESULT" == "success" && "$NATIVE_RESULT" == "success" \
-            && "$KERNEL_RESULT" == "success" ]]
+            && "$KERNEL_RESULT" == "success" && "$PARITY_RESULT" == "success" ]]

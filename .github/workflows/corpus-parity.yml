@@ -13,15 +13,27 @@ name: Corpus parity
 # why the baseline rather than the corpus's own committed tapes is the byte
 # oracle.
 #
-# WHY NOT REQUIRED ON PULL REQUESTS. Measured end to end on a 16-core laptop:
+# WHY THE WHOLE SWEEP IS NIGHTLY. Measured end to end on a 16-core laptop:
 # the runtime and all 312 corpus strategies build in ~105 s at JOBS=8, and then
 # the run phase -- which run_corpus.sh executes serially, one ctypes process per
 # probe over a 221861-bar feed -- took 1792 s, with 94 s more to judge the
 # result. The dominant term is single-core serial work, which a 4-vCPU hosted
-# runner runs slower rather than faster, so the job cannot be held to the ~25
-# min a required pull-request check is budgeted for. It therefore runs nightly
-# and on demand, plus on any pull request that touches the pin or the parity
-# tooling itself, where it is the only thing that can catch the change.
+# runner runs slower rather than faster, so the whole population cannot be held
+# to the ~25 min a required pull-request check is budgeted for. It therefore
+# runs nightly and on demand, plus on any pull request that touches the pin or
+# the parity tooling itself.
+#
+# AND HOW PARITY STILL BLOCKS A MERGE. The `corpus-parity-subset` job below
+# re-runs the 30 probes scripts/corpus_parity_subset.txt names -- in parallel,
+# they write into disjoint directories -- and judges them against the same
+# pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
+# under sibling load: derive 2 s, build the runtime + the 30 strategy .so 68 s
+# from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
+# over an up-to-date build directory, under 3 min cold.
+# .github/workflows/ci.yml calls it as a reusable workflow and
+# makes it a dependency of the required `build` context, so a src/** change that
+# moves one of those 30 probes by one byte cannot merge. Nothing about the
+# nightly job changes.
 
 on:
   schedule:
@@ -29,12 +41,19 @@ on:
     # does not queue behind the GitHub-wide cron spike.
     - cron: '30 1 * * *'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      mode:
+        description: 'full (all 312 probes) or subset (the pull-request gate)'
+        type: string
+        default: full
   pull_request:
     branches: [main]
     paths:
       - 'corpus'
       - '.gitmodules'
       - 'scripts/check_corpus_parity.sh'
+      - 'scripts/corpus_parity_subset.txt'
       - 'scripts/run_corpus.sh'
       - 'scripts/run_strategy.py'
       - 'scripts/verify_corpus.py'
@@ -44,8 +63,12 @@ on:
 permissions:
   contents: read
 
+# The caller owns pull-request cancellation. Keep a distinct prefix:
+# github.workflow in a reusable workflow names the CALLER, so an unprefixed
+# group would collide with CI's and could cancel it (native-live.yml has the
+# same note). Nightly and manual runs stay unique per run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: corpus-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -58,7 +81,10 @@ env:
   CCACHE_MAXSIZE: 2G
 
 jobs:
+  # The whole population. Nightly, on demand, and on a pull request that
+  # touches the pin or the parity tooling. Never reached by `mode: subset`.
   corpus-parity:
+    if: inputs.mode != 'subset'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -127,5 +153,123 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: corpus-parity-diagnostics
+          path: corpus-parity-diagnostics/
+          if-no-files-found: warn
+
+  # The blocking half: the 30 probes scripts/corpus_parity_subset.txt names,
+  # judged against the same pinned sha256 rows. Reached only through
+  # .github/workflows/ci.yml, which needs it for the required `build` context.
+  corpus-parity-subset:
+    if: inputs.mode == 'subset'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Credentials stay persisted, exactly as the nightly job above: the
+      # submodule clone and `git lfs pull` below go out over https and the
+      # nightly is the configuration that is known to work for them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
+
+      - name: Resolve the recorded corpus gitlink
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          gitlink="$(git rev-parse HEAD:corpus)"
+          echo "recorded corpus gitlink: $gitlink"
+          echo "gitlink=$gitlink" >> "$GITHUB_OUTPUT"
+
+      # Check the submodule out WITHOUT smudging Git LFS, so the ~176 MB
+      # full-history 1m feed is fetched at most once per gitlink instead of
+      # once per pull-request push. The cache below carries it, and the step
+      # after that proves the restored bytes are the ones the corpus commit
+      # points at.
+      - name: Check out the validation corpus at the recorded gitlink
+        shell: bash
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          set -euo pipefail
+          git submodule update --init corpus
+          test "$(git -C corpus rev-parse HEAD)" = "${{ steps.pin.outputs.gitlink }}"
+          git -C corpus status --porcelain -- validation
+
+      - name: Restore the corpus chart feed
+        id: feed
+        uses: actions/cache@v4
+        with:
+          path: corpus/data
+          key: corpus-feed-${{ steps.pin.outputs.gitlink }}
+
+      - name: Pull the Git-LFS chart feed
+        if: steps.feed.outputs.cache-hit != 'true'
+        run: git -C corpus lfs pull
+
+      # A restored cache is not evidence. Every LFS pointer the corpus commits
+      # under data/ records its content's sha256; check the bytes on disk
+      # against it, so a corrupt or stale cache is "the feed is wrong" here and
+      # not "30 probes drifted" three steps later.
+      - name: Verify the chart feed against its Git-LFS pointers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C corpus ls-files -- data | while read -r file; do
+            pointer="$(git -C corpus cat-file -p "HEAD:$file")"
+            case "$pointer" in
+              version*git-lfs*)
+                oid="$(printf '%s\n' "$pointer" | sed -n 's/^oid sha256://p')"
+                echo "$oid  corpus/$file" | sha256sum -c -
+                ;;
+            esac
+          done
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-
+
+      - name: Check TradingView parity over the pull-request subset
+        shell: bash
+        env:
+          BUILD_DIR: build-corpus-parity-subset
+          JOBS: "4"
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: ./scripts/check_corpus_parity.sh --subset
+
+      - name: Collect the drifted trades
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p corpus-parity-diagnostics
+          python3 scripts/corpus_trades_identity.py \
+            --subset scripts/corpus_parity_subset.txt --files 30 --lines 40 \
+            > corpus-parity-diagnostics/trades-identity.txt 2>&1 || true
+          git -C corpus --no-pager diff --no-color -- 'validation/*/engine_trades.csv' \
+            > corpus-parity-diagnostics/engine_trades.diff || true
+          git -C corpus status --porcelain -- validation \
+            > corpus-parity-diagnostics/corpus-status.txt || true
+          cp -r build-corpus-parity-subset/subset-run-logs corpus-parity-diagnostics/ 2>/dev/null || true
+          wc -l corpus-parity-diagnostics/* || true
+
+      - name: Retain parity diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-parity-subset-diagnostics
           path: corpus-parity-diagnostics/
           if-no-files-found: warn
