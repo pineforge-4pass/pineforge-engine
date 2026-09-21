@@ -18,6 +18,7 @@
 #include "native_c_api_twin.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3582,6 +3583,205 @@ static void check_fx_roll_margin_point(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── A subscription row's two delivery words (lane E7) ──────────────
+ *
+ * pf_native_subscription_v1::lookahead holds a pf_native_lookahead_e value and
+ * ::gaps a pf_native_gaps_e value: the same two uint32_t words at the same
+ * offsets, now translated by an exhaustive switch like every other enum-valued
+ * field. Four rows of one "15" series, one per pair of values, run over
+ * thirteen whole buckets of the twin's "5" feed, and each value must select
+ * its own rule as a C host sees it: WHEN a bucket is delivered
+ * (on_timeframe_bar's `delivered_at_ms` against the bucket's own open) and
+ * what the series answers on the inputs that deliver nothing
+ * (strategy_native_series_bar_v1). A value outside either enumeration is
+ * refused on both entry points that take a row, and changes nothing. */
+
+#define DELIVERY_ROWS        4
+#define DELIVERY_BUCKET_BARS 3   /* one "15" bucket of the "5" feed */
+#define DELIVERY_BUCKETS     13
+#define DELIVERY_BARS        (DELIVERY_BUCKETS * DELIVERY_BUCKET_BARS)
+
+static const uint32_t delivery_lookahead[DELIVERY_ROWS] = {
+    PF_NATIVE_LOOKAHEAD_AT_COMPLETION, PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT,
+    PF_NATIVE_LOOKAHEAD_AT_COMPLETION, PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT};
+static const uint32_t delivery_gaps[DELIVERY_ROWS] = {
+    PF_NATIVE_GAPS_HOLD, PF_NATIVE_GAPS_HOLD, PF_NATIVE_GAPS_CLEAR, PF_NATIVE_GAPS_CLEAR};
+
+typedef struct delivery_state {
+    pf_strategy_t host;
+    int           calculations;
+    int           failures;
+    int           deliveries[DELIVERY_ROWS];
+    int           off_input[DELIVERY_ROWS];    /* rode on another input than the rule names */
+    int           off_bucket[DELIVERY_ROWS];   /* values that are not the whole bucket */
+    int           off_presence[DELIVERY_ROWS]; /* series_bar answered against the rule */
+} delivery_state;
+
+static int delivery_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
+                                     uint32_t completion, int64_t delivered_at_ms) {
+    delivery_state* state = (delivery_state*)user;
+    const pf_bar_t* feed = pf_twin_bars(NULL);
+    const int64_t bucket_ms = (int64_t)DELIVERY_BUCKET_BARS * 300000;
+    int first;
+    int last;
+    int rides_on;
+    (void)completion;
+    LCHECK(state, subscription < DELIVERY_ROWS, "a bucket was delivered under no declared row");
+    if (subscription >= DELIVERY_ROWS) return 0;
+    ++state->deliveries[subscription];
+    first = (int)(bar->timestamp / bucket_ms) * DELIVERY_BUCKET_BARS;
+    last = first + DELIVERY_BUCKET_BARS - 1;
+    LCHECK(state, bar->timestamp % bucket_ms == 0 && first >= 0 && last < DELIVERY_BARS,
+           "a delivered bucket is not one of the feed's thirteen");
+    if (first < 0 || last >= DELIVERY_BARS) return 0;
+    /* AT_FIRST_INPUT: the bucket's final values ride on its first input.
+     * AT_COMPLETION: the bucket rides on the input that completes it. */
+    rides_on = delivery_lookahead[subscription] == PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT ? first
+                                                                                        : last;
+    if (delivered_at_ms != feed[rides_on].timestamp) ++state->off_input[subscription];
+    /* The whole bucket under either rule. The feed rises bar by bar, so its
+     * high and close are the last input's and its open and low the first's. */
+    if (bar->open != feed[first].open || bar->low != feed[first].low
+        || bar->high != feed[last].high || bar->close != feed[last].close
+        || bar->volume != (double)DELIVERY_BUCKET_BARS * feed[first].volume) {
+        ++state->off_bucket[subscription];
+    }
+    return 0;
+}
+
+static int delivery_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    delivery_state* state = (delivery_state*)user;
+    const int input = state->calculations++;  /* 0-based: one calculation per input */
+    const int phase = input % DELIVERY_BUCKET_BARS;
+    uint32_t row;
+    (void)bar;
+    (void)at;
+    for (row = 0; row < DELIVERY_ROWS; ++row) {
+        const int at_first = delivery_lookahead[row] == PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT;
+        /* Whether this input delivers the row's bucket, and whether any
+         * input has delivered one yet. */
+        const int delivered_here = at_first ? phase == 0 : phase == DELIVERY_BUCKET_BARS - 1;
+        const int delivered_yet = at_first ? 1 : input >= DELIVERY_BUCKET_BARS - 1;
+        const int want = delivery_gaps[row] == PF_NATIVE_GAPS_CLEAR ? delivered_here
+                                                                    : delivered_yet;
+        pf_bar_t series;
+        int rc;
+        memset(&series, 0, sizeof(series));
+        rc = strategy_native_series_bar_v1(state->host, row, &series);
+        LCHECK(state, rc == PF_NATIVE_OK || rc == PF_NATIVE_ABSENT,
+               "a declared series answered neither a bar nor absent");
+        if ((rc == PF_NATIVE_OK) != want) ++state->off_presence[row];
+    }
+    return 0;
+}
+
+static void check_subscription_delivery_words(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_subscription_v1 rows[DELIVERY_ROWS];
+    pf_native_subscription_v1 row;
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 lifecycle;
+    delivery_state state;
+    char what[128];
+    uint32_t i;
+
+    /* Typing the words moved nothing: each is still one uint32_t, zero is the
+     * default of both, and on LP64 -- every CI host's data model -- the row
+     * keeps the offsets and the size measured on 0a47cbf7, before the two
+     * enumerations existed. */
+    memset(&row, 0, sizeof(row));
+    CHECK_EQ_INT(sizeof(row.lookahead), sizeof(uint32_t), "lookahead is not one uint32_t word");
+    CHECK_EQ_INT(sizeof(row.gaps), sizeof(uint32_t), "gaps is not one uint32_t word");
+    CHECK_EQ_INT(row.lookahead, PF_NATIVE_LOOKAHEAD_AT_COMPLETION,
+                 "a zero-filled row does not deliver at completion");
+    CHECK_EQ_INT(row.gaps, PF_NATIVE_GAPS_HOLD, "a zero-filled row does not hold its bucket");
+    if (sizeof(void*) == 8) {
+        CHECK_EQ_INT(offsetof(pf_native_subscription_v1, lookahead), 4, "lookahead moved");
+        CHECK_EQ_INT(offsetof(pf_native_subscription_v1, tf), 8, "tf moved");
+        CHECK_EQ_INT(offsetof(pf_native_subscription_v1, authoritative_bars), 16,
+                     "authoritative_bars moved");
+        CHECK_EQ_INT(offsetof(pf_native_subscription_v1, authoritative_n), 24,
+                     "authoritative_n moved");
+        CHECK_EQ_INT(offsetof(pf_native_subscription_v1, gaps), 28, "gaps moved");
+        CHECK_EQ_INT(sizeof(pf_native_subscription_v1), 32, "pf_native_subscription_v1 resized");
+    }
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = delivery_on_bar;
+    table.on_timeframe_bar = delivery_on_timeframe_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "delivery-word host create failed");
+    if (!state.host) return;
+
+    spec.session_key = "native-c-api-delivery-words";
+    memset(rows, 0, sizeof(rows));
+    for (i = 0; i < DELIVERY_ROWS; ++i) {
+        rows[i].struct_size = (uint32_t)sizeof(rows[i]);
+        rows[i].tf = "15";
+        rows[i].lookahead = delivery_lookahead[i];
+        rows[i].gaps = delivery_gaps[i];
+    }
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS;
+    ext.subscriptions = rows;
+    ext.subscriptions_n = DELIVERY_ROWS;
+
+    /* One past the end of each enumeration: refused at the boundary with the
+     * tag error every enum-valued field uses, at configure time and at begin
+     * time alike, leaving the handle Unconfigured. */
+    rows[1].lookahead = PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT + 1u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "a lookahead past pf_native_lookahead_e was configured");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, rows, DELIVERY_ROWS),
+                 PF_NATIVE_E_TAG, "a lookahead past pf_native_lookahead_e was declared");
+    rows[1].lookahead = delivery_lookahead[1];
+    rows[2].gaps = PF_NATIVE_GAPS_CLEAR + 1u;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_E_TAG,
+                 "a gaps word past pf_native_gaps_e was configured");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_v1(state.host, rows, DELIVERY_ROWS),
+                 PF_NATIVE_E_TAG, "a gaps word past pf_native_gaps_e was declared");
+    rows[2].gaps = delivery_gaps[2];
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &lifecycle), PF_NATIVE_OK,
+                 "delivery-word state read");
+    CHECK_EQ_INT(lifecycle.lifecycle, PF_NATIVE_LIFECYCLE_UNCONFIGURED,
+                 "a refused delivery word configured or failed the host");
+
+    /* Both values of both words, on one run. */
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the four typed rows were refused");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), DELIVERY_BARS, NULL),
+                 PF_NATIVE_OK, "the delivery-word run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback delivery-word rows failed");
+    CHECK_EQ_INT(state.calculations, DELIVERY_BARS, "the run calculated another input count");
+    for (i = 0; i < DELIVERY_ROWS; ++i) {
+        snprintf(what, sizeof(what), "row %u (lookahead %u, gaps %u): ", (unsigned)i,
+                 (unsigned)delivery_lookahead[i], (unsigned)delivery_gaps[i]);
+        if (state.deliveries[i] != DELIVERY_BUCKETS) {
+            fprintf(stderr, "  %sdelivered another bucket count\n", what);
+        }
+        CHECK_EQ_INT(state.deliveries[i], DELIVERY_BUCKETS, "a row delivered another bucket count");
+        if (state.off_input[i] != 0) {
+            fprintf(stderr, "  %sa bucket rode on another input than its lookahead names\n", what);
+        }
+        CHECK_EQ_INT(state.off_input[i], 0, "a bucket rode on another input than its lookahead names");
+        if (state.off_bucket[i] != 0) {
+            fprintf(stderr, "  %sa delivered bucket is not the whole bucket\n", what);
+        }
+        CHECK_EQ_INT(state.off_bucket[i], 0, "a delivered bucket is not the whole bucket");
+        if (state.off_presence[i] != 0) {
+            fprintf(stderr, "  %sthe series answered against its gaps word\n", what);
+        }
+        CHECK_EQ_INT(state.off_presence[i], 0, "the series answered against its gaps word");
+    }
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -3606,5 +3806,6 @@ int pf_native_c_api_checks(void) {
     check_cohort_roster();
     check_auxiliary_feed();
     check_fx_roll_margin_point();
+    check_subscription_delivery_words();
     return failures;
 }
