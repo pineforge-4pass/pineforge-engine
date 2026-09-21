@@ -125,6 +125,23 @@ public:
     uint64_t recalculation_count() const noexcept { return recalculations_; }
     uint64_t recalculations_skipped() const noexcept { return recalculations_skipped_; }
 
+    // The generic mark-to-market report producer: one row per open physical
+    // lot at `mark_price`, dated `mark_time_ms` on `interval_index`, appended
+    // to the engine's range-end row space through the same non-mutating row
+    // builder every full close uses. Returns the summed NET row P&L.
+    //
+    // Reporting only: the live book, the realized sums, the equity curve and
+    // every hash are left exactly as the run left them, so calling this can
+    // never move a fill or a continuation. The caller owns the policy around
+    // it — when to mark, what to clear first, and whether anything downstream
+    // of the rows (an equity point, an extreme, a row order) is re-derived
+    // from them. That is what lets the kernel's own run-end producer below
+    // and a host with a different report shape share one loop instead of
+    // each carrying its own (R5 audit lane Q6, first-round duplicate D5).
+    double append_open_position_report_rows(
+        BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
+        int interval_index) const;
+
 private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;

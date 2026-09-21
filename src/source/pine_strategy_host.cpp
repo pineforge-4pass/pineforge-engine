@@ -1571,26 +1571,17 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
         || !std::isfinite(terminal_bar.close)) return;
     const Bar saved = current_bar_;
     current_bar_ = terminal_bar;
-    const bool was_long = position_side_ == PositionSide::LONG;
     const double fill_price = bar_fill_price(current_bar_.close);
     const auto saved_timestamp = current_bar_.timestamp;
     current_bar_.timestamp = equity_curve_.back().time_ms;
-    double range_end_pnl = 0.0;
+    // R5 audit lane Q6 (duplicate D5): the row loop itself is the kernel's
+    // generic producer, called here at TradingView's own mark instead of
+    // being restated. What stays below is the part that is report SHAPE and
+    // not a mark-to-market row — the reason the kernel's run-end producer is
+    // gated out of every Pine run (pine_adapter.cpp project()).
     excursion_range_end_projection_ = true;
-    for (const auto& lot : pyramid_entries_) {
-        execution::PhysicalExecutionContext context;
-        context.effective_time_ms = current_bar_.timestamp;
-        context.interval_index = bar_index_;
-        if (!std::isnan(fold_exit_trail_peak_))
-            context.preceding_exit_trail_peak = fold_exit_trail_peak_;
-        Trade row = build_close_trade_with_costs(
-            lot, lot.qty, fill_price, was_long,
-            allocated_entry_commission(lot, lot.qty), calc_commission(fill_price, lot.qty),
-            context);
-        row.open_at_end = true;
-        range_end_pnl += row.pnl;
-        range_end_trades_.push_back(std::move(row));
-    }
+    const double range_end_pnl = as_native_consumer(execution_consumer())
+        .append_open_position_report_rows(*this, fill_price, current_bar_.timestamp, bar_index_);
     excursion_range_end_projection_ = false;
     current_bar_.timestamp = saved_timestamp;
     auto& last = equity_curve_.back();

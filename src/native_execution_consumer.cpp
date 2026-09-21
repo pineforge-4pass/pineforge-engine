@@ -6659,11 +6659,44 @@ void NativeExecutionConsumer::record_report_point(
     engine.record_equity_point(report_ts);
 }
 
+// The generic mark-to-market producer both report shapes share. One row per
+// open physical lot at `mark_price`, built by the same non-mutating builder a
+// full close uses and appended to the engine's range-end row space; the summed
+// NET row P&L comes back for a caller that re-derives a report figure from it.
+//
+// Nothing here is a policy: the caller decides when to mark, what to clear
+// first and what (if anything) downstream of the rows it re-marks. The
+// `preceding_exit_trail_peak` carry is the same one the kernel's own settling
+// path folds (engine_execution.cpp), so a mark row and a close row fold the
+// identical excursion facts; the member is a run-scoped NaN today, which makes
+// the branch inert rather than absent.
+double NativeExecutionConsumer::append_open_position_report_rows(
+        BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
+        int interval_index) const {
+    const bool was_long = engine.position_side_ == PositionSide::LONG;
+    double marked = 0.0;
+    for (const auto& lot : engine.pyramid_entries_) {
+        execution::PhysicalExecutionContext context;
+        context.effective_time_ms = mark_time_ms;
+        context.interval_index = interval_index;
+        if (!std::isnan(engine.fold_exit_trail_peak_))
+            context.preceding_exit_trail_peak = engine.fold_exit_trail_peak_;
+        Trade row = engine.build_close_trade_with_costs(
+            lot, lot.qty, mark_price, was_long,
+            engine.allocated_entry_commission(lot, lot.qty),
+            engine.calc_commission(mark_price, lot.qty), context);
+        row.open_at_end = true;
+        marked += row.pnl;
+        engine.range_end_trades_.push_back(std::move(row));
+    }
+    return marked;
+}
+
 // A position still open when the feed ends is reported as the rows a close at
-// the last bar's close would record — one per physical lot, through the same
-// non-mutating row builder every full close uses. Reporting only: the live
-// book, the realized sums, the equity curve and every hash are left exactly as
-// the run left them, so enabling this cannot move a fill or a continuation.
+// the last bar's close would record — the kernel's own use of the producer
+// above, once, after the last point of the run. Reporting only: the live book,
+// the realized sums, the equity curve and every hash are left exactly as the
+// run left them, so enabling this cannot move a fill or a continuation.
 // The mark is the raw close on the price grid (bar_fill_price) with no
 // slippage: slippage models a market order's fill uncertainty, and this row is
 // a mark, not an order. The exit is dated on the script bar's own label.
@@ -6674,21 +6707,11 @@ void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& e
     engine.range_end_trades_.clear();
     if (engine.position_side_ == PositionSide::FLAT || engine.pyramid_entries_.empty()) return;
     if (!std::isfinite(engine.current_bar_.close)) return;
-    const bool was_long = engine.position_side_ == PositionSide::LONG;
-    const double fill_price = engine.bar_fill_price(engine.current_bar_.close);
-    execution::PhysicalExecutionContext context;
-    context.effective_time_ms = engine.equity_curve_.empty()
-        ? engine.current_bar_.timestamp
-        : engine.equity_curve_.back().time_ms;
-    context.interval_index = engine.bar_index_;
-    for (const auto& lot : engine.pyramid_entries_) {
-        Trade row = engine.build_close_trade_with_costs(
-            lot, lot.qty, fill_price, was_long,
-            engine.allocated_entry_commission(lot, lot.qty),
-            engine.calc_commission(fill_price, lot.qty), context);
-        row.open_at_end = true;
-        engine.range_end_trades_.push_back(std::move(row));
-    }
+    (void)append_open_position_report_rows(
+        engine, engine.bar_fill_price(engine.current_bar_.close),
+        engine.equity_curve_.empty() ? engine.current_bar_.timestamp
+                                     : engine.equity_curve_.back().time_ms,
+        engine.bar_index_);
 }
 
 void NativeExecutionConsumer::deliver_aggregate_calculation(
