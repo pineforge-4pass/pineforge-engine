@@ -1,0 +1,131 @@
+name: Corpus parity
+
+# The TradingView parity gate. Every other CI lane configures
+# -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF (scripts/ci_verify.py,
+# cmake_cache_definitions), so until this workflow existed the engine's parity
+# with TradingView -- the property the whole corpus exists to prove -- was
+# checked by hand and by nothing else.
+#
+# What it proves: at the corpus commit the `corpus` gitlink records, every
+# corpus strategy builds, every probe's re-derived engine_trades.csv still
+# hashes to what scripts/corpus_parity_baseline.txt pins, and
+# scripts/verify_corpus.py still prints its pinned headline. See docs/ci.md for
+# why the baseline rather than the corpus's own committed tapes is the byte
+# oracle.
+#
+# WHY NOT REQUIRED ON PULL REQUESTS. Measured end to end on a 16-core laptop:
+# the runtime and all 312 corpus strategies build in ~105 s at JOBS=8, and then
+# the run phase -- which run_corpus.sh executes serially, one ctypes process per
+# probe over a 221861-bar feed -- took 1792 s, with 94 s more to judge the
+# result. The dominant term is single-core serial work, which a 4-vCPU hosted
+# runner runs slower rather than faster, so the job cannot be held to the ~25
+# min a required pull-request check is budgeted for. It therefore runs nightly
+# and on demand, plus on any pull request that touches the pin or the parity
+# tooling itself, where it is the only thing that can catch the change.
+
+on:
+  schedule:
+    # 01:30 UTC daily, after the nightly quiet period and off the hour so it
+    # does not queue behind the GitHub-wide cron spike.
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'corpus'
+      - '.gitmodules'
+      - 'scripts/check_corpus_parity.sh'
+      - 'scripts/run_corpus.sh'
+      - 'scripts/run_strategy.py'
+      - 'scripts/verify_corpus.py'
+      - 'scripts/derive_corpus_feeds.py'
+      - '.github/workflows/corpus-parity.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  # 312 corpus translation units of generated C++ plus the runtime; they only
+  # change when the corpus gitlink moves, so a nightly re-run at an unchanged
+  # pin is almost entirely cache hits.
+  CCACHE_MAXSIZE: 2G
+
+jobs:
+  corpus-parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
+
+      # Separate from the parity script so the gitlink and the Git-LFS chart
+      # feed are visible as their own step: the corpus ships ONE full-history
+      # 1m feed through LFS (~176 MB) and scripts/derive_corpus_feeds.py
+      # rebuilds the 15m charts from it.
+      - name: Check out the validation corpus at the recorded gitlink
+        shell: bash
+        run: |
+          set -euo pipefail
+          gitlink="$(git rev-parse HEAD:corpus)"
+          echo "recorded corpus gitlink: $gitlink"
+          git submodule update --init corpus
+          git -C corpus lfs pull
+          test "$(git -C corpus rev-parse HEAD)" = "$gitlink"
+          git -C corpus status --porcelain -- validation
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-
+
+      - name: Check TradingView parity against the committed oracle
+        shell: bash
+        env:
+          BUILD_DIR: build-corpus-parity
+          JOBS: "4"
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: ./scripts/check_corpus_parity.sh
+
+      - name: Collect the drifted trades
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p corpus-parity-diagnostics
+          python3 scripts/corpus_trades_identity.py --files 312 --lines 40 \
+            > corpus-parity-diagnostics/trades-identity.txt 2>&1 || true
+          git -C corpus --no-pager diff --no-color -- 'validation/*/engine_trades.csv' \
+            > corpus-parity-diagnostics/engine_trades.diff || true
+          git -C corpus status --porcelain -- validation \
+            > corpus-parity-diagnostics/corpus-status.txt || true
+          cp build-corpus-parity/verify_corpus.log corpus-parity-diagnostics/ 2>/dev/null || true
+          wc -l corpus-parity-diagnostics/* || true
+
+      - name: Retain parity diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-parity-diagnostics
+          path: corpus-parity-diagnostics/
+          if-no-files-found: warn

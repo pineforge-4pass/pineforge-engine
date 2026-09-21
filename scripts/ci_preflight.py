@@ -23,7 +23,8 @@ def check_commands(source: Path) -> list[tuple[str, list[str]]]:
         ('shellcheck-version', ['shellcheck', '--version']),
         ('workflow-lint', ['actionlint', '-color',
                            str(source / '.github/workflows/ci.yml'),
-                           str(source / '.github/workflows/native-live.yml')]),
+                           str(source / '.github/workflows/native-live.yml'),
+                           str(source / '.github/workflows/corpus-parity.yml')]),
         *source_guard_commands(source),
         ('source-guard-market-admission',
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
@@ -33,6 +34,8 @@ def check_commands(source: Path) -> list[tuple[str, list[str]]]:
         ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
         ('native-c-surface-tests',
          [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')]),
+        ('corpus-parity-identity-tests',
+         [sys.executable, str(source / 'scripts/test_corpus_trades_identity.py')]),
     ]
 
 
