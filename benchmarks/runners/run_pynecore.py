@@ -136,9 +136,18 @@ def main() -> int:
     raw_trades = strat_dir / "_pynecore_raw_trades.csv"
     raw_stats = strat_dir / "pynecore_stats.csv"
 
+    # Same-symbol request.security at D/W/M needs an explicit base feed in a
+    # PyneCore backtest (intraday HTFs are served from the chart data), keyed
+    # by the timeframe as the script spells it: map both spellings of each to
+    # the chart feed, which PyneCore resamples to the requested period -- the
+    # same bars PineForge aggregates its HTF series from. An unused mapping
+    # changes nothing.
+    security = [arg for tf in ("D", "W", "M", "1D", "1W", "1M")
+                for arg in ("--security", f"{tf}={args.ohlcv.resolve()}")]
     cmd = [
         "pyne", "-w", str(args.workdir.resolve()),
         "run", str(script), str(args.ohlcv.resolve()),
+        *security,
         "--trade", str(raw_trades.resolve()),
         "--strat", str(raw_stats.resolve()),
     ]

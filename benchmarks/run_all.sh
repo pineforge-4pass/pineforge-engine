@@ -22,7 +22,9 @@
 #   SKIP_SPEED          — skip the per-strategy speed sweep (pineforge_bench + timers)
 #   SKIP_REPORTS        — skip the compare.py / compare_indicators.py step
 #   SKIP_VECTORBT       — skip the vectorbt trades + timing (slots shipping strategy_vbt.py)
+#   SKIP_INDICATORS     — skip the canonical indicator runs (PineForge, PyneCore, PineTS)
 #   JOBS                — parallel PineForge / PyneCore parity runs (default 1; timing never parallelizes further)
+#   SLOTS               — only these slot numbers in the parity loops, e.g. "1-50,120" (default: all)
 #   QUIET_LOAD_MAX      — before each timing batch, wait until the 1-minute load average is below
 #                         this and no cmake --build / ctest / ci_verify runs (poll 60 s, up to
 #                         QUIET_WAIT_S, default 14400); unset = record the load and go on.
@@ -118,12 +120,25 @@ if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
         "${LIVE_CSV}" >/dev/null
 fi
 
-# Every slot directory of every root, in slot order.
+# Every slot directory of every root, in slot order (SLOTS narrows it).
+in_slots() {
+    local n=$((10#${1%%-*})) part lo hi
+    [[ -z "${SLOTS:-}" ]] && return 0
+    for part in ${SLOTS//,/ }; do
+        lo=${part%%-*}; hi=${part##*-}
+        (( n >= lo && n <= hi )) && return 0
+    done
+    return 1
+}
 slot_dirs() {
-    local root
+    local root s
     for root in "${STRATEGY_ROOTS[@]}"; do
-        ls -d "${root}"/[0-9]*-*/ 2>/dev/null
-    done | sed 's:/$::'
+        for s in "${root}"/[0-9]*-*/; do
+            [[ -d "$s" ]] || continue
+            s="${s%/}"
+            in_slots "$(basename "$s")" && printf '%s\n' "$s"
+        done
+    done
 }
 
 # One parity run per slot; a failure leaves <slot>/_<engine>_error.log (its
@@ -171,7 +186,8 @@ if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
     if [[ -n "${failed}" ]]; then
         warn "PyneCore runtime failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
     fi
-
+fi
+if [[ "${SKIP_PYNE:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
     log "running canonical indicators through PyneCore"
     pyne -w "${WORKDIR}" run \
         "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
@@ -188,14 +204,14 @@ fi
 
 # --- 4) run canonical indicators through PineTS ----------------------
 
-if [[ "${SKIP_PINETS:-0}" != "1" ]]; then
+if [[ "${SKIP_PINETS:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
     log "running canonical indicators through PineTS"
     (cd "${BENCH_DIR}" && node runners/run_pinets_canonical.mjs >/dev/null)
 fi
 
 # --- 5) build + run PineForge canonical indicator runner -------------
 
-if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
+if [[ "${SKIP_PINEFORGE:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
     CANON_BIN="${BENCH_DIR}/runners/run_pineforge_canonical"
     if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" ]]; then
         log "building PineForge canonical indicator runner"
@@ -221,7 +237,11 @@ quiet_gate() {
     local label="$1" waited=0 load busy
     while :; do
         load=$( (sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg) | tr -d '{}' | awk '{print $1}')
-        busy=$(ps -axo command | grep -E 'ctest|cmake --build|ci_verify' | grep -vc grep || true)
+        # Build/test processes by executable name (a full-command grep also
+        # matches any process whose arguments merely quote these commands).
+        busy=$(ps -axo comm=,args= | awk '{ c = $1; sub(".*/", "", c)
+            if (c == "ctest" || (c == "cmake" && / --build /) || (c ~ /^[Pp]ython/ && /ci_verify\.py/)) n++ }
+            END { print n + 0 }')
         if [[ -z "${QUIET_LOAD_MAX:-}" ]] \
            || { awk -v l="${load}" -v m="${QUIET_LOAD_MAX}" 'BEGIN { exit !(l < m) }' && [[ "${busy}" == 0 ]]; }; then
             break
