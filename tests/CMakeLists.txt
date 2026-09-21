@@ -814,6 +814,11 @@ list(APPEND TEST_SOURCES test_native_sizing_price_rule)
 # core-plus-override differential.
 list(APPEND TEST_SOURCES test_adapter_sizing_relower)
 
+# R5 E9: TradingView's trail activation tapes (tests/fixtures/
+# trail_activation_tick_reach) replayed through the Pine adapter, with the
+# kernel's record of the one-shot's resting limit and booked price.
+list(APPEND TEST_SOURCES test_trail_activation_tick_reach)
+
 # R5 N14: the live-runtime tail overrides are the source host's; the kernel
 # exposes only the virtual seams behind the frozen C setters. Source-free,
 # so it also runs in the kernel-only profile.
@@ -1419,6 +1424,12 @@ endif()
 string(REPLACE ";" "|" PINEFORGE_SOURCE_LAYER_JOINED "${PINEFORGE_SOURCE_LAYER_FILES}")
 target_compile_definitions(test_native_sizing_bases PRIVATE
     PINEFORGE_SOURCE_LAYER_FILES="${PINEFORGE_SOURCE_LAYER_JOINED}")
+
+# R5 E9 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_trail_activation_tick_reach)
+    target_compile_definitions(test_trail_activation_tick_reach PRIVATE
+        PINEFORGE_E9_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/trail_activation_tick_reach")
+endif()
 
 # R5 R2's witness is the mirror image: the adapter DOES name the sizing basis
 # it was re-lowered onto, and the core files that own the basis name no source

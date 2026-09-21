@@ -398,6 +398,21 @@ int legacy_volume_weighted_max_samples(int samples) noexcept {
     return std::max(scaled, 8);
 }
 
+// The price a one-shot trail books when its activation is first reached
+// inside a bar's path: the tick the quantized path reaches there. The one-shot
+// rests as a generic Limit at that tick's half-tick boundary
+// (one_shot_trail_trigger, source_trigger_threshold), so the tick is the
+// resting level rounded AWAY from the position (a sell up, a buy down), a
+// price the limit admits by construction. R5 lane E9, `lab tv` on
+// BINANCE:ETHUSDT.P 15m (tests/fixtures/trail_activation_tick_reach): a long
+// filled 2550.85 with trail_price 2550.854 rests at 2550.855 and books 2550.86
+// (5 of 5 exits), a short filled 1791.83 with 1791.826 rests at 1791.825 and
+// books 1791.82 (4 of 4); the stop-style snap toward the position (2550.85,
+// 1791.83) was refused as InvalidTerms. On the grid it is the activation.
+double source_one_shot_reach_tick(double resting_level, double tick, bool exit_is_buy) noexcept {
+    return directional_tick(resting_level, tick, !exit_is_buy);
+}
+
 double floor_quantity_grid(double units, const std::optional<double>& grid) noexcept {
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
@@ -10025,6 +10040,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         && facts.price_kind == native_order::NativeCandidatePriceKind::PointPrice;
     const bool trail_limit_one_shot = source.family == PineOrderFamily::ExitTrail
         && std::holds_alternative<native_order::Limit>(facts.definition->request.trigger);
+    const auto* one_shot_rest = trail_limit_one_shot
+        ? std::get_if<native_order::Limit>(&facts.definition->request.trigger) : nullptr;
     const auto* trail_active = std::get_if<native_order::TrailActive>(&facts.trigger_state);
     const auto retained_trail_source_price = [&]() -> std::optional<double> {
         // ab9714be engine_path_resolve.cpp:494-510: explicit zero trail rides running best and does not offset trigger level
@@ -10196,7 +10213,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 const bool reached = long_side
                     ? (to >= activation && to > from)
                     : (to <= activation && to < from);
-                if (reached) return level(activation);
+                if (reached) {
+                    return one_shot_rest
+                        ? source_one_shot_reach_tick(one_shot_rest->price, tick, facts.is_buy)
+                        : level(activation);
+                }
                 continue;
             }
             const bool favorable = long_side ? to > best : to < best;
@@ -10633,9 +10654,13 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             // ab9714be:test_fills_edge.cpp:827-858 and the zero-offset trail
             // owner: an activation first reached inside a path is a one-shot
             // fill at that activation.  A favourable opening gap keeps the
-            // generic trail ride and is deliberately excluded here.
-            result.resolved_price = directional_tick(
-                activation, staged_.syminfo.mintick, facts.is_buy);
+            // generic trail ride and is deliberately excluded here.  A resting
+            // one-shot books the tick its limit stands for: a sub-tick
+            // activation rounds away from the position, not toward it.
+            result.resolved_price = one_shot_rest
+                ? source_one_shot_reach_tick(
+                    one_shot_rest->price, staged_.syminfo.mintick, facts.is_buy)
+                : directional_tick(activation, staged_.syminfo.mintick, facts.is_buy);
         }
     }
     if ((std::holds_alternative<native_order::Stop>(trigger)
