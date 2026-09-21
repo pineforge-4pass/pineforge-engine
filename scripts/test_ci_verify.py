@@ -288,7 +288,8 @@ class Scripted:
             if self.exits.get('sanitizer_flag') == 'absent':
                 commands[0]['command'] = f'{self.cxx} -c src/matrix.cpp'
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
-        if self.profile in ci_verify.EXAMPLES_PROFILES:
+        if (self.profile in ci_verify.EXAMPLES_PROFILES
+                or ci_verify.PROFILE[self.profile].live_runner):
             commands = self._example_compile_commands()
             if commands is not None:
                 (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
@@ -297,35 +298,38 @@ class Scripted:
         return Completed(0, b'configured\n', b'')
 
     def _example_compile_commands(self) -> list[dict] | None:
-        """Two example targets as CMake compiles them, plus the runner's MODULE
-        build of an example source, which has no example_* row and keeps
-        Release's NDEBUG. 'example_ndebug' names an example compiled without
-        -UNDEBUG; 'example_commands' is 'absent' (no file) or 'none' (no
-        example entry)."""
+        """The compiles of examples/native sources, as CMake emits them: two
+        example_* targets where the profile builds the examples, and the live
+        runner's two MODULE builds of example sources where it builds the
+        runner. Every one strips Release's NDEBUG with -UNDEBUG unless
+        'example_ndebug' names its target; 'example_commands' is 'absent' (no
+        file) or 'none' (no compile of an examples/native source)."""
         mode = self.exits.get('example_commands')
         if mode == 'absent':
             return None
-        examples = self.source / 'examples/native'
-        commands = [{
-            'directory': str(self.build_dir / 'runner'),
-            'file': str(examples / 'native_market_strategy.cpp'),
-            'output': 'runner/CMakeFiles/native_market_example.dir/__/examples/native/'
-                      'native_market_strategy.cpp.o',
-            'command': f'{self.cxx} -O3 -DNDEBUG -std=c++17 -ffp-contract=off -fPIC -o '
-                       'CMakeFiles/native_market_example.dir/__/examples/native/'
-                       f'native_market_strategy.cpp.o -c {examples}/native_market_strategy.cpp',
-        }]
         if mode == 'none':
-            return commands
-        for target, source in (('example_hello_kernel', 'hello_kernel.cpp'),
-                               ('example_hello_kernel_c', 'hello_kernel_c.c')):
+            return []
+        examples = self.source / 'examples/native'
+        rows = []
+        if ci_verify.PROFILE[self.profile].live_runner:
+            rows += [('runner', target, f'__/examples/native/{source}', source, ' -fPIC')
+                     for target, source in (('native_market_example', 'native_market_strategy.cpp'),
+                                            ('native_selected_example',
+                                             'native_selected_strategy.cpp'))]
+        if self.profile in ci_verify.EXAMPLES_PROFILES:
+            rows += [('examples/native', target, source, source, '')
+                     for target, source in (('example_hello_kernel', 'hello_kernel.cpp'),
+                                            ('example_hello_kernel_c', 'hello_kernel_c.c'))]
+        commands = []
+        for directory, target, object_path, source, extra in rows:
             undebug = '' if self.exits.get('example_ndebug') == target else ' -UNDEBUG'
+            obj = f'CMakeFiles/{target}.dir/{object_path}.o'
             commands.append({
-                'directory': str(self.build_dir / 'examples/native'),
+                'directory': str(self.build_dir / directory),
                 'file': str(examples / source),
-                'output': f'examples/native/CMakeFiles/{target}.dir/{source}.o',
-                'command': f'{self.cxx} -O3 -DNDEBUG -ffp-contract=off{undebug} -o '
-                           f'CMakeFiles/{target}.dir/{source}.o -c {examples}/{source}',
+                'output': f'{directory}/{obj}',
+                'command': f'{self.cxx} -O3 -DNDEBUG -ffp-contract=off{extra}{undebug} -o '
+                           f'{obj} -c {examples}/{source}',
             })
         return commands
 
@@ -1738,10 +1742,26 @@ class ExamplesAssertLive(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(ci_verify.ndebug_defined(argv), defined)
 
+    # The profiles that compile an examples/native source -- the examples
+    # (release, kernel) or the live runner's two MODULE builds of example
+    # sources (kernel, native) -- and the targets the scripted configure
+    # compiles from them.
+    ASSERT_LIVE_TARGETS = {
+        'release': ['example_hello_kernel', 'example_hello_kernel_c'],
+        'kernel': ['example_hello_kernel', 'example_hello_kernel_c',
+                   'native_market_example', 'native_selected_example'],
+        'native': ['native_market_example', 'native_selected_example'],
+    }
+
     def test_every_example_compiled_with_assert_live_passes_before_the_build(self):
-        # The runner's MODULE build of an example source keeps NDEBUG and is
-        # not an example_* target, so it neither fails nor counts.
-        for profile in sorted(ci_verify.EXAMPLES_PROFILES):
+        # expectation corrected: the stage ran in release and kernel and read
+        # the example_* targets alone ('all 2 example targets: ...'; the
+        # runner's MODULE builds of two example sources kept NDEBUG and were
+        # not counted) -> it runs in every profile that compiles an
+        # examples/native source, native included, and counts those modules,
+        # because runner/CMakeLists.txt now gives them -UNDEBUG too (lane E4,
+        # item 2).
+        for profile, targets in self.ASSERT_LIVE_TARGETS.items():
             with self.subTest(profile=profile):
                 code, summary, _, build_dir = self.run_profile(profile)
                 self.assertEqual(code, 0, summary['failures'])
@@ -1750,36 +1770,47 @@ class ExamplesAssertLive(unittest.TestCase):
                                 names.index('examples-assert-live'))
                 self.assertLess(names.index('examples-assert-live'), names.index('build'))
                 log = (build_dir / 'ci-logs' / 'examples-assert-live.log').read_text()
-                self.assertIn('all 2 example targets: example_hello_kernel, '
-                              'example_hello_kernel_c', log)
+                self.assertIn(f'all {len(targets)} targets built from examples/native sources: '
+                              + ', '.join(targets), log)
 
     def test_an_example_compiled_with_ndebug_fails_before_the_build(self):
-        # The mutation the stage exists for: one example's compile without
-        # -UNDEBUG after Release's -DNDEBUG.
-        for profile in sorted(ci_verify.EXAMPLES_PROFILES):
-            with self.subTest(profile=profile):
-                code, summary, scripted, _ = self.run_profile(
-                    profile, example_ndebug='example_hello_kernel_c')
+        # The mutation the stage exists for: one compile of an example source
+        # without -UNDEBUG after Release's -DNDEBUG -- an example_* target, or
+        # a live-runner module built from one (lane E4, item 2).
+        for profile, target in (('release', 'example_hello_kernel_c'),
+                                ('kernel', 'example_hello_kernel_c'),
+                                ('kernel', 'native_market_example'),
+                                ('native', 'native_selected_example')):
+            with self.subTest(profile=profile, target=target):
+                code, summary, scripted, _ = self.run_profile(profile, example_ndebug=target)
                 self.assertEqual(code, 1)
                 self.assertEqual(failure_stages(summary), ['examples-assert-live'])
                 self.assertNotIn('build', scripted.names())
-                error = summary['failures'][0]['error']
-                self.assertIn('example_hello_kernel_c', error)
-                self.assertNotIn('example_hello_kernel,', error)
+                self.assertIn(f'NDEBUG stays defined in the compile of {target}, so',
+                              summary['failures'][0]['error'])
 
     def test_the_stage_fails_closed_without_example_compile_commands(self):
-        for mode, needle in (('absent', 'compile_commands.json missing'),
-                             ('none', 'no example_* compile command')):
-            with self.subTest(mode=mode):
-                code, summary, scripted, _ = self.run_profile(
-                    'kernel', example_commands=mode)
-                self.assertEqual(code, 1)
-                self.assertEqual(failure_stages(summary), ['examples-assert-live'])
-                self.assertIn(needle, summary['failures'][0]['error'])
-                self.assertNotIn('build', scripted.names())
+        # expectation corrected: 'no example_* compile command' -> 'no compile
+        # of an examples/native source', because the stage reads every compile
+        # of an example source, the runner's modules included, and fails
+        # closed only when there is none (lane E4, item 2).
+        for profile in ('kernel', 'native'):
+            for mode, needle in (('absent', 'compile_commands.json missing'),
+                                 ('none', 'no compile of an examples/native source')):
+                with self.subTest(profile=profile, mode=mode):
+                    code, summary, scripted, _ = self.run_profile(
+                        profile, example_commands=mode)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(failure_stages(summary), ['examples-assert-live'])
+                    self.assertIn(needle, summary['failures'][0]['error'])
+                    self.assertNotIn('build', scripted.names())
 
-    def test_profiles_without_examples_do_not_run_the_stage(self):
-        for profile in ('debug', 'sanitizers', 'native'):
+    def test_profiles_that_compile_no_example_source_do_not_run_the_stage(self):
+        # expectation corrected: ('debug', 'sanitizers', 'native') ->
+        # ('debug', 'sanitizers'), because the native profile builds the live
+        # runner's two modules from examples/native sources and now runs the
+        # stage (lane E4, item 2).
+        for profile in ('debug', 'sanitizers'):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(profile)
                 self.assertEqual(code, 0, summary['failures'])

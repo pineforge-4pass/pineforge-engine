@@ -54,6 +54,17 @@ target_link_libraries(native_selected_example PRIVATE PineForge::pineforge)
 target_compile_options(native_selected_example PRIVATE -fvisibility=hidden -ffp-contract=off)
 set_target_properties(native_selected_example PROPERTIES PREFIX "" OUTPUT_NAME "native-selected-example")
 
+# Both modules are examples/native sources, which check their own results with
+# assert(); test_native_example_batch and test_native_example_selected drive
+# them through the C ABI. Keep assert() live here too, as
+# examples/native/CMakeLists.txt does for their example_* executables: strip
+# NDEBUG after the build-type flags, so it wins over Release's -DNDEBUG.
+# scripts/ci_verify.py's examples-assert-live stage checks every compile of an
+# examples/native source for it.
+foreach(_pf_example_module native_market_example native_selected_example)
+    target_compile_options(${_pf_example_module} PRIVATE -UNDEBUG)
+endforeach()
+
 add_library(native_live_parser_example MODULE examples/demo_parser.cpp)
 target_include_directories(native_live_parser_example PRIVATE ${PROJECT_SOURCE_DIR}/include)
 set_target_properties(native_live_parser_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-parser-example")

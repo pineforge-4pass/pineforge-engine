@@ -83,6 +83,16 @@ release rows. Raise the constant when a row lands, and pass `--min-tests N` to
 override it for one run (the flag gates any profile; `kernel` and `release`
 have a default).
 
+Every compile of an `examples/native` source keeps `assert()` live: the
+`example_*` executables (`examples/native/CMakeLists.txt`) and the live
+runner's two MODULE builds of example sources (`runner/CMakeLists.txt`, driven
+through the C ABI by `test_native_example_batch` and
+`test_native_example_selected`) put `-UNDEBUG` after the build-type flags. The
+`examples-assert-live` stage of the `release`, `kernel` and `native` profiles
+reads `compile_commands.json` after configure and refuses, before the build, a
+compile of an example source that leaves `NDEBUG` defined, or a database with
+no such compile.
+
 Pass `--ccache` when ccache is installed. It caches compiler work, not complete
 build directories or verification receipts. Compiler, source, header and flag
 checks remain in effect. The native curl cache is separately bound to its source
