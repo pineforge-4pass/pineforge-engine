@@ -159,6 +159,12 @@ EXAMPLES_PROFILES = frozenset(('release', 'kernel'))
 # A compile's CMake target, read from its object directory as CMake names it
 # for every generator: <dir>/CMakeFiles/<target>.dir/<source>.o.
 OBJECT_DIR = re.compile(r'(?:^|[/\\])CMakeFiles[/\\]([^/\\]+)\.dir[/\\]')
+# The two static archives every profile builds, by CMake target: libpineforge.a
+# (the kernel, and the source layer wherever the profile compiles it) and
+# libpineforge_kernel.a (the kernel alone). stale-binaries holds each against
+# the files its own compiles read.
+ARCHIVE_TARGETS = ('pineforge', 'pineforge_kernel')
+INCLUDE_DIRECTIVE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.MULTILINE)
 
 
 class ConfigError(Exception):
@@ -567,17 +573,96 @@ def example_targets_with_ndebug(build_dir: Path, source: Path) -> tuple[list[str
     return sorted(targets), sorted(with_ndebug)
 
 
+def include_search_path(argv: list[str], directory: Path) -> tuple[list[Path], list[Path]]:
+    """Where one compile looks for a header: the extra directories of a
+    "quoted" include (-iquote; the including file's own directory comes
+    first), then those of every include (-I, then -isystem), in the compiler's
+    order."""
+    quote, ordinary, system = [], [], []
+    tokens = iter(argv)
+    for token in tokens:
+        for flag, found in (('-iquote', quote), ('-isystem', system), ('-I', ordinary)):
+            if token == flag:
+                value = next(tokens, '')
+            elif token.startswith(flag):
+                value = token[len(flag):]
+            else:
+                continue
+            found.append(directory / value)
+            break
+    return quote, ordinary + system
+
+
+def archive_inputs(source: Path, build_dir: Path, target: str) -> list[Path]:
+    """Every file of the source or the build tree that the compiles of target's objects read.
+
+    That is each translation unit compile_commands.json compiles into target,
+    and every header they reach through #include that resolves inside either
+    tree -- the pineforge/version.h CMake generates into the build tree
+    included, wherever that tree lives: a "quoted" include is looked up beside
+    the including file first, then in the compile's -iquote, -I and -isystem
+    directories; an <angled> one in the last two. A header outside both trees
+    (the standard library, a system Eigen) is neither an input nor followed.
+    The scan reads #include lines as text: one under a false #if still counts,
+    one spelled through a macro is not followed, and a header reached from
+    several units is read with the first one's search path (an archive's units
+    share theirs).
+    """
+    path = build_dir / 'compile_commands.json'
+    if not path.is_file():
+        raise RuntimeError(f'compile_commands.json missing; the inputs of {target} cannot be listed')
+    trees = (source.resolve(), build_dir.resolve())
+
+    def in_trees(candidate: Path) -> bool:
+        return any(tree in candidate.parents for tree in trees)
+
+    units = []
+    for entry in json.loads(path.read_text()):
+        argv = compile_argv(entry)
+        if compile_target(entry, argv) == target:
+            directory = Path(entry.get('directory') or build_dir)
+            units.append((compile_unit(entry), include_search_path(argv, directory)))
+    if not units:
+        raise RuntimeError(f'compile_commands.json has no compile command of target {target}')
+    read, includes = set(), {}
+    for unit, (quote_dirs, dirs) in units:
+        pending = [unit]
+        while pending:
+            current = pending.pop()
+            if current in read:
+                continue
+            read.add(current)
+            if current not in includes:
+                includes[current] = INCLUDE_DIRECTIVE.findall(current.read_text(errors='replace'))
+            for kind, name in includes[current]:
+                search = [current.parent, *quote_dirs, *dirs] if kind == '"' else dirs
+                found = next((candidate for candidate in (directory / name for directory in search)
+                              if candidate.is_file()), None)
+                if found is not None and in_trees(found.resolve()):
+                    pending.append(found.resolve())
+    return sorted(path for path in read if in_trees(path))
+
+
 def stale_archive_sources(source: Path, archive: Path) -> list[str]:
+    """The files the archive <build>/lib/lib<target>.a is compiled from that are newer than it.
+
+    An archive's inputs are what its own compiles read (archive_inputs), not
+    every file under src/, include/ and CMakeLists.txt: the kernel profile's
+    archives never compile src/source/ or src/compat/pine/, and no archive
+    compiles a header only an example or a test includes, so an edit to one of
+    those rebuilds no archive and is no sign of a stale build. A change to
+    CMakeLists.txt that matters reaches the archive as a changed compile.
+    """
     if not archive.is_file():
         raise RuntimeError(f'full build did not produce {archive}')
+    named = re.fullmatch(r'lib(.+)\.a', archive.name)
+    if named is None:
+        raise RuntimeError(f'{archive} is not a static archive named lib<target>.a')
     newest = archive.stat().st_mtime
-    stale = []
-    for root in (source / 'CMakeLists.txt', source / 'src', source / 'include'):
-        paths = [root] if root.is_file() else [path for path in root.rglob('*') if path.is_file()]
-        for path in paths:
-            if path.stat().st_mtime > newest:
-                stale.append(str(path.relative_to(source)))
-    return stale
+    source = source.resolve()
+    return [str(path.relative_to(source)) if source in path.parents else str(path)
+            for path in archive_inputs(source, archive.parent.parent, named.group(1))
+            if path.stat().st_mtime > newest]
 
 
 def smoke_prefix(cache: dict[str, str], install_prefix: Path) -> str:
@@ -1047,18 +1132,23 @@ class Driver:
                 ['cmake', '--build', str(self.cfg.build_dir), '--parallel', str(self.cfg.jobs)],
                 timeout=1800).returncode != 0:
             return self.finish('failed', 1)
-        archive = self.cfg.build_dir / 'lib' / 'libpineforge.a'
-        try:
-            stale = stale_archive_sources(self.cfg.source, archive)
-        except Exception as error:
-            self.fail_stage('stale-binaries', str(error))
-            return self.finish('failed', 1)
-        if stale:
-            self.fail_stage(
-                'stale-binaries',
-                'libpineforge.a predates source; full rebuild required: ' + ', '.join(stale[:40]))
-            return self.finish('failed', 1)
-        self.pass_stage('stale-binaries', f'{archive} is newer than src/, include/, CMakeLists.txt')
+        archives = [self.cfg.build_dir / 'lib' / f'lib{target}.a' for target in ARCHIVE_TARGETS]
+        for archive in archives:
+            try:
+                stale = stale_archive_sources(self.cfg.source, archive)
+            except Exception as error:
+                self.fail_stage('stale-binaries', str(error))
+                return self.finish('failed', 1)
+            if stale:
+                self.fail_stage(
+                    'stale-binaries',
+                    f'{archive.name} predates source it is compiled from; full rebuild '
+                    'required: ' + ', '.join(stale[:40]))
+                return self.finish('failed', 1)
+        self.pass_stage('stale-binaries',
+                        ' and '.join(archive.name for archive in archives)
+                        + ' are newer than every file of the source and build trees their '
+                        'compiles read')
         if not self.enforce_native_include_independence():
             return self.finish('failed', 1)
         if not self.enforce_kernel_residuals():

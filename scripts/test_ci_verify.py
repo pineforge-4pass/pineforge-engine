@@ -25,6 +25,7 @@ from ci_verify import (
     Completed,
     ConfigError,
     KERNEL_MIN_TESTS,
+    PROFILES,
     RELEASE_MIN_TESTS,
     ROOT,
     SANITIZER_FLAG,
@@ -279,35 +280,47 @@ class Scripted:
             # A real, empty CTest inventory proves the no-test exit policy.
             # Configure/build remain scripted; no engine executable is run.
             (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
-        if self.profile == 'sanitizers':
-            commands = [{
-                'directory': str(self.build_dir),
-                'file': str(self.source / 'src/matrix.cpp'),
-                'command': f'{self.cxx} {SANITIZER_FLAG} -c src/matrix.cpp',
-            }]
-            if self.exits.get('sanitizer_flag') == 'absent':
-                commands[0]['command'] = f'{self.cxx} -c src/matrix.cpp'
+        # 'example_commands' == 'absent' scripts a configure that wrote no
+        # compile database at all.
+        if self.exits.get('example_commands') != 'absent':
+            commands = self._library_compile_commands() + self._example_compile_commands()
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
-        if (self.profile in ci_verify.EXAMPLES_PROFILES
-                or ci_verify.PROFILE[self.profile].live_runner):
-            commands = self._example_compile_commands()
-            if commands is not None:
-                (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
         for role in ('e60', '0e', 'v13', 'v14', 'v15-frozen', 'v16-frozen'):
             self._maybe_seed_abi_base(role)
         return Completed(0, b'configured\n', b'')
 
-    def _example_compile_commands(self) -> list[dict] | None:
+    def _library_compile_commands(self) -> list[dict]:
+        """A real kernel translation unit, src/matrix.cpp, compiled into each of
+        the two archives every profile builds, with the library's include
+        directories; the sanitizers profile adds the PUBLIC sanitizer flag
+        unless 'sanitizer_flag' is 'absent'. 'library_commands' == 'none'
+        scripts a database without them."""
+        if self.exits.get('library_commands') == 'none':
+            return []
+        flag = ''
+        if self.profile == 'sanitizers' and self.exits.get('sanitizer_flag') != 'absent':
+            flag = ' ' + SANITIZER_FLAG
+        unit = self.source / 'src/matrix.cpp'
+        commands = []
+        for target in ('pineforge', 'pineforge_kernel'):
+            obj = f'CMakeFiles/{target}.dir/src/matrix.cpp.o'
+            commands.append({
+                'directory': str(self.build_dir),
+                'file': str(unit),
+                'output': obj,
+                'command': f'{self.cxx} -I{self.source}/include -I{self.build_dir}/include '
+                           f'-I{self.source}/src -O2{flag} -o {obj} -c {unit}',
+            })
+        return commands
+
+    def _example_compile_commands(self) -> list[dict]:
         """The compiles of examples/native sources, as CMake emits them: two
         example_* targets where the profile builds the examples, and the live
         runner's two MODULE builds of example sources where it builds the
         runner. Every one strips Release's NDEBUG with -UNDEBUG unless
-        'example_ndebug' names its target; 'example_commands' is 'absent' (no
-        file) or 'none' (no compile of an examples/native source)."""
-        mode = self.exits.get('example_commands')
-        if mode == 'absent':
-            return None
-        if mode == 'none':
+        'example_ndebug' names its target; 'example_commands' == 'none'
+        scripts a database without any."""
+        if self.exits.get('example_commands') == 'none':
             return []
         examples = self.source / 'examples/native'
         rows = []
@@ -337,9 +350,14 @@ class Scripted:
         code = int(self.exits.get('build', 0))
         if code != 0:
             return Completed(code, b'', b'build failed\n')
-        archive = self.build_dir / 'lib' / 'libpineforge.a'
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        archive.write_bytes(b'!<arch>\nci-verify-test\n')
+        # Both archives every profile builds. 'stale_archive' names one the
+        # scripted build leaves older than the sources it is compiled from.
+        for name in ('libpineforge.a', 'libpineforge_kernel.a'):
+            archive = self.build_dir / 'lib' / name
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(b'!<arch>\nci-verify-test\n')
+            if self.exits.get('stale_archive') == name:
+                os.utime(archive, (1, 1))
         if self.profile in {'native', 'kernel'} or self.exits.get('create_native_binaries'):
             binary = self.build_dir / 'bin' / 'pineforge-live'
             binary.parent.mkdir(parents=True, exist_ok=True)
@@ -1815,6 +1833,157 @@ class ExamplesAssertLive(unittest.TestCase):
                 code, summary, _, _ = self.run_profile(profile)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertNotIn('examples-assert-live', stage_names(summary))
+
+
+class StaleBinaries(unittest.TestCase):
+    """stale-binaries holds each archive against the files its own compiles read.
+
+    Until lane E4 it held libpineforge.a against every file under src/,
+    include/ and CMakeLists.txt, so the kernel profile, whose archives never
+    compile src/source/ or src/compat/pine/, failed after any edit there
+    (lane P7's report), and every profile failed after an edit to a header
+    only examples or tests include. A synthetic tree pins the reading; the
+    driver rows pin the wiring.
+    """
+    run_profile = DriverOrderingAndAggregation.run_profile
+    FILES = {
+        'CMakeLists.txt': 'project(fixture)\n',
+        'include/pineforge/kernel.hpp':
+            '#pragma once\n#include "pineforge/detail.hpp"\n#include <vector>\n'
+            '#include <pineforge/version.h>\n',
+        'include/pineforge/detail.hpp': '#pragma once\n',
+        'include/pineforge/module.hpp': '#pragma once\n#include "pineforge/kernel.hpp"\n',
+        'include/pineforge/source/adapter.hpp': '#pragma once\n#include "pineforge/kernel.hpp"\n',
+        'src/kernel.cpp': '#include "pineforge/kernel.hpp"\n#include "local.hpp"\n',
+        'src/local.hpp': '#pragma once\n',
+        'src/source/adapter.cpp': '#include "pineforge/source/adapter.hpp"\n',
+    }
+    KERNEL_UNITS = ('src/kernel.cpp',)
+    ALL_UNITS = ('src/kernel.cpp', 'src/source/adapter.cpp')
+
+    def fixture(self, units_of: dict) -> tuple[Path, Path]:
+        """A source tree and a build tree whose compile database compiles
+        units_of[target] into lib/lib<target>.a, each archive built after
+        every source file."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        source, build = root / 'source', root / 'build'
+        for rel, text in self.FILES.items():
+            path = source / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+            os.utime(path, (1000, 1000))
+        entries = []
+        for target, units in units_of.items():
+            for unit in units:
+                obj = f'CMakeFiles/{target}.dir/{unit}.o'
+                entries.append({
+                    'directory': str(build), 'file': str(source / unit), 'output': obj,
+                    'command': f'c++ -I{source}/include -I{build}/include -I{source}/src '
+                               f'-isystem /usr/include -O2 -o {obj} -c {source / unit}'})
+            archive = build / 'lib' / f'lib{target}.a'
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(b'!<arch>\n')
+            os.utime(archive, (2000, 2000))
+        (build / 'compile_commands.json').write_text(json.dumps(entries))
+        return source, build
+
+    @staticmethod
+    def edit(source: Path, *files: str) -> None:
+        for rel in files:
+            os.utime(source / rel, (3000, 3000))
+
+    @staticmethod
+    def stale(source: Path, build: Path, target: str) -> list[str]:
+        return ci_verify.stale_archive_sources(source, build / 'lib' / f'lib{target}.a')
+
+    def test_a_kernel_only_archive_ignores_what_it_never_compiles(self):
+        # The kernel profile, where libpineforge.a is the kernel alone.
+        source, build = self.fixture({'pineforge': self.KERNEL_UNITS})
+        self.edit(source, 'src/source/adapter.cpp', 'include/pineforge/source/adapter.hpp',
+                  'include/pineforge/module.hpp', 'CMakeLists.txt')
+        self.assertEqual(self.stale(source, build, 'pineforge'), [])
+
+    def test_every_file_the_archive_compiles_is_held_against_it(self):
+        # A unit, a header reached through another header, and a "quoted"
+        # header found beside the file that includes it.
+        for edited in ('src/kernel.cpp', 'include/pineforge/detail.hpp', 'src/local.hpp'):
+            with self.subTest(edited=edited):
+                source, build = self.fixture({'pineforge': self.KERNEL_UNITS})
+                self.edit(source, edited)
+                self.assertEqual(self.stale(source, build, 'pineforge'), [edited])
+
+    def test_each_archive_is_held_against_its_own_compiles(self):
+        # The default build: libpineforge.a compiles the source layer too,
+        # libpineforge_kernel.a never does.
+        source, build = self.fixture({'pineforge': self.ALL_UNITS,
+                                      'pineforge_kernel': self.KERNEL_UNITS})
+        self.edit(source, 'include/pineforge/source/adapter.hpp', 'include/pineforge/module.hpp')
+        self.assertEqual(self.stale(source, build, 'pineforge'),
+                         ['include/pineforge/source/adapter.hpp'])
+        self.assertEqual(self.stale(source, build, 'pineforge_kernel'), [])
+
+    def test_a_header_generated_into_the_build_tree_is_an_input(self):
+        # CMake writes pineforge/version.h into the build tree; kernel.hpp
+        # reaches it through -I<build>/include, wherever that tree lives.
+        # Outside both trees (the standard library) nothing is followed.
+        source, build = self.fixture({'pineforge': self.KERNEL_UNITS})
+        generated = build / 'include' / 'pineforge' / 'version.h'
+        generated.parent.mkdir(parents=True)
+        generated.write_text('#define PINEFORGE_GIT_SHA "0000000"\n')
+        os.utime(generated, (1000, 1000))
+        self.assertIn(generated, ci_verify.archive_inputs(source, build, 'pineforge'))
+        self.assertEqual(self.stale(source, build, 'pineforge'), [])
+        os.utime(generated, (3000, 3000))
+        self.assertEqual(self.stale(source, build, 'pineforge'), [str(generated)])
+
+    def test_the_inputs_are_the_units_and_the_headers_they_reach_in_the_tree(self):
+        source, build = self.fixture({'pineforge': self.ALL_UNITS})
+        inputs = ci_verify.archive_inputs(source, build, 'pineforge')
+        self.assertEqual([str(path.relative_to(source)) for path in inputs], [
+            'include/pineforge/detail.hpp', 'include/pineforge/kernel.hpp',
+            'include/pineforge/source/adapter.hpp', 'src/kernel.cpp', 'src/local.hpp',
+            'src/source/adapter.cpp'])
+
+    def test_it_fails_closed_when_it_cannot_list_an_archive_inputs(self):
+        source, build = self.fixture({'pineforge_kernel': self.KERNEL_UNITS})
+        (build / 'lib' / 'libpineforge.a').write_bytes(b'!<arch>\n')
+        with self.assertRaisesRegex(RuntimeError, 'no compile command of target pineforge$'):
+            self.stale(source, build, 'pineforge')
+        (build / 'compile_commands.json').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'compile_commands.json missing'):
+            self.stale(source, build, 'pineforge_kernel')
+        with self.assertRaisesRegex(RuntimeError, 'did not produce'):
+            self.stale(source, build, 'pineforge_live_support')
+
+    def test_every_profile_holds_both_archives_after_the_build(self):
+        for profile in PROFILES:
+            with self.subTest(profile=profile):
+                code, summary, _, build_dir = self.run_profile(profile)
+                self.assertEqual(code, 0, summary['failures'])
+                names = stage_names(summary)
+                self.assertLess(names.index('build'), names.index('stale-binaries'))
+                self.assertIn('libpineforge.a and libpineforge_kernel.a are newer than every '
+                              'file', (build_dir / 'ci-logs' / 'stale-binaries.log').read_text())
+
+    def test_a_stale_archive_fails_the_stage_before_ctest(self):
+        for name in ('libpineforge.a', 'libpineforge_kernel.a'):
+            with self.subTest(archive=name):
+                code, summary, scripted, _ = self.run_profile('kernel', stale_archive=name)
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), ['stale-binaries'])
+                error = summary['failures'][0]['error']
+                self.assertTrue(error.startswith(f'{name} predates '), error)
+                self.assertIn('src/matrix.cpp', error)
+                self.assertNotIn('ctest', scripted.names())
+
+    def test_a_build_without_the_archive_compiles_fails_closed(self):
+        code, summary, scripted, _ = self.run_profile('release', library_commands='none')
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['stale-binaries'])
+        self.assertIn('no compile command of target pineforge', summary['failures'][0]['error'])
+        self.assertNotIn('ctest', scripted.names())
 
 
 class DiagnosticsCollection(unittest.TestCase):

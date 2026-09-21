@@ -93,6 +93,16 @@ reads `compile_commands.json` after configure and refuses, before the build, a
 compile of an example source that leaves `NDEBUG` defined, or a database with
 no such compile.
 
+After the build, the `stale-binaries` stage requires `libpineforge.a` and
+`libpineforge_kernel.a` each to be newer than every file its own compiles
+read: the translation units `compile_commands.json` compiles into it and the
+headers they reach through `#include` inside the source tree or the build tree
+(the generated `pineforge/version.h`). Files no archive
+compiles do not count, so an edit under `src/source/` does not fail the
+`kernel` profile, whose archives never compile it, and an edit to a header that
+only examples or tests include fails no profile. A database without the
+archive's compiles fails the stage.
+
 Pass `--ccache` when ccache is installed. It caches compiler work, not complete
 build directories or verification receipts. Compiler, source, header and flag
 checks remain in effect. The native curl cache is separately bound to its source
