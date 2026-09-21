@@ -452,6 +452,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_declare_subscriptions_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list |
 | `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
 | `strategy_native_append_auxiliary_bars_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed |
+| `strategy_native_declare_opened_lot_entry_bar_mask_v1` | From inside `on_applied`, say where the fill that opened a lot sat on its entry bar (`pf_native_opened_lot_fill_point_e`: on the bar's path, or after it); the kernel derives the lot's entry-bar mask that `on_lot_excursion`'s facts carry back |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
 
 The header's **COVERAGE** block lists every public member of

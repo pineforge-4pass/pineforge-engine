@@ -3094,7 +3094,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-32 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+33 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -3325,6 +3325,22 @@ because nothing was sampled for it. The three margin hooks share one view
 POD, `pf_native_margin_view_v1`, whose fields are documented per hook and
 zero where that hook has no such fact, exactly as `pf_native_event_v1`'s
 union is.
+
+The owner of the excursions also says where each lot's opening fill sat on
+its entry bar: `strategy_native_declare_opened_lot_entry_bar_mask_v1` is the
+C spelling of the protected `BacktestEngine::declare_opened_lot_entry_bar_mask`.
+It takes the lot's entry incarnation
+(`pf_native_applied_v1::opened_lot_incarnation`), the whole entry bar and a
+`pf_native_opened_lot_fill_point_e` — `ON_PATH` for a fill at a price the
+bar's path reaches, `AFTER_PATH` for one at the bar's closing point — and the
+kernel derives which ends of the bar the path had reached before the fill,
+handing both flags back as `pf_native_lot_excursion_v1::entry_bar_high_masked` /
+`entry_bar_low_masked`. It is legal inside `on_applied` alone and
+`PF_NATIVE_E_STATE` everywhere else. Being a member of the base rather than
+of `NativeStrategyHost`, it sits outside the COVERAGE census below, so the
+block records it in prose. The entry-bar mask scenario of
+`tests/test_native_c_api.c` reproduces the C++ witness
+`tests/test_e6_entry_bar_mask_declaration.cpp` number for number.
 
 **What is not exposed, and why.** The header opens with a **COVERAGE** block:
 one line per public member of `NativeStrategyHost`, carrying either the C
