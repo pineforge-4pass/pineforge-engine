@@ -55,7 +55,7 @@ old source. Existing checked-in corpus/tutorial C++ must likewise be regenerated
 before using it for Pine behavior measurements; compilation alone is insufficient.
 
 Rebuild every C++ consumer with matching current headers and archive. The class
-namespace is `engine_script_run_v4`; frozen v2/base38 and v3/f864 callers are
+namespace is `engine_script_run_v4`; frozen v2/base38 and v3/f864 callers are <!-- verified HEAD -->
 compile/link rejection controls. Broker fingerprint domain and stream fingerprint
 version are now 4 and include priority attachment/configuration. Prior hashes
 are not comparable. Public C functions, PODs and ABI/API versions are unchanged;

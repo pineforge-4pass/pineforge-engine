@@ -139,15 +139,15 @@ What each gate refuses:
 | `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
 | `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |
 | `check_doc_anchors.py` | a `file:line` citation that no longer points at the symbol it claims |
-| `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified |
+| `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified | <!-- verified HEAD -->
 | `check_pine_to_native_coverage.py` | a Pine builtin with no row on the migration page |
 | the CTest row **floors** | a test row that vanished from a profile |
 
 ### The floors
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
-floor — `KERNEL_MIN_TESTS` ci_verify.py:88 and `RELEASE_MIN_TESTS`
-ci_verify.py:107.
+floor — `KERNEL_MIN_TESTS` ci_verify.py:93 and `RELEASE_MIN_TESTS`
+ci_verify.py:116.
 A deleted or silently skipped row is a failure, not a quieter run. If your
 change adds rows, raise the floor in the same commit and say by how much; if it
 legitimately removes one, lower it deliberately and say why. `--min-tests`
@@ -184,7 +184,7 @@ python3 scripts/corpus_trades_identity.py --update
 
 The subset runs as a required check on a pull request; the full sweep runs
 nightly and on demand. The details, including which 30 probes and why, are in
-[`docs/ci.md`](docs/ci.md).
+`docs/ci.md`.
 
 ### "Expectation corrected"
 

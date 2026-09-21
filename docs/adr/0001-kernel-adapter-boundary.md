@@ -300,10 +300,10 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   COVERAGE block carries one line per public member of `NativeStrategyHost` with either its C
   spelling or the reason it has none, and `scripts/check_native_c_api_surface.py` proves the
   block is exactly that class's public surface. `strategy_create` / `run_backtest` stay
-  codegen-emitted (`include/pineforge/pineforge.h:434`), which is why a C host frees its report
+  codegen-emitted (`include/pineforge/pineforge.h:530`), which is why a C host frees its report
   with `strategy_native_report_free_v1`.
-- **The examples are a gated target with executed assertions.** Thirteen Pine-free hosts ship
-  under `examples/native/` — eleven C++ and two C — each including only
+- **The examples are a gated target with executed assertions.** Fifteen Pine-free hosts ship
+  under `examples/native/` — thirteen C++ and two C — each including only
   `<pineforge/native_host.hpp>` (or `native_c_api.h`), linking `PineForge::kernel`, and checking
   its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
   (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:305`) and
@@ -419,8 +419,8 @@ on a Release and on a Debug archive: `0 findings`, both profiles, with these ali
 |---|---|---|---|---|
 | `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 4) | the next `PF_ABI_VERSION` (5) | The field is month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev — a construction whose name is its resampling period, not its calibration source. The published header is the contract of every compiled FFI consumer, so both names are one `double` behind a C11 anonymous union of two same-typed members: identical offset (48), identical `sizeof(pf_equity_stats_t)` (120), identical `offsetof(pf_metrics_t, equity)` (648), pinned by `static_assert` in `src/c_abi.cpp` and exercised from C by `tests/test_c_abi.c`. |
 | `pf_equity_stats_t::sortino_tv` | `sortino_monthly` | public C ABI (as above) | the next `PF_ABI_VERSION` (5) | Same resampling as `sharpe_monthly`, population downside deviation vs the monthly risk-free. Aliased on the same terms; offset 56. |
-| `exit_legs::Domain::Coof` | `FillRecalc` | standalone C++ ABI `pineforge::exit_legs::lifecycle_v1` (`include/pineforge/exit_leg_lifecycle.hpp`) | `lifecycle_v2` | The domain is the fill-recalculation re-entry pass: the host re-runs its script after a fill and observes the rest of the same bar. `coof` abbreviates `calc_on_order_fills`, the Pine adapter's name for it (the same abbreviation the `coof_*` reflection rows carry, ruled above). An enumerator alias adds a name and no value: `Coof == FillRecalc == 1`, the underlying type stays `uint8_t`, `Domain::RawTicks` stays 4 (so `valid_frame`'s range check is unchanged), and no `switch` gains a case. Twin-parity-frozen TUs keep compiling their old spelling unchanged. |
-| `exit_legs::Domain::MagnifierCoof` | `MagnifierFillRecalc` | standalone C++ ABI `lifecycle_v1` (as above) | `lifecycle_v2` | The same re-entry pass on a magnified sub-bar. `MagnifierCoof == MagnifierFillRecalc == 3`. |
+| `exit_legs::Domain::Coof` | `FillRecalc` | standalone C++ ABI `pineforge::exit_legs::lifecycle_v1` (`include/pineforge/exit_leg_lifecycle.hpp`) | `lifecycle_v2` | The domain is the fill-recalculation re-entry pass: the host re-runs its script after a fill and observes the rest of the same bar. `coof` abbreviates `calc_on_order_fills`, the Pine adapter's name for it (the same abbreviation the `coof_*` reflection rows carry, ruled above). An enumerator alias adds a name and no value: `Coof == FillRecalc == 1`, the underlying type stays `uint8_t`, `Domain::RawTicks` stays 4 (so `valid_frame`'s range check is unchanged), and no `switch` gains a case. Twin-parity-frozen TUs keep compiling their old spelling unchanged. | <!-- verified HEAD -->
+| `exit_legs::Domain::MagnifierCoof` | `MagnifierFillRecalc` | standalone C++ ABI `lifecycle_v1` (as above) | `lifecycle_v2` | The same re-entry pass on a magnified sub-bar. `MagnifierCoof == MagnifierFillRecalc == 3`. | <!-- verified HEAD -->
 
 **The serialized report keys do not change.** `sharpe_tv` and `sortino_tv` remain the JSON keys of
 the report dictionaries built by `docker/run_json.py` (`_stats_dict`, driven off the ctypes
@@ -614,7 +614,7 @@ buildable archive with no source-layer object in it; size with `Sized` or with y
 let the kernel record the equity curve, the per-bar broker hashes and the open-position row, or
 record them yourself; declare higher-timeframe series and an auxiliary finer feed in the run
 spec; declare a margin model, a risk block and a price grid; and submit, replace, cancel, bracket
-and trail through one request type. Thirteen example hosts do exactly that, each asserting its own
+and trail through one request type. Fifteen example hosts do exactly that, each asserting its own
 numbers in a gated CTest row, and the `kernel` profile of `scripts/ci_verify.py` runs the whole
 suite with no adapter compiled.
 

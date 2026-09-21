@@ -41,7 +41,12 @@ The four rules
    pages use: Doxygen's explicit ``{#label}`` and a GitHub-style slug of the
    heading text.  Doxygen ``@ref`` targets are deliberately *not* checked:
    they also name C++ symbols, which cannot be resolved without Doxygen's own
-   index, so a checker here would guess.
+   index, so a checker here would guess.  An inline code span is not a link,
+   for the same reason a fenced block is not one: ``Series<T>::operator[](k)``
+   spelled in backticks is an operator signature, and reading its ``[](k)`` as
+   a link to a file named ``k`` is the checker inventing a citation the page
+   never made.  Only the span's *content* is masked, so the label of a real
+   link (``[`docs/ci.md`](docs/ci.md)``) is still read as one.
 
 Exit status
 -----------
@@ -60,8 +65,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 #: Where each rule looks.  ``lane L…`` is about the *published* migration
 #: surface; the rest guard everything a reader can reach under ``docs/``.
-PUBLISHED_GLOBS = ('README.md', 'docs/pages/*.md')
-DOC_GLOBS = ('README.md', 'docs/*.md', 'docs/pages/*.md', 'docs/adr/*.md', 'docs/design/*.md')
+PUBLISHED_GLOBS = ('README.md', 'CONTRIBUTING.md', 'docs/pages/*.md')
+DOC_GLOBS = ('README.md', 'CONTRIBUTING.md', 'docs/*.md', 'docs/pages/*.md',
+             'docs/adr/*.md', 'docs/design/*.md')
 
 VERIFIED = '<!-- verified HEAD -->'
 
@@ -76,6 +82,7 @@ LINK_RE = re.compile(r'(?<!\!)\[[^\]]*\]\(([^)\s]+)\)')
 HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.*?)\s*$')
 EXPLICIT_ID_RE = re.compile(r'\{#([A-Za-z0-9_.-]+)\}')
 FENCE_RE = re.compile(r'^\s*(```|~~~)')
+CODE_SPAN_RE = re.compile(r'(`+)(.+?)\1')
 INLINE_NS_RE = re.compile(r'\binline namespace\s+([a-z][a-z0-9_]*_v[0-9]+)')
 LITERAL_DOMAIN_RE = re.compile(r'"pineforge-([a-z-]+)/v([0-9]+)')
 
@@ -134,6 +141,16 @@ def masked(text: str) -> str:
         else:
             out.append('' if fenced else line)
     return '\n'.join(out)
+
+
+def mask_code_spans(line: str) -> str:
+    """The line with every inline code span's content blanked out.
+
+    Column positions and every character outside a span are preserved, so a
+    rule that reads the line afterwards still reports the same line and still
+    sees a real link whose label happens to be code.
+    """
+    return CODE_SPAN_RE.sub(lambda m: m.group(1) + 'x' * len(m.group(2)) + m.group(1), line)
 
 
 def headings(text: str) -> set[str]:
@@ -211,7 +228,7 @@ def check(root: Path) -> list[Offender]:
     for page in pages(root, DOC_GLOBS):
         text = page.read_text(errors='replace')
         for number, line in code_free(text):
-            for target in LINK_RE.findall(line):
+            for target in LINK_RE.findall(mask_code_spans(line)):
                 problem = dead_link(root, page, target, anchors_cache)
                 if problem:
                     found.append(Offender(page, number, 'dead-link', line.strip(), problem))

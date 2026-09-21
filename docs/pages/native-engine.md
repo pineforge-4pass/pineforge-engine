@@ -1755,13 +1755,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:2378`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1108`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1127`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1048-1063`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1082-1097`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3016,7 +3016,7 @@ profiles of `scripts/ci_verify.py` turn the option on, so every `example_*`
 row runs in the gate both with and without the source layer compiled (their
 `examples-assert-live` stage refuses a configure in which an example's
 compile command leaves `NDEBUG` defined);
-`scripts/check_native_include_independence.py` compiles all thirteen sources
+`scripts/check_native_include_independence.py` compiles all fifteen sources
 against the installed headers with the source trees removed, the C one with
 the C compiler. The market and selected examples are also built, from the
 same sources, as the MODULE targets the live runner `dlopen`s.
@@ -3435,7 +3435,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` (189 rows) is the count the kernel-only CTest set is
+`scripts/ci_verify.py` (193 rows) is the count the kernel-only CTest set is
 expected to run, and the `ctest-floor` stage fails the run when fewer rows
 ran or CTest printed no count it can read, so a test TU that silently becomes
 source-bound (or a filter that empties the suite) is a refusal rather than a
@@ -3511,7 +3511,7 @@ surface"); the short version:
   standalone `lifecycle_v1` enumerators `exit_legs::Domain::Coof` /
   `MagnifierCoof` are now `FillRecalc` / `MagnifierFillRecalc` (the
   fill-recalculation re-entry pass), with the old names kept as
-  value-identical aliases until `lifecycle_v2`.
+  value-identical aliases until `lifecycle_v2`. <!-- verified HEAD -->
 - **The ambient EMA seeding default.** `ta::EMA` seeds from its first finite
   input (`EmaSeeding::FirstValue`, the default) or from the simple average
   of its first `length` inputs (`EmaSeeding::SimpleAverage`, na for the

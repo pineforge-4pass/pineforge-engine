@@ -178,6 +178,19 @@ class MustNotFire(unittest.TestCase):
         with tree(**{PAGE: body}) as t:
             self.assertEqual(t.run()[0], 0)
 
+    def test_an_operator_signature_in_backticks_is_not_a_link(self) -> None:
+        # `Series<T>::operator[](k)` reads as [](k) to a naive link scan.
+        body = '| `[]` | op | `Series<T>::operator[](k)` |\n'
+        with tree(**{PAGE: body}) as t:
+            self.assertEqual(t.run()[0], 0)
+
+    def test_a_real_link_whose_label_is_code_is_still_read(self) -> None:
+        body = 'See [`docs/gone.md`](../gone.md).\n'
+        with tree(**{PAGE: body}) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1)
+            self.assertIn('dead-link', out)
+
     def test_link_to_a_directory(self) -> None:
         with tree(**{PAGE: 'See [the sources](../../src/).\n'}) as t:
             self.assertEqual(t.run()[0], 0)

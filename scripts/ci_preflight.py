@@ -4,17 +4,18 @@
 Run this before the complete ci_verify.py profiles. Both local use and GitHub
 Actions require actionlint 1.7.12; missing tools and failed checks fail closed.
 
-One exception, and it is deliberate: the two documentation guards added by
-R5 lane L14-A run ADVISORY by default. They report today's drift - the stale
-``file:line`` anchors and the stale prose the two page-rewriting lanes L14-B
-and L14-C exist to remove - without failing the integration branch before
-those lanes land. ``--strict-docs`` promotes them to ordinary fail-closed
-stages; L14-B/C flip it on for good once their pages are clean. Their
-self-tests are NOT advisory: a guard that cannot fail is decoration.
+The documentation guards ``doc-anchors`` and ``doc-lint`` (R5 lane L14-A) are
+ordinary fail-closed stages. They ran ADVISORY for exactly as long as their
+offenders existed - the stale ``file:line`` anchors and the stale prose the two
+page-rewriting lanes L14-B and L14-C were written to remove - and the
+``--strict-docs`` flag that promoted them is gone with that state: the pages
+are clean, so a guard that can be asked not to bind is decoration. The advisory
+*mechanism* stays (a stage may still be declared ``(name, argv, True)``), for
+the next guard that lands before the drift it names is gone.
 
-``design-inventory`` is fail-closed from the day it lands: it holds a
-convention the design document already follows on every row, so it has no
-drift to report and nothing to wait for.
+``design-inventory`` and ``doc-pine-coverage`` were fail-closed from the day
+they landed: each holds a convention its document already follows on every row,
+so neither had drift to report or anything to wait for.
 """
 from __future__ import annotations
 
@@ -30,8 +31,7 @@ from ci_verify import ROOT, source_guard_commands
 ACTIONLINT_VERSION = '1.7.12'
 
 
-def check_commands(source: Path, *, strict_docs: bool = False) -> list[tuple]:
-    advisory = not strict_docs
+def check_commands(source: Path) -> list[tuple]:
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
         ('workflow-lint', ['actionlint', '-color',
@@ -58,11 +58,11 @@ def check_commands(source: Path, *, strict_docs: bool = False) -> list[tuple]:
         ('doc-anchors-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',
-         [sys.executable, str(source / 'scripts/check_doc_anchors.py')], advisory),
+         [sys.executable, str(source / 'scripts/check_doc_anchors.py')]),
         ('doc-lint-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
         ('doc-lint',
-         [sys.executable, str(source / 'scripts/check_doc_lint.py')], advisory),
+         [sys.executable, str(source / 'scripts/check_doc_lint.py')]),
         # NOT advisory: the migration page's coverage claim is L14-B's own, and
         # it is true on this tree. A `strategy.*` name added to the Pine v6
         # inventory without a row on that page fails here immediately.
@@ -113,7 +113,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             print(log.decode('utf-8', 'replace'), end='', flush=True)
         if code and advisory:
             print(f'ci_preflight: {name}: exit {code}, reported only '
-                  '(rerun with --strict-docs to make this binding)', flush=True)
+                  '(this stage is declared advisory)', flush=True)
             stage.update(status='reported', exitCode=code)
         else:
             stage.update(status='passed' if code == 0 else 'failed', exitCode=code)
@@ -128,16 +128,13 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build-ci-preflight')
-    parser.add_argument('--strict-docs', action='store_true',
-                        help='make the documentation guards binding (L14-B/C)')
     args = parser.parse_args()
     # Pin the linter contract as well as its CI download. No optional lint lane.
     version_check = [sys.executable, '-c',
                      'import subprocess,sys; '
                      'v=subprocess.check_output(["actionlint","-version"],text=True).splitlines()[0]; '
                      f'print("actionlint "+v); sys.exit(0 if v == {ACTIONLINT_VERSION!r} else 1)']
-    return run_checks([('actionlint-version', version_check),
-                       *check_commands(ROOT, strict_docs=args.strict_docs)],
+    return run_checks([('actionlint-version', version_check), *check_commands(ROOT)],
                       args.output_dir.resolve())
 
 

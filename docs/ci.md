@@ -304,9 +304,9 @@ drifted".
 
 ## Documentation guards
 
-Three guards hold the published documentation to the tree. All three run from
-the source alone — no build, no corpus — and the first two are `ci_preflight`
-stages.
+Four guards hold the published documentation to the tree. Three of them run
+from the source alone — no build, no corpus — and are `ci_preflight` stages;
+the fourth is the documentation build.
 
 `scripts/check_doc_anchors.py` checks every `file:line` citation the pages
 make: the file must resolve, the line must exist, and when a backticked symbol
@@ -343,26 +343,35 @@ python3 scripts/check_doc_lint.py
 ```
 
 Both guards are wired into `scripts/ci_preflight.py` as `doc-anchors` and
-`doc-lint`, and both run **advisory**: the stage runs, prints its offenders and
-is recorded as `reported`, but its failure does not fail the preflight. That is
-deliberate and temporary. They fail on HEAD by design — the citations and the
-sentences they name are exactly what the two page-rewriting lanes L14-B and
-L14-C exist to correct — and a red stage on the integration branch before those
-lanes land would block every other lane's verification. `--strict-docs` makes
-them binding today, and L14-B/C leave it on:
+`doc-lint`, and both are **binding**: a bad anchor or a stale sentence fails
+the preflight, like any other stage. They ran advisory for one integration
+window — the citations and the sentences they named were exactly what the two
+page-rewriting lanes were written to correct, and a red stage on the
+integration branch would have blocked every other lane's verification — and the
+`--strict-docs` flag that promoted them was removed with that state: the pages
+are clean, and a guard that can be asked not to bind is decoration. The
+advisory *mechanism* remains in `ci_preflight.py` for the next guard that lands
+before the drift it names is gone; no stage uses it today.
 
 ```sh
-python3 scripts/ci_preflight.py --strict-docs
+python3 scripts/ci_preflight.py        # doc-anchors and doc-lint among its stages
 ```
 
-Their own self-tests, `doc-anchors-tests` and `doc-lint-tests`, are never
+Their own self-tests, `doc-anchors-tests` and `doc-lint-tests`, were never
 advisory, and both register as CTest rows (`test_doc_anchors`, `test_doc_lint`).
-A guard that cannot fail is decoration.
 
-The third guard is the documentation build. `docs/build.sh` runs Doxygen over
+The third source-only guard is `scripts/check_design_inventory.py`
+(`design-inventory`, with its own `design-inventory-tests` suite). It was
+fail-closed from the day it landed: it reads `docs/design/native-feature-parity.md`
+§1, replays `tests/CMakeLists.txt`'s own decision about which units the kernel
+profile compiles, and fails when an inventory row's closure marker does not
+match what the tests actually drive. `--ctest-list` cross-checks its transliteration
+against real `ctest -N` output in both directions.
+
+The fourth guard is the documentation build. `docs/build.sh` runs Doxygen over
 the whole public surface — every header under `include/pineforge`, the C API
-and C ABI headers, the ten native examples, the adapter units, the pages, the
-design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.
+and C ABI headers, the fifteen native examples, the adapter units, the pages,
+the front-door documents, the design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.
 Doxygen's `WARN_AS_ERROR` is global, which would let a stale comment in a
 legacy adapter header stop the site from building, so the gate is scoped in the
 script instead: a warning in the guarded set — `native_host.hpp`,

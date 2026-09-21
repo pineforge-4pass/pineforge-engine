@@ -145,6 +145,10 @@ INPUT                  = groups.dox \
                          pages/exit-leg-activation.md \
                          pages/quantity-intent.md \
                          native-settlement.md \
+                         ../CONTRIBUTING.md \
+                         ../CODE_OF_CONDUCT.md \
+                         ../LEGAL.md \
+                         ../SECURITY.md \
                          design \
                          adr
 

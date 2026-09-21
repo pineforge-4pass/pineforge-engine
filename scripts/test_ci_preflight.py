@@ -54,17 +54,19 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(summary['stages'][0]['exitCode'], 1)
         self.assertIn('drift', (logs / 'docs.log').read_text())
 
-    def test_strict_docs_makes_the_documentation_guards_binding(self):
-        relaxed = {name: entry for entry in check_commands(Path('/src')) for name in [entry[0]]}
-        strict = {name: entry
-                  for entry in check_commands(Path('/src'), strict_docs=True)
-                  for name in [entry[0]]}
-        for name in ('doc-anchors', 'doc-lint'):
-            self.assertTrue(relaxed[name][2], name)
-            self.assertFalse(strict[name][2], name)
-        # A guard's own must-fail suite is never advisory.
-        for name in ('doc-anchors-tests', 'doc-lint-tests'):
-            self.assertEqual(len(relaxed[name]), 2, name)
+    def test_every_documentation_stage_is_binding(self):
+        # R5 int12: the page lanes landed, so the guards and their self-tests
+        # are ordinary fail-closed stages and --strict-docs is gone. A stage
+        # declares advisory by carrying a third element; none of these may.
+        plan = {entry[0]: entry for entry in check_commands(Path('/src'))}
+        for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
+                     'doc-pine-coverage', 'design-inventory', 'design-inventory-tests'):
+            self.assertIn(name, plan)
+            self.assertEqual(len(plan[name]), 2, name)
+
+    def test_no_stage_is_advisory_today(self):
+        for entry in check_commands(Path('/src')):
+            self.assertFalse(len(entry) > 2 and entry[2], entry[0])
 
     def test_success_is_explicitly_only_preflight(self):
         code, summary, _ = self.run_preflight([('ok', [sys.executable, '-c', 'pass'])])

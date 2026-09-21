@@ -103,8 +103,8 @@ finding to report, not a step to take.
    coverage claim.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:88 and
-    `RELEASE_MIN_TESTS` ci_verify.py:107. Adding rows means raising the floor
+    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:93 and
+    `RELEASE_MIN_TESTS` ci_verify.py:116. Adding rows means raising the floor
     in the same commit.
 
 ## The recipe for a lane
@@ -236,7 +236,7 @@ CMakeLists.txt:43 off.
 policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
-through `NativeStrategyHost` native_host.hpp:658, or C through the
+through `NativeStrategyHost` native_host.hpp:778, or C through the
 `strategy_native_*` surface native_c_api.h:1379.
 
 **twin** — a test unit compiled twice, once against a frozen historical header
@@ -249,7 +249,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:88, `RELEASE_MIN_TESTS` ci_verify.py:107). It
+(`KERNEL_MIN_TESTS` ci_verify.py:93, `RELEASE_MIN_TESTS` ci_verify.py:116). It
 counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared
@@ -283,5 +283,5 @@ no individual regression, and negative movement is outside it.
   and the two normative ruling tables.
 - [`docs/design/native-feature-parity.md`](../design/native-feature-parity.md)
   — the inventory every ruling is measured against.
-- [`docs/ci.md`](../ci.md) — the profiles, the parity gate and the
+- `docs/ci.md` — the profiles, the parity gate and the
   documentation guards, with what each one costs.

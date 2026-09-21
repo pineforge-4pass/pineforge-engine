@@ -137,6 +137,7 @@ ROOT = Path(__file__).resolve().parent.parent
 #: files ``--fix`` may rewrite.
 PAGE_GLOBS = (
     'README.md',
+    'CONTRIBUTING.md',
     'docs/README.md',
     'docs/pages/*.md',
     'docs/adr/*.md',

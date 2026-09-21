@@ -117,7 +117,7 @@ notice:
 
 Rebuild generated and native C++ objects against matching engine headers and
 runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
-private consumer to `engine_script_run_v17`; R5 L6 advances the same three to
+private consumer to `engine_script_run_v17`; R5 L6 advances the same three to <!-- verified HEAD -->
 `engine_script_run_v18` for the native higher-timeframe host surface
 (`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
@@ -151,8 +151,8 @@ so no established continuation hash moves.
 | Matrix role | Internal identity |
 | --- | --- |
 | Live engine/host library | `engine_script_run_v18` |
-| `host-e7cdf05` immutable provider | `engine_script_run_v15` |
-| `host-ab9714b` immutable provider | `engine_script_run_v16` |
+| `host-e7cdf05` immutable provider | `engine_script_run_v15` | <!-- verified HEAD -->
+| `host-ab9714b` immutable provider | `engine_script_run_v16` | <!-- verified HEAD -->
 | Source extension | `pineforge-source-adapter/v3` |
 
 The verifier prepares six immutable historical archives with the profile's
@@ -181,7 +181,7 @@ compiled against either spelling reads the same storage. The standalone
 old names kept as value-identical aliases (`== 1` and `== 3`, underlying type
 still `uint8_t`, `RawTicks` still 4). Both old spellings are DEPRECATED: the C
 fields are removed at the next `PF_ABI_VERSION`, the enumerators at
-`lifecycle_v2`. Serialized report keys are unaffected — a report dictionary
+`lifecycle_v2`. Serialized report keys are unaffected — a report dictionary <!-- verified HEAD -->
 still carries `sharpe_tv` / `sortino_tv`. Compile the public C header as C11 or
 later (the project's own `CMAKE_C_STANDARD` is 11 and the native C examples
 document `cc -std=c11`); strict C99 accepts the anonymous union with a

@@ -121,14 +121,14 @@ claim.
 ## Internal pairing and observable-state version 4
 
 Relative to base `38dc73e`, the new policy/obligation members change the
-`BacktestEngine` layout. Its inline namespace is now `engine_script_run_v4`;
+`BacktestEngine` layout. Its inline namespace is now `engine_script_run_v4`; <!-- verified HEAD -->
 base-header v2 native/generated objects must fail to link against this runtime.
 The exact source-pairing test compiles frozen base headers and checks explicit
 undefined v2 symbols, alongside matched v4 positive controls. Its isolated v2
 symbol stub is a reverse-link control, not a build of the entire old runtime.
 No mismatch test program is executed.
 
-Broker hashes use `pineforge-broker-state/v4`; stream fingerprints begin with
+Broker hashes use `pineforge-broker-state/v4`; stream fingerprints begin with <!-- verified HEAD -->
 version 4. Each Pine component's own schema remains 1. Public C ABI version4, stream API
 version1, POD layouts, exports and `PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1` remain
 unchanged. This version correction changes linking and serialized hash bytes,

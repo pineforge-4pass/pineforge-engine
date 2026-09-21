@@ -69,7 +69,7 @@ PR #246 completed the native resting-order contract:
    replacement and exhaustion finish their dependency cleanup before a
    command returns. One opening request may own several physical fragments.
    Canceling its working remainder does not undo committed exposure.
-3. PR #246's historical baseline used `native_order_v2` for request/core/event
+3. PR #246's historical baseline used `native_order_v2` for request/core/event <!-- verified HEAD -->
    values; identity values remained `native_order_v1`. Engine, pending, host
    and consumer C++ boundaries were at epoch 13, with broker/stream hash version
    13. Existing native run-spec, calendar/driver value domains and C ABI 4
@@ -133,9 +133,9 @@ measurement and gate.
 
 ## Current R4-C epoch baseline
 
-The current L1 baseline uses `native_order_v5`, engine/host
-`engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and
-the source extension domain `pineforge-source-adapter/v2`. The frozen ab9714b
+The current L1 baseline uses `native_order_v5`, engine/host <!-- verified HEAD -->
+`engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and <!-- verified HEAD -->
+the source extension domain `pineforge-source-adapter/v2`. The frozen ab9714b <!-- verified HEAD -->
 provider remains v16 for the required bidirectional rejection pairs. Identity
 values remain `native_order_v1`; native run-spec is v2, calendar remains v2,
 the driver is v5, and `PF_ABI_VERSION` remains 4.

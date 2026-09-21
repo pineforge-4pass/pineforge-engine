@@ -85,7 +85,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # linked libcurl has no WebSocket support -- a system libcurl; the native CI
 # lane builds its own and refuses the skip -- so 189 run. A host whose
 # libcurl has it runs 190.
-KERNEL_MIN_TESTS = 189
+# 193 = those 189 plus the four rows the R5 documentation wave registers in
+# every profile that builds the examples: L14-A's two guard suites
+# (test_doc_anchors, test_doc_lint) and L14-B's two example hosts
+# (example_native_auxiliary_feed_strategy, example_native_open_lots_strategy).
+# 194 registered, 193 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 193
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -104,7 +109,11 @@ KERNEL_MIN_TESTS = 189
 # 554 = those 553 plus gap lane Q6's test_adapter_range_end_relower: its TU
 # includes pineforge/source/, so it registers in release only and the kernel
 # floor does not move.
-RELEASE_MIN_TESTS = 554
+# 558 = those 554 plus the same four documentation-wave rows: the two guard
+# suites register wherever the tests do, the two example hosts wherever
+# PINEFORGE_BUILD_EXAMPLES is ON. No release row skips, so 558 registered is
+# 558 run.
+RELEASE_MIN_TESTS = 558
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
