@@ -168,6 +168,12 @@ static_assert(static_cast<int>(pineforge::NativeCalculationReason::SubBar)
                   == PF_NATIVE_CALC_SUB_BAR, "NativeCalculationReason drifted");
 static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
                   == PF_NATIVE_MARGIN_CHECK_CALCULATION, "NativeMarginCheckKind drifted");
+/* margin_view_pod() casts the kind straight through, so the LAST enumerator is
+ * the one that has to be pinned: a kind added above without its C name would
+ * reach a C host as a number with no spelling, which is exactly how FxRoll
+ * shipped in N6. */
+static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
+                  == PF_NATIVE_MARGIN_CHECK_FX_ROLL, "NativeMarginCheckKind drifted");
 /* The hook tail is append-only: the base layout must still end exactly where
  * PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, and the tail must be the six
  * function pointers below it and nothing else. */

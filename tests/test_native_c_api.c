@@ -3051,6 +3051,192 @@ static void check_auxiliary_feed(void) {
     strategy_native_host_free(host);
 }
 
+/* --- the FX roll check point, and the ticket its liquidation books --- */
+
+/* Audit lane P4. NativeMarginCheckKind::FxRoll shipped in N6 without a C
+ * name: pf_native_margin_check_kind_e stopped at CALCULATION, so a C host was
+ * handed the number 3 and had to guess what it meant. The scenario below is
+ * the C spelling of the kernel test's own acceptance row
+ * (tests/test_native_margin_fx_roll.cpp), with the same hand arithmetic --
+ * four flat bars at 100 and a long 10 opened at bar 1's open, under a curve
+ * whose single step to 2.5 sits at bar 2's close coordinate:
+ *
+ *     equity(100, fx)   = 1000                       (no price ever moves)
+ *     required(100, fx) = 10 * 100 * fx * 0.5        = 500 at 1.0, 1250 at 2.5
+ *
+ * Nothing moves after the entry -- no price, no position -- so the roll is
+ * the only point that re-measures anything, and it is the point that
+ * breaches. The liquidation level a long 10 solves to is 200 * (fx - 1) / fx:
+ * 0 at rate 1.0, which no price the run prints ever reaches, and 120 at 2.5,
+ * which is already through the standing 100. That is MG9's whole claim. The
+ * kernel rests the liquidation at the roll and takes it at the next opening
+ * print, restoring the minimum: (1250 - 1000) / (100 * 2.5 * 0.5) = 2 units.
+ *
+ */
+#define FX_ROLL_CAPITAL     1000.0
+#define FX_ROLL_UNITS       10.0
+#define FX_ROLL_MAINTENANCE 0.5
+#define FX_ROLL_RATE        2.5
+#define FX_ROLL_SLICE       2.0
+#define FX_ROLL_MARK        100.0
+#define FX_ROLL_STEP_MS     900000   /* bar 2's close == bar 3's open coordinate */
+#define FX_ROLL_N           4
+
+static pf_bar_t fx_roll_bars[FX_ROLL_N];
+
+static void fx_roll_fill(void) {
+    int i;
+    for (i = 0; i < FX_ROLL_N; ++i) {
+        fx_roll_bars[i].open = FX_ROLL_MARK;
+        fx_roll_bars[i].high = FX_ROLL_MARK;
+        fx_roll_bars[i].low = FX_ROLL_MARK;
+        fx_roll_bars[i].close = FX_ROLL_MARK;
+        fx_roll_bars[i].volume = 1.0;
+        fx_roll_bars[i].timestamp = (int64_t)i * 300000;
+    }
+}
+
+typedef struct fx_roll_state {
+    pf_strategy_t host;
+    int failures;
+    int calculations;
+    int offered[PF_NATIVE_MARGIN_CHECK_FX_ROLL + 1]; /* one counter per named kind */
+    int offered_unnamed;      /* a kind this header cannot spell */
+    int roll_facts;           /* rolls whose point facts are the hand-derived ones */
+    int roll_measured;        /* requirement views tagged FX_ROLL */
+    int roll_numbers;         /* ... whose two numbers are the new rate's */
+    int margin_calls;
+    double called_units;
+} fx_roll_state;
+
+static int fx_roll_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    fx_roll_state* state = (fx_roll_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (state->calculations++ != 0) return 0;
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = FX_ROLL_UNITS;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    request.label = "fx-roll-entry";
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "the fx-roll entry was refused");
+    return 0;
+}
+
+static int fx_roll_on_check(void* user, const pf_native_margin_view_v1* at, int32_t* allowed) {
+    fx_roll_state* state = (fx_roll_state*)user;
+    (void)allowed;
+    if (at->kind <= (uint32_t)PF_NATIVE_MARGIN_CHECK_FX_ROLL) {
+        ++state->offered[at->kind];
+    } else {
+        ++state->offered_unnamed;
+    }
+    if (at->kind == (uint32_t)PF_NATIVE_MARGIN_CHECK_FX_ROLL
+        && at->struct_size == (uint32_t)sizeof(*at)
+        && at->version == PF_NATIVE_API_VERSION
+        /* The head of the step's own segment: the rate moved, nothing else. */
+        && at->cursor_effective_time_ms == (int64_t)FX_ROLL_STEP_MS
+        && at->cursor_t == 0.0
+        && at->mark == FX_ROLL_MARK
+        && at->signed_units == FX_ROLL_UNITS
+        && at->liquidation_resting == 0u) {
+        ++state->roll_facts;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int fx_roll_on_requirement(void* user, const pf_native_margin_view_v1* view,
+                                  pf_native_margin_decision_v1* out) {
+    fx_roll_state* state = (fx_roll_state*)user;
+    (void)out;
+    if (view->kind != (uint32_t)PF_NATIVE_MARGIN_CHECK_FX_ROLL) return PF_NATIVE_ANSWER_DEFAULT;
+    ++state->roll_measured;
+    if (fabs(view->equity - FX_ROLL_CAPITAL) < 1e-9
+        && fabs(view->required
+                - FX_ROLL_UNITS * FX_ROLL_MARK * FX_ROLL_RATE * FX_ROLL_MAINTENANCE) < 1e-9) {
+        ++state->roll_numbers;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int fx_roll_on_margin_call(void* user, const pf_native_event_v1* call) {
+    fx_roll_state* state = (fx_roll_state*)user;
+    ++state->margin_calls;
+    state->called_units = call->closed_units;
+    return 0;
+}
+
+static void check_fx_roll_margin_point(void) {
+    const int64_t step_ms = (int64_t)FX_ROLL_STEP_MS;
+    const double step_rate = FX_ROLL_RATE;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_fx_curve_v1 curve;
+    pf_native_callbacks_v1 table;
+    fx_roll_state state;
+
+    fx_roll_fill();
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = fx_roll_on_bar;
+    table.on_margin_check = fx_roll_on_check;
+    table.on_margin_requirement = fx_roll_on_requirement;
+    table.on_margin_call = fx_roll_on_margin_call;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "fx-roll host create failed");
+    if (!state.host) return;
+
+    spec.session_key = "native-c-api-fx-roll";
+    spec.initial_capital = FX_ROLL_CAPITAL;
+    spec.account_fx = 1.0;
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_MARGIN;
+    ext.margin_has_maintenance_long = 1u;
+    ext.margin_maintenance_long = FX_ROLL_MAINTENANCE;
+    ext.margin_has_maintenance_short = 1u;
+    ext.margin_maintenance_short = FX_ROLL_MAINTENANCE;
+    ext.margin_sizing = 0u;    /* RestoreMinimum */
+    ext.margin_shortfall_multiple = 1.0;
+    ext.margin_check = 0u;     /* PathAdverseExtreme */
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
+                 "the fx-roll margin extension was refused");
+
+    memset(&curve, 0, sizeof(curve));
+    curve.struct_size = (uint32_t)sizeof(curve);
+    curve.n = 1u;
+    curve.effective_from_ms = &step_ms;
+    curve.account_per_quote = &step_rate;
+    CHECK_EQ_INT(strategy_configure_native_fx_curve_v1(state.host, &curve), 0,
+                 "the fx-roll curve was refused");
+
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, fx_roll_bars, FX_ROLL_N, NULL),
+                 PF_NATIVE_OK, "the fx-roll run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback fx-roll rows failed");
+
+    /* The fourth kind reaches a C host under its own name, exactly once. */
+    CHECK_EQ_INT(state.offered[PF_NATIVE_MARGIN_CHECK_FX_ROLL], 1,
+                 "the curve step was not offered once as PF_NATIVE_MARGIN_CHECK_FX_ROLL");
+    CHECK_EQ_INT(state.offered_unnamed, 0, "a check point arrived with no C name");
+    CHECK(state.offered[PF_NATIVE_MARGIN_CHECK_BAR_OPEN] > 0,
+          "no bar-open check point was offered");
+    CHECK_EQ_INT(state.offered[PF_NATIVE_MARGIN_CHECK_CALCULATION], 0,
+                 "a path-checking model was offered a CalculationOnly point");
+    CHECK_EQ_INT(state.roll_facts, 1, "the roll named another point");
+    CHECK_EQ_INT(state.roll_measured, 1, "the roll measured nothing");
+    CHECK_EQ_INT(state.roll_numbers, 1,
+                 "the roll's two numbers are not the new rate at the unchanged price");
+    CHECK_EQ_INT(state.margin_calls, 1, "the roll's breach called no margin");
+    CHECK(fabs(state.called_units - FX_ROLL_SLICE) < 1e-9,
+          "the liquidation sliced another quantity");
+
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -3073,5 +3259,6 @@ int pf_native_c_api_checks(void) {
     check_margin_tail_fields();
     check_cohort_roster();
     check_auxiliary_feed();
+    check_fx_roll_margin_point();
     return failures;
 }
