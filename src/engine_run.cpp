@@ -81,25 +81,6 @@ void validate_chart_bars(const Bar* bars, int n) {
         }
     }
 }
-
-// ABI v4 live-runtime surface (task 4): installs this run's forced path
-// order as the thread-local internal::bar_path_uses_high_first override for
-// exactly the duration of the scope, restoring whatever override value was
-// in effect before it (not unconditionally AUTO) on every exit path --
-// normal return or an exception unwinding through a `try`. Restoring the
-// PRIOR value rather than hardcoding 0 is future-proofed against a caller
-// ever nesting two overridden runs on the same thread; today there is no
-// such nesting (each public run() entrypoint reaches exactly one of the two
-// installation sites below, see the single-TF run() and run_tf_impl), so in
-// practice the prior value is always AUTO (0). One file-scope definition
-// shared by both installation sites instead of a duplicated local struct.
-struct PathOrderScope {
-    int prev;
-    explicit PathOrderScope(int mode) : prev(internal::path_order_override()) {
-        internal::set_path_order_override(mode);
-    }
-    ~PathOrderScope() { internal::set_path_order_override(prev); }
-};
 }  // namespace
 
 bool BacktestEngine::set_account_currency_fx_series(

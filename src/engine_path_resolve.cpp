@@ -2,9 +2,9 @@
  * engine_path_resolve.cpp — the generic half of the modeled OHLC path.
  *
  * A kernel TU needs exactly three things from the path: the forced path-order
- * override a replay/live host installs, the open-proximity rule that picks the
- * first intrabar leg, and the first position at which a level is touched on
- * that path (engine_orders.cpp).  Everything else the file used to hold is
+ * override the native consumer installs while it samples an intrabar path, the
+ * open-proximity rule that picks the first intrabar leg, and the first
+ * position at which a level is touched on that path (engine_orders.cpp).  Everything else the file used to hold is
  * TradingView exit/entry resolution and now lives in
  * src/source/pine_path_resolve.cpp; the two halves are the same
  * `pineforge::internal` namespace and the same declarations in
@@ -24,10 +24,12 @@ namespace internal {
 namespace {
 // ABI v4 live-runtime surface (task 4): thread-local forced path order.
 // 0 AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. thread_local is sufficient because a
-// BacktestEngine handle is single-threaded per run; PathOrderScope
-// (engine_run.cpp) installs this for exactly the duration of one run() and
-// restores AUTO (0) on every exit path, so it can never leak into a later
-// run on this thread that did not itself request a forced order.
+// BacktestEngine handle is single-threaded per run. Its one installer is the
+// consumer's NativePathOrderScope (native_execution_consumer.cpp): it sets
+// the run's NativeRunSpec::path_order only while the intrabar driver
+// materializes a sample path (the sampler reads it through
+// bar_path_uses_high_first) and restores the prior value on every exit path,
+// so it is AUTO (0) everywhere else, every host callback included.
 thread_local int g_path_order_override = 0;
 }  // namespace
 

@@ -475,9 +475,8 @@ protected:
     // AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. Any other value is clamped to AUTO by
     // set_path_order() -- this member is always one of {0,1,2}. Persistent
     // configuration -- reset_run_state() does not touch it. See
-    // set_path_order() and the
-    // legacy PathOrderScope guard in engine_run.cpp. Native-bound source
-    // hosts project it into NativeRunSpec::path_order at begin, so the native
+    // set_path_order(). No kernel path reads it: native-bound source hosts
+    // project it into NativeRunSpec::path_order at begin, so the native
     // driver owns the active batch/stream path order.
     int path_order_mode_ = 0;
     // Retained last-array-bar visibility flag (waived from the fold). The
@@ -2100,14 +2099,13 @@ public:
     // forced orders and keeps only the fills that agree between the two --
     // a fill that depends on which leg TradingView's own still-forming bar
     // will resolve to is path-dependent and must be suppressed rather than
-    // guessed. See internal::bar_path_uses_high_first's thread-local
-    // override (engine_path_resolve.cpp) and the PathOrderScope guard in
-    // engine_run.cpp that installs/clears it for exactly the duration of
-    // this run's own dispatch.
+    // guessed.
     // Persistent configuration, like set_realtime_tail -- stays set until a
-    // caller passes mode=0. The legacy route installs it through
-    // PathOrderScope; a native-bound source provider projects the same value
-    // into NativeRunSpec::path_order.
+    // caller passes mode=0. It only stores the mode: a native-bound source
+    // provider projects it into NativeRunSpec::path_order at begin (a bare
+    // native host declares that field itself), and the native driver walks
+    // the spec field; the sampler's thread-local override
+    // (internal::set_path_order_override) is installed by the consumer alone.
     // Default AUTO (mode=0): every historical run stays byte-identical to
     // before this flag existed.
     void set_path_order(int mode) {

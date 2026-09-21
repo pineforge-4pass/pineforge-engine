@@ -83,15 +83,17 @@ bool bar_path_uses_high_first(const Bar& bar);
 // ABI v4 live-runtime surface (task 4): force bar_path_uses_high_first's
 // verdict for the calling thread -- 0 AUTO (the real |H-O| vs |O-L| rule,
 // unchanged), 1 HIGH_FIRST, 2 LOW_FIRST. thread_local: a handle is
-// single-threaded per run, and this is installed/cleared for exactly one
-// run's duration by the PathOrderScope guard in engine_run.cpp. See
-// BacktestEngine::set_path_order (engine.hpp).
+// single-threaded per run. The one installer is NativePathOrderScope
+// (native_execution_consumer.cpp), which sets the run's
+// NativeRunSpec::path_order only while the intrabar driver materializes a
+// sample path; no host callback runs inside it, so a question a host asks
+// from a callback is answered in the run's order by the consumer
+// (NativeExecutionConsumer::path_high_first), not through this override.
 void set_path_order_override(int mode);
 
-// Current thread-local override value (see above). PathOrderScope reads this
-// before installing its own mode so it can restore the prior value on scope
-// exit, rather than hardcoding AUTO -- correct even if a future caller ever
-// nests two overridden runs on the same thread.
+// Current thread-local override value (see above). NativePathOrderScope
+// reads this before installing its own mode so it restores the prior value
+// on scope exit rather than hardcoding AUTO.
 int path_order_override();
 
 
