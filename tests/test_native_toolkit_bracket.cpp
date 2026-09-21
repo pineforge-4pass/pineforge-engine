@@ -222,12 +222,113 @@ void bracket_knobs_and_pending_order_book() {
     completed(host);
 }
 
+// E8: the receipt tells apart the three outcomes of one leg -- a leg the spec
+// never asked for, a leg the kernel accepted, and a leg the kernel refused --
+// and carries the kernel's own reason for the refusal. The legacy optional
+// handles cannot: they are empty for all but the accepted one, which is how
+// lane L14-B's leg vanished while the strategy kept running.
+void bracket_receipt_separates_absent_from_refused() {
+    Host host;
+    tk::BracketReceipt receipt;
+    no::RequestHandle parent;
+    host.beginning = [&](Host& base) {
+        parent = put(base, tx(1.0, "entry"));
+        tk::BracketSpec spec_rows;
+        spec_rows.parent = parent;
+        no::Request take_profit{no::Reduce{no::OwnerOpenedUnits{}}, "tp", "bracket"};
+        take_profit.trigger = no::Limit{120.0};
+        spec_rows.take_profit = take_profit;
+        // A leg the kernel must refuse: a reduce of zero units is
+        // RequestRejectReason::InvalidQuantity at validation, so this leg is
+        // requested, reaches the kernel and never rests.
+        no::Request stop_loss{no::Reduce{no::ExplicitUnits{0.0}}, "sl", "bracket"};
+        stop_loss.trigger = no::Stop{80.0};
+        spec_rows.stop_loss = stop_loss;
+        // The trail leg is never asked for.
+        receipt = tk::submit_bracket(base, spec_rows);
+    };
+
+    run(host, spec("e8-toolkit-leg-outcomes"), {100.0});
+
+    // The ambiguity the outcomes remove: the refused leg and the leg that was
+    // never asked for are the same empty optional.
+    CHECK(!receipt.stop_loss.has_value());
+    CHECK(!receipt.trail.has_value());
+
+    // Requested and accepted: the handle, and the kernel's own accepted result.
+    const auto& profit = receipt.outcome(tk::BracketLeg::TakeProfit);
+    CHECK(profit.state == tk::BracketLegState::Accepted);
+    CHECK(profit.requested());
+    CHECK(profit.accepted());
+    CHECK(!profit.rejected());
+    CHECK(profit.handle() == receipt.take_profit);
+    CHECK(!profit.reason().has_value());
+    REQUIRE(profit.result.has_value());
+    CHECK(profit.result->status == no::SubmitStatus::Accepted);
+    CHECK(profit.result->event_ordinal != 0);
+
+    // Requested and refused: no handle, and the reason the kernel gave.
+    const auto& loss = receipt.outcome(tk::BracketLeg::StopLoss);
+    CHECK(loss.state == tk::BracketLegState::Rejected);
+    CHECK(loss.requested());
+    CHECK(!loss.accepted());
+    CHECK(loss.rejected());
+    CHECK(!loss.handle().has_value());
+    REQUIRE(loss.reason().has_value());
+    CHECK(*loss.reason() == no::RequestRejectReason::InvalidQuantity);
+    REQUIRE(loss.result.has_value());
+    CHECK(loss.result->status == no::SubmitStatus::Rejected);
+    CHECK(loss.result->event_ordinal == profit.result->event_ordinal + 1);
+
+    // Not requested: no kernel verdict at all, because nothing was submitted.
+    const auto& trail = receipt.outcome(tk::BracketLeg::Trail);
+    CHECK(trail.state == tk::BracketLegState::NotRequested);
+    CHECK(!trail.requested());
+    CHECK(!trail.result.has_value());
+    CHECK(!trail.reason().has_value());
+    CHECK(!trail.handle().has_value());
+
+    CHECK(!receipt.every_requested_leg_accepted());
+    // One refusal reached the kernel and exactly one leg rests.
+    const auto rejected_events = events<no::RejectedEvent>(host);
+    REQUIRE(rejected_events.size() == 1);
+    CHECK(rejected_events[0].reason == no::RequestRejectReason::InvalidQuantity);
+    CHECK(host.native_working_requests().size() == 1);
+    completed(host);
+
+    // The fourth state: the legs were asked for, but the builder had no
+    // allocated parent to wait on, so nothing reached the kernel and there is
+    // no verdict to report.
+    Host orphan;
+    tk::BracketReceipt unparented;
+    orphan.beginning = [&](Host& base) {
+        tk::BracketSpec spec_rows;
+        spec_rows.take_profit = resting("tp");
+        unparented = tk::submit_bracket(base, spec_rows);
+    };
+    run(orphan, spec("e8-toolkit-unparented"), {100.0});
+    const auto& absent_parent = unparented.outcome(tk::BracketLeg::TakeProfit);
+    CHECK(absent_parent.state == tk::BracketLegState::NotSubmitted);
+    CHECK(absent_parent.requested());
+    CHECK(!absent_parent.accepted());
+    CHECK(!absent_parent.rejected());
+    CHECK(!absent_parent.result.has_value());
+    CHECK(unparented.outcome(tk::BracketLeg::StopLoss).state
+          == tk::BracketLegState::NotRequested);
+    CHECK(!unparented.every_requested_leg_accepted());
+    CHECK(events<no::RejectedEvent>(orphan).empty());
+    CHECK(orphan.native_working_requests().empty());
+    completed(orphan);
+}
+
 }  // namespace
 
 int main() {
     test("bracket emits owner and group shapes", bracket_emits_owner_and_group_shapes);
     test("order book submit_or_replace and cancel", order_book_submit_or_replace_and_cancel);
     test("bracket knobs and pending order book", bracket_knobs_and_pending_order_book);
+    test("bracket receipt separates absent from refused",
+         bracket_receipt_separates_absent_from_refused);
     std::printf("L7 native toolkit: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

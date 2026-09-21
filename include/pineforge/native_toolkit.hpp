@@ -44,20 +44,92 @@ struct BracketSpec {
     native_order::NativeArmVisibility visibility = native_order::NativeArmVisibility::Working;
 };
 
-// The handles the legs were accepted under. A leg that was absent or that the
-// host rejected stays empty; the remaining legs are still submitted.
-struct BracketReceipt {
-    native_order::RequestHandle parent;
-    std::optional<native_order::RequestHandle> take_profit;
-    std::optional<native_order::RequestHandle> stop_loss;
-    std::optional<native_order::RequestHandle> trail;
-};
-
 // Sibling cohorts, fixed so a hand-written twin can reproduce the shape.
 enum class BracketLeg : std::int64_t {
     TakeProfit = 1,
     StopLoss = 2,
     Trail = 3,
+};
+
+// What became of one leg. An empty handle is four different things, and a
+// host that cannot tell them apart runs on with a leg it believes it placed:
+//
+//   NotRequested  the spec left this leg unset; nothing was submitted.
+//   NotSubmitted  the spec asked for the leg, but `spec.parent` was never
+//                 allocated, so there is no fill to wait on and the builder
+//                 sent nothing. The kernel never saw the leg and gave no
+//                 verdict; this is the builder's own refusal, not a rejection.
+//   Accepted      the kernel accepted the leg.
+//   Rejected      the kernel refused the leg, with its own reason.
+enum class BracketLegState : std::uint8_t {
+    NotRequested = 0,
+    NotSubmitted = 1,
+    Accepted = 2,
+    Rejected = 3,
+};
+
+// One leg's submit outcome. `result` is the kernel's own SubmitResult,
+// verbatim and whole (status, event ordinal, handle, RequestRejectReason):
+// the toolkit adds no refusal vocabulary of its own, and `state` is that
+// status widened by the two cases a submit never produces because no submit
+// happened. It is present exactly when the leg reached the kernel, so for
+// Accepted and Rejected and for neither of the others.
+struct BracketLegOutcome {
+    BracketLegState state = BracketLegState::NotRequested;
+    std::optional<native_order::SubmitResult> result;
+
+    bool requested() const noexcept { return state != BracketLegState::NotRequested; }
+    bool accepted() const noexcept { return state == BracketLegState::Accepted; }
+    bool rejected() const noexcept { return state == BracketLegState::Rejected; }
+
+    // The handle the leg rests under, empty unless the kernel accepted it.
+    std::optional<native_order::RequestHandle> handle() const {
+        if (!accepted() || !result) return std::nullopt;
+        return result->handle;
+    }
+    // Why the kernel refused the leg, empty unless it refused one.
+    std::optional<native_order::RequestRejectReason> reason() const {
+        if (!rejected() || !result) return std::nullopt;
+        return result->reason;
+    }
+};
+
+// What the builder did with each leg. The three optional handles are the
+// original surface and keep their meaning exactly: each holds the handle its
+// leg was accepted under and is empty otherwise. They cannot say why it is
+// empty -- a leg the caller never asked for, a leg the builder could not
+// submit and a leg the kernel refused are all the same empty optional -- so
+// every leg also carries its outcome, and a host reads the refusal and its
+// reason there.
+struct BracketReceipt {
+    native_order::RequestHandle parent;
+    std::optional<native_order::RequestHandle> take_profit;
+    std::optional<native_order::RequestHandle> stop_loss;
+    std::optional<native_order::RequestHandle> trail;
+    BracketLegOutcome take_profit_outcome;
+    BracketLegOutcome stop_loss_outcome;
+    BracketLegOutcome trail_outcome;
+
+    const BracketLegOutcome& outcome(BracketLeg which) const noexcept {
+        switch (which) {
+        case BracketLeg::TakeProfit: return take_profit_outcome;
+        case BracketLeg::StopLoss: return stop_loss_outcome;
+        case BracketLeg::Trail: break;
+        }
+        return trail_outcome;
+    }
+
+    // The one question a host must ask before it treats the bracket as
+    // placed: is every leg I asked for resting? A spec with no legs at all is
+    // trivially true.
+    bool every_requested_leg_accepted() const noexcept {
+        for (const BracketLeg which : {BracketLeg::TakeProfit, BracketLeg::StopLoss,
+                                       BracketLeg::Trail}) {
+            const BracketLegOutcome& leg = outcome(which);
+            if (leg.requested() && !leg.accepted()) return false;
+        }
+        return true;
+    }
 };
 
 // The owner/group pair the builder writes onto every leg, plus the two
@@ -82,25 +154,31 @@ inline native_order::Request bracket_leg(
     return out;
 }
 
-// Submits the present legs. A parent handle that was never allocated has no
-// fill to wait for, so nothing is submitted for it.
+// Submits the present legs and reports what became of each. A parent handle
+// that was never allocated has no fill to wait for, so nothing is submitted
+// for it and every requested leg reads NotSubmitted.
 inline BracketReceipt submit_bracket(NativeStrategyHost& host, const BracketSpec& spec) {
     BracketReceipt receipt;
     receipt.parent = spec.parent;
-    if (spec.parent.incarnation == 0) return receipt;
-    const auto place = [&](const std::optional<native_order::Request>& leg, BracketLeg which)
+    const auto place = [&](const std::optional<native_order::Request>& leg, BracketLeg which,
+                           BracketLegOutcome& outcome)
             -> std::optional<native_order::RequestHandle> {
         if (!leg) return std::nullopt;
-        const auto result = host.submit(bracket_leg(*leg, spec.parent, which, spec.sibling_effect,
-                                                    spec.visibility, spec.anchor_rounding));
-        if (result.status != native_order::SubmitStatus::Accepted || !result.handle) {
+        if (spec.parent.incarnation == 0) {
+            outcome.state = BracketLegState::NotSubmitted;
             return std::nullopt;
         }
-        return *result.handle;
+        auto result = host.submit(bracket_leg(*leg, spec.parent, which, spec.sibling_effect,
+                                              spec.visibility, spec.anchor_rounding));
+        const bool accepted = result.status == native_order::SubmitStatus::Accepted;
+        outcome.state = accepted ? BracketLegState::Accepted : BracketLegState::Rejected;
+        outcome.result = std::move(result);
+        return outcome.handle();
     };
-    receipt.take_profit = place(spec.take_profit, BracketLeg::TakeProfit);
-    receipt.stop_loss = place(spec.stop_loss, BracketLeg::StopLoss);
-    receipt.trail = place(spec.trail, BracketLeg::Trail);
+    receipt.take_profit =
+            place(spec.take_profit, BracketLeg::TakeProfit, receipt.take_profit_outcome);
+    receipt.stop_loss = place(spec.stop_loss, BracketLeg::StopLoss, receipt.stop_loss_outcome);
+    receipt.trail = place(spec.trail, BracketLeg::Trail, receipt.trail_outcome);
     return receipt;
 }
 
