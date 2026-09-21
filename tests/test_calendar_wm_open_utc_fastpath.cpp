@@ -3,7 +3,7 @@
  *
  * calendar_week_open_local_ms / calendar_month_open_local_ms gained the same
  * UTC fast path calendar_day_open_local_ms has had since eab8676 (KI-35):
- * pure integer / gmtime_r arithmetic, no pine_tz::ScopedTimezone, no tzset.
+ * pure integer / gmtime_r arithmetic, no tz_util::ScopedTimezone, no tzset.
  * This test proves the fast path is BIT-EQUAL to the ScopedTimezone slow path
  * it bypasses. The slow-path bodies are replicated here verbatim (localtime_r
  * + mktime under an explicitly pinned process TZ — exactly what
@@ -248,11 +248,11 @@ static bool slow_ismarket_pinned(const std::string& windows,
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
     localtime_r(&secs, &local_tm);
-    int tv_dow = local_tm.tm_wday + 1;  // 1=Sunday
+    int day_of_week_sun1 = local_tm.tm_wday + 1;  // 1=Sunday
     if (n_days > 0) {
         bool hit = false;
         for (int i = 0; i < n_days; ++i)
-            if (days[i] == tv_dow) hit = true;
+            if (days[i] == day_of_week_sun1) hit = true;
         if (!hit)
             return false;
     }

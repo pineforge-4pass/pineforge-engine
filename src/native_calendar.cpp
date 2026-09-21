@@ -312,8 +312,8 @@ std::optional<int64_t> resolve_hms(const std::string& tz,
 }
 
 bool day_allowed(const SessionCalendar& cal, const CivilDate& trading_date) {
-    const int pine_dow = weekday_sun0(trading_date) + 1;
-    return (cal.day_mask() & static_cast<std::uint8_t>(1u << pine_dow)) != 0;
+    const int day_of_week_sun1 = weekday_sun0(trading_date) + 1;
+    return (cal.day_mask() & static_cast<std::uint8_t>(1u << day_of_week_sun1)) != 0;
 }
 
 bool same_civil_date(const CivilDate& a, const CivilDate& b) {

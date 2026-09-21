@@ -445,8 +445,8 @@ bool passes_session_filter(const std::string& session,
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
 
-    int tv_dow = local_tm.tm_wday + 1;  // 1=Sunday
-    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+    int day_of_week_sun1 = local_tm.tm_wday + 1;  // 1=Sunday
+    if (!day_filter.empty() && day_filter.count(day_of_week_sun1) == 0)
         return false;
 
     return local_time_in_session_windows(windows, local_tm);
@@ -491,8 +491,8 @@ bool session_in_premarket(const std::string& session,
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
 
-    int tv_dow = local_tm.tm_wday + 1;
-    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+    int day_of_week_sun1 = local_tm.tm_wday + 1;
+    if (!day_filter.empty() && day_filter.count(day_of_week_sun1) == 0)
         return false;
 
     int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
@@ -527,8 +527,8 @@ bool session_in_postmarket(const std::string& session,
     struct tm local_tm {};
     decompose_ms_local(bar_ms, tz, local_tm);  // gmtime_r for UTC (no TZ flip)
 
-    int tv_dow = local_tm.tm_wday + 1;
-    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+    int day_of_week_sun1 = local_tm.tm_wday + 1;
+    if (!day_filter.empty() && day_filter.count(day_of_week_sun1) == 0)
         return false;
 
     int mod = local_tm.tm_hour * 60 + local_tm.tm_min;

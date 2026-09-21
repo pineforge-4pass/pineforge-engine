@@ -252,8 +252,7 @@ double PivotHigh::compute(double src) {
 
     // Pivot candidate rules (validated against TradingView's `ta.pivothigh`
     // semantics by exporting per-bar pivot_high values from a TV indicator
-    // and diffing against this engine; see
-    // docs/per-bar-trace/tv_trace_helper.pine).
+    // and diffing against this engine).
     //
     // LEFT side: equal-high left bars are allowed (non-strict). A run of
     // identical highs to the left of the candidate should still confirm

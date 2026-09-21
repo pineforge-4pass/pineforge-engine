@@ -5,7 +5,7 @@
  * (pineforge.h, strategy_set_chart_timezone: "process-global mutex so
  * multi-threaded harnesses don't corrupt each other's wall time").
  *
- * Pre-fix, pine_tz::ScopedTimezone released the mutex at the END of its
+ * Pre-fix, tz_util::ScopedTimezone released the mutex at the END of its
  * CONSTRUCTOR, so the caller's localtime_r/mktime decomposition ran
  * unlocked — two threads on different timezones could decompose under the
  * wrong TZ. Post-fix the lock is held for the guard's full RAII scope.

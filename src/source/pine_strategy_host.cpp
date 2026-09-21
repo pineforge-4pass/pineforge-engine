@@ -949,7 +949,7 @@ source::PineStrategyHost::BarTime source::PineStrategyHost::fixture_chart_time(
         (void)utc();
     } else {
         try {
-            pine_tz::ScopedTimezone guard(chart_timezone_);
+            tz_util::ScopedTimezone guard(chart_timezone_);
             if (::localtime_r(&seconds, &tm) == nullptr) (void)utc();
         } catch (...) {
             (void)utc();

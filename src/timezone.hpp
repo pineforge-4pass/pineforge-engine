@@ -29,7 +29,4 @@ private:
 
 }  // namespace tz_util
 
-// Deprecated spelling, kept so the source adapter compiles unchanged.
-namespace pine_tz = tz_util;
-
 } // namespace pineforge

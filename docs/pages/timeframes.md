@@ -66,7 +66,7 @@ Pine functions like `time(timeframe.period, "0930-1600")` and
 `timeframe.change(...)` are evaluated in the **exchange timezone**
 attached to the strategy script.
 
-The runtime carries a `pine_tz::ScopedTimezone` mutex around timezone
+The runtime carries a `tz_util::ScopedTimezone` mutex around timezone
 changes — concurrent backtests on different timezones are safe, but
 each handle should stay on a single thread. See [Lifecycle](@ref
 lifecycle) for the threading rule.

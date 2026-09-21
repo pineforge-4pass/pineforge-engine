@@ -12003,7 +12003,7 @@ std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) cons
         if (!utc()) return std::numeric_limits<std::int64_t>::min();
     } else {
         try {
-            pine_tz::ScopedTimezone guard(timezone);
+            tz_util::ScopedTimezone guard(timezone);
             if (::localtime_r(&seconds, &fields) == nullptr) {
                 if (!utc()) return std::numeric_limits<std::int64_t>::min();
             }

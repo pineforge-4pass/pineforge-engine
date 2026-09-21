@@ -43,8 +43,8 @@ std::string normalize_timezone_for_posix(const std::string& tz) {
         return tz;
     }
 
-    char tv_sign = tz[prefix];
-    if (tv_sign != '+' && tv_sign != '-') {
+    char offset_sign = tz[prefix];
+    if (offset_sign != '+' && offset_sign != '-') {
         return tz;
     }
 
@@ -76,7 +76,7 @@ std::string normalize_timezone_for_posix(const std::string& tz) {
         return "UTC";
     }
 
-    char posix_sign = (tv_sign == '+') ? '-' : '+';
+    char posix_sign = (offset_sign == '+') ? '-' : '+';
     std::ostringstream out;
     out << "UTC" << posix_sign << hours;
     if (minutes != 0) {
