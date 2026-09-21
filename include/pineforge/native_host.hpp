@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -223,6 +224,50 @@ struct NativePhysicalPosition {
     double signed_units = 0.0;
     double average_price = 0.0;
     std::size_t lot_count = 0;
+};
+
+// Owning value row for one open physical lot, copied at query time by
+// native_open_lots(mark) — the lot-by-lot view of the same book
+// physical_position() aggregates. Every field is what the book already
+// holds; nothing is computed that the kernel does not already keep.
+//
+// Identity: `ordinal` is the lot's position in the book (oldest first),
+// `entry_incarnation` the request record whose fill opened it (never
+// reused; 0 only for a legacy synthetic lot) and `cycle` the position cycle
+// the lot belongs to (the value BindOpening / BindOpenings name).
+//
+// Booking: `entry_label` / `entry_comment` are the opening request's own,
+// `entry_time_ms` / `entry_bar_index` its fill point, `entry_price` the
+// booked price, `signed_units` the lot's remaining units (> 0 long, < 0
+// short) and `entry_commission` the entry fee still on the lot in account
+// currency — a partial realization takes its share with it.
+//
+// Marked: `unrealized_pnl` is the lot's own term of native_marked_equity(mark)
+// — the move from `entry_price` to `mark`, in account currency, less
+// `entry_commission` — so the marked equity is the realized balance plus the
+// sum of these rows. `favorable_excursion` / `adverse_excursion` are the
+// largest moves for and against the lot the kernel has sampled along the
+// delivered path, in account currency, with `mark` itself folded in; both
+// are gross of fees and never negative. A host that owns lot excursions
+// (owns_lot_excursions) keeps its own sampler, so for that run the kernel's
+// two fields fold `mark` alone. A NaN `mark` keeps every booking fact,
+// leaves `unrealized_pnl` NaN and folds nothing into the excursions.
+struct NativeOpenLot {
+    std::size_t ordinal = 0;
+    std::uint64_t entry_incarnation = 0;
+    std::int64_t cycle = 0;
+    native_order::Side side = native_order::Side::Long;
+    std::string entry_label;
+    std::string entry_comment;
+    std::int64_t entry_time_ms = 0;
+    int entry_bar_index = -1;
+    double entry_price = 0.0;
+    double signed_units = 0.0;
+    double entry_commission = 0.0;
+    double mark = std::numeric_limits<double>::quiet_NaN();
+    double unrealized_pnl = std::numeric_limits<double>::quiet_NaN();
+    double favorable_excursion = 0.0;
+    double adverse_excursion = 0.0;
 };
 
 struct NativeAccountObservation {
@@ -860,6 +905,11 @@ public:
     void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);
 
     NativePhysicalPosition physical_position() const;
+    // The book lot by lot, oldest first, marked at `mark`: one NativeOpenLot
+    // per physical lot (physical_position().lot_count rows), copied at query
+    // time. Legal wherever physical_position() is; observation only, it
+    // moves no fill, no hash and no row.
+    std::vector<NativeOpenLot> native_open_lots(double mark) const;
     double native_marked_equity(double mark) const;
     // The units a kernel-sized intent resolves to under this run's spec at a
     // sizing price, a marked equity and an account FX rate -- as a pure query.

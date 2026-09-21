@@ -78,6 +78,7 @@ set(TEST_SOURCES
     test_native_report_truth
     test_native_host_hash_extension
     test_native_report_truth_twin
+    test_native_open_lots
     test_native_margin_model
     test_native_margin_hooks
     test_native_margin_hooks_twin

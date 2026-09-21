@@ -84,6 +84,7 @@ public:
     NativeCurrentExecutionResult execute_current(
         BacktestEngine& engine, const NativeCurrentExecution& command);
     NativePhysicalPosition position(const BacktestEngine& engine) const;
+    std::vector<NativeOpenLot> open_lots(const BacktestEngine& engine, double mark) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
     // NativeStrategyHost::native_sized_units: the L3 basis arithmetic under the

@@ -769,7 +769,8 @@ def check_texts(files):
                    "NativeMarginCheckKind", "NativeMarginCheckPoint",
                    "NativeMarginRequirementView", "NativeMarginDecision",
                    "NativeCalculationReason", "NativeRiskState",
-                   "NativeAnchoredTrigger", "NativeAnchoredLevelView"),
+                   "NativeAnchoredTrigger", "NativeAnchoredLevelView",
+                   "NativeOpenLot"),
             "engine_script_run_v18",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     # R5 L7b: the anchored-level view is the read-only fact set the arm hook
@@ -900,6 +901,10 @@ def check_texts(files):
          r'\s*\)\s*const\s*;', "native_liquidation_price"),
         (r'\bNativeRiskState\s+native_risk_state\s*\(\s*\)\s*const\s*;',
          "native_risk_state"),
+        # N18: the open-lot snapshot is NOT virtual either — an observation of
+        # the book the kernel holds, never a policy seam a host could override.
+        (r'(?<!virtual )std::vector\s*<\s*NativeOpenLot\s*>\s+native_open_lots\s*\('
+         r'\s*double\s+\w+\s*\)\s*const\s*;', "native_open_lots"),
         (r'\bvirtual\s+void\s+on_native_recalculate\s*\('
          r'\s*const\s+Bar\s*&\s*\w*\s*,\s*const\s+NativeDecisionContext\s*&',
          "on_native_recalculate"),
@@ -946,7 +951,8 @@ def check_texts(files):
              "NativeStrategyHost::native_recalculation_count",
              "NativeStrategyHost::native_recalculations_skipped",
              "NativeStrategyHost::native_risk_state",
-             "NativeStrategyHost::native_sized_units"),
+             "NativeStrategyHost::native_sized_units",
+             "NativeStrategyHost::native_open_lots"),
             "engine_script_run_v18", r'\bNAME\s*\(')
 
 

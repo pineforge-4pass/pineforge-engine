@@ -8905,6 +8905,59 @@ NativePhysicalPosition NativeStrategyHost::physical_position() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).position(*this);
 }
 
+// R5 gap lane N18: the book lot by lot. A read of what the engine already
+// holds — the pyramid entries, their unconsumed entry fee and the excursion
+// apply_excursion has sampled — marked at the caller's price with exactly the
+// arithmetic marked_equity() and build_close_trade_with_costs() use, so a row
+// reconciles bit-for-bit with the marked equity now and with the closed row
+// later. Nothing is cached and nothing is written: this cannot move a hash.
+std::vector<NativeOpenLot> NativeExecutionConsumer::open_lots(
+        const BacktestEngine& engine, double mark) const {
+    std::vector<NativeOpenLot> out;
+    const auto n = engine.pyramid_entries_.size();
+    if (n == 0) return out;
+    out.reserve(n);
+    const bool is_long = engine.position_side_ != PositionSide::SHORT;
+    const double point_value = engine.syminfo_.pointvalue;
+    const double fx = engine.active_account_currency_fx();
+    for (std::size_t i = 0; i < n; ++i) {
+        const PyramidEntry& lot = engine.pyramid_entries_[i];
+        NativeOpenLot row;
+        row.ordinal = i;
+        row.entry_incarnation = lot.entry_incarnation;
+        row.cycle = engine.position_cycle_seq_;
+        row.side = is_long ? native_order::Side::Long : native_order::Side::Short;
+        row.entry_label = lot.entry_id;
+        row.entry_comment = lot.entry_comment;
+        row.entry_time_ms = lot.time;
+        row.entry_bar_index = lot.entry_bar_index;
+        row.entry_price = lot.price;
+        row.signed_units = is_long ? lot.qty : -lot.qty;
+        row.entry_commission = engine.open_entry_commission(lot);
+        row.mark = mark;
+        // Price-points × units, the unit the sampler keeps the lot's extremes
+        // in; scaled to account currency once, below, the way the accessors
+        // and the closing row scale them.
+        double favorable = lot.max_runup;
+        double adverse = lot.max_drawdown;
+        if (std::isfinite(mark)) {
+            const double move = (is_long ? (mark - lot.price) : (lot.price - mark)) * lot.qty;
+            row.unrealized_pnl = move * point_value * fx - row.entry_commission;
+            favorable = std::max(favorable, move);
+            adverse = std::max(adverse, -move);
+        }
+        row.favorable_excursion = favorable * point_value * fx;
+        row.adverse_excursion = adverse * point_value * fx;
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+std::vector<NativeOpenLot> NativeStrategyHost::native_open_lots(double mark) const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .open_lots(*this, mark);
+}
+
 NativeRiskState NativeExecutionConsumer::risk_state() const {
     NativeRiskState state;
     if (risk_limits() == nullptr) return state;
