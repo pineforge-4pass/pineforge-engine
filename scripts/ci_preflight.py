@@ -55,6 +55,11 @@ def check_commands(source: Path, *, strict_docs: bool = False) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
         ('doc-lint',
          [sys.executable, str(source / 'scripts/check_doc_lint.py')], advisory),
+        # NOT advisory: the migration page's coverage claim is L14-B's own, and
+        # it is true on this tree. A `strategy.*` name added to the Pine v6
+        # inventory without a row on that page fails here immediately.
+        ('doc-pine-coverage',
+         [sys.executable, str(source / 'scripts/check_pine_to_native_coverage.py')]),
     ]
 
 
