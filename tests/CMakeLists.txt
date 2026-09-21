@@ -109,6 +109,7 @@ set(TEST_SOURCES
     test_native_order_core
     test_native_order_terminal
     test_native_order_ergonomics
+    test_native_limit_fill_through
     test_native_toolkit_bracket
     test_native_anchored_legs
     test_native_arm_options

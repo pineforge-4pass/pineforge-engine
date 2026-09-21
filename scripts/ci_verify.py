@@ -67,7 +67,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 183 = those 182 plus gap lane P2's test_kernel_residuals, the Python guard
 # that holds ADR-0001's residual-vocabulary table against libpineforge_kernel.a
 # (a source-free row: it reads the archive every profile builds).
-KERNEL_MIN_TESTS = 183
+# 184 = those 183 plus P5's test_native_limit_fill_through (the market-if-
+# touched geometry of Limit{price, fill_through}); P5's closed_trade(i) and
+# liquidation-through-the-lots witnesses extend existing source-free TUs.
+KERNEL_MIN_TESTS = 184
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
