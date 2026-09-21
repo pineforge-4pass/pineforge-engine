@@ -94,6 +94,36 @@ static_assert(static_cast<int>(pineforge::NativeSeriesSource::Input)
                   && static_cast<int>(pineforge::NativeSeriesSource::AuxiliaryFeed)
                          == PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED,
               "NativeSeriesSource drifted");
+/* A subscription row's two delivery rules are bools on the C++ side, so each
+ * C enumeration names exactly those two values, false first: a zero-filled row
+ * is the C++ default. A rule that grows a third value fails here before it can
+ * reach a C host with no name. */
+static_assert(std::is_same_v<decltype(pineforge::NativeTimeframeSubscription::lookahead), bool>
+                  && std::is_same_v<decltype(pineforge::NativeTimeframeSubscription::gaps),
+                                    bool>,
+              "a subscription delivery rule is no longer a bool");
+static_assert(PF_NATIVE_LOOKAHEAD_AT_COMPLETION == static_cast<int>(false)
+                  && PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT == static_cast<int>(true),
+              "pf_native_lookahead_e drifted from NativeTimeframeSubscription::lookahead");
+static_assert(PF_NATIVE_GAPS_HOLD == static_cast<int>(false)
+                  && PF_NATIVE_GAPS_CLEAR == static_cast<int>(true),
+              "pf_native_gaps_e drifted from NativeTimeframeSubscription::gaps");
+/* Typing the two words moved nothing: they are the row's uint32_t words, `gaps`
+ * in the slot published as `reserved0`, at the offsets measured before the
+ * enumerations existed (lookahead 4, gaps 28, size 32 on LP64). */
+static_assert(std::is_same_v<decltype(pf_native_subscription_v1::lookahead), std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_subscription_v1::gaps), std::uint32_t>,
+              "the subscription delivery words must stay uint32_t words");
+static_assert(offsetof(pf_native_subscription_v1, lookahead) == sizeof(std::uint32_t)
+                  && offsetof(pf_native_subscription_v1, tf) == 2u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_subscription_v1, authoritative_n)
+                         == 2u * sizeof(std::uint32_t) + 2u * sizeof(void*)
+                  && offsetof(pf_native_subscription_v1, gaps)
+                         == offsetof(pf_native_subscription_v1, authoritative_n)
+                                + sizeof(std::int32_t)
+                  && sizeof(pf_native_subscription_v1)
+                         == offsetof(pf_native_subscription_v1, gaps) + sizeof(std::uint32_t),
+              "the pf_native_subscription_v1 layout moved");
 static_assert(static_cast<int>(pineforge::NativeFailureCode::CallbackException)
                   == PF_NATIVE_FAILURE_CALLBACK,
               "PF_NATIVE_FAILURE_CALLBACK must mirror NativeFailureCode::CallbackException");
@@ -1289,16 +1319,22 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
         const auto& row = rows[i];
         if (row.struct_size != sizeof(pf_native_subscription_v1)) return PF_NATIVE_E_STRUCT;
         if (!row.tf) return PF_NATIVE_E_ARGUMENT;
-        if (row.lookahead > 1u) return PF_NATIVE_E_TAG;
-        if (row.gaps > 1u) return PF_NATIVE_E_TAG;
+        pineforge::NativeTimeframeSubscription subscription;
+        switch (row.lookahead) {
+        case PF_NATIVE_LOOKAHEAD_AT_COMPLETION: subscription.lookahead = false; break;
+        case PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT: subscription.lookahead = true; break;
+        default: return PF_NATIVE_E_TAG;
+        }
+        switch (row.gaps) {
+        case PF_NATIVE_GAPS_HOLD: subscription.gaps = false; break;
+        case PF_NATIVE_GAPS_CLEAR: subscription.gaps = true; break;
+        default: return PF_NATIVE_E_TAG;
+        }
         if (row.authoritative_n < 0
             || (row.authoritative_n > 0 && !row.authoritative_bars)) {
             return PF_NATIVE_E_ARGUMENT;
         }
-        pineforge::NativeTimeframeSubscription subscription;
         subscription.tf = row.tf;
-        subscription.lookahead = row.lookahead != 0u;
-        subscription.gaps = row.gaps != 0u;
         /* The source column rides in the auxiliary tail, so a caller that
          * does not carry that tail declares input-built series only. */
         if (sources) {
