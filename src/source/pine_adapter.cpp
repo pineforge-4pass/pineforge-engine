@@ -376,6 +376,20 @@ double source_trigger_threshold(double level, double tick,
     return threshold;
 }
 
+// A trailing exit's activation is reached on the tick-quantized path whatever
+// its trailing offset: the one-shot's (test_trail_activation_tick_bar) and a
+// trailing leg's arm alike. R5 lane E5, `lab tv` on NYSE:F 15m with
+// trail_offset 1 (tests/fixtures/offset_trail_arm): lows 9.415 / 13.041 /
+// 12.641 and highs 11.899 / 13.049 / 13.419 arm the activations their ticks
+// equal, 6 of 6 exits on that bar. The generic Trail compares arm_price with
+// the raw path, so the arm is the half-tick boundary where the quantized path
+// first reaches the activation, the threshold a one-shot leg rests at; a
+// sub-tick activation keeps its own level (the ETH tapes: never rounded onto
+// the fill).
+double source_trail_arm_level(double activation, double tick, bool exit_is_buy) noexcept {
+    return source_trigger_threshold(activation, tick, exit_is_buy, true);
+}
+
 int legacy_volume_weighted_max_samples(int samples) noexcept {
     constexpr int kMaxSamples = 1 << 20;
     const int nonnegative = std::max(samples, 0);
@@ -2378,11 +2392,18 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             // price distance this leg will be stored with.
             const double trail_offset = trail->ticks
                 ? trail->ticks->ticks * staged_.syminfo.mintick : trail->offset;
+            // exit() arms the leg at source_trail_arm_level of the source
+            // trail_price, on the close side of the cohort pinned above.
+            const auto arm_of_prior = [&](bool exit_is_buy) {
+                return source_trail_arm_level(prior.exit_levels.trail_price,
+                                              staged_.syminfo.mintick, exit_is_buy);
+            };
             return snapshot.family == PineOrderFamily::ExitTrail
                 && same_double_bits(trail_offset, prior.exit_levels.trail_offset)
                 && trail->arm_price.has_value() == std::isfinite(prior.exit_levels.trail_price)
-                && (!trail->arm_price || same_double_bits(*trail->arm_price,
-                                                           prior.exit_levels.trail_price));
+                && (!trail->arm_price
+                    || same_double_bits(*trail->arm_price, arm_of_prior(true))
+                    || same_double_bits(*trail->arm_price, arm_of_prior(false)));
         }
         return false;
     };
@@ -8010,7 +8031,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             submit_leg(PineOrderFamily::ExitTrail,
                        native_order::Limit{one_shot_level, slipped_touch});
         } else if (native_trail_offset_ticks) {
-            std::optional<double> native_arm_price = native_trail_price;
+            // The trailing leg's arm is reached on the quantized path too
+            // (source_trail_arm_level); the source level stays the activation
+            // every placement fact and booking reads.
+            std::optional<double> native_arm_price =
+                source_trail_arm_level(native_trail_price, tick, exit_is_buy);
             // ab9714be engine_path_resolve.cpp:464-479: trailing exit already reached at placement arms immediately
             if (trail_already_reached)
                 native_arm_price.reset();
@@ -9622,7 +9647,7 @@ std::optional<double> PineExecutionAdapter::resolve_anchored_level(
     } else {
         const double trail_price = directional_tick(view.kernel_level, tick, leg.parent_long);
         installed = std::holds_alternative<native_order::Trail>(leg.request.trigger)
-            ? trail_price
+            ? source_trail_arm_level(trail_price, tick, exit_is_buy)
             : one_shot_trail_trigger(trail_price, leg.trail_offset, tick, exit_is_buy, true);
     }
     // The kernel refuses a level its trigger cannot hold and fails the run.
@@ -10015,6 +10040,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         if (trail_active && std::isfinite(trail_active->best_at_trigger)) {
             best = facts.is_buy ? std::min(best, trail_active->best_at_trigger)
                                 : std::max(best, trail_active->best_at_trigger);
+        }
+        // An armed trail's running best starts at its activation: the E5
+        // tapes book activation -/+ offset while the raw extreme stays inside
+        // the activation's tick cell (13.041 -> 13.05, 11.899 -> 11.89),
+        // whereas the kernel's best starts at the half-tick arm
+        // (source_trail_arm_level). On the grid the two never differ.
+        if (std::isfinite(source.trail_activation_level)) {
+            best = facts.is_buy ? std::min(best, source.trail_activation_level)
+                                : std::max(best, source.trail_activation_level);
         }
         const double offset = std::floor(source.exit_levels.trail_offset)
             * staged_.syminfo.mintick;

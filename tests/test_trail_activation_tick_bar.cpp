@@ -30,9 +30,10 @@
  * lowering and the kernel consumer's walk, the one fill simulation the
  * repository ships — and read the fill back from the kernel's public event
  * record. The product spells the quantized activation as the adapter's
- * half-tick threshold on a one-shot limit (source_trigger_threshold), so
- * the tick twin below is only the arithmetic that names the quantized print
- * the rule reads.
+ * half-tick threshold — on a one-shot limit (source_trigger_threshold) and,
+ * since lane E5's tapes, on a trailing leg's arm (source_trail_arm_level) —
+ * so the tick twin below is only the arithmetic that names the quantized
+ * print the rule reads.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -262,27 +263,34 @@ void test_product_activation_is_reached_on_the_tick_path() {
     // option — so the negative control left with the resolver.
 }
 
-// A trail WITH an offset arms on the RAW extreme in the product: long @9.90,
+// A trail WITH an offset arms on the tick-quantized extreme too: long @9.90,
 // activation 10.00 (10 ticks), offset 2 ticks; bar O 9.98 H 9.996 L 9.97
-// C 9.975 (|O-L| 0.01 < |H-O| 0.016 -> low first). The raw high 9.996 never
-// reaches 10.00: the generic Trail's arm_price is the on-grid activation and
-// the kernel compares the raw path against it — only the one-shot leg carries
-// the half-tick threshold — so the trail stays dormant and the position stays
-// open. expectation corrected: fill 9.976 on this bar -> no fill, because the
-// deleted resolver extended the tick-quantized activation (pinned for the
-// zero-offset one-shot, above) to offset trails as "the consequence of the
-// pinned rule"; no TradingView tape pins an offset trail whose raw extreme
-// stops half a tick short of its activation, the product does not arm it,
-// and the corpus is byte-identical either way (open question in the P9
-// report).
-void test_product_offset_trail_arms_on_the_raw_extreme() {
-    std::printf("-- product: an offset trail's arm is raw - the tick high 10.00 of a 9.996 print does not arm it --\n");
+// C 9.975 (|O-L| 0.01 < |H-O| 0.016 -> low first). The raw high 9.996 stops
+// short of 10.00 and its tick is 10.00: the adapter arms the generic Trail at
+// the half-tick boundary 9.995 (the kernel still compares its raw path with
+// arm_price), and H -> C falls through the stop. expectation corrected: no
+// fill -> fill @9.98 on this bar, because lane E5's `lab tv` tapes
+// (tests/fixtures/offset_trail_arm, test_offset_trail_quantized_arm: NYSE:F
+// lows 9.415 / 13.041 / 12.641 and highs 11.899 / 13.049 / 13.419 against
+// activations one tick past them, trail_offset 1) exit on the bar whose
+// QUANTIZED extreme reaches the activation, 6 of 6, at activation -/+ offset:
+// the P9 open question is settled against the raw arm. The booked price is
+// 10.00 - 0.02 because TradingView's running best starts at the activation;
+// the kernel's best starts at the arm and rides the raw 9.996, so its own
+// stop, and the crossing it records, is 9.976 (the deleted resolver's number).
+void test_product_offset_trail_arms_on_the_tick_path() {
+    std::printf("-- product: an offset trail's arm is on the tick path - the tick high 10.00 of a 9.996 print arms it --\n");
     const Bar bar = mk(9.98, 9.996, 9.97, 9.975);
     const Bar tick = tick_twin(bar, 0.01);
     CHECK(tick.high == 10.0);
     TrailExitProjection f = trail_fill(bar, PositionSide::LONG, 10.0, 2.0, 9.90, 9.90, 0.01);
-    CHECK(f.filled == false);
-    CHECK(f.position_after == 1.0);
+    CHECK(f.filled == true);
+    CHECK(f.leg_is_trail == true);
+    CHECK(f.level_fill == true);
+    CHECK_NEAR(f.exit_price, 9.98, 1e-9);
+    CHECK_NEAR(f.raw_price, 9.976, 1e-9);
+    // Segment 2 (H -> C, 9.996 -> 9.975) is crossed 0.02 / 0.021 of the way.
+    CHECK_NEAR(f.path_position, 2.0 + 0.02 / 0.021, 1e-6);
     // Control: a raw high ON the activation arms it and the trail runs from
     // that best: H -> C (10.00 -> 9.975) crosses 10.00 - 0.02 = 9.98.
     const Bar reach = mk(9.98, 10.00, 9.97, 9.975);
@@ -296,13 +304,15 @@ void test_product_offset_trail_arms_on_the_raw_extreme() {
     CHECK_NEAR(g.path_position, 2.0 + 0.02 / 0.025, 1e-6);
 }
 
-// The carried best is read RAW for the arming test too: best_start 9.996
-// with activation 10.00 arrives dormant (9.996 < 10.00), and a bar that only
-// falls (O 9.99 H 9.99 L 9.96 C 9.97) never arms it. expectation corrected:
-// fill 9.976 -> no fill, because the adapter reads "already reached" at
-// placement against the raw activation and the kernel's arm is raw (the
-// previous row); the two bests that quantize below the activation (9.994,
-// 9.995 -> tick 9.99) stay dormant exactly as before.
+// The carried best is read RAW at placement: best_start 9.996 with
+// activation 10.00 arrives dormant (9.996 < 10.00), and a bar that only
+// falls (O 9.99 H 9.99 L 9.96 C 9.97) never reaches the arm's half-tick
+// boundary 9.995 either. expectation corrected: fill 9.976 -> no fill,
+// because the adapter reads "already reached" at placement against the raw
+// activation; lane E5's tapes pin the arm on the bar's path (the previous
+// row), not a placement close inside the activation's tick cell, so this row
+// is the product's reading, unpinned by a tape. The two bests that quantize
+// below the activation (9.994, 9.995 -> tick 9.99) stay dormant as before.
 void test_product_carried_best_arms_raw() {
     std::printf("-- product: a carried raw best 9.996 does not arm the 10.00 activation; 10.00 does, and the adapter books the carried level --\n");
     const Bar bar = mk(9.99, 9.99, 9.96, 9.97);
@@ -353,7 +363,7 @@ int main() {
     test_fixed_754_exits_on_the_quantized_low();
     test_activation_below_the_quantized_low_does_not_fire();
     test_product_activation_is_reached_on_the_tick_path();
-    test_product_offset_trail_arms_on_the_raw_extreme();
+    test_product_offset_trail_arms_on_the_tick_path();
     test_product_carried_best_arms_raw();
     test_product_raw_reach_books_the_level();
     std::printf("trail_activation_tick_bar: %d passed, %d failed\n",

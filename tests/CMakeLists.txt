@@ -819,6 +819,10 @@ list(APPEND TEST_SOURCES test_adapter_sizing_relower)
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_tail_override_seam)
 
+# R5 E5: TradingView's offset-trail arm tapes (tests/fixtures/offset_trail_arm)
+# replayed through the Pine adapter, with the kernel's record of the arm.
+list(APPEND TEST_SOURCES test_offset_trail_quantized_arm)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is
@@ -1426,6 +1430,12 @@ if(TARGET test_adapter_sizing_relower)
     target_compile_definitions(test_adapter_sizing_relower PRIVATE
         PINEFORGE_R2_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
         PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
+endif()
+
+# R5 E5 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_offset_trail_quantized_arm)
+    target_compile_definitions(test_offset_trail_quantized_arm PRIVATE
+        PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
