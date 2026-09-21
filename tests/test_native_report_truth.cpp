@@ -9,6 +9,7 @@
 
 #include <pineforge/pineforge.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -345,10 +346,12 @@ void idle_rule(Host&) {}
 
 // 6. KernelRecorded records the whole report, the per-bar broker-state hash
 //    included: with the recording switch on, a bare host reports one row per
-//    script bar, 1:1 with the curve. The rows are the broker state and nothing
-//    but its past — equal while two books are equal, different once they
-//    diverge, and the row after bar k is the row a run that ended at bar k
-//    recorded last.
+//    script bar, 1:1 with the curve. Within one driving mode the rows follow
+//    the run's past — equal while two books are equal, different once they
+//    diverge, and the row after bar k is the row a run driven the same way
+//    that ended at bar k recorded last. "Driven the same way" is load-bearing
+//    and is scenario 9's subject: a row is the run's continuation identity at
+//    that bar, and the driving mode is part of a continuation.
 void kernel_recorded_broker_hash_per_script_bar() {
     auto spec = report_spec("l2-report-truth");
     spec.report_policy = NativeReportPolicy::KernelRecorded;
@@ -388,8 +391,9 @@ void kernel_recorded_broker_hash_per_script_bar() {
     for (std::size_t i = 0; i < 10; ++i) CHECK(idle_rows[i] == rows[i]);
     for (std::size_t i = 10; i < rows.size(); ++i) CHECK(idle_rows[i] != rows[i]);
 
-    // A row is a function of the past only: a run that ends at bar 29 recorded,
-    // as its last row, the row this run recorded after bar 29.
+    // A row is a function of the past only, at a fixed driving mode: a batch
+    // run that ends at bar 29 recorded, as its last row, the row this batch
+    // run recorded after bar 29.
     Host prefix;
     prefix.set_broker_state_hash_recording(true);
     prefix.calculation = round_trip_rule;
@@ -473,13 +477,192 @@ void kernel_recorded_broker_hash_spans_a_stream() {
     CHECK(report.c.trades_len == 2);
 }
 
+
+// ── What a per-bar row is for (R5 gap lane Q4) ──────────────────────────
+// The second claimed-vs-actual audit measured that a bare host's recorded
+// rows differ between run(), stream_begin(warmup=1)+push and
+// stream_begin(warmup=all) over identical bars booking identical trades, and
+// asked which it is: an invariant to repair, or a contract to state.
+//
+// It is the contract. A row is the run's CONTINUATION IDENTITY at that bar,
+// not its trade outcome: broker_state_hash() folds the kernel's broker state
+// and, ahead of it, the execution consumer's continuation_hash() — the state
+// a resume would continue from. NativeRunPhase (Batch / Warmup / Realtime,
+// readable as native_state().phase) is folded into that continuation on
+// purpose, because a consumer mid-warmup and a consumer mid-realtime are not
+// interchangeable continuations. Factoring the continuation out leaves a fold
+// that IS driving-mode invariant, which is what makes the divergence a
+// property of the continuation and of nothing else.
+//
+// So the array is a replay check WITHIN one driving mode and deliberately not
+// across modes. Scenario 9 pins both directions; the artefact that compares a
+// stream's OUTCOME against a batch's is the outcome twin
+// (tests/test_native_margin_fx_roll.cpp section 8, tests/test_streaming.cpp),
+// and for the Pine adapter scripts/check_corpus_parity.sh over the corpus.
+
+// Samples the generic broker-state fold — the continuation factored out at a
+// fixed execution hash — and the run phase, once per script calculation.
+struct DriveHost : BrokerStateHost {
+    std::vector<std::uint64_t> broker_only;
+    std::vector<NativeRunPhase> phases;
+    void sample() {
+        broker_only.push_back(broker_state_from(kProbeExecutionHash));
+        phases.push_back(native_state().phase);
+    }
+};
+
+struct Drive {
+    std::vector<std::uint64_t> rows;
+    std::vector<std::uint64_t> broker_only;
+    std::vector<NativeRunPhase> phases;
+    std::size_t trades = 0;
+    double net = 0.0;
+};
+
+Drive collect(DriveHost& host) {
+    Drive drive;
+    Report report(host);
+    drive.rows = hash_rows(report.c);
+    drive.broker_only = host.broker_only;
+    drive.phases = host.phases;
+    drive.trades = host.rows().size();
+    drive.net = host.net();
+    return drive;
+}
+
+NativeRunSpec drive_spec() {
+    auto spec = report_spec("l2-report-truth");
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+    return spec;
+}
+
+Drive drive_batch(int n) {
+    DriveHost host;
+    host.set_broker_state_hash_recording(true);
+    REQUIRE(host.configure_native(drive_spec()).status == NativeSetupStatus::Applied);
+    host.calculation = [&host](Host& self) { round_trip_rule(self); host.sample(); };
+    const auto bars = feed(n);
+    host.run(bars.data(), n);
+    completed(host);
+    return collect(host);
+}
+
+Drive drive_stream(int n, int warmup) {
+    DriveHost host;
+    host.set_broker_state_hash_recording(true);
+    REQUIRE(host.configure_native(drive_spec()).status == NativeSetupStatus::Applied);
+    host.calculation = [&host](Host& self) { round_trip_rule(self); host.sample(); };
+    const auto bars = feed(n);
+    REQUIRE(host.stream_begin(bars.data(), warmup, "1", "1"));
+    for (int i = warmup; i < n; ++i) REQUIRE(host.stream_push_bar(bars[static_cast<std::size_t>(i)]));
+    REQUIRE(host.stream_end(false));
+    CHECK(host.last_error().empty());
+    return collect(host);
+}
+
+std::size_t common_prefix(const std::vector<std::uint64_t>& a,
+                          const std::vector<std::uint64_t>& b) {
+    std::size_t i = 0;
+    while (i < a.size() && i < b.size() && a[i] == b[i]) ++i;
+    return i;
+}
+
+std::size_t equal_rows(const std::vector<std::uint64_t>& a,
+                       const std::vector<std::uint64_t>& b) {
+    REQUIRE(a.size() == b.size());
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) n += (a[i] == b[i]);
+    return n;
+}
+
+// 9. The per-bar row is the continuation identity, so it is per driving mode.
+void broker_hash_rows_are_per_driving_mode() {
+    constexpr int kBars = 60;
+    const Drive batch = drive_batch(kBars);
+    const Drive warm1 = drive_stream(kBars, 1);
+    const Drive warm20 = drive_stream(kBars, 20);
+    const Drive warmall = drive_stream(kBars, kBars);
+
+    // The four drives are the same run by every outcome the goal names.
+    for (const Drive* drive : {&batch, &warm1, &warm20, &warmall}) {
+        REQUIRE(drive->rows.size() == static_cast<std::size_t>(kBars));
+        CHECK(drive->broker_only.size() == static_cast<std::size_t>(kBars));
+        CHECK(drive->trades == 2);
+        CHECK(drive->net == batch.net);
+    }
+    // And they are four different drivings: a batch is Batch throughout, a
+    // stream is Warmup for its warmup leg and Realtime after it.
+    for (const auto phase : batch.phases) CHECK(phase == NativeRunPhase::Batch);
+    for (int i = 0; i < kBars; ++i) {
+        CHECK(warm1.phases[static_cast<std::size_t>(i)]
+              == (i < 1 ? NativeRunPhase::Warmup : NativeRunPhase::Realtime));
+        CHECK(warm20.phases[static_cast<std::size_t>(i)]
+              == (i < 20 ? NativeRunPhase::Warmup : NativeRunPhase::Realtime));
+        CHECK(warmall.phases[static_cast<std::size_t>(i)] == NativeRunPhase::Warmup);
+    }
+
+    // Direction A — WITHIN a driving mode the array is a replay check.
+    // Reproducible: the same drive records the same rows.
+    CHECK(drive_batch(kBars).rows == batch.rows);
+    CHECK(drive_stream(kBars, 20).rows == warm20.rows);
+    // Prefix-closed: a run driven the same way that ends at bar k recorded,
+    // as its last row, the row the longer run recorded after bar k. True of a
+    // batch and of a stream alike, at every warmup split.
+    const auto batch_prefix = drive_batch(30).rows;
+    REQUIRE(batch_prefix.size() == 30);
+    CHECK(std::equal(batch_prefix.begin(), batch_prefix.end(), batch.rows.begin()));
+    for (const int warmup : {1, 20, 30}) {
+        const auto short_stream = drive_stream(30, warmup).rows;
+        const auto long_stream = drive_stream(kBars, warmup).rows;
+        REQUIRE(short_stream.size() == 30);
+        REQUIRE(long_stream.size() == static_cast<std::size_t>(kBars));
+        CHECK(std::equal(short_stream.begin(), short_stream.end(), long_stream.begin()));
+    }
+
+    // Direction B — ACROSS driving modes the rows are deliberately different.
+    // A batch shares not one row with any stream, from index 0 on, although
+    // every trade, the net and the curve length are the batch's.
+    CHECK(equal_rows(batch.rows, warm1.rows) == 0);
+    CHECK(equal_rows(batch.rows, warm20.rows) == 0);
+    CHECK(equal_rows(batch.rows, warmall.rows) == 0);
+    CHECK(batch.rows[0] != warm1.rows[0]);
+    CHECK(batch.rows[0] != warmall.rows[0]);
+    // Two streams differ the moment their phases differ, and agree exactly on
+    // the bars both are still in Warmup for: the divergence is the driving
+    // phase, arriving bar by bar, not a per-run salt.
+    CHECK(common_prefix(warm20.rows, warmall.rows) == 20);
+    CHECK(warm20.rows[20] != warmall.rows[20]);
+    CHECK(common_prefix(warm1.rows, warmall.rows) == 1);
+    CHECK(common_prefix(warm1.rows, warm20.rows) == 1);
+    // ...and they converge again once the two continuations agree: one bar
+    // past the later stream's warmup boundary the two realtime legs are the
+    // same continuation and record identical rows to the end.
+    for (std::size_t i = 21; i < warm1.rows.size(); ++i)
+        CHECK(warm1.rows[i] == warm20.rows[i]);
+
+    // The ruling itself: the divergence is the continuation and NOTHING else.
+    // Factor the continuation out at a fixed execution hash and the kernel's
+    // own broker-state fold — the book, the lots, the realized sums, the
+    // equity extremes, the closed rows — is identical at every bar in all
+    // four drivings.
+    CHECK(equal_rows(batch.broker_only, warm1.broker_only) == kBars);
+    CHECK(equal_rows(batch.broker_only, warm20.broker_only) == kBars);
+    CHECK(equal_rows(batch.broker_only, warmall.broker_only) == kBars);
+
+    // Therefore the batch<->stream oracle is the OUTCOME, not the hash: two
+    // drivings that share no row share every closed row.
+    const Drive& stream = warm20;
+    REQUIRE(stream.trades == batch.trades);
+    CHECK(stream.net == batch.net);
+}
+
 // ── Closed rows by index (§1.8 RP6, R5 gap lane P5) ─────────────────────
-// 9. closed_trade_count() / closed_trade(i) are the closed rows this run
-//    booked, by index and by reference: the i-th row is the very object the
-//    blotter holds, the one get_trade(i) reads, and the one fill_report
-//    publishes at the same index, field for field. A range-end row is report
-//    space only: report_trade_count() / get_report_trade(i) see it after the
-//    closed rows, closed_trade() never does.
+// 10. closed_trade_count() / closed_trade(i) are the closed rows this run
+//     booked, by index and by reference: the i-th row is the very object the
+//     blotter holds, the one get_trade(i) reads, and the one fill_report
+//     publishes at the same index, field for field. A range-end row is report
+//     space only: report_trade_count() / get_report_trade(i) see it after the
+//     closed rows, closed_trade() never does.
 void closed_rows_by_index() {
     Host host;
     host.calculation = round_trip_rule;
@@ -569,6 +752,8 @@ int main() {
          broker_hash_rows_are_opt_in_and_move_nothing);
     test("kernel_recorded_broker_hash_spans_a_stream",
          kernel_recorded_broker_hash_spans_a_stream);
+    test("broker_hash_rows_are_per_driving_mode",
+         broker_hash_rows_are_per_driving_mode);
     test("closed_rows_by_index", closed_rows_by_index);
     std::printf("test_native_report_truth: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
