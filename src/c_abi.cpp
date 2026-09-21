@@ -177,6 +177,34 @@ static_assert(offsetof(pf_report_t, broker_state_hash) == offsetof(pineforge::Re
 static_assert(offsetof(pf_report_t, broker_state_hash_len) == offsetof(pineforge::ReportC, broker_state_hash_len),
               "pf_report_t::broker_state_hash_len offset mismatch");
 
+/* ── Equity-stats deprecated-spelling parity (R5 gap lane P2c) ──── */
+
+/* sharpe_monthly / sortino_monthly are the generic spelling of the fields
+ * this ABI shipped as sharpe_tv / sortino_tv. Each pair is ONE double behind a
+ * C11 anonymous union of two same-typed members, so the old spelling stays
+ * valid and no offset, no size and no value moves. These assertions pin the
+ * numbers measured on the commit before the alias (1974e87e, arm64 macOS and
+ * the LP64 C ABI generally): sizeof 120, the pair at 48 and 56, and
+ * pf_metrics_t::equity at 648. The old spelling is removed at the next
+ * PF_ABI_VERSION; until then both names must keep answering one offset. */
+static_assert(sizeof(pf_equity_stats_t) == 120,
+              "pf_equity_stats_t size moved; the deprecated-spelling union must not grow it");
+static_assert(offsetof(pf_equity_stats_t, sharpe_monthly) == 48,
+              "pf_equity_stats_t::sharpe_monthly offset moved");
+static_assert(offsetof(pf_equity_stats_t, sortino_monthly) == 56,
+              "pf_equity_stats_t::sortino_monthly offset moved");
+static_assert(offsetof(pf_equity_stats_t, sharpe_tv) == offsetof(pf_equity_stats_t, sharpe_monthly),
+              "the deprecated sharpe_tv spelling must name the sharpe_monthly storage");
+static_assert(offsetof(pf_equity_stats_t, sortino_tv) == offsetof(pf_equity_stats_t, sortino_monthly),
+              "the deprecated sortino_tv spelling must name the sortino_monthly storage");
+static_assert(offsetof(pf_equity_stats_t, sharpe_bar) == 64,
+              "pf_equity_stats_t::sharpe_bar offset moved");
+static_assert(offsetof(pf_equity_stats_t, open_pl) == 112,
+              "pf_equity_stats_t::open_pl tail offset moved");
+static_assert(offsetof(pf_metrics_t, equity) == 648,
+              "pf_metrics_t::equity offset moved");
+static_assert(sizeof(pf_metrics_t) == 768, "pf_metrics_t size moved");
+
 /* ── Magnifier distribution enum parity ─────────────────────────── */
 
 static_assert(static_cast<int>(pineforge::MagnifierDistribution::UNIFORM)      == PF_MAGNIFIER_UNIFORM,

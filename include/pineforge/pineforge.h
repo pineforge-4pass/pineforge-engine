@@ -267,13 +267,32 @@ typedef struct pf_equity_stats_s {
                                         *   NaN when first chart open is non-finite or <= 0. */
     double buy_hold_return_pct;        /**< buy_hold_return as PERCENT.
                                         *   NaN when first chart open is non-finite or <= 0. */
-    double sharpe_tv;                  /**< Month-end-resampled equity simple returns (chart timezone,
-                                        *   open-time bucketing), risk-free 2%/yr (2/12 per month),
-                                        *   annualized by sqrt(12). Uses sample (N-1) stddev.
-                                        *   NaN with <2 monthly returns or zero deviation. */
-    double sortino_tv;                 /**< Same resampling as sharpe_tv; uses population downside
-                                        *   deviation vs the monthly risk-free.
-                                        *   NaN with <2 monthly returns or zero deviation. */
+    /** Month-end-resampled equity simple returns (chart timezone, open-time
+     *  bucketing), risk-free 2%/yr (2/12 per month), annualized by sqrt(12).
+     *  Uses sample (N-1) stddev. NaN with <2 monthly returns or zero deviation.
+     *
+     *  `sharpe_tv` is the historical spelling of this same field. Both names
+     *  are one `double` at one offset (a C11 anonymous union of two members of
+     *  the same type), so the struct's size and every field offset are
+     *  unchanged and a caller compiled against either spelling reads the same
+     *  storage. The old spelling is DEPRECATED and is removed at the next
+     *  #PF_ABI_VERSION; see ADR-0001 "Deprecated public spellings". The
+     *  serialized report key stays `sharpe_tv` (report-schema name). */
+    union {
+        double sharpe_monthly;
+        double sharpe_tv;              /**< Deprecated spelling of
+                                        *   pf_equity_stats_s::sharpe_monthly. */
+    };
+    /** Same resampling as sharpe_monthly; uses population downside deviation
+     *  vs the monthly risk-free. NaN with <2 monthly returns or zero deviation.
+     *
+     *  `sortino_tv` is the historical spelling of this same field, on the same
+     *  terms as sharpe_monthly / sharpe_tv above. */
+    union {
+        double sortino_monthly;
+        double sortino_tv;             /**< Deprecated spelling of
+                                        *   pf_equity_stats_s::sortino_monthly. */
+    };
     double sharpe_bar;                 /**< Per-script-bar returns, annualized by observed bar density
                                         *   (bars per year = (len-1)/calendar span), NOT a fixed
                                         *   calendar formula. Uses sample (N-1) stddev.

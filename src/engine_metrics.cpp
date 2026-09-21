@@ -156,7 +156,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
                                        double first_open, double last_close,
                                        int64_t bars_in_market, double net_profit) {
     pf_equity_stats_t e{};
-    e.sharpe_tv = kNaN; e.sortino_tv = kNaN; e.sharpe_bar = kNaN; e.sortino_bar = kNaN;
+    e.sharpe_monthly = kNaN; e.sortino_monthly = kNaN; e.sharpe_bar = kNaN; e.sortino_bar = kNaN;
     e.cagr = kNaN; e.calmar = kNaN; e.recovery_factor = kNaN;
     e.buy_hold_return = kNaN; e.buy_hold_return_pct = kNaN;
     e.time_in_market_pct = kNaN; e.open_pl = 0.0;
@@ -206,7 +206,8 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
             e.calmar = e.cagr / e.max_equity_drawdown_pct;
     }
 
-    // --- TV-method monthly Sharpe/Sortino: last point of each chart-tz
+    // --- Monthly-resampled Sharpe/Sortino (sharpe_monthly / sortino_monthly,
+    // the TV-calibrated construction): last point of each chart-tz
     // (year,month) bucket; simple returns between consecutive month-ends.
     // TODO(perf): decompose only at month boundaries (O(months)) instead
     // of per point; shrinks the non-UTC critical section.
@@ -232,7 +233,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         std::vector<double> r;
         for (size_t i = 1; i < month_end.size(); ++i)
             if (month_end[i - 1] > 0.0) r.push_back(month_end[i] / month_end[i - 1] - 1.0);
-        sharpe_sortino(r, 0.02 / 12.0, std::sqrt(12.0), &e.sharpe_tv, &e.sortino_tv);
+        sharpe_sortino(r, 0.02 / 12.0, std::sqrt(12.0), &e.sharpe_monthly, &e.sortino_monthly);
     }
 
     // --- Per-bar variant: density-annualized (observed bars/year, NOT the
