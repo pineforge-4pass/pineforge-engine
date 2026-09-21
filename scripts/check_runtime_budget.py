@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -21,9 +23,28 @@ from cpp_abi_pairing import PairingError, enforce_receipt_mode, load_frozen_v16
 # matchings, request-core mutation plans and event history per bar, by design);
 # the follow-up kernel lane lowers this constant toward that floor. The workload
 # and the ab9714be side are frozen; only this constant may move, by root.
+#
+# A40 rev 7 (Q9, 2026-09-21): the gated sample is the replay's process CPU
+# time (user + system), not its wall-clock time. Wall clock counts the time a
+# leg spent descheduled, and the minimum of five samples recovers an
+# undisturbed 0.03 s baseline leg far more often than an undisturbed 0.5 s
+# candidate leg, so the wall ratio of an unchanged tree rose with host load
+# (12.3x at load average 51, 16.7x at 60, 29-35x at 190) while the CPU ratio
+# of the same runs stayed at 10x. The ceiling, the sample count and both
+# workloads are unchanged; on a quiet host CPU time and wall clock agree.
+# Both witnesses print the wall-clock sample too; it is reported, with the
+# one-minute load average, so a log shows how loaded the host was.
 LIMIT = 15.0
 SAMPLES = 5  # best-of-N per side (A40 rev 4)
-TIMING = re.compile(r"^PF_RUNTIME_SECONDS=(\d+(?:\.\d+)?)$", re.M)
+WALL_MARKER = re.compile(r"^PF_RUNTIME_SECONDS=(\d+(?:\.\d+)?)$", re.M)
+CPU_MARKER = re.compile(r"^PF_RUNTIME_CPU_SECONDS=(\d+(?:\.\d+)?)$", re.M)
+
+
+@dataclass(frozen=True)
+class Sample:
+    """One witness run: process CPU seconds (gated) and wall-clock seconds (diagnostic)."""
+    cpu: float
+    wall: float
 
 
 def enforce_ratio(candidate: float, baseline: float, limit: float = LIMIT) -> float:
@@ -37,15 +58,41 @@ def enforce_ratio(candidate: float, baseline: float, limit: float = LIMIT) -> fl
     return ratio
 
 
-def run_sample(executable: Path) -> float:
+def parse_sample(diagnostic: str) -> Sample:
+    """Both markers are required: the witness TU emits them from one build."""
+    wall = WALL_MARKER.search(diagnostic)
+    cpu = CPU_MARKER.search(diagnostic)
+    if not wall or not cpu:
+        raise RuntimeError("runtime witness emitted no timing marker:\n" + diagnostic)
+    return Sample(cpu=float(cpu.group(1)), wall=float(wall.group(1)))
+
+
+def best(samples: list[Sample]) -> Sample:
+    """The least-disturbed run per axis: the minimum CPU time and the minimum wall time."""
+    if not samples:
+        raise ValueError("runtime samples are empty")
+    return Sample(cpu=min(sample.cpu for sample in samples),
+                  wall=min(sample.wall for sample in samples))
+
+
+def gate_ratio(candidates: list[Sample], baselines: list[Sample], limit: float = LIMIT) -> float:
+    """The enforced quantity: best candidate CPU time over best baseline CPU time."""
+    return enforce_ratio(best(candidates).cpu, best(baselines).cpu, limit)
+
+
+def run_sample(executable: Path) -> Sample:
     result = subprocess.run([str(executable)], text=True, capture_output=True, timeout=120)
     diagnostic = result.stdout + result.stderr
     if result.returncode:
         raise RuntimeError(f"runtime witness {executable} exited {result.returncode}:\n{diagnostic}")
-    match = TIMING.search(diagnostic)
-    if not match:
-        raise RuntimeError("runtime witness emitted no timing marker:\n" + diagnostic)
-    return float(match.group(1))
+    return parse_sample(diagnostic)
+
+
+def load_average() -> str:
+    try:
+        return f"{os.getloadavg()[0]:.1f}"
+    except (AttributeError, OSError):
+        return "n/a"
 
 
 def include_flags(compile_commands: Path, source: Path) -> list[str]:
@@ -105,10 +152,10 @@ def main() -> int:
             [args.v16_frozen_receipt], skip=args.skip_if_receipt_missing,
             require=args.require_receipts, label="runtime budget")
         if receipt is not None: return receipt
-        candidate = run_sample(args.candidate)
+        candidates = [run_sample(args.candidate)]
         if args.candidate_only:
-            print(f"runtime budget: candidate correctness sample {candidate:.6f}s; "
-                  "relative gate is Release-only")
+            print(f"runtime budget: candidate correctness sample cpu={candidates[0].cpu:.6f}s "
+                  f"wall={candidates[0].wall:.6f}s; relative gate is Release-only")
             return 0
         with tempfile.TemporaryDirectory(prefix="pineforge-runtime-base-") as directory:
             baseline_binary = compile_baseline(args, Path(directory))
@@ -119,13 +166,18 @@ def main() -> int:
             # ratio from 9x (local) to 10.2x and 13.3x on single shots. The
             # minimum of five alternating runs per side removes scheduler noise
             # without touching the workload or the ceiling.
-            baseline = run_sample(baseline_binary)
+            baselines = [run_sample(baseline_binary)]
             for _ in range(SAMPLES - 1):
-                baseline = min(baseline, run_sample(baseline_binary))
-                candidate = min(candidate, run_sample(args.candidate))
-        ratio = enforce_ratio(candidate, baseline)
-        print(f"runtime budget: candidate={candidate:.6f}s ab9714be={baseline:.6f}s "
-              f"ratio={ratio:.3f}x limit={LIMIT:.3f}x")
+                baselines.append(run_sample(baseline_binary))
+                candidates.append(run_sample(args.candidate))
+        candidate, baseline = best(candidates), best(baselines)
+        # The measurement line is printed before the verdict so a failing log
+        # still shows both clocks and the host load.
+        print(f"runtime budget: candidate={candidate.cpu:.6f}s ab9714be={baseline.cpu:.6f}s "
+              f"ratio={candidate.cpu / baseline.cpu:.3f}x limit={LIMIT:.3f}x (process cpu time; "
+              f"wall {candidate.wall:.6f}s/{baseline.wall:.6f}s="
+              f"{candidate.wall / baseline.wall:.3f}x; load average {load_average()})", flush=True)
+        gate_ratio(candidates, baselines)
         return 0
     except (OSError, PairingError, RuntimeError, ValueError, json.JSONDecodeError) as error:
         raise SystemExit("runtime budget: " + str(error))

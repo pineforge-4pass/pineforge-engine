@@ -1,7 +1,17 @@
 // A30/L8d: one source TU is compiled against ab9714be and the current engine.
 // The runner compares those two executables; this binary reports one sample.
+//
+// Q9: the sample the runner gates on is the process CPU time of the replay
+// (user + system, getrusage), not its wall-clock time. Wall clock counts the
+// time this process spent descheduled on a loaded host, and a best-of-N
+// minimum recovers an undisturbed 0.03 s replay far more often than an
+// undisturbed 0.5 s one, so the wall ratio of the two legs grew with load
+// (12x quiet, 29x at load average 190 on the same tree). CPU time is what the
+// engine actually spent. The wall-clock marker stays as a diagnostic.
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+
+#include <sys/resource.h>
 
 #include <chrono>
 #include <cmath>
@@ -73,6 +83,13 @@ public:
     }
 };
 
+double process_cpu_seconds() {
+    struct rusage usage {};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) return -1.0;
+    return static_cast<double>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+         + static_cast<double>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6;
+}
+
 } // namespace
 
 int main() {
@@ -82,15 +99,19 @@ int main() {
     if (bars.empty() || bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         return 1;
     ReissueReplay strategy;
+    const double cpu_started = process_cpu_seconds();
     const auto started = std::chrono::steady_clock::now();
     strategy.run(bars.data(), static_cast<int>(bars.size()));
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
+    const double cpu_elapsed = process_cpu_seconds() - cpu_started;
+    CHECK(cpu_started >= 0.0);
     CHECK(strategy.last_error().empty());
     CHECK(strategy.callbacks == static_cast<std::int64_t>(bars.size()));
     CHECK(std::isfinite(strategy.live_position_size()));
     CHECK(strategy.broker_state_hash() != 0);
     std::printf("PF_RUNTIME_SECONDS=%.9f\n", elapsed);
+    std::printf("PF_RUNTIME_CPU_SECONDS=%.9f\n", cpu_elapsed);
     std::printf("runtime replay callbacks=%lld bars=%zu\n",
                 static_cast<long long>(strategy.callbacks), bars.size());
     return failures == 0 ? 0 : 1;
