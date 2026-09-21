@@ -1,0 +1,4325 @@
+{
+ "schema": "pineforge-bench-selection/v1",
+ "seed": 20260921,
+ "inputs": {
+  "corpusGitlink": "442d497b52d8b559bbcad0831cb5a8aceebb9d3a",
+  "populationVersionSha256": "3d72f815de54e4a2f6fdff6bb2294ea99c38849888390ded4ecd68ac3e5a9110",
+  "populationFileSha256": "dd8841c96ff99e1d0e92e944ba7b4827b27fc30cfd05e76a419c1cf3ca992dd4",
+  "populationHeads": {
+   "engine": "209067aa98fe3d04cc093a630f945fb2e70d2aef",
+   "scrapper": "30a49594f8bcb07cb57b1607e09f1cc2a6035f08",
+   "corpus": "b46cd80c247a53b19e23cb0c12c4451d624ce9a6"
+  },
+  "verifyFactsExperimentId": "exp-r5-p2c-abi-aliases-20260921",
+  "verifyFactsSha256": "d1e9c28004804ee0ac44e533b282cdf270bf654757658a60daf6f8732e9c2bb7",
+  "benchFeed": {
+   "path": "benchmarks/assets/data/ETHUSDT_15.csv",
+   "sha256": "c4e3aafade38e399e65a674b1b8ee8e877d769a8714284adfb0afa6a1beb75c6",
+   "bars": 53929,
+   "firstMs": 1729371600000,
+   "lastMs": 1777906800000
+  }
+ },
+ "counts": {
+  "corpus": {
+   "probeDirs": 313,
+   "excluded": {
+    "needs the 1m corpus feed (bench ships 15m only)": 2,
+    "not a probe (no strategy.pine)": 1
+   },
+   "eligible": 310,
+   "families": {
+    "UDT": {
+     "eligible": 28,
+     "slots": 9
+    },
+    "array": {
+     "eligible": 2,
+     "slots": 1
+    },
+    "brackets/trails/OCA": {
+     "eligible": 22,
+     "slots": 7
+    },
+    "calc timing": {
+     "eligible": 9,
+     "slots": 3
+    },
+    "commission kinds": {
+     "eligible": 4,
+     "slots": 1
+    },
+    "composite": {
+     "eligible": 44,
+     "slots": 14
+    },
+    "drawing": {
+     "eligible": 6,
+     "slots": 2
+    },
+    "language semantics": {
+     "eligible": 13,
+     "slots": 4
+    },
+    "magnifier": {
+     "eligible": 6,
+     "slots": 2
+    },
+    "map": {
+     "eligible": 2,
+     "slots": 1
+    },
+    "margin": {
+     "eligible": 3,
+     "slots": 1
+    },
+    "math": {
+     "eligible": 2,
+     "slots": 1
+    },
+    "matrix": {
+     "eligible": 9,
+     "slots": 3
+    },
+    "order kinds": {
+     "eligible": 48,
+     "slots": 15
+    },
+    "request.security/_lower_tf": {
+     "eligible": 20,
+     "slots": 6
+    },
+    "risk rules": {
+     "eligible": 5,
+     "slots": 2
+    },
+    "sessions/calendars": {
+     "eligible": 7,
+     "slots": 2
+    },
+    "sizing bases": {
+     "eligible": 3,
+     "slots": 1
+    },
+    "ta": {
+     "eligible": 77,
+     "slots": 25
+    }
+   }
+  },
+  "closed": {
+   "laneProbes": 413,
+   "excluded": {
+    "campaign runs it on the 1m feed (finer-TF / lower_tf security)": 16,
+    "surface anomaly": 18
+   },
+   "eligible": 379,
+   "surfaces": {
+    "hard": {
+     "eligible": 379,
+     "slots": 100
+    }
+   }
+  }
+ },
+ "excludedCorpus": {
+  "needs the 1m corpus feed (bench ships 15m only)": [
+   "ltf-bool-array-bull-majority-01",
+   "ltf-numeric-float-ratio15-01"
+  ],
+  "not a probe (no strategy.pine)": [
+   "symbol-specified"
+  ]
+ },
+ "slots": [
+  {
+   "slot": "001-analyzer-anvil-percent-costs-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/analyzer-anvil-percent-costs-01",
+   "corpusPath": "corpus/validation/analyzer-anvil-percent-costs-01",
+   "stratum": "commission kinds",
+   "bin": 0,
+   "tvTrades": 325,
+   "tvRows": 650,
+   "window": [
+    "2025-04-02 16:45",
+    "2026-05-04 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "d8d18952199ac82d75df40d19c38bd79524ed6ac5670387810e2b3c9c00cbe9d",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "pyramid-cash-fractional-commission-01",
+    "order-percent-equity-cash-commission-01",
+    "analyzer-cashflow-cash-costs-01"
+   ]
+  },
+  {
+   "slot": "002-analyzer-parity-percent-of-equity-sizing-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/analyzer-parity-percent-of-equity-sizing-01",
+   "corpusPath": "corpus/validation/analyzer-parity-percent-of-equity-sizing-01",
+   "stratum": "sizing bases",
+   "bin": 0,
+   "tvTrades": 57,
+   "tvRows": 114,
+   "window": [
+    "2025-03-31 00:15",
+    "2026-04-27 00:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "8edfd38e99169206d6b7513680297ec4fd7c86cc0a77e6b380a7d9bda361b14b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "analyzer-parity-small-equity-fraction-01",
+    "composite-ies-equity-feedback-sizing-01"
+   ]
+  },
+  {
+   "slot": "003-array-atlas-momentum-rotation-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/array-atlas-momentum-rotation-01",
+   "corpusPath": "corpus/validation/array-atlas-momentum-rotation-01",
+   "stratum": "array",
+   "bin": 0,
+   "tvTrades": 930,
+   "tvRows": 1860,
+   "window": [
+    "2025-04-01 03:15",
+    "2026-05-03 23:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "94629c4c9e22fe100a429043d76b051b4fbc96b563caa6695ac50e086c8ac98d",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "array-spectrum-deque-01"
+   ]
+  },
+  {
+   "slot": "004-barstate-isconfirmed-magnifier-off-01b",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/barstate-isconfirmed-magnifier-off-01b",
+   "corpusPath": "corpus/validation/barstate-isconfirmed-magnifier-off-01b",
+   "stratum": "magnifier",
+   "bin": 0,
+   "tvTrades": 871,
+   "tvRows": 1742,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 22:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "fa0737ef028fd514db13b076d65049b0cc304eac5177b2486f5d8a1ca717cde6",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "barstate-isconfirmed-magnifier-on-01a",
+    "recompute-alma-sar-corr-magnifier-01"
+   ]
+  },
+  {
+   "slot": "005-bracket-compass-partial-ladder-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/bracket-compass-partial-ladder-01",
+   "corpusPath": "corpus/validation/bracket-compass-partial-ladder-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 4,
+   "tvTrades": 836,
+   "tvRows": 1672,
+   "window": [
+    "2025-03-31 12:30",
+    "2026-05-03 09:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "bac1ee38bdbe2e9d21bb5dd8d4d49b05f97f241fc6b158734b777dda108ec1cb",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "bracket-narrow-stop-limit-with-trail8-01",
+    "bracket-exit-three-way-set-once-entry-01"
+   ]
+  },
+  {
+   "slot": "006-bracket-exit-tp-sl-fixed-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/bracket-exit-tp-sl-fixed-01",
+   "corpusPath": "corpus/validation/bracket-exit-tp-sl-fixed-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 0,
+   "tvTrades": 366,
+   "tvRows": 732,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-03-31 00:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "b8516cc5f441250c051ed8cc677a20d577f7d08a874077eb72d54e7bd5ab9808",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "bracket-revision-exit-replace-01",
+    "bracket-same-id-exit-replace-01"
+   ]
+  },
+  {
+   "slot": "007-bracket-tp-sl-oca-reduce-isolate-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/bracket-tp-sl-oca-reduce-isolate-01",
+   "corpusPath": "corpus/validation/bracket-tp-sl-oca-reduce-isolate-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 6,
+   "tvTrades": 2240,
+   "tvRows": 4480,
+   "window": [
+    "2025-03-31 12:00",
+    "2026-04-30 23:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "dc322e99074e955b8f6a1990193e2ed462e65166838f28643972006379a1ab97",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "bracket-atr-trailing-stop-state-01",
+    "composite-scalping-tight-tp-sl-points-01",
+    "composite-trendmaster-pivot-anchored-bracket-01"
+   ]
+  },
+  {
+   "slot": "008-bracket-trail-points-no-offset-explicit-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/bracket-trail-points-no-offset-explicit-01",
+   "corpusPath": "corpus/validation/bracket-trail-points-no-offset-explicit-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 3,
+   "tvTrades": 782,
+   "tvRows": 1564,
+   "window": [
+    "2025-03-31 08:15",
+    "2026-04-30 20:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "f19651bf5dded3370fb374adaa67ffeec1b6edd7c78044fb05167ef30ae39ba3",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "bracket-exit-stop-limit-trail-same-bar-01",
+    "bracket-atr-trail-series-int-points-01"
+   ]
+  },
+  {
+   "slot": "009-bracket-trail-points-with-offset-only-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/bracket-trail-points-with-offset-only-01",
+   "corpusPath": "corpus/validation/bracket-trail-points-with-offset-only-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 2,
+   "tvTrades": 710,
+   "tvRows": 1420,
+   "window": [
+    "2025-03-31 09:30",
+    "2026-03-31 15:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0efe5884af7860531edd6b75ac6262dc4bb5bef190153fccd76890351e489197",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "bracket-entry-exit-same-pass-attach-01",
+    "bracket-partial-exit-qty-percent-01"
+   ]
+  },
+  {
+   "slot": "010-cap-gatekeeper-intraday-risk-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/cap-gatekeeper-intraday-risk-01",
+   "corpusPath": "corpus/validation/cap-gatekeeper-intraday-risk-01",
+   "stratum": "risk rules",
+   "bin": 0,
+   "tvTrades": 302,
+   "tvRows": 604,
+   "window": [
+    "2025-04-01 02:15",
+    "2026-05-03 09:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "bd770408d927bfd713000025cef2092d4ca2eda6b302076925ac71af0c936d43",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "risk-max-contracts-held-gate-pyramid-01"
+   ]
+  },
+  {
+   "slot": "011-composite-4emarsi-rsi-pullback-latch-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-4emarsi-rsi-pullback-latch-01",
+   "corpusPath": "corpus/validation/composite-4emarsi-rsi-pullback-latch-01",
+   "stratum": "composite",
+   "bin": 6,
+   "tvTrades": 816,
+   "tvRows": 1632,
+   "window": [
+    "2025-03-31 11:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e78dd5c3f70641d442af52f724c02cd7df9fcd7bdbb3c2c5357f183373a4e0e0",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-ies-pivot-liquidity-sweep-01",
+    "composite-ies-three-ema-bias-score-01",
+    "composite-kanuck-max-bars-back-500-01"
+   ]
+  },
+  {
+   "slot": "012-composite-boscurv-integration-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-boscurv-integration-01",
+   "corpusPath": "corpus/validation/composite-boscurv-integration-01",
+   "stratum": "composite",
+   "bin": 9,
+   "tvTrades": 1026,
+   "tvRows": 2052,
+   "window": [
+    "2025-03-31 12:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "73212ac7088cd5cb9e2980358c086435a3fb2e897455dfe3236c97a804a6eb2a",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-liqsweep-pivot-hh-ll-01",
+    "analyzer-parity-choch-bos-isolator-01"
+   ]
+  },
+  {
+   "slot": "013-composite-boscurv-pivot-bos-trigger-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-boscurv-pivot-bos-trigger-01",
+   "corpusPath": "corpus/validation/composite-boscurv-pivot-bos-trigger-01",
+   "stratum": "composite",
+   "bin": 7,
+   "tvTrades": 906,
+   "tvRows": 1812,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "d8924251d2aea0c98280e30d60d5e35b44efef044cdf0aae932605f82f69bab9",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-boscurv-linreg-slope-channel-01",
+    "composite-ies-bb-kc-squeeze-release-01"
+   ]
+  },
+  {
+   "slot": "014-composite-ies-adx-regime-classify-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-ies-adx-regime-classify-01",
+   "corpusPath": "corpus/validation/composite-ies-adx-regime-classify-01",
+   "stratum": "composite",
+   "bin": 5,
+   "tvTrades": 682,
+   "tvRows": 1364,
+   "window": [
+    "2025-03-31 13:30",
+    "2026-04-30 07:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "586c42d181ac6adac16fb01828b0958bf49cd54d01892bf8d00f39b89b633c8c",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-kkb-integration-01",
+    "composite-keystone-udf-tuple-01"
+   ]
+  },
+  {
+   "slot": "015-composite-ies-cooldown-daily-cap-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-ies-cooldown-daily-cap-01",
+   "corpusPath": "corpus/validation/composite-ies-cooldown-daily-cap-01",
+   "stratum": "risk rules",
+   "bin": 1,
+   "tvTrades": 727,
+   "tvRows": 1454,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 22:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "6e9245841b75336c37f92c1c13146898432fcb194effbdd3a03bfe0cc9832256",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "cap-max-intraday-filled-orders-isolate-01",
+    "cap-risk-gates-allow-max-intraday-01"
+   ]
+  },
+  {
+   "slot": "016-composite-kanuck-calc-on-every-tick-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-kanuck-calc-on-every-tick-01",
+   "corpusPath": "corpus/validation/composite-kanuck-calc-on-every-tick-01",
+   "stratum": "calc timing",
+   "bin": 0,
+   "tvTrades": 361,
+   "tvRows": 722,
+   "window": [
+    "2025-04-01 02:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "9a38f1aa8ce010b4832d734dd17aa7fcc4f96b357f832af4f46473940dacb6eb",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "barstate-lattice-confirmed-pivot-01",
+    "bracket-rivet-calc-on-fill-01"
+   ]
+  },
+  {
+   "slot": "017-composite-kkb-ema-atr-breakout-band-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-kkb-ema-atr-breakout-band-01",
+   "corpusPath": "corpus/validation/composite-kkb-ema-atr-breakout-band-01",
+   "stratum": "composite",
+   "bin": 4,
+   "tvTrades": 641,
+   "tvRows": 1282,
+   "window": [
+    "2025-03-31 12:45",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "a05ca89aa2badc0df4c9dff687d74989ead74874fb53d15e1de5803e6381a437",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-trendmaster-integration-01",
+    "composite-vcp-manual-adx-regime-01"
+   ]
+  },
+  {
+   "slot": "018-composite-kkb-kalman-filter-1d-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-kkb-kalman-filter-1d-01",
+   "corpusPath": "corpus/validation/composite-kkb-kalman-filter-1d-01",
+   "stratum": "composite",
+   "bin": 13,
+   "tvTrades": 5487,
+   "tvRows": 10974,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "5bf77d886457ae709c3af4c0c2aebe4750c086e858cce4a97d8b26f71942c8dc",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-ies-rsi-macd-momentum-01",
+    "composite-vcp-fvg-active-zones-01",
+    "composite-kanuck-kama-state-recurrence-01"
+   ]
+  },
+  {
+   "slot": "019-composite-kkb-margin-100-pct-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-kkb-margin-100-pct-01",
+   "corpusPath": "corpus/validation/composite-kkb-margin-100-pct-01",
+   "stratum": "margin",
+   "bin": 0,
+   "tvTrades": 2522,
+   "tvRows": 5044,
+   "window": [
+    "2025-03-31 05:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "3ca24c94c11067afd518b03764997f6af6bbb7ea2eab4a822eb8db6e8058afba",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "analyzer-parity-edge-margin-50-pct-01",
+    "anomaly-equity-mirror-strategy-equity-01"
+   ]
+  },
+  {
+   "slot": "020-composite-marketshift-pivot-state-machine-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-marketshift-pivot-state-machine-01",
+   "corpusPath": "corpus/validation/composite-marketshift-pivot-state-machine-01",
+   "stratum": "composite",
+   "bin": 8,
+   "tvTrades": 906,
+   "tvRows": 1812,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "40bfe960ccdaa2ff33274f06ba3728a84cc068e8a0dccd15cfc1f3272288c55b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-marketshift-state-edge-detector-01",
+    "composite-marketshift-integration-01"
+   ]
+  },
+  {
+   "slot": "021-composite-scalping-integration-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-scalping-integration-01",
+   "corpusPath": "corpus/validation/composite-scalping-integration-01",
+   "stratum": "composite",
+   "bin": 11,
+   "tvTrades": 3097,
+   "tvRows": 6194,
+   "window": [
+    "2025-03-31 04:00",
+    "2026-04-30 21:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e2c6ed53c1b4d9bbe6d80c273be0c9be8f6b069c4ce1f579f6306f11f53f84b8",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-scalping-fast-ma-cross-trigger-01",
+    "composite-ies-pressure-gauge-01"
+   ]
+  },
+  {
+   "slot": "022-composite-trendmaster-line-new-projection-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-trendmaster-line-new-projection-01",
+   "corpusPath": "corpus/validation/composite-trendmaster-line-new-projection-01",
+   "stratum": "composite",
+   "bin": 10,
+   "tvTrades": 1592,
+   "tvRows": 3184,
+   "window": [
+    "2025-03-31 09:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "fd34b39fbc770998288784aa2b26c36f78bc98d1ecc4a29de72d2d1708320e96",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-vcp-pivot-strength-5-01",
+    "composite-kanuck-integration-01"
+   ]
+  },
+  {
+   "slot": "023-composite-trendmaster-three-tier-ema-state-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-trendmaster-three-tier-ema-state-01",
+   "corpusPath": "corpus/validation/composite-trendmaster-three-tier-ema-state-01",
+   "stratum": "composite",
+   "bin": 1,
+   "tvTrades": 224,
+   "tvRows": 448,
+   "window": [
+    "2025-04-02 02:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "139b510095cafd82108b43c10d9c424033f3a9660427bfb77c12ea9496d8e5f0",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-vcp-integration-01",
+    "composite-4emarsi-integration-01"
+   ]
+  },
+  {
+   "slot": "024-composite-trendmaster-trend-momentum-structure-gate-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-trendmaster-trend-momentum-structure-gate-01",
+   "corpusPath": "corpus/validation/composite-trendmaster-trend-momentum-structure-gate-01",
+   "stratum": "composite",
+   "bin": 2,
+   "tvTrades": 362,
+   "tvRows": 724,
+   "window": [
+    "2025-04-01 05:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "d881cf5288ebeb787c47dc670ae18d0270d4f720f697c9ea61965f52765e0311",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-marketshift-rolling-highest-lowest-01",
+    "composite-liqsweep-integration-01"
+   ]
+  },
+  {
+   "slot": "025-composite-vcp-rsi-smooth-divergence-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-vcp-rsi-smooth-divergence-01",
+   "corpusPath": "corpus/validation/composite-vcp-rsi-smooth-divergence-01",
+   "stratum": "composite",
+   "bin": 0,
+   "tvTrades": 142,
+   "tvRows": 284,
+   "window": [
+    "2025-04-02 03:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "c8522136b17c89f8969ef050fa55acd7eee0edeac827024d323acb6a45ee86f4",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "analyzer-self-test-multi-mode-01",
+    "composite-4emarsi-quad-ema-stack-01"
+   ]
+  },
+  {
+   "slot": "026-composite-vcp-vol-zscore-anomaly-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-vcp-vol-zscore-anomaly-01",
+   "corpusPath": "corpus/validation/composite-vcp-vol-zscore-anomaly-01",
+   "stratum": "composite",
+   "bin": 3,
+   "tvTrades": 591,
+   "tvRows": 1182,
+   "window": [
+    "2025-03-31 11:00",
+    "2026-04-30 09:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0639f931895a78f237472d08a77ef0f956b09ded07c6f981e36e7640db4bb108",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-liqsweep-wait-one-continuation-01",
+    "composite-ies-integration-01"
+   ]
+  },
+  {
+   "slot": "027-composite-wunderscalper-integration-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/composite-wunderscalper-integration-01",
+   "corpusPath": "corpus/validation/composite-wunderscalper-integration-01",
+   "stratum": "composite",
+   "bin": 12,
+   "tvTrades": 3097,
+   "tvRows": 6194,
+   "window": [
+    "2025-03-31 04:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "76e76f8e93127220a0350a93f845405272299a0c047f17add17aa5eefb7ac182",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-wunderscalper-alert-templates-01",
+    "composite-vcp-cumulative-volume-delta-01"
+   ]
+  },
+  {
+   "slot": "028-drawing-line-level-breakout",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/drawing-line-level-breakout",
+   "corpusPath": "corpus/validation/drawing-line-level-breakout",
+   "stratum": "drawing",
+   "bin": 0,
+   "tvTrades": 2265,
+   "tvRows": 4530,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-04-30 21:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "99b935935956da977b2633d38bdc9fef655af97c413726bb5a133ce167dda645",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "drawing-chartpoint-trendline",
+    "drawing-box-zone-reentry"
+   ]
+  },
+  {
+   "slot": "029-drawing-visual-noise-geometry",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/drawing-visual-noise-geometry",
+   "corpusPath": "corpus/validation/drawing-visual-noise-geometry",
+   "stratum": "drawing",
+   "bin": 1,
+   "tvTrades": 2969,
+   "tvRows": 5938,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-04-30 21:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "2142143fc3213d372b5e47a3344056e87bccd364be2d63fb58da1f10da0159bb",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "drawing-delete-halt",
+    "drawing-udt-alias-identity"
+   ]
+  },
+  {
+   "slot": "030-input-source-subscript-hl2-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/input-source-subscript-hl2-01",
+   "corpusPath": "corpus/validation/input-source-subscript-hl2-01",
+   "stratum": "language semantics",
+   "bin": 3,
+   "tvTrades": 16347,
+   "tvRows": 32694,
+   "window": [
+    "2025-03-31 01:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "547eb7a1eddb3161ff84a5fee0411c089fa40deea648463d336cc4ce486e7652",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "na-nz-fixnan-history-chain-01",
+    "input-source-runtime-override-high-01",
+    "timeframe-main-period-self-adaptive-01"
+   ]
+  },
+  {
+   "slot": "031-magnifier-tick-dist-volume-weighted-on-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/magnifier-tick-dist-volume-weighted-on-01",
+   "corpusPath": "corpus/validation/magnifier-tick-dist-volume-weighted-on-01",
+   "stratum": "magnifier",
+   "bin": 1,
+   "tvTrades": 871,
+   "tvRows": 1742,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 19:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "07ca488aa72b08ec86ab0ffdbd26dc586495bd5019607eb4c5a9e3269d0c5df0",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "magnifier-tick-dist-endpoints-01",
+    "magnifier-tick-dist-endpoints-rsi-cross-08a"
+   ]
+  },
+  {
+   "slot": "032-map-mosaic-regime-weight-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/map-mosaic-regime-weight-01",
+   "corpusPath": "corpus/validation/map-mosaic-regime-weight-01",
+   "stratum": "map",
+   "bin": 0,
+   "tvTrades": 836,
+   "tvRows": 1672,
+   "window": [
+    "2025-03-31 12:00",
+    "2026-05-03 23:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "4d500edb13c3a95de5e045358d10caf01cb98a9f76211e7cab39a8517df50d4f",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "map-archive-presence-01"
+   ]
+  },
+  {
+   "slot": "033-math-kiln-power-efficiency-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/math-kiln-power-efficiency-01",
+   "corpusPath": "corpus/validation/math-kiln-power-efficiency-01",
+   "stratum": "math",
+   "bin": 0,
+   "tvTrades": 28,
+   "tvRows": 56,
+   "window": [
+    "2025-04-09 06:00",
+    "2026-04-30 02:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "ac71c161e5b033694d46a78878064dd9072a389a4e413a9c164ccf1b13cfb21f",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "math-forge-log-channel-01"
+   ]
+  },
+  {
+   "slot": "034-matrix-bool-mask-transpose-roundtrip-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/matrix-bool-mask-transpose-roundtrip-01",
+   "corpusPath": "corpus/validation/matrix-bool-mask-transpose-roundtrip-01",
+   "stratum": "matrix",
+   "bin": 1,
+   "tvTrades": 774,
+   "tvRows": 1548,
+   "window": [
+    "2025-03-31 12:00",
+    "2026-04-30 21:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "28f89d7b6d041a4e305b2fbea8bed87740aff8babbd8c013bf10444199bbe68f",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "matrix-bool-regime-mask-24x7-01",
+    "matrix-eigen-rank-deficient-cov-01"
+   ]
+  },
+  {
+   "slot": "035-matrix-cadence-transpose-pairs-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/matrix-cadence-transpose-pairs-01",
+   "corpusPath": "corpus/validation/matrix-cadence-transpose-pairs-01",
+   "stratum": "matrix",
+   "bin": 2,
+   "tvTrades": 2358,
+   "tvRows": 4716,
+   "window": [
+    "2025-03-31 11:00",
+    "2026-05-03 23:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "7204bd5e87134957360c8e1671c1252eb24da47379cdfd1e31c6f359dd56673a",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "matrix-prism-factor-vote-01",
+    "matrix-covariance-eigen-pca-01"
+   ]
+  },
+  {
+   "slot": "036-matrix-eigen-covariance-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/matrix-eigen-covariance-01",
+   "corpusPath": "corpus/validation/matrix-eigen-covariance-01",
+   "stratum": "matrix",
+   "bin": 0,
+   "tvTrades": 542,
+   "tvRows": 1084,
+   "window": [
+    "2025-03-31 14:45",
+    "2026-05-03 23:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "26490df6fc07cb2c4f3b7f4decd075523c10f5f24ff25859dad367a80698ea39",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "matrix-bool-mask-no-transpose-01",
+    "matrix-bool-mask-explicit-utc-tz-01"
+   ]
+  },
+  {
+   "slot": "037-mtf-daily-array-median-percentrank-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-daily-array-median-percentrank-01",
+   "corpusPath": "corpus/validation/mtf-daily-array-median-percentrank-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 3,
+   "tvTrades": 362,
+   "tvRows": 724,
+   "window": [
+    "2025-04-06 00:00",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "26da78ef4db04c9ac58081f15b9c2030e0e95ea997342416f951c4e71e10563e",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-htf-confluence-manual-trail-01",
+    "mtf-htf-60-rsi14-inside-security-01"
+   ]
+  },
+  {
+   "slot": "038-mtf-dual-tf-60-240-rising-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-dual-tf-60-240-rising-01",
+   "corpusPath": "corpus/validation/mtf-dual-tf-60-240-rising-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 4,
+   "tvTrades": 736,
+   "tvRows": 1472,
+   "window": [
+    "2025-04-20 20:00",
+    "2026-04-20 16:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "afdabc84a0d9d9419cdeed354593039dfd4ac39a45526fb11a87a0d8cd4b6a07",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-htf-60-volume-spike-01",
+    "mtf-htf-60-sma20-inside-security-01"
+   ]
+  },
+  {
+   "slot": "039-mtf-htf-60-close-change-baseline-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-htf-60-close-change-baseline-01",
+   "corpusPath": "corpus/validation/mtf-htf-60-close-change-baseline-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 5,
+   "tvTrades": 8779,
+   "tvRows": 17558,
+   "window": [
+    "2025-04-05 02:00",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e08112eae0af35815361f30c47f831e3ffef755222cfd67cbdd166c556a20da4",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-roll-state-60-240-d-minimal-01",
+    "mtf-htf-60-close-roll-01",
+    "mtf-htf-60-gaps-on-roll-01"
+   ]
+  },
+  {
+   "slot": "040-mtf-htf-weekly-sma-cross-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-htf-weekly-sma-cross-01",
+   "corpusPath": "corpus/validation/mtf-htf-weekly-sma-cross-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 1,
+   "tvTrades": 102,
+   "tvRows": 204,
+   "window": [
+    "2025-06-22 13:45",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "369b3e7bcf1362052f8f8e90bbcb5937cd33306d1cdf05748aa1398d07caa15a",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-daily-prev-high-break-01",
+    "mtf-rangefinder-daily-reference-01"
+   ]
+  },
+  {
+   "slot": "041-mtf-orbit-trend-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-orbit-trend-01",
+   "corpusPath": "corpus/validation/mtf-orbit-trend-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 2,
+   "tvTrades": 289,
+   "tvRows": 578,
+   "window": [
+    "2025-04-02 09:30",
+    "2026-05-04 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "23c8ffb5fb37d4824c4b18510513b0b4fcfce2c28ddab5a39fc8d4987bae9fc5",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-cascade-tuple-01",
+    "recompute-mtf-rsi-macd-bb-01",
+    "mtf-htf-confluence-static-bracket-01"
+   ]
+  },
+  {
+   "slot": "042-mtf-triple-tf-macd-hist-confluence-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/mtf-triple-tf-macd-hist-confluence-01",
+   "corpusPath": "corpus/validation/mtf-triple-tf-macd-hist-confluence-01",
+   "stratum": "request.security/_lower_tf",
+   "bin": 0,
+   "tvTrades": 24,
+   "tvRows": 48,
+   "window": [
+    "2025-05-07 04:00",
+    "2026-04-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "2be297e4916769e3975025b529656ef6d92c58cbf0cdd72af1e0b0c4b38e77ab",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "mtf-triple-tf-close-confluence-01",
+    "mtf-daily-ema26-warmup-01"
+   ]
+  },
+  {
+   "slot": "043-na-deep-history-int-na-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/na-deep-history-int-na-01",
+   "corpusPath": "corpus/validation/na-deep-history-int-na-01",
+   "stratum": "language semantics",
+   "bin": 0,
+   "tvTrades": 106,
+   "tvRows": 212,
+   "window": [
+    "2025-04-05 14:15",
+    "2026-04-30 22:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "363d50c11f66798c0e5cc6054ed9496bded30142ecc737c074d1aef7aa10ef7b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "stats-eventrades-zero-pnl-count-01",
+    "na-ledger-history-anchor-01"
+   ]
+  },
+  {
+   "slot": "044-oca-multi-bracket-isolation-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/oca-multi-bracket-isolation-01",
+   "corpusPath": "corpus/validation/oca-multi-bracket-isolation-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 5,
+   "tvTrades": 1244,
+   "tvRows": 2488,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 21:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "9d70d1129602118c5fee5a7c325f6cbebeeffd927e68c834c5cc540b62a37f52",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-bracket-cap-range-pending-stop-01",
+    "bracket-aurora-market-atr-01"
+   ]
+  },
+  {
+   "slot": "045-oca-raw-strategy-order-reduce-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/oca-raw-strategy-order-reduce-01",
+   "corpusPath": "corpus/validation/oca-raw-strategy-order-reduce-01",
+   "stratum": "brackets/trails/OCA",
+   "bin": 1,
+   "tvTrades": 366,
+   "tvRows": 732,
+   "window": [
+    "2025-03-31 07:30",
+    "2026-03-31 08:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "ab5c9dfe19aca29a8723157f2e8b67c082d7f7174faa63d1dc5c274d7417d971",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "oca-exit-bracket-internal-cancel-01",
+    "bracket-trailing-activation-offset-path-01"
+   ]
+  },
+  {
+   "slot": "046-order-close-immediate-vs-next-bar-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-close-immediate-vs-next-bar-01",
+   "corpusPath": "corpus/validation/order-close-immediate-vs-next-bar-01",
+   "stratum": "calc timing",
+   "bin": 1,
+   "tvTrades": 732,
+   "tvRows": 1464,
+   "window": [
+    "2025-03-31 02:30",
+    "2026-03-31 11:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "5b48ae32e773a196f8954d1b9abf6c29bb7b6b0a8e0c8587b6f6e86aec6c495e",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-deferred-flip-pooc-cross-bar-01",
+    "order-flashpoint-immediate-close-01"
+   ]
+  },
+  {
+   "slot": "047-order-cross-exit-close-same-pass-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-cross-exit-close-same-pass-01",
+   "corpusPath": "corpus/validation/order-cross-exit-close-same-pass-01",
+   "stratum": "order kinds",
+   "bin": 8,
+   "tvTrades": 732,
+   "tvRows": 1464,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-03-31 07:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "03354227a2a5664bdaad0845f129e8cf230250a2d6f45d8ad7ab6793cade2062",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-stop-open-tie-01",
+    "order-market-close-fill-basis-01"
+   ]
+  },
+  {
+   "slot": "048-order-deferred-flip-guaranteed-gap-stops-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-deferred-flip-guaranteed-gap-stops-01",
+   "corpusPath": "corpus/validation/order-deferred-flip-guaranteed-gap-stops-01",
+   "stratum": "order kinds",
+   "bin": 10,
+   "tvTrades": 792,
+   "tvRows": 1584,
+   "window": [
+    "2025-03-31 08:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "43aab71880c7a24399ed01dacfc8481c526772e444206b31f91f732241191563",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "analyzer-parity-stop-limit-timing-01",
+    "order-dual-stop-cancel-rotation-01"
+   ]
+  },
+  {
+   "slot": "049-order-dual-four-bar-stop-no-close-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-dual-four-bar-stop-no-close-01",
+   "corpusPath": "corpus/validation/order-dual-four-bar-stop-no-close-01",
+   "stratum": "order kinds",
+   "bin": 3,
+   "tvTrades": 366,
+   "tvRows": 732,
+   "window": [
+    "2025-03-31 02:15",
+    "2026-04-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "2de95481357be62247bc9d025a5cab8a1fa9f1cf515583ca6b34131b13eb73f0",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-switchback-all-in-reversal-01",
+    "order-harbor-stop-limit-01"
+   ]
+  },
+  {
+   "slot": "050-order-dual-stop-open-low-first-path-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-dual-stop-open-low-first-path-01",
+   "corpusPath": "corpus/validation/order-dual-stop-open-low-first-path-01",
+   "stratum": "order kinds",
+   "bin": 0,
+   "tvTrades": 189,
+   "tvRows": 378,
+   "window": [
+    "2025-04-01 03:15",
+    "2026-03-31 06:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "600278ab94eb3c5ff5d27c5ab612b93fb1a0e730ac85bb90a9a8a20c9a9be062",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-stop-open-high-first-path-01",
+    "order-vector-stop-breakout-01"
+   ]
+  },
+  {
+   "slot": "051-order-dual-stop-source-order-short-first-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-dual-stop-source-order-short-first-01",
+   "corpusPath": "corpus/validation/order-dual-stop-source-order-short-first-01",
+   "stratum": "order kinds",
+   "bin": 2,
+   "tvTrades": 365,
+   "tvRows": 730,
+   "window": [
+    "2025-03-31 03:00",
+    "2026-03-31 06:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "68a82d01cfc96bf2645452e90483bab225264e49c3a5055317d7bd7be8308df5",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-stop-near-only-01",
+    "order-dual-stop-source-order-long-first-01"
+   ]
+  },
+  {
+   "slot": "052-order-entry-implicit-reversal-exit-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-entry-implicit-reversal-exit-01",
+   "corpusPath": "corpus/validation/order-entry-implicit-reversal-exit-01",
+   "stratum": "order kinds",
+   "bin": 12,
+   "tvTrades": 1098,
+   "tvRows": 2196,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-03-31 02:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "2e99c8e40d69e50a6d3f78a182a0cf56ae2afe1a7768fa411faf91ae43be02fa",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "pyramid-terrace-staged-entry-01",
+    "composite-liqsweep-wick-pierce-close-back-01"
+   ]
+  },
+  {
+   "slot": "053-order-flip-stop-no-paired-close-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-flip-stop-no-paired-close-01",
+   "corpusPath": "corpus/validation/order-flip-stop-no-paired-close-01",
+   "stratum": "order kinds",
+   "bin": 7,
+   "tvTrades": 724,
+   "tvRows": 1448,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-04-30 12:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "13582ae8fbc17bddeade30b8559fd206c462ea7b94ad7164fefc0e4e04bfc04b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-close-all-cancel-all-01",
+    "order-cross-entry-close-same-pass-01"
+   ]
+  },
+  {
+   "slot": "054-order-keystone-limit-replace-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-keystone-limit-replace-01",
+   "corpusPath": "corpus/validation/order-keystone-limit-replace-01",
+   "stratum": "order kinds",
+   "bin": 5,
+   "tvTrades": 686,
+   "tvRows": 1372,
+   "window": [
+    "2025-03-31 13:30",
+    "2026-05-04 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "a46a723a3923e0bad2a9e1b567d8c1d1956f9de9b33529d2892ea6eb25b3fe78",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-same-id-stop-minute-zero-01",
+    "order-same-id-stop-raise-only-01"
+   ]
+  },
+  {
+   "slot": "055-order-one-side-four-bar-far-opposite-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-one-side-four-bar-far-opposite-01",
+   "corpusPath": "corpus/validation/order-one-side-four-bar-far-opposite-01",
+   "stratum": "order kinds",
+   "bin": 1,
+   "tvTrades": 349,
+   "tvRows": 698,
+   "window": [
+    "2025-03-31 02:15",
+    "2026-03-31 06:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0343187d23e7335bef58f9788d3bd0db01c53fd149ef2941d6ab7c38b2c4f6fc",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-stop-far-only-01",
+    "order-same-id-stop-window-four-bars-01"
+   ]
+  },
+  {
+   "slot": "056-order-process-on-close-true-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-process-on-close-true-01",
+   "corpusPath": "corpus/validation/order-process-on-close-true-01",
+   "stratum": "calc timing",
+   "bin": 2,
+   "tvTrades": 857,
+   "tvRows": 1714,
+   "window": [
+    "2025-03-31 11:30",
+    "2026-04-30 21:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "f00587fe5c43c9f3ba32bd87a07fbc07d68f0ab8145e76b53cbd5a94efef4207",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-process-on-close-false-01",
+    "order-horizon-next-bar-close-01"
+   ]
+  },
+  {
+   "slot": "057-order-same-id-market-entry-repeat-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-same-id-market-entry-repeat-01",
+   "corpusPath": "corpus/validation/order-same-id-market-entry-repeat-01",
+   "stratum": "order kinds",
+   "bin": 9,
+   "tvTrades": 732,
+   "tvRows": 1464,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-03-31 13:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "c0e31eaff2d5b57612ba1a15227cf08cadde6de713279232b0c0133e64b0207f",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-stop-both-touch-priority-01",
+    "order-same-id-entry-close-same-bar-01",
+    "order-same-id-stop-cross-before-modify-01"
+   ]
+  },
+  {
+   "slot": "058-order-same-id-stop-after-flat-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-same-id-stop-after-flat-01",
+   "corpusPath": "corpus/validation/order-same-id-stop-after-flat-01",
+   "stratum": "order kinds",
+   "bin": 6,
+   "tvTrades": 703,
+   "tvRows": 1406,
+   "window": [
+    "2025-03-31 02:15",
+    "2026-03-31 12:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "fad74ad27f754a7e67363f7fe72d302f769566aac5c5aa64d5087c077233d9c8",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-dual-side-same-id-stop-no-cancel-01",
+    "order-same-id-stop-modification-01"
+   ]
+  },
+  {
+   "slot": "059-order-stop-entry-cancel-opposite-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-stop-entry-cancel-opposite-01",
+   "corpusPath": "corpus/validation/order-stop-entry-cancel-opposite-01",
+   "stratum": "order kinds",
+   "bin": 13,
+   "tvTrades": 1739,
+   "tvRows": 3478,
+   "window": [
+    "2025-03-31 00:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "ace391dd7e172e67e42de231d5cd140759bfea9d3ec7c48543287b188e1e3ae5",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-stop-cancel-no-regime-close-01",
+    "order-stop-entry-reversal-grouping-01"
+   ]
+  },
+  {
+   "slot": "060-order-stop-entry-touch-boundary-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/order-stop-entry-touch-boundary-01",
+   "corpusPath": "corpus/validation/order-stop-entry-touch-boundary-01",
+   "stratum": "order kinds",
+   "bin": 4,
+   "tvTrades": 548,
+   "tvRows": 1096,
+   "window": [
+    "2025-03-31 02:30",
+    "2026-03-31 18:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e8a6528e36d7acbdcba937cd000c91e01ac8d206e5c91c46cfce3b1c93036fe8",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-stale-stop-after-close-no-cancel-01",
+    "order-cross-entry-cancel-same-pass-01",
+    "order-tranche-partial-market-close-01"
+   ]
+  },
+  {
+   "slot": "061-pyramid-deferred-flip-close-all-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/pyramid-deferred-flip-close-all-01",
+   "corpusPath": "corpus/validation/pyramid-deferred-flip-close-all-01",
+   "stratum": "order kinds",
+   "bin": 14,
+   "tvTrades": 2356,
+   "tvRows": 4712,
+   "window": [
+    "2025-03-31 06:15",
+    "2026-04-30 22:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "19eef3d8207f8bf70ddf010f88a63980c78c30265edd64eee04449d4e623d986",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "pyramid-close-id-grouping-01",
+    "order-range-expansion-pending-stop-01",
+    "composite-wunderscalper-explicit-reverse-01"
+   ]
+  },
+  {
+   "slot": "062-pyramid-flip-stop-pyramiding-2-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/pyramid-flip-stop-pyramiding-2-01",
+   "corpusPath": "corpus/validation/pyramid-flip-stop-pyramiding-2-01",
+   "stratum": "order kinds",
+   "bin": 11,
+   "tvTrades": 843,
+   "tvRows": 1686,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-04-30 12:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "f819c4d66c0984338a845b589f1830b6765d6d53cfa39496c657d53cfd42f903",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "order-opposite-entry-close-same-pass-01",
+    "order-crosscurrent-opposite-market-pair-01"
+   ]
+  },
+  {
+   "slot": "063-session-borough-new-york-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/session-borough-new-york-01",
+   "corpusPath": "corpus/validation/session-borough-new-york-01",
+   "stratum": "sessions/calendars",
+   "bin": 0,
+   "tvTrades": 159,
+   "tvRows": 318,
+   "window": [
+    "2025-04-01 13:45",
+    "2026-05-03 20:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "44167a32edb9b069eb511d2ed4552ba33623f53894f5f59601b4af708255adc3",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "composite-vcp-session-tz-newyork-01",
+    "session-hour-minute-pulse-filter-01"
+   ]
+  },
+  {
+   "slot": "064-session-ny-spring-forward-dst-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/session-ny-spring-forward-dst-01",
+   "corpusPath": "corpus/validation/session-ny-spring-forward-dst-01",
+   "stratum": "sessions/calendars",
+   "bin": 1,
+   "tvTrades": 396,
+   "tvRows": 792,
+   "window": [
+    "2025-03-31 13:45",
+    "2026-04-30 20:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "36ce05cf5386c3a891e820b31a62602ecf37821789fadefdb680aeb7b6ea77a3",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "calendar-waypoint-weekday-macd-01",
+    "composite-4emarsi-session-window-nbar-exit-01",
+    "session-compass-utc-market-window-01"
+   ]
+  },
+  {
+   "slot": "065-stats-ledger-outcome-throttle-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/stats-ledger-outcome-throttle-01",
+   "corpusPath": "corpus/validation/stats-ledger-outcome-throttle-01",
+   "stratum": "language semantics",
+   "bin": 2,
+   "tvTrades": 425,
+   "tvRows": 850,
+   "window": [
+    "2025-03-31 12:45",
+    "2026-05-04 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0bbf0c5af86d21017a882c5f3ccbf70d147c4232191f02a3faf51ba061746a7a",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "control-heliograph-while-channel-01",
+    "enum-relay-regime-01"
+   ]
+  },
+  {
+   "slot": "066-syntax-glyph-string-regex-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/syntax-glyph-string-regex-01",
+   "corpusPath": "corpus/validation/syntax-glyph-string-regex-01",
+   "stratum": "language semantics",
+   "bin": 1,
+   "tvTrades": 271,
+   "tvRows": 542,
+   "window": [
+    "2025-04-02 15:45",
+    "2026-05-03 21:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "fd21acf8ac7e7a27d5da527054e1037b12f466387e489e8a8262e5f2271c2a58",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "syntax-caliper-scalar-switch-01",
+    "timeframe-dial-main-period-01"
+   ]
+  },
+  {
+   "slot": "067-ta-aperture-cog-linreg-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-aperture-cog-linreg-01",
+   "corpusPath": "corpus/validation/ta-aperture-cog-linreg-01",
+   "stratum": "ta",
+   "bin": 5,
+   "tvTrades": 530,
+   "tvRows": 1060,
+   "window": [
+    "2025-03-31 15:45",
+    "2026-05-03 23:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "092faa2d5021172ce9556076e45df0d54e2f8bdfd6e9a59625a241fa0ec44270",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-ema-ribbon-stack-transition-01",
+    "ta-gyroscope-cmo-median-01"
+   ]
+  },
+  {
+   "slot": "068-ta-bb-rsi-mean-reversion-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-bb-rsi-mean-reversion-01",
+   "corpusPath": "corpus/validation/ta-bb-rsi-mean-reversion-01",
+   "stratum": "ta",
+   "bin": 4,
+   "tvTrades": 496,
+   "tvRows": 992,
+   "window": [
+    "2025-04-05 12:45",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "70246fdb538047369c2634a75655e14c8cab8291182dc995d4e01242f2c87448",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-mfi-14-bands-20-80-01",
+    "volume-tide-vwap-mfi-01"
+   ]
+  },
+  {
+   "slot": "069-ta-closedtrades-risk-introspection-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-closedtrades-risk-introspection-01",
+   "corpusPath": "corpus/validation/ta-closedtrades-risk-introspection-01",
+   "stratum": "ta",
+   "bin": 6,
+   "tvTrades": 751,
+   "tvRows": 1502,
+   "window": [
+    "2025-04-05 09:15",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "20882bf7f312782512e91be4c284b6d65a0b0d337b83bfcbebde8b735fbe574d",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-keltner-channel-break-01",
+    "bands-constellation-mean-reversion-01"
+   ]
+  },
+  {
+   "slot": "070-ta-cog-10-signal-cross-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-cog-10-signal-cross-01",
+   "corpusPath": "corpus/validation/ta-cog-10-signal-cross-01",
+   "stratum": "ta",
+   "bin": 24,
+   "tvTrades": 5803,
+   "tvRows": 11606,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "fb9f89796bbad7c913357da4f4504e46e7fe9d5da9b0a95f3cea6f499b643637",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-cmo-9-zero-cross-01",
+    "ta-stoch-slow-k-d-cross-01",
+    "ta-pivot-point-levels-break-01"
+   ]
+  },
+  {
+   "slot": "071-ta-dual-thrust-open-anchored-range-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-dual-thrust-open-anchored-range-01",
+   "corpusPath": "corpus/validation/ta-dual-thrust-open-anchored-range-01",
+   "stratum": "ta",
+   "bin": 19,
+   "tvTrades": 2871,
+   "tvRows": 5742,
+   "window": [
+    "2025-04-05 01:00",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e98e4bb74ed1f0246bae0ffaf352519ae369a46806fd214554df4b7d7c006505",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-pvt-ema-cross-01",
+    "ta-median-vs-ema-cross-01"
+   ]
+  },
+  {
+   "slot": "072-ta-highestbars-lowestbars-breakout-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-highestbars-lowestbars-breakout-01",
+   "corpusPath": "corpus/validation/ta-highestbars-lowestbars-breakout-01",
+   "stratum": "ta",
+   "bin": 13,
+   "tvTrades": 1587,
+   "tvRows": 3174,
+   "window": [
+    "2025-04-05 12:30",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "31e35e240f6d1fb5aba087e034461c52838cc2898d5d8f01d76ec8f9e3be6d67",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-conduit-obv-accdist-01",
+    "ta-macd-line-gt-signal-continuous-state-01"
+   ]
+  },
+  {
+   "slot": "073-ta-inside-bar-engulfing-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-inside-bar-engulfing-01",
+   "corpusPath": "corpus/validation/ta-inside-bar-engulfing-01",
+   "stratum": "ta",
+   "bin": 21,
+   "tvTrades": 3614,
+   "tvRows": 7228,
+   "window": [
+    "2025-03-31 01:45",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "88d54c4c576ec56e5e59a7f72781edb4c4d765f9d5b38a5d15206da68a5300d9",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-kama-style-efficiency-ratio-01",
+    "ta-multi-indicator-score-composite-01"
+   ]
+  },
+  {
+   "slot": "074-ta-macd-histogram-reversal-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-macd-histogram-reversal-01",
+   "corpusPath": "corpus/validation/ta-macd-histogram-reversal-01",
+   "stratum": "ta",
+   "bin": 18,
+   "tvTrades": 2816,
+   "tvRows": 5632,
+   "window": [
+    "2025-04-05 11:30",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "effe49168c55129a8d717360e0e05d75aa366ab570705f7b425ef00d14c037f9",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-dmi-adx-di-cross-01",
+    "ta-tsi-25-13-signal-cross-01"
+   ]
+  },
+  {
+   "slot": "075-ta-mantle-keltner-regime-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-mantle-keltner-regime-01",
+   "corpusPath": "corpus/validation/ta-mantle-keltner-regime-01",
+   "stratum": "ta",
+   "bin": 2,
+   "tvTrades": 379,
+   "tvRows": 758,
+   "window": [
+    "2025-04-01 05:30",
+    "2026-05-03 23:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "afb77a0aace8f523ca9d7bcd5b51fe3aef4a5f36176f452c8e1e9c5b321f5dab",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-percentrank-mean-reversion-01",
+    "ta-range-filter-var-band-01"
+   ]
+  },
+  {
+   "slot": "076-ta-obv-ema-cross-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-obv-ema-cross-01",
+   "corpusPath": "corpus/validation/ta-obv-ema-cross-01",
+   "stratum": "ta",
+   "bin": 23,
+   "tvTrades": 5296,
+   "tvRows": 10592,
+   "window": [
+    "2025-03-31 11:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "5cbdc76f7e7a770c29a75b33b8214e885bafd9a5e5682bd68113f565625f0494",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-accdist-ema-cross-01",
+    "ta-momentum-roc-zero-cross-01"
+   ]
+  },
+  {
+   "slot": "077-ta-pivot-array-unshift-pop-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-pivot-array-unshift-pop-01",
+   "corpusPath": "corpus/validation/ta-pivot-array-unshift-pop-01",
+   "stratum": "ta",
+   "bin": 8,
+   "tvTrades": 829,
+   "tvRows": 1658,
+   "window": [
+    "2025-04-05 05:00",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "9fd137405964687920e590074d7e65991f56da95f2756306a72d5fc966922e50",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-supertrend-direction-flip-01",
+    "ta-engulfing-candle-pattern-01"
+   ]
+  },
+  {
+   "slot": "078-ta-pivot-atr-stop-target-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-pivot-atr-stop-target-01",
+   "corpusPath": "corpus/validation/ta-pivot-atr-stop-target-01",
+   "stratum": "ta",
+   "bin": 14,
+   "tvTrades": 1620,
+   "tvRows": 3240,
+   "window": [
+    "2025-04-05 05:00",
+    "2026-04-05 23:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "152fda5e764ed3db83cca68eba006742753deadd2d2e48e932c0445ab242195b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-sma-152-close-cross-01",
+    "ta-chandelier-exit-direction-01"
+   ]
+  },
+  {
+   "slot": "079-ta-pivot-confirmed-break-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-pivot-confirmed-break-01",
+   "corpusPath": "corpus/validation/ta-pivot-confirmed-break-01",
+   "stratum": "ta",
+   "bin": 11,
+   "tvTrades": 1115,
+   "tvRows": 2230,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "030eafbd7856f944dca9ddd8a6b428e7c4b60cda791b40cc37b720ea6862e1fb",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-donchian-channel-breakout-01",
+    "ta-dual-ma-switch-dispatch-01"
+   ]
+  },
+  {
+   "slot": "080-ta-plumbline-pvt-vwma-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-plumbline-pvt-vwma-01",
+   "corpusPath": "corpus/validation/ta-plumbline-pvt-vwma-01",
+   "stratum": "ta",
+   "bin": 12,
+   "tvTrades": 1371,
+   "tvRows": 2742,
+   "window": [
+    "2025-03-31 11:00",
+    "2026-05-03 23:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "1c7d746c6ede86c261ea65539afdf40594bfeb22ca0e52c431a48cf877104ac2",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-triple-sma-stack-latch-01",
+    "ta-sextant-cci-hma-01",
+    "ta-stochastic-rsi-cross-01"
+   ]
+  },
+  {
+   "slot": "081-ta-rsi-bb-self-bands-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-rsi-bb-self-bands-01",
+   "corpusPath": "corpus/validation/ta-rsi-bb-self-bands-01",
+   "stratum": "ta",
+   "bin": 1,
+   "tvTrades": 350,
+   "tvRows": 700,
+   "window": [
+    "2025-04-06 18:00",
+    "2026-04-05 21:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "1ffa387beff456446dcc72514de6a0c87115c3b1cb6a3a2c702f2d603de8aaac",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-nvi-pvi-cross-01",
+    "ta-tally-volume-index-roc-01"
+   ]
+  },
+  {
+   "slot": "082-ta-rsi14-cross-50-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-rsi14-cross-50-01",
+   "corpusPath": "corpus/validation/ta-rsi14-cross-50-01",
+   "stratum": "ta",
+   "bin": 22,
+   "tvTrades": 4690,
+   "tvRows": 9380,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "79e89c655850872a217be1ebe5a205bdcee4a9bd809870bbd0f0ed4bef7339e5",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-hma-fast-slow-cross-01",
+    "ta-hma-55-close-cross-01"
+   ]
+  },
+  {
+   "slot": "083-ta-rsi14-gt60-lt45-no-matrix-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-rsi14-gt60-lt45-no-matrix-01",
+   "corpusPath": "corpus/validation/ta-rsi14-gt60-lt45-no-matrix-01",
+   "stratum": "ta",
+   "bin": 7,
+   "tvTrades": 785,
+   "tvRows": 1570,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 21:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "60886fb531b6c83e002c9bfb615e6cbd817fcc11694cfa39a14531f30ffec678",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-bb-kc-squeeze-breakout-01",
+    "ta-map-regime-threshold-lookup-01"
+   ]
+  },
+  {
+   "slot": "084-ta-sar-flip-entry-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-sar-flip-entry-01",
+   "corpusPath": "corpus/validation/ta-sar-flip-entry-01",
+   "stratum": "ta",
+   "bin": 20,
+   "tvTrades": 3082,
+   "tvRows": 6164,
+   "window": [
+    "2025-03-31 01:15",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "f7bea1cef777540da8885d9eb7bf4fb96991de70069a32c6b0a2353b3df5e76b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-macd-12-26-9-line-signal-cross-01",
+    "ta-rci-14-zero-cross-01"
+   ]
+  },
+  {
+   "slot": "085-ta-stdev-sma-expansion-break-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-stdev-sma-expansion-break-01",
+   "corpusPath": "corpus/validation/ta-stdev-sma-expansion-break-01",
+   "stratum": "ta",
+   "bin": 9,
+   "tvTrades": 878,
+   "tvRows": 1756,
+   "window": [
+    "2025-03-31 07:45",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "c8ee42474298c5f71f9c673b18d17f65b070ae021921ac8c25cdb3242f70840d",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-rsi-ema-signal-cross-01",
+    "ta-pendulum-sar-rotation-01"
+   ]
+  },
+  {
+   "slot": "086-ta-str-match-regex-filter-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-str-match-regex-filter-01",
+   "corpusPath": "corpus/validation/ta-str-match-regex-filter-01",
+   "stratum": "ta",
+   "bin": 16,
+   "tvTrades": 1917,
+   "tvRows": 3834,
+   "window": [
+    "2025-03-31 00:15",
+    "2026-04-30 21:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "967a4cf71c5ab4b54dabe932c20e13822bd8d094021230e7cd888baf10969e0d",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-sma-dual-cross-01",
+    "ta-rsi14-gt-50-continuous-state-01"
+   ]
+  },
+  {
+   "slot": "087-ta-torque-tsi-signal-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-torque-tsi-signal-01",
+   "corpusPath": "corpus/validation/ta-torque-tsi-signal-01",
+   "stratum": "ta",
+   "bin": 3,
+   "tvTrades": 402,
+   "tvRows": 804,
+   "window": [
+    "2025-04-01 15:30",
+    "2026-05-03 21:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "c543d860a3579a2f9cfa0d7769b7c9f484d0101389c81758eaaf17ab72fafb31",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-supertrend-adx-filter-01",
+    "ta-meridian-dmi-regime-01"
+   ]
+  },
+  {
+   "slot": "088-ta-vwma-vs-sma-divergence-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-vwma-vs-sma-divergence-01",
+   "corpusPath": "corpus/validation/ta-vwma-vs-sma-divergence-01",
+   "stratum": "ta",
+   "bin": 17,
+   "tvTrades": 2576,
+   "tvRows": 5152,
+   "window": [
+    "2025-04-05 07:00",
+    "2026-04-06 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "c136fbbfd2e201c9baf304fcf6ef725ffbce6b8f28dec2d385be5923b29409ce",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-elder-ray-bull-bear-power-01",
+    "ta-cci-threshold-cross-01"
+   ]
+  },
+  {
+   "slot": "089-ta-wpr-14-bands-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-wpr-14-bands-01",
+   "corpusPath": "corpus/validation/ta-wpr-14-bands-01",
+   "stratum": "ta",
+   "bin": 15,
+   "tvTrades": 1847,
+   "tvRows": 3694,
+   "window": [
+    "2025-03-31 08:00",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "62916beef3de975e434bf34d01aa66a1b8d0a0bae39a9bca516054bdc9972cb8",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-volume-spike-atr-breakout-01",
+    "ta-rsi-macd-and-continuous-state-01"
+   ]
+  },
+  {
+   "slot": "090-ta-zenith-rci-wpr-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/ta-zenith-rci-wpr-01",
+   "corpusPath": "corpus/validation/ta-zenith-rci-wpr-01",
+   "stratum": "ta",
+   "bin": 10,
+   "tvTrades": 949,
+   "tvRows": 1898,
+   "window": [
+    "2025-03-31 12:00",
+    "2026-05-03 23:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0b20fdda4c7842d8a159aacb53bae9bdf0a1d00cd932a095a88d043310fbdd1f",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "vwap-bands-breakout-1sigma-01",
+    "ta-quarry-alma-correlation-01"
+   ]
+  },
+  {
+   "slot": "091-udt-method-drives-strategy-entry-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-drives-strategy-entry-01",
+   "corpusPath": "corpus/validation/udt-method-drives-strategy-entry-01",
+   "stratum": "UDT",
+   "bin": 7,
+   "tvTrades": 1635,
+   "tvRows": 3270,
+   "window": [
+    "2025-03-31 06:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "5802200690e439792ff42a2349081f41c3e2a7b86dba22894132340ed63e1295",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-loopback-method-for-01",
+    "udt-method-in-for-loop-01"
+   ]
+  },
+  {
+   "slot": "092-udt-method-extra-primitive-args-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-extra-primitive-args-01",
+   "corpusPath": "corpus/validation/udt-method-extra-primitive-args-01",
+   "stratum": "UDT",
+   "bin": 8,
+   "tvTrades": 2504,
+   "tvRows": 5008,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-04-30 19:15"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "994cf219e8abf7772891137c73143543e00171e22a3903b4717191bb48763f21",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-method-mutating-self-ref-01",
+    "udt-method-receives-ta-series-param-01",
+    "udt-regime-stack-stress-01"
+   ]
+  },
+  {
+   "slot": "093-udt-method-in-switch-arms-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-in-switch-arms-01",
+   "corpusPath": "corpus/validation/udt-method-in-switch-arms-01",
+   "stratum": "UDT",
+   "bin": 2,
+   "tvTrades": 402,
+   "tvRows": 804,
+   "window": [
+    "2025-03-31 12:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "bc2c5949984843f9ceb40f8164439314c253464f5b837d9c199d7929cf446ed1",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-method-default-param-kwargs-01",
+    "udt-method-in-if-else-branch-01"
+   ]
+  },
+  {
+   "slot": "094-udt-method-in-while-loop-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-in-while-loop-01",
+   "corpusPath": "corpus/validation/udt-method-in-while-loop-01",
+   "stratum": "UDT",
+   "bin": 1,
+   "tvTrades": 306,
+   "tvRows": 612,
+   "window": [
+    "2025-04-02 09:30",
+    "2026-04-30 17:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "b8af834e91c816b6faad8964d355a34295dd38440b5e42485a8be968d1903678",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-switchboard-method-arms-01",
+    "udt-method-windowed-method-chain-01"
+   ]
+  },
+  {
+   "slot": "095-udt-method-reads-strategy-state-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-reads-strategy-state-01",
+   "corpusPath": "corpus/validation/udt-method-reads-strategy-state-01",
+   "stratum": "UDT",
+   "bin": 4,
+   "tvTrades": 705,
+   "tvRows": 1410,
+   "window": [
+    "2025-03-31 11:45",
+    "2026-04-30 22:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "eff17d30ca5230cdf95dc92fd88e9c1f645781287c8400f910d63079fb3fb93b",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-method-feeds-strategy-exit-prices-01",
+    "udt-method-uses-na-nz-fixnan-01"
+   ]
+  },
+  {
+   "slot": "096-udt-method-tuple-return-destructure-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-tuple-return-destructure-01",
+   "corpusPath": "corpus/validation/udt-method-tuple-return-destructure-01",
+   "stratum": "UDT",
+   "bin": 6,
+   "tvTrades": 1095,
+   "tvRows": 2190,
+   "window": [
+    "2025-03-31 06:30",
+    "2026-05-01 00:00"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "e3301889b5f544b542e45f67dd4c4ccf6d890df6a6ac43ce700d72fb5aa2225c",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-sentinel-method-regime-01",
+    "udt-breaker-method-while-01"
+   ]
+  },
+  {
+   "slot": "097-udt-method-udt-return-from-func-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-udt-return-from-func-01",
+   "corpusPath": "corpus/validation/udt-method-udt-return-from-func-01",
+   "stratum": "UDT",
+   "bin": 0,
+   "tvTrades": 132,
+   "tvRows": 264,
+   "window": [
+    "2025-04-08 01:45",
+    "2026-04-27 05:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "2dd65745566df0e3687cbb95ee61c3d2c9198623e3934bcbf121ce1abf7640ac",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-method-calls-sibling-cumulative-01",
+    "udt-method-uses-history-globals-01"
+   ]
+  },
+  {
+   "slot": "098-udt-method-var-instance-streak-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-method-var-instance-streak-01",
+   "corpusPath": "corpus/validation/udt-method-var-instance-streak-01",
+   "stratum": "UDT",
+   "bin": 5,
+   "tvTrades": 1007,
+   "tvRows": 2014,
+   "window": [
+    "2025-03-31 15:30",
+    "2026-04-30 15:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "0d4725beeb5cad922cb8386d5ef49593ec699d04fe4f92e902c81b768d9b61ad",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-method-uses-math-funcs-01",
+    "udt-method-on-array-element-01"
+   ]
+  },
+  {
+   "slot": "099-udt-tessellate-tuple-method-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/udt-tessellate-tuple-method-01",
+   "corpusPath": "corpus/validation/udt-tessellate-tuple-method-01",
+   "stratum": "UDT",
+   "bin": 3,
+   "tvTrades": 426,
+   "tvRows": 852,
+   "window": [
+    "2025-03-31 12:30",
+    "2026-05-03 23:45"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "031e15f7a4090d82a3ea1ed2c26785013c44db76d38ff8016f564ccac8c6588c",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "udt-courier-return-method-01",
+    "udt-method-scalar-return-01"
+   ]
+  },
+  {
+   "slot": "100-vwap-bands-mean-reversion-2sigma-01",
+   "source": "corpus",
+   "probeId": "corpus:corpus/validation/vwap-bands-mean-reversion-2sigma-01",
+   "corpusPath": "corpus/validation/vwap-bands-mean-reversion-2sigma-01",
+   "stratum": "ta",
+   "bin": 0,
+   "tvTrades": 241,
+   "tvRows": 482,
+   "window": [
+    "2025-04-02 22:15",
+    "2026-04-30 00:30"
+   ],
+   "tape": "tv_trades.csv",
+   "tapeSha256": "960ce94f3d111e76e8aa64ae127c6a282cbece8562d7537d1df1eddbf0bb4fa3",
+   "license": "Apache-2.0 (pineforge-corpus LICENSE)",
+   "replacements": [
+    "ta-rsi14-bands-30-70-01",
+    "ta-linreg-stdev-channel-revert-01"
+   ]
+  },
+  {
+   "slot": "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-3commas-bch-overbought-rsi-fade-short-indicator",
+   "stratum": "hard",
+   "bin": 33,
+   "tvTrades": 288,
+   "tvRows": 576,
+   "populationTvTradeRows": 288,
+   "window": [
+    "2025-03-31 13:00",
+    "2026-04-29 13:45"
+   ],
+   "tapeSha256": "aa70f2795bb4a83a8c46927391889eb3e494677dece6c3af496548fb90821e39",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "3commas-3commas-dot-rsi-reversal-dca-short-indicator",
+    "presbiterga-range-breakout-session-strategy"
+   ]
+  },
+  {
+   "slot": "102-3commas-3commas-pol-grid-bot-long-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-3commas-pol-grid-bot-long-strategy",
+   "stratum": "hard",
+   "bin": 39,
+   "tvTrades": 354,
+   "tvRows": 708,
+   "populationTvTradeRows": 354,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "2733143f096e425ce42984c1683dd2fef847fcb2f0cb4f31dd61539ba5f62f35",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "reeduck-neo-matrix",
+    "errajeshmangal-test",
+    "3commas-link-grid-bot-long-strategy"
+   ]
+  },
+  {
+   "slot": "103-3commas-eth-grid-bot-long-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-eth-grid-bot-long-strategy",
+   "stratum": "hard",
+   "bin": 37,
+   "tvTrades": 332,
+   "tvRows": 664,
+   "populationTvTradeRows": 332,
+   "window": [
+    "2026-02-08 00:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "68d5ca9986ad23a605ded2cd95b196914d9a590ba91f824260e9ccd0f52d741b",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "alpha-wizard-wave-oscillator",
+    "pridarasx-turtle-soup-strategy-with-1-bar-confirmation",
+    "andrehan-elite-ultimate-smc-pro-probability-engine"
+   ]
+  },
+  {
+   "slot": "104-3commas-gram-rsi-strategy-3commas",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-gram-rsi-strategy-3commas",
+   "stratum": "hard",
+   "bin": 9,
+   "tvTrades": 43,
+   "tvRows": 86,
+   "populationTvTradeRows": 43,
+   "window": [
+    "2025-04-06 19:45",
+    "2026-03-16 04:00"
+   ],
+   "tapeSha256": "2fd03e97b4b5368dff28bd95d9bc37931daf76bfdfbd574b956d07a2f981bec4",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "3commas-3commas-tao-rsi-oversold-doubling-dca-long-strategy",
+    "doriannnq-tjr-v4-strategy"
+   ]
+  },
+  {
+   "slot": "105-3commas-heikin-ashi-rsi-fade-short-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-heikin-ashi-rsi-fade-short-strategy",
+   "stratum": "hard",
+   "bin": 43,
+   "tvTrades": 392,
+   "tvRows": 784,
+   "populationTvTradeRows": 392,
+   "window": [
+    "2025-04-04 08:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "b815af792d78da29d109390937eb39021c2745b68d6130a85f3ac0e847dc7ea5",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "nils123456-mnq-15m-ny-open-orb-strategy",
+    "ltony-oracle-matrix-red-pill",
+    "officialjackofalltrades-quant-synthesis-strategy-joat"
+   ]
+  },
+  {
+   "slot": "106-3commas-sol-rsi-dca-long-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-sol-rsi-dca-long-strategy",
+   "stratum": "hard",
+   "bin": 7,
+   "tvTrades": 29,
+   "tvRows": 58,
+   "populationTvTradeRows": 29,
+   "window": [
+    "2026-02-16 00:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "13196b6f148a6136edb01719cea847cdb43339faa9d392684307ef4853ed8da6",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "bnf6082-market-open-break",
+    "bnf6082-market-open-break-2-0",
+    "ltony-matrix-killzone-trend-filter-session-sniper"
+   ]
+  },
+  {
+   "slot": "107-3commas-xmr-grid-bot-long-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/3commas-xmr-grid-bot-long-strategy",
+   "stratum": "hard",
+   "bin": 41,
+   "tvTrades": 371,
+   "tvRows": 742,
+   "populationTvTradeRows": 371,
+   "window": [
+    "2025-03-31 00:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "36e6d2e080f2fe3ef2a9ae5afefe63dd565212fb5688d0b192f5467667854189",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "pacorodriguez-ber-nas100-sp500-turtle-soup-ny-v4-fixed",
+    "bprakaash-new-era-strategy-1-0",
+    "officialjackofalltrades-helios-institutional-synthesis-strategy-joat"
+   ]
+  },
+  {
+   "slot": "108-a-popal-simple-smart-buy-sell-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/a-popal-simple-smart-buy-sell-strategy",
+   "stratum": "hard",
+   "bin": 86,
+   "tvTrades": 2559,
+   "tvRows": 5118,
+   "populationTvTradeRows": 5118,
+   "window": [
+    "2025-03-31 06:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "cc5ef7db940dde934c4362ec99ecdc697a40ffc4bd544afebc1dd3139d89338e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "beyondthemarkets-black-diamond-fvg",
+    "gb2wgkrtxs-liquidity-sweep-strategy-m2-swing",
+    "mikemucurry-clean-vwap-zl-scalper-single-trigger-by-sandip"
+   ]
+  },
+  {
+   "slot": "109-acalvillo20-amd1",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/acalvillo20-amd1",
+   "stratum": "hard",
+   "bin": 22,
+   "tvTrades": 172,
+   "tvRows": 344,
+   "populationTvTradeRows": 344,
+   "window": [
+    "2025-03-31 13:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "5f761d47f02520b5ff5d70ab77ef0317f6e3dda9b058cbf086735b35f23cb098",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "robmagnaye14-eb-ict-one-trade-setup-for-life-sniper-70-model-v5",
+    "wardy05-the-club",
+    "jonny-dow-opening-price-level-breakout"
+   ]
+  },
+  {
+   "slot": "110-aiscripts-lvn-rejection-acceptance-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/aiscripts-lvn-rejection-acceptance-strategy",
+   "stratum": "hard",
+   "bin": 88,
+   "tvTrades": 2949,
+   "tvRows": 5898,
+   "populationTvTradeRows": 2949,
+   "window": [
+    "2025-03-31 10:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "0da1fec8106ab45a9e0cdc715fd918228d3f9b0f21e85bd301fe60160f658b9c",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "boztilkiserhan-serhan1-wma-rsi-trailing-scalp-date-filter",
+    "richiedino90-liquidity-zones-vwap-ema-system",
+    "brosbothbk-chande-kroll-stop-exness-look-like-styles"
+   ]
+  },
+  {
+   "slot": "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1",
+   "stratum": "hard",
+   "bin": 84,
+   "tvTrades": 2373,
+   "tvRows": 4746,
+   "populationTvTradeRows": 2373,
+   "window": [
+    "2025-03-31 07:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "571910000301fdf4da4aa5207c378727d4aa932a969d026df7761ba8dee6fa56",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "colasbreugnon-good-luck",
+    "artificialintelligencealgo-algoai-ema-rsi-entry-exit-system",
+    "elistools-fvg-toolkit-smart-money"
+   ]
+  },
+  {
+   "slot": "112-alexgrover-g-channel-trend-detection-alerts-non-repainting",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/alexgrover-g-channel-trend-detection-alerts-non-repainting",
+   "stratum": "hard",
+   "bin": 46,
+   "tvTrades": 462,
+   "tvRows": 924,
+   "populationTvTradeRows": 924,
+   "window": [
+    "2025-04-04 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "e455961fe6c8cd189eee1f95d061625da642eec0848d1278f72aefb13c3a71ea",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "adxae-z-score-statistical-bands",
+    "strategylab-liquidity-dynamic-trend",
+    "projectsyndicate-strong-reversal-signals-projectsyndicate"
+   ]
+  },
+  {
+   "slot": "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash",
+   "stratum": "hard",
+   "bin": 3,
+   "tvTrades": 7,
+   "tvRows": 14,
+   "populationTvTradeRows": 7,
+   "window": [
+    "2025-04-29 20:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "b5bad67a5176778a206dcb4dab7381e77a1de0eb8eb40b391ff5d1c56101b930",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "version-eurgbp-daily-2023-strategy",
+    "ayusattv-z-score-mean-reversion-pro",
+    "version-eurgbp-daily-2024-strategy"
+   ]
+  },
+  {
+   "slot": "114-amandaborgeson06-bias-status-dashboard",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/amandaborgeson06-bias-status-dashboard",
+   "stratum": "hard",
+   "bin": 83,
+   "tvTrades": 2183,
+   "tvRows": 4366,
+   "populationTvTradeRows": 2183,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "871579279c15d27949bfb359479d8b8c8efeb93bfdb4980aaef5b3374dbd562f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "bladzehairsalon-the-greatest-bot-ever-made-pmt-apex-edition",
+    "jos-protrader-auto-candlestick-patterns-targets-setup",
+    "algoalpha-machine-learning-adaptive-dmi-signals-algoalpha"
+   ]
+  },
+  {
+   "slot": "115-anji-ga-9-21ema-anji",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/anji-ga-9-21ema-anji",
+   "stratum": "hard",
+   "bin": 24,
+   "tvTrades": 196,
+   "tvRows": 392,
+   "populationTvTradeRows": 196,
+   "window": [
+    "2026-01-01 14:30",
+    "2026-04-29 15:30"
+   ],
+   "tapeSha256": "a59a6c6b7a2fdfbb6f7a37a234165ae8b339fe5ebb42bdc7e077ed0a1136b4f8",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "saivivek0192-fabio-whale-vrvp",
+    "santiagomunoz00-mes-orb-v6-santi",
+    "pridarasx-ewo-rsi-advanced-signals-strategy-exhaustion-filter"
+   ]
+  },
+  {
+   "slot": "116-anonycryptous-ev-edge-anonycryptous",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/anonycryptous-ev-edge-anonycryptous",
+   "stratum": "hard",
+   "bin": 63,
+   "tvTrades": 866,
+   "tvRows": 1732,
+   "populationTvTradeRows": 866,
+   "window": [
+    "2025-04-01 05:15",
+    "2026-04-30 03:30"
+   ],
+   "tapeSha256": "f540848f4b1f430eecfd260eacd8434805bf3af6139184bebbcc40dd60943da3",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "officialjackofalltrades-caldera-meridian-strategy-joat",
+    "bblacks-tv-options-momentum-bias-strategy-v2",
+    "erdensedat-fvg-bias-finder-erdensedat"
+   ]
+  },
+  {
+   "slot": "117-antoniolinux-rsi-mfi-divergence-momentum",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/antoniolinux-rsi-mfi-divergence-momentum",
+   "stratum": "hard",
+   "bin": 35,
+   "tvTrades": 298,
+   "tvRows": 596,
+   "populationTvTradeRows": 298,
+   "window": [
+    "2025-03-31 07:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "d98667863b597158c6f0f0a6db50ec5235ec0462ee6c358df085b11b823cdb8d",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "drakkhon-nasdaq-orb-strategy-strict-exec-rrr-2-0-fixed",
+    "equivest-equivest-supply-and-demand-zone",
+    "mayur-das4-mayur-stock-monthly-option-seller"
+   ]
+  },
+  {
+   "slot": "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/averagepoe-mnq-anomaly-candle-sma-confluence-v6",
+   "stratum": "hard",
+   "bin": 31,
+   "tvTrades": 253,
+   "tvRows": 506,
+   "populationTvTradeRows": 506,
+   "window": [
+    "2025-04-01 06:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "c91f62dd32be6f47008ce3f8fb31d93a5d741f686acd48d1007024a421ba422f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "3commas-3commas-silicon-vault-long-intc-dca-strategy",
+    "sunitkumar-sugar-baby-scanner-position-size-us-nse",
+    "fran-pineda-strategy-500-turtle-soup-ny-v5-m5-sweep"
+   ]
+  },
+  {
+   "slot": "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris",
+   "stratum": "hard",
+   "bin": 47,
+   "tvTrades": 466,
+   "tvRows": 932,
+   "populationTvTradeRows": 466,
+   "window": [
+    "2025-03-31 06:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "0357a2a47aa4409d6e6946c36748247ee32acf214bf49e7e8585490f577beb72",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "forexver-xauusd-sok-sondurucu-stratejisi",
+    "jaysharmaofficial-alphamojo-supertrend-strategy-ha-with-buffer"
+   ]
+  },
+  {
+   "slot": "120-benblackdiamond-l2gmom-network-momentum",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/benblackdiamond-l2gmom-network-momentum",
+   "stratum": "hard",
+   "bin": 44,
+   "tvTrades": 416,
+   "tvRows": 832,
+   "populationTvTradeRows": 416,
+   "window": [
+    "2025-04-02 15:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "6bc27f274d4d9bae63950a8533119c57fb5fbf8d2ddeed10d79e60de76bfa64d",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "mohammedimranpoc14-nifty-supertrend-ce-strategy-alice-blue",
+    "jos-protrader-pivot-breakout-high-low-signals-jpt",
+    "vasanth-mvk-velocity-breakout-strategy-vbs"
+   ]
+  },
+  {
+   "slot": "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/bipinbiharipatra-5m-sol-scalper-ha-lorentzian",
+   "stratum": "hard",
+   "bin": 71,
+   "tvTrades": 1119,
+   "tvRows": 2238,
+   "populationTvTradeRows": 1119,
+   "window": [
+    "2025-03-31 09:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "31562bb5240e646c9a7060b1c0843c44790b906037ea7dfd31c39e6bf8f74883",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "alpha-forge-alpha-forge-liquidity-matrix-v2-2",
+    "geckin-joey-strategy"
+   ]
+  },
+  {
+   "slot": "122-cb85wj5jmt-moja-strategia-harami-bb",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/cb85wj5jmt-moja-strategia-harami-bb",
+   "stratum": "hard",
+   "bin": 81,
+   "tvTrades": 1976,
+   "tvRows": 3952,
+   "populationTvTradeRows": 1976,
+   "window": [
+    "2025-03-31 08:00",
+    "2026-04-30 17:30"
+   ],
+   "tapeSha256": "682a71b9d93a5c179375ddbc9722892f9e2ac601a267b6029092514758324071",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "freddycandle-fc-ema-trend",
+    "musashibruno-ck-index-strategy-open-source-code-free-no-cost",
+    "wayward-bison-vumanchu-wt-zero-cross-strategy-v1-2-2"
+   ]
+  },
+  {
+   "slot": "123-chadow6875-swing-high-low-ict-clean-pro",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/chadow6875-swing-high-low-ict-clean-pro",
+   "stratum": "hard",
+   "bin": 99,
+   "tvTrades": 14289,
+   "tvRows": 28578,
+   "populationTvTradeRows": 14289,
+   "window": [
+    "2025-03-31 01:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "4c62e16d42273c8ba65d2894b9076fbff164d880a3d8b2f08df100adfcf3795e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "steversteves-machine-learning-point-forecast-with-sr-ss",
+    "blackelonmuskonwebull-clean-buyers-vs-sellers-control-black-elon-musk",
+    "masayanfx-spike-ea-trade-strategy"
+   ]
+  },
+  {
+   "slot": "124-cihanozdemir-trade-id-signal-engine-buy-only-option",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/cihanozdemir-trade-id-signal-engine-buy-only-option",
+   "stratum": "hard",
+   "bin": 25,
+   "tvTrades": 200,
+   "tvRows": 400,
+   "populationTvTradeRows": 200,
+   "window": [
+    "2025-04-02 14:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "fdfbf3158a86b5c6340ea36beba6fc379cf644d6b6c767beb6e531dd3c59bdb0",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "r2keymoneymind-xauusd-15m-200-ema-1h-ut-bot-adx-strategy",
+    "lennon-bartling-8am-opening-range-zone",
+    "manjotblue-smart-money-concepts-pa"
+   ]
+  },
+  {
+   "slot": "125-cleightyp-cleightyp-bos-sma-macd-vwap",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/cleightyp-cleightyp-bos-sma-macd-vwap",
+   "stratum": "hard",
+   "bin": 74,
+   "tvTrades": 1396,
+   "tvRows": 2792,
+   "populationTvTradeRows": 2792,
+   "window": [
+    "2025-04-01 15:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "165b02696d5c68d0eeb1eeaea3712c27845330c2891e4a222a04b5e2ccf69d25",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "kite4corporation-ema-crossover-labeled-swing-levels-indicator-v6-by-jc",
+    "mylivingedge-mylivingedgefx-panel",
+    "jos-protrader-liquidity-sweep-detector-pro"
+   ]
+  },
+  {
+   "slot": "126-cntvxiao-smc-vsa-oi",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/cntvxiao-smc-vsa-oi",
+   "stratum": "hard",
+   "bin": 67,
+   "tvTrades": 978,
+   "tvRows": 1956,
+   "populationTvTradeRows": 978,
+   "window": [
+    "2025-03-31 13:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "c87559bc98c83e63cd6df69494cb63472409e8c31102da27aa7b06ffecce55c7",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "shahbazgold-ai-triple-confirmation-strategy",
+    "z8830-bb-macd-v6-1-5-qing-smart-distribution",
+    "adxae-trend-pulse-channel-strategy"
+   ]
+  },
+  {
+   "slot": "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge",
+   "stratum": "hard",
+   "bin": 78,
+   "tvTrades": 1743,
+   "tvRows": 3486,
+   "populationTvTradeRows": 3486,
+   "window": [
+    "2025-03-31 06:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "2820f1e28ab1f2df96841a32afa010f91e858ae6b7260f2d8fb9f2c484267a60",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "bhavik51-pivot-point-standard",
+    "kevincheung6688-price-action-index-zwyzjnwhj-imitation-v6-pro-tcp",
+    "codetradesalgo-codetrades-sub-50ms-webhook-formatter"
+   ]
+  },
+  {
+   "slot": "128-colasbreugnon-nq-scalp-fix-signals",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/colasbreugnon-nq-scalp-fix-signals",
+   "stratum": "hard",
+   "bin": 77,
+   "tvTrades": 1574,
+   "tvRows": 3148,
+   "populationTvTradeRows": 3148,
+   "window": [
+    "2025-04-01 17:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "2b8e8ca037a0ea86eaa12820fea1c8c4204a3068bb9e7cd1f083dde16ec3f00b",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "gurpreetrahal6-gc-overlay-pro-v3-2",
+    "rsouzaeverton-btc-averages-strategy-long-short",
+    "officialjackofalltrades-concordance-allocation-strategy-joat"
+   ]
+  },
+  {
+   "slot": "129-daytrader4beginners-box-breakout-strategy-dt4b-trader",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/daytrader4beginners-box-breakout-strategy-dt4b-trader",
+   "stratum": "hard",
+   "bin": 76,
+   "tvTrades": 1562,
+   "tvRows": 3124,
+   "populationTvTradeRows": 1562,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-04-30 14:15"
+   ],
+   "tapeSha256": "d292aecf9f292c154105b0ce1316349ee6f5546dbcdd61d56af2480e0a867a05",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "rsantanabooking-simple-breakout-strategy-santana",
+    "klowdcossey99-my-strategy-9"
+   ]
+  },
+  {
+   "slot": "130-delta-crypto-mu-overnight-gap-capture",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/delta-crypto-mu-overnight-gap-capture",
+   "stratum": "hard",
+   "bin": 94,
+   "tvTrades": 5148,
+   "tvRows": 10296,
+   "populationTvTradeRows": 5148,
+   "window": [
+    "2025-03-31 13:30",
+    "2026-04-30 19:45"
+   ],
+   "tapeSha256": "db23b1355b033879f16b4e61e918074a93e9766d7ef49280d543d2369619d87e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "taro-s-edvefi-standard-ma-version",
+    "taro-s-volumema",
+    "trendmatrix-labs-trendmatrix-institutional-momentum-regime-engine"
+   ]
+  },
+  {
+   "slot": "131-devildk-option-point",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/devildk-option-point",
+   "stratum": "hard",
+   "bin": 27,
+   "tvTrades": 210,
+   "tvRows": 420,
+   "populationTvTradeRows": 420,
+   "window": [
+    "2025-04-02 12:15",
+    "2026-04-29 15:45"
+   ],
+   "tapeSha256": "bb52e49d3d11d840588421c93507f8c01527814c9dad320e4db094d843984380",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "gpmpastorsc-20-200-sma-strategy",
+    "cipher-instinct-market-structure-supertrend-cipher-instinct",
+    "ruchiragrawal-cluster-breakout-strategy-v6-robust"
+   ]
+  },
+  {
+   "slot": "132-dinkus3-obsidian",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/dinkus3-obsidian",
+   "stratum": "hard",
+   "bin": 14,
+   "tvTrades": 86,
+   "tvRows": 172,
+   "populationTvTradeRows": 86,
+   "window": [
+    "2025-04-04 07:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "4d45565db41a81fbb6de42ffdd0d9bbe24a30417eb351a66ccbfea42cda41de7",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "yukozb-gold-ny-orb-v19-close-20-00",
+    "van007trader-volume-profile-lite-dyna"
+   ]
+  },
+  {
+   "slot": "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500",
+   "stratum": "hard",
+   "bin": 36,
+   "tvTrades": 313,
+   "tvRows": 626,
+   "populationTvTradeRows": 313,
+   "window": [
+    "2025-04-02 09:00",
+    "2026-04-29 12:15"
+   ],
+   "tapeSha256": "2c15b7886a2f5053dd11992f49a912a1c2e3801cd48e4068bdba5d0ace32259f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "dub4art-zero-lag-cvd-rsi-stochastic-divergence-all-in-one-d4a",
+    "b-ram18-hos",
+    "zenoutman-imbalance-repricing-engine-zom"
+   ]
+  },
+  {
+   "slot": "134-elomadablah-atr-trailing-stoploss-multi",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/elomadablah-atr-trailing-stoploss-multi",
+   "stratum": "hard",
+   "bin": 91,
+   "tvTrades": 3369,
+   "tvRows": 6738,
+   "populationTvTradeRows": 6738,
+   "window": [
+    "2025-03-31 04:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "692687a48f6cac05ad3d87a8dab70b7712e1a6773ef657ee829fcd2ab8d766a1",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "rhyme17-trendline-and-horizontal-breakout",
+    "dontcare12-obv-trend-candles",
+    "aiscripts-trend-persistence-analysis-framework"
+   ]
+  },
+  {
+   "slot": "135-finnp17-atm",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/finnp17-atm",
+   "stratum": "hard",
+   "bin": 79,
+   "tvTrades": 1790,
+   "tvRows": 3580,
+   "populationTvTradeRows": 1790,
+   "window": [
+    "2025-03-31 03:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "cd4beb5c195c7d735a985ee07208c3cc25da611b0a785544d31d4934ca18742f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "agaam-gfg-orb-asia-london-new-york-by-agaam",
+    "officialjackofalltrades-aureate-market-architecture-strategy-joat",
+    "forexcracked-fvg-order-block-toolkit-forexcracked"
+   ]
+  },
+  {
+   "slot": "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy",
+   "stratum": "hard",
+   "bin": 65,
+   "tvTrades": 928,
+   "tvRows": 1856,
+   "populationTvTradeRows": 928,
+   "window": [
+    "2025-04-02 15:45",
+    "2026-04-29 10:45"
+   ],
+   "tapeSha256": "1c082e93f8c467925b9168f20d519241f281981613368f4a8369e76d3b0a0edd",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "bg7crypto-bg7-nq-8am-orb-v2",
+    "shojiy940207-atr-big-candle-alert-v2",
+    "giua64-aquila-reale-bos-choch-zone"
+   ]
+  },
+  {
+   "slot": "137-fran-pineda-strategy-501-de-franpineda",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/fran-pineda-strategy-501-de-franpineda",
+   "stratum": "hard",
+   "bin": 29,
+   "tvTrades": 224,
+   "tvRows": 448,
+   "populationTvTradeRows": 448,
+   "window": [
+    "2025-04-01 14:45",
+    "2026-04-30 20:00"
+   ],
+   "tapeSha256": "73d202dec54a974633793fd10e51dc515f177a4fbafddf118d059f2746e2d882",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "robmagnaye14-eb-ict-v5-professional-trader-model",
+    "bitfundamental-swing-breakout-strategy-quant-core",
+    "samjnq-initial-balance-breakout-samjnq-v3"
+   ]
+  },
+  {
+   "slot": "138-fran-pineda-strategy-502-de-franpineda",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/fran-pineda-strategy-502-de-franpineda",
+   "stratum": "hard",
+   "bin": 20,
+   "tvTrades": 151,
+   "tvRows": 302,
+   "populationTvTradeRows": 151,
+   "window": [
+    "2025-04-01 14:45",
+    "2026-04-30 20:00"
+   ],
+   "tapeSha256": "dfd1b484dc8d54ae304bd1ada5cb3ed3dcb58e810a3fd71efac71e156c584396",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "chartprime-volumetric-trend-ribbon-pro-chartprime",
+    "van007trader-vwap-deviation-score-dyna",
+    "3commas-3commas-bch-heikin-ashi-rsi-fade-short-strategy"
+   ]
+  },
+  {
+   "slot": "139-francescodimichele-gold-ai-strategy-v2-0",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/francescodimichele-gold-ai-strategy-v2-0",
+   "stratum": "hard",
+   "bin": 55,
+   "tvTrades": 643,
+   "tvRows": 1286,
+   "populationTvTradeRows": 643,
+   "window": [
+    "2025-04-02 14:30",
+    "2026-04-30 13:15"
+   ],
+   "tapeSha256": "226b31955f73d82c41e0f8da449687647b0dedd6982a7e5c13af7355175364a2",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "crypt0graf-btc-turtle-paper-strategy-v1-bitstamp",
+    "shiroi-volatility-surge-strategy",
+    "algo-aakash-smart-money-stop-hunt-detector-algo-aakash"
+   ]
+  },
+  {
+   "slot": "140-gonzowiththewind-sisyphus-happiness",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/gonzowiththewind-sisyphus-happiness",
+   "stratum": "hard",
+   "bin": 15,
+   "tvTrades": 96,
+   "tvRows": 192,
+   "populationTvTradeRows": 96,
+   "window": [
+    "2025-03-31 14:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "7a38cd8d275d7916dcb2108bfc24593bf02f2cf259787390701103353e5ec127",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "vinay-poojary-order-block-strategy",
+    "drop-trades-drop-s-opening-range-breakout-orb",
+    "nils123456-orb-strat"
+   ]
+  },
+  {
+   "slot": "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369",
+   "stratum": "hard",
+   "bin": 60,
+   "tvTrades": 774,
+   "tvRows": 1548,
+   "populationTvTradeRows": 774,
+   "window": [
+    "2025-04-05 12:30",
+    "2026-04-30 15:30"
+   ],
+   "tapeSha256": "7c8975c4b8cec355d034cd01cea92798dd98a337f5511546da299be52316862d",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "vasudevshenoy-manoj-betrayed-me",
+    "ananthanvelmurugan-orb-lite",
+    "3commas-nvdax-grid-bot-long-strategy"
+   ]
+  },
+  {
+   "slot": "142-hermescore-momentum-conviction-hermescore",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/hermescore-momentum-conviction-hermescore",
+   "stratum": "hard",
+   "bin": 90,
+   "tvTrades": 3194,
+   "tvRows": 6388,
+   "populationTvTradeRows": 6388,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "8bc274b1c1d09934b0387552cd9676afa328a73c735db8f5ea3dd32e190e06df",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "aiscripts-market-breadth-trend-strategy",
+    "proozac98-advvolbars-proozac"
+   ]
+  },
+  {
+   "slot": "143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway",
+   "stratum": "hard",
+   "bin": 1,
+   "tvTrades": 4,
+   "tvRows": 8,
+   "populationTvTradeRows": 4,
+   "window": [
+    "2025-10-11 02:15",
+    "2025-11-05 01:00"
+   ],
+   "tapeSha256": "3018806c7e56b22f13e0da37c452d85be5fcc94792675faedbe200b7cec0713e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "vikprimus-level-breakout-consolidation",
+    "traderhayz-prison-escape-breakout-strategy",
+    "artificialintelligencealgo-algoai-swing-point-reversal-hunter"
+   ]
+  },
+  {
+   "slot": "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1",
+   "stratum": "hard",
+   "bin": 49,
+   "tvTrades": 513,
+   "tvRows": 1026,
+   "populationTvTradeRows": 513,
+   "window": [
+    "2025-03-31 17:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "0bb68a72fe55ebd1d3e4e06488717a0f165c3ced6963d1d54b4b7eb8258c6dee",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "p181342x-china-a-share-long-trend-resonance-system-clr-system",
+    "phenlabs-liquidity-sweep-absorption-reversal-engine-phenlabs",
+    "abhivish-surgical-sweep-original-restored"
+   ]
+  },
+  {
+   "slot": "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/imtiyazali73-imtiyaz-signature-liquidity-compass-smc",
+   "stratum": "hard",
+   "bin": 64,
+   "tvTrades": 906,
+   "tvRows": 1812,
+   "populationTvTradeRows": 1812,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "5b2e1b4c12997d86641e4e48c42f7509d83bb3ada24f07521e17e97c604d7aa9",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "jake-theboss-master-trend-strategy-v1-0",
+    "shiroi-zl-trend-indicator",
+    "boztilkiserhan-serhan-1-wma-adx-trailing-date-filter"
+   ]
+  },
+  {
+   "slot": "146-inr3d-r3d-jackofxc-rtp-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/inr3d-r3d-jackofxc-rtp-strategy",
+   "stratum": "hard",
+   "bin": 10,
+   "tvTrades": 48,
+   "tvRows": 96,
+   "populationTvTradeRows": 96,
+   "window": [
+    "2025-04-02 14:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "445dab0b80b43cd8b2d844026d08fb83787a9abfedd961eaef19cb3521262785",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "rumdopfstocks-btc-4h-rsi-bullish-engulfing",
+    "swallowacademy-sca-weekend-gap-indicator",
+    "egoigor1976-1-trendline-strategy"
+   ]
+  },
+  {
+   "slot": "147-jaydeepp095-candle-harry",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jaydeepp095-candle-harry",
+   "stratum": "hard",
+   "bin": 58,
+   "tvTrades": 746,
+   "tvRows": 1492,
+   "populationTvTradeRows": 1492,
+   "window": [
+    "2025-03-31 14:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "82765008ced503b0b215e21f0332495abdc83275d72adcca23fae10c9b7698d7",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "shiroi-supertrend-bb-strategy-stb",
+    "roxview-roxema-12-21",
+    "waranyutrkm-asian-box-breakout-strategy"
+   ]
+  },
+  {
+   "slot": "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jayendranath4-banknifty-15m-clear-tp-sl-strategy",
+   "stratum": "hard",
+   "bin": 45,
+   "tvTrades": 430,
+   "tvRows": 860,
+   "populationTvTradeRows": 860,
+   "window": [
+    "2025-04-01 12:15",
+    "2026-04-30 14:30"
+   ],
+   "tapeSha256": "50f5570ff377f956914fbe8e9f4fe0775b901f25cbfd5bae0e4bab783575e27f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "miemomo3-expma-analysis",
+    "todrock-solana-day-trader-1-02",
+    "shiroi-qqe-trend-strategy-long-short"
+   ]
+  },
+  {
+   "slot": "149-jayentriken-bbwp-macd-ema-trend-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jayentriken-bbwp-macd-ema-trend-strategy",
+   "stratum": "hard",
+   "bin": 52,
+   "tvTrades": 593,
+   "tvRows": 1186,
+   "populationTvTradeRows": 593,
+   "window": [
+    "2025-04-02 03:00",
+    "2026-04-27 01:45"
+   ],
+   "tapeSha256": "df0fb4421556ded0349c79e1030d792551af239338ed1454c3f66763d655162f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "ahtisham-ee-decoded-volatility-expansion-ahtisham",
+    "projectsyndicate-strong-impulse-signals-projectsyndicate"
+   ]
+  },
+  {
+   "slot": "150-jdceagle-zigzag-de-fractales-williams",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jdceagle-zigzag-de-fractales-williams",
+   "stratum": "hard",
+   "bin": 98,
+   "tvTrades": 8491,
+   "tvRows": 16982,
+   "populationTvTradeRows": 8491,
+   "window": [
+    "2025-03-31 01:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "ef5cd1538cab6c6148a86260ffa7aba027ccf1d45f237231d1820bb541393827",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "masayanfx-scalping-london-new-york-strategy",
+    "willowsportz-pk-willow-pulse-ut-williams-live-movement",
+    "remarkablefreddy-scale-strat-trade-plan-wedge-trendlines"
+   ]
+  },
+  {
+   "slot": "151-jos-protrader-edward-smart-channel-reversal",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-channel-reversal",
+   "stratum": "hard",
+   "bin": 5,
+   "tvTrades": 16,
+   "tvRows": 32,
+   "populationTvTradeRows": 32,
+   "window": [
+    "2025-04-10 03:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "4b4e985c535f5f396740e38f50875f36fdf55380a251fba07d6ecb04e94496fc",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "heneralmomo25-selda-97ma",
+    "colasbreugnon-as-1m-smart-money-strategy",
+    "yubinzhang802-turtle-traders-strategy"
+   ]
+  },
+  {
+   "slot": "152-jos-protrader-edward-smart-liquidity-sweep",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-liquidity-sweep",
+   "stratum": "hard",
+   "bin": 69,
+   "tvTrades": 1040,
+   "tvRows": 2080,
+   "populationTvTradeRows": 2080,
+   "window": [
+    "2025-03-31 03:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "b2633e126d99262fa63a269f92008340b68173bef012375fdeb98a62d8ab686b",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "finntech1-event-horizon",
+    "skyricho-jake-bernstein-moving-average-channel-for-widget",
+    "bhajneek12-ema-dmi-macd-rsi-strategy"
+   ]
+  },
+  {
+   "slot": "153-jos-protrader-edward-smart-momentum-pro",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/jos-protrader-edward-smart-momentum-pro",
+   "stratum": "hard",
+   "bin": 30,
+   "tvTrades": 232,
+   "tvRows": 464,
+   "populationTvTradeRows": 464,
+   "window": [
+    "2025-03-31 12:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "0e12961404db3d76dcaa93d3b174104cedeb907f4862ced01e22d8a35bd6c842",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "crypto-imperija-adaptive-atr-trend-bands",
+    "wielkieef-rsi-volume-ladder",
+    "fran-pineda-strategy-250-xauusd-composite-quality-score"
+   ]
+  },
+  {
+   "slot": "154-khanhtq26-psol-01-donchian-channels",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/khanhtq26-psol-01-donchian-channels",
+   "stratum": "hard",
+   "bin": 38,
+   "tvTrades": 346,
+   "tvRows": 692,
+   "populationTvTradeRows": 692,
+   "window": [
+    "2025-04-02 09:15",
+    "2026-04-29 14:15"
+   ],
+   "tapeSha256": "25e37d1a6a2677d06dcc6912d6246ef9aed507fed5a0411fad5c37c286c93f32",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "atreynolds19-bollinger-bands-rsi-live-radar-strategy",
+    "sharpstrat-structure-break-chain-sbc-sharpstrat"
+   ]
+  },
+  {
+   "slot": "155-legalrice2697-nse-elite-strategy-v6-full-system",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/legalrice2697-nse-elite-strategy-v6-full-system",
+   "stratum": "hard",
+   "bin": 40,
+   "tvTrades": 362,
+   "tvRows": 724,
+   "populationTvTradeRows": 362,
+   "window": [
+    "2025-04-02 05:15",
+    "2026-04-29 12:00"
+   ],
+   "tapeSha256": "a41fa3ba8b671b093796ae0394b5d22aafb06a84fb38497749337c72fe5ec3dc",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "binodrawani-twb-5-30-setup-strategy",
+    "dthomas1026-dill-volume-slip-high-low-volume-buy-sell",
+    "trading4me79-nifty-success-analyst-strategy-v6-final"
+   ]
+  },
+  {
+   "slot": "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/m-f-atipey-hybrid-3-strategy-smart-system-v6-1",
+   "stratum": "hard",
+   "bin": 18,
+   "tvTrades": 132,
+   "tvRows": 264,
+   "populationTvTradeRows": 132,
+   "window": [
+    "2025-04-04 13:15",
+    "2026-04-07 22:45"
+   ],
+   "tapeSha256": "fb35b517cf9baa310687b6b65d106cfd8dbc68415ac7c938d678b41caf9ec4f8",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "quantbyboji-nq-hma-midday-strategy",
+    "mukhlisilahi-universal-backtest-pro-multi-strategy-timeframe-by-mucis",
+    "bnf6082-initial-balance-breakout-strategy"
+   ]
+  },
+  {
+   "slot": "157-madue2014-twe-2-bar-break-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/madue2014-twe-2-bar-break-strategy",
+   "stratum": "hard",
+   "bin": 95,
+   "tvTrades": 5999,
+   "tvRows": 11998,
+   "populationTvTradeRows": 5999,
+   "window": [
+    "2025-03-31 12:45",
+    "2026-04-30 23:45"
+   ],
+   "tapeSha256": "2d763d2180083269a1b2168f00083fb00da5c755096228b5d333e5e3cb85b175",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "fluxchart-supply-and-demand-zones-flux-charts",
+    "samb817-maket-strat-absorption-bubbles"
+   ]
+  },
+  {
+   "slot": "158-market-logic-india-low-lag-strength-oscillator",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/market-logic-india-low-lag-strength-oscillator",
+   "stratum": "hard",
+   "bin": 96,
+   "tvTrades": 6826,
+   "tvRows": 13652,
+   "populationTvTradeRows": 6826,
+   "window": [
+    "2025-03-31 14:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "10b7d0681384b3bbf7aa7f159d8daba1a9ff21c4c5254c1a55aae401aa03e053",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "vinafx-engulfing-zone-finder-box-by-vinafx",
+    "markittick-intra-candle-pressure-dissector-markittick",
+    "taro-s-c-c-ma-simplified-2-color"
+   ]
+  },
+  {
+   "slot": "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/mdfe3757-trade-strategy-v8-4-pine-v6-ready",
+   "stratum": "hard",
+   "bin": 54,
+   "tvTrades": 642,
+   "tvRows": 1284,
+   "populationTvTradeRows": 642,
+   "window": [
+    "2025-03-31 08:00",
+    "2026-04-30 19:45"
+   ],
+   "tapeSha256": "899a4319536ad3009d8327695e2fa65f8fc7ce1f05718d97a2ebc15fa78cd583",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "blackelonmuskonwebull-blackelonmusk-auto-chart-patterns-clean-volume-probability",
+    "3commas-btcusdt-p-grid-bot-long-strategy",
+    "3commas-3commas-xlm-grid-bot-long-strategy"
+   ]
+  },
+  {
+   "slot": "160-mehranazizi219-goldsiggy-murk",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/mehranazizi219-goldsiggy-murk",
+   "stratum": "hard",
+   "bin": 62,
+   "tvTrades": 819,
+   "tvRows": 1638,
+   "populationTvTradeRows": 1638,
+   "window": [
+    "2025-03-31 23:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "8033e451fd04f228c9a9efcde23be32b0c5630107046f5e6c1cd72e890e046b3",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "apkw82-sttrend-tp-lock-added",
+    "shiroi-supertrend-strategy-long-short",
+    "gntfrx-albtrader-nq-beast-supertrend-macd-rsi"
+   ]
+  },
+  {
+   "slot": "161-mylivingedge-gold-asian-range-breakout-signals",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/mylivingedge-gold-asian-range-breakout-signals",
+   "stratum": "hard",
+   "bin": 2,
+   "tvTrades": 4,
+   "tvRows": 8,
+   "populationTvTradeRows": 4,
+   "window": [
+    "2025-10-25 09:00",
+    "2026-03-05 12:00"
+   ],
+   "tapeSha256": "3d47e20f652222d6708d33f6a9f6ffef85602bdbe2625e7a30084ca4590ef3b1",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "meinnameaufxyz-percent-supertrend-strategy-long-only",
+    "market-logic-india-path-signature-regime-engine",
+    "version-eurgbp-daily-2025-strategy"
+   ]
+  },
+  {
+   "slot": "162-nicocashfx-prime-strategy-swing",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/nicocashfx-prime-strategy-swing",
+   "stratum": "hard",
+   "bin": 13,
+   "tvTrades": 73,
+   "tvRows": 146,
+   "populationTvTradeRows": 146,
+   "window": [
+    "2025-04-02 21:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "558bd968bf199f615bc6c0a9b9b0a9df023bfa4c79cdae2026e3d6d541c4a7a5",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "astongill-tjr-london-fakeout-strategy-free",
+    "3commas-bb-rsi-overbought-dca-short-strategy",
+    "elarisgroup-elaris-smart-pullback-hunter"
+   ]
+  },
+  {
+   "slot": "163-nightowlxtrader-azt-strategy-v11-first-draft",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/nightowlxtrader-azt-strategy-v11-first-draft",
+   "stratum": "hard",
+   "bin": 4,
+   "tvTrades": 13,
+   "tvRows": 26,
+   "populationTvTradeRows": 26,
+   "window": [
+    "2025-04-05 13:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "35de261d540d20c05e825a4b3745b67f82ed325e4666395f9ecf1c4f5c3976f7",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "version-eurusd-daily-2023-strategy",
+    "3commas-arb-rsi-short-strategy-3commas"
+   ]
+  },
+  {
+   "slot": "164-officialjackofalltrades-concordance-execution-mandate-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-execution-mandate-joat",
+   "stratum": "hard",
+   "bin": 23,
+   "tvTrades": 183,
+   "tvRows": 366,
+   "populationTvTradeRows": 183,
+   "window": [
+    "2025-05-27 12:15",
+    "2026-04-29 11:15"
+   ],
+   "tapeSha256": "162d062e3f698ae0f1ae7270dc74fe69bb351dee77827471f6c04f6f54470b3f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "fattyguinness-the-mean-goose-v1",
+    "syed-shah-hassan-ut-bot-alert-shah"
+   ]
+  },
+  {
+   "slot": "165-officialjackofalltrades-concordance-regime-synthesis-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-regime-synthesis-joat",
+   "stratum": "hard",
+   "bin": 97,
+   "tvTrades": 7021,
+   "tvRows": 14042,
+   "populationTvTradeRows": 7021,
+   "window": [
+    "2025-03-31 20:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "32e9558f7386f52d6f04ee5748ae1bfaf36a74683c7264942375a82cbbe84a92",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "van007trader-vwap-bands-dyna",
+    "trendmatrix-labs-trendmatrix-auto-period-trend-screener",
+    "taro-s-rsi-ma-signals-on-chart"
+   ]
+  },
+  {
+   "slot": "166-officialjackofalltrades-concordance-strategy-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-concordance-strategy-joat",
+   "stratum": "hard",
+   "bin": 53,
+   "tvTrades": 602,
+   "tvRows": 1204,
+   "populationTvTradeRows": 602,
+   "window": [
+    "2025-04-03 05:45",
+    "2026-04-29 13:45"
+   ],
+   "tapeSha256": "dbc7178f16c420792049a0c140684aaf4d21bff28bc9446396b0bce31bb952a3",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "tmtex-bos-fvg-retest-signals",
+    "bluealgocapital-supply-and-demand-zones-with-market-structure-jayadev-rana",
+    "officialjackofalltrades-tension-flow-rr-joat"
+   ]
+  },
+  {
+   "slot": "167-officialjackofalltrades-large-lot-reverse-engineer-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-large-lot-reverse-engineer-joat",
+   "stratum": "hard",
+   "bin": 61,
+   "tvTrades": 795,
+   "tvRows": 1590,
+   "populationTvTradeRows": 1590,
+   "window": [
+    "2025-04-01 08:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "5378ef7b100eac763c4572ebbc06ea4754f428bca57131a9186edbc88932be92",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "version-sk-system-zigzag-fib-system-live-breakout-smc-with-bc-retest",
+    "vikprimus-volume-pressure-support-resistance-proxy"
+   ]
+  },
+  {
+   "slot": "168-officialjackofalltrades-parallax-covenant-strategy-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-parallax-covenant-strategy-joat",
+   "stratum": "hard",
+   "bin": 68,
+   "tvTrades": 1002,
+   "tvRows": 2004,
+   "populationTvTradeRows": 1002,
+   "window": [
+    "2025-03-31 17:30",
+    "2026-04-30 07:45"
+   ],
+   "tapeSha256": "a53a06f0b34c84343a8eddf86243ed522848dd4ca40c229077dc91513f640d59",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "forexcracked-adaptive-supertrend-forexcracked",
+    "uptrick-uptrick-dynamic-trend-matrix",
+    "3commas-3commas-ena-grid-bot-long-strategy"
+   ]
+  },
+  {
+   "slot": "169-officialjackofalltrades-regime-execution-strategy-joat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/officialjackofalltrades-regime-execution-strategy-joat",
+   "stratum": "hard",
+   "bin": 59,
+   "tvTrades": 766,
+   "tvRows": 1532,
+   "populationTvTradeRows": 766,
+   "window": [
+    "2025-03-31 05:00",
+    "2026-04-30 07:30"
+   ],
+   "tapeSha256": "9caf8c59de0d78ea0129f21b6c44c67f43fb5c2947c754e4019a61360049423f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "stockhunter2025-btcusd-4h-ema-swing-strategy",
+    "b3ar-trades-ehlers-dominant-cycle-stochastic-rsi-v2",
+    "pipstomcapital-pipstorm-va"
+   ]
+  },
+  {
+   "slot": "170-ollie-b-ollie-asia-sweep-model",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/ollie-b-ollie-asia-sweep-model",
+   "stratum": "hard",
+   "bin": 0,
+   "tvTrades": 1,
+   "tvRows": 2,
+   "populationTvTradeRows": 1,
+   "window": [
+    "2025-05-19 07:30",
+    "2025-05-19 23:15"
+   ],
+   "tapeSha256": "a37e7b2d2fdc139d80292e2c74337c6fcb15fe4fc5b7843169b374c893b98d94",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "jespi0611-nq-21-ema-root-pullback-v4-strong-confirmation",
+    "jlall7892-btc-smart-pullback-liquidity-adaptive-rsi"
+   ]
+  },
+  {
+   "slot": "171-options7700-2min-bullish-confluence",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/options7700-2min-bullish-confluence",
+   "stratum": "hard",
+   "bin": 70,
+   "tvTrades": 1106,
+   "tvRows": 2212,
+   "populationTvTradeRows": 1106,
+   "window": [
+    "2025-04-01 02:45",
+    "2026-04-29 12:15"
+   ],
+   "tapeSha256": "4ba142f754ed950853ef47e08b9dbd6d435c0d5a5b3c4bcd5e0cd8681ed2398e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "jamarcusallen12-marks-key-times-order-blocks-eqh-eql",
+    "evrinb7716-liquidity-entry-zones-strategy-2-0",
+    "rupasgavane-hemant-gold-strategy"
+   ]
+  },
+  {
+   "slot": "172-projectsyndicate-strong-breakout-signals-projectsyndicate",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/projectsyndicate-strong-breakout-signals-projectsyndicate",
+   "stratum": "hard",
+   "bin": 75,
+   "tvTrades": 1521,
+   "tvRows": 3042,
+   "populationTvTradeRows": 1521,
+   "window": [
+    "2025-03-31 09:00",
+    "2026-04-30 07:30"
+   ],
+   "tapeSha256": "6bce492018d5c005c9e10ea67b732041128a20c9f84de174b17bbbed4de118ba",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "projectsyndicate-strong-candlestick-patterns-projectsyndicate",
+    "wayward-bison-vumanchu-wt-zero-cross-strategy-v1-2-3",
+    "burnerview-amit-eth-strategy"
+   ]
+  },
+  {
+   "slot": "173-quantitativealpha-strategy-forecast-engine",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/quantitativealpha-strategy-forecast-engine",
+   "stratum": "hard",
+   "bin": 80,
+   "tvTrades": 1849,
+   "tvRows": 3698,
+   "populationTvTradeRows": 1849,
+   "window": [
+    "2025-03-31 15:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "2902d118afaae0df4d0487eb288a6862d63728ba8ddeaa441b945940ad647930",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "ycelestine77-ll-momentum-and-curl-master",
+    "alby1611-bollinger-bands-simple-strategy"
+   ]
+  },
+  {
+   "slot": "174-quantnomad-ut-bot-v2-atr-trailing-stop",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/quantnomad-ut-bot-v2-atr-trailing-stop",
+   "stratum": "hard",
+   "bin": 93,
+   "tvTrades": 4330,
+   "tvRows": 8660,
+   "populationTvTradeRows": 4330,
+   "window": [
+    "2025-03-31 05:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "123d42cbc023fa64d9f176facbcb9728c1756aa13d9cdf0bbc1c6283895afeff",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "antoniolinux-obv-with-sma-and-max-50gg",
+    "van007trader-quick-reversal-candles-dyna",
+    "systemsoverfeelings-fisher-smoothed-vzo-overlay"
+   ]
+  },
+  {
+   "slot": "175-rakesh-09-edge-confirmation-system",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/rakesh-09-edge-confirmation-system",
+   "stratum": "hard",
+   "bin": 42,
+   "tvTrades": 386,
+   "tvRows": 772,
+   "populationTvTradeRows": 386,
+   "window": [
+    "2025-04-01 15:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "ab3c5632fdd515797d3165507f9291e8103a1187577c7dc50079317b69dd18c4",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "harshshodhan59-w-m-pattern-3-peaks-rr-tool",
+    "briancurry-egan-s-pure-structure-s-d-strategy-backtest"
+   ]
+  },
+  {
+   "slot": "176-rakesh-09-edge-confirmation-system-ecs-v2-0",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/rakesh-09-edge-confirmation-system-ecs-v2-0",
+   "stratum": "hard",
+   "bin": 48,
+   "tvTrades": 484,
+   "tvRows": 968,
+   "populationTvTradeRows": 484,
+   "window": [
+    "2025-04-01 15:15",
+    "2026-04-30 12:15"
+   ],
+   "tapeSha256": "3bc793f22ca93f4d17aa17fb98fa7758210b4d71f88b44d57caf786e6f32246c",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "aborkan89-abo-rkan-final",
+    "shurben5-tradingview-bot-trailing-15-min",
+    "chawarat-mb-10-in-1-mas-dashboard-buy-sell-v7"
+   ]
+  },
+  {
+   "slot": "177-rampatel9912-super-rsi-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/rampatel9912-super-rsi-strategy",
+   "stratum": "hard",
+   "bin": 87,
+   "tvTrades": 2846,
+   "tvRows": 5692,
+   "populationTvTradeRows": 5692,
+   "window": [
+    "2025-03-31 03:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "8e6feb2fb569ccbabb7e0b7837caddd308bfff771caa4c9aaf49b9c8d0659a5b",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "fullravivla-alligator-cross-signals-false-signals",
+    "almesnedabdulaziz-hunter-oci-all-session",
+    "chillcrypto-flipped-inverted-z-score-subpane"
+   ]
+  },
+  {
+   "slot": "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/remarkablefreddy-ultimate-smc-emas-day-trading-strategy",
+   "stratum": "hard",
+   "bin": 50,
+   "tvTrades": 519,
+   "tvRows": 1038,
+   "populationTvTradeRows": 1038,
+   "window": [
+    "2025-04-02 09:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "66c24dc31710bdbc8fc8dea110979c0a1dfee80069d652949f3fa9e083cb06d2",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "arun-rajan-institutional-ob-entry-exit-sl-strategy",
+    "mrwicktrading-big-daddy-max-orb-strategy",
+    "chadsingh-orb-fib-breakout-signals-strategy"
+   ]
+  },
+  {
+   "slot": "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3",
+   "stratum": "hard",
+   "bin": 28,
+   "tvTrades": 220,
+   "tvRows": 440,
+   "populationTvTradeRows": 220,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "4f8f5c54dea1bceae1d2df7b2b8af1eca14c20d89f65696c2a33fb13184a83ce",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "raphaeltay-dual-cof-4h-45m-802",
+    "jevondijefferson-big-breakout-strategy"
+   ]
+  },
+  {
+   "slot": "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target",
+   "stratum": "hard",
+   "bin": 34,
+   "tvTrades": 291,
+   "tvRows": 582,
+   "populationTvTradeRows": 291,
+   "window": [
+    "2025-04-02 13:45",
+    "2026-04-30 17:15"
+   ],
+   "tapeSha256": "6dba604af33d82c91ba8e1cccfaecb8f5ea751e71d60a1e59a8f979a41d15f85",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "lukeborgerding-orb-avwap-retest-strategy",
+    "patelanishp-adaptive-dual-engine-strategy-momentum-mean-reversion-bt",
+    "van007trader-momentum-shift-detector-dyna"
+   ]
+  },
+  {
+   "slot": "181-roi10x-shiva-lt-ls-blend",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/roi10x-shiva-lt-ls-blend",
+   "stratum": "hard",
+   "bin": 85,
+   "tvTrades": 2411,
+   "tvRows": 4822,
+   "populationTvTradeRows": 4822,
+   "window": [
+    "2025-03-31 03:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "6c763c9981988a8b7ecf83b7f82cde10bce1e72296362052aeb695d6ad581922",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "officialjackofalltrades-concord-execution-mandate-joat",
+    "fran-pineda-strategy-461-ts-m15"
+   ]
+  },
+  {
+   "slot": "182-sadtrader9-fair-value-gap-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/sadtrader9-fair-value-gap-strategy",
+   "stratum": "hard",
+   "bin": 89,
+   "tvTrades": 3031,
+   "tvRows": 6062,
+   "populationTvTradeRows": 3031,
+   "window": [
+    "2025-03-31 00:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "83562f5e9939d5bb3b46c4d6250865746142624c6ac5f581df5b3d11104d1016",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "kev444-gcc-macd-mtf-dashboard-horizontal-clean-dynamic-macd",
+    "shiroi-macd-crossover-strategy-long-short",
+    "taro-s-macd-crossover-signal"
+   ]
+  },
+  {
+   "slot": "183-shiroi-macd-zero-line-candles-alert",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/shiroi-macd-zero-line-candles-alert",
+   "stratum": "hard",
+   "bin": 72,
+   "tvTrades": 1302,
+   "tvRows": 2604,
+   "populationTvTradeRows": 1302,
+   "window": [
+    "2025-03-31 12:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "59fc16aab36492137f7d6ef51636f9c95e469cfdeda406ae9297af17509971f6",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "shiroi-macd-zero-line-background-alert",
+    "dj-siggis-jd-0w-1w-siggi-v10-ultimativ",
+    "markittick-alpha-signal-engine-pro-markittick"
+   ]
+  },
+  {
+   "slot": "184-shurben5-tradingview-bot-goat",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/shurben5-tradingview-bot-goat",
+   "stratum": "hard",
+   "bin": 66,
+   "tvTrades": 958,
+   "tvRows": 1916,
+   "populationTvTradeRows": 958,
+   "window": [
+    "2025-04-02 03:00",
+    "2026-04-30 22:45"
+   ],
+   "tapeSha256": "1ca3df719c412f5fe7d7d1b64b8e7f3b5135d9e643f8b7eee40839e34ead3514",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "jenmb-sma-standard-deviation-for-entry-and-tp-2-exit-ema-tp3-exit",
+    "officialjackofalltrades-concordance-execution-model-joat"
+   ]
+  },
+  {
+   "slot": "185-simon20cent-efi-macd-advanced-pro",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/simon20cent-efi-macd-advanced-pro",
+   "stratum": "hard",
+   "bin": 82,
+   "tvTrades": 2153,
+   "tvRows": 4306,
+   "populationTvTradeRows": 4306,
+   "window": [
+    "2025-03-31 10:15",
+    "2026-04-30 18:00"
+   ],
+   "tapeSha256": "0145051b6a6392793a7b9801ae9c37537e2e55d95cac93a7d272d56e011a57a5",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "patelanishp-ema-macd-trend-decision-table",
+    "gopidanielnaidu-bommisetty-signal",
+    "adxae-ema-40-pullback-pyramid-strategy"
+   ]
+  },
+  {
+   "slot": "186-tharris235106-reversal-signals-with-profit-target-and-continuation",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/tharris235106-reversal-signals-with-profit-target-and-continuation",
+   "stratum": "hard",
+   "bin": 8,
+   "tvTrades": 36,
+   "tvRows": 72,
+   "populationTvTradeRows": 72,
+   "window": [
+    "2025-04-02 20:30",
+    "2026-04-29 04:30"
+   ],
+   "tapeSha256": "241f592f42c5c80f3d3e84627e1ff191b9e7f80dead2eef13c62eb332ca7a845",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "3commas-3commas-amzn-rsi-oversold-doubling-dca-long-strategy",
+    "secretmorina-post-absorption-vwap-reversal-engine-v1-6",
+    "sonluu1994-8-30-texas-clean-signal-htf-volume-asian-london-time"
+   ]
+  },
+  {
+   "slot": "187-thebitcoin37-9-15-ema-strategy-trade-room",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/thebitcoin37-9-15-ema-strategy-trade-room",
+   "stratum": "hard",
+   "bin": 26,
+   "tvTrades": 202,
+   "tvRows": 404,
+   "populationTvTradeRows": 202,
+   "window": [
+    "2025-04-02 20:15",
+    "2026-04-29 20:30"
+   ],
+   "tapeSha256": "2e3c8b31c5f2ee258f169d73434dcf0eb565c55320fb2dbeffe8b9e6a569612c",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "3commas-3commas-jup-grid-bot-long-strategy",
+    "pickmytrade-official-institutional-liquidity-sweep-pickmytrade",
+    "fran-pineda-strategy-432-btc-donchian-breakout-continuation"
+   ]
+  },
+  {
+   "slot": "188-theforexguy0777-9-ema-20-ema-retest-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/theforexguy0777-9-ema-20-ema-retest-strategy",
+   "stratum": "hard",
+   "bin": 73,
+   "tvTrades": 1372,
+   "tvRows": 2744,
+   "populationTvTradeRows": 1372,
+   "window": [
+    "2025-03-31 05:45",
+    "2026-04-30 09:30"
+   ],
+   "tapeSha256": "d407ee2f37382b4b11a9c9c54abc4528c1c60c085456229865b4ddfe5bb70e8e",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "gaganparida-gagan-ut-super-buy",
+    "gate3121-pre-breakout-scanner-volume-compression",
+    "muratkbesiroglu-kaufman-moving-average-adaptive-strategy-by-mkb"
+   ]
+  },
+  {
+   "slot": "189-therealbouga-apex-mtf-index-model",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/therealbouga-apex-mtf-index-model",
+   "stratum": "hard",
+   "bin": 19,
+   "tvTrades": 144,
+   "tvRows": 288,
+   "populationTvTradeRows": 144,
+   "window": [
+    "2025-04-25 10:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "1067250911c0c0611fbc9d95d1273d9a1018dd4d776a7d9e51515e4bfdebeae4",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "louislapis9-rr-master-lc",
+    "fran-pineda-strategy-470-ny-open-3h-sweep-continuation"
+   ]
+  },
+  {
+   "slot": "190-tomukasss-engulfing-mitigation-strategy",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/tomukasss-engulfing-mitigation-strategy",
+   "stratum": "hard",
+   "bin": 11,
+   "tvTrades": 53,
+   "tvRows": 106,
+   "populationTvTradeRows": 53,
+   "window": [
+    "2025-04-02 03:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "7adaa39541ec9aa2ef4dd018a6d1820e0e48076917f11a115b5d7f44fc7b9f91",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "tradingcontoto-tradingcontoto-dca",
+    "imtiyazali73-liquidity-reversal-map-pro",
+    "markittick-market-weariness-spectrum-indicator-markittick"
+   ]
+  },
+  {
+   "slot": "191-tomukasss-trend-pivot-scale-in",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/tomukasss-trend-pivot-scale-in",
+   "stratum": "hard",
+   "bin": 32,
+   "tvTrades": 269,
+   "tvRows": 538,
+   "populationTvTradeRows": 269,
+   "window": [
+    "2025-04-02 20:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "a51689fd85d654683af0026ff8259e60c85adf6aac44a01b73bb3d2e96a75440",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "algotorma-algo-torma-orb-strategy",
+    "egoigor1976-axis-reversal",
+    "nq370-vcgz-bot-clean-v3-3-stable-scored"
+   ]
+  },
+  {
+   "slot": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
+   "stratum": "hard",
+   "bin": 21,
+   "tvTrades": 157,
+   "tvRows": 314,
+   "populationTvTradeRows": 314,
+   "window": [
+    "2025-04-01 15:00",
+    "2026-04-30 22:00"
+   ],
+   "tapeSha256": "eb6c4c90987bd9090bf2d5665fb79f7963a014bc9ee5dc27516bf8dcf275d70f",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
+    "bigbeluga-volume-trend-order-block-engine-bigbeluga",
+    "3commas-3commas-xrp-grid-bot-long-strategy"
+   ]
+  },
+  {
+   "slot": "193-ttagkoin-adaptive-multi-facto-9-years",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/ttagkoin-adaptive-multi-facto-9-years",
+   "stratum": "hard",
+   "bin": 92,
+   "tvTrades": 3394,
+   "tvRows": 6788,
+   "populationTvTradeRows": 3394,
+   "window": [
+    "2025-03-31 03:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "ac21f1959f98a2eb2711d522e1dd942a289c95c858bd040423545d78a310bb64",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "latibonit15-execution-signals-confluence-strategy",
+    "stevenygabbyperez-fast-scalper-with-stops",
+    "chartprime-power-order-blocks-chartprime"
+   ]
+  },
+  {
+   "slot": "194-usamotorcars-sedat-xi-crypto-ai-bias-engine",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/usamotorcars-sedat-xi-crypto-ai-bias-engine",
+   "stratum": "hard",
+   "bin": 56,
+   "tvTrades": 657,
+   "tvRows": 1314,
+   "populationTvTradeRows": 1314,
+   "window": [
+    "2025-03-31 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "6ecd25c1dd87250f6c6511c82ba2beb8b3aed6f30fdcaa161e13638671b4ca50",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "viprasol-apex-trend-signal-engine-viprasol",
+    "jespi0611-nq-ema-vwap-strategy",
+    "hossa-nostra-ho55a-engine-regime"
+   ]
+  },
+  {
+   "slot": "195-van007trader-micro-momentum-oscillator-dyna",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/van007trader-micro-momentum-oscillator-dyna",
+   "stratum": "hard",
+   "bin": 57,
+   "tvTrades": 712,
+   "tvRows": 1424,
+   "populationTvTradeRows": 1424,
+   "window": [
+    "2025-03-31 10:00",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "a03734b09e8e7591e8ddc4df9350cdb70095b08f4e3dcf635b41efa99bb100b9",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "thulashimohanr-prev-day-week-levels-or-vwap-strategy",
+    "nishkumar11-danzanger-breakout-candle-highlighter-by-nish"
+   ]
+  },
+  {
+   "slot": "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2",
+   "stratum": "hard",
+   "bin": 17,
+   "tvTrades": 111,
+   "tvRows": 222,
+   "populationTvTradeRows": 111,
+   "window": [
+    "2025-04-02 09:15",
+    "2026-04-26 14:15"
+   ],
+   "tapeSha256": "ef07e394221d88e362c2229903ba9df7bae70a9cdc6da463148eb7653eb08eee",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "abhivish-rsi-exact-divergence-strategy-extreme-zones",
+    "alpha-wizard-channel-volume-profil",
+    "gainzalgo-smart-ichimoku-gainzalgo"
+   ]
+  },
+  {
+   "slot": "197-waranyutrkm-asian-box-breakout-eda-tuned",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/waranyutrkm-asian-box-breakout-eda-tuned",
+   "stratum": "hard",
+   "bin": 16,
+   "tvTrades": 110,
+   "tvRows": 220,
+   "populationTvTradeRows": 110,
+   "window": [
+    "2025-05-19 17:00",
+    "2026-04-29 18:00"
+   ],
+   "tapeSha256": "ce754b2aac7ab489d3765df80afbbc6c5f15a92c70ab12311313d9c24102f7a6",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "wtomala75-nas100-ema-scalper",
+    "oliver1002-wyckoff-structural-events-trend-filter",
+    "3commas-3commas-pullback-sniper-strategy"
+   ]
+  },
+  {
+   "slot": "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8",
+   "stratum": "hard",
+   "bin": 12,
+   "tvTrades": 72,
+   "tvRows": 144,
+   "populationTvTradeRows": 72,
+   "window": [
+    "2025-04-10 12:30",
+    "2026-04-11 16:30"
+   ],
+   "tapeSha256": "662500339d6e9aab01e326aa28b54089a37532ddde025289f9eb1965c886c1bd",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "neurodoc-cascade-dca-spot-long-strategy",
+    "maziblend35-market-bias-30m",
+    "3commas-rsi-oversold-ao-long-strategy"
+   ]
+  },
+  {
+   "slot": "199-yahmis13-nyo-day-type-early-read",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/yahmis13-nyo-day-type-early-read",
+   "stratum": "hard",
+   "bin": 6,
+   "tvTrades": 26,
+   "tvRows": 52,
+   "populationTvTradeRows": 52,
+   "window": [
+    "2025-04-03 00:30",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "b58f470210e9fd5b7f793b1ba37042c36a2b190b905843679624e5c199a895b9",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "dr-ziuber-bb-short-dca-strategy",
+    "thinkswell-smart-circuit-detector",
+    "aetheredge-aetheredge-pattern-edge-learner"
+   ]
+  },
+  {
+   "slot": "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils",
+   "stratum": "hard",
+   "bin": 51,
+   "tvTrades": 533,
+   "tvRows": 1066,
+   "populationTvTradeRows": 533,
+   "window": [
+    "2025-04-02 09:15",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "fc2881f774bbc9398336a1981b2014fd365f30505cebd8e019fade35e7968364",
+   "license": "TradingView scraped, not redistributed",
+   "replacements": [
+    "onderarslantas107-market-projection",
+    "alirichh-ahlenaz",
+    "r87-84-acceleration-wyckoff-balanced-v6"
+   ]
+  }
+ ]
+}

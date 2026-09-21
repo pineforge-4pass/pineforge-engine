@@ -73,3 +73,7 @@ docs/production-readiness-findings.md
 # Reusable CI cache and retained diagnostics (never source bundles)
 .ccache/
 ci-diagnostics/
+
+# Closed (TradingView-scraped, not redistributable) benchmark slots: maintainer-local only,
+# published to the maintainers' evidence store as a tarball (sha in benchmarks/results/selection.md).
+benchmarks/assets-closed/
