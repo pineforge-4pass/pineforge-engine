@@ -19,6 +19,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -322,6 +323,227 @@ int pf_twin_run_c_cancel_where(pf_twin_cancel_where* out) {
     rc = strategy_native_run_v1(state.host, bars, n, NULL);
     out->completed = (rc == PF_NATIVE_OK) ? 1 : 0;
     strategy_native_host_free(state.host);
+    return state.command_error;
+}
+
+/* ── The pyramid arm (N18): open lots through the C API ─────────── */
+
+typedef struct pyramid_state {
+    pf_strategy_t   host;
+    int             calculations;
+    int             command_error;  /* first non-zero status a command returned. */
+    int             failures;       /* refusal rows checked inside the callback. */
+    pf_twin_result* out;
+} pyramid_state;
+
+static void copy_text(char* dst, const char* src) {
+    size_t n = src ? strlen(src) : 0;
+    if (n >= PF_TWIN_TEXT) n = PF_TWIN_TEXT - 1;
+    memset(dst, 0, PF_TWIN_TEXT);
+    if (n) memcpy(dst, src, n);
+}
+
+static void observe_lots(pyramid_state* state, double mark) {
+    pf_twin_result* out = state->out;
+    pf_twin_observation* obs;
+    int count, i;
+    if (out->observation_count >= PF_TWIN_OBSERVATIONS) return;
+    obs = &out->observations[out->observation_count++];
+    memset(obs, 0, sizeof(*obs));
+    obs->calculation = state->calculations;
+    count = strategy_native_open_lot_count_v1(state->host, mark);
+    obs->count = count;
+    for (i = 0; i < count && i < PF_TWIN_MAX_LOTS; ++i) {
+        pf_native_open_lot_v1 row;
+        pf_twin_lot* lot = &obs->lots[i];
+        memset(&row, 0, sizeof(row));
+        row.struct_size = (uint32_t)sizeof(row);
+        if (strategy_native_open_lot_get_v1(state->host, i, &row) != PF_NATIVE_OK) {
+            if (state->command_error == 0) state->command_error = -2000 - i;
+            continue;
+        }
+        lot->ordinal = row.ordinal;
+        lot->entry_incarnation = row.entry_incarnation;
+        lot->cycle = row.cycle;
+        lot->side = row.side;
+        lot->entry_bar_index = row.entry_bar_index;
+        lot->entry_time_ms = row.entry_time_ms;
+        lot->entry_price = row.entry_price;
+        lot->signed_units = row.signed_units;
+        lot->entry_commission = row.entry_commission;
+        lot->mark = row.mark;
+        lot->unrealized_pnl = row.unrealized_pnl;
+        lot->favorable_excursion = row.favorable_excursion;
+        lot->adverse_excursion = row.adverse_excursion;
+        copy_text(lot->entry_label, row.entry_label);
+        copy_text(lot->entry_comment, row.entry_comment);
+        /* The row is its own version and its own size. */
+        if (row.struct_size != sizeof(row) || row.version != PF_NATIVE_API_VERSION) {
+            if (state->command_error == 0) state->command_error = -3000 - i;
+        }
+    }
+}
+
+/* Inside a callback there is no global CHECK context; see LCHECK below. */
+#define PCHECK(state, cond, msg)                                               \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, (msg));    \
+            ++(state)->failures;                                               \
+        }                                                                      \
+    } while (0)
+
+static int pyramid_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    pyramid_state* state = (pyramid_state*)user;
+    pf_native_request_v1 request;
+    int rc = PF_NATIVE_OK;
+    (void)at;
+    ++state->calculations;
+
+    /* Observations first: the book the previous command left. */
+    if (state->calculations == PF_TWIN_PYRAMID_OBSERVE_A
+        || state->calculations == PF_TWIN_PYRAMID_OBSERVE_B
+        || state->calculations == PF_TWIN_PYRAMID_OBSERVE_C
+        || state->calculations == PF_TWIN_PYRAMID_OBSERVE_D) {
+        observe_lots(state, bar->close);
+    }
+    if (state->calculations == PF_TWIN_PYRAMID_OBSERVE_A) {
+        /* The documented refusals, and a NaN mark: booking facts kept, the
+         * marked P&L NaN, the label still borrowed from the new snapshot. */
+        pf_native_open_lot_v1 row;
+        const double nan = strtod("nan", NULL);
+        int n;
+        memset(&row, 0, sizeof(row));
+        row.struct_size = (uint32_t)sizeof(row);
+        PCHECK(state, strategy_native_open_lot_get_v1(state->host, 3, &row) == PF_NATIVE_E_ARGUMENT,
+               "an out-of-range open-lot index was not refused");
+        PCHECK(state, strategy_native_open_lot_get_v1(state->host, -1, &row) == PF_NATIVE_E_ARGUMENT,
+               "a negative open-lot index was not refused");
+        PCHECK(state, strategy_native_open_lot_get_v1(state->host, 0, NULL) == PF_NATIVE_E_ARGUMENT,
+               "a NULL open-lot row was not refused");
+        row.struct_size = (uint32_t)sizeof(row) + 8u;
+        PCHECK(state, strategy_native_open_lot_get_v1(state->host, 0, &row) == PF_NATIVE_E_STRUCT,
+               "a mis-sized open-lot row was not refused");
+        n = strategy_native_open_lot_count_v1(state->host, nan);
+        PCHECK(state, n == 3, "a NaN mark changed the row count");
+        memset(&row, 0, sizeof(row));
+        row.struct_size = (uint32_t)sizeof(row);
+        if (strategy_native_open_lot_get_v1(state->host, 0, &row) == PF_NATIVE_OK) {
+            PCHECK(state, row.unrealized_pnl != row.unrealized_pnl, "a NaN mark did not leave the P&L NaN");
+            PCHECK(state, row.mark != row.mark, "a NaN mark was not reported as NaN");
+            PCHECK(state, row.entry_label != NULL && strcmp(row.entry_label, "L1") == 0,
+                   "a NaN mark lost the entry label");
+            PCHECK(state, row.signed_units == 1.0, "a NaN mark lost the units");
+        } else {
+            PCHECK(state, 0, "open_lot_get refused row 0 after a NaN-mark snapshot");
+        }
+        /* Restore the marked snapshot the record compares. */
+        PCHECK(state, strategy_native_open_lot_count_v1(state->host, bar->close) == 3,
+               "the re-marked snapshot has another row count");
+    }
+
+    request = blank_request();
+    switch (state->calculations) {
+    case PF_TWIN_PYRAMID_L1:
+        request.intent = PF_NATIVE_INTENT_TRANSACT; request.intent_value = 1.0;
+        request.label = "L1"; request.comment = "first";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    case PF_TWIN_PYRAMID_L2:
+        request.intent = PF_NATIVE_INTENT_TRANSACT; request.intent_value = 2.0;
+        request.label = "L2"; request.comment = "second";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    case PF_TWIN_PYRAMID_L3:
+        request.intent = PF_NATIVE_INTENT_TRANSACT; request.intent_value = 1.0;
+        request.label = "L3"; request.comment = "third";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    case PF_TWIN_PYRAMID_PARTIAL:
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+        request.intent_value = 1.5;
+        request.label = "partial";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    case PF_TWIN_PYRAMID_REVERSE:
+        request.intent = PF_NATIVE_INTENT_REVERSE_TO; request.intent_value = -1.0;
+        request.label = "REV"; request.comment = "flip";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    case PF_TWIN_PYRAMID_FLAT:
+        request.intent = PF_NATIVE_INTENT_FLATTEN;
+        request.label = "flat";
+        rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+        break;
+    default:
+        break;
+    }
+    if (rc != PF_NATIVE_OK && state->command_error == 0) state->command_error = rc;
+    return 0;
+}
+
+int pf_twin_run_c_pyramid(pf_twin_result* out) {
+    pyramid_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_report_t report;
+    const pf_bar_t* bars;
+    int n = 0;
+    int rc;
+    int i;
+
+    memset(out, 0, sizeof(*out));
+    memset(&state, 0, sizeof(state));
+    memset(&report, 0, sizeof(report));
+    state.out = out;
+    spec.fee_kind = 2;   /* CashPerExecution */
+    spec.fee_value = PF_TWIN_PYRAMID_FEE;
+
+    table = blank_callbacks(&state);
+    table.on_bar = pyramid_on_bar;
+
+    state.host = strategy_native_host_create_v1(&table);
+    if (!state.host) return -1;
+    if (strategy_configure_native_v1(state.host, &spec) != 0) {
+        strategy_native_host_free(state.host);
+        return -2;
+    }
+
+    bars = pf_twin_bars(&n);
+    rc = strategy_native_run_v1(state.host, bars, n, &report);
+    out->completed = (rc == PF_NATIVE_OK) ? 1 : 0;
+
+    out->trade_count = report.total_trades;
+    if (out->trade_count > PF_TWIN_MAX_TRADES) out->trade_count = PF_TWIN_MAX_TRADES;
+    for (i = 0; i < out->trade_count; ++i) {
+        out->trades[i].entry_price = report.trades[i].entry_price;
+        out->trades[i].exit_price = report.trades[i].exit_price;
+        out->trades[i].qty = report.trades[i].qty;
+        out->trades[i].pnl = report.trades[i].pnl;
+        out->trades[i].entry_time = report.trades[i].entry_time;
+        out->trades[i].exit_time = report.trades[i].exit_time;
+        out->trades[i].is_long = report.trades[i].is_long;
+        out->trade_commission[i] = report.trades[i].commission;
+        out->trade_max_runup[i] = report.trades[i].max_runup;
+        out->trade_max_drawdown[i] = report.trades[i].max_drawdown;
+    }
+    strategy_native_report_free_v1(&report);
+
+    strategy_native_position_v1(state.host, &out->signed_units, &out->average_price,
+                                &out->lots);
+    /* After the run the book is flat: the snapshot is empty from outside a
+     * callback too, and a foreign handle is refused. */
+    if (strategy_native_open_lot_count_v1(state.host, 100.0) != 0 && state.command_error == 0) {
+        state.command_error = -4000;
+    }
+    if (strategy_native_open_lot_count_v1(NULL, 100.0) != PF_NATIVE_E_HANDLE
+        && state.command_error == 0) {
+        state.command_error = -4001;
+    }
+    collect_events(state.host, out);
+    strategy_native_host_free(state.host);
+    if (state.failures != 0 && state.command_error == 0) state.command_error = -5000 - state.failures;
     return state.command_error;
 }
 

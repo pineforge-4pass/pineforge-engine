@@ -14,7 +14,9 @@
  * ✓ Create / free a native host backed by a C callback table
  * ✓ Run a batch of OHLCV bars and fill a pf_report_t
  * ✓ submit / replace / cancel / cancel_all / cancel_where / execute_current
- * ✓ Read the physical position, the live working book and the event history
+ * ✓ Read the physical position, the live working book, the open lots (the
+ *   book lot by lot, marked at a price — strategy.opentrades.* for a C host)
+ *   and the event history
  * ✓ Read the run's lifecycle state and its typed failure
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
  * ✓ Declare an auxiliary finer feed, build a series from it, and append its
@@ -750,6 +752,46 @@ typedef struct pf_native_working_v1 {
     const char* comment;      /**< Borrowed; see the struct note. */
 } pf_native_working_v1;
 
+/** One open physical lot, copied out by #strategy_native_open_lot_get_v1 —
+ *  the C spelling of `NativeOpenLot` (R5 gap lane N18): the book that
+ *  #strategy_native_position_v1 aggregates, lot by lot, marked at the price
+ *  #strategy_native_open_lot_count_v1 was given. Every field is what the
+ *  kernel already holds for the lot; reading it moves nothing.
+ *
+ *  `unrealized_pnl` is the lot's own term of the marked equity: the move from
+ *  `entry_price` to `mark`, in account currency, less `entry_commission`.
+ *  The two excursions are the largest moves for and against the lot the
+ *  kernel has sampled along the delivered path, in account currency, gross
+ *  of fees, with `mark` folded in. A NaN `mark` keeps every booking fact,
+ *  leaves `unrealized_pnl` NaN and folds nothing into the excursions.
+ *
+ *  `entry_label` and `entry_comment` borrow the snapshot taken by the most
+ *  recent #strategy_native_open_lot_count_v1 call on this handle. They stay
+ *  valid until the next call to that function, or until the host is freed;
+ *  copy them if the host keeps them longer. */
+typedef struct pf_native_open_lot_v1 {
+    uint32_t struct_size;        /**< sizeof(pf_native_open_lot_v1). */
+    uint32_t version;            /**< PF_NATIVE_API_VERSION. */
+    uint64_t ordinal;            /**< Position in the book, oldest first. */
+    uint64_t entry_incarnation;  /**< The request whose fill opened the lot; never
+                                  *   reused; 0 only for a legacy synthetic lot. */
+    int64_t  cycle;              /**< The position cycle the lot belongs to — the
+                                  *   `owner_cycle` a BIND_OPENING(S) request names. */
+    uint32_t side;               /**< #pf_native_side_e. */
+    int32_t  entry_bar_index;    /**< Script-bar index of the opening fill. */
+    int64_t  entry_time_ms;      /**< Effective time of the opening fill. */
+    double   entry_price;        /**< Booked entry price. */
+    double   signed_units;       /**< Remaining units: > 0 long, < 0 short. */
+    double   entry_commission;   /**< Entry fee still on the lot, account currency;
+                                  *   a partial realization takes its share with it. */
+    double   mark;               /**< The price the three fields below were marked at. */
+    double   unrealized_pnl;     /**< Fee-net move to `mark`, account currency; NaN for a NaN mark. */
+    double   favorable_excursion; /**< Largest move for the lot so far, account currency, >= 0. */
+    double   adverse_excursion;  /**< Largest move against the lot so far, account currency, >= 0. */
+    const char* entry_label;     /**< Borrowed; see the struct note. */
+    const char* entry_comment;   /**< Borrowed; see the struct note. */
+} pf_native_open_lot_v1;
+
 /** The run's lifecycle and its typed failure. */
 typedef struct pf_native_state_v1 {
     uint32_t struct_size;      /**< sizeof(pf_native_state_v1). */
@@ -1411,6 +1453,27 @@ PF_API int strategy_native_working_len_v1(pf_strategy_t s);
  *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status. */
 PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
                                           pf_native_working_v1* out);
+
+/** Snapshot the open lots marked at @p mark and return their count.
+ *
+ *  The C spelling of `NativeStrategyHost::native_open_lots(mark)` (R5 gap
+ *  lane N18). The snapshot is retained on the handle:
+ *  #strategy_native_open_lot_get_v1 reads from it, so a row already copied
+ *  out is not invalidated by a later command; the next call to this function
+ *  replaces it. Observation only — it moves no fill, no hash and no row — and
+ *  legal wherever #strategy_native_position_v1 is. A NaN @p mark keeps every
+ *  booking fact and leaves `unrealized_pnl` NaN.
+ *  @return The row count (>= 0), or a negative status. */
+PF_API int strategy_native_open_lot_count_v1(pf_strategy_t s, double mark);
+
+/** Copy row @p index of the most recent open-lot snapshot into @p out.
+ *
+ *  @p out is an in/out size prefix: set `out->struct_size` to
+ *  `sizeof(pf_native_open_lot_v1)` before the call. Everything else is filled.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for an out-of-range index,
+ *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status. */
+PF_API int strategy_native_open_lot_get_v1(pf_strategy_t s, int index,
+                                           pf_native_open_lot_v1* out);
 
 /** Copy up to @p cap events with an ordinal strictly greater than
  *  @p after_ordinal into @p out, in the kernel's own recording order.

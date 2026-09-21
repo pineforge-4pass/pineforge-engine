@@ -106,6 +106,8 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_position_v1",
     "strategy_native_working_len_v1",
     "strategy_native_working_get_v1",
+    "strategy_native_open_lot_count_v1",
+    "strategy_native_open_lot_get_v1",
     "strategy_native_events_v1",
     "strategy_native_state_v1",
     "strategy_native_cancel_where_v1",
@@ -125,8 +127,8 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_append_auxiliary_bars_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 30
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 30
+EXPECTED_NATIVE_C_API_DECLARATIONS = 32
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 32
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

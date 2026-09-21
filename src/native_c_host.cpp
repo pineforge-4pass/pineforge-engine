@@ -205,6 +205,12 @@ public:
         return working_cache_;
     }
 
+    /* N18: the open-lot snapshot the copy-out reads from. Host-side only,
+     * like working_cache_: never durable engine state, never hashed. */
+    std::vector<pineforge::NativeOpenLot>& open_lot_cache() noexcept {
+        return open_lot_cache_;
+    }
+
     pf_native_decision_v1 decision(const pineforge::NativeDecisionContext& ctx) const;
 
 private:
@@ -434,6 +440,7 @@ private:
 
     pf_native_callbacks_v1 table_{};
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
+    std::vector<pineforge::NativeOpenLot> open_lot_cache_;
 };
 
 pf_native_decision_v1 CCallbackHost::decision(
@@ -1023,6 +1030,29 @@ std::uint32_t working_trigger_tag(const no::Trigger& trigger, double& p1, double
             return PF_NATIVE_TRIGGER_TRAIL;
         }
     }, trigger);
+}
+
+/* N18: one NativeOpenLot row into its C POD. The strings borrow the cached
+ * snapshot exactly as fill_working's label/comment do. */
+void fill_open_lot(const pineforge::NativeOpenLot& lot, pf_native_open_lot_v1& out) {
+    std::memset(&out, 0, sizeof(out));
+    out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+    out.version = PF_NATIVE_API_VERSION;
+    out.ordinal = static_cast<std::uint64_t>(lot.ordinal);
+    out.entry_incarnation = lot.entry_incarnation;
+    out.cycle = lot.cycle;
+    out.side = static_cast<std::uint32_t>(lot.side);
+    out.entry_bar_index = lot.entry_bar_index;
+    out.entry_time_ms = lot.entry_time_ms;
+    out.entry_price = lot.entry_price;
+    out.signed_units = lot.signed_units;
+    out.entry_commission = lot.entry_commission;
+    out.mark = lot.mark;
+    out.unrealized_pnl = lot.unrealized_pnl;
+    out.favorable_excursion = lot.favorable_excursion;
+    out.adverse_excursion = lot.adverse_excursion;
+    out.entry_label = lot.entry_label.c_str();
+    out.entry_comment = lot.entry_comment.c_str();
 }
 
 void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working_v1& out) {
@@ -1689,6 +1719,31 @@ PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
             return PF_NATIVE_E_ARGUMENT;
         }
         fill_working(cache[static_cast<std::size_t>(index)], *out);
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_open_lot_count_v1(pf_strategy_t s, double mark) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        host->open_lot_cache() = host->native_open_lots(mark);
+        return static_cast<int>(host->open_lot_cache().size());
+    });
+}
+
+PF_API int strategy_native_open_lot_get_v1(pf_strategy_t s, int index,
+                                           pf_native_open_lot_v1* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        if (out->struct_size != sizeof(pf_native_open_lot_v1)) return PF_NATIVE_E_STRUCT;
+        const auto& cache = host->open_lot_cache();
+        if (index < 0 || static_cast<std::size_t>(index) >= cache.size()) {
+            return PF_NATIVE_E_ARGUMENT;
+        }
+        fill_open_lot(cache[static_cast<std::size_t>(index)], *out);
         return PF_NATIVE_OK;
     });
 }
