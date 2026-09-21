@@ -340,6 +340,11 @@ elseif(PINEFORGE_BUILD_BENCH_STRATEGIES)
         "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/assets/strategies/CMakeLists.txt")
     if(EXISTS "${_bench_strat_cmake}")
         add_subdirectory(benchmarks/assets/strategies)
+        # Maintainer-local closed slots (TradingView-scraped, never public):
+        # built into the same bench_strategies target when the root exists.
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/assets-closed/strategies/CMakeLists.txt")
+            add_subdirectory(benchmarks/assets-closed/strategies)
+        endif()
     else()
         message(FATAL_ERROR
             "PINEFORGE_BUILD_BENCH_STRATEGIES=ON but "

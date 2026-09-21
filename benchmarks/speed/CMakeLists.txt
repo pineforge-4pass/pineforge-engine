@@ -41,5 +41,6 @@ target_compile_features(pineforge_bench PRIVATE cxx_std_17)
 # closed-source codegen required.
 target_compile_definitions(pineforge_bench PRIVATE
     BENCH_STRATEGIES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/assets/strategies"
+    BENCH_CLOSED_STRATEGIES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/assets-closed/strategies"
     BENCH_OHLCV_PATH="${CMAKE_SOURCE_DIR}/benchmarks/assets/data/ETHUSDT_15.csv"
 )

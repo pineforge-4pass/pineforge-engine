@@ -23,3 +23,7 @@ else:
     ASSETS = BENCH
 STRATEGIES = ASSETS / "strategies"
 DATA = ASSETS / "data"
+# Maintainer-local closed slots (TradingView-scraped, never public); absent in
+# public checkouts, where STRATEGY_ROOTS is the public root alone.
+CLOSED_STRATEGIES = BENCH / "assets-closed" / "strategies"
+STRATEGY_ROOTS = [STRATEGIES] + ([CLOSED_STRATEGIES] if CLOSED_STRATEGIES.is_dir() else [])

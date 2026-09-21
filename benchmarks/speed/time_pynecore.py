@@ -5,8 +5,10 @@ Output: JSON {strategy: {median_ms, p95_ms, n}} to stdout.
 Includes interpreter startup + framework import time, which is the
 realistic per-strategy cost for a Python-runtime engine.
 
-Strategies 51-75 lack strategy_pyne.py (PyneSys quota exhaustion); those
-are skipped gracefully when the subprocess returns non-zero.
+A slot without strategy_pyne.py (a PyneSys compile rejection) is skipped
+gracefully when the subprocess returns non-zero. ``--slots`` (slot-number
+ranges) and ``--out`` let a long sweep run in chunks whose JSON files merge
+by key.
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCH = REPO_ROOT / "benchmarks"
 sys.path.insert(0, str(BENCH))
-from paths import STRATEGIES  # noqa: E402
+from paths import STRATEGY_ROOTS  # noqa: E402
 
 DEFAULT_N = 20
 
@@ -62,15 +64,28 @@ def main() -> None:
                     help="Filter: only time strategies whose name contains this string")
     ap.add_argument("--workers", type=int, default=8,
                     help="Number of concurrent workers (default: 8)")
+    ap.add_argument("--slots", default=None,
+                    help="slot-number ranges to time, e.g. 1-50,120 (default: all)")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="also write the JSON to this file")
     args = ap.parse_args()
+    wanted: set[int] | None = None
+    if args.slots:
+        wanted = set()
+        for part in args.slots.split(","):
+            a, _, b = part.partition("-")
+            wanted.update(range(int(a), int(b or a) + 1))
 
     strat_dirs = []
-    for d in sorted(STRATEGIES.iterdir()):
-        if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
-            continue
-        if args.only and args.only not in d.name:
-            continue
-        strat_dirs.append(d)
+    for root in STRATEGY_ROOTS:
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
+                continue
+            if args.only and args.only not in d.name:
+                continue
+            if wanted is not None and int(d.name.split("-", 1)[0]) not in wanted:
+                continue
+            strat_dirs.append(d)
 
     out: dict[str, dict] = {}
 
@@ -93,6 +108,9 @@ def main() -> None:
 
     # Sort final output alphabetically by strategy name
     sorted_out = {k: out[k] for k in sorted(out.keys())}
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(sorted_out, indent=2) + "\n")
     json.dump(sorted_out, sys.stdout, indent=2)
     print(file=sys.stdout)  # trailing newline
 

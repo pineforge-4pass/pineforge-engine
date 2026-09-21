@@ -18,9 +18,19 @@
 #   SKIP_BUILD          — skip the runtime + bench-strategy build step
 #   SKIP_PYNE           — skip PyneCore strategy + indicator runs
 #   SKIP_PINETS         — skip PineTS indicator run
-#   SKIP_PINEFORGE      — skip PineForge trade regeneration
+#   SKIP_PINEFORGE      — skip PineForge trade regeneration and its canonical indicator run
 #   SKIP_SPEED          — skip the per-strategy speed sweep (pineforge_bench + timers)
 #   SKIP_REPORTS        — skip the compare.py / compare_indicators.py step
+#   SKIP_VECTORBT       — skip the vectorbt trades + timing (slots shipping strategy_vbt.py)
+#   JOBS                — parallel PineForge / PyneCore parity runs (default 1; timing never parallelizes further)
+#   QUIET_LOAD_MAX      — before each timing batch, wait until the 1-minute load average is below
+#                         this and no cmake --build / ctest / ci_verify runs (poll 60 s, up to
+#                         QUIET_WAIT_S, default 14400); unset = record the load and go on.
+#                         Loads land in _workdir/speed_loads.tsv and speed.md's header.
+#
+# Maintainer-local closed slots (benchmarks/assets-closed/strategies, never
+# public) join every loop when that directory exists; without it the run is the
+# public assets alone.
 #
 # Maintenance scripts (refresh OHLCV, add new bench slots, refresh
 # strategy_pyne.py, re-emit generated.cpp) are NOT part of this script —
@@ -36,6 +46,9 @@ else
     BENCH_ASSETS="${BENCH_DIR}"
 fi
 STRATEGIES_DIR="${BENCH_ASSETS}/strategies"
+CLOSED_STRATEGIES_DIR="${BENCH_DIR}/assets-closed/strategies"
+STRATEGY_ROOTS=("${STRATEGIES_DIR}")
+[[ -d "${CLOSED_STRATEGIES_DIR}" ]] && STRATEGY_ROOTS+=("${CLOSED_STRATEGIES_DIR}")
 ROOT_DIR="$(cd "${BENCH_DIR}/.." && pwd)"
 WORKDIR="${BENCH_DIR}/_workdir"
 
@@ -45,8 +58,8 @@ log()  { printf '\033[1;34m[bench]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bench]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
 
-if [[ ! -f "${STRATEGIES_DIR}/01-sma-cross/strategy.pine" ]]; then
-    fail "benchmark fixtures missing (expected ${STRATEGIES_DIR}/01-sma-cross/strategy.pine).
+if ! compgen -G "${STRATEGIES_DIR}/[0-9]*-*/strategy.pine" >/dev/null; then
+    fail "benchmark fixtures missing (expected ${STRATEGIES_DIR}/<NNN-slug>/strategy.pine).
 
 TV-linked strategy folders and OHLCV live in the private benchmarks/assets
 submodule (init: git submodule update --init benchmarks/assets).
@@ -105,42 +118,58 @@ if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
         "${LIVE_CSV}" >/dev/null
 fi
 
+# Every slot directory of every root, in slot order.
+slot_dirs() {
+    local root
+    for root in "${STRATEGY_ROOTS[@]}"; do
+        ls -d "${root}"/[0-9]*-*/ 2>/dev/null
+    done | sed 's:/$::'
+}
+
+# One parity run per slot; a failure leaves <slot>/_<engine>_error.log (its
+# stderr) for compare.py to report, a success removes it.
+run_pineforge_one() {
+    local s="$1" extra=()
+    [[ -f "$s/strategy.dylib" || -f "$s/strategy.so" ]] || return 0
+    # Per-slot run flags the graded TV run needs (e.g. --allow-trading-before-window).
+    [[ -f "$s/run_strategy.args" ]] && read -r -a extra < "$s/run_strategy.args"
+    if python3 "${ROOT_DIR}/scripts/run_strategy.py" "$s" \
+            --ohlcv "${SNAPSHOT_CSV}" \
+            --output "$s/pineforge_trades.csv" ${extra[@]+"${extra[@]}"} \
+            >/dev/null 2>"$s/_pineforge_error.log"; then
+        rm -f "$s/_pineforge_error.log"
+    fi
+}
+run_pynecore_one() {
+    local s="$1"
+    if python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>"$s/_pynecore_error.log"; then
+        rm -f "$s/_pynecore_error.log"
+    fi
+}
+export -f run_pineforge_one run_pynecore_one
+export ROOT_DIR BENCH_DIR SNAPSHOT_CSV
+
 # --- 3c) regenerate PineForge trades on the extended OHLCV ----------
 # Reads strategy.dylib built by cmake --target bench_strategies (step 1).
 # Drives scripts/run_strategy.py (engine-level harness) per strategy dir.
 
 if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
-    n_strats=$(ls -d "${STRATEGIES_DIR}"/[0-9][0-9]*-*/ 2>/dev/null | wc -l | tr -d ' ')
-    log "regenerating PineForge trades for ${n_strats} strategies"
-    failed=()
-    for s in "${STRATEGIES_DIR}"/[0-9][0-9]*-*/; do
-        s="${s%/}"
-        [[ -f "$s/strategy.dylib" || -f "$s/strategy.so" ]] || continue
-        if ! python3 "${ROOT_DIR}/scripts/run_strategy.py" "$s" \
-                --ohlcv "${SNAPSHOT_CSV}" \
-                --output "$s/pineforge_trades.csv" >/dev/null 2>&1; then
-            failed+=("$(basename "$s")")
-        fi
-    done
-    if (( ${#failed[@]} > 0 )); then
-        warn "PineForge regen failed on ${#failed[@]} strategies (${failed[*]})"
+    log "regenerating PineForge trades for $(slot_dirs | wc -l | tr -d ' ') strategies (JOBS=${JOBS:-1})"
+    slot_dirs | xargs -P "${JOBS:-1}" -I{} bash -c 'run_pineforge_one "$1"' _ {}
+    failed=$(slot_dirs | while read -r s; do [[ -f "$s/_pineforge_error.log" ]] && basename "$s"; done || true)
+    if [[ -n "${failed}" ]]; then
+        warn "PineForge regen failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
     fi
 fi
 
 # --- 3d) run all strategies through PyneCore ------------------------
 
 if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
-    n_strats=$(ls -d "${STRATEGIES_DIR}"/[0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
-    log "running ${n_strats} strategies through PyneCore"
-    failed=()
-    for s in "${STRATEGIES_DIR}"/[0-9][0-9]-*/; do
-        s="${s%/}"
-        if ! python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>&1; then
-            failed+=("$(basename "$s")")
-        fi
-    done
-    if (( ${#failed[@]} > 0 )); then
-        warn "PyneCore runtime failed on ${#failed[@]} strategies: ${failed[*]}"
+    log "running $(slot_dirs | wc -l | tr -d ' ') strategies through PyneCore (JOBS=${JOBS:-1})"
+    slot_dirs | xargs -P "${JOBS:-1}" -I{} bash -c 'run_pynecore_one "$1"' _ {}
+    failed=$(slot_dirs | while read -r s; do [[ -f "$s/_pynecore_error.log" ]] && basename "$s"; done || true)
+    if [[ -n "${failed}" ]]; then
+        warn "PyneCore runtime failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
     fi
 
     log "running canonical indicators through PyneCore"
@@ -148,6 +177,13 @@ if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
         "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
         "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
         --plot "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" >/dev/null
+fi
+
+# --- 3e) vectorbt trades (slots that ship a strategy_vbt.py port) ------
+
+if [[ "${SKIP_VECTORBT:-0}" != "1" ]]; then
+    log "writing vectorbt trades for the slots that ship strategy_vbt.py"
+    (cd "${BENCH_DIR}" && uv run python speed/time_vectorbt.py --write-trades >/dev/null)
 fi
 
 # --- 4) run canonical indicators through PineTS ----------------------
@@ -159,26 +195,49 @@ fi
 
 # --- 5) build + run PineForge canonical indicator runner -------------
 
-CANON_BIN="${BENCH_DIR}/runners/run_pineforge_canonical"
-if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" ]]; then
-    log "building PineForge canonical indicator runner"
-    c++ -std=c++17 -O2 -I "${ROOT_DIR}/include" \
-        "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" \
-        -L "${ROOT_DIR}/build/lib" \
-        -Wl,-force_load,"${ROOT_DIR}/build/lib/libpineforge.a" \
-        -o "${CANON_BIN}"
+if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
+    CANON_BIN="${BENCH_DIR}/runners/run_pineforge_canonical"
+    if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" ]]; then
+        log "building PineForge canonical indicator runner"
+        c++ -std=c++17 -O2 -I "${ROOT_DIR}/include" \
+            "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" \
+            -L "${ROOT_DIR}/build/lib" \
+            -Wl,-force_load,"${ROOT_DIR}/build/lib/libpineforge.a" \
+            -o "${CANON_BIN}"
+    fi
+    log "running canonical indicators through PineForge"
+    # Prefer the extended OHLCV (matches the trade-list comparison feed);
+    # the C++ binary takes input and output CSV paths.
+    (cd "${BENCH_DIR}" && "${CANON_BIN}" \
+        "${WORKDIR}/data/ETHUSDT_15.csv" \
+        "${STRATEGIES_DIR}/_indicators/canonical_pineforge.csv" >/dev/null)
 fi
-log "running canonical indicators through PineForge"
-# Prefer the extended OHLCV (matches the trade-list comparison feed);
-# the C++ binary takes input and output CSV paths.
-(cd "${BENCH_DIR}" && "${CANON_BIN}" \
-    "${WORKDIR}/data/ETHUSDT_15.csv" \
-    "${STRATEGIES_DIR}/_indicators/canonical_pineforge.csv" >/dev/null)
 
 # --- 6) speed sweep ---------------------------------------------------
 
+# Record the host load before a timing batch (and, with QUIET_LOAD_MAX, wait
+# for a quiet host first). One line per batch in _workdir/speed_loads.tsv.
+quiet_gate() {
+    local label="$1" waited=0 load busy
+    while :; do
+        load=$( (sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg) | tr -d '{}' | awk '{print $1}')
+        busy=$(ps -axo command | grep -E 'ctest|cmake --build|ci_verify' | grep -vc grep || true)
+        if [[ -z "${QUIET_LOAD_MAX:-}" ]] \
+           || { awk -v l="${load}" -v m="${QUIET_LOAD_MAX}" 'BEGIN { exit !(l < m) }' && [[ "${busy}" == 0 ]]; }; then
+            break
+        fi
+        (( waited >= ${QUIET_WAIT_S:-14400} )) && fail "host never quiet before ${label}: load ${load}, busy ${busy}"
+        sleep 60
+        waited=$((waited + 60))
+    done
+    printf '%s\t%s\t%s\t%s\n' "${label}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${load}" "${busy}" \
+        >> "${WORKDIR}/speed_loads.tsv"
+    log "timing batch ${label}: 1-min load ${load}, build/test processes ${busy}"
+}
+
 if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
     log "running per-strategy speed sweep"
+    : > "${WORKDIR}/speed_loads.tsv"
     if [[ "${RUNNER:-native}" == "docker" ]]; then
         # SECONDARY path: time PineForge inside the pineforge-release image
         # (run_json.py --bench → raw samples_ns). GBench (native) stays the
@@ -197,17 +256,29 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
         fi
         cmake --build "${ROOT_DIR}/build" --target pineforge_bench -j >/dev/null \
             || fail "speed harness build failed (configure with -DPINEFORGE_BUILD_SPEED_BENCH=ON)"
+        quiet_gate pineforge
         "${ROOT_DIR}/build/bin/pineforge_bench" \
+            --benchmark_filter='/throughput/with_magnifier' \
             --benchmark_format=json > "${WORKDIR}/pf_speed.json"
         PF_FMT=gbench
     fi
+    quiet_gate pynecore
     (cd "${BENCH_DIR}" && uv run python speed/time_pynecore.py) > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
+    quiet_gate pinets
     (cd "${BENCH_DIR}" && node speed/time_pinets.mjs) > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
+    VBT_ARGS=()
+    if [[ "${SKIP_VECTORBT:-0}" != "1" ]]; then
+        quiet_gate vectorbt
+        (cd "${BENCH_DIR}" && uv run python speed/time_vectorbt.py --out "${WORKDIR}/vbt_speed.json") \
+            >/dev/null 2>"${WORKDIR}/vbt_speed.err"
+        VBT_ARGS=(--vectorbt "${WORKDIR}/vbt_speed.json")
+    fi
     (cd "${BENCH_DIR}" && uv run python speed/aggregate.py \
         --pineforge "${WORKDIR}/pf_speed.json" \
         --pineforge-format "${PF_FMT}" \
         --pynecore  "${WORKDIR}/pc_speed.json" \
-        --pinets    "${WORKDIR}/pt_speed.json")
+        --pinets    "${WORKDIR}/pt_speed.json" \
+        --loads     "${WORKDIR}/speed_loads.tsv" ${VBT_ARGS[@]+"${VBT_ARGS[@]}"})
 fi
 
 # --- 7) reports -------------------------------------------------------

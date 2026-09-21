@@ -231,24 +231,28 @@ void register_strategy(const std::string& slug, const std::string& dylib_path) {
 
 // ---------------------------------------------------------------------------
 // main: enumerate BENCH_STRATEGIES_DIR/<slug>/strategy.dylib (or .so on
-// Linux), register one benchmark per found dylib, then hand off to GBench.
+// Linux) and, when it exists, BENCH_CLOSED_STRATEGIES_DIR likewise; register
+// one benchmark per found dylib, then hand off to GBench.
 // ---------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
-    fs::path root(BENCH_STRATEGIES_DIR);
+    // The public slots, then the maintainer-local closed slots when present.
+    for (const fs::path root : {fs::path(BENCH_STRATEGIES_DIR),
+                                fs::path(BENCH_CLOSED_STRATEGIES_DIR)}) {
+        if (!fs::is_directory(root)) continue;
+        for (auto& entry : fs::directory_iterator(root)) {
+            if (!entry.is_directory()) continue;
+            const auto name = entry.path().filename().string();
+            // Skip hidden dirs and _indicator/meta folders that have no dylib.
+            if (name.empty() || name[0] == '_' || name[0] == '.') continue;
 
-    for (auto& entry : fs::directory_iterator(root)) {
-        if (!entry.is_directory()) continue;
-        const auto name = entry.path().filename().string();
-        // Skip hidden dirs and _indicator/meta folders that have no dylib.
-        if (name.empty() || name[0] == '_' || name[0] == '.') continue;
+            // Prefer .dylib (macOS); fall back to .so (Linux).
+            fs::path dylib = entry.path() / "strategy.dylib";
+            if (!fs::exists(dylib)) dylib = entry.path() / "strategy.so";
+            if (!fs::exists(dylib)) continue;  // skip silently (e.g. compile failure)
 
-        // Prefer .dylib (macOS); fall back to .so (Linux).
-        fs::path dylib = entry.path() / "strategy.dylib";
-        if (!fs::exists(dylib)) dylib = entry.path() / "strategy.so";
-        if (!fs::exists(dylib)) continue;  // skip silently (e.g. compile failure)
-
-        register_strategy(name, dylib.string());
+            register_strategy(name, dylib.string());
+        }
     }
 
     benchmark::Initialize(&argc, argv);

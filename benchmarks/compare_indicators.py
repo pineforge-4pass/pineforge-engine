@@ -13,7 +13,9 @@ per-bar absolute and relative deltas, and reports:
   - p50, p90, p99, max relative delta
   - count of bars where any engine returned NA but the others didn't
 
-Output: benchmarks/results/indicator_comparison.md
+Output: benchmarks/results/indicator_comparison.md (``--out`` to write
+elsewhere; ``--pending-pineforge TEXT`` leaves the PineForge pairs out and
+prints TEXT in their place, e.g. when staging the other engines first).
 
 Treats early bars (before each indicator's warmup window) where engines
 disagree on NA-ness as a known semantic divergence — counted but not
@@ -21,6 +23,7 @@ counted as a defect.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import math
 import os
@@ -143,39 +146,57 @@ def render_pair_table(name_a: str, name_b: str, stats: dict[str, dict]) -> str:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--pending-pineforge", default=None,
+                    help="leave the PineForge pairs out; their sections read this text")
+    args = ap.parse_args()
+    out = args.out.resolve()
+    with_pf = args.pending_pineforge is None
+
     pf_path = INDIR / "canonical_pineforge.csv"
     pc_path = INDIR / "canonical_pyne.csv"
     pt_path = INDIR / "canonical_pinets.csv"
 
-    missing = [p.name for p in (pf_path, pc_path, pt_path) if not p.exists()]
+    needed = (pf_path, pc_path, pt_path) if with_pf else (pc_path, pt_path)
+    missing = [p.name for p in needed if not p.exists()]
     if missing:
         print(f"missing input files: {missing}")
         print("expected:")
-        for p in (pf_path, pc_path, pt_path):
+        for p in needed:
             print(f"  {p}")
         return 1
 
-    print(f"loading {pf_path.name}…")
-    pf = load_csv(pf_path)
+    pf = None
+    if with_pf:
+        print(f"loading {pf_path.name}…")
+        pf = load_csv(pf_path)
     print(f"loading {pc_path.name}…")
     pc = load_csv(pc_path)
     print(f"loading {pt_path.name}…")
     pt = load_csv(pt_path)
-    print(f"  PineForge: {len(pf)} bars")
+    if pf is not None:
+        print(f"  PineForge: {len(pf)} bars")
     print(f"  PyneCore:  {len(pc)} bars")
     print(f"  PineTS:    {len(pt)} bars")
 
-    s_pf_pc = diff_two(pf, pc)
-    s_pf_pt = diff_two(pf, pt)
+    s_pf_pc = diff_two(pf, pc) if pf is not None else None
+    s_pf_pt = diff_two(pf, pt) if pf is not None else None
     s_pc_pt = diff_two(pc, pt)
 
+    def pair(name_a: str, name_b: str, stats: dict | None) -> str:
+        if stats is None:
+            return f"### {name_a} ↔ {name_b}\n\n⏳ {args.pending_pineforge}\n"
+        return render_pair_table(name_a, name_b, stats)
+
     pine_src = INDIR / "canonical.pine"
-    pine_href = _md_relpath(OUT.parent, pine_src)
+    pine_href = _md_relpath(out.parent, pine_src)
     sections = [
         "# Indicator comparison\n",
         "All three engines compute the canonical indicator script "
         f"([canonical.pine]({pine_href})) "
-        "on the same 36,361-bar OHLCV feed. This table reports per-bar "
+        f"on the same {len(pc):,}-bar OHLCV feed. This table reports per-bar "
         "absolute and relative deltas across every pair of engines.\n",
         "**NA columns** count bars where one engine reported a number "
         "but the other was still in its warmup window (or vice versa). "
@@ -186,17 +207,20 @@ def main() -> int:
         "**Both-num columns** are the bars where both engines emitted a "
         "value. The relative-delta percentiles are computed only over "
         "those bars.\n",
-        render_pair_table("PineForge", "PyneCore", s_pf_pc),
-        render_pair_table("PineForge", "PineTS",   s_pf_pt),
-        render_pair_table("PyneCore",  "PineTS",   s_pc_pt),
+        pair("PineForge", "PyneCore", s_pf_pc),
+        pair("PineForge", "PineTS",   s_pf_pt),
+        pair("PyneCore",  "PineTS",   s_pc_pt),
     ]
 
-    OUT.parent.mkdir(exist_ok=True)
-    OUT.write_text("\n".join(sections), encoding="utf-8")
-    print(f"\nwrote {OUT.relative_to(REPO_ROOT)}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(sections), encoding="utf-8")
+    print(f"\nwrote {out.relative_to(REPO_ROOT)}")
 
     print("\nsummary (max-rel across all 10 indicators):")
     for label, stats in (("PF↔PC", s_pf_pc), ("PF↔PT", s_pf_pt), ("PC↔PT", s_pc_pt)):
+        if stats is None:
+            print(f"  {label}: {args.pending_pineforge}")
+            continue
         worst = max(s["max_rel"] for s in stats.values())
         print(f"  {label}: {fmt_e(worst)}")
     return 0
