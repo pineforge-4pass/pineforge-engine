@@ -929,15 +929,49 @@ bracket.take_profit = take_profit_request;  // limit leg
 bracket.stop_loss = stop_loss_request;      // stop leg
 bracket.trail = trail_request;              // optional trailing leg
 const tk::BracketReceipt legs = tk::submit_bracket(*this, bracket);
+if (!legs.every_requested_leg_accepted()) { /* a leg this entry needs is not resting */ }
 ```
 
 Each present leg is submitted as the parent's `WaitForApplied` child in one
 OCA group — group id the parent's incarnation, one cohort per leg, the
 caller's `sibling_effect` (default `Cancel`) — in take-profit, stop-loss,
 trail order. That is exactly the owner/group shape a host would write by
-hand, and the legs' own intent, trigger and anchor are left untouched. The
-receipt reports the handle each leg was accepted under; a rejected leg stays
-empty and the others are still submitted.
+hand, and the legs' own intent, trigger and anchor are left untouched. A leg
+the kernel refuses does not stop the others: the remaining legs are still
+submitted.
+
+The receipt says what became of every leg, and nothing about a bracket is
+silent. `legs.take_profit` / `.stop_loss` / `.trail` are the handles the legs
+rest under and are empty otherwise, so beside each one the receipt carries a
+`BracketLegOutcome` — `legs.outcome(tk::BracketLeg::StopLoss)`, or the
+`*_outcome` member — whose `state` is one of four:
+
+| `BracketLegState` | what it means | `handle()` | `reason()` |
+| --- | --- | --- | --- |
+| `NotRequested` | the spec left the leg unset; nothing was submitted | — | — |
+| `NotSubmitted` | the leg was asked for, but `spec.parent` was never allocated, so the builder sent nothing and the kernel gave no verdict | — | — |
+| `Accepted` | the kernel accepted it | the handle | — |
+| `Rejected` | the kernel refused it | — | its `RequestRejectReason` |
+
+`BracketLegOutcome::result` is the kernel's own `SubmitResult` verbatim —
+status, event ordinal, handle, reason — so the toolkit spells a refusal in no
+vocabulary of its own; `state` is that status widened by the two cases in
+which no submit happened. `every_requested_leg_accepted()` is the one
+question a host must ask before it treats the bracket as placed: reading only
+the optional handles cannot tell a leg that was never asked for from one the
+kernel refused, and a refused exit leg that goes unread leaves a position
+running without the protection its strategy believes it placed.
+`examples/native/native_bracket_strategy.cpp` reads and asserts every leg.
+
+The toolkit is C++-only and has no C spelling. It is header-only composition
+over the public request surface — `std::optional`, the request variants, a
+class template — that emits no library symbol and adds no kernel behaviour,
+so there is nothing for `native_c_api.h` to export. A C host composes the
+same bracket from the primitives the C API already carries:
+`strategy_native_submit_v1` per leg with `PF_NATIVE_OWNER_WAIT_FOR_APPLIED`
+and `PF_NATIVE_GROUP_MEMBER`, which returns `PF_NATIVE_E_REJECTED` with the
+same `RequestRejectReason` written out — the refusal this receipt surfaces in
+C++ is already unmissable there, one call at a time.
 
 Two more knobs cover anchored legs, both defaulting to "leave the leg as
 written": `bracket.anchor_rounding` (an optional `NativeAnchorRounding`,

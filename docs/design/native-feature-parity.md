@@ -976,7 +976,9 @@ struct ReplaceOptions { bool retain_trigger_state = false; };          // O: kee
 // include/pineforge/native_toolkit.hpp — header-only, Pine-free, covered by the include-independence checker (F; shapes from S P1)
 struct BracketSpec    { native_order::RequestHandle parent; std::optional<native_order::Request> take_profit, stop_loss, trail;
                         native_order::GroupEffect sibling_effect = native_order::GroupEffect::Cancel; };
-struct BracketReceipt { native_order::RequestHandle parent; std::optional<native_order::RequestHandle> take_profit, stop_loss, trail; };
+struct BracketLegOutcome { BracketLegState state; std::optional<native_order::SubmitResult> result; };  // gap lane E8
+struct BracketReceipt { native_order::RequestHandle parent; std::optional<native_order::RequestHandle> take_profit, stop_loss, trail;
+                        BracketLegOutcome take_profit_outcome, stop_loss_outcome, trail_outcome; };
 BracketReceipt submit_bracket(NativeStrategyHost&, const BracketSpec&);   // emits exactly the owner / group shapes of OL10
 template <class Key> class OrderBook;                                     // id -> handle: submit-or-replace, cancel-by-id
 ```

@@ -252,7 +252,12 @@ once. Natively they are separate and each is nameable:
 
 `submit_bracket` native_toolkit.hpp:87 places the three legs of a
 `BracketSpec` native_toolkit.hpp:37 in one call and hands back a
-`BracketReceipt`; `native_bracket_strategy.cpp` is the runnable version. In C
+`BracketReceipt`, which reports **every** leg: beside the handle it rests
+under, a `BracketLegOutcome` saying whether the leg was never requested, never
+submitted (no allocated parent), accepted, or refused with the kernel's own
+`RequestRejectReason`. Pine drops a leg it cannot place without telling the
+script; a native host reads `every_requested_leg_accepted()`.
+`native_bracket_strategy.cpp` is the runnable version. In C
 each leg is its own `strategy_native_submit_v1` native_c_api.h:1431 with
 `PF_NATIVE_OWNER_WAIT_FOR_APPLIED` native_c_api.h:329 — with one documented
 narrowing: `first_match` and `scope` are not exposed there, so a C bracket
