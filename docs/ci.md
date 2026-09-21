@@ -120,6 +120,99 @@ FX, and missing-Cancelled controls are active, and the good caller compiles
 before its intentional negative compile control. Ordinary compile failures
 remain failures, separate from ABI link rejections.
 
+## TradingView parity: the corpus gate
+
+Every profile in `scripts/ci_verify.py` configures
+`PINEFORGE_BUILD_CORPUS_STRATEGIES=OFF`, so no profile above compiles or runs a
+single corpus strategy. TradingView parity — the property the validation corpus
+exists to prove — is gated by its own workflow,
+[`.github/workflows/corpus-parity.yml`](../.github/workflows/corpus-parity.yml),
+and by one local command:
+
+```sh
+./scripts/check_corpus_parity.sh
+```
+
+It checks the corpus submodule out **at the gitlink this repository records**,
+refuses to start if a pinned input under `validation/` is modified, builds the
+runtime and all 312 corpus strategies, re-runs every one, and then applies two
+gates:
+
+1. **Byte-identity.** Every `engine_trades.csv` must hash to what
+   `scripts/corpus_parity_baseline.txt` pins
+   (`scripts/corpus_trades_identity.py`). A probe whose hash moved is named
+   with its expected and produced sha256 and the first rows of its file that
+   differ from the pinned corpus tape.
+2. **Tiers.** `scripts/verify_corpus.py --all --quiet` must still print its
+   pinned headline, currently
+   `Verified 312 strategies — excellent=311, strong=0, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0`.
+
+Both always run, so one command reports both. Exit 0 is parity, 1 is drift, 2
+is "the check could not run" (no gitlink, wrong corpus commit, modified pinned
+inputs).
+
+### Why the baseline, and not the corpus's own trades
+
+The committed `corpus/validation/<probe>/engine_trades.csv` look like the
+oracle, and for a long time they were. They are not one now: pineforge-corpus
+442d497 re-transpiled every `generated.cpp` against the R4-D codegen **without
+re-running the tapes**, so what it commits is an older harness generation. At
+this engine, 0 of 312 tapes reproduce byte-for-byte — the harness appends an
+`Engine range-end` column (`run_strategy.py`, 11e61d41) and prints `Qty` at
+full precision — and only 98 of 312 still agree on every column the tape does
+record. A gate on those bytes would fail on every commit and prove nothing.
+
+`scripts/corpus_parity_baseline.txt` is therefore the byte oracle: the sha256
+of every `engine_trades.csv` this engine produces at the recorded corpus
+gitlink, refreshed only by a deliberate
+
+```sh
+./scripts/check_corpus_parity.sh
+python3 scripts/corpus_trades_identity.py --update
+```
+
+in a commit that carries the evidence. Two invariants are still taken from the
+tapes, because those cannot go stale: every probe the corpus commits must
+produce a file, and its header must be the tape's header, optionally plus a
+column declared in `ALLOWED_EXTRA_COLUMNS`. An undeclared column is drift.
+
+The two gates are not redundant. A one-tick slippage change on a single probe
+moves its trades and its baseline hash while `verify_corpus.py` still reports
+`excellent=311, strong=0, anomaly=1`: the tier verifier grades against the
+TradingView tape with tolerances, so it cannot see a regression that stays
+inside them. The baseline can.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BUILD_DIR` | `build-corpus-parity` | CMake build directory |
+| `JOBS` | `nproc` (else 4) | parallel build/run jobs |
+| `DIFF_FILES` | `5` | drifted probes expanded |
+| `DIFF_LINES` | `20` | lines printed per drifted probe |
+| `EXPECTED_VERIFY` | the headline above | the pinned verifier line |
+| `SKIP_BUILD` | `0` | reuse an existing `BUILD_DIR` (developer loop only) |
+| `SKIP_RUN` | `0` | judge the trades already on disk (developer loop only) |
+
+### Nightly, not required on pull requests
+
+Measured end to end on a 16-core laptop: configure 3 s, runtime library 15 s,
+all 312 corpus strategies 90 s at `JOBS=8` — and then the run phase, which
+`scripts/run_corpus.sh` executes **serially**, one `run_strategy.py` ctypes
+process per probe over a 221 861-bar feed, took **1792 s** (about 5.7 s per
+probe, machine load average 100–160 from sibling builds). Judging the result
+(byte-identity plus the verifier) takes a further 94 s. That is ~32 min here,
+and the dominant term is single-core serial work that a 4-vCPU hosted runner
+runs slower, not faster.
+
+So the job cannot be held to the ~25 min a required pull-request check is
+budgeted for, and it runs nightly (01:30 UTC), on `workflow_dispatch`, and on
+pull requests that touch the corpus pin or the parity tooling — the changes it
+is the only check able to catch. ccache (2 GB, keyed per commit with a prefix
+restore) makes a re-run at an unchanged pin almost entirely cache hits; the
+Git-LFS chart feed (~176 MB, one full-history 1m CSV) is pulled once per job.
+Parallelising the run phase across probes (they write into disjoint directories)
+is the one change that could bring it into a pull-request budget; it is not
+done here.
+
 ## Failure evidence
 
 Each build directory contains `ci-summary.json` and full command logs under

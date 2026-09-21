@@ -178,6 +178,40 @@ when to pick which one when adding a new probe.
 
 If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), run the corpus sweep locally and include the diff in the PR description.
 
+### The parity gate in one command
+
+`scripts/run_corpus.sh` rewrites the trades and prints a summary; it does not
+judge them. The gate does:
+
+```bash
+./scripts/check_corpus_parity.sh
+```
+
+It checks the corpus out at the gitlink this repository records, refuses to
+start if a pinned input under `validation/` is modified, runs the full sweep,
+and then **fails** if any probe's `engine_trades.csv` no longer hashes to what
+`scripts/corpus_parity_baseline.txt` pins — naming the probe and printing the
+first differing rows — or if `scripts/verify_corpus.py` no longer prints its
+pinned headline (`excellent=311, strong=0, anomaly=1`).
+
+The baseline, not the corpus's committed trades, is the byte oracle: the tapes
+pineforge-corpus commits were written by an older harness (no `Engine
+range-end` column, rounded `Qty`) and no longer reproduce. Both gates matter —
+a one-tick slippage change moves a probe's baseline hash while the tier
+headline stays `excellent=311`. Refresh the baseline deliberately, in the
+commit that carries the evidence:
+
+```bash
+./scripts/check_corpus_parity.sh
+python3 scripts/corpus_trades_identity.py --update
+```
+
+The same command runs nightly and on demand in CI as the `Corpus parity`
+workflow, and automatically on pull requests that touch the corpus pin or the
+parity tooling. It is not a required pull-request check because the 312-probe
+run phase is serial and exceeds the pull-request time budget; see
+[`docs/ci.md`](docs/ci.md). Run it yourself for any runtime-semantics change.
+
 For a multi-engine cross-check, [`benchmarks/`](benchmarks/) ships
 the same 50 strategies through PineForge, [PyneCore](https://github.com/PyneSys/pynecore),
 and [PineTS](https://github.com/LuxAlgo/PineTS) — useful for spotting
@@ -191,6 +225,7 @@ engines see. `bash benchmarks/run_all.sh` runs the whole pipeline.
 - Title format: `area: short imperative summary` (e.g. `engine_fills: handle dual-stop tie-break`).
 - Body: explain the *why*. If it's a TV-parity fix, link the failing probe / cite the TV behavior.
 - All CI must pass before merge: build on Ubuntu + macOS in both Release and Debug, ctest, and the install/`find_package` smoke test.
+- TradingView parity is gated separately by the nightly `Corpus parity` workflow (`./scripts/check_corpus_parity.sh`). A pull request that moves the `corpus` gitlink or the parity tooling triggers it directly; any other parity-relevant change should run it locally.
 
 ## Maintainer: release checklist
 
