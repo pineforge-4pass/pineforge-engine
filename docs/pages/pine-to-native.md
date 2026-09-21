@@ -355,11 +355,16 @@ migration decision:
 3. **The report, after the run** — `fill_report` engine.hpp:2388 into a
    `pf_report_t` pineforge.h:428, which is what a C host reads.
 
-One rule governs the whole table: the equity series, the equity extremes and
-the position-size peaks are folded at the kernel's own report point, which
-exists **only** under `NativeReportPolicy::KernelRecorded` native_run_spec.hpp:62
-(or `KernelRecordedAtHostMarks`). The default `HostRecorded` leaves the whole
-report series to the host, so those fields stand at zero until you ask.
+One rule governs the whole table, in two scopes. The equity **series** is
+recorded at the kernel's own report point, which exists **only** under
+`NativeReportPolicy::KernelRecorded` native_run_spec.hpp:62 (or
+`KernelRecordedAtHostMarks`); the default `HostRecorded` leaves that series,
+and every `pf_equity_stats_t` figure walked out of it, to the host. The equity
+**extremes** and the **position-size peaks** are not scoped that way: they are
+a property of the run, folded under every policy (lane E2) — at every script
+calculation under `HostRecorded` and `KernelRecorded`, and at the host's own
+marks under `KernelRecordedAtHostMarks`, which handed that cadence away. So a
+host on the default reads them truthfully without recording a curve.
 `native_open_lots_strategy.cpp` runs the same tape under both policies and
 prints the difference; recording books no cash and places no order, so the two
 runs close the same trades for the same money.
@@ -377,10 +382,10 @@ runs close the same trades for the same money.
 | `strategy.grossloss_percent` | `grossloss_percent` engine.hpp:1393 | `pf_metrics_t` pineforge.h:319 | `native_sized_report_strategy.cpp` | |
 | `strategy.openprofit` | `open_profit` engine.hpp:1439 | `strategy_native_marked_equity_v1` native_c_api.h:1621 less the balance | `native_open_lots_strategy.cpp` | Takes the price to mark at, like every other native mark. |
 | `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1439 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the realized equity. |
-| `strategy.max_drawdown` | `max_drawdown_` engine.hpp:647 | `max_equity_drawdown` pineforge.h:260 | `native_open_lots_strategy.cpp` | Folded only under `KernelRecorded` native_run_spec.hpp:62 — see the rule above. |
-| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1998 | `max_equity_drawdown_pct` pineforge.h:261 | `native_sized_report_strategy.cpp` | Same condition. |
-| `strategy.max_runup` | `max_runup_` engine.hpp:648 | `max_equity_runup` pineforge.h:264 | `native_open_lots_strategy.cpp` | Same condition. |
-| `strategy.max_runup_percent` | `max_runup_percent` engine.hpp:1387 | `max_equity_runup_pct` pineforge.h:265 | `native_sized_report_strategy.cpp` | Same condition. |
+| `strategy.max_drawdown` | `max_drawdown_` engine.hpp:647 | `max_equity_drawdown` pineforge.h:260 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:62. |
+| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1998 | `max_equity_drawdown_pct` pineforge.h:261 | `native_sized_report_strategy.cpp` | Same rule. |
+| `strategy.max_runup` | `max_runup_` engine.hpp:648 | `max_equity_runup` pineforge.h:264 | `native_open_lots_strategy.cpp` | Same rule. |
+| `strategy.max_runup_percent` | `max_runup_percent` engine.hpp:1387 | `max_equity_runup_pct` pineforge.h:265 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.avg_trade` | `avg_trade` engine.hpp:1396 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | |
 | `strategy.avg_trade_percent` | `avg_trade_percent` engine.hpp:1400 | `pf_trade_stats_t` pineforge.h:256 | `native_sized_report_strategy.cpp` | |
 | `strategy.avg_winning_trade` | `avg_winning_trade` engine.hpp:1407 | `pf_trade_stats_t` pineforge.h:256 | `native_sized_report_strategy.cpp` | |
@@ -390,9 +395,9 @@ runs close the same trades for the same money.
 | `strategy.wintrades` | `count_wintrades` engine.hpp:1450 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | |
 | `strategy.losstrades` | `count_losstrades` engine.hpp:1451 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | |
 | `strategy.eventrades` | `eventrades` engine.hpp:2386 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | Public, not protected: a zero-profit closed row. Win + loss + even is the closed-row count, which the example asserts. |
-| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2381 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | Folded only under `KernelRecorded` native_run_spec.hpp:62. |
-| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2382 | `pf_trade_stats_t` pineforge.h:256 | `tests/test_native_report_truth.cpp` | Same condition. |
-| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2383 | `pf_trade_stats_t` pineforge.h:256 | `tests/test_native_report_truth.cpp` | Same condition. |
+| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2381 | `pf_trade_stats_t` pineforge.h:256 | `native_open_lots_strategy.cpp` | Running peak of the absolute position size, folded beside the equity extremes and, like them, independent of the report policy (lane E2). Zero only for a run that never held a position. |
+| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2382 | `pf_trade_stats_t` pineforge.h:256 | `tests/test_native_report_truth.cpp` | Same rule, long side. |
+| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2383 | `pf_trade_stats_t` pineforge.h:256 | `tests/test_native_report_truth.cpp` | Same rule, short side. |
 | `strategy.position_size` | `NativePhysicalPosition::signed_units` native_host.hpp:297 | `strategy_native_position_v1` native_c_api.h:1507 | `hello_kernel.cpp` | Signed: no separate direction field. |
 | `strategy.position_avg_price` | `NativePhysicalPosition::average_price` native_host.hpp:298 | `strategy_native_position_v1` native_c_api.h:1507 | `native_selected_strategy.cpp` | Volume-weighted over the open lots. |
 | `strategy.position_entry_name` | `native_open_lots` native_host.hpp:1152 then the last row's `entry_label` native_host.hpp:333 | `strategy_native_open_lot_get_v1` native_c_api.h:1545 | `native_open_lots_strategy.cpp` | Pine reports the newest entry's id; the native book lets you read any lot's. |

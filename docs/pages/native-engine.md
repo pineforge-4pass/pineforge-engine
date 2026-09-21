@@ -1619,17 +1619,32 @@ the cohort close from a bare host, and the cohort scenario of
 metrics derived from it. The curve is **host-owned by default**: nothing in
 the kernel records a point, so a bare `NativeStrategyHost` that leaves
 `report_policy` at `HostRecorded` reports `equity_curve_len == 0`, and every
-equity metric (drawdown, run-up, Sharpe/Sortino, CAGR, time in market)
-degenerates over that empty series. A host that marks its own equity keeps
-this default and owns the whole series.
+metric *derived from that curve* (`pf_equity_stats_t`: its drawdown, run-up,
+Sharpe/Sortino, CAGR, time in market) degenerates over the empty series. A
+host that marks its own equity keeps this default and owns the whole series.
+
+**The scalar extremes are not part of that bargain.** `max_drawdown_`,
+`max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
+through `max_drawdown_percent()` (`engine.hpp:1998`), `max_runup_percent()`
+(`engine.hpp:1387`) and `max_contracts_held_all/long/short()`
+(`engine.hpp:2381-2383`) — are a property of the RUN: what it drew down, what
+it ran up, the most it ever held. The kernel folds them
+(`update_equity_extremes`, `engine.hpp:1853`) at every script calculation
+under **every** report policy, so a `HostRecorded` host reads them truthfully
+without asking the kernel to record anything. Before R5 lane E2 the fold was
+reachable only through the two recording policies, and a defaulted host read
+all five back as zero for the whole run. What stays policy-scoped is the
+recording: the curve point, and with it every `pf_equity_stats_t` figure.
 
 `NativeReportPolicy::KernelRecorded` asks the consumer to record instead. Once
 per script calculation — after the callback returns, and after the
-`AfterCalculation` close when that mode is on — it folds the equity extremes
-and appends one point labelled with the **script interval's open**, so the
-curve is identical with and without an intrabar path. The result is one point
-per script bar, a finite drawdown/run-up walk, and metrics computed over a
-real series.
+`AfterCalculation` close when that mode is on — it appends one point labelled
+with the **script interval's open**, at the same instant as that
+calculation's extremes fold, so the curve is identical with and without an
+intrabar path and a re-walk of it reproduces the scalars above bit for bit
+(`compute_equity_stats`, `engine_metrics.cpp:173`, "MUST mirror
+update_equity_extremes"). The result is one point per script bar, a finite
+drawdown/run-up walk, and metrics computed over a real series.
 
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
@@ -1638,7 +1653,7 @@ always had — `set_broker_state_hash_recording(true)`
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:6630`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:6641`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
