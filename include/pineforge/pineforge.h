@@ -883,7 +883,21 @@ PF_API int strategy_last_bar_dual_entry_path(pf_strategy_t s);
  *  returns misses the warmup bars already dispatched.
  *  Default off (@p on == 0): pf_report_t::broker_state_hash is NULL /
  *  0-length and every historical run stays byte-identical to before this
- *  flag existed. */
+ *  flag existed.
+ *
+ *  What a row is, and what it is for. A row is the run's CONTINUATION
+ *  IDENTITY at that bar, not its trade outcome: it folds the broker state and,
+ *  ahead of it, the state a resume would continue from -- the driving mode
+ *  (batch run, stream warmup, stream realtime) included, on purpose. So the
+ *  array is a replay check WITHIN one driving mode and deliberately not across
+ *  modes: two runs driven the same way over the same bars record the same
+ *  rows, and a run driven the same way that ended at bar k recorded, as its
+ *  last row, the row the longer run recorded after bar k; but a run(), a
+ *  #strategy_stream_begin with one warmup bar and one with every bar as warmup
+ *  record DIFFERENT rows from index 0 over the same bars booking the same
+ *  trades. Only the len == script_bars_processed identity above holds across
+ *  drivings. What pins that a stream books what a batch books is the outcome
+ *  itself -- the trades, the position and the equity -- and not this array. */
 PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on);
 /** Return the broker-state hash of the FINAL state after the most recent
  *  run() (see #strategy_set_broker_state_hash_recording's doc and

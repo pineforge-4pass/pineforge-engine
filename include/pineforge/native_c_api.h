@@ -1598,8 +1598,12 @@ PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out);
 PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v1* out);
 
 /** The run's continuation identity — `native_continuation_hash()`. Two runs
- *  that folded the same declarations and the same inputs answer the same
- *  value; it is the C spelling of the hash a stream resumes against. */
+ *  driven the same way that folded the same declarations and the same inputs
+ *  answer the same value; a batch and a stream over identical bars booking
+ *  identical trades do NOT, because the driving mode is part of a
+ *  continuation. It is the C spelling of the hash a stream resumes against,
+ *  and the same reason the per-bar broker-state hash is per driving mode
+ *  (`pineforge.h`, `strategy_set_broker_state_hash_recording`). */
 PF_API int strategy_native_continuation_hash_v1(pf_strategy_t s, uint64_t* out);
 
 /** Open a cohort roster for PF_NATIVE_OWNER_BIND_COHORT. */

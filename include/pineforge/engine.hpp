@@ -2754,6 +2754,30 @@ public:
     // value; the flag itself is persistent configuration, like
     // set_realtime_tail, so it must be set BEFORE stream_begin to also
     // cover the warmup bars.
+    //
+    // What a row is, and what it is for. A row is the run's CONTINUATION
+    // IDENTITY at that bar, not its trade outcome: broker_state_hash() is
+    // broker_state_hash_from_execution_hash(continuation_hash()), so it folds
+    // the kernel's broker state AND, ahead of it, the state a resume would
+    // continue from. NativeRunPhase (Batch/Warmup/Realtime, readable as
+    // native_state().phase) is part of that continuation on purpose, because a
+    // consumer mid-warmup and one mid-realtime are not interchangeable
+    // continuations. So the array is a replay check WITHIN one driving mode
+    // and deliberately not across modes:
+    //   * same driving -- two runs driven the same way record the same rows,
+    //     and the row after bar k is the last row of a run driven the same way
+    //     that ended at bar k (a batch and a stream at any warmup split);
+    //   * different driving -- run(), stream_begin(warmup=1)+push and
+    //     stream_begin(warmup=all) over the same bars booking the same trades
+    //     record different rows from index 0; only the length identity above
+    //     survives. Two streams share exactly their common Warmup prefix.
+    //   * the broker half alone IS driving-mode invariant: factor the
+    //     continuation out with broker_state_hash_from_execution_hash(fixed)
+    //     and the remaining fold is identical at every bar in every driving.
+    // The batch<->stream oracle is therefore the OUTCOME, not this array:
+    // tests/test_native_margin_fx_roll.cpp section 8 and tests/test_streaming.cpp
+    // for the kernel, scripts/check_corpus_parity.sh for the Pine adapter.
+    // Both directions are pinned in tests/test_native_report_truth.cpp.
     void set_broker_state_hash_recording(bool on) {
         guard_native_mutation("set_broker_state_hash_recording");
         broker_state_hash_recording_ = on;

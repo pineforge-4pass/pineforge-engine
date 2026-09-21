@@ -1394,19 +1394,56 @@ real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2867`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2781`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:6519`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:6630`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
 ```
 
-in batch and across a stream's warmup and realtime legs alike. A row is a
-function of the run's past only: the row after bar *k* equals the last row of
-a run that ended at bar *k*, which is what makes the array a replay check.
+in batch and across a stream's warmup and realtime legs alike. That length
+identity is the only part of the array that holds across drivings.
+
+**What a row is, and what it is for.** A row is the run's *continuation
+identity* at that bar, not its trade outcome. `broker_state_hash()` is
+`broker_state_hash_from_execution_hash(continuation_hash())`, so a row folds
+the kernel's broker state — the lots, the realized sums, the equity extremes,
+the closed rows — and, ahead of it, the state a resume would continue from.
+`NativeRunPhase` (`Batch` / `Warmup` / `Realtime`, readable as
+`native_state().phase`) is folded into that continuation **on purpose**: a
+consumer mid-warmup and a consumer mid-realtime are not interchangeable
+continuations, which is exactly what `native_continuation_hash()` is for and
+why `stream_state_hash()` leads with this value. So the array is a replay
+check **within one driving mode** and deliberately not across modes:
+
+- *Same driving.* Two runs driven the same way over the same bars record the
+  same rows, and the row after bar *k* equals the last row of a run driven the
+  same way that ended at bar *k*. That prefix closure — in a batch, and in a
+  stream at any warmup split — is what makes the array a replay check.
+- *Different driving.* The same bars booking the same trades record
+  **different** rows under `run()`, under `stream_begin(warmup=1)` +
+  `stream_push_bar` and under `stream_begin(warmup=all)`, differing from index
+  0. Two streams share exactly the bars both are still in `Warmup` for, and
+  converge again one bar past the later warmup boundary, when their realtime
+  legs become the same continuation.
+- *The broker half alone is driving-mode invariant.* Factor the continuation
+  out — `broker_state_hash_from_execution_hash(fixed)`, protected on
+  `BacktestEngine` — and the remaining fold is identical at every bar in every
+  driving. The divergence is the continuation and nothing else.
+
+**The batch↔stream oracle is the outcome, not the hash.** What pins that a
+stream books what a batch books is the outcome twin: section 8 of
+`tests/test_native_margin_fx_roll.cpp` compares every offered check point,
+every measured requirement, every receipt, every closed row and the book that
+is left; `tests/test_streaming.cpp` compares trade count, position, equity and
+each closed row's identity, prices and size. For the Pine adapter the same job
+is done over the whole validation corpus by `scripts/check_corpus_parity.sh`.
+Both directions of the row contract are pinned in
+`tests/test_native_report_truth.cpp`.
+
 Recording is reporting — the switch is not continuation state and no row is
 ever read back, so a run records the same trades, curve, continuation and
 broker state with it on or off. Under `HostRecorded` the report is the host's
