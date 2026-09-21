@@ -197,10 +197,12 @@ inside them. The baseline can.
 | `DIFF_FILES` | `5` | drifted probes expanded |
 | `DIFF_LINES` | `20` | lines printed per drifted probe |
 | `EXPECTED_VERIFY` | the headline above | the pinned verifier line |
+| `BUILD_TYPE` | `Release` | CMake build type |
+| `SUBSET_FILE` | `scripts/corpus_parity_subset.txt` | the probe list `--subset` reads |
 | `SKIP_BUILD` | `0` | reuse an existing `BUILD_DIR` (developer loop only) |
 | `SKIP_RUN` | `0` | judge the trades already on disk (developer loop only) |
 
-### Nightly, not required on pull requests
+### The whole sweep is nightly
 
 Measured end to end on a 16-core laptop: configure 3 s, runtime library 15 s,
 all 312 corpus strategies 90 s at `JOBS=8` — and then the run phase, which
@@ -211,15 +213,75 @@ probe, machine load average 100–160 from sibling builds). Judging the result
 and the dominant term is single-core serial work that a 4-vCPU hosted runner
 runs slower, not faster.
 
-So the job cannot be held to the ~25 min a required pull-request check is
-budgeted for, and it runs nightly (01:30 UTC), on `workflow_dispatch`, and on
-pull requests that touch the corpus pin or the parity tooling — the changes it
-is the only check able to catch. ccache (2 GB, keyed per commit with a prefix
-restore) makes a re-run at an unchanged pin almost entirely cache hits; the
-Git-LFS chart feed (~176 MB, one full-history 1m CSV) is pulled once per job.
-Parallelising the run phase across probes (they write into disjoint directories)
-is the one change that could bring it into a pull-request budget; it is not
-done here.
+So the whole population cannot be held to the ~25 min a required pull-request
+check is budgeted for, and it runs nightly (01:30 UTC), on `workflow_dispatch`,
+and on pull requests that touch the corpus pin or the parity tooling. ccache
+(2 GB, keyed per commit with a prefix restore) makes a re-run at an unchanged
+pin almost entirely cache hits; the Git-LFS chart feed (~176 MB, one
+full-history 1m CSV) is pulled once per job.
+
+### The subset that does block a merge
+
+A nightly gate cannot stop a merge: a `src/**` change that moves a TradingView
+trade merges green and is caught the next night at the earliest. The blocking
+half is a named population, not a weaker oracle:
+
+```sh
+./scripts/check_corpus_parity.sh --subset
+```
+
+builds and re-runs only the 30 probes
+[`scripts/corpus_parity_subset.txt`](../scripts/corpus_parity_subset.txt)
+names — **in parallel**, which the full sweep's serial loop is not, because the
+probes write into disjoint directories and share only the read-only feeds — and
+judges them against the same pinned sha256 rows of
+`scripts/corpus_parity_baseline.txt`. There is no subset baseline;
+`corpus_trades_identity.py --update` refuses `--subset`, so the fast gate can
+never re-record the oracle it is measured by, and a row naming a probe the
+corpus does not commit is exit 2, never a pass.
+
+The 30 were chosen mechanically, and the reason each one is in the list is on
+its line. Every strategy.pine was scanned for the 40 engine mechanisms the
+corpus exercises at all — order kinds, exit shapes, OCA, pyramiding, the three
+commission kinds, the three sizing bases, slippage, margin, the three
+calculation-timing switches, `request.security` and `_lower_tf`, the magnifier,
+sessions, calendars, timeframes, risk rules and the
+ta/math/array/matrix/map/UDT/drawing surfaces — a greedy cover took the fewest
+probes witnessing all 40, then one probe per corpus family of three or more
+members the cover had missed, then the keepers: the corpus's only anomaly-tier
+verdict, its two largest trade surfaces, and the mechanisms the campaign
+measured as divergence-prone. Every mechanism with exactly one witness in the
+corpus is therefore in the subset by construction — `strategy.cancel_all`,
+`calc_on_order_fills=true`, `commission.cash_per_order`, a non-zero
+`commission_value`, and `map.*`.
+
+Measured on the same 16-core laptop at `JOBS=8`, corpus 442d497, under sibling
+load: derive 2 s (a no-op when the feeds are fresh), build the runtime and the
+30 strategy `.so` 68 s from clean, run **45 s wall** for 80 s of probe CPU,
+judge <1 s — **94 s** end to end over an up-to-date build directory, against
+1792 s for the run phase alone in full mode.
+
+`corpus-parity.yml` exposes it as a reusable workflow (`mode: subset`) and
+`ci.yml` calls it on every CI run and lists it in `build-gate`'s `needs`. The
+"PineForge strict CI base" ruleset requires the contexts `build` and
+`sanitizers`; `build` **is** `build-gate`, so the parity subset blocks a merge
+through the context that is already required, with no ruleset change. A
+skipped dependency is not a success, so the job is deliberately unfiltered by
+path.
+
+What the subset does not prove, and what therefore stays with the nightly
+sweep: the other 282 probes, and the tier headline —
+`scripts/verify_corpus.py` grades the whole population, so 30 re-runs cannot
+print its line, and grading the 282 untouched tapes beside them would judge the
+corpus's own older generation rather than this engine. The subset is a blocking
+floor, not a replacement.
+
+The subset job checks the submodule out with `GIT_LFS_SKIP_SMUDGE=1` and
+restores `corpus/data` from a cache keyed by the gitlink, so the ~176 MB feed
+is fetched at most once per pin rather than once per push; the restored bytes
+are then checked against the sha256 in the corpus's own Git-LFS pointer, so a
+stale or corrupt cache fails as "the feed is wrong" and not as "30 probes
+drifted".
 
 ## Failure evidence
 
@@ -236,8 +298,9 @@ Superseded pull-request runs are canceled. CI/native main/post-merge and manual 
 use distinct concurrency groups and remain uncanceled. Native verification is a
 reusable workflow called once by CI, with a separate concurrency namespace; it
 also supports manual dispatch. The required `build` check passes only when
-preflight, all four standard builds, sanitizers and native verification succeed.
-A failed, canceled or skipped dependency cannot produce a green `build` check.
+preflight, all four standard builds, sanitizers, native verification and the
+TradingView parity subset succeed. A failed, canceled or skipped dependency
+cannot produce a green `build` check.
 The separate required `sanitizers` status remains available.
 
 These checks do not run the parity campaign. Fixed-population Cloud measurement,

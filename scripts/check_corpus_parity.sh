@@ -21,12 +21,32 @@
 # scripts/corpus_trades_identity.py). The tape is still the locator, and its
 # header is still enforced.
 #
+# --subset — THE HALF A PULL REQUEST CAN WAIT FOR. The whole sweep is ~32 min,
+# so it cannot hold a merge (docs/ci.md). With --subset this builds and re-runs
+# only the 30 probes scripts/corpus_parity_subset.txt names, in parallel, and
+# judges them against the SAME pinned sha256 rows. Measured on a 16-core laptop
+# at JOBS=8, corpus 442d497, under sibling load: derive 2 s (a no-op when the
+# feeds are fresh), build the runtime + the 30 strategy .so 68 s from clean,
+# run 45 s wall for 80 s of probe CPU, judge <1 s — 94 s end to end over an
+# up-to-date build directory, against 1792 s for the run phase alone in full
+# mode. That fits the ~25 min a required check is budgeted for, which is why
+# .github/workflows/ci.yml can make it a dependency of the required `build`
+# context.
+#
+# What --subset does NOT prove: the other 282 probes, and the tier headline
+# (scripts/verify_corpus.py grades the whole population, so 30 runs cannot
+# print its line). Both stay with the nightly full sweep. The subset is a
+# blocking floor, not a replacement.
+#
 # Environment:
 #   BUILD_DIR        CMake build directory      (default: build-corpus-parity)
+#   BUILD_TYPE       CMake build type           (default: Release)
 #   JOBS             parallel build/run jobs    (default: nproc, or 4)
 #   DIFF_FILES       drifted probes to expand   (default: 5)
 #   DIFF_LINES       lines per drifted probe    (default: 20)
 #   EXPECTED_VERIFY  the pinned verifier headline
+#   SUBSET_FILE      the probe list --subset reads
+#                    (default: scripts/corpus_parity_subset.txt)
 #   SKIP_BUILD=1     reuse an existing BUILD_DIR (developer loop only)
 #   SKIP_RUN=1       judge the trades already on disk (developer loop only)
 #
@@ -37,7 +57,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+MODE=full
+while (( $# > 0 )); do
+    case "$1" in
+        --subset) MODE=subset ;;
+        -h|--help) sed -n '2,52p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *) printf 'check_corpus_parity: unknown argument %s\n' "$1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
 BUILD_DIR="${BUILD_DIR:-build-corpus-parity}"
+BUILD_TYPE="${BUILD_TYPE:-Release}"
 if command -v nproc >/dev/null 2>&1; then
     JOBS="${JOBS:-$(nproc)}"
 else
@@ -45,6 +76,7 @@ else
 fi
 DIFF_FILES="${DIFF_FILES:-5}"
 DIFF_LINES="${DIFF_LINES:-20}"
+SUBSET_FILE="${SUBSET_FILE:-scripts/corpus_parity_subset.txt}"
 PY="${PYTHON:-python3}"
 
 # The parity headline this engine is pinned to. Moving it is a deliberate act:
@@ -89,12 +121,105 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
     fi
 fi
 
-# --- 2) build every corpus strategy and re-run all of them -------------
+# --- 2) build every corpus strategy (or the subset) and re-run them ----
 
-log "running the corpus sweep (build_dir=$BUILD_DIR, jobs=$JOBS)"
-BUILD_DIR="$BUILD_DIR" JOBS="$JOBS" \
-    SKIP_BUILD="${SKIP_BUILD:-0}" SKIP_RUN="${SKIP_RUN:-0}" SKIP_VERIFY=1 \
-    ./scripts/run_corpus.sh
+if [[ "$MODE" == full ]]; then
+    log "running the corpus sweep (build_dir=$BUILD_DIR, jobs=$JOBS)"
+    BUILD_DIR="$BUILD_DIR" JOBS="$JOBS" \
+        SKIP_BUILD="${SKIP_BUILD:-0}" SKIP_RUN="${SKIP_RUN:-0}" SKIP_VERIFY=1 \
+        ./scripts/run_corpus.sh
+else
+    if [[ ! -f "$SUBSET_FILE" ]]; then
+        unrunnable "no subset list at $SUBSET_FILE"
+    fi
+    # One corpus-relative probe directory per line, '#' starts a comment. The
+    # spelling is checked here and not only by the identity checker: these
+    # names become CMake target names and shell words below.
+    PROBES=()
+    while IFS= read -r line; do
+        entry="${line%%#*}"
+        entry="$(printf '%s' "$entry" | tr -d '[:space:]')"
+        [[ -z "$entry" ]] && continue
+        if [[ ! "$entry" =~ ^validation/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            unrunnable "$SUBSET_FILE names an unusable probe: $entry"
+        fi
+        if [[ ! -f "corpus/$entry/generated.cpp" ]]; then
+            unrunnable "$SUBSET_FILE names $entry, which the corpus does not build"
+        fi
+        PROBES+=("$entry")
+    done < "$SUBSET_FILE"
+    if (( ${#PROBES[@]} == 0 )); then
+        unrunnable "$SUBSET_FILE names no probe"
+    fi
+    log "subset parity over ${#PROBES[@]} probes from $SUBSET_FILE (build_dir=$BUILD_DIR, jobs=$JOBS)"
+
+    # The derived 15m chart feeds are rebuilt from the committed 1m Git-LFS
+    # feed. Do it ONCE, before anything fans out: a rebuild writes through a
+    # temporary and renames, so two probes materializing at the same time race
+    # (corpus/CLAUDE.md, "Concurrency"). Fresh, this is a no-op.
+    if [[ "${SKIP_RUN:-0}" != "1" ]]; then
+        log "materializing derived corpus feeds"
+        "$PY" scripts/derive_corpus_feeds.py
+    fi
+
+    if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
+        log "configuring CMake (build_type=$BUILD_TYPE, dir=$BUILD_DIR)"
+        cmake -B "$BUILD_DIR" -S . \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON \
+            -Wno-dev
+        # corpus/CMakeLists.txt derives one target per probe directory:
+        # validation/<probe> -> strategy_validation_<probe with - as _>.
+        TARGETS=()
+        for probe in "${PROBES[@]}"; do
+            TARGETS+=("strategy_$(printf '%s' "$probe" | tr '/-' '__')")
+        done
+        log "building the runtime + ${#TARGETS[@]} strategy libraries ($JOBS jobs)"
+        cmake --build "$BUILD_DIR" -j "$JOBS" --target "${TARGETS[@]}"
+    fi
+
+    if [[ "${SKIP_RUN:-0}" != "1" ]]; then
+        # Which shared-library extension this platform produced.
+        SO_NAME=strategy.so
+        if [[ -f "corpus/${PROBES[0]}/strategy.dylib" ]]; then
+            SO_NAME=strategy.dylib
+        elif [[ -f "corpus/${PROBES[0]}/strategy.dll" ]]; then
+            SO_NAME=strategy.dll
+        fi
+        RUN_LOGS="$BUILD_DIR/subset-run-logs"
+        rm -rf "$RUN_LOGS"
+        mkdir -p "$RUN_LOGS"
+        log "re-running the subset ($SO_NAME, $JOBS at a time)"
+        started=$(date +%s)
+        # The probes write into disjoint directories and share only the
+        # read-only feeds, so the run phase parallelises exactly; the full
+        # sweep's serial loop is what puts it out of a pull-request budget.
+        run_rc=0
+        # One probe per child, passed as $1 -- NOT through xargs -I, whose
+        # replacement string is capped at 255 bytes on BSD xargs ("command
+        # line cannot be assembled, too long").
+        # SC2016: the child's body is deliberately unexpanded here — PF_PY,
+        # PF_SO and PF_LOGS are read from its own environment, exported above.
+        # shellcheck disable=SC2016
+        printf '%s\n' "${PROBES[@]}" \
+            | PF_PY="$PY" PF_SO="$SO_NAME" PF_LOGS="$RUN_LOGS" \
+              xargs -P "$JOBS" -n 1 sh -c '
+                  probe="$1"
+                  log="$PF_LOGS/$(printf %s "$probe" | tr / _).log"
+                  if ! "$PF_PY" scripts/run_strategy.py "corpus/$probe" \
+                          --so-name "$PF_SO" > "$log" 2>&1; then
+                      printf "FAILED %s\n" "$probe" >&2
+                      cat "$log" >&2
+                      exit 1
+                  fi' corpus-parity-subset || run_rc=$?
+        elapsed=$(( $(date +%s) - started ))
+        log "ran ${#PROBES[@]} probes in ${elapsed}s"
+        if (( run_rc != 0 )); then
+            unrunnable "a subset probe failed to run; refusing to judge stale trades"
+        fi
+    fi
+fi
 
 status=0
 
@@ -102,8 +227,14 @@ status=0
 
 log "byte-identity against scripts/corpus_parity_baseline.txt"
 identity_rc=0
-"$PY" scripts/corpus_trades_identity.py --corpus corpus \
-    --files "$DIFF_FILES" --lines "$DIFF_LINES" || identity_rc=$?
+if [[ "$MODE" == subset ]]; then
+    "$PY" scripts/corpus_trades_identity.py --corpus corpus \
+        --subset "$SUBSET_FILE" \
+        --files "$DIFF_FILES" --lines "$DIFF_LINES" || identity_rc=$?
+else
+    "$PY" scripts/corpus_trades_identity.py --corpus corpus \
+        --files "$DIFF_FILES" --lines "$DIFF_LINES" || identity_rc=$?
+fi
 if (( identity_rc == 2 )); then
     unrunnable "the byte-identity check could not run"
 fi
@@ -113,27 +244,42 @@ fi
 
 # --- 4) the verifier headline ------------------------------------------
 
-log "verifying TradingView parity"
-verify_log="$BUILD_DIR/verify_corpus.log"
-mkdir -p "$BUILD_DIR"
-verify_rc=0
-"$PY" scripts/verify_corpus.py --all --quiet > "$verify_log" 2>&1 || verify_rc=$?
-headline="$(grep -m1 '^Verified ' "$verify_log" || true)"
-printf '%s\n' "$headline"
-if [[ "$headline" != "$EXPECTED_VERIFY" ]]; then
-    warn "the verifier headline moved"
-    warn "  expected: $EXPECTED_VERIFY"
-    warn "  actual:   ${headline:-<no headline; see $verify_log>}"
-    tail -n "$DIFF_LINES" "$verify_log" >&2
-    status=1
-fi
-if (( verify_rc != 0 )); then
-    warn "scripts/verify_corpus.py exited $verify_rc"
-    tail -n "$DIFF_LINES" "$verify_log" >&2
-    status=1
+if [[ "$MODE" == subset ]]; then
+    # scripts/verify_corpus.py grades the whole population and prints one
+    # headline for it; 30 re-runs cannot produce that line, and grading the
+    # 282 stale tapes beside them would judge the corpus's own generation,
+    # not this engine. The tier gate stays with the nightly full sweep.
+    log "subset mode: the tier headline is the nightly sweep's, not judged here"
+else
+    log "verifying TradingView parity"
+    verify_log="$BUILD_DIR/verify_corpus.log"
+    mkdir -p "$BUILD_DIR"
+    verify_rc=0
+    "$PY" scripts/verify_corpus.py --all --quiet > "$verify_log" 2>&1 || verify_rc=$?
+    headline="$(grep -m1 '^Verified ' "$verify_log" || true)"
+    printf '%s\n' "$headline"
+    if [[ "$headline" != "$EXPECTED_VERIFY" ]]; then
+        warn "the verifier headline moved"
+        warn "  expected: $EXPECTED_VERIFY"
+        warn "  actual:   ${headline:-<no headline; see $verify_log>}"
+        tail -n "$DIFF_LINES" "$verify_log" >&2
+        status=1
+    fi
+    if (( verify_rc != 0 )); then
+        warn "scripts/verify_corpus.py exited $verify_rc"
+        tail -n "$DIFF_LINES" "$verify_log" >&2
+        status=1
+    fi
 fi
 
 if (( status != 0 )); then
+    if [[ "$MODE" == subset ]]; then
+        fail "TradingView parity DRIFTED on the subset at corpus $GITLINK"
+    fi
     fail "TradingView parity DRIFTED at corpus $GITLINK"
 fi
-log "TradingView parity holds at corpus $GITLINK"
+if [[ "$MODE" == subset ]]; then
+    log "TradingView parity holds on the ${#PROBES[@]}-probe subset at corpus $GITLINK"
+else
+    log "TradingView parity holds at corpus $GITLINK"
+fi
