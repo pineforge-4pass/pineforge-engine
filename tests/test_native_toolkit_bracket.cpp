@@ -454,6 +454,68 @@ void order_book_outcome_reports_the_abandoned_replace() {
     completed(host);
 }
 
+// E12: cancel(key) answers one word, and says CancelStatus::NotWorking both
+// when the kernel said so and when no cancel was ever sent -- an unknown key
+// and a key whose request already died are the kernel's word for the book's
+// own silence. The outcome tells them apart and carries the kernel's own
+// CancelResult when there is one.
+void order_book_cancel_outcome_says_who_spoke() {
+    Host host;
+    tk::OrderBookCancel cancelled, unknown, forgotten;
+    std::size_t events_before_unknown = 0, events_after_unknown = 0;
+    std::size_t events_before_forgotten = 0, events_after_forgotten = 0;
+
+    std::optional<tk::OrderBook<std::string>> book;
+    host.beginning = [&](Host& base) {
+        book.emplace(base);
+        (void)book->submit_or_replace("edge", resting("edge-1"));
+        cancelled = book->cancel_outcome("edge");
+
+        events_before_unknown = base.native_events(0).size();
+        unknown = book->cancel_outcome("never");
+        events_after_unknown = base.native_events(0).size();
+
+        // A key whose request died behind the book's back.
+        const auto stale = book->submit_or_replace("stale", resting("stale-1"));
+        REQUIRE(stale.has_value());
+        base.cancel(*stale);
+        events_before_forgotten = base.native_events(0).size();
+        forgotten = book->cancel_outcome("stale");
+        events_after_forgotten = base.native_events(0).size();
+        CHECK(!book->contains("stale"));
+    };
+
+    run(host, spec("e12-order-book-cancel"), {100.0});
+
+    // Commanded: the kernel's CancelResult carried whole, and the one-word
+    // spelling still reads exactly as it did.
+    CHECK(cancelled.known);
+    CHECK(cancelled.commanded());
+    REQUIRE(cancelled.result.has_value());
+    CHECK(cancelled.result->status == no::CancelStatus::Cancelled);
+    CHECK(cancelled.status() == no::CancelStatus::Cancelled);
+    CHECK(cancelled.event_ordinal() == cancelled.result->event_ordinal);
+    CHECK(cancelled.event_ordinal() != 0);
+
+    // An unknown key is not a command: NotWorking is the book's own word here.
+    CHECK(!unknown.known);
+    CHECK(!unknown.commanded());
+    CHECK(!unknown.result.has_value());
+    CHECK(unknown.status() == no::CancelStatus::NotWorking);
+    CHECK(unknown.event_ordinal() == 0);
+    CHECK(events_before_unknown == events_after_unknown);
+
+    // A known key whose request is already gone: also uncommanded, and told
+    // apart from the unknown key by `known`.
+    CHECK(forgotten.known);
+    CHECK(!forgotten.commanded());
+    CHECK(!forgotten.result.has_value());
+    CHECK(forgotten.status() == no::CancelStatus::NotWorking);
+    CHECK(forgotten.event_ordinal() == 0);
+    CHECK(events_before_forgotten == events_after_forgotten);
+    completed(host);
+}
+
 }  // namespace
 
 int main() {
@@ -465,6 +527,8 @@ int main() {
     test("order book outcome names the command", order_book_outcome_names_the_command);
     test("order book outcome reports the abandoned replace",
          order_book_outcome_reports_the_abandoned_replace);
+    test("order book cancel outcome says who spoke",
+         order_book_cancel_outcome_says_who_spoke);
     std::printf("L7 native toolkit: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

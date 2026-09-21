@@ -263,6 +263,32 @@ struct OrderBookOutcome {
     }
 };
 
+// What the book did for one cancel. `result` is the kernel's own CancelResult
+// verbatim and whole, present exactly when a cancel reached the kernel. It is
+// empty in the two cases the book answers alone -- and cancel(key) reports
+// both of them as CancelStatus::NotWorking, a verdict the kernel never gave:
+//
+//   known == false   the key was not in the book; nothing was commanded.
+//   known == true    the key was bound, but its request is neither an
+//                    unarmed pending child nor in the working enumeration,
+//                    so the book forgot it and commanded nothing.
+//
+// Either way the key is unbound when the call returns.
+struct OrderBookCancel {
+    bool known = false;
+    std::optional<native_order::CancelResult> result;
+
+    // A cancel reached the kernel and `result` is its answer.
+    bool commanded() const noexcept { return result.has_value(); }
+    // The one-word answer cancel(key) returns, unchanged: the kernel's own
+    // status when it was commanded, NotWorking when the book answered alone.
+    native_order::CancelStatus status() const noexcept {
+        return result ? result->status : native_order::CancelStatus::NotWorking;
+    }
+    // The cancellation's timeline ordinal, 0 when nothing was commanded.
+    std::uint64_t event_ordinal() const noexcept { return result ? result->event_ordinal : 0; }
+};
+
 // A host-side key to live-handle index: the bookkeeping a strategy would
 // otherwise write to re-price "its" order by name. It owns no engine state,
 // only the handles the host returned. Key must be ordered (a std::string id
@@ -354,15 +380,25 @@ public:
     // Cancels the key's request and forgets the key. An unknown key is not a
     // command: nothing reaches the host. A key bound to a PendingUntilArmed
     // child is cancelled by handle without consulting the enumeration.
-    native_order::CancelStatus cancel(const Key& key) {
+    //
+    // The one word this returns is CancelStatus::NotWorking for both cases in
+    // which nothing was commanded, which is the book speaking in the kernel's
+    // vocabulary; cancel_outcome() is the same call saying who spoke.
+    native_order::CancelStatus cancel(const Key& key) { return cancel_outcome(key).status(); }
+
+    // cancel with the kernel's verdict attached: whether the key was bound at
+    // all, and the CancelResult of a cancel that reached the kernel. Same
+    // commands, same book state.
+    OrderBookCancel cancel_outcome(const Key& key) {
+        OrderBookCancel outcome;
         const auto found = entries_.find(key);
-        if (found == entries_.end()) return native_order::CancelStatus::NotWorking;
+        if (found == entries_.end()) return outcome;
+        outcome.known = true;
         const auto target = found->second;
         entries_.erase(found);
-        if (!target.pending_until_armed && !working(target.handle)) {
-            return native_order::CancelStatus::NotWorking;
-        }
-        return host_->cancel(target.handle).status;
+        if (!target.pending_until_armed && !working(target.handle)) return outcome;
+        outcome.result = host_->cancel(target.handle);
+        return outcome;
     }
 
     // Drops the key without commanding the host.
