@@ -93,7 +93,9 @@
  *                                          pf_native_execute_outcome_e and pf_native_refusal_e
  *   [C]  execute_current                   strategy_native_execute_current_v1
  *   [C]  native_series_bar                 strategy_native_series_bar_v1
- *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1
+ *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1 -- a row is
+ *                                          pf_native_subscription_v1, whose `lookahead` / `gaps` bools are
+ *                                          pf_native_lookahead_e / pf_native_gaps_e words
  *   [--] declare_auxiliary_feed            a C host declares the run's auxiliary finer feed up front, in
  *                                          pf_native_run_spec_ext_v1's auxiliary tail under
  *                                          PF_NATIVE_SPEC_EXT_AUXILIARY_FEED; the begin-time REPLACEMENT
@@ -528,6 +530,29 @@ typedef enum pf_native_series_source_e {
     PF_NATIVE_SERIES_SOURCE_INPUT          = 0, /**< The accepted input (the default). */
     PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED = 1  /**< The run's auxiliary finer feed. */
 } pf_native_series_source_t;
+
+/** When a declared series delivers a completed bucket —
+ *  `NativeTimeframeSubscription::lookahead`, the `lookahead` word of
+ *  #pf_native_subscription_v1. AT_FIRST_INPUT resolves the historical input
+ *  ahead; a stream's live inputs have nothing ahead to resolve, so under
+ *  either value they deliver each bucket at its completion. */
+typedef enum pf_native_lookahead_e {
+    PF_NATIVE_LOOKAHEAD_AT_COMPLETION  = 0, /**< On the input that completes the
+                                             *   bucket (the default). */
+    PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT = 1  /**< The bucket's final values, on its
+                                             *   first contributing input. */
+} pf_native_lookahead_t;
+
+/** What a declared series holds on an accepted input that delivers no bucket
+ *  of it — `NativeTimeframeSubscription::gaps`, the `gaps` word of
+ *  #pf_native_subscription_v1. Neither value changes which buckets complete,
+ *  when they are delivered or what they contain. */
+typedef enum pf_native_gaps_e {
+    PF_NATIVE_GAPS_HOLD  = 0, /**< The last delivered bucket, until the next
+                               *   delivery replaces it (the default). */
+    PF_NATIVE_GAPS_CLEAR = 1  /**< Nothing: #strategy_native_series_bar_v1
+                               *   answers #PF_NATIVE_ABSENT on that input. */
+} pf_native_gaps_t;
 
 /** WHICH price a kernel-sized basis converts at — `native_order::SizePrice`
  *  (L3b). RESOLVED is the established behaviour: the price the kernel would
@@ -1103,15 +1128,15 @@ typedef struct pf_native_request_v1 {
  *
  *  `gaps` occupies the word this struct published as `reserved0`, which every
  *  layout required to be zero — so a caller that zero-fills the struct keeps
- *  barmerge.gaps_off, and the struct's size and field offsets are unchanged.
- *  Any value but 0 or 1 is PF_NATIVE_E_TAG. */
+ *  PF_NATIVE_GAPS_HOLD, and the struct's size and field offsets are unchanged.
+ *  A value outside either word's enumeration is PF_NATIVE_E_TAG. */
 typedef struct pf_native_subscription_v1 {
     uint32_t struct_size;   /**< sizeof(pf_native_subscription_v1). */
-    uint32_t lookahead;     /**< 0 = barmerge.lookahead_off, 1 = lookahead_on. */
+    uint32_t lookahead;     /**< #pf_native_lookahead_e. */
     const char* tf;         /**< Non-NULL timeframe literal. */
     const pf_bar_t* authoritative_bars; /**< Optional exchange bars; copied. */
     int32_t authoritative_n;            /**< Length of `authoritative_bars`. */
-    uint32_t gaps;          /**< 0 = barmerge.gaps_off, 1 = gaps_on. */
+    uint32_t gaps;          /**< #pf_native_gaps_e. */
 } pf_native_subscription_v1;
 
 /** The run-specification fields #pf_native_run_spec_v1 predates.
@@ -1641,7 +1666,8 @@ PF_API int strategy_native_trail_state_v1(pf_strategy_t s, uint64_t incarnation,
  *  every callback, `on_timeframe_bar` included.
  *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT before the
  *  series' first delivery, for an unknown index, and on every input bar a
- *  `gaps = 1` series publishes nothing on — the empty that stands for na. */
+ *  #PF_NATIVE_GAPS_CLEAR series publishes nothing on — the empty that stands
+ *  for na. */
 PF_API int strategy_native_series_bar_v1(pf_strategy_t s, uint32_t subscription,
                                          pf_bar_t* out);
 
