@@ -18,6 +18,9 @@
  *   book lot by lot, marked at a price — strategy.opentrades.* for a C host)
  *   and the event history
  * ✓ Read the run's lifecycle state and its typed failure
+ * ✓ Read a closed row's own identifiers — its entry and exit ticket, its exit
+ *   comment and its close cause — with the pineforge.h accessors, which take
+ *   any handle this header produces
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
  * ✓ Declare an auxiliary finer feed, build a series from it, and append its
  *   later bars to a realtime stream
@@ -126,6 +129,17 @@
  *                                          carries a sizing BLOCK, not the variant); a C host submits
  *                                          PF_NATIVE_INTENT_SIZED and reads the units the kernel resolved
  *                                          from the applied execution
+ *
+ * One asymmetry this list does not reach, recorded here because a C host will
+ * look for it: pf_trade_t carries no exit ticket. That POD is the codegen
+ * ABI's, runtime-allocated and iterated with the caller's own sizeof, so a
+ * tail costs a PF_ABI_VERSION bump for every existing consumer — and it needs
+ * none. strategy_closed_trade_entry_id / _exit_id / _exit_comment /
+ * _close_cause (pineforge.h) index exactly the rows of pf_report_t::trades,
+ * are implemented in the kernel archive, and take any handle, so a C host
+ * reads back the ticket its own margin model declared
+ * (pf_native_run_spec_ext_v1::margin_liquidation_label) without a new symbol.
+ * Executed by the fx-roll scenario of tests/test_native_c_api.c.
  *
  * HARDENING RULES
  * ───────────────

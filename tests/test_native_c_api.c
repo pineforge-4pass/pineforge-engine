@@ -3072,7 +3072,13 @@ static void check_auxiliary_feed(void) {
  * kernel rests the liquidation at the roll and takes it at the next opening
  * print, restoring the minimum: (1250 - 1000) / (100 * 2.5 * 0.5) = 2 units.
  *
- */
+ * The second half reads the TICKET that slice is booked under. A C host has
+ * no pf_trade_t::exit_id -- that struct is the codegen ABI's and grows only
+ * with PF_ABI_VERSION -- but it does not need one: the run declares the
+ * ticket (margin_liquidation_label) and reads it back per report row with
+ * strategy_closed_trade_exit_id, a kernel-archive PF_API symbol that takes
+ * any handle, this header's included. That is the route the COVERAGE block
+ * names, and this is its executed proof. */
 #define FX_ROLL_CAPITAL     1000.0
 #define FX_ROLL_UNITS       10.0
 #define FX_ROLL_MAINTENANCE 0.5
@@ -3081,6 +3087,9 @@ static void check_auxiliary_feed(void) {
 #define FX_ROLL_MARK        100.0
 #define FX_ROLL_STEP_MS     900000   /* bar 2's close == bar 3's open coordinate */
 #define FX_ROLL_N           4
+#define FX_ROLL_TICKET      "c-fx-roll-liquidation"
+#define FX_ROLL_COMMENT     "rolled into the maintenance line"
+#define FX_ROLL_CAUSE_MARGIN_CALL 3
 
 static pf_bar_t fx_roll_bars[FX_ROLL_N];
 
@@ -3176,9 +3185,13 @@ static void check_fx_roll_margin_point(void) {
     pf_native_fx_curve_v1 curve;
     pf_native_callbacks_v1 table;
     fx_roll_state state;
+    pf_report_t report;
+    int ticket_rows = 0;
+    int i;
 
     fx_roll_fill();
     memset(&state, 0, sizeof(state));
+    memset(&report, 0, sizeof(report));
     table = blank_callbacks(&state);
     table.on_bar = fx_roll_on_bar;
     table.on_margin_check = fx_roll_on_check;
@@ -3203,6 +3216,8 @@ static void check_fx_roll_margin_point(void) {
     ext.margin_sizing = 0u;    /* RestoreMinimum */
     ext.margin_shortfall_multiple = 1.0;
     ext.margin_check = 0u;     /* PathAdverseExtreme */
+    ext.margin_liquidation_label = FX_ROLL_TICKET;
+    ext.margin_liquidation_comment = FX_ROLL_COMMENT;
     CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
                  "the fx-roll margin extension was refused");
 
@@ -3214,7 +3229,7 @@ static void check_fx_roll_margin_point(void) {
     CHECK_EQ_INT(strategy_configure_native_fx_curve_v1(state.host, &curve), 0,
                  "the fx-roll curve was refused");
 
-    CHECK_EQ_INT(strategy_native_run_v1(state.host, fx_roll_bars, FX_ROLL_N, NULL),
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, fx_roll_bars, FX_ROLL_N, &report),
                  PF_NATIVE_OK, "the fx-roll run did not complete");
     CHECK_EQ_INT(state.failures, 0, "in-callback fx-roll rows failed");
 
@@ -3234,6 +3249,30 @@ static void check_fx_roll_margin_point(void) {
     CHECK(fabs(state.called_units - FX_ROLL_SLICE) < 1e-9,
           "the liquidation sliced another quantity");
 
+    /* And the closed row it books carries the ticket this run declared. */
+    CHECK(report.trades_len > 0, "the fx-roll run booked no closed row");
+    for (i = 0; i < report.trades_len; ++i) {
+        const char* exit_id = strategy_closed_trade_exit_id(state.host, i);
+        const char* comment = strategy_closed_trade_exit_comment(state.host, i);
+        CHECK(exit_id != NULL, "a report row answered no exit ticket");
+        if (!exit_id || strcmp(exit_id, FX_ROLL_TICKET) != 0) continue;
+        ++ticket_rows;
+        CHECK(comment != NULL && strcmp(comment, FX_ROLL_COMMENT) == 0,
+              "the liquidation row carries another exit comment");
+        CHECK_EQ_INT(strategy_closed_trade_close_cause(state.host, i),
+                     FX_ROLL_CAUSE_MARGIN_CALL,
+                     "the liquidation row is not classified as a margin call");
+        CHECK_EQ_INT(report.trades[i].is_long, 1, "the liquidation row closed another side");
+        CHECK(fabs(report.trades[i].qty - FX_ROLL_SLICE) < 1e-9,
+              "the liquidation row closed another quantity");
+        CHECK(fabs(report.trades[i].entry_price - FX_ROLL_MARK) < 1e-9,
+              "the liquidation row entered at another price");
+    }
+    CHECK_EQ_INT(ticket_rows, 1, "no closed row carries the declared liquidation ticket");
+    CHECK(strategy_closed_trade_exit_id(state.host, report.trades_len) == NULL,
+          "an out-of-range report row answered a ticket");
+
+    strategy_native_report_free_v1(&report);
     strategy_native_host_free(state.host);
 }
 
