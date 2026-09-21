@@ -1,0 +1,65 @@
+# The probe subset scripts/check_corpus_parity.sh --subset re-derives, and the
+# only parity evidence a pull request can afford to wait for.
+#
+# WHY A SUBSET. The whole sweep is ~32 min (docs/ci.md, "Nightly, not required
+# on pull requests"), so it runs nightly and cannot hold a merge. This list is
+# the fast half: it is judged against exactly the same byte oracle
+# (scripts/corpus_parity_baseline.txt), so a probe in it that moves one byte
+# fails a REQUIRED check on the pull request, while the nightly sweep keeps
+# judging all 312.
+#
+# HOW IT WAS CHOSEN (mechanically re-derivable, R5 lane P3). Every probe's
+# strategy.pine was scanned for the 40 engine mechanisms the corpus exercises
+# at all -- order kinds, exit shapes, OCA, pyramiding, the three commission
+# kinds, the three sizing bases, slippage, margin, the three calculation-timing
+# switches, request.security / _lower_tf, the magnifier, sessions, calendars,
+# timeframes, risk rules, ta/math/array/matrix/map/UDT/drawing surfaces -- and
+# a greedy cover picked the fewest probes that witness all 40, preferring the
+# probe with the larger trade surface on a tie. That is the first 14 rows. The
+# cover was then topped up: one probe per corpus family of three or more
+# members that the cover had missed, and the keepers below (the corpus's only
+# anomaly-tier verdict, its largest two trade surfaces, and the mechanisms the
+# campaign measured as divergence-prone: recompute state, risk rules, calendar
+# and timeframe resolution, trade statistics).
+#
+# Every mechanism that exactly ONE probe in the whole corpus witnesses is in
+# here by construction: strategy.cancel_all, calc_on_order_fills=true,
+# commission.cash_per_order, a non-zero commission_value, and map.*.
+#
+# The subset is NOT a second oracle and has no baseline of its own: it names
+# probes, and scripts/corpus_trades_identity.py --subset judges them against
+# the same pinned sha256. Adding a row is free; removing one weakens the gate
+# and needs the same evidence as moving the baseline.
+#
+# Format: one corpus-relative probe directory per line, '#' starts a comment.
+
+validation/anomaly-equity-mirror-strategy-equity-01        # the corpus's only anomaly-tier verdict: strategy.equity mirrored back into the script
+validation/analyzer-parity-choch-bos-isolator-01           # close_all on both sides from a market-structure analyzer
+validation/barstate-isconfirmed-magnifier-off-01b          # barstate.isconfirmed with the magnifier OFF: bar-close calculation timing
+validation/bracket-atr-trail-series-int-points-01          # trailing stop (trail_points/trail_offset), series-valued, inside a bracket
+validation/bracket-compass-partial-ladder-01               # partial exit allocations (qty_percent) laddered off one entry, under a margin model
+validation/bracket-rivet-calc-on-fill-01                   # the corpus's only calc_on_order_fills=true, with process_orders_on_close and margin
+validation/bracket-tp-sl-oca-reduce-isolate-01             # strategy.order raw orders, OCA reduce isolation, strategy.cancel
+validation/calendar-waypoint-weekday-macd-01               # weekday / calendar gating
+validation/cap-gatekeeper-intraday-risk-01                 # strategy.risk.* rules with a session gate, margin and slippage (intraday cap family)
+validation/composite-kanuck-integration-01                 # calc_on_every_tick=true over a three-surface composite
+validation/composite-vcp-fvg-active-zones-01               # the second-largest trade surface in the corpus (23 600 tape rows)
+validation/drawing-udt-alias-identity                      # drawing objects and UDT aliasing: object identity across bars
+validation/input-source-subscript-hl2-01                   # input.source() subscripted (src[1]); the largest trade surface (32 694 tape rows)
+validation/ltf-bool-array-bull-majority-01                 # request.security_lower_tf returning array<bool>
+validation/magnifier-tick-dist-endpoints-rsi-cross-08a     # the intrabar magnifier feed and its tick distribution
+validation/map-mosaic-regime-weight-01                     # the corpus's only map.*, with percent-of-equity sizing and margin
+validation/matrix-cadence-transpose-pairs-01               # matrix.* with slippage and a margin model
+validation/mtf-htf-60-close-roll-01                        # request.security(..., "60", close, lookahead_off) HTF roll
+validation/na-nz-fixnan-history-chain-01                   # na / nz / fixnan warm-up over chained history references
+validation/oca-multi-bracket-isolation-01                  # two strategy.exit brackets on one entry: OCA isolation
+validation/order-close-all-cancel-all-01                   # the corpus's only strategy.cancel_all, plus close_all and pending limits
+validation/order-percent-equity-cash-commission-01         # the corpus's only commission.cash_per_order and only non-zero commission_value
+validation/pyramid-cash-fractional-commission-01           # strategy.cash sizing with cash_per_contract commission and pyramiding
+validation/recompute-alma-sar-corr-magnifier-01            # ALMA / SAR / correlation recompute state under the magnifier
+validation/risk-max-contracts-held-gate-pyramid-01         # strategy.risk.max_contracts_held_all gating pyramided entries
+validation/session-compass-utc-market-window-01            # a UTC session window with percent-of-equity sizing and margin
+validation/stats-ledger-outcome-throttle-01                # trade statistics read back into the script to size the next order
+validation/ta-pivot-point-levels-break-01                  # the ta.* family's largest surface: pivot_point_levels array returns
+validation/timeframe-main-period-self-adaptive-01          # timeframe.main_period resolution driving the script
+validation/udt-regime-stack-stress-01                      # enum, flat type UDTs and var <UDT> per-field state under stress

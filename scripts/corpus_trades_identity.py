@@ -25,7 +25,16 @@ they cannot go stale: every probe the corpus commits must produce a file, and
 its header must be the tape's header, optionally plus a column named in
 ALLOWED_EXTRA_COLUMNS. An undeclared column is drift, never an extension.
 
+THE SUBSET. ``--subset scripts/corpus_parity_subset.txt`` judges only the
+probes that file names, against the same pinned sha256. It is what the
+pull-request half of the parity gate runs (scripts/check_corpus_parity.sh
+--subset): the whole sweep is too slow to hold a merge, a named subset of it
+is not. A subset never records a baseline -- ``--update`` with ``--subset``
+is refused -- and a row it names that the corpus or the baseline does not
+know is "the check could not run", never a pass.
+
   python3 scripts/corpus_trades_identity.py [--corpus corpus] [--files 5] [--lines 20]
+  python3 scripts/corpus_trades_identity.py --subset scripts/corpus_parity_subset.txt
   python3 scripts/corpus_trades_identity.py --update    # re-record the baseline
 
 Exit 0 when every probe matches the baseline, 1 on drift, 2 when the
@@ -110,6 +119,25 @@ def first_differing_rows(path: str, tape: str, produced: str, lines: int) -> lis
     return out[:lines]
 
 
+def parse_subset(text: str) -> list[str]:
+    """The probe directories a subset file names, corpus-relative and unique.
+
+    One ``validation/<probe>`` per line; '#' starts a comment. Order is the
+    file's, so a drift report reads in the order the list is maintained in.
+    """
+    seen: dict[str, None] = {}
+    for line in text.splitlines():
+        entry = line.split('#', 1)[0].strip()
+        if entry:
+            seen[entry.rstrip('/')] = None
+    return list(seen)
+
+
+def subset_paths(text: str) -> list[str]:
+    """The trades files of the probes a subset file names."""
+    return [f'{probe}/{TRADES}' for probe in parse_subset(text)]
+
+
 def read_baseline() -> tuple[dict[str, str], str | None]:
     if not BASELINE.is_file():
         return {}, None
@@ -147,7 +175,15 @@ def main() -> int:
     ap.add_argument('--lines', type=int, default=20)
     ap.add_argument('--update', action='store_true',
                     help='re-record the baseline from the trades on disk')
+    ap.add_argument('--subset', type=Path, default=None,
+                    help='judge only the probes this file names '
+                         '(scripts/corpus_parity_subset.txt)')
     args = ap.parse_args()
+
+    if args.subset is not None and args.update:
+        print('corpus_trades_identity: --update records the whole baseline; '
+              'it cannot be restricted to a subset', file=sys.stderr)
+        return 2
 
     corpus: Path = args.corpus
     if not (corpus / 'CMakeLists.txt').is_file():
@@ -158,6 +194,27 @@ def main() -> int:
         print('corpus_trades_identity: the corpus commits no validation trades', file=sys.stderr)
         return 2
     gitlink = git(corpus, 'rev-parse', 'HEAD').strip()
+
+    population = len(paths)
+    subset_name = None
+    if args.subset is not None:
+        if not args.subset.is_file():
+            print(f'corpus_trades_identity: no subset file at {args.subset}', file=sys.stderr)
+            return 2
+        subset_name = str(args.subset)
+        wanted = subset_paths(args.subset.read_text())
+        if not wanted:
+            print(f'corpus_trades_identity: {subset_name} names no probe', file=sys.stderr)
+            return 2
+        unknown_rows = [path for path in wanted if path not in set(paths)]
+        if unknown_rows:
+            for path in unknown_rows[:args.files]:
+                print(f'  UNKNOWN {path} — named by {subset_name}, not a probe '
+                      f'the corpus commits', file=sys.stderr)
+            print('corpus_trades_identity: the subset names probes this corpus '
+                  'does not have', file=sys.stderr)
+            return 2
+        paths = wanted
 
     digests: dict[str, str] = {}
     missing: list[str] = []
@@ -206,12 +263,17 @@ def main() -> int:
               f'{pinned_gitlink}, the checkout is at {gitlink}', file=sys.stderr)
         return 2
 
+    if subset_name is not None:
+        pinned = {path: digest for path, digest in pinned.items() if path in set(paths)}
+
     moved = [path for path, digest in digests.items()
              if pinned.get(path) not in (None, digest)]
     unknown = [path for path in digests if path not in pinned]
     dropped = [path for path in pinned if path not in digests]
 
-    print(f'corpus_trades_identity: {len(paths)} probes at corpus {gitlink} — '
+    scope = (f'{len(paths)} probes' if subset_name is None
+             else f'{len(paths)} of {population} probes (subset {subset_name})')
+    print(f'corpus_trades_identity: {scope} at corpus {gitlink} — '
           f'baseline match={len(digests) - len(moved) - len(unknown)}, moved={len(moved)}, '
           f'unrecorded={len(unknown)}, missing={len(missing) + len(dropped)}, '
           f'schema violations={len(schema)}')
