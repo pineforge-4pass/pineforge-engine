@@ -337,7 +337,8 @@ never sets it, so Pine-compatible runs are unchanged.
   `(k ± 0.5) * tick`: an exact half-tick print rounds away from zero and so
   lies outside a `<=` region. The Pine adapter still runs with `None`.
   TradingView quantizes per order kind — stop and limit legs and a trail's
-  activation against the tick-quantized bar; the trail stop, the running best,
+  activation, with or without a trailing offset (R5 lane E5's tapes, below),
+  against the tick-quantized bar; the trail stop, the running best,
   stop-limit entries and the calc_on_order_fills cursors against the raw path
   (engine.hpp, design-stop-tick-rounding and design-trail-activation-tick-bar)
   — whereas the run spec's grid is one rule for every trigger the matcher
@@ -1550,6 +1551,19 @@ the row carries its `expectation corrected:` note, and the three suites are
 registered in `tests/twin_parity_inventory.json`'s `observableRewrites` with
 their new assertion digests. Every TradingView number those suites pin is
 unchanged.
+
+P9 left one ruling open, and lane E5 settled it with TradingView's own tapes
+(`tests/fixtures/offset_trail_arm`, replayed by
+`tests/test_offset_trail_quantized_arm.cpp`): a trail WITH a trailing offset
+arms on the tick-quantized path exactly like the one-shot. On NYSE:F 15m, six
+trades whose bar's raw extreme stops inside the activation's tick cell
+(9.415, 13.041, 12.641 lows; 11.899, 13.049, 13.419 highs) exit on that bar at
+activation -/+ the offset; on the on-grid ETH feed a sub-tick activation is
+never rounded onto the fill. The adapter therefore arms the generic `Trail`
+at the half-tick threshold its one-shot leg rests at and books from a running
+best that starts at the activation; the kernel still compares `arm_price`
+with the raw path. The P9 row that asserted the hold in that window now
+asserts the fill, with its `expectation corrected:` note.
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the

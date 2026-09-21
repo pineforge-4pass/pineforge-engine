@@ -574,11 +574,37 @@ trial after L8b; row PG (§1.7) holds the counts. In summary:
 | blocker | what it is | state |
 |---|---|---|
 | B1 | under `QuantizeFillsAndTriggers` the matcher reported a cursor print inside the quantized region but short of the raw level, and the core's raw re-validation aborted the run ("native working-request preparation failed": nine zero-offset-trail tapes, six `process_orders_on_close` panels) | **closed generically by L8b**: the tick-quantized print is the reached price, and the core re-validates on the same ladder (`native_order::ActivationGrid`); 0 aborts under the N13 re-run |
-| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation are tested on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
+| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5) are tested on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
 
 The corpus cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid
 feed, and under the trial 5 of them differ, in the engine-only
 entry-incarnation column only.
+
+**The offset trail's arm (lane E5, closing lane P9's open question).** P9
+found the adapter armed a trail WITH a trailing offset at its raw activation
+while the one-shot's activation was quantized, and no tape pinned the
+difference. TradingView's own tapes do (`tests/fixtures/offset_trail_arm`,
+`lab tv`, ws-report-v1, `rangeProof` covered): on NYSE:F 15m with
+`trail_offset` 1, lows 9.415 / 13.041 / 12.641 and highs 11.899 / 13.049 /
+13.419 reach, only once quantized, the activations one tick past them, and 6
+of 6 trades exit on that bar at activation -/+ 1 tick; the one-shot twins
+exit on the same bars at the activation. On the on-grid ETH feed, levels
+0.004 / 0.006 off the fill and `trail_points` 0.4 never arm on a bar that
+touches the fill (0 of 32): the quantization is the path's, not the level's.
+So the arm is B2's per-kind shape again and stays adapter policy — ADR-0001's
+"Trail and tick conventions" already names the half-tick arm as the
+adapter's, and the kernel's generic rule for a trail's arm under a declared
+grid already exists (L8b); selecting it for the arm alone is the per-kind
+mask above. The adapter now arms the generic `Trail` at the half-tick
+threshold its one-shot leg rests at (`source_trail_arm_level`) and books from
+a running best that is never short of the activation, because TradingView's
+starts there. The kernel is unchanged and the corpus byte-identical (on-grid,
+the two arms admit the same prints); the population sweep over sub-tick feeds
+is the real gate. One residual is left, of the same kind: the kernel's best
+starts at the arm, half a tick short of the activation, so while the raw
+extreme stays inside the activation's tick cell its stop sits up to half a
+tick further out than TradingView's and a print between the two fires only
+TradingView's (0 of the 6 tapes).
 
 **Why B2 is not closed in the kernel (route (a) rejected).** The only kernel
 change that would let `project()` declare the grid is a per-order-kind
