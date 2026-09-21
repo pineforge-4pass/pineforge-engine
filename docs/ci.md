@@ -302,6 +302,84 @@ are then checked against the sha256 in the corpus's own Git-LFS pointer, so a
 stale or corrupt cache fails as "the feed is wrong" and not as "30 probes
 drifted".
 
+## Documentation guards
+
+Three guards hold the published documentation to the tree. All three run from
+the source alone — no build, no corpus — and the first two are `ci_preflight`
+stages.
+
+`scripts/check_doc_anchors.py` checks every `file:line` citation the pages
+make: the file must resolve, the line must exist, and when a backticked symbol
+precedes the citation in the same table cell or sentence, that symbol must be
+on the cited line. Anchors rot on every header edit — a single campaign left
+474 of 992 wrong — so the gate is the only durable repair. `--list` dumps every
+anchor with its verdict; `--fix` re-anchors in place, and it changes **line
+numbers and nothing else**: it moves a citation only when the claimed symbol
+has exactly one occurrence in the resolved file's code, or exactly one type
+declaration there. It will not choose between several plausible lines, will not
+invent a line for a symbol that has vanished, and will not guess a file — those
+are edits to the sentence, not to the coordinate, and it reports each one with
+its candidate lines instead.
+
+```sh
+python3 scripts/check_doc_anchors.py            # the drift report, exit 1 if any
+python3 scripts/check_doc_anchors.py --list     # every anchor and its verdict
+python3 scripts/check_doc_anchors.py --fix      # re-anchor what is provable
+```
+
+`scripts/check_doc_lint.py` reads the prose instead: a `lane L<n>` roadmap
+label on a published page, a `there is no … yet / in this slice / today` claim <!-- verified HEAD -->
+whose line carries no `<!-- verified HEAD -->` marker, a stale epoch or hash
+domain, and a relative markdown link whose file or `#anchor` is missing. The
+marker on the line above is the escape hatch itself: this sentence names the
+pattern rather than claiming it, and the guard has no way to tell those apart,
+so somebody has to say so where the diff will show it. The
+live epoch set is read out of the tree — every `inline namespace <family>_v<n>`
+and every `"pineforge-…/v<n>"` domain — so the rule needs no edit when an epoch
+bumps and does not flag a live epoch of a family whose other members moved on.
+
+```sh
+python3 scripts/check_doc_lint.py
+```
+
+Both guards are wired into `scripts/ci_preflight.py` as `doc-anchors` and
+`doc-lint`, and both run **advisory**: the stage runs, prints its offenders and
+is recorded as `reported`, but its failure does not fail the preflight. That is
+deliberate and temporary. They fail on HEAD by design — the citations and the
+sentences they name are exactly what the two page-rewriting lanes L14-B and
+L14-C exist to correct — and a red stage on the integration branch before those
+lanes land would block every other lane's verification. `--strict-docs` makes
+them binding today, and L14-B/C leave it on:
+
+```sh
+python3 scripts/ci_preflight.py --strict-docs
+```
+
+Their own self-tests, `doc-anchors-tests` and `doc-lint-tests`, are never
+advisory, and both register as CTest rows (`test_doc_anchors`, `test_doc_lint`).
+A guard that cannot fail is decoration.
+
+The third guard is the documentation build. `docs/build.sh` runs Doxygen over
+the whole public surface — every header under `include/pineforge`, the C API
+and C ABI headers, the ten native examples, the adapter units, the pages, the
+design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.
+Doxygen's `WARN_AS_ERROR` is global, which would let a stale comment in a
+legacy adapter header stop the site from building, so the gate is scoped in the
+script instead: a warning in the guarded set — `native_host.hpp`,
+`native_run_spec.hpp`, `native_order.hpp`, `native_order_identity.hpp`,
+`native_toolkit.hpp`, `native_c_api.h`, `pineforge.h`, `docs/groups.dox`,
+`examples/native/` — fails the build; anything else is printed and counted. The
+count is zero today.
+
+```sh
+bash docs/build.sh        # docs/site/html/index.html, exit 1 on a guarded warning
+```
+
+CI pins Doxygen 1.13.2 (`.github/workflows/docs.yml`); the gate is a grep over
+the warning log rather than a Doxygen setting, so it behaves the same on any
+version. One version-specific note: 1.18 aborts when its configuration arrives
+on stdin, so `build.sh` writes a temporary config file.
+
 ## Failure evidence
 
 Each build directory contains `ci-summary.json` and full command logs under
