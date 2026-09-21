@@ -180,8 +180,9 @@ jobs:
   # Kernel-only lane: PINEFORGE_BUILD_SOURCE_LAYER=OFF. Proves the engine
   # still configures, builds, installs and passes its source-free CTest set
   # with no Pine adapter compiled, and that libpineforge_kernel.a carries no
-  # source-layer symbol. The live runner stays ON so both native examples
-  # are built from the kernel alone.
+  # source-layer symbol. The live runner stays ON so its two native example
+  # modules are built from the kernel alone, and every examples/native host
+  # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
     needs: preflight
     runs-on: ubuntu-24.04

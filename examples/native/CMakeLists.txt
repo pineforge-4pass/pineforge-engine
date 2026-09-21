@@ -10,7 +10,8 @@
 # alone: a source-layer symbol reaching an example is a link error here in the
 # default build too, not only under PINEFORGE_BUILD_SOURCE_LAYER=OFF. The
 # release and kernel profiles of scripts/ci_verify.py build them and run
-# their example_* rows; the other profiles leave the option OFF.
+# their example_* rows (each asserts the exit code and a summary line, below);
+# the other profiles leave the option OFF.
 
 set(PINEFORGE_NATIVE_EXAMPLES
     hello_kernel
@@ -72,25 +73,53 @@ foreach(example IN LISTS PINEFORGE_NATIVE_C_EXAMPLES)
 endforeach()
 
 if(PINEFORGE_BUILD_TESTS)
-    # Every example is its own assertion: a nonzero exit means the run did not
-    # reach Completed, or produced no closed trade.
+    # Every example is its own assertion, and its row asserts two things: the
+    # host exits 0 (it reached Completed and every check of its own passed),
+    # and it printed its summary line, which each host prints only after those
+    # checks and never when one fails. CTest cannot assert both on one row --
+    # PASS_REGULAR_EXPRESSION replaces the exit-code check, so a host that
+    # printed its line and then exited nonzero passed -- so every row runs its
+    # host through run_example.cmake, which fails on a nonzero exit, a signal,
+    # a timeout or a missing line. The line below is that row's assertion; an
+    # example without one is a configure error. No row may set
+    # PASS_REGULAR_EXPRESSION, FAIL_REGULAR_EXPRESSION, SKIP_REGULAR_EXPRESSION,
+    # WILL_FAIL or SKIP_RETURN_CODE: each would override the runner's verdict.
+    set(_pf_example_line_hello_kernel "closed trades: [1-9]")
+    set(_pf_example_line_hello_kernel_c "closed trades: [1-9]")
+    set(_pf_example_line_native_market_strategy
+        "batch closed trades: [1-9][0-9]*  stream closed trades: [1-9]")
+    set(_pf_example_line_native_selected_strategy
+        "host-sized applied: 1 units=2  selected-close applied: 1  closed trades: [1-9]")
+    set(_pf_example_line_native_bracket_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_sized_report_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_margin_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_calc_on_fills_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_htf_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_trail_risk_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_price_grid_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_risk_limits_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_price_grid_c "closed trades: [1-9]")
     foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES PINEFORGE_NATIVE_C_EXAMPLES)
-        add_test(NAME example_${example} COMMAND example_${example})
+        if(NOT DEFINED _pf_example_line_${example})
+            message(FATAL_ERROR "examples/native: ${example} has no summary line for its "
+                "CTest row to assert; set _pf_example_line_${example} to the line it prints "
+                "after its own checks have passed")
+        endif()
+        add_test(NAME example_${example}
+            COMMAND ${CMAKE_COMMAND}
+                "-DEXAMPLE=$<TARGET_FILE:example_${example}>"
+                "-DEXPECT=${_pf_example_line_${example}}"
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/run_example.cmake)
         set_tests_properties(example_${example} PROPERTIES TIMEOUT 60)
     endforeach()
-    # The regex is the row's assertion (CTest ignores the exit code once one is
-    # set), so each of these hosts prints its "closed trades:" line LAST, after
-    # every check of its own has passed, and prints nothing of the kind when
-    # a check fails.
-    set_tests_properties(example_hello_kernel example_hello_kernel_c
-        example_native_bracket_strategy
-        example_native_sized_report_strategy
-        example_native_margin_strategy
-        example_native_calc_on_fills_strategy
-        example_native_htf_strategy
-        example_native_trail_risk_strategy
-        example_native_price_grid_strategy
-        example_native_price_grid_c
-        example_native_risk_limits_strategy PROPERTIES
-        PASS_REGULAR_EXPRESSION "closed trades: [1-9]")
+
+    # The runner's mutation self-test: a host that prints its line and then
+    # exits nonzero, dies on a signal or hangs fails it, as does one that exits
+    # 0 without the line; and every example_* row above, read back from CTest,
+    # runs its own host through it with no property overriding its verdict.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME test_example_runner
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/test_example_runner.py
+            --cmake ${CMAKE_COMMAND} --ctest ${CMAKE_CTEST_COMMAND}
+            --examples-build-dir ${CMAKE_CURRENT_BINARY_DIR})
 endif()

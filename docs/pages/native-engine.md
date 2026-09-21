@@ -2648,8 +2648,9 @@ which has no realtime route.
 Both hosts on this page are built sources, not listings. They live under
 `examples/native/` with one standalone, Pine-free host per feature family the
 kernel exposes. Each includes only `<pineforge/native_host.hpp>` (or the
-toolkit / module header over it), links `PineForge::kernel` and prints a
-`closed trades:` line last, after every check of its own has passed:
+toolkit / module header over it), links `PineForge::kernel`, and prints its
+summary line — the one carrying `closed trades:` — only after every check of
+its own has passed:
 
 | example | demonstrates | lane |
 |---|---|---|
@@ -2675,8 +2676,18 @@ ctest --test-dir build -R '^example_'
 ```
 
 `PINEFORGE_BUILD_EXAMPLES` (default OFF) builds each one as a standalone
-executable and registers it as a CTest row whose assertion is that
-`closed trades: [1-9]` line. The `release` and `kernel` profiles of
+executable and registers it as a CTest row that asserts two things: the host
+exits 0, and it printed its summary line — `closed trades: [1-9]`; the market
+host's line must also show a closed trade from its stream drive, and the
+selected host's pins its one host-sized opening of 2 units and its one
+selected close. CTest cannot assert both on one row (`PASS_REGULAR_EXPRESSION`
+replaces the exit-code check), so every row runs its host through
+`examples/native/run_example.cmake`, which fails on a nonzero exit, a signal, a
+timeout or a missing line; an example registered without a summary line is a
+configure error. The `test_example_runner` row
+(`scripts/test_example_runner.py`) proves the runner fails in each of those
+ways and that no `example_*` row sets a property that would override its
+verdict. The `release` and `kernel` profiles of
 `scripts/ci_verify.py` turn the option on, so every `example_*` row runs in
 the gate both with and without the source layer compiled;
 `scripts/check_native_include_independence.py` compiles all thirteen sources

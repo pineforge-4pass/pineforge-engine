@@ -76,7 +76,10 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # 189 = those 187 plus P6's two source-guard rows test_native_feature_rulings /
 # _mutations, which are Python guards over the sources and so register in
 # every profile, as N11's two do.
-KERNEL_MIN_TESTS = 189
+# 190 = those 189 plus lane P7's test_example_runner, the self-test of the
+# runner every example_* row goes through; it registers wherever the examples
+# do, so here and in release.
+KERNEL_MIN_TESTS = 190
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise.
 CTEST_ROW_COUNT = re.compile(r'% tests passed(?:, \d+ tests? failed)? out of (\d+)')
