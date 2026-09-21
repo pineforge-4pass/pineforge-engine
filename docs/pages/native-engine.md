@@ -1640,7 +1640,18 @@ TradingView-calibrated, and a host that supplies them inherits its rules:
   exactly as a partly covered chart would.
 
 Declare no `authoritative_bars` and the buckets are a plain aggregation of the
-run's own input, with no calibration to inherit.
+run's own input, with no calibration to inherit. That is the whole policy
+knob (R5 lane N14 ruling): the three rules above follow from "the supplied
+bars are the venue's own bars of that timeframe", so the kernel gates them on
+the feed's presence rather than on a separate partition field.
+
+One more rule holds with or without authoritative bars and is keyed by the
+instrument class in `spec.type`: an early close (a session-day that ends
+before its template's end) completes a calendar period for the exchange
+classes (`"stock"`, `"futures"`, `"index"`, `"fund"`), and does **not** for
+the continuous-session classes `"forex"`, `"cfd"` and `"crypto"`, whose period
+completes on the next session's first bar instead. The vocabulary is the one
+the C ABI's `strategy_set_syminfo_type` fixes.
 
 **Declaring at begin.** A host whose series are known only to its own
 begin-time registration calls
@@ -3017,6 +3028,39 @@ fewer rows or no count at all, so a test TU that silently becomes source-bound
 (or a filter that empties the suite) is a refusal rather than a smaller green.
 Raise the constant when a new source-free row lands; `--min-tests N` overrides
 it for one run of any profile (the other profiles carry no default floor).
+
+### What the kernel-only archive still names
+
+R5 lane N14 audited `strings libpineforge_kernel.a` for Pine / TradingView
+vocabulary. What remains is listed with its ruling in
+`docs/adr/0001-kernel-adapter-boundary.md` ("Residual TradingView-named
+surface"); the short version:
+
+- **Neutral spellings.** The kernel's public utility names are the neutral
+  ones: `NumericMatrix` / `GenericMatrix<T>` (`matrix.hpp`,
+  `generic_matrix.hpp`), `timeframe_time` / `local_hour` /
+  `session_in_market` (`session_time.hpp`), `str_format` / `str_tostring`
+  (`str_utils.hpp`), `deterministic_random` (`math.hpp`) and
+  `float_band_eq` … (`ta_compare_band.hpp`). The `Pine*` / `pine_*`
+  spellings are exact deprecated aliases kept for generated code; the
+  `pine_float_*` shim ships only with the source layer
+  (`include/pineforge/source/pine_float_compare.hpp`).
+- **Frozen pending-row field names.** The seventeen `pine_exit_activation_*`,
+  `pine_frozen_market_instruction_*` and `pine_birth_reach` reflection
+  strings (plus `tv_carry_qty`) belong to the frozen `pf_pending_order_v1_t`
+  mirror, an append-only C ABI contract; the neutral view is
+  `native_working_requests()`.
+- **Host-only modes behind frozen C setters.** `strategy_set_realtime_tail`
+  and `strategy_set_probe_suppress_tail_logic` are the Pine source host's
+  live-probe protocol. On a bare `NativeStrategyHost` the kernel's virtual
+  seams `set_realtime_tail` / `set_probe_suppress_tail_logic` are accepted
+  and inert, as the C setters always were on a native module: the C++ seam
+  answers `false` ("no such mode here"), `last_error()` stays empty, and the
+  run is byte-identical to one that never asked.
+- **`request.security` in three feed-store messages.** The last_error texts
+  of `set_native_security_feed` name the feature the frozen C export
+  `strategy_set_native_security_feed` documents; the mechanism is the
+  generic authoritative-feed store above.
 
 ## Runner JSON and command
 

@@ -14,7 +14,25 @@
 
 namespace pineforge {
 
-// ---- native higher-timeframe request.security feeds -------------------------
+// ---- authoritative higher-timeframe feeds ---------------------------------
+//
+// The generic contract (R5 lane N14 ruling, design §2.iv item 6 / ADR-0001):
+// a feed installed here is the venue's own bars of one timeframe. Three
+// rules follow from that and from nothing else:
+//   (a) a completed bucket of that timeframe takes its OHLCV from the bar
+//       keyed to the same period -- the aggregator still decides WHEN;
+//   (b) the feed's stamps ARE the period partition of every calendar
+//       evaluator that reads it, each period's trade date being the
+//       session-day of its last chart bar (a session with no stamp of its
+//       own belongs to the next stamped period);
+//   (c) a coarser calendar period ("W" / "M") with no feed of its own is
+//       the aggregate of the finest installed calendar feed that divides it
+//       (the daily feed), keyed as its own aggregator labels the period.
+// The policy knob is the feed itself: a host that installs no authoritative
+// bars gets a plain aggregation of its input with none of this, and a host
+// that wants the venue's periods installs them. The calibration evidence
+// below is TradingView's, recorded because it is what pinned each rule; the
+// mechanism is venue-generic.
 //
 // TradingView's request.security(syminfo.tickerid, "D", close) on an intraday
 // chart of CME_MINI:ES1! returns the 15:00 CT settlement, on NASDAQ:AAPL the

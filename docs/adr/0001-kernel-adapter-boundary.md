@@ -236,6 +236,47 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   (`CMakeLists.txt:341-342`). `PINEFORGE_BUILD_EXAMPLES` (`CMakeLists.txt:37`) is passed by CI
   (`scripts/ci_verify.py:167`) but tested by no CMake code: it guards nothing.
 
+## Residual TradingView-named surface in the kernel-only archive (R5 lane N14 rulings)
+
+Measured on this tree with the audit's own command over `libpineforge_kernel.a` (the archive built
+with `PINEFORGE_BUILD_SOURCE_LAYER=OFF`):
+
+```
+strings build-ci-kernel/lib/libpineforge_kernel.a | grep -iP 'pine(?!forge)|tradingview|barmerge'
+```
+
+Every hit is a field name of the frozen pending-row POD and nothing else. Each is listed here with its
+ruling; a name that is not in this table must not appear in that output, and a lane that adds one
+adds its row.
+
+| archive string | where it comes from | ruling |
+|---|---|---|
+| `pine_exit_activation_present`, `pine_exit_activation_direction_at_birth`, `pine_exit_activation_entry_bar_at_birth`, `pine_exit_activation_cursor_price_at_birth`, `pine_exit_activation_owner_cycle_at_birth`, `pine_exit_activation_stop_level_at_birth`, `pine_exit_activation_limit_level_at_birth`, `pine_exit_activation_limit_continuation_present`, `pine_exit_activation_limit_continuation_fill`, `pine_exit_activation_limit_continuation_cause` | reflection table of `pf_pending_order_v1_t` (`src/pending_order_mirror.cpp`, `include/pineforge/pending_order_mirror.hpp`) | **frozen by ruling** (design §2.ii row i): the POD is an append-only C ABI contract read by `strategy_pending_order_get`; its field names are the contract. The neutral view is `native_working_requests()` / `strategy_native_working_*`. |
+| `pine_frozen_market_instruction_kind`, `pine_frozen_market_instruction_own_units`, `pine_frozen_market_instruction_target_id`, `pine_frozen_market_instruction_target_id_hash64`, `pine_frozen_market_instruction_target_id_truncated`, `pine_frozen_market_instruction_transaction_units` | same reflection table | **frozen by ruling** (§2.ii row i), as above. |
+| `pine_birth_reach` | same reflection table | **frozen by ruling** (§2.ii row i), as above. |
+
+Names the grep does not match but the audit named, with their rulings:
+
+| name | where | ruling |
+|---|---|---|
+| `tv_carry_qty` | `pf_pending_order_v1_t` field | **frozen by ruling** (§2.ii row i), as the table above. |
+| `native request.security feed requires …` (three `last_error` texts) | `src/engine_aux_security.cpp` `set_native_security_feed` | **retained**: the texts name the feature the frozen C export `strategy_set_native_security_feed` documents, and the prefix is pinned by the ab9714be base test `test_native_security_feed` (twin parity). The store itself is the generic authoritative-feed mechanism. |
+| the W/M-from-dailies partition and trade-date rule | `src/engine_aux_security.cpp` | **retained as the generic contract** (design §2.iv item 6, §2.ii row s): a feed is the venue's own bars of one timeframe; its stamps are the period partition, a coarser calendar period without its own feed is the aggregate of the finest installed calendar feed, and the policy knob is installing the feed or not. TradingView pins are the calibration evidence, not the mechanism. |
+| `session_template_knows_early_close` (`"forex"` / `"cfd"` / `"crypto"`) | `src/engine_security.cpp` | **retained** (§2.ii row t): `SymInfo::type`'s vocabulary is fixed by the frozen C ABI (`strategy_set_syminfo_type`), so the instrument-class classification is the kernel's own; continuous-session OTC classes complete a calendar period on the next session's first bar. |
+| `is_fixed_intraday_minute_tf`, `supports_lower_tf_emulation`, `synthesize_lower_tf_bars` | `src/engine_lower_tf.cpp` | **retained as generic primitives** (§2.ii row r): a timeframe parser, an integer ratio and evenly sampled sub-bars, pinned by kernel-only tests; the merge-flag rule that used to throw TradingView's sentence from this TU moved to the source evaluator. |
+| `inputs_`, `get_input_*`, `syminfo_metadata_`, `set_syminfo_metadata`, `enum class QtyType`, `SymInfo` | `include/pineforge/engine.hpp` | **retained**: the run-time ingress the frozen C ABI exposes (`strategy_set_input*`, `strategy_set_syminfo_*`). Their comments explain the vocabulary; no kernel decision reads a Pine name. |
+| `[pineforge] WARNING: …`, `on_margin_call` | `src/session_time.cpp`, `native_c_api.h` | not residue: the project's own name and a broker term. |
+
+What N14 moved out of the archive, so the table above is complete: the `barmerge` merge-flag rule
+(→ `src/source/pine_security_eval.cpp`), the `PineMatrix` / `PineGenericMatrix` names (→
+`NumericMatrix` / `GenericMatrix<T>` with deprecated aliases), the `pine_float_*` shim (→
+`include/pineforge/source/`), the market-admission journal `pineforge::admission` (→ source layer),
+TradingView's trail tick arithmetic (→ `compat/pine/trail_ticks.hpp`) and the live-tail /
+probe-suppress overrides (→ `source::PineStrategyHost`, behind two kernel virtual seams the frozen C
+setters call; on a bare host the seams keep the L1 ingress contract, accepted and inert). The Codex audit's remaining rows — the dead fill helpers `round_to_mintick_directional`
+/ `apply_slippage` and the `observe_*` source-only observers — are gap lane N10's and the C-surface
+lane's, not residue of this table.
+
 ## Boundary rules (for contributors)
 
 1. TradingView/Pine parity for *new* work goes only in `src/source/` / `src/compat/pine/` or in

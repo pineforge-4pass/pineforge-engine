@@ -48,6 +48,15 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
 }
 
 
+// Whether an early close (a session-day ending before its template's end)
+// completes a calendar period. Keyed by the instrument class in
+// SymInfo::type -- the vocabulary the frozen C ABI's strategy_set_syminfo_type
+// fixes ("stock" / "futures" / "index" / "fund" vs the continuous-session
+// OTC classes "forex" / "cfd" / "crypto"), so the rule is the kernel's own
+// market-structure classification, not a source-language one (R5 lane N14
+// ruling, ADR-0001). OTC classes never close a day early: their session
+// template has no holiday knowledge, so the period completes on the next
+// session's first bar instead (the OANDA pins in timeframe.hpp).
 bool BacktestEngine::session_template_knows_early_close() const {
     std::string kind = syminfo_.type;
     for (char& c : kind) {
