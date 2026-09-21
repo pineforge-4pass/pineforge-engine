@@ -1,241 +1,319 @@
 # Contributing to PineForge
 
-Thanks for your interest. This document covers the practical workflow for contributing changes to the runtime.
+Thanks for your interest. This document is the whole workflow, written for
+someone who has never seen this repository. Read it once before your first
+change; after that, the checklist near the end is the part you keep.
 
-Community interaction is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For licensing and third-party obligations (Eigen, optional benchmark tools), see [LEGAL.md](LEGAL.md).
+Community interaction follows the [Code of Conduct](CODE_OF_CONDUCT.md). For
+licensing and third-party obligations (Eigen, optional benchmark tools), see
+[LEGAL.md](LEGAL.md). If you are an AI agent working from a brief rather than a
+person reading a guide, read
+[Contributing as an LLM](docs/pages/contributing-llm.md) instead — same ground,
+written as rules with the guard that enforces each one.
 
-## Submodules
+## What this repository is
 
-The `corpus/` validation tree and `benchmarks/assets` are published as
-separate Apache-2.0 submodules. Initialize them after cloning:
+PineForge is a C++17 backtest and forward-execution engine with a C ABI. Its
+job is to be *right*: a strategy run through it produces the same trade list
+TradingView produces for the same PineScript on the same bars, trade for trade,
+and two runs of the same inputs produce identical bytes. The PineScript →
+C++ transpiler is a **separate** project
+([`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss));
+this repository is the runtime that every compiled strategy links against, and
+also a kernel that runs strategies written directly in C++ or C with no
+PineScript anywhere.
 
-```bash
-git submodule update --init corpus benchmarks/assets
+## The two layers, and the one rule
+
+```
+Pine v6 script
+   │  pineforge-codegen (separate repo): translation only
+   ▼
+GeneratedStrategy ── indicator math + strategy.* calls
+   │  attach_pine_execution_adapter()
+   ▼
+Pine adapter        src/source/, src/compat/pine/     ← TradingView parity lives here
+   │  generic orders, handles, callbacks
+   ▼
+Kernel              src/engine_*, src/native_*, src/ta_*, …   ← knows nothing about Pine
 ```
 
-Both submodules are redistributable: `tv_trades.csv` files are produced
-from PineScript sources we own, and the corpus ships under the same
-Apache-2.0 license as the engine. The corpus also ships the per-probe
-`generated.cpp` (transpiler output of our own clean-room
-`strategy.pine`) so public users can rebuild without access to the
-separate `pineforge-codegen` transpiler (source-available, PolyForm Noncommercial). The compiled
-`strategy.dylib` / `strategy.so` / `strategy.dll` artefacts are
-platform-specific and rebuilt locally by `scripts/run_corpus.sh`.
+**The rule: the kernel must not know what TradingView is.** The test is
+mechanical — *if justifying the change needs the word "TradingView", it does
+not belong in the kernel.* The kernel changes only for a **generic** capability
+with a recorded ruling; TradingView's own rules go in the adapter or in
+codegen. The boundary, its five other rules and the ruling table live in
+[ADR 0001](docs/adr/0001-kernel-adapter-boundary.md).
+
+Two consequences that are easy to miss:
+
+- **Every kernel capability is opt-in.** A new spec field, a new request kind,
+  or a new virtual with an empty default — so a run that does not ask for it is
+  byte-identical to the run before the capability existed. This is what lets
+  the parity corpus be a byte oracle.
+- **A capability the adapter never declares is a decision, not dead code.**
+  The change that adds a `NativeRunSpec` field adds its row to ADR 0001's
+  ruling table: *native-only* (and then it needs a native example and a test),
+  *adapter-policy*, or *adapter-hook*.
+  `scripts/check_native_feature_rulings.py` fails until the table is true.
+
+## Where your change goes
+
+| You want to… | It goes in | And you must also |
+|---|---|---|
+| Fix a TradingView-parity difference | `src/source/` or `src/compat/pine/` | add a replay test on recorded bars; run the parity gate |
+| Add a generic broker/matching capability | the kernel (`src/engine_*`, `src/native_*`) | make it opt-in, add its ADR 0001 ruling row, add a kernel-only test, and add an `examples/native/` host if the ruling is *native-only* |
+| Add or change a TA class | the right `ta_*.cpp` partition + its declaration in `<pineforge/ta.hpp>` | add a unit test against a hand-computed series |
+| Change what codegen may emit | the contract, not this repo's runtime | say so in the PR; the transpiler lives in `pineforge-codegen-oss` |
+| Add a runtime `PF_API` export | `src/c_abi.cpp` + `include/pineforge/pineforge.h` | update `EXPECTED_RUNTIME` check_c_abi_runtime.py:28, the ctypes harnesses, and the README symbol table — all in the same commit |
+| Add a C kernel-driving export | `src/native_c_host.cpp` + `include/pineforge/native_c_api.h` | update that header's COVERAGE block; `scripts/check_native_c_api_surface.py` proves it is exactly the host's public surface |
+| Document something | `docs/pages/`, `README.md`, this file | cite the tree by `file:line`; the anchor guard checks that the line still holds the symbol |
 
 ## Development setup
 
 ```bash
-git clone https://github.com/pineforge-4pass/pineforge-engine.git pineforge-engine
+git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 git submodule update --init corpus benchmarks/assets
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-You'll need:
+You need CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12),
+Python 3 and Eigen 3.3+ (fetched automatically if absent).
 
-- CMake ≥ 3.16
-- A C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12)
-- Eigen 3.3+ (will be fetched automatically if not on system)
+> **The stale-test-binary trap.** `cmake --build build --target pineforge`
+> rebuilds only the static library. Test executables are separate targets that
+> statically link it, and `ctest` rebuilds nothing — so after a library-only
+> build, `ctest` runs stale binaries and can pass falsely. Always build **all**
+> targets before `ctest` when runtime values changed.
 
-The full test suite — 30 binaries, 29 C++ + 1 pure-C ABI sanity test — completes in under a second. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
+## The loop: write the witness first
 
-## What changes are easy to land
+A change is proven by a test that failed before it and passes after it. In that
+order, deliberately:
 
-Pure implementation changes that touch internal C++ are easy. Examples:
+1. **Write the test first** — a unit test in `tests/`, or a native host under
+   `examples/native/`, or a corpus probe. Register it: `TEST_SOURCES`
+   tests/CMakeLists.txt:1 for a unit, or `PINEFORGE_NATIVE_EXAMPLES`
+   examples/native/CMakeLists.txt:16 plus a `_pf_example_line_hello_kernel`
+   examples/native/CMakeLists.txt:98 for the row's own assertion.
+2. **Run it and read the failure.** It must fail for the *right* reason — the
+   behaviour is missing or wrong — not because the fixture is wrong or the
+   symbol does not compile. Record what it said; a reviewer will ask.
+3. **Implement the smallest change that makes it pass.**
+4. **Run it again, green**, then the gates below.
 
-- Bug fixes in `engine_*.cpp` that improve TV parity
-- New TA classes (add to the appropriate `ta_*.cpp` partition + its declaration in `<pineforge/ta.hpp>`)
-- Refactors of internal C++ that don't touch the C ABI surface
-- Added unit tests in `tests/`
+A test whose body is a seed row, a `return 0` main, a disabled row or a TODO
+placeholder is not evidence. Neither is a test whose expected value you copied
+out of the run you are trying to justify.
 
-Changes to `<pineforge/pineforge.h>` are hard. See "ABI stability" below.
+## The gates
 
-## ABI stability
-
-`<pineforge/pineforge.h>` is the canonical consumer surface and follows append-only semver:
-
-- **PATCH** (`0.1.X`): no ABI changes. Bug fixes, internal refactors, perf, new tests, doc fixes.
-- **MINOR** (`0.X.0`): append-only additions. New functions added at the end of the header; new fields appended at the end of existing struct definitions; new enum values at the end of an enum.
-  - You **may not** add a new field in the middle of `pf_report_t`. That's a layout change.
-  - You **may** add `pf_some_new_function()` at the end of the header. Old binaries that don't reference it keep working.
-- **MAJOR** (`X.0.0`): breaking changes. Reordering struct fields, removing functions, renaming things. Requires explicit maintainer signoff.
-
-The compile-time `static_assert`s in `src/c_abi.cpp` enforce layout pinning between `pf_*_t` POD types and their internal C++ mirrors. **If those `static_assert`s fail in your branch, do not "fix" them by changing the asserts.** Find what changed in the C++ representation and revert.
-
-## Coding style
-
-- C++17. No `std::filesystem`, no `<format>`. Yes to structured bindings, `if constexpr`, and `std::optional`.
-- 4-space indent (no tabs). 100-column soft limit. The repo's `.clang-format` is canonical.
-- Names: `lower_snake_case` for functions and members, `PascalCase` for types, `kPascal` for constants where they exist.
-- Comments explain *why*, not *what*. The runtime has hundreds of subtle TV-parity quirks; if you write code that handles one, leave a one-paragraph comment on what TV does, and link the offending probe / test fixture from `tests/`.
-
-## Function size
-
-The runtime targets functions ≤ 80 lines (one screen). Most are well under. Three are intentionally larger because splitting fragments a single concept:
-
-- `BacktestEngine::classify_order_eligibility`
-- `BacktestEngine::evaluate_fill_price`
-- `BacktestEngine::sort_orders_by_fill_phase`
-
-If you add a new function over 80 lines, expect the reviewer to ask "can this be split?". If the answer is "no, it's one cohesive thing", say so in the PR description. Don't fragment cohesive code just to hit a number.
-
-## File organisation
-
-The runtime is split by concern, not by class. When adding code:
-
-- New TA indicator class? Pick the correct `ta_*.cpp` partition by category (averages / oscillators / volatility-trend / extremes-volume / misc) and add it there.
-- New `BacktestEngine` method? It probably belongs in one of the `engine_*.cpp` partitions. Add the declaration to `<pineforge/engine.hpp>`'s appropriate section (private/protected/public) and the definition to whichever partition matches the concern.
-- New file-local helper that's only used in one `.cpp`? Put it in an anonymous namespace inside that file. Do not declare it in `engine_internal.hpp` unless it's genuinely cross-TU.
-- New cross-TU internal helper? Declare it in `engine_internal.hpp` under `pineforge::internal`.
-
-## Tests
-
-Every PR must keep ctest green:
+Run these before you push. Each one refuses a specific way of being wrong.
 
 ```bash
-ctest --test-dir build --output-on-failure
+# 1. Fast wiring and source checks. No build. Run this first: it is seconds.
+python3 scripts/ci_preflight.py --output-dir build-ci-preflight
+
+# 2. The full verifier, per profile. Configure, build, ctest, the source
+#    guards, the historical-ABI matrix, the installed-package smoke check.
+python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 6
+python3 scripts/ci_verify.py kernel  --build-dir build-ci-kernel  --jobs 6
+
+# 3. TradingView parity. The subset is what a pull request can wait for.
+./scripts/check_corpus_parity.sh --subset
 ```
 
-For meaningful changes, add a test. The easiest pattern: copy `tests/test_kc.cpp` and rename — it shows the standard test harness. New tests should be added to the `TEST_SOURCES` list in `tests/CMakeLists.txt`.
+What each gate refuses:
 
-For TA-class changes, the test pattern is:
+| Gate | Refuses |
+|---|---|
+| `check_c_abi_runtime.py` | a `PF_API` runtime export added or removed without its inventory row |
+| `check_native_c_api_surface.py` | a public `NativeStrategyHost` member with no C spelling and no recorded reason |
+| `check_native_feature_rulings.py` | a `NativeRunSpec` field the adapter does not declare and the ADR does not rule |
+| `check_kernel_residuals.py` | a TradingView-shaped name reaching the kernel archive without an ADR 0001 row |
+| `check_native_cpp_versions.py`, `check_aggregate_cpp_versions.py` | an internal C++ epoch moved without its consumers |
+| `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
+| `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |
+| `check_doc_anchors.py` | a `file:line` citation that no longer points at the symbol it claims |
+| `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified |
+| `check_pine_to_native_coverage.py` | a Pine builtin with no row on the migration page |
+| the CTest row **floors** | a test row that vanished from a profile |
 
-1. Construct the indicator
-2. Feed a known input series
-3. Compare against a hand-computed expected output (use Python or a spreadsheet)
-4. `printf` and assert
+### The floors
 
-For engine changes, look at `tests/test_integration.cpp` and `tests/test_request_security.cpp` for examples of multi-bar simulation tests.
+`ci_verify.py` counts the CTest rows that actually **ran** and fails below a
+floor — `KERNEL_MIN_TESTS` ci_verify.py:88 and `RELEASE_MIN_TESTS`
+ci_verify.py:107.
+A deleted or silently skipped row is a failure, not a quieter run. If your
+change adds rows, raise the floor in the same commit and say by how much; if it
+legitimately removes one, lower it deliberately and say why. `--min-tests`
+overrides the floor for a local experiment; never in a commit.
 
-## Source coverage
+## The parity contract
 
-The runtime ships an opt-in coverage harness (Apple Clang's `llvm-cov` or
-GCC's `gcov`/`gcovr`). It is **not** wired into the default `cmake -B build`
-flow — coverage instrumentation forces `-fprofile-instr-generate` /
-`--coverage`, which slows the build and produces `.profraw` / `.gcda`
-side-files that don't belong in regular development trees.
-
-Run the full coverage pipeline with:
-
-```bash
-bash scripts/coverage.sh
-```
-
-That script:
-
-1. Configures a separate `build-cov/` tree with `-DPINEFORGE_ENABLE_COVERAGE=ON`.
-2. Builds the runtime + every test binary with the right instrumentation flags.
-3. Runs every test (`LLVM_PROFILE_FILE` redirected to `build-cov/coverage/raw/`).
-4. Merges the per-test `.profraw` files into one `.profdata`.
-5. Emits a per-file totals table and per-file annotated source listings.
-
-Outputs live under `build-cov/coverage/`:
-
-- `totals.txt` — line / region / function / branch percentages per source file.
-- `uncovered.txt` — same rows sorted ascending by line coverage (lowest first).
-- `per-file/<source>.txt` — annotated listings showing which lines/branches are unreached.
-- `html/index.html` — only when `FORMAT=html bash scripts/coverage.sh` is used (requires `lcov`/`gcovr`).
-
-Honoured env vars: `BUILD_DIR` (default `build-cov`), `COMPILER`
-(`clang` | `gcc`, auto-detected), `JOBS`, `SKIP_BUILD=1` and `SKIP_TESTS=1`
-to reuse cached artefacts, `FORMAT=html` to also emit a clickable report.
-
-The current totals on a fresh clone hover around 81% line coverage; new
-PRs that touch a file with <80% coverage should ideally raise (or at least
-not lower) that file's line coverage. The `uncovered.txt` report makes it
-easy to find candidates.
-
-## Parity testing
-
-The parity corpus lives in the **`corpus` git submodule** (see
-top of this file). After `git submodule update --init corpus`, read
-[`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is:
+The validation corpus is a **byte oracle**, not a smoke test.
 
 ```bash
-bash scripts/run_corpus.sh
-```
-
-It builds every `corpus/validation/<probe>/generated.cpp` into a
-`strategy.dylib` / `strategy.so`, runs each against the 15m chart feed
-derived from the corpus's single committed 1m feed
-(`corpus/data/ohlcv_ETH-USDT-USDT_1m.csv`, Git LFS; the harness
-materializes `corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv` via
-`scripts/derive_corpus_feeds.py`), and
-rewrites the regenerated `engine_trades.csv` files. It also prints a
-canonical `scripts/verify_corpus.py --all --quiet` summary with the five
-parity labels (`excellent`, `strong`, `moderate`, `weak`, `minimal`).
-Review the regenerated CSV diff before committing runtime-semantics changes.
-
-Probe directories follow the convention
-`<category>-<descriptive-slug>-NN` (e.g. `bracket-exit-tp-sl-fixed-01`,
-`analyzer-parity-stop-limit-timing-01`). The leading `<category>` token
-groups probes by the engine sub-system they exercise — `bracket`,
-`analyzer-parity`, `barstate`, `anomaly`, and so on. See
-[`corpus/README.md`](corpus/README.md) for the full category list and
-when to pick which one when adding a new probe.
-
-If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), run the corpus sweep locally and include the diff in the PR description.
-
-### The parity gate in one command
-
-`scripts/run_corpus.sh` rewrites the trades and prints a summary; it does not
-judge them. The gate does:
-
-```bash
-./scripts/check_corpus_parity.sh
+./scripts/check_corpus_parity.sh            # the full 312-probe sweep, ~32 min
+./scripts/check_corpus_parity.sh --subset   # the 30 probes a pull request waits for
 ```
 
 It checks the corpus out at the gitlink this repository records, refuses to
-start if a pinned input under `validation/` is modified, runs the full sweep,
-and then **fails** if any probe's `engine_trades.csv` no longer hashes to what
+start if a pinned input under `validation/` is modified, runs the probes, and
+fails if any probe's `engine_trades.csv` no longer hashes to what
 `scripts/corpus_parity_baseline.txt` pins — naming the probe and printing the
 first differing rows — or if `scripts/verify_corpus.py` no longer prints its
-pinned headline (`excellent=311, strong=0, anomaly=1`).
+pinned tier headline.
 
-The baseline, not the corpus's committed trades, is the byte oracle: the tapes
-pineforge-corpus commits were written by an older harness (no `Engine
-range-end` column, rounded `Qty`) and no longer reproduce. Both gates matter —
-a one-tick slippage change moves a probe's baseline hash while the tier
-headline stays `excellent=311`. Refresh the baseline deliberately, in the
-commit that carries the evidence:
+**"Moved" means any byte changed**: a one-tick slippage difference moves a
+probe's baseline hash while the tier headline stays `excellent=311`. Both
+matter. The baseline, not the corpus's committed trades, is the oracle: the
+tapes `pineforge-corpus` committed were written by an older harness and no
+longer reproduce.
+
+A refresh is deliberate and carries its evidence in the same commit:
 
 ```bash
 ./scripts/check_corpus_parity.sh
 python3 scripts/corpus_trades_identity.py --update
 ```
 
-The same command runs nightly and on demand in CI as the `Corpus parity`
-workflow, and automatically on pull requests that touch the corpus pin or the
-parity tooling. It is not a required pull-request check because the 312-probe
-run phase is serial and exceeds the pull-request time budget; see
-[`docs/ci.md`](docs/ci.md). Run it yourself for any runtime-semantics change.
+The subset runs as a required check on a pull request; the full sweep runs
+nightly and on demand. The details, including which 30 probes and why, are in
+[`docs/ci.md`](docs/ci.md).
 
-For a multi-engine cross-check, [`benchmarks/`](benchmarks/) ships
-the same 50 strategies through PineForge, [PyneCore](https://github.com/PyneSys/pynecore),
-and [PineTS](https://github.com/LuxAlgo/PineTS) — useful for spotting
-whether a parity drift is engine-specific or a TV-side semantic both
-engines see. `bash benchmarks/run_all.sh` runs the whole pipeline.
+### "Expectation corrected"
 
-## Pull requests
+Sometimes a pinned number *should* change — a test's expected value, a floor, a
+baseline hash. Loosening a pin to make a red thing green is the single easiest
+way to destroy this repository's value, so the convention is explicit: the diff
+that changes a pin carries, on the line above it or in the commit message,
 
-- Open against `main`.
-- Keep PRs small. One concept per PR; multiple commits is fine.
-- Title format: `area: short imperative summary` (e.g. `engine_fills: handle dual-stop tie-break`).
-- Body: explain the *why*. If it's a TV-parity fix, link the failing probe / cite the TV behavior.
-- All CI must pass before merge: build on Ubuntu + macOS in both Release and Debug, ctest, and the install/`find_package` smoke test.
-- TradingView parity is gated separately by the nightly `Corpus parity` workflow (`./scripts/check_corpus_parity.sh`). A pull request that moves the `corpus` gitlink or the parity tooling triggers it directly; any other parity-relevant change should run it locally.
+```
+expectation corrected: <old> -> <new>, because <what actually changed>
+```
 
-## Maintainer: release checklist
+with the *what* naming the mechanism, not the symptom. No note, no merge. You
+will find the convention already in `scripts/ci_verify.py` and in the test
+suites; follow the spelling exactly so it stays greppable.
 
-Before cutting a release on the **public** default branch:
+### Epochs and the ABI
 
-1. **Submodule pins** — bump `corpus/` and `benchmarks/assets` submodules to the intended commits and verify both upstream tags resolve under their published Apache-2.0 trees. [LEGAL.md](LEGAL.md) describes the submodule split.
-2. **Secrets** — No API keys, `.env`, or machine-specific paths in tracked files; keep `benchmarks/_workdir`, `.venv`, and `node_modules` untracked.
-3. **Notices** — Keep [NOTICE](NOTICE) aligned with anything linked into `libpineforge` (e.g. Eigen). Update [LEGAL.md](LEGAL.md) if you add a new mandatory runtime dependency.
-4. **Benchmark AGPL** — Optional `benchmarks/` tooling installs AGPL-covered PineTS (`pinets`). Default CI stays on ctest only so a minimal clone is not forced to pull AGPL into the lib build.
+Two different promises:
+
+- **The C ABI** (`<pineforge/pineforge.h>`, `<pineforge/native_c_api.h>`) is
+  append-only within a major version: fields and functions are added at the
+  end, never reordered, removed or retyped. PATCH never touches it, MINOR
+  appends, MAJOR breaks and needs maintainer signoff. The `static_assert`s in
+  `src/c_abi.cpp` pin the layouts. **If those asserts fail in your branch, do
+  not "fix" them by changing the asserts** — find what changed in the C++
+  representation.
+- **Internal C++ epochs** (`inline namespace engine_script_run_v…` and the
+  hash domains) guard link-time compatibility between the library and the
+  strategies compiled against it. Moving one is a real event with its own
+  procedure: read [`docs/pages/abi-stability.md`](docs/pages/abi-stability.md)
+  before you do, and expect the version guards to fail until every consumer
+  moves with you.
+
+## Coding style
+
+- C++17. No `std::filesystem`, no `<format>`. Yes to structured bindings,
+  `if constexpr`, `std::optional`.
+- 4-space indent, no tabs, 100-column soft limit; `.clang-format` is canonical.
+- `lower_snake_case` functions and members, `PascalCase` types.
+- Comments explain *why*. The runtime is full of subtle TradingView-parity
+  quirks; when you handle one, leave a paragraph on what TradingView does and
+  cite the probe or fixture that proves it.
+- Functions target ≤ 80 lines, and a few in the matching and fill paths are
+  deliberately longer because splitting them would fragment one concept. If
+  yours must be longer, say so in the PR rather than fragmenting it to hit a
+  number.
+- File organisation is by concern, not by class: a new `BacktestEngine` method
+  goes in the `engine_*.cpp` partition that matches its concern, a file-local
+  helper into an anonymous namespace, a genuinely cross-TU helper into
+  `engine_internal.hpp` under `pineforge::internal`.
+- **No debug output in a merged change.** No `printf` left behind, no
+  commented-out experiment, no `test.skip`.
+
+## Coverage
+
+The coverage harness is opt-in — instrumentation slows the build and leaves
+profile side-files:
+
+```bash
+bash scripts/coverage.sh          # FORMAT=html for a clickable report
+```
+
+Outputs land in `build-cov/coverage/`: `totals.txt` (per-file percentages),
+`uncovered.txt` (same rows, lowest first) and `per-file/<source>.txt`
+(annotated listings). Honoured env vars: `BUILD_DIR`, `COMPILER`, `JOBS`,
+`SKIP_BUILD=1`, `SKIP_TESTS=1`, `FORMAT=html`. A PR touching a file under 80 %
+should not lower that file's line coverage.
+
+## Commits and pull requests
+
+Read `git log --format=%s -40` before your first commit; the convention is
+visible and consistent:
+
+```
+<Area>: <what changed, named by mechanism> (<lane or scope>, item <n>)
+```
+
+`<Area>` is `Docs`, `Tests`, `Kernel`, `Examples`, `Rulings`, `Integration`, or
+the subsystem. The summary names the **mechanism**, not the symptom — "the CTest
+row floor counts rows that ran; skipped rows are listed, not counted" rather
+than "fix floor". The body explains *why*, with the measurement. One concept
+per pull request; several commits inside it is fine.
+
+A pull request body has two parts and no third:
+
+- **What** — the change, one paragraph, in mechanism terms. If it moves a
+  boundary, name the rule it moves and the ruling that permits it.
+- **Evidence** — the commands you ran and what they printed: the failing-before
+  line of your new test, the `ci_verify` summary lines for both profiles, the
+  parity result, the floor numbers if they moved. Paste it; do not summarise it.
+
+All CI must pass before merge: build on Ubuntu + macOS in Release and Debug,
+sanitizers, ctest, the source guards, the install/`find_package` smoke test, and
+the parity subset.
+
+### How a parity campaign gates a merge
+
+For changes measured against the closed TradingView test set, a sweep is run
+before and after over a **fixed** population, and the merge rule is stated in
+terms of movement between grade bands: **no individual regression, and net
+movement ≥ 0** across the target excellent and excellent+strong bands. A
+documented native-correctness exception permits exactly **net 0** with no
+individual regression, after full comparison, independent review and green CI;
+its FAIL stays on the record and baseline promotion is deferred. Negative
+movement is outside the exception — it is not traded against anything.
+
+## Reporting a bug
+
+The most valuable thing you can send is a reproduction: the Pine script, the
+OHLCV slice, and TradingView's own trade list exported at full precision. That
+is exactly how every rule in this engine was found.
 
 ## License
 
-By contributing, you agree your contributions will be licensed under the Apache License 2.0 (the same license as the rest of the project). See [LICENSE](LICENSE).
+By contributing, you agree your contributions will be licensed under the Apache
+License 2.0 (the same license as the rest of the project). See
+[LICENSE](LICENSE).
+
+## Maintainer: release checklist
+
+1. **Submodule pins** — bump `corpus/` and `benchmarks/assets` to the intended
+   commits and verify both upstream tags resolve under their published
+   Apache-2.0 trees. [LEGAL.md](LEGAL.md) describes the submodule split.
+2. **Secrets** — no API keys, `.env`, or machine-specific paths in tracked
+   files; keep `benchmarks/_workdir`, `.venv` and `node_modules` untracked.
+3. **Notices** — keep [NOTICE](NOTICE) aligned with anything linked into
+   `libpineforge` (e.g. Eigen). Update [LEGAL.md](LEGAL.md) if you add a new
+   mandatory runtime dependency.
+4. **Benchmark AGPL** — optional `benchmarks/` tooling installs AGPL-covered
+   PineTS. Default CI stays on ctest only so a minimal clone is not forced to
+   pull AGPL into the library build.
