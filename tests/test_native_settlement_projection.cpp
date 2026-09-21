@@ -24,7 +24,7 @@ struct Book final:BacktestEngine{
         syminfo_.pointvalue=1;account_currency_fx_=1;stream_observe_actions_=true;
         current_bar_={100,100,100,100,1,1736121600000LL};bar_index_=3;}
     void on_bar(const Bar&)override{}
-    x::PhysicalExecutionContext context()const{return {current_bar_.timestamp,bar_index_,{}, {}};}
+    x::PhysicalExecutionContext context()const{return {current_bar_.timestamp,bar_index_,{}};}
     x::Result settle(const x::Action& a,const x::Fill& f){return settle_native_execution_at(a,f,context());}
     x::Result settle(const x::Action& a,const x::Fill& f,const x::SelectedOpeningSet& s){return settle_native_execution_selected_at(a,f,context(),s);}
     x::AccountEffectProjection project(const x::Action& a,const x::Fill& f)const{return project_native_settlement_v1(a,f);}

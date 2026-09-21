@@ -57,7 +57,7 @@ x::Fill fill(double price = 100, double fee = 0) { return {price, "effect", "lit
 struct Book final : pineforge::source::PineStrategyHost {
     std::vector<uint64_t> members{11};
     double target = -.1;
-    x::PhysicalExecutionContext native_context{999000, 9, {}, {}};
+    x::PhysicalExecutionContext native_context{999000, 9, {}};
     Book() {
         initial_capital_ = 1000;
         commission_type_ = CommissionType::CASH_PER_ORDER;

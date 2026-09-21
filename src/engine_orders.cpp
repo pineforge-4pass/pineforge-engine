@@ -165,40 +165,16 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     } else {
     runup = std::max(pe.max_runup * slice, fill_fav);
     drawdown = std::max(pe.max_drawdown * slice, -fill_fav);
-    // Priced (stop/limit/trail) exits fill mid-bar: the bar-path extremes the
-    // assumed OHLC path reaches BEFORE the exit fill belong to this trade's
-    // excursion, but per-bar sampling never sees them (the entry is removed
-    // before the next update_per_trade_extremes). Fold them in here, honoring
-    // the entry-side masks when the trade opened on this same bar (an extreme
-    // that precedes the ENTRY fill is not part of the trade either).
-    // TRAIL fills: the peak that armed the trail (fill +/- offset) is a
-    // pre-fill favorable excursion no bar-boundary sample sees (TV reports
-    // MFE == peak for trail exits).
+    // A priced (stop / limit / trail) exit fills mid-bar, before that bar's
+    // own per-trade extreme sampling, so a bar-path extreme the modeled path
+    // reaches ahead of the fill is seen by nothing else. The one such extreme
+    // the settling path carries is the trail's: the peak that armed the
+    // trailing stop (fill +/- offset) is a pre-fill favorable excursion no
+    // bar-boundary sample ever sees.
     if (context.preceding_exit_trail_peak) {
         const double peak = *context.preceding_exit_trail_peak;
         double peak_fav = (was_long ? (peak - pe.price) : (pe.price - peak)) * close_qty;
         runup = std::max(runup, peak_fav);
-    }
-    if (context.preceding_exit_path_prefix && *context.preceding_exit_path_prefix) {
-        double fill_pos = 0.0;
-        if (internal::first_touch_position(current_bar_, fill_price, &fill_pos)) {
-            const bool high_first = internal::bar_path_uses_high_first(current_bar_);
-            const double high_pos = high_first ? 1.0 : 2.0;
-            const double low_pos  = high_first ? 2.0 : 1.0;
-            const bool same_bar = (pe.entry_bar_index == context.interval_index);
-            if (high_pos < fill_pos && !(same_bar && pe.skip_entry_bar_high)) {
-                double hi_fav = (was_long ? (current_bar_.high - pe.price)
-                                          : (pe.price - current_bar_.high)) * close_qty;
-                runup = std::max(runup, hi_fav);
-                drawdown = std::max(drawdown, -hi_fav);
-            }
-            if (low_pos < fill_pos && !(same_bar && pe.skip_entry_bar_low)) {
-                double lo_fav = (was_long ? (current_bar_.low - pe.price)
-                                          : (pe.price - current_bar_.low)) * close_qty;
-                runup = std::max(runup, lo_fav);
-                drawdown = std::max(drawdown, -lo_fav);
-            }
-        }
     }
     }
     // TV reports excursions on the NET OPEN-PROFIT basis: the entry-leg

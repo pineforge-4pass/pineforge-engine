@@ -27,7 +27,7 @@ struct Book final : BacktestEngine {
         syminfo_.pointvalue=1;account_currency_fx_=1;stream_observe_actions_=true;
         current_bar_={100,100,100,100,1,1736121600000LL};bar_index_=7;}
     void on_bar(const Bar&) override {}
-    x::PhysicalExecutionContext context() const {return {current_bar_.timestamp,bar_index_,{}, {}};}
+    x::PhysicalExecutionContext context() const {return {current_bar_.timestamp,bar_index_,{}};}
     void open(double q,double price,uint64_t id,const char* label,double paid=0){
         const auto r=settle_native_execution_at(order_action::Transact{q},x::Fill{price,label,"",id,paid},context());
         REQUIRE(r.status==x::Status::Applied);

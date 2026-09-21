@@ -85,7 +85,7 @@ struct Book final : pineforge::source::PineStrategyHost {
         current_bar_ = {price, price + 20, price - 20, price, 1, 1736121600000LL + index * 60000};
         bar_index_ = index;
     }
-    x::PhysicalExecutionContext context() const { return {current_bar_.timestamp, bar_index_, {}, {}}; }
+    x::PhysicalExecutionContext context() const { return {current_bar_.timestamp, bar_index_, {}}; }
     void open(double quantity, double price, uint64_t incarnation, const char* label,
               std::optional<double> paid = 0.0) {
         REQUIRE(settle_native_execution_at(order_action::Transact{quantity},

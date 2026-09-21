@@ -60,12 +60,12 @@ struct Host : NativeStrategyHost {
     }
     ex::Result settle_quote(const ex::Fill& fill, const ex::SelectedOpeningSet& selected) {
         return settle_native_execution_selected_at(ex::Flatten{},fill,
-            ex::PhysicalExecutionContext{current_bar_.timestamp,bar_index_,{}, {}},selected);
+            ex::PhysicalExecutionContext{current_bar_.timestamp,bar_index_,{}},selected);
     }
     void seed(double q,double price,uint64_t incarnation,double paid=0) {
         auto result=settle_native_execution_at(order_action::Transact{q},
             ex::Fill{price,"literal","",incarnation,paid},
-            ex::PhysicalExecutionContext{current_bar_.timestamp,bar_index_,{}, {}});
+            ex::PhysicalExecutionContext{current_bar_.timestamp,bar_index_,{}});
         REQUIRE(result.status==ex::Status::Applied);
     }
 };

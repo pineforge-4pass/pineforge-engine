@@ -78,12 +78,11 @@ struct Result {
 };
 
 // Stack-bound physical coordinates for one settlement. Native supplies time
-// and index from the matching point and leaves both optionals empty. Legacy
-// callers copy current_bar_/bar_index_ and the current fold flags.
+// and index from the matching point and leaves the trail carry empty; the
+// settling path fills it in for a trail exit.
 struct PhysicalExecutionContext {
     int64_t effective_time_ms = 0;
     int interval_index = 0;
-    std::optional<bool> preceding_exit_path_prefix;
     std::optional<double> preceding_exit_trail_peak;
 };
 

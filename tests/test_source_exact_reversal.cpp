@@ -68,7 +68,7 @@ struct Book final : pineforge::source::PineStrategyHost {
     }
     void on_source_bar(const Bar&) override {}
     void open(double quantity, double price, uint64_t incarnation) {
-        const x::PhysicalExecutionContext context{1736121600000LL, 6, {}, {}};
+        const x::PhysicalExecutionContext context{1736121600000LL, 6, {}};
         REQUIRE(settle_native_execution_at(order_action::Transact{quantity},
             x::Fill{price, "old", "historical", incarnation, 0}, context).status == x::Status::Applied);
     }
