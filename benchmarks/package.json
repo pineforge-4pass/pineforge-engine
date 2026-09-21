@@ -9,7 +9,7 @@
     "run": "node --experimental-strip-types runners/run_pinets.ts"
   },
   "dependencies": {
-    "pinets": "^0.9.13"
+    "pinets": "^0.9.34"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

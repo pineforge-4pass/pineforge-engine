@@ -992,7 +992,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.65.1" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pandas", specifier = ">=2.0,<3.0" },
-    { name = "pynesys-pynecore", extras = ["cli"], specifier = ">=6.4" },
+    { name = "pynesys-pynecore", extras = ["cli"], specifier = ">=6.10.2" },
     { name = "vectorbt", specifier = ">=0.28.2" },
 ]
 
@@ -1078,11 +1078,11 @@ wheels = [
 
 [[package]]
 name = "pynesys-pynecore"
-version = "6.4.6"
+version = "6.10.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/74/7b/65e5c930ab091113941deda9b4ad1f84322d45fa68a31ac090b4f64bc56b/pynesys_pynecore-6.4.6.tar.gz", hash = "sha256:0024d9a2318271fa63fefa1c9e416eea07924fce838af1688323d75a7d5c0586", size = 267730, upload-time = "2026-05-12T07:17:27.477Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/97/2eaf77d7cdec5de10a3e242e1442da9a2bc992c4a2926d0040ff60dd628c/pynesys_pynecore-6.10.2.tar.gz", hash = "sha256:9097589d2a706ff41a6194c5c6e3c832da4548ac90ff121de9ca897fff126fc6", size = 1644806, upload-time = "2026-09-20T17:53:52.169Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/47/989107a4b210be3cb61afc40004e4874eb06bc2598472998aa5159fa1bb9/pynesys_pynecore-6.4.6-py3-none-any.whl", hash = "sha256:4a1d9be1b20e632c594c20e09839125cbdff9e8c254a3cac2debc8f9d0b24ce6", size = 325531, upload-time = "2026-05-12T07:17:25.697Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/90/583a69e6ecd9c9f1637b2545fefcedfcdd8d6582d3f74b6997043f66d269/pynesys_pynecore-6.10.2-py3-none-any.whl", hash = "sha256:9624d125d4c58ee071e1bcbb6806801d8cae3d2915c94529aaf590edbe18a6b1", size = 1766389, upload-time = "2026-09-20T17:53:50.334Z" },
 ]
 
 [package.optional-dependencies]

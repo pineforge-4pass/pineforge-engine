@@ -5,7 +5,7 @@ description = "Three-way engine comparison harness: PineForge vs PyneCore vs Pin
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
-    "pynesys-pynecore[cli]>=6.4",
+    "pynesys-pynecore[cli]>=6.10.2",
     "pandas>=2.0,<3.0",
     "numpy>=1.24",
     "vectorbt>=0.28.2",
