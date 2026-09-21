@@ -4152,7 +4152,10 @@
     "robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
     "bigbeluga-volume-trend-order-block-engine-bigbeluga",
     "3commas-3commas-xrp-grid-bot-long-strategy"
-   ]
+   ],
+   "lost": {
+    "reason": "PyneSys compile error: {\"detail\":{\"status\":\"error\",\"error\":\"Empty document.\",\"line\":null,\"file\":\"script.pine\"}}"
+   }
   },
   {
    "slot": "193-ttagkoin-adaptive-multi-facto-9-years",
@@ -4319,6 +4322,27 @@
     "onderarslantas107-market-projection",
     "alirichh-ahlenaz",
     "r87-84-acceleration-wyckoff-balanced-v6"
+   ]
+  },
+  {
+   "slot": "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
+   "source": "closed",
+   "probeId": "scrapper:data/standard/robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2",
+   "stratum": "hard",
+   "bin": 21,
+   "tvTrades": 154,
+   "tvRows": 308,
+   "populationTvTradeRows": 154,
+   "window": [
+    "2025-04-02 08:45",
+    "2026-05-01 00:00"
+   ],
+   "tapeSha256": "6563c344e9c435c03b768890225a64c612f87ece8003a352c8e535ce317aebd1",
+   "license": "TradingView scraped, not redistributed",
+   "replaces": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap",
+   "replacements": [
+    "bigbeluga-volume-trend-order-block-engine-bigbeluga",
+    "3commas-3commas-xrp-grid-bot-long-strategy"
    ]
   }
  ]

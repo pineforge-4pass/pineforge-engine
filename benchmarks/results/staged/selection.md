@@ -1,6 +1,6 @@
 # Benchmark population selection
 
-Seed **20260921** · `benchmarks/select_population.py` · 200 slots = 100 corpus + 100 closed.
+Seed **20260921** · `benchmarks/select_population.py` · 200 slots = 100 corpus + 100 closed, plus 1 replacement slot(s) for PyneSys compile rejections (the rejected slot is kept).
 
 ## Inputs
 
@@ -251,3 +251,10 @@ Closed: 413 BINANCE:ETHUSDT.P 15 scraped probes → 379 eligible (excluded: camp
 | 198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8 | closed | `scrapper:data/standard/wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8` | 72 (144) | hard | 12 | TradingView scraped, not redistributed |
 | 199-yahmis13-nyo-day-type-early-read | closed | `scrapper:data/standard/yahmis13-nyo-day-type-early-read` | 26 (52) | hard | 6 | TradingView scraped, not redistributed |
 | 200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils | closed | `scrapper:data/standard/ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils` | 533 (1066) | hard | 51 | TradingView scraped, not redistributed |
+| 201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2 | closed | `scrapper:data/standard/robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2` | 154 (308) | hard | 21 | TradingView scraped, not redistributed |
+
+## Replacements
+
+| Lost slot | Reason | Replacement (same stratum and bin) |
+|---|---|---|
+| 192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap | PyneSys compile error: {"detail":{"status":"error","error":"Empty document.","line":null,"file":"script.pine"}} | 201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2 |

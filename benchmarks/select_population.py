@@ -2,8 +2,8 @@
 """Select the benchmark population: 100 corpus probes + 100 closed scraped scripts.
 
 Deterministic (``--seed``, default 20260921). Writes
-``benchmarks/results/selection.json`` (machine manifest) and
-``benchmarks/results/selection.md`` (the printed manifest).
+``benchmarks/results/staged/selection.json`` (machine manifest) and
+``benchmarks/results/staged/selection.md`` (the printed manifest).
 
 Corpus half (public)
     Drawn from ``corpus/validation/<probe>/`` (the engine's corpus gitlink).
@@ -35,7 +35,10 @@ Closed half (private artifacts, public manifest)
 
 Every slot carries its replacement queue: the other members of its bin in
 seeded order, the "next candidate from the same stratum" used when a slot is
-lost (a PyneSys compile rejection).
+lost (a PyneSys compile rejection). ``--replace NNN="reason"`` keeps slot NNN
+and appends its replacement -- the first queue entry not already selected --
+as the next free slot number (201, 202, ...), so the manifest stays a pure
+function of its inputs and the recorded rejections.
 """
 from __future__ import annotations
 
@@ -266,7 +269,9 @@ def main() -> int:
     ap.add_argument("--scrapper-data", type=Path,
                     default=Path(os.environ.get("PINESCRIPT_SCRAPPER_DIR",
                                                 Path.home() / "code" / "pinescript-scrapper")) / "data")
-    ap.add_argument("--out-dir", type=Path, default=BENCH / "results")
+    ap.add_argument("--out-dir", type=Path, default=BENCH / "results" / "staged")
+    ap.add_argument("--replace", action="append", default=[], metavar='NNN="reason"',
+                    help="slot number lost to a PyneSys compile rejection (repeatable)")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
@@ -324,6 +329,30 @@ def main() -> int:
             "replacements": m["replacements"],
         })
 
+    by_key = {m["key"]: m for m in c_eligible + s_eligible}
+    selected = {x["slot"].split("-", 1)[1] for x in slots}
+    for item in args.replace:
+        number, _, reason = item.partition("=")
+        lost = next(x for x in slots if int(x["slot"][:3]) == int(number))
+        key = next(k for k in lost["replacements"] if k not in selected)
+        selected.add(key)
+        m = by_key[key]
+        lost["lost"] = {"reason": reason.strip()}
+        new = {k: v for k, v in lost.items() if k not in ("lost", "replacements")}
+        new.update({
+            "slot": f"{len(slots) + 1:03d}-{key}",
+            "tvTrades": m["tvTrades"], "tvRows": m["tvRows"],
+            "window": [iso(m["windowStartMs"]), iso(m["windowEndMs"])],
+            "tapeSha256": m["tapeSha256"], "replaces": lost["slot"],
+            "replacements": [k for k in lost["replacements"] if k not in selected],
+        })
+        if lost["source"] == "closed":
+            new.update({"probeId": m["probeId"], "populationTvTradeRows": m["populationTvTradeRows"]})
+        else:
+            new.update({"probeId": f"corpus:corpus/validation/{key}",
+                        "corpusPath": f"corpus/validation/{key}", "tape": m["tapeName"]})
+        slots.append(new)
+
     manifest = {
         "schema": "pineforge-bench-selection/v1",
         "seed": args.seed,
@@ -365,12 +394,16 @@ def main() -> int:
 def render_md(m: dict) -> str:
     c, s = m["counts"]["corpus"], m["counts"]["closed"]
     feed = m["inputs"]["benchFeed"]
+    replaced = [x for x in m["slots"] if "replaces" in x]
     lines = [
         "# Benchmark population selection",
         "",
         f"Seed **{m['seed']}** · `benchmarks/select_population.py` · "
-        f"{len(m['slots'])} slots = {sum(1 for x in m['slots'] if x['source'] == 'corpus')} corpus + "
-        f"{sum(1 for x in m['slots'] if x['source'] == 'closed')} closed.",
+        f"{len(m['slots']) - len(replaced)} slots = "
+        f"{sum(1 for x in m['slots'] if x['source'] == 'corpus' and 'replaces' not in x)} corpus + "
+        f"{sum(1 for x in m['slots'] if x['source'] == 'closed' and 'replaces' not in x)} closed"
+        + (f", plus {len(replaced)} replacement slot(s) for PyneSys compile rejections "
+           "(the rejected slot is kept)." if replaced else "."),
         "",
         "## Inputs",
         "",
@@ -432,6 +465,13 @@ def render_md(m: dict) -> str:
         lines.append(f"| {x['slot']} | {x['source']} | `{where}` | {x['tvTrades']} ({x['tvRows']}) | "
                      f"{x['stratum']} | {x['bin']} | {x['license']} |")
     lines.append("")
+    if replaced:
+        lines += ["## Replacements", "",
+                  "| Lost slot | Reason | Replacement (same stratum and bin) |", "|---|---|---|"]
+        for x in replaced:
+            lost = next(y for y in m["slots"] if y["slot"] == x["replaces"])
+            lines.append(f"| {lost['slot']} | {lost['lost']['reason']} | {x['slot']} |")
+        lines.append("")
     return "\n".join(lines)
 
 
