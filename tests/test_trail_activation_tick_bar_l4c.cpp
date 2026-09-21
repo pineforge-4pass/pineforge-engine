@@ -308,20 +308,29 @@ void test_product_offset_trail_arms_on_the_tick_path() {
     CHECK_NEAR(g.path_position, 2.0 + 0.02 / 0.025, 1e-6);
 }
 
-// The carried best is read RAW at placement: best_start 9.996 with
-// activation 10.00 arrives dormant (9.996 < 10.00), and a bar that only
-// falls (O 9.99 H 9.99 L 9.96 C 9.97) never reaches the arm's half-tick
-// boundary 9.995 either. expectation corrected: fill 9.976 -> no fill,
-// because the adapter reads "already reached" at placement against the raw
-// activation; lane E5's tapes pin the arm on the bar's path (the previous
-// row), not a placement close inside the activation's tick cell, so this row
-// is the product's reading, unpinned by a tape. The two bests that quantize
-// below the activation (9.994, 9.995 -> tick 9.99) stay dormant as before.
-void test_product_carried_best_arms_raw() {
-    std::printf("-- product: a carried raw best 9.996 does not arm the 10.00 activation; 10.00 does, and the adapter books the carried level --\n");
+// The carried best is read on its TICK at placement: best_start 9.996 is a
+// placement close inside the 10.00 activation's tick cell, so the trail is
+// armed before the bar opens, its best starts at the activation, and a bar
+// that only falls (O 9.99 H 9.99 L 9.96 C 9.97) crosses its stop. expectation
+// corrected: no fill -> fill @9.98 on this bar, because lane E9's `lab tv`
+// tapes (tests/fixtures/trail_activation_tick_reach,
+// test_trail_activation_tick_reach: NYSE:F placement closes 11.295 / 11.575 /
+// 13.055 / 14.135 / 13.705 / 13.385 / 11.565 half a tick under the
+// activations their ticks equal, a short's 14.415 over 14.41) exit on the next
+// bar, 8 of 8, trail_offset 1 and 0 alike, at activation -/+ the offset. The
+// kernel Trail is armed from its first live print as for a best AT the
+// activation (below: stop 9.97 crossed on the falling leg) and the adapter
+// books the carried level 10.00 - 0.02. The two bests that quantize below the
+// activation (9.994, 9.995 -> tick 9.99) stay dormant as before.
+void test_product_carried_best_arms_on_its_tick() {
+    std::printf("-- product: a carried best 9.996 arms the 10.00 activation on its tick, as 10.00 does, and the adapter books the carried level --\n");
     const Bar bar = mk(9.99, 9.99, 9.96, 9.97);
     TrailExitProjection f = trail_fill(bar, PositionSide::LONG, 10.0, 2.0, 9.90, 9.996, 0.01);
-    CHECK(f.filled == false);
+    CHECK(f.filled == true);
+    CHECK(f.leg_is_trail == true);
+    CHECK(f.level_fill == true);
+    CHECK_NEAR(f.raw_price, 9.97, 1e-9);
+    CHECK_NEAR(f.exit_price, 9.98, 1e-9);
     for (double best : {9.994, 9.995}) {
         TrailExitProjection dormant = trail_fill(bar, PositionSide::LONG, 10.0, 2.0, 9.90, best, 0.01);
         CHECK(dormant.filled == false);
@@ -368,7 +377,7 @@ int main() {
     test_activation_below_the_quantized_low_does_not_fire();
     test_product_activation_is_reached_on_the_tick_path();
     test_product_offset_trail_arms_on_the_tick_path();
-    test_product_carried_best_arms_raw();
+    test_product_carried_best_arms_on_its_tick();
     test_product_raw_reach_books_the_level();
     std::printf("trail_activation_tick_bar: %d passed, %d failed\n",
                 tests_passed, tests_failed);

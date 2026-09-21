@@ -321,10 +321,10 @@
     },
     "test_trail_activation_tick_bar": {
       "baseAssertions": 33,
-      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the offset-trail arm row follows the R5 E5 TradingView tapes (quantized arm)",
+      "reason": "resolver-level rows of the deleted exit-path fill simulation are rebuilt as product fills read from the kernel event record; the offset-trail arm row follows the R5 E5 TradingView tapes (quantized arm) and the carried-best row the R5 E9 tapes (a placement close reaches the activation on its tick)",
       "twin": "test_trail_activation_tick_bar_l4c.cpp",
-      "twinAssertionSha256": "d92f2a9d3163895c9d75793ea67d8de6ab962aa1e7c2a1fd28126a6a4640c54b",
-      "twinAssertions": 45
+      "twinAssertionSha256": "1e9d3acbebd3d36f9f23d0bfb3410d77cf898cbf79b3bebf78e33d902c005466",
+      "twinAssertions": 49
     },
     "test_trail_fill_snap": {
       "baseAssertions": 154,

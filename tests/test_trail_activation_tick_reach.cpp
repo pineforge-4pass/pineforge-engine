@@ -26,6 +26,21 @@
  * rounded AWAY from the position (a long's sell exit up, a short's buy exit
  * down), the grid point its resting threshold stands for. On the grid that is
  * the activation itself, which is why no on-grid pin moves.
+ *
+ * E5's other open question: does a PLACEMENT close that sits inside the
+ * activation's tick cell count as already reached? NYSE:F 15m (sub-cent
+ * prints), seven longs and one short with trail_points n: the close of the bar
+ * whose open filled the entry — where strategy.exit is issued — is half a tick
+ * short of the activation and quantizes onto it (11.295 -> 11.30, 11.575 ->
+ * 11.58, 13.055 -> 13.06, 14.135 -> 14.14, 13.705 -> 13.71, 13.385 -> 13.39,
+ * 11.565 -> 11.57; short 14.415 -> 14.41), and the next bar never reaches the
+ * activation's half-tick boundary on its raw path. TradingView exits every
+ * trade on that next bar, at its open, with trail_offset 1 and 0 alike (the
+ * tapes are identical): the placement close is one more print of the
+ * quantized path, so it has reached the activation, and the trail's running
+ * best starts at the activation (offset 1 books activation -/+ 1 tick, not
+ * close -/+ 1 tick). The adapter read that close raw, left the trail dormant
+ * and exited one to twenty bars later.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -73,6 +88,8 @@ struct FeedBar {
 // The ETH entries lane E5 exported its offset-trail tapes over; the one-shot
 // tapes ran on the same eight per side.
 #include "fixtures/offset_trail_arm/bars.inc"
+// The NYSE:F placement-cell entries.
+#include "fixtures/trail_activation_tick_reach/bars.inc"
 
 // One tape of the fixture: its side, its strategy.exit arguments and the
 // entries it was run over (bars.inc rows).
@@ -81,16 +98,31 @@ struct Probe {
     bool is_long;
     double mintick;
     double qty;
-    int timeout;          // bars after the entry bar, then strategy.close
-    double trail_delta;   // trail_price = entry fill + delta
+    int timeout;                 // bars after the entry bar, then strategy.close
+    const double* trail_points;  // per entry; nullptr: absent
+    double trail_offset;
+    double trail_delta;          // trail_price = entry fill + delta; NaN: absent
     const FeedBar* bars;
     int entries;
     int bars_per_entry;
 };
 
+constexpr double kFordLongCellPoints[] = {3.0, 3.0, 1.0, 1.0, 5.0, 4.0, 3.0};
+constexpr double kFordShortCellPoints[] = {2.0};
+
 const Probe kProbes[] = {
-    {"e5-eth-long-oneshot-p004", true, 0.01, 1.0, 16, 0.004, &kEthLong[0][0], 8, 19},
-    {"e9-eth-short-oneshot-m004", false, 0.01, 1.0, 16, -0.004, &kEthShort[0][0], 8, 19},
+    {"e5-eth-long-oneshot-p004", true, 0.01, 1.0, 16, nullptr, 0.0, 0.004,
+     &kEthLong[0][0], 8, 19},
+    {"e9-eth-short-oneshot-m004", false, 0.01, 1.0, 16, nullptr, 0.0, -0.004,
+     &kEthShort[0][0], 8, 19},
+    {"e9-f-long-cell-off1", true, 0.01, 100.0, 20, kFordLongCellPoints, 1.0, kNaN,
+     &kFordLongCell[0][0], 7, 23},
+    {"e9-f-long-cell-oneshot", true, 0.01, 100.0, 20, kFordLongCellPoints, 0.0, kNaN,
+     &kFordLongCell[0][0], 7, 23},
+    {"e9-f-short-cell-off1", false, 0.01, 100.0, 20, kFordShortCellPoints, 1.0, kNaN,
+     &kFordShortCell[0][0], 1, 23},
+    {"e9-f-short-cell-oneshot", false, 0.01, 100.0, 20, kFordShortCellPoints, 0.0, kNaN,
+     &kFordShortCell[0][0], 1, 23},
 };
 
 // ── the tape ──────────────────────────────────────────────────────────
@@ -150,7 +182,8 @@ std::vector<TapeTrade> read_tape(const std::string& slug) {
 // whose open filled it; `timeout` bars later strategy.close takes what is left.
 class TapeHost : public pineforge::source::PineStrategyHost {
 public:
-    explicit TapeHost(const Probe& probe) : probe_(probe) {
+    TapeHost(const Probe& probe, double trail_points)
+        : probe_(probe), trail_points_(trail_points) {
         pineforge::source::PineStrategyConfig config;
         config.initial_capital = 1'000'000.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -169,8 +202,10 @@ public:
         if (bar_index_ == 0) strategy_entry(id, probe_.is_long);
         if (units != 0.0 && entry_bar_ < 0) {
             entry_bar_ = bar_index_;
-            strategy_exit(probe_.is_long ? "LX" : "SX", id, kNaN, kNaN, kNaN, 0.0,
-                          position_avg_price() + probe_.trail_delta);
+            const double trail_price = std::isnan(probe_.trail_delta)
+                ? kNaN : position_avg_price() + probe_.trail_delta;
+            strategy_exit(probe_.is_long ? "LX" : "SX", id, kNaN, kNaN, trail_points_,
+                          probe_.trail_offset, trail_price);
         }
         if (units != 0.0 && entry_bar_ >= 0 && bar_index_ - entry_bar_ >= probe_.timeout)
             strategy_close(id, "timeout");
@@ -183,8 +218,13 @@ public:
 
 private:
     Probe probe_;
+    double trail_points_;
     int entry_bar_ = -1;
 };
+
+double trail_points_of(const Probe& probe, int entry) {
+    return probe.trail_points ? probe.trail_points[entry] : kNaN;
+}
 
 std::vector<Bar> entry_bars(const Probe& probe, int entry) {
     std::vector<Bar> bars;
@@ -275,7 +315,7 @@ void test_tapes_replay() {
         if (static_cast<int>(tape.size()) != probe.entries) continue;
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
-            TapeHost host(probe);
+            TapeHost host(probe, trail_points_of(probe, e));
             host.run(bars.data(), static_cast<int>(bars.size()));
             CHECK(host.last_error().empty());
             CHECK(host.trade_count() == 1);
@@ -303,13 +343,14 @@ void test_tapes_replay() {
 // limit's own side of the boundary; no match is refused.
 void test_booked_price_is_the_reach_tick() {
     for (const Probe& probe : kProbes) {
+        if (std::isnan(probe.trail_delta)) continue;
         std::printf("-- %s: the booked price is the tick past the sub-tick level --\n",
                     probe.slug);
         const auto tape = read_tape(probe.slug);
         if (static_cast<int>(tape.size()) != probe.entries) { CHECK(false); continue; }
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
-            TapeHost host(probe);
+            TapeHost host(probe, trail_points_of(probe, e));
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             const double tick = probe.mintick;
@@ -351,11 +392,99 @@ void test_booked_price_is_the_reach_tick() {
     }
 }
 
+// ── 3. a placement close inside the activation's tick cell has reached it ──
+
+// What the kernel recorded for the exit's legs: a resting one-shot Limit, a
+// generic Trail and its arm threshold, and the bar a leg closed the trade on.
+struct PlacementRecord {
+    bool one_shot_limit = false;
+    bool trail = false;
+    std::optional<double> trail_arm;
+    std::optional<std::int64_t> close_bar_ms;
+};
+
+PlacementRecord placement_record(const TapeHost& host, const char* exit_label) {
+    PlacementRecord record;
+    for (const auto& event : host.native_events(0)) {
+        if (!event.command) continue;
+        if (const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command)) {
+            if (accepted->request().label != exit_label) continue;
+            if (std::holds_alternative<native_order::Limit>(accepted->request().trigger))
+                record.one_shot_limit = true;
+            if (const auto* t = std::get_if<native_order::Trail>(&accepted->request().trigger)) {
+                record.trail = true;
+                record.trail_arm = t->arm_price;
+            }
+        } else if (const auto* applied =
+                       std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
+            if (applied->request().label == exit_label && applied->closed_units != 0.0)
+                record.close_bar_ms = applied->cursor.point.open_ms;
+        }
+    }
+    return record;
+}
+
+// On every NYSE:F entry the placement close — the entry bar's close, where
+// strategy.exit is issued — stops half a tick short of the activation and its
+// tick IS the activation, while the next bar never reaches the activation's
+// half-tick boundary on its raw path; TradingView exits on that next bar, at
+// its open, and with trail_offset 1 at activation -/+ 1 tick. So the adapter
+// arms the trail at placement: the generic Trail is accepted with no arm
+// threshold (the kernel arms it at its first print), with or without an
+// offset, instead of a dormant one-shot Limit or an arm the next bar never
+// reaches, and an exit leg closes the trade on that next bar.
+void test_placement_close_in_the_cell_has_reached() {
+    for (const Probe& probe : kProbes) {
+        if (!probe.trail_points) continue;
+        std::printf("-- %s: the placement close's tick reaches the activation --\n",
+                    probe.slug);
+        const auto tape = read_tape(probe.slug);
+        if (static_cast<int>(tape.size()) != probe.entries) { CHECK(false); continue; }
+        for (int e = 0; e < probe.entries; ++e) {
+            const auto bars = entry_bars(probe, e);
+            TapeHost host(probe, probe.trail_points[e]);
+            host.run(bars.data(), static_cast<int>(bars.size()));
+            const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
+            const double tick = probe.mintick;
+            const double activation = tv.entry_price
+                + (probe.is_long ? 1.0 : -1.0) * probe.trail_points[e] * tick;
+            // bars[0] places the entry, bars[1] fills it at its open and issues
+            // the exit at its close, bars[2] is the next bar.
+            const double placement = bars[1].close;
+            const Bar& next = bars[2];
+            CHECK(bars[1].timestamp == tv.entry_ms);
+            CHECK(probe.is_long ? placement < activation : placement > activation);
+            CHECK(same_price(tick_of(placement, tick), activation));
+            const double next_tick = tick_of(probe.is_long ? next.high : next.low, tick);
+            CHECK(probe.is_long ? next_tick < activation - 0.5 * tick
+                                : next_tick > activation + 0.5 * tick);
+            CHECK(tv.exit_ms == next.timestamp);
+            CHECK(same_price(tv.exit_price, tick_of(next.open, tick)));
+            if (probe.trail_offset >= 1.0) {
+                CHECK(same_price(tv.exit_price, activation
+                    + (probe.is_long ? -1.0 : 1.0) * probe.trail_offset * tick));
+            }
+            const PlacementRecord record = placement_record(host, probe.is_long ? "LX" : "SX");
+            CHECK(!record.one_shot_limit);
+            CHECK(record.trail);
+            CHECK(!record.trail_arm.has_value());
+            CHECK(record.close_bar_ms && *record.close_bar_ms == next.timestamp);
+            if (record.one_shot_limit || record.trail_arm) {
+                std::printf("        entry %d: placement %.10g short of activation %.10g left %s\n",
+                            e + 1, placement, activation,
+                            record.one_shot_limit ? "a resting one-shot Limit"
+                                                  : "a Trail waiting for its arm");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
     test_tapes_replay();
     test_booked_price_is_the_reach_tick();
+    test_placement_close_in_the_cell_has_reached();
     std::printf("\n%s trail activation tick reach: %d checks, %d failures\n",
                 tests_failed == 0 ? "PASS" : "FAIL", tests_passed + tests_failed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

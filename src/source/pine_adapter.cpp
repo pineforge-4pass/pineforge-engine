@@ -413,6 +413,21 @@ double source_one_shot_reach_tick(double resting_level, double tick, bool exit_i
     return directional_tick(resting_level, tick, !exit_is_buy);
 }
 
+// Whether a print has reached a trail's activation: on the tick-quantized
+// path, like every print the arm is tested on (source_trail_arm_level), the
+// placement print included. R5 lane E9, `lab tv` on NYSE:F 15m
+// (tests/fixtures/trail_activation_tick_reach): a placement close half a tick
+// short of the activation whose tick IS the activation (11.295 under 11.30,
+// 14.415 over a short's 14.41) has reached it; 8 of 8 trades exit on the next
+// bar, trail_offset 1 and 0 alike. On an on-grid feed no print lies in the
+// half cell, so it admits what the raw compare did, save a print on the
+// activation's own grid point that the raw compare missed by a binary64 ULP.
+bool source_trail_reached_at(double price, double activation, double tick,
+                             bool exit_is_buy) noexcept {
+    const double arm = source_trail_arm_level(activation, tick, exit_is_buy);
+    return exit_is_buy ? price <= arm : price >= arm;
+}
+
 double floor_quantity_grid(double units, const std::optional<double>& grid) noexcept {
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
@@ -8009,8 +8024,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool buy_close = physical.signed_units != 0.0
                 ? physical.signed_units < 0.0 : exit_is_buy;
             const auto point = require_host().current_execution_point();
-            const bool already_reached = point && (buy_close
-                ? point->price <= trail_price : point->price >= trail_price);
+            // The placement print is tested on the quantized path like every
+            // later one: a close whose tick is the activation has reached it.
+            const bool already_reached = point
+                && source_trail_reached_at(point->price, trail_price, tick, buy_close);
             trail_already_reached = already_reached;
             const bool no_trailing_distance = !native_trail_offset_ticks || zero_distance;
             // An omitted offset and an explicit offset that truncates to zero
@@ -8080,14 +8097,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         && finite_positive(trail_price)) {
         if (const auto point = require_host().current_execution_point()) {
             const bool long_side = require_host().physical_position().signed_units > 0.0;
-            const bool already_armed = long_side ? point->price >= trail_price
-                                                  : point->price <= trail_price;
+            const bool already_armed = source_trail_reached_at(
+                point->price, trail_price, tick, !long_side);
             if (already_armed) {
                 // The explicit-zero trail is already active at the source
                 // placement close.  A sibling generic stop preserves the
                 // next-open print decision; the Trail request still owns a
-                // favourable-gap ride and all later path tracking.
-                submit_leg(PineOrderFamily::ExitStop, native_order::Stop{point->price});
+                // favourable-gap ride and all later path tracking.  Its level
+                // is the carried best, which never starts short of the
+                // activation (a close reaching it only on its tick).
+                const double carried_best = long_side
+                    ? std::max(point->price, trail_price)
+                    : std::min(point->price, trail_price);
+                submit_leg(PineOrderFamily::ExitStop, native_order::Stop{carried_best});
             }
         }
     }
@@ -10083,8 +10105,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     }();
     const bool placement_reached_trail_activation =
         std::isfinite(source.sizing.price) && std::isfinite(source.trail_activation_level)
-        && (facts.is_buy ? source.sizing.price <= source.trail_activation_level
-                         : source.sizing.price >= source.trail_activation_level);
+        && source_trail_reached_at(source.sizing.price, source.trail_activation_level,
+                                   staged_.syminfo.mintick, facts.is_buy);
     const bool zero_trail_first_activation = explicit_zero_trail && trail_active
         && !placement_reached_trail_activation
         && std::isfinite(source.trail_activation_level)
@@ -10102,8 +10124,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const double open = policy_script_bar_.open;
         const double placement = source.sizing.price;
         const double activation = source.trail_activation_level;
-        const bool reached_at_placement = facts.is_buy
-            ? placement <= activation : placement >= activation;
+        const bool reached_at_placement = source_trail_reached_at(
+            placement, activation, staged_.syminfo.mintick, facts.is_buy);
         const bool open_beyond = facts.is_buy
             ? open <= activation : open >= activation;
         const bool high_first = source_path_uses_high_first(policy_script_bar_);
@@ -10156,10 +10178,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 ? host_state.spec->path_order : NativePathOrder::Auto);
         const bool favorable_first = long_side ? high_first : !high_first;
         const double open_print = source_bar_fill_tick(open, tick);
+        // A placement close that reached the activation only on its tick
+        // carries the activation as its best: TradingView's starts there.
+        const double placement_best = placement_armed
+            ? (long_side ? std::max(placement, activation) : std::min(placement, activation))
+            : placement;
         const double carried_best = preopen != trail_state_at_open_.end()
                 && preopen->second.activated
                 && std::isfinite(preopen->second.best_price)
-            ? preopen->second.best_price : placement;
+            ? preopen->second.best_price : placement_best;
         const bool carried_armed = (preopen != trail_state_at_open_.end()
             && preopen->second.activated) || placement_armed;
         if (carried_armed && std::isfinite(carried_best)) {
