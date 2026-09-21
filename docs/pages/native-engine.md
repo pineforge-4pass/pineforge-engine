@@ -337,9 +337,10 @@ never sets it, so Pine-compatible runs are unchanged.
   `(k ± 0.5) * tick`: an exact half-tick print rounds away from zero and so
   lies outside a `<=` region. The Pine adapter still runs with `None`.
   TradingView quantizes per order kind — stop and limit legs and a trail's
-  activation, with or without a trailing offset (R5 lane E5's tapes, below),
-  against the tick-quantized bar; the trail stop, the running best,
-  stop-limit entries and the calc_on_order_fills cursors against the raw path
+  activation, with or without a trailing offset (R5 lane E5's tapes, below)
+  and at the placement close too (lane E9), against the tick-quantized bar,
+  a one-shot booking the tick that bar reaches; the trail stop, the running
+  best, stop-limit entries and the calc_on_order_fills cursors against the raw path
   (engine.hpp, design-stop-tick-rounding and design-trail-activation-tick-bar)
   — whereas the run spec's grid is one rule for every trigger the matcher
   tests. The measured divergence is the trail stop: `best - offset` lands one
@@ -1564,6 +1565,19 @@ at the half-tick threshold its one-shot leg rests at and books from a running
 best that starts at the activation; the kernel still compares `arm_price`
 with the raw path. The P9 row that asserted the hold in that window now
 asserts the fill, with its `expectation corrected:` note.
+
+Lane E9 closed the two findings E5 left
+(`tests/fixtures/trail_activation_tick_reach`, replayed by
+`tests/test_trail_activation_tick_reach.cpp`). A one-shot with a sub-tick
+`trail_price` books the tick the quantized path reaches — its resting half-tick
+level rounded away from the position (ETH fill 2550.85, level 2550.854,
+@2550.86) — where the adapter had booked the snap toward it, which the kernel's
+limit-or-better check rightly refused (`InvalidTerms`). And a placement close
+inside the activation's tick cell (NYSE:F 11.295 under 11.30) has reached the
+activation: 8 of 8 trades exit on the next bar, `trail_offset` 1 and 0 alike,
+so P9's carried-best row (9.996 under 10.00) now asserts the fill @9.98, with
+its `expectation corrected:` note. Both stay adapter policy; the kernel is
+unchanged.
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the

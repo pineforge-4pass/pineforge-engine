@@ -574,7 +574,7 @@ trial after L8b; row PG (§1.7) holds the counts. In summary:
 | blocker | what it is | state |
 |---|---|---|
 | B1 | under `QuantizeFillsAndTriggers` the matcher reported a cursor print inside the quantized region but short of the raw level, and the core's raw re-validation aborted the run ("native working-request preparation failed": nine zero-offset-trail tapes, six `process_orders_on_close` panels) | **closed generically by L8b**: the tick-quantized print is the reached price, and the core re-validates on the same ladder (`native_order::ActivationGrid`); 0 aborts under the N13 re-run |
-| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5) are tested on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
+| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5; the placement close included: lane E9) are tested on the quantized bar, and a one-shot books the tick that bar reaches, its resting half-tick level rounded away from the position (lane E9); the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause |
 
 The corpus cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid
 feed, and under the trial 5 of them differ, in the engine-only
@@ -605,6 +605,30 @@ starts at the arm, half a tick short of the activation, so while the raw
 extreme stays inside the activation's tick cell its stop sits up to half a
 tick further out than TradingView's and a print between the two fires only
 TradingView's (0 of the 6 tapes).
+
+**The one-shot's booked price and the placement print (lane E9, closing
+E5's findings).** Two more `lab tv` sets
+(`tests/fixtures/trail_activation_tick_reach`, replayed by
+`tests/test_trail_activation_tick_reach.cpp`) pin the rest of the rule. A
+one-shot (`trail_offset` 0) with a sub-tick `trail_price` — fill 2550.85,
+level 2550.854 on ETH 15m — rests at the half-tick boundary 2550.855 and
+TradingView books the tick the quantized path reaches there, 2550.86 (5 of
+5; the short twin books fill - 0.01, 4 of 4): the resting level rounded AWAY
+from the position. The adapter booked the stop-style snap toward it (2550.85),
+a price its own resting limit forbids, and the kernel's generic
+limit-or-better check refused it as `InvalidTerms` — correctly, so the kernel
+is untouched and the adapter books the reach tick
+(`source_one_shot_reach_tick`). And a placement close half a tick short of
+the activation whose tick IS the activation (NYSE:F 11.295 under 11.30, seven
+longs and a short) counts as already reached: 8 of 8 trades exit on the next
+bar, `trail_offset` 1 and 0 alike, at activation -/+ the offset, so the best
+of a trail armed at placement starts at the activation too
+(`source_trail_reached_at`). Both are adapter policy for the reason above and
+byte-identical on the on-grid corpus (no print lies in a half cell; the
+corpus sets no sub-tick `trail_price`); the population sweep over sub-tick
+feeds is the real gate. TradingView's compiler refuses a trail without
+`trail_offset` on its own, so the omitted-offset shape has no tape and follows
+the same compare.
 
 **Why B2 is not closed in the kernel (route (a) rejected).** The only kernel
 change that would let `project()` declare the grid is a per-order-kind
