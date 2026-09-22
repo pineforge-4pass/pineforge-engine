@@ -863,6 +863,10 @@ list(APPEND TEST_SOURCES test_session_day_facts_adapter)
 # bars, close fills dated at the bucket close, and calc_on_order_fills
 # recalculations reading the previous bar's session flags — against ab9714be.
 list(APPEND TEST_SOURCES test_aggregated_path_regressions)
+# R5 F14: kernel buckets at session boundaries -- a session with breaks
+# aggregates on its whole session day. Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_session_boundaries)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

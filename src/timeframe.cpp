@@ -216,7 +216,7 @@ static int64_t calendar_clock_ms(int64_t ts, const std::string& tz) {
     return ts - tz_offset_ms(ts, tz);
 }
 
-static int session_length_minutes(const std::string& session);
+static int first_window_length_minutes(const std::string& session);
 
 /// Minutes from symbol-local midnight to the symbol's DAY STAMP: the instant
 /// its daily bar starts, which is where TradingView anchors the intraday HTF
@@ -246,10 +246,12 @@ static int session_length_minutes(const std::string& session);
 /// (where a native 17:00-stamped bar's content lies) and the close
 /// arithmetic (open + length = the next 17:00 stamp). No 1800-1700 bar
 /// trades in the 17:00-18:00 hour the two clocks attribute differently.
+/// The exception reads the literal first window, as it always has: a session
+/// with breaks is not that session.
 static int session_day_stamp_offset_minutes(const std::string& session) {
     const int open = session_open_offset_minutes(session);
     if (open == 18 * 60
-        && (open + session_length_minutes(session)) % 1440 == 17 * 60) {
+        && (open + first_window_length_minutes(session)) % 1440 == 17 * 60) {
         return 17 * 60;
     }
     return open;
@@ -280,12 +282,126 @@ int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
     return ms - (clock - open_clock);
 }
 
-/// Minutes from symbol-local midnight to the first session window's CLOSE
-/// ("0930-1600..." -> 960). Returns -1 when the session is none/24x7/wrapped
-/// (end<=start), in which case eager session-close completion is unavailable
-/// and callers fall back to the next-bar-crossing rule.
+namespace {
+
+/// The trading windows of one session day of a session that declares BREAKS
+/// (two or more windows: "0900-1130,1230-1500"), as minute offsets from the
+/// day's origin -- the first declared window's open, where the day opens here
+/// (session_open_offset_minutes) and in the native calendar alike
+/// (native_calendar.hpp) -- over the cycle [0, 1440):
+/// "0900-1130,1230-1500" -> [0, 150) and [210, 360). Windows are normalized
+/// as the native calendar normalizes them: one that wraps midnight (end <=
+/// start; equal ends are a whole day) runs into the next civil day, one that
+/// opens before the origin opens on the cycle's next civil day, the part
+/// beyond the cycle end continues at its start, and overlapping or touching
+/// windows merge. So close[count - 1] is where the session day ends, and
+/// every earlier close is a break.
+struct SessionDaySchedule {
+    static constexpr int kMaxWindows = 8;
+    int count = 0;
+    int open[2 * kMaxWindows] = {};
+    int close[2 * kMaxWindows] = {};
+};
+
+/// Parse "HHMM-HHMM,HHMM-HHMM[,...][:days]". False for a session without
+/// breaks (one window, ""/"24x7"), a clock that is not HHMM (HH <= 24,
+/// MM <= 59, 2400 only as an end), more than kMaxWindows windows, or any other
+/// character: each caller keeps its first-window arithmetic for those, which
+/// is exact for a single window.
+bool parse_session_breaks(const std::string& session, SessionDaySchedule& out) {
+    out = SessionDaySchedule{};
+    if (session.find(',') == std::string::npos) return false;
+    constexpr int kMax = SessionDaySchedule::kMaxWindows;
+    int starts[kMax];
+    int ends[kMax];
+    int declared = 0;
+    std::size_t at = 0;
+    const std::size_t n = session.size();
+    const auto clock = [&](int& minutes) {
+        if (at + 4 > n) return false;
+        int value = 0;
+        for (std::size_t k = 0; k < 4; ++k) {
+            const char c = session[at + k];
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + (c - '0');
+        }
+        at += 4;
+        const int hh = value / 100;
+        const int mm = value % 100;
+        if (hh > 24 || mm > 59 || (hh == 24 && mm != 0)) return false;
+        minutes = hh * 60 + mm;
+        return true;
+    };
+    for (;;) {
+        if (declared == kMax) return false;
+        int start = 0;
+        int end = 0;
+        if (!clock(start) || start >= 1440 || at >= n || session[at] != '-') return false;
+        ++at;
+        if (!clock(end)) return false;
+        starts[declared] = start;
+        ends[declared] = end;
+        ++declared;
+        if (at == n || session[at] == ':') break;
+        if (session[at] != ',') return false;
+        ++at;
+    }
+    if (declared < 2) return false;
+    int opens[2 * kMax];
+    int closes[2 * kMax];
+    int pieces = 0;
+    for (int i = 0; i < declared; ++i) {
+        const int open = ((starts[i] - starts[0]) % 1440 + 1440) % 1440;
+        int length = ends[i] - starts[i];
+        if (length <= 0) length += 1440;
+        if (open + length <= 1440) {
+            opens[pieces] = open;
+            closes[pieces++] = open + length;
+        } else {
+            opens[pieces] = open;
+            closes[pieces++] = 1440;
+            opens[pieces] = 0;
+            closes[pieces++] = open + length - 1440;
+        }
+    }
+    for (int i = 1; i < pieces; ++i) {
+        const int open = opens[i];
+        const int close = closes[i];
+        int j = i;
+        for (; j > 0 && opens[j - 1] > open; --j) {
+            opens[j] = opens[j - 1];
+            closes[j] = closes[j - 1];
+        }
+        opens[j] = open;
+        closes[j] = close;
+    }
+    for (int i = 0; i < pieces; ++i) {
+        if (out.count > 0 && opens[i] <= out.close[out.count - 1]) {
+            out.close[out.count - 1] = std::max(out.close[out.count - 1], closes[i]);
+            continue;
+        }
+        out.open[out.count] = opens[i];
+        out.close[out.count] = closes[i];
+        ++out.count;
+    }
+    return true;
+}
+
+}  // namespace
+
+/// Minutes from symbol-local midnight to the session day's CLOSE
+/// ("0930-1600..." -> 960; "0900-1130,1230-1500" -> 900, its last window's).
+/// Returns -1 when the session is none/24x7/wrapped (a single window with
+/// end<=start, a day with breaks that closes past midnight), in which case
+/// eager session-close completion is unavailable and callers fall back to the
+/// next-bar-crossing rule.
 static int session_close_offset_minutes(const std::string& session) {
     if (session.empty() || session == "24x7") return -1;
+    SessionDaySchedule breaks;
+    if (parse_session_breaks(session, breaks)) {
+        const int close = session_open_offset_minutes(session) + breaks.close[breaks.count - 1];
+        return close <= 1440 ? close : -1;
+    }
     int values[2] = {-1, -1};
     int idx = 0, digits = 0, value = 0;
     for (char c : session) {
@@ -350,9 +466,9 @@ static bool is_utc_tz(const std::string& tz) {
     return tz.empty() || tz == "UTC" || tz == "Etc/UTC";
 }
 
-/// Length of the (first) session window in minutes: 0930-1600 -> 390,
+/// Length of the first session window in minutes: 0930-1600 -> 390,
 /// 1700-1700 -> 1440 (wraps midnight), 24x7/empty -> 1440.
-static int session_length_minutes(const std::string& session) {
+static int first_window_length_minutes(const std::string& session) {
     if (session.empty() || session == "24x7") return 1440;
     int values[2] = {-1, -1};
     int idx = 0, digits = 0, value = 0;
@@ -376,6 +492,17 @@ static int session_length_minutes(const std::string& session) {
     int len = end - start;
     if (len <= 0) len += 1440;   // wraps midnight (1700-1700, 1800-1700)
     return len;
+}
+
+/// Length of the session DAY in minutes, from its open to its close: the
+/// single window's length (0930-1600 -> 390, 1700-1700 -> 1440, 24x7/empty
+/// -> 1440), and from the first window's open to the last window's close for a
+/// session with breaks (0900-1130,1230-1500 -> 360, not the first window's
+/// 150).
+static int session_length_minutes(const std::string& session) {
+    SessionDaySchedule breaks;
+    if (parse_session_breaks(session, breaks)) return breaks.close[breaks.count - 1];
+    return first_window_length_minutes(session);
 }
 
 /// Days from a session-day's nominal OPEN date to its TradingView trading
@@ -721,6 +848,32 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
     return session_day_close_real_ms(last, tz, session);
 }
 
+/// Exclusive close (real epoch ms) of the session WINDOW that holds `ms`,
+/// where an intraday bucket is clipped: the session-day's close
+/// (session_period_last_traded_close_ms, DAY) for a session without breaks
+/// and for the day's last window; the break that ends an earlier window
+/// otherwise -- 11:30 for a 10:45 bar of 0900-1130,1230-1500, and 15:00 for
+/// its 12:45 bar, not the 11:30 that closed its first window. A bar inside a
+/// break reads the break it follows, as a bar after the day's close reads
+/// that close.
+static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
+                                       const std::string& session) {
+    const int64_t day_close =
+        session_period_last_traded_close_ms(ms, tz, session, CalendarPeriod::DAY);
+    SessionDaySchedule breaks;
+    if (!parse_session_breaks(session, breaks) || breaks.count < 2) return day_close;
+    const int64_t origin =
+        session_day_open_nominal_ms(session_day_index_nominal(ms, tz, session), session);
+    const int64_t at = calendar_clock_ms(ms, tz) - origin;
+    for (int i = 0; i + 1 < breaks.count; ++i) {
+        if (at < static_cast<int64_t>(breaks.open[i + 1]) * 60000) {
+            return nominal_to_real_ms(
+                origin + static_cast<int64_t>(breaks.close[i]) * 60000, tz);
+        }
+    }
+    return day_close;
+}
+
 /// Period key for D/W/M attribution by SESSION-DAY: every bar belongs to the
 /// session that contains it, and that session belongs to the calendar period
 /// of its TRADING date (see session_trading_date_shift_days). Forex weeks
@@ -974,6 +1127,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                 // this caller.  Keep the eager path limited to a genuinely
                 // coarser fixed intraday target on a real session; equal-TF,
                 // 24x7 and calendar aggregation retain their existing paths.
+                // A session with breaks clips at the window's close
+                // (session_window_close_ms), the rule below.
                 bool singleton_session_final = false;
                 if (ratio > 1 && input_seconds > 0
                     && target_seconds < kSecPerDay
@@ -981,9 +1136,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                     const int64_t next_ms =
                         input_bar.timestamp + input_seconds * 1000;
                     singleton_session_final =
-                        next_ms >= session_period_last_traded_close_ms(
-                            input_bar.timestamp, atz, asess,
-                            CalendarPeriod::DAY);
+                        next_ms >= session_window_close_ms(
+                            input_bar.timestamp, atz, asess);
                     // Early close (round 8, family U): the session's last
                     // chart bar can also be the FIRST bar of the bucket it
                     // leaves open -- the 12:00 CT bar of a 12:15 CT
@@ -1069,12 +1223,16 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // where the boundary test above would catch it a session late.
             // Declared sessions only: ""/"24x7" feeds keep the count/
             // real-end/boundary rules bit-for-bit, and multi-day ratio
-            // targets ("2D") are calendar-sized, not session-sized.
+            // targets ("2D") are calendar-sized, not session-sized. A session
+            // with breaks closes a window at each break the same way: the
+            // "60" 11:00 bucket of 0900-1130,1230-1500 is clipped at 11:30
+            // and finalized on the 11:15 bar, while the buckets after the
+            // 12:30 reopen run to their count, real end or the day's close
+            // (session_window_close_ms; the day's own close for one window).
             if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
                 && has_trading_session(asess)) {
                 const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
-                if (next_ms >= session_period_last_traded_close_ms(
-                        input_bar.timestamp, atz, asess, CalendarPeriod::DAY)) {
+                if (next_ms >= session_window_close_ms(input_bar.timestamp, atz, asess)) {
                     complete = true;
                 }
             }
