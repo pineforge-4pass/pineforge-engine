@@ -155,7 +155,7 @@ native_c_api.h:684.
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `strategy.fixed` | `Transact` native_order.hpp:41 | `PF_NATIVE_INTENT_TRANSACT` native_c_api.h:306 | `hello_kernel.cpp` | Signed units, the default native sizing: `> 0` long, `< 0` short. |
-| `strategy.cash` | `CashValue` native_order.hpp:91 | `PF_NATIVE_SIZE_BASIS_CASH` native_c_api.h:336 | `native_sized_report_strategy.cpp` | `units = cash / (price * point_value * fx)`. `Sized::reserve_percent_fee` native_order.hpp:179 divides the cash by `(1 + fee)` under `NativeFeeKind::Percent`, which is the fee reserve Pine has no spelling for. |
+| `strategy.cash` | `CashValue` native_order.hpp:91 | `PF_NATIVE_SIZE_BASIS_CASH` native_c_api.h:336 | `native_sized_report_strategy.cpp` / `native_fee_reserve_strategy.cpp` | `units = cash / (price * point_value * fx)`. `Sized::reserve_percent_fee` native_order.hpp:179 divides the cash by `(1 + fee)` under `NativeFeeKind::Percent`, which is the fee reserve Pine has no spelling for. The fee-reserve example sizes 46 shares with it where 47 fit without, and asserts the fee each leg pays. |
 | `strategy.percent_of_equity` | `EquityFraction` native_order.hpp:97 | `PF_NATIVE_SIZE_BASIS_EQUITY_FRACTION` native_c_api.h:337 | `native_sized_report_strategy.cpp` | A fraction of the marked equity at the sizing point: `0.10` is ten percent, never `10`. |
 | `strategy.long` | `Side::Long` native_order.hpp:65 | `PF_NATIVE_SIDE_LONG` native_c_api.h:330 | `native_selected_strategy.cpp` | For `Transact` it is the sign of `signed_units` order_action.hpp:10; `Sized::side` native_order.hpp:165 and `HostSized::side` native_order.hpp:75 name it explicitly. |
 | `strategy.short` | `Side::Short` native_order.hpp:65 | `PF_NATIVE_SIDE_SHORT` native_c_api.h:331 | `native_selected_strategy.cpp` | Same. |
@@ -326,6 +326,7 @@ liquidation level, and the ticket the forced close is booked under.
 | the host's own admission verdict | `validate_execution_precommit` native_host.hpp:938 | — (C hosts gate through `on_margin_requirement` native_c_api.h:1599) | `native_margin_strategy.cpp` |
 | the host's own requirement | `resolve_margin_requirement` native_host.hpp:954 | `on_margin_requirement` native_c_api.h:1599 | `native_margin_strategy.cpp` |
 | which check points run at all | `margin_check_allowed` native_host.hpp:966 | `on_margin_check` native_c_api.h:1608 | `native_margin_strategy.cpp` |
+| a step of the account FX curve, checked though no price moved | `NativeMarginCheckKind::FxRoll` native_host.hpp:542 | `PF_NATIVE_MARGIN_CHECK_FX_ROLL` native_c_api.h:839 | `native_fx_roll_strategy.cpp` |
 | the host's own liquidation size | `resolve_margin_call_units` native_host.hpp:973 | `on_margin_call_units` native_c_api.h:1615 | `native_margin_strategy.cpp` |
 | the liquidation event | `MarginCallEvent` native_order.hpp:1148 delivered to `on_native_margin_call` native_host.hpp:979 | `on_margin_call` native_c_api.h:1563 | `native_margin_strategy.cpp` |
 
@@ -387,7 +388,7 @@ runs close the same trades for the same money.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.account_currency` | `currency` native_run_spec.hpp:541 | `currency` pineforge.h:458 | `hello_kernel.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:552 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1143. |
+| `strategy.account_currency` | `currency` native_run_spec.hpp:541 | `currency` pineforge.h:458 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:552 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1143. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
 | `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:550 | `initial_capital` pineforge.h:460 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
 | `strategy.equity` | `native_marked_equity` native_host.hpp:1237 | `strategy_native_marked_equity_v1` native_c_api.h:1937 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`; the native call takes the mark explicitly, so the caller says what "now" means. It equals the balance plus the open lots' `unrealized_pnl` native_host.hpp:341, which the example asserts at every calculation. |
 | `strategy.netprofit` | `net_profit` engine.hpp:993 | `net_profit` pineforge.h:371 | `native_open_lots_strategy.cpp` | Realized only. |
@@ -418,7 +419,7 @@ runs close the same trades for the same money.
 | `strategy.position_avg_price` | `NativePhysicalPosition::average_price` native_host.hpp:298 | `strategy_native_position_v1` native_c_api.h:1820 | `native_selected_strategy.cpp` | Volume-weighted over the open lots. |
 | `strategy.position_entry_name` | `native_open_lots` native_host.hpp:1233 then the last row's `entry_label` native_host.hpp:333 | `strategy_native_open_lot_get_v1` native_c_api.h:1860 | `native_open_lots_strategy.cpp` | Pine reports the newest entry's id; the native book lets you read any lot's. |
 | `strategy.margin_liquidation_price` | `native_liquidation_price` native_host.hpp:1256 | `strategy_native_liquidation_price_v1` native_c_api.h:1945 | `native_margin_strategy.cpp` | Solved from the declared maintenance requirement, so it answers `nullopt` when the model declares none or the slope is degenerate (a long at full maintenance has no finite level). |
-| `strategy.convert_to_account()` | none — the kernel converts with the FX you declare | `strategy_set_account_currency_fx_series` pineforge.h:1237 | `tests/test_native_fx_curve.cpp` | Pine's converter needs TradingView's own FX series. Natively, `account_fx` native_run_spec.hpp:552 is one scalar and `configure_native_fx_curve` native_host.hpp:1143 stages an immutable timestamped curve; codegen emits the Pine call as the identity, because no fixed table reproduces TradingView's series. |
+| `strategy.convert_to_account()` | none — the kernel converts with the FX you declare | `strategy_set_account_currency_fx_series` pineforge.h:1237 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | Pine's converter needs TradingView's own FX series. Natively, `account_fx` native_run_spec.hpp:552 is one scalar and `configure_native_fx_curve` native_host.hpp:1143 stages an immutable timestamped curve; codegen emits the Pine call as the identity, because no fixed table reproduces TradingView's series. |
 | `strategy.convert_to_symbol()` | none — same reason, the other direction | `strategy_set_account_currency_fx_series` pineforge.h:1237 | `tests/test_native_fx_curve.cpp` | Same ruling. |
 
 @anchor pine_to_native_map_trades
@@ -516,7 +517,7 @@ close, a bracket leg, a liquidation, a risk flatten and the range end.
 | `barmerge.gaps_on` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:488 set true | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_CLEAR` native_c_api.h:717 | `native_htf_strategy.cpp` | The series is cleared on every input bar it delivers nothing on, so the pull answers empty — the native spelling of `na`. |
 | `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:487 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:704 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
 | `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:487 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:706 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
-| `request.currency_rate()` | none — no FX data feed | `strategy_set_account_currency_fx_series` pineforge.h:1237 | `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
+| `request.currency_rate()` | none — no FX data feed | `strategy_set_account_currency_fx_series` pineforge.h:1237 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
 | `request.dividends()` | none — no fundamentals feed | — | — | Rejected at transpile for a Pine script; a native host fetches and models it itself. |
 | `request.earnings()` | none — no fundamentals feed | — | — | Same. |
 | `request.financial()` | none — no fundamentals feed | — | — | Same. |

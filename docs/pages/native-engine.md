@@ -3222,7 +3222,7 @@ its own has passed:
 | `hello_kernel_c.c` | the same host from C, through `<pineforge/native_c_api.h>` | `tests/test_native_c_api.c` |
 | `native_market_strategy.cpp` | batch and stream lifecycles; also the live runner's MODULE | `tests/test_native_example_batch.cpp`, `tests/test_streaming.cpp` |
 | `native_selected_strategy.cpp` | `HostSized`, `BindOpening(s)`, `execute_current`, `ReverseTo`; also a MODULE | `tests/test_native_example_selected.cpp`, `tests/test_native_current_execution.cpp` |
-| `native_bracket_strategy.cpp` | `submit_bracket` with `FromOwnerFill` legs on a tick ladder, `Directional`, `PendingUntilArmed` | `tests/test_native_toolkit_bracket.cpp`, `tests/test_native_anchored_legs.cpp` |
+| `native_bracket_strategy.cpp` | `submit_bracket` with three `FromOwnerFill` legs on a tick ladder — take-profit, stop-loss and a trail's arm threshold, each snapped `Directional` and asserted on the ladder (103.25, 98.00, 101.75); `PendingUntilArmed`, so the working rows go from 1 to 3 at the fill; the one-cancels-all group, whose take-profit fill cancels both siblings with `CancelReason::Group` | `tests/test_native_toolkit_bracket.cpp`, `tests/test_native_anchored_legs.cpp` |
 | `native_sized_report_strategy.cpp` | `Sized{CashValue}` / `Sized{EquityFraction}` resolved by the kernel; `report_policy = KernelRecorded`, `report_open_position_at_end`, reading `fill_report` | `tests/test_native_sizing_bases.cpp`, `tests/test_native_report_truth.cpp` |
 | `native_margin_strategy.cpp` | `NativeMarginModel` (initial gate, `native_liquidation_price`, kernel liquidation, `MarginCallEvent`); `margin_check_allowed`, `resolve_margin_requirement` | `tests/test_native_margin_model.cpp`, `tests/test_native_margin_hooks.cpp` |
 | `native_calc_on_fills_strategy.cpp` | `NativeCalculationTrigger::BarCloseAndFills`, `on_native_recalculate`, `current_partial_bar`, `NativeOpenBarView::OpenOnly` | `tests/test_native_calc_timing.cpp` |
@@ -3231,6 +3231,11 @@ its own has passed:
 | `native_price_grid_strategy.cpp` | `NativePriceGrid` `None` / `QuantizeFills` / `QuantizeFillsAndTriggers` and `NativeGridRounding` `HalfUp` / `Directional` on one sub-tick tape: raw against booked price per fill, a ladder level as a fixed point, the stop only the quantized path reaches, `GridRequiresPriceTick` | `tests/test_native_price_grid.cpp` |
 | `native_price_grid_c.c` | the same four runs from C: `PF_NATIVE_SPEC_EXT_PRICE_GRID` through `strategy_configure_native_ext_v1`, fills read back from `strategy_native_events_v1` with the C++ host's numbers | `tests/test_native_c_api.c` |
 | `native_risk_limits_strategy.cpp` | the money limits: `max_intraday_loss` as a percent of the day's opening equity, `max_consecutive_loss_days`, `max_drawdown`; `FlattenAndBlock` and the kernel's own flatten (`RequestOrigin::KernelRisk`, ticket `__kernel_risk__`); `CalendarDayInTimezone`, the next-day re-arm, the ledger per day | `tests/test_native_risk_limits.cpp` |
+| `native_auxiliary_feed_strategy.cpp` | `NativeRunSpec::auxiliary_feed`: a `"5"` series over 15-minute inputs built from a 1-minute feed (`NativeSeriesSource::AuxiliaryFeed`), every bucket against its hand aggregation, routing by time, and the refusal without a feed (`SubscriptionWithoutAuxiliaryFeed`) | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
+| `native_open_lots_strategy.cpp` | `native_open_lots(mark)` lot by lot and `native_marked_equity(mark)`; a FIFO partial reduce taking its share of the entry fee; the report accessors a host inherits; which report policy folds the extremes | `tests/test_native_open_lots.cpp` |
+| `native_fee_reserve_strategy.cpp` | `Sized{CashValue}` with `reserve_percent_fee`, from a JPY account on a USD-quoted instrument: 46 shares with the reserve and 47 without, both as `native_sized_units` and as fills; the commission of each leg (`ExecutionAppliedEvent::current_ticket`, `NativeOpenLot::entry_commission`, the closed row); the reserve is a no-op under `CashPerExecution` | `tests/test_native_sizing_bases.cpp` |
+| `native_fx_roll_strategy.cpp` | a `NativeFxCurve` staged with `configure_native_fx_curve` under a maintenance-only margin model: a restating point that is not a step, a 150 → 160 step offered as the `NativeMarginCheckKind::FxRoll` check point (its units, lot count, mark, time and the requirement at the new rate), `native_liquidation_price` moving with the rate, and the same run without the step, which liquidates nothing | `tests/test_native_fx_curve.cpp`, `tests/test_native_margin_fx_roll.cpp` |
+| `native_broker_hash_strategy.cpp` | the per-bar broker-state hashes (`set_broker_state_hash_recording`, `KernelRecorded`): one row per script bar in a batch and a stream; `hash_host_extension`, which moves every row and the scalar and no fill or continuation; replay and prefix closure within one driving; across drivings no shared row, the same closed rows and the same broker half (`broker_state_hash_from_execution_hash`) | `tests/test_native_report_truth.cpp`, `tests/test_native_host_hash_extension.cpp` |
 
 ```bash
 cmake -S . -B build -DPINEFORGE_BUILD_EXAMPLES=ON
@@ -3242,9 +3247,14 @@ ctest --test-dir build -R '^example_'
 `PINEFORGE_BUILD_EXAMPLES` (default OFF) builds each one as a standalone
 executable and registers it as a CTest row that asserts two things: the host
 exits 0, and it printed its summary line — `closed trades: [1-9]`; the market
-host's line must also show a closed trade from its stream drive, and the
+host's line must also show a closed trade from its stream drive, the
 selected host's pins its one host-sized opening of 2 units and its one
-selected close. CTest cannot assert both on one row (`PASS_REGULAR_EXPRESSION`
+selected close, and the bracket, fee-reserve, FX-roll and broker-hash hosts'
+lines pin their headline numbers: the three arm levels, the working rows and
+the two group cancels; 46 against 47 shares and both commissions; the roll's
+units and mark and the step-free run's zero margin calls; one hash row per
+script bar, all of them moved by the extension, none shared between a batch
+and a stream. CTest cannot assert both on one row (`PASS_REGULAR_EXPRESSION`
 replaces the exit-code check), so every row runs its host through
 `examples/native/run_example.cmake`, which fails on a nonzero exit, a signal, a
 timeout or a missing line; an example registered without a summary line is a
@@ -3258,9 +3268,9 @@ profiles of `scripts/ci_verify.py` turn the option on, so every `example_*`
 row runs in the gate both with and without the source layer compiled (their
 `examples-assert-live` stage refuses a configure in which an example's
 compile command leaves `NDEBUG` defined);
-`scripts/check_native_include_independence.py` compiles all fifteen sources
-against the installed headers with the source trees removed, the C one with
-the C compiler. The market and selected examples are also built, from the
+`scripts/check_native_include_independence.py` compiles every source there
+against the installed headers with the source trees removed, the two C hosts
+with the C compiler. The market and selected examples are also built, from the
 same sources, as the MODULE targets the live runner `dlopen`s
 (`native_market_example`, `native_selected_example`). Those two compiles take
 `-UNDEBUG` too, and `examples-assert-live` checks them wherever the runner is
