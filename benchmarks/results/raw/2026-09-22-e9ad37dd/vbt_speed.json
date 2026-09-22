@@ -1,0 +1,67 @@
+{
+  "002-analyzer-parity-percent-of-equity-sizing-01": {
+    "median_ms": 70.96477109007537,
+    "p95_ms": 189.41902485676175,
+    "n": 20
+  },
+  "004-barstate-isconfirmed-magnifier-off-01b": {
+    "median_ms": 133.32218723371625,
+    "p95_ms": 201.27690772060305,
+    "n": 20
+  },
+  "006-bracket-exit-tp-sl-fixed-01": {
+    "median_ms": 82.27897877804935,
+    "p95_ms": 160.9363152179867,
+    "n": 20
+  },
+  "007-bracket-tp-sl-oca-reduce-isolate-01": {
+    "median_ms": 220.47387505881488,
+    "p95_ms": 301.4444937231019,
+    "n": 20
+  },
+  "008-bracket-trail-points-no-offset-explicit-01": {
+    "median_ms": 118.61993744969368,
+    "p95_ms": 189.98959134332836,
+    "n": 20
+  },
+  "011-composite-4emarsi-rsi-pullback-latch-01": {
+    "median_ms": 158.01418735645711,
+    "p95_ms": 229.58729804959148,
+    "n": 20
+  },
+  "021-composite-scalping-integration-01": {
+    "median_ms": 10.217374889180064,
+    "p95_ms": 10.582539113238454,
+    "n": 20
+  },
+  "031-magnifier-tick-dist-volume-weighted-on-01": {
+    "median_ms": 130.92493684962392,
+    "p95_ms": 194.2493056645617,
+    "n": 20
+  },
+  "044-oca-multi-bracket-isolation-01": {
+    "median_ms": 519.4778330624104,
+    "p95_ms": 525.9326459374279,
+    "n": 20
+  },
+  "045-oca-raw-strategy-order-reduce-01": {
+    "median_ms": 102.30370843783021,
+    "p95_ms": 174.17998318560421,
+    "n": 20
+  },
+  "048-order-deferred-flip-guaranteed-gap-stops-01": {
+    "median_ms": 89.68220860697329,
+    "p95_ms": 160.07969654165208,
+    "n": 20
+  },
+  "059-order-stop-entry-cancel-opposite-01": {
+    "median_ms": 96.86158364638686,
+    "p95_ms": 174.22404161188751,
+    "n": 20
+  },
+  "064-session-ny-spring-forward-dst-01": {
+    "median_ms": 10.966729139909148,
+    "p95_ms": 11.491162586025894,
+    "n": 20
+  }
+}

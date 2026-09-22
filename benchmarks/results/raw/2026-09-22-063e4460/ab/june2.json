@@ -1,0 +1,81 @@
+{
+  "context": {
+    "date": "2026-09-22T22:20:29+08:00",
+    "host_name": "HaoLiangWendeMac-Studio-2.local",
+    "executable": "/tmp/bench3-ab-june/build/bin/pineforge_bench",
+    "num_cpus": 16,
+    "mhz_per_cpu": 24,
+    "cpu_scaling_enabled": false,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 65536,
+        "num_sharing": 0
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 131072,
+        "num_sharing": 0
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 4194304,
+        "num_sharing": 1
+      }
+    ],
+    "load_avg": [12.833,6.96729,5.25439],
+    "library_version": "v1.9.0",
+    "library_build_type": "release",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "52-barstate-isconfirmed-magnifier-off-01b/throughput/with_magnifier/iterations:20",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "52-barstate-isconfirmed-magnifier-off-01b/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 6.6683583427220583e+03,
+      "cpu_time": 6.3042500000000000e+03,
+      "time_unit": "us",
+      "items_per_second": 8.5543879129158892e+06
+    },
+    {
+      "name": "97-composite-scalping-integration-01/throughput/with_magnifier/iterations:20",
+      "family_index": 1,
+      "per_family_instance_index": 0,
+      "run_name": "97-composite-scalping-integration-01/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 7.2045687586069107e+03,
+      "cpu_time": 6.9321999999999998e+03,
+      "time_unit": "us",
+      "items_per_second": 7.7794928017079718e+06
+    },
+    {
+      "name": "87-pyramid-deferred-flip-close-all-01/throughput/with_magnifier/iterations:20",
+      "family_index": 2,
+      "per_family_instance_index": 0,
+      "run_name": "87-pyramid-deferred-flip-close-all-01/throughput/with_magnifier/iterations:20",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 1.0546127101406455e+04,
+      "cpu_time": 1.0152200000000001e+04,
+      "time_unit": "us",
+      "items_per_second": 5.3120505900198976e+06
+    }
+  ]
+}

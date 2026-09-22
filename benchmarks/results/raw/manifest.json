@@ -1,0 +1,198 @@
+{
+  "schema": "pineforge-bench-raw/v1",
+  "evidence": {
+    "sha256": "6e938f9a9160eeae6bda5c7c2d02078f1b9795d767a48d125fa68245f69ca539",
+    "bytes": 14696398,
+    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp, tv_trades.csv, strategy_pyne.py, inputs; TradingView-scraped third-party scripts, not redistributed",
+    "lane": "BENCH1c",
+    "fetch": "lab evidence get <sha256> --out <file> (maintainers, campaign environment); tar -xzf <file> -C benchmarks"
+  },
+  "windows": {
+    "2026-06-11-94596bf": {
+      "lane": "2026-06-11 speed refresh",
+      "engine": "94596bf",
+      "published_in": [
+        "ac011d84",
+        "933fe583"
+      ],
+      "note": "ac011d84 and 933fe583 change docs only: their src/ and include/ equal 94596bf's, so the rebuilt 'June engine' ac011d84 is this engine"
+    },
+    "2026-09-22-e9ad37dd": {
+      "lane": "BENCH2",
+      "engine": "e9ad37dd",
+      "published_in": [
+        "cd581082"
+      ],
+      "utc": "2026-09-22T03:03:18Z..05:30Z"
+    },
+    "2026-09-22-063e4460": {
+      "lane": "BENCH3",
+      "engine": "063e4460",
+      "published_in": [
+        "a02160f4",
+        "0ad1e8e4"
+      ],
+      "utc": "2026-09-22T11:57:36Z..14:22Z"
+    }
+  },
+  "files": {
+    "2026-06-11-94596bf/pf_speed.json": {
+      "sha256": "0216b2dfba447805630219f61016082df978d9bd42ad4882e8ab07d72fbded4b",
+      "what": "Google Benchmark JSON of the 2026-06-11 sweep: 100 slots x {with_magnifier, no_magnifier, cold}; the with_magnifier entries are the PineForge column of the 2026-06-11 speed table (4.80 / 5.58 / 8.72 ms on the three probes the current population shares)",
+      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pf_speed.json",
+      "origin_sha256": "d102b7816175e1ef1a98c05e1a7fcdadcf39a5b4b7d370542a77c1a56cfc0b45",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-06-11-94596bf/pc_speed.json": {
+      "sha256": "2141049653f2af9cc5e2e45c6b1407dd4892f596fa2c455d2e9e0a9b45f2d5b4",
+      "what": "PyneCore subprocess timings of the 2026-06-11 sweep (99 slots); with pf_speed.json they give the table's median 162x",
+      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pc_speed.json"
+    },
+    "2026-06-11-94596bf/pt_speed.json": {
+      "sha256": "9e22fca70dc86391f2d4cf1773790ec112c3a5c820f068c507c0c50f39acd729",
+      "what": "PineTS canonical-indicator timing of the 2026-06-11 sweep",
+      "origin": "~/code/pineforge-engine/benchmarks/_workdir/pt_speed.json"
+    },
+    "2026-06-11-94596bf/vbt_speed.json": {
+      "sha256": "16f60d594b13076973c877127247bb6f17014d2498668c1fd7a99567ec349262",
+      "what": "vectorbt timings of the 2026-06-11 sweep",
+      "origin": "~/code/pineforge-engine/benchmarks/_workdir/vbt_speed.json"
+    },
+    "2026-09-22-e9ad37dd/pf_speed.json": {
+      "sha256": "d5c8e31f6041167dad60799c3b273e7e80a3f4c79e1a68264db7b7bc8d10c6e5",
+      "what": "Google Benchmark JSON of lane BENCH2's PineForge sweep at e9ad37dd (201 slots, gate load 3.79); superseded by BENCH3's sweep, kept for the 1.02x cross-window comparison in speed.md",
+      "origin": "/tmp/bench3/bench2-workdir/pf_speed.json (BENCH2's benchmarks/_workdir)"
+    },
+    "2026-09-22-e9ad37dd/pc_speed.json": {
+      "sha256": "800879ec8da94f375e4a2da043f96826f72b6103b774fe1d519590efdc888adc",
+      "what": "PyneCore subprocess timings (median / p95 of 20 runs, 8 concurrent; 196 slots): the published PyneCore column",
+      "origin": "/tmp/bench3/bench2-workdir/pc_speed.json"
+    },
+    "2026-09-22-e9ad37dd/pt_speed.json": {
+      "sha256": "c9d19fd98320e46c068947b743b0fdac82f0fa0bb2f4887d8786d85e50aa71e9",
+      "what": "PineTS canonical-indicator timing (median / p95 of 20 runs): the published PineTS row",
+      "origin": "/tmp/bench3/bench2-workdir/pt_speed.json"
+    },
+    "2026-09-22-e9ad37dd/vbt_speed.json": {
+      "sha256": "8ccb87f43af360039ab858eeb8b5f72c3cdcbf269722fccd2632b02ea7720be2",
+      "what": "vectorbt in-process timings (13 ports): the published vectorbt column",
+      "origin": "/tmp/bench3/bench2-workdir/vbt_speed.json"
+    },
+    "2026-09-22-e9ad37dd/speed_loads.tsv": {
+      "sha256": "3cdcfcfe0fe8c1be52b28448cd1d190e8f461f57bc333627a74ac5375eefbc9e",
+      "what": "quiet-gate readings before each BENCH2 timing batch: label, UTC, 1-min load, build/test processes (the e9ad37dd rows of speed.md's load table)",
+      "origin": "/tmp/bench3/bench2-workdir/speed_loads.tsv"
+    },
+    "2026-09-22-063e4460/speed_loads.tsv": {
+      "sha256": "7e50952ca48ceba93ba67e18c177e58dd620cdf3b9992eb38b42fcbbbe90ca58",
+      "what": "quiet-gate readings before each BENCH3 timing batch: the PineForge sweep (pineforge-a = slots 001-100, pineforge-b = 101-201), the discarded throughput-r1 / -q1 runs, the five kept runs (throughput-q2..q6 = r1..r5) and the A/B",
+      "origin": "/tmp/bench3/loads_bench3.tsv"
+    },
+    "2026-09-22-063e4460/gate_polls.tsv": {
+      "sha256": "019e6511ff82e8cfb6fcb3331790c18ef300c1ff286ca5d83fad64f4acd164ac",
+      "what": "the 5-minute gate probes from 12:50 UTC: UTC, offset, 1/5/15-min load, build/test processes, verdict",
+      "origin": "/tmp/bench3/quiet_poll_bench3.tsv"
+    },
+    "2026-09-22-063e4460/throughput/r1.json": {
+      "sha256": "bab9adcd7e3bcd91b7c6c9df5d12ef96151be0e7dce532d8dab1cb6b9c2f602b",
+      "what": "throughput package run 1 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:29:51Z",
+      "origin": "/tmp/bench3/tp-q2/benchmark_results.json",
+      "origin_sha256": "2028dfc6025b2c700e530fec4360324e435e9438da925091f9be99fe904bb33b",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-09-22-063e4460/throughput/r1-load.tsv": {
+      "sha256": "fcddfe578b3e93c9098d1f23b924bf47a3868d3ef44a4d9701a5097e9715ce6f",
+      "what": "1/5/15-min load every 10 s during run 1: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/tp-q2/loadtrace.tsv"
+    },
+    "2026-09-22-063e4460/throughput/r2.json": {
+      "sha256": "bfa78da4b0dd21d9ba85164329eb0a91b8344829a3d992597911e0301945d19f",
+      "what": "throughput package run 2 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:38:22Z; the median run, published as benchmarks/throughput/benchmark_results.json",
+      "origin": "/tmp/bench3/tp-q3/benchmark_results.json",
+      "origin_sha256": "905f77ffe6bec684375b7559c40deaeac850fc63c7d331e12ef261e94a9d3d68",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-09-22-063e4460/throughput/r2-load.tsv": {
+      "sha256": "1ac59eb1b491b58ec25a77d3a6523bd792d09c179231aa7e8b3f50110a21073d",
+      "what": "1/5/15-min load every 10 s during run 2: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/tp-q3/loadtrace.tsv"
+    },
+    "2026-09-22-063e4460/throughput/r3.json": {
+      "sha256": "8076701b45b690bc95177327887bc67619d1ff1386efb1d6577c4704071a032c",
+      "what": "throughput package run 3 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T13:46:30Z",
+      "origin": "/tmp/bench3/tp-q4/benchmark_results.json",
+      "origin_sha256": "81d5204485d09f46ef40889956c94abe3252f583b32f52486b91a8ea5c828f2a",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-09-22-063e4460/throughput/r3-load.tsv": {
+      "sha256": "b736cbd01b3752bb8821586106a27495c1b076566599471fd7cc3de96644332f",
+      "what": "1/5/15-min load every 10 s during run 3: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/tp-q4/loadtrace.tsv"
+    },
+    "2026-09-22-063e4460/throughput/r4.json": {
+      "sha256": "2421d077c22777ce627db1ef7cfc83a82c9488ec0c0f84ef3995db882c2d4752",
+      "what": "throughput package run 4 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:00:07Z",
+      "origin": "/tmp/bench3/tp-q5/benchmark_results.json",
+      "origin_sha256": "f8732abdcc651eb374883f301559fa65ab3a71707ba5b2d70fa5e23025a06579",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-09-22-063e4460/throughput/r4-load.tsv": {
+      "sha256": "3e9238ade8576ddd9fa188f2470628704bb697667ebf112942e44d0d1f91e09c",
+      "what": "1/5/15-min load every 10 s during run 4: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/tp-q5/loadtrace.tsv"
+    },
+    "2026-09-22-063e4460/throughput/r5.json": {
+      "sha256": "9a3030b3a792cb653ced865c3d3ab0d17e541c673c264c5425dc0f16d3fd5e8c",
+      "what": "throughput package run 5 of 5 (bash benchmarks/throughput/reproduce.sh; <slug>/throughput/no_magnifier, 201 slots), gate at 2026-09-22T14:08:13Z",
+      "origin": "/tmp/bench3/tp-q6/benchmark_results.json",
+      "origin_sha256": "ad538bc3b63154492bbf747918cbb9696e06eac3d2873776439d96dff83d179f",
+      "edit": "context.executable relativized to \"./build/bin/pineforge_bench\" (the measuring host's absolute build path)"
+    },
+    "2026-09-22-063e4460/throughput/r5-load.tsv": {
+      "sha256": "f0bf6ac7ef4d16472713be54d6d0256e0a54dc881fa963e21f1e2da7b2b4ae95",
+      "what": "1/5/15-min load every 10 s during run 5: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/tp-q6/loadtrace.tsv"
+    },
+    "2026-09-22-063e4460/ab/new1.json": {
+      "sha256": "d457dc1934e242a3a3b2e060382de7a0bb45e20ba8d2f23a54e41bfb0b7dcd8b",
+      "what": "paired A/B, pass 1: engine 063e4460 over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
+      "engine": "063e4460",
+      "origin": "/tmp/bench3/ab/new1.json"
+    },
+    "2026-09-22-063e4460/ab/old1.json": {
+      "sha256": "c735e597ec183a71f6af94478eb915bbbddc5fa9d68be477ae8476132f992c79",
+      "what": "paired A/B, pass 1: engine e9ad37dd over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
+      "engine": "e9ad37dd",
+      "origin": "/tmp/bench3/ab/old1.json"
+    },
+    "2026-09-22-063e4460/ab/june1.json": {
+      "sha256": "99447d694beafa98c138e483871a61e5740980f31b02ad350b91caf28b5bef3b",
+      "what": "paired A/B, pass 1: the 2026-06-11 engine ac011d84 rebuilt on the same host, its three probes the current population shares, <slug>/throughput/with_magnifier",
+      "engine": "ac011d84",
+      "origin": "/tmp/bench3/ab/june1.json"
+    },
+    "2026-09-22-063e4460/ab/old2.json": {
+      "sha256": "d0b401c05f2ed91c70ff8f6d71874dd0e0f76ab43e3ff4aab3b12bda2e3a75a4",
+      "what": "paired A/B, pass 2: engine e9ad37dd over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
+      "engine": "e9ad37dd",
+      "origin": "/tmp/bench3/ab/old2.json"
+    },
+    "2026-09-22-063e4460/ab/new2.json": {
+      "sha256": "b2d801aa4d71d6462865e0b755580ccd751d91967999f15abce975b57657bc74",
+      "what": "paired A/B, pass 2: engine 063e4460 over 26 public slots (every fourth from 001 to 097, plus 004), <slug>/throughput/with_magnifier",
+      "engine": "063e4460",
+      "origin": "/tmp/bench3/ab/new2.json"
+    },
+    "2026-09-22-063e4460/ab/june2.json": {
+      "sha256": "b4d3800264aac5fa4a0ec4f1ee7e9b77d00bee265a57c3a2ad2b61eb3348aa88",
+      "what": "paired A/B, pass 2: the 2026-06-11 engine ac011d84 rebuilt on the same host, its three probes the current population shares, <slug>/throughput/with_magnifier",
+      "engine": "ac011d84",
+      "origin": "/tmp/bench3/ab/june2.json"
+    },
+    "2026-09-22-063e4460/ab/load.tsv": {
+      "sha256": "f9bb345d5f7c5f5d7532e36c826e936c6cec9bf6bf69bbe9569e383c3a66e9ef",
+      "what": "1/5/15-min load every 10 s during the A/B window: UTC, load1, load5, load15",
+      "origin": "/tmp/bench3/ab/loadtrace.tsv"
+    }
+  }
+}

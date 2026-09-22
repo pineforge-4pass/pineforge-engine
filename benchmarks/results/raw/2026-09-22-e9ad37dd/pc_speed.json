@@ -1,0 +1,982 @@
+{
+  "001-analyzer-anvil-percent-costs-01": {
+    "median_ms": 1395.253854105249,
+    "p95_ms": 1483.674189145677,
+    "n": 20
+  },
+  "002-analyzer-parity-percent-of-equity-sizing-01": {
+    "median_ms": 485.3091666009277,
+    "p95_ms": 535.718364082277,
+    "n": 20
+  },
+  "003-array-atlas-momentum-rotation-01": {
+    "median_ms": 1661.285542184487,
+    "p95_ms": 1744.6273953421044,
+    "n": 20
+  },
+  "004-barstate-isconfirmed-magnifier-off-01b": {
+    "median_ms": 691.995020955801,
+    "p95_ms": 741.8171097524466,
+    "n": 20
+  },
+  "005-bracket-compass-partial-ladder-01": {
+    "median_ms": 1165.6169584020972,
+    "p95_ms": 1241.7839105241003,
+    "n": 20
+  },
+  "006-bracket-exit-tp-sl-fixed-01": {
+    "median_ms": 556.2043748795986,
+    "p95_ms": 599.8610600363465,
+    "n": 20
+  },
+  "007-bracket-tp-sl-oca-reduce-isolate-01": {
+    "median_ms": 855.7476664427668,
+    "p95_ms": 920.8052194910126,
+    "n": 20
+  },
+  "008-bracket-trail-points-no-offset-explicit-01": {
+    "median_ms": 588.8707709964365,
+    "p95_ms": 630.3739618975671,
+    "n": 20
+  },
+  "009-bracket-trail-points-with-offset-only-01": {
+    "median_ms": 679.9538745544851,
+    "p95_ms": 709.1926594497637,
+    "n": 20
+  },
+  "010-cap-gatekeeper-intraday-risk-01": {
+    "median_ms": 1471.868353895843,
+    "p95_ms": 1554.445818834938,
+    "n": 20
+  },
+  "011-composite-4emarsi-rsi-pullback-latch-01": {
+    "median_ms": 772.2390417475253,
+    "p95_ms": 811.4952292293311,
+    "n": 20
+  },
+  "012-composite-boscurv-integration-01": {
+    "median_ms": 1489.6700417157263,
+    "p95_ms": 1555.7276183972135,
+    "n": 20
+  },
+  "013-composite-boscurv-pivot-bos-trigger-01": {
+    "median_ms": 1029.890667181462,
+    "p95_ms": 1083.0752584151926,
+    "n": 20
+  },
+  "014-composite-ies-adx-regime-classify-01": {
+    "median_ms": 886.1167919822037,
+    "p95_ms": 942.1498649753631,
+    "n": 20
+  },
+  "015-composite-ies-cooldown-daily-cap-01": {
+    "median_ms": 824.4626040104777,
+    "p95_ms": 886.6884293500335,
+    "n": 20
+  },
+  "016-composite-kanuck-calc-on-every-tick-01": {
+    "median_ms": 697.269520489499,
+    "p95_ms": 747.3013124894352,
+    "n": 20
+  },
+  "017-composite-kkb-ema-atr-breakout-band-01": {
+    "median_ms": 743.3792711235583,
+    "p95_ms": 766.5179543197155,
+    "n": 20
+  },
+  "018-composite-kkb-kalman-filter-1d-01": {
+    "median_ms": 1166.2739170715213,
+    "p95_ms": 1187.8121646121144,
+    "n": 20
+  },
+  "019-composite-kkb-margin-100-pct-01": {
+    "median_ms": 987.4682289082557,
+    "p95_ms": 1012.1631794143468,
+    "n": 20
+  },
+  "020-composite-marketshift-pivot-state-machine-01": {
+    "median_ms": 983.6636453401297,
+    "p95_ms": 995.6160021480173,
+    "n": 20
+  },
+  "021-composite-scalping-integration-01": {
+    "median_ms": 817.8872915450484,
+    "p95_ms": 832.9205959802493,
+    "n": 20
+  },
+  "022-composite-trendmaster-line-new-projection-01": {
+    "median_ms": 1216.1782295443118,
+    "p95_ms": 1233.2326350966468,
+    "n": 20
+  },
+  "023-composite-trendmaster-three-tier-ema-state-01": {
+    "median_ms": 688.4492707904428,
+    "p95_ms": 725.050541665405,
+    "n": 20
+  },
+  "024-composite-trendmaster-trend-momentum-structure-gate-01": {
+    "median_ms": 874.4905204512179,
+    "p95_ms": 898.2737248530611,
+    "n": 20
+  },
+  "025-composite-vcp-rsi-smooth-divergence-01": {
+    "median_ms": 646.3185206521302,
+    "p95_ms": 670.0546001084149,
+    "n": 20
+  },
+  "026-composite-vcp-vol-zscore-anomaly-01": {
+    "median_ms": 804.7170834615827,
+    "p95_ms": 823.642901936546,
+    "n": 20
+  },
+  "027-composite-wunderscalper-integration-01": {
+    "median_ms": 1017.1119375154376,
+    "p95_ms": 1041.1979315103963,
+    "n": 20
+  },
+  "028-drawing-line-level-breakout": {
+    "median_ms": 934.0892913751304,
+    "p95_ms": 959.1174457687885,
+    "n": 20
+  },
+  "029-drawing-visual-noise-geometry": {
+    "median_ms": 1302.0765834953636,
+    "p95_ms": 1333.9933708310127,
+    "n": 20
+  },
+  "030-input-source-subscript-hl2-01": {
+    "median_ms": 1977.0033329259604,
+    "p95_ms": 2022.2496058559045,
+    "n": 20
+  },
+  "031-magnifier-tick-dist-volume-weighted-on-01": {
+    "median_ms": 601.9198964349926,
+    "p95_ms": 616.3282271008939,
+    "n": 20
+  },
+  "032-map-mosaic-regime-weight-01": {
+    "median_ms": 1399.791375733912,
+    "p95_ms": 1426.5660452656448,
+    "n": 20
+  },
+  "033-math-kiln-power-efficiency-01": {
+    "median_ms": 928.510750643909,
+    "p95_ms": 953.326833457686,
+    "n": 20
+  },
+  "034-matrix-bool-mask-transpose-roundtrip-01": {
+    "median_ms": 1399.6324164327234,
+    "p95_ms": 1422.235472756438,
+    "n": 20
+  },
+  "035-matrix-cadence-transpose-pairs-01": {
+    "median_ms": 1799.224083777517,
+    "p95_ms": 1824.7109787305817,
+    "n": 20
+  },
+  "036-matrix-eigen-covariance-01": {
+    "median_ms": 1664.0206668525934,
+    "p95_ms": 1707.1496356045827,
+    "n": 20
+  },
+  "037-mtf-daily-array-median-percentrank-01": {
+    "median_ms": 3050.8981039747596,
+    "p95_ms": 3298.2899171998724,
+    "n": 20
+  },
+  "038-mtf-dual-tf-60-240-rising-01": {
+    "median_ms": 4752.580916509032,
+    "p95_ms": 5188.72196606826,
+    "n": 20
+  },
+  "039-mtf-htf-60-close-change-baseline-01": {
+    "median_ms": 5217.2113752458245,
+    "p95_ms": 5483.671510219574,
+    "n": 20
+  },
+  "040-mtf-htf-weekly-sma-cross-01": {
+    "median_ms": 2793.8909376971424,
+    "p95_ms": 2976.086725946516,
+    "n": 20
+  },
+  "041-mtf-orbit-trend-01": {
+    "median_ms": 5289.0705415047705,
+    "p95_ms": 5490.981707558967,
+    "n": 20
+  },
+  "042-mtf-triple-tf-macd-hist-confluence-01": {
+    "median_ms": 6398.199145914987,
+    "p95_ms": 6794.504639063962,
+    "n": 20
+  },
+  "043-na-deep-history-int-na-01": {
+    "median_ms": 809.875812381506,
+    "p95_ms": 823.1545748189092,
+    "n": 20
+  },
+  "044-oca-multi-bracket-isolation-01": {
+    "median_ms": 862.2793955728412,
+    "p95_ms": 875.9877539472654,
+    "n": 20
+  },
+  "045-oca-raw-strategy-order-reduce-01": {
+    "median_ms": 573.6707088071853,
+    "p95_ms": 592.8973813774064,
+    "n": 20
+  },
+  "046-order-close-immediate-vs-next-bar-01": {
+    "median_ms": 608.1804796122015,
+    "p95_ms": 627.901035384275,
+    "n": 20
+  },
+  "047-order-cross-exit-close-same-pass-01": {
+    "median_ms": 619.9757498688996,
+    "p95_ms": 636.3899207673967,
+    "n": 20
+  },
+  "048-order-deferred-flip-guaranteed-gap-stops-01": {
+    "median_ms": 779.5001044869423,
+    "p95_ms": 799.0356630180031,
+    "n": 20
+  },
+  "049-order-dual-four-bar-stop-no-close-01": {
+    "median_ms": 735.1754996925592,
+    "p95_ms": 758.9657629607245,
+    "n": 20
+  },
+  "050-order-dual-stop-open-low-first-path-01": {
+    "median_ms": 568.6862289439887,
+    "p95_ms": 584.3200269620866,
+    "n": 20
+  },
+  "051-order-dual-stop-source-order-short-first-01": {
+    "median_ms": 609.725083457306,
+    "p95_ms": 641.1441962933168,
+    "n": 20
+  },
+  "052-order-entry-implicit-reversal-exit-01": {
+    "median_ms": 638.8203750830144,
+    "p95_ms": 655.6788674090058,
+    "n": 20
+  },
+  "053-order-flip-stop-no-paired-close-01": {
+    "median_ms": 688.5731664951891,
+    "p95_ms": 710.8752749627456,
+    "n": 20
+  },
+  "054-order-keystone-limit-replace-01": {
+    "median_ms": 1540.7402915880084,
+    "p95_ms": 1576.765008829534,
+    "n": 20
+  },
+  "055-order-one-side-four-bar-far-opposite-01": {
+    "median_ms": 780.4938128683716,
+    "p95_ms": 814.7066795034334,
+    "n": 20
+  },
+  "056-order-process-on-close-true-01": {
+    "median_ms": 779.4036460109055,
+    "p95_ms": 804.6826548175886,
+    "n": 20
+  },
+  "057-order-same-id-market-entry-repeat-01": {
+    "median_ms": 605.8548749424517,
+    "p95_ms": 632.0862707681955,
+    "n": 20
+  },
+  "058-order-same-id-stop-after-flat-01": {
+    "median_ms": 678.8160835858434,
+    "p95_ms": 717.1835953136907,
+    "n": 20
+  },
+  "059-order-stop-entry-cancel-opposite-01": {
+    "median_ms": 967.3218128737062,
+    "p95_ms": 997.5962516386063,
+    "n": 20
+  },
+  "060-order-stop-entry-touch-boundary-01": {
+    "median_ms": 700.9279164485633,
+    "p95_ms": 733.9391737710686,
+    "n": 20
+  },
+  "061-pyramid-deferred-flip-close-all-01": {
+    "median_ms": 1028.5154171288013,
+    "p95_ms": 1067.8861542372035,
+    "n": 20
+  },
+  "062-pyramid-flip-stop-pyramiding-2-01": {
+    "median_ms": 714.8716466035694,
+    "p95_ms": 753.3971499884502,
+    "n": 20
+  },
+  "063-session-borough-new-york-01": {
+    "median_ms": 1197.3268329165876,
+    "p95_ms": 1252.9411855852231,
+    "n": 20
+  },
+  "064-session-ny-spring-forward-dst-01": {
+    "median_ms": 783.9121248107404,
+    "p95_ms": 811.1829110421241,
+    "n": 20
+  },
+  "065-stats-ledger-outcome-throttle-01": {
+    "median_ms": 1102.003270527348,
+    "p95_ms": 1158.2488171523437,
+    "n": 20
+  },
+  "066-syntax-glyph-string-regex-01": {
+    "median_ms": 1179.9022711347789,
+    "p95_ms": 1222.269076993689,
+    "n": 20
+  },
+  "067-ta-aperture-cog-linreg-01": {
+    "median_ms": 1300.502166384831,
+    "p95_ms": 1332.555942144245,
+    "n": 20
+  },
+  "068-ta-bb-rsi-mean-reversion-01": {
+    "median_ms": 1253.6906045861542,
+    "p95_ms": 1287.3208835488185,
+    "n": 20
+  },
+  "069-ta-closedtrades-risk-introspection-01": {
+    "median_ms": 909.7559996880591,
+    "p95_ms": 930.0498627359048,
+    "n": 20
+  },
+  "070-ta-cog-10-signal-cross-01": {
+    "median_ms": 1228.6120210774243,
+    "p95_ms": 1255.8790624840185,
+    "n": 20
+  },
+  "071-ta-dual-thrust-open-anchored-range-01": {
+    "median_ms": 1567.8209795150906,
+    "p95_ms": 1606.439789175056,
+    "n": 20
+  },
+  "072-ta-highestbars-lowestbars-breakout-01": {
+    "median_ms": 1557.412062305957,
+    "p95_ms": 1577.1741999778897,
+    "n": 20
+  },
+  "073-ta-inside-bar-engulfing-01": {
+    "median_ms": 992.1252082567662,
+    "p95_ms": 1009.6206503221765,
+    "n": 20
+  },
+  "074-ta-macd-histogram-reversal-01": {
+    "median_ms": 1414.5461248699576,
+    "p95_ms": 1436.2766460515559,
+    "n": 20
+  },
+  "075-ta-mantle-keltner-regime-01": {
+    "median_ms": 1027.8238751925528,
+    "p95_ms": 1062.8303040517494,
+    "n": 20
+  },
+  "076-ta-obv-ema-cross-01": {
+    "median_ms": 1129.6019793953747,
+    "p95_ms": 1154.754695785232,
+    "n": 20
+  },
+  "077-ta-pivot-array-unshift-pop-01": {
+    "median_ms": 1516.8077293783426,
+    "p95_ms": 1560.2775188861415,
+    "n": 20
+  },
+  "078-ta-pivot-atr-stop-target-01": {
+    "median_ms": 1583.148458506912,
+    "p95_ms": 1605.0052498700097,
+    "n": 20
+  },
+  "079-ta-pivot-confirmed-break-01": {
+    "median_ms": 1001.5490206424147,
+    "p95_ms": 1029.4425474014133,
+    "n": 20
+  },
+  "080-ta-plumbline-pvt-vwma-01": {
+    "median_ms": 1352.407937636599,
+    "p95_ms": 1380.1792023237795,
+    "n": 20
+  },
+  "081-ta-rsi-bb-self-bands-01": {
+    "median_ms": 1262.0353542733938,
+    "p95_ms": 1294.9118250515312,
+    "n": 20
+  },
+  "082-ta-rsi14-cross-50-01": {
+    "median_ms": 1078.6562920548022,
+    "p95_ms": 1102.974450448528,
+    "n": 20
+  },
+  "083-ta-rsi14-gt60-lt45-no-matrix-01": {
+    "median_ms": 690.1032915338874,
+    "p95_ms": 698.3682455262169,
+    "n": 20
+  },
+  "084-ta-sar-flip-entry-01": {
+    "median_ms": 1030.4224374704063,
+    "p95_ms": 1061.0441392054781,
+    "n": 20
+  },
+  "085-ta-stdev-sma-expansion-break-01": {
+    "median_ms": 888.2245414424688,
+    "p95_ms": 907.1298856055364,
+    "n": 20
+  },
+  "086-ta-str-match-regex-filter-01": {
+    "median_ms": 925.0600624363869,
+    "p95_ms": 943.0282735731453,
+    "n": 20
+  },
+  "087-ta-torque-tsi-signal-01": {
+    "median_ms": 1065.6868959777057,
+    "p95_ms": 1088.7083794921637,
+    "n": 20
+  },
+  "088-ta-vwma-vs-sma-divergence-01": {
+    "median_ms": 1555.4631873965263,
+    "p95_ms": 1577.572430879809,
+    "n": 20
+  },
+  "089-ta-wpr-14-bands-01": {
+    "median_ms": 929.3928120750934,
+    "p95_ms": 959.4589417101815,
+    "n": 20
+  },
+  "090-ta-zenith-rci-wpr-01": {
+    "median_ms": 2267.8146245889366,
+    "p95_ms": 2306.3035659957677,
+    "n": 20
+  },
+  "091-udt-method-drives-strategy-entry-01": {
+    "median_ms": 873.1695415917784,
+    "p95_ms": 904.8774538561702,
+    "n": 20
+  },
+  "092-udt-method-extra-primitive-args-01": {
+    "median_ms": 836.9860206730664,
+    "p95_ms": 857.8757900279015,
+    "n": 20
+  },
+  "093-udt-method-in-switch-arms-01": {
+    "median_ms": 648.7608752213418,
+    "p95_ms": 671.041414514184,
+    "n": 20
+  },
+  "094-udt-method-in-while-loop-01": {
+    "median_ms": 864.355395315215,
+    "p95_ms": 881.1624765396118,
+    "n": 20
+  },
+  "095-udt-method-reads-strategy-state-01": {
+    "median_ms": 642.7852080669254,
+    "p95_ms": 658.1639566924423,
+    "n": 20
+  },
+  "096-udt-method-tuple-return-destructure-01": {
+    "median_ms": 807.5203543994576,
+    "p95_ms": 832.0928561966866,
+    "n": 20
+  },
+  "097-udt-method-udt-return-from-func-01": {
+    "median_ms": 602.4679164402187,
+    "p95_ms": 617.2585122520104,
+    "n": 20
+  },
+  "098-udt-method-var-instance-streak-01": {
+    "median_ms": 602.3262289818376,
+    "p95_ms": 615.5015353579074,
+    "n": 20
+  },
+  "099-udt-tessellate-tuple-method-01": {
+    "median_ms": 1117.401750292629,
+    "p95_ms": 1155.3846020484343,
+    "n": 20
+  },
+  "100-vwap-bands-mean-reversion-2sigma-01": {
+    "median_ms": 589.2430006060749,
+    "p95_ms": 613.8749232748523,
+    "n": 20
+  },
+  "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator": {
+    "median_ms": 3927.057125605643,
+    "p95_ms": 4087.5311313197017,
+    "n": 20
+  },
+  "102-3commas-3commas-pol-grid-bot-long-strategy": {
+    "median_ms": 1805.3337705787271,
+    "p95_ms": 1861.7181686684492,
+    "n": 20
+  },
+  "103-3commas-eth-grid-bot-long-strategy": {
+    "median_ms": 1062.7596250269562,
+    "p95_ms": 1121.975455945358,
+    "n": 20
+  },
+  "104-3commas-gram-rsi-strategy-3commas": {
+    "median_ms": 3723.5059374943376,
+    "p95_ms": 3977.1243039052933,
+    "n": 20
+  },
+  "105-3commas-heikin-ashi-rsi-fade-short-strategy": {
+    "median_ms": 7545.6846037413925,
+    "p95_ms": 8023.446960374713,
+    "n": 20
+  },
+  "106-3commas-sol-rsi-dca-long-strategy": {
+    "median_ms": 5505.411541555077,
+    "p95_ms": 5809.706611162983,
+    "n": 20
+  },
+  "107-3commas-xmr-grid-bot-long-strategy": {
+    "median_ms": 1812.1644163038582,
+    "p95_ms": 1929.1024872800338,
+    "n": 20
+  },
+  "108-a-popal-simple-smart-buy-sell-strategy": {
+    "median_ms": 1805.1680410280824,
+    "p95_ms": 1861.3764798035847,
+    "n": 20
+  },
+  "109-acalvillo20-amd1": {
+    "median_ms": 6631.871104706079,
+    "p95_ms": 7483.867983613163,
+    "n": 20
+  },
+  "110-aiscripts-lvn-rejection-acceptance-strategy": {
+    "median_ms": 2469.565791776404,
+    "p95_ms": 2531.485284655355,
+    "n": 20
+  },
+  "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1": {
+    "median_ms": 1797.0836453605443,
+    "p95_ms": 1879.0613265242428,
+    "n": 20
+  },
+  "112-alexgrover-g-channel-trend-detection-alerts-non-repainting": {
+    "median_ms": 1556.1613750178367,
+    "p95_ms": 1618.2586057577282,
+    "n": 20
+  },
+  "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash": {
+    "median_ms": 1990.4411665629596,
+    "p95_ms": 2017.0747980242595,
+    "n": 20
+  },
+  "114-amandaborgeson06-bias-status-dashboard": {
+    "median_ms": 12243.723853956908,
+    "p95_ms": 15657.014222699217,
+    "n": 20
+  },
+  "115-anji-ga-9-21ema-anji": {
+    "median_ms": 1320.3095209319144,
+    "p95_ms": 1343.3167725102976,
+    "n": 20
+  },
+  "116-anonycryptous-ev-edge-anonycryptous": {
+    "median_ms": 1856.0426875483245,
+    "p95_ms": 1878.1225101323798,
+    "n": 20
+  },
+  "117-antoniolinux-rsi-mfi-divergence-momentum": {
+    "median_ms": 1920.946895610541,
+    "p95_ms": 1980.981589225121,
+    "n": 20
+  },
+  "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6": {
+    "median_ms": 1369.8299368843436,
+    "p95_ms": 1418.7701682560148,
+    "n": 20
+  },
+  "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris": {
+    "median_ms": 1096.7887707520276,
+    "p95_ms": 1135.220581223257,
+    "n": 20
+  },
+  "120-benblackdiamond-l2gmom-network-momentum": {
+    "median_ms": 3063.2654377259314,
+    "p95_ms": 3162.254503602162,
+    "n": 20
+  },
+  "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian": {
+    "median_ms": 1657.1282502263784,
+    "p95_ms": 1704.7791428398343,
+    "n": 20
+  },
+  "122-cb85wj5jmt-moja-strategia-harami-bb": {
+    "median_ms": 1650.9983334690332,
+    "p95_ms": 1727.4332005530598,
+    "n": 20
+  },
+  "123-chadow6875-swing-high-low-ict-clean-pro": {
+    "median_ms": 2592.8048125933856,
+    "p95_ms": 2660.9588576946408,
+    "n": 20
+  },
+  "124-cihanozdemir-trade-id-signal-engine-buy-only-option": {
+    "median_ms": 803.3874998800457,
+    "p95_ms": 854.975874302909,
+    "n": 20
+  },
+  "125-cleightyp-cleightyp-bos-sma-macd-vwap": {
+    "median_ms": 3817.745458567515,
+    "p95_ms": 3951.2638518819585,
+    "n": 20
+  },
+  "126-cntvxiao-smc-vsa-oi": {
+    "median_ms": 2681.74787517637,
+    "p95_ms": 2783.579685189761,
+    "n": 20
+  },
+  "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge": {
+    "median_ms": 1225.5526459775865,
+    "p95_ms": 1270.7454442046583,
+    "n": 20
+  },
+  "128-colasbreugnon-nq-scalp-fix-signals": {
+    "median_ms": 2466.9678546488285,
+    "p95_ms": 2533.251107414253,
+    "n": 20
+  },
+  "129-daytrader4beginners-box-breakout-strategy-dt4b-trader": {
+    "median_ms": 1673.560687340796,
+    "p95_ms": 1723.6401915550232,
+    "n": 20
+  },
+  "130-delta-crypto-mu-overnight-gap-capture": {
+    "median_ms": 1657.2234795894474,
+    "p95_ms": 1713.6450057849288,
+    "n": 20
+  },
+  "131-devildk-option-point": {
+    "median_ms": 1315.3241039253771,
+    "p95_ms": 1355.6046418379995,
+    "n": 20
+  },
+  "132-dinkus3-obsidian": {
+    "median_ms": 13184.167353669181,
+    "p95_ms": 13524.274779018015,
+    "n": 20
+  },
+  "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500": {
+    "median_ms": 1480.8111044112593,
+    "p95_ms": 1515.7979557057845,
+    "n": 20
+  },
+  "134-elomadablah-atr-trailing-stoploss-multi": {
+    "median_ms": 2389.123125001788,
+    "p95_ms": 2524.8229270102456,
+    "n": 20
+  },
+  "135-finnp17-atm": {
+    "median_ms": 2626.8819372635335,
+    "p95_ms": 2712.6366166863595,
+    "n": 20
+  },
+  "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy": {
+    "median_ms": 1390.223375055939,
+    "p95_ms": 1442.9294495843353,
+    "n": 20
+  },
+  "137-fran-pineda-strategy-501-de-franpineda": {
+    "median_ms": 1897.4486875813454,
+    "p95_ms": 2023.6047252314168,
+    "n": 20
+  },
+  "138-fran-pineda-strategy-502-de-franpineda": {
+    "median_ms": 1900.9348747786134,
+    "p95_ms": 2018.8847917597743,
+    "n": 20
+  },
+  "139-francescodimichele-gold-ai-strategy-v2-0": {
+    "median_ms": 3659.829937852919,
+    "p95_ms": 3715.4725628672168,
+    "n": 20
+  },
+  "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369": {
+    "median_ms": 3694.422770757228,
+    "p95_ms": 3826.473303302191,
+    "n": 20
+  },
+  "142-hermescore-momentum-conviction-hermescore": {
+    "median_ms": 4449.165104422718,
+    "p95_ms": 4873.498517903499,
+    "n": 20
+  },
+  "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1": {
+    "median_ms": 2104.31049996987,
+    "p95_ms": 2173.8852835725993,
+    "n": 20
+  },
+  "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc": {
+    "median_ms": 6717.7059792447835,
+    "p95_ms": 7564.783302438445,
+    "n": 20
+  },
+  "146-inr3d-r3d-jackofxc-rtp-strategy": {
+    "median_ms": 1420.8116456866264,
+    "p95_ms": 1502.3287940537557,
+    "n": 20
+  },
+  "147-jaydeepp095-candle-harry": {
+    "median_ms": 3517.9,
+    "p95_ms": 3592.6,
+    "n": 20
+  },
+  "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy": {
+    "median_ms": 1478.5,
+    "p95_ms": 1513.9,
+    "n": 20
+  },
+  "149-jayentriken-bbwp-macd-ema-trend-strategy": {
+    "median_ms": 2506.3,
+    "p95_ms": 2559.4,
+    "n": 20
+  },
+  "150-jdceagle-zigzag-de-fractales-williams": {
+    "median_ms": 1939.8,
+    "p95_ms": 1976.8,
+    "n": 20
+  },
+  "151-jos-protrader-edward-smart-channel-reversal": {
+    "median_ms": 1503.1,
+    "p95_ms": 1557.5,
+    "n": 20
+  },
+  "152-jos-protrader-edward-smart-liquidity-sweep": {
+    "median_ms": 1615.2,
+    "p95_ms": 1665.6,
+    "n": 20
+  },
+  "153-jos-protrader-edward-smart-momentum-pro": {
+    "median_ms": 1871.2,
+    "p95_ms": 1913.9,
+    "n": 20
+  },
+  "154-khanhtq26-psol-01-donchian-channels": {
+    "median_ms": 1936.3,
+    "p95_ms": 2002.0,
+    "n": 20
+  },
+  "155-legalrice2697-nse-elite-strategy-v6-full-system": {
+    "median_ms": 5155.1,
+    "p95_ms": 5273.1,
+    "n": 20
+  },
+  "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1": {
+    "median_ms": 6549.7,
+    "p95_ms": 6926.8,
+    "n": 20
+  },
+  "157-madue2014-twe-2-bar-break-strategy": {
+    "median_ms": 1854.3,
+    "p95_ms": 1887.9,
+    "n": 20
+  },
+  "158-market-logic-india-low-lag-strength-oscillator": {
+    "median_ms": 2860.6,
+    "p95_ms": 2900.6,
+    "n": 20
+  },
+  "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready": {
+    "median_ms": 2079.1,
+    "p95_ms": 2129.3,
+    "n": 20
+  },
+  "160-mehranazizi219-goldsiggy-murk": {
+    "median_ms": 1185.7,
+    "p95_ms": 1257.7,
+    "n": 20
+  },
+  "161-mylivingedge-gold-asian-range-breakout-signals": {
+    "median_ms": 3394.6,
+    "p95_ms": 3510.4,
+    "n": 20
+  },
+  "162-nicocashfx-prime-strategy-swing": {
+    "median_ms": 35770.586687373,
+    "p95_ms": 36639.063066616654,
+    "n": 20
+  },
+  "163-nightowlxtrader-azt-strategy-v11-first-draft": {
+    "median_ms": 17046.7,
+    "p95_ms": 18839.1,
+    "n": 20
+  },
+  "164-officialjackofalltrades-concordance-execution-mandate-joat": {
+    "median_ms": 25356.2,
+    "p95_ms": 28121.8,
+    "n": 20
+  },
+  "165-officialjackofalltrades-concordance-regime-synthesis-joat": {
+    "median_ms": 13386.8,
+    "p95_ms": 13833.1,
+    "n": 20
+  },
+  "167-officialjackofalltrades-large-lot-reverse-engineer-joat": {
+    "median_ms": 2087.9,
+    "p95_ms": 2133.0,
+    "n": 20
+  },
+  "168-officialjackofalltrades-parallax-covenant-strategy-joat": {
+    "median_ms": 8613.5,
+    "p95_ms": 9111.1,
+    "n": 20
+  },
+  "169-officialjackofalltrades-regime-execution-strategy-joat": {
+    "median_ms": 3361.2,
+    "p95_ms": 3408.7,
+    "n": 20
+  },
+  "170-ollie-b-ollie-asia-sweep-model": {
+    "median_ms": 2563.7,
+    "p95_ms": 2606.2,
+    "n": 20
+  },
+  "171-options7700-2min-bullish-confluence": {
+    "median_ms": 11438.9,
+    "p95_ms": 12531.7,
+    "n": 20
+  },
+  "172-projectsyndicate-strong-breakout-signals-projectsyndicate": {
+    "median_ms": 5866.7,
+    "p95_ms": 6306.5,
+    "n": 20
+  },
+  "173-quantitativealpha-strategy-forecast-engine": {
+    "median_ms": 1229.4,
+    "p95_ms": 1261.8,
+    "n": 20
+  },
+  "174-quantnomad-ut-bot-v2-atr-trailing-stop": {
+    "median_ms": 2197.2,
+    "p95_ms": 2245.6,
+    "n": 20
+  },
+  "175-rakesh-09-edge-confirmation-system": {
+    "median_ms": 1786.7,
+    "p95_ms": 1867.9,
+    "n": 20
+  },
+  "176-rakesh-09-edge-confirmation-system-ecs-v2-0": {
+    "median_ms": 1740.3,
+    "p95_ms": 1919.0,
+    "n": 20
+  },
+  "177-rampatel9912-super-rsi-strategy": {
+    "median_ms": 1596.7,
+    "p95_ms": 1748.8,
+    "n": 20
+  },
+  "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy": {
+    "median_ms": 72524.47622921318,
+    "p95_ms": 78330.22273224778,
+    "n": 20
+  },
+  "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3": {
+    "median_ms": 1837.786957854405,
+    "p95_ms": 1885.9230360249057,
+    "n": 20
+  },
+  "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target": {
+    "median_ms": 6660.975333536044,
+    "p95_ms": 6973.42943395488,
+    "n": 20
+  },
+  "181-roi10x-shiva-lt-ls-blend": {
+    "median_ms": 11201.71945844777,
+    "p95_ms": 12459.237842168659,
+    "n": 20
+  },
+  "182-sadtrader9-fair-value-gap-strategy": {
+    "median_ms": 1510.0904165301472,
+    "p95_ms": 1534.2255159979686,
+    "n": 20
+  },
+  "183-shiroi-macd-zero-line-candles-alert": {
+    "median_ms": 789.7988129407167,
+    "p95_ms": 821.5279672760516,
+    "n": 20
+  },
+  "184-shurben5-tradingview-bot-goat": {
+    "median_ms": 1366.7214163579047,
+    "p95_ms": 1406.7164519801736,
+    "n": 20
+  },
+  "185-simon20cent-efi-macd-advanced-pro": {
+    "median_ms": 1755.998604465276,
+    "p95_ms": 1784.201114671305,
+    "n": 20
+  },
+  "186-tharris235106-reversal-signals-with-profit-target-and-continuation": {
+    "median_ms": 1257.9573751427233,
+    "p95_ms": 1320.804287889041,
+    "n": 20
+  },
+  "187-thebitcoin37-9-15-ema-strategy-trade-room": {
+    "median_ms": 1243.9668329898268,
+    "p95_ms": 1286.048521171324,
+    "n": 20
+  },
+  "188-theforexguy0777-9-ema-20-ema-retest-strategy": {
+    "median_ms": 1514.1170001588762,
+    "p95_ms": 1548.650418734178,
+    "n": 20
+  },
+  "189-therealbouga-apex-mtf-index-model": {
+    "median_ms": 8038.5304999072105,
+    "p95_ms": 8545.274413237348,
+    "n": 20
+  },
+  "190-tomukasss-engulfing-mitigation-strategy": {
+    "median_ms": 3651.021854020655,
+    "p95_ms": 3687.0230987435207,
+    "n": 20
+  },
+  "191-tomukasss-trend-pivot-scale-in": {
+    "median_ms": 2629.9950829707086,
+    "p95_ms": 2705.247759609483,
+    "n": 20
+  },
+  "193-ttagkoin-adaptive-multi-facto-9-years": {
+    "median_ms": 3414.8338122759014,
+    "p95_ms": 3463.455637404695,
+    "n": 20
+  },
+  "194-usamotorcars-sedat-xi-crypto-ai-bias-engine": {
+    "median_ms": 2294.1862291190773,
+    "p95_ms": 2406.154285580851,
+    "n": 20
+  },
+  "195-van007trader-micro-momentum-oscillator-dyna": {
+    "median_ms": 2209.8496668040752,
+    "p95_ms": 2261.62183790002,
+    "n": 20
+  },
+  "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2": {
+    "median_ms": 2069.7942920960486,
+    "p95_ms": 2129.022449813783,
+    "n": 20
+  },
+  "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8": {
+    "median_ms": 2904.701124643907,
+    "p95_ms": 2937.70682325121,
+    "n": 20
+  },
+  "199-yahmis13-nyo-day-type-early-read": {
+    "median_ms": 1363.5929794982076,
+    "p95_ms": 1391.2056094035509,
+    "n": 20
+  },
+  "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils": {
+    "median_ms": 2041.1481875926256,
+    "p95_ms": 2092.8386970888823,
+    "n": 20
+  },
+  "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2": {
+    "median_ms": 2639.8321664892137,
+    "p95_ms": 2675.17043328844,
+    "n": 20
+  }
+}

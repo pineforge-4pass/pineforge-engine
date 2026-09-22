@@ -1,0 +1,327 @@
+{
+  "01-sma-cross": {
+    "median_ms": 6.3602912705391645,
+    "p95_ms": 7.61981552932412,
+    "n": 20
+  },
+  "02-inside-bar": {
+    "median_ms": 59.54472883604467,
+    "p95_ms": 64.50758350547409,
+    "n": 20
+  },
+  "04-macd-histogram": {
+    "median_ms": 6.188645493239164,
+    "p95_ms": 6.968524865806103,
+    "n": 20
+  },
+  "09-kkb-kalman": {
+    "median_ms": 45.335541712120175,
+    "p95_ms": 49.10350162535911,
+    "n": 20
+  },
+  "11-greedy": {
+    "median_ms": 71.23850006610155,
+    "p95_ms": 74.12740213330835,
+    "n": 20
+  },
+  "12-keltner": {
+    "median_ms": 26.89306251704693,
+    "p95_ms": 28.239502059295774,
+    "n": 20
+  },
+  "14-pivot-ext": {
+    "median_ms": 5.996249616146088,
+    "p95_ms": 6.345118768513203,
+    "n": 20
+  },
+  "16-volty-expan": {
+    "median_ms": 3.3620414324104786,
+    "p95_ms": 4.3515420984476805,
+    "n": 20
+  },
+  "18-kanuck": {
+    "median_ms": 3.3283960074186325,
+    "p95_ms": 4.370006476528943,
+    "n": 20
+  },
+  "26-aroon-oscillator": {
+    "median_ms": 4.992249887436628,
+    "p95_ms": 5.304579064249992,
+    "n": 20
+  },
+  "27-donchian-breakout": {
+    "median_ms": 12.294291518628597,
+    "p95_ms": 12.57921636570245,
+    "n": 20
+  },
+  "28-elder-ray": {
+    "median_ms": 9.26014524884522,
+    "p95_ms": 9.540024516172707,
+    "n": 20
+  },
+  "29-chandelier-exit": {
+    "median_ms": 125.22177095524967,
+    "p95_ms": 194.78915657382458,
+    "n": 20
+  },
+  "30-atr-trailing-stop": {
+    "median_ms": 169.45106186904013,
+    "p95_ms": 253.12304380349815,
+    "n": 20
+  },
+  "32-momentum-roc": {
+    "median_ms": 8.97460407577455,
+    "p95_ms": 9.649027814157307,
+    "n": 20
+  },
+  "34-dual-ma-switch": {
+    "median_ms": 5.857666721567512,
+    "p95_ms": 6.615270860493183,
+    "n": 20
+  },
+  "36-pivot-array-breakout": {
+    "median_ms": 2.455000067129731,
+    "p95_ms": 3.08301872573793,
+    "n": 20
+  },
+  "37-range-filter-while": {
+    "median_ms": 5.91056258417666,
+    "p95_ms": 6.406614789739252,
+    "n": 20
+  },
+  "38-adaptive-ma-func": {
+    "median_ms": 106.87637492083013,
+    "p95_ms": 190.3822435764596,
+    "n": 20
+  },
+  "39-candle-pattern": {
+    "median_ms": 7.097396068274975,
+    "p95_ms": 7.848314405418932,
+    "n": 20
+  },
+  "40-dual-thrust": {
+    "median_ms": 9.059542091563344,
+    "p95_ms": 9.617439494468272,
+    "n": 20
+  },
+  "42-ma-stack-array": {
+    "median_ms": 12.546020792797208,
+    "p95_ms": 14.180957525968555,
+    "n": 20
+  },
+  "44-median-cross": {
+    "median_ms": 15.095083508640528,
+    "p95_ms": 15.705454209819436,
+    "n": 20
+  },
+  "48-bracket-exit-tp-sl": {
+    "median_ms": 72.88677128963172,
+    "p95_ms": 82.54919406026607,
+    "n": 20
+  },
+  "49-partial-exit-qty-percent": {
+    "median_ms": 77.83362502232194,
+    "p95_ms": 152.45065421331674,
+    "n": 20
+  },
+  "50-close-immediate-vs-next-bar": {
+    "median_ms": 75.72368741966784,
+    "p95_ms": 157.874501706101,
+    "n": 20
+  },
+  "51-order-deferred-flip-guaranteed-gap-stops-01": {
+    "median_ms": 84.24354111775756,
+    "p95_ms": 100.73102433234459,
+    "n": 20
+  },
+  "52-barstate-isconfirmed-magnifier-off-01b": {
+    "median_ms": 121.7103130184114,
+    "p95_ms": 197.7592829382047,
+    "n": 20
+  },
+  "53-barstate-isconfirmed-magnifier-on-01a": {
+    "median_ms": 122.51943745650351,
+    "p95_ms": 209.3479461967945,
+    "n": 20
+  },
+  "54-composite-ies-integration-01": {
+    "median_ms": 741.686999797821,
+    "p95_ms": 875.5939284106717,
+    "n": 20
+  },
+  "55-composite-ies-pressure-gauge-01": {
+    "median_ms": 292.50237438827753,
+    "p95_ms": 471.32855218369536,
+    "n": 20
+  },
+  "56-composite-vcp-integration-01": {
+    "median_ms": 8929.435541620478,
+    "p95_ms": 9818.53840558324,
+    "n": 20
+  },
+  "57-oca-exit-bracket-internal-cancel-01": {
+    "median_ms": 295.64845841377974,
+    "p95_ms": 375.60835904441774,
+    "n": 20
+  },
+  "58-oca-multi-bracket-isolation-01": {
+    "median_ms": 418.02383307367563,
+    "p95_ms": 505.5054194526747,
+    "n": 20
+  },
+  "59-order-deferred-flip-pooc-cross-bar-01": {
+    "median_ms": 100.05545895546675,
+    "p95_ms": 194.80971263255924,
+    "n": 20
+  },
+  "60-recompute-alma-sar-corr-magnifier-01": {
+    "median_ms": 264.33543767780066,
+    "p95_ms": 358.6498790420592,
+    "n": 20
+  },
+  "61-analyzer-parity-edge-margin-50-pct-01": {
+    "median_ms": 64.84237522818148,
+    "p95_ms": 153.57760197948664,
+    "n": 20
+  },
+  "62-analyzer-parity-percent-of-equity-sizing-01": {
+    "median_ms": 62.94970843009651,
+    "p95_ms": 69.03173122555023,
+    "n": 20
+  },
+  "63-analyzer-parity-small-equity-fraction-01": {
+    "median_ms": 64.48087515309453,
+    "p95_ms": 72.38005516119307,
+    "n": 20
+  },
+  "64-composite-vcp-cumulative-volume-delta-01": {
+    "median_ms": 39.76516658440232,
+    "p95_ms": 45.54344492498792,
+    "n": 20
+  },
+  "66-bracket-entry-exit-same-pass-attach-01": {
+    "median_ms": 119.37493784353137,
+    "p95_ms": 215.01290232408792,
+    "n": 20
+  },
+  "68-bracket-exit-three-way-set-once-entry-01": {
+    "median_ms": 143.40387447737157,
+    "p95_ms": 231.84776382986456,
+    "n": 20
+  },
+  "69-bracket-exit-tp-sl-fixed-01": {
+    "median_ms": 71.72124995850027,
+    "p95_ms": 163.80942699033767,
+    "n": 20
+  },
+  "70-bracket-narrow-stop-limit-with-trail8-01": {
+    "median_ms": 144.0963540226221,
+    "p95_ms": 235.58453456498682,
+    "n": 20
+  },
+  "71-bracket-partial-exit-qty-percent-01": {
+    "median_ms": 75.89466637000442,
+    "p95_ms": 163.84073980152607,
+    "n": 20
+  },
+  "72-bracket-same-id-exit-replace-01": {
+    "median_ms": 72.27283297106624,
+    "p95_ms": 77.5385956978426,
+    "n": 20
+  },
+  "73-bracket-tp-sl-oca-reduce-isolate-01": {
+    "median_ms": 195.71758364327252,
+    "p95_ms": 284.5765298465267,
+    "n": 20
+  },
+  "74-bracket-trail-points-no-offset-explicit-01": {
+    "median_ms": 107.36410412937403,
+    "p95_ms": 200.77031441032887,
+    "n": 20
+  },
+  "75-composite-4emarsi-rsi-pullback-latch-01": {
+    "median_ms": 142.37270806916058,
+    "p95_ms": 230.81040459219366,
+    "n": 20
+  },
+  "76-analyzer-parity-choch-bos-isolator-01": {
+    "median_ms": 128.51524981670082,
+    "p95_ms": 223.79385188687593,
+    "n": 20
+  },
+  "77-composite-scalping-fast-ma-cross-trigger-01": {
+    "median_ms": 107.50702093355358,
+    "p95_ms": 200.76046048197895,
+    "n": 20
+  },
+  "78-cap-max-intraday-filled-orders-isolate-01": {
+    "median_ms": 131.826437311247,
+    "p95_ms": 224.66175423469394,
+    "n": 20
+  },
+  "79-composite-kanuck-kama-state-recurrence-01": {
+    "median_ms": 126.8379578832537,
+    "p95_ms": 217.8084853105247,
+    "n": 20
+  },
+  "80-magnifier-tick-dist-volume-weighted-on-01": {
+    "median_ms": 118.97491663694382,
+    "p95_ms": 208.38085408322513,
+    "n": 20
+  },
+  "82-matrix-covariance-eigen-pca-01": {
+    "median_ms": 7.377020549029112,
+    "p95_ms": 8.09257933869958,
+    "n": 20
+  },
+  "84-na-nz-fixnan-history-chain-01": {
+    "median_ms": 5.99612551741302,
+    "p95_ms": 6.136035546660423,
+    "n": 20
+  },
+  "85-oca-raw-strategy-order-reduce-01": {
+    "median_ms": 93.67852052673697,
+    "p95_ms": 187.15236221905798,
+    "n": 20
+  },
+  "88-order-stop-entry-cancel-opposite-01": {
+    "median_ms": 86.92366699688137,
+    "p95_ms": 177.47849833685905,
+    "n": 20
+  },
+  "89-session-ny-spring-forward-dst-01": {
+    "median_ms": 10.323041817173362,
+    "p95_ms": 10.739936027675867,
+    "n": 20
+  },
+  "91-pyramid-close-id-grouping-01": {
+    "median_ms": 21.143312333151698,
+    "p95_ms": 22.56039842031896,
+    "n": 20
+  },
+  "92-session-hour-minute-pulse-filter-01": {
+    "median_ms": 7.399812573567033,
+    "p95_ms": 8.271352085284889,
+    "n": 20
+  },
+  "95-cap-risk-gates-allow-max-intraday-01": {
+    "median_ms": 19.071041606366634,
+    "p95_ms": 20.563425100408494,
+    "n": 20
+  },
+  "97-composite-scalping-integration-01": {
+    "median_ms": 9.464624803513288,
+    "p95_ms": 9.857606259174645,
+    "n": 20
+  },
+  "98-magnifier-tick-dist-endpoints-01": {
+    "median_ms": 6.320624612271786,
+    "p95_ms": 6.906495173461735,
+    "n": 20
+  },
+  "99-matrix-eigen-rank-deficient-cov-01": {
+    "median_ms": 5.75960474088788,
+    "p95_ms": 6.136906100437045,
+    "n": 20
+  }
+}
