@@ -2473,7 +2473,7 @@ bool NativeExecutionConsumer::request_is_buy(
 }
 
 native_order::CommandContext NativeExecutionConsumer::make_command_context(
-        BacktestEngine& engine, const native_order::Request& request,
+        const BacktestEngine& engine, const native_order::Request& request,
         native_order::CommandSurface surface) const {
     native_order::CommandContext ctx;
     // A request submitted by the generic pre-open provider is born at this
@@ -2503,35 +2503,24 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
                 }
                 if (native_sized->time == native_order::SizeTime::AtAcceptance) {
                     // E21: the freeze and its placement gate are one
-                    // measurement at the acceptance point. The rate below is
-                    // that point's; the marked equity, and the settlement
-                    // inspection the gate reads (the resulting notional and a
-                    // percent ticket), convert where the engine presents --
-                    // which, in an applied callback drained at its script
-                    // bar's calculation, is that bar's close, not the print
-                    // the fill landed on. So the point's own instant is
-                    // presented for this block and the caller's clock is
-                    // handed back on exit. Nothing inside calls out of the
-                    // kernel, so no host code ever sees that instant, exactly
-                    // as when consume_matched_request presents a candidate's
-                    // cursor for its own inspection and gate. With no curve
-                    // every instant has one rate and the block is inert.
-                    struct PresentedInstant {
-                        int64_t& clock;
-                        const int64_t caller;
-                        ~PresentedInstant() { clock = caller; }
-                    } presented{engine.current_bar_.timestamp, engine.current_bar_.timestamp};
-                    engine.current_bar_.timestamp = point->decision.coordinate.effective_time_ms;
+                    // measurement at the acceptance point, taken at that
+                    // point's rate: the equity basis and the units'
+                    // conversion here, the gate's notional, marked equity and
+                    // percent ticket below. The rate is threaded, never the
+                    // clock -- in an applied callback drained at its script
+                    // bar's calculation the engine presents that bar's close,
+                    // not the print the fill landed on, and nothing here
+                    // reads or moves that clock. With no curve every instant
+                    // has one rate.
+                    const double fx = engine.account_currency_fx_at(
+                        point->decision.coordinate.effective_time_ms);
                     ctx.sizing_units = sized_basis_units(
-                        *native_sized, price, marked(engine, price),
-                        engine.account_currency_fx_at(
-                            point->decision.coordinate.effective_time_ms),
-                        *spec);
+                        *native_sized, price, engine.marked_equity_at(price, fx), fx, *spec);
                     // The frozen quantity is an admission input at placement,
                     // not only at the candidate.
                     if (ctx.sizing_units) {
                         ctx.sizing_admissible = admit_placement_units(
-                            engine, *native_sized, *ctx.sizing_units, price);
+                            engine, *native_sized, *ctx.sizing_units, price, fx);
                     }
                 }
             }
@@ -2578,7 +2567,7 @@ void NativeExecutionConsumer::refresh_target_scalars(
 }
 
 bool NativeExecutionConsumer::admit_opening_inspect(
-        const BacktestEngine& engine, double resolved_price,
+        const BacktestEngine& engine, double resolved_price, double fx,
         const execution::SettlementInspection& inspect,
         bool skip_initial_margin,
         native_order::MatchRejectReason* reason) const {
@@ -2619,8 +2608,11 @@ bool NativeExecutionConsumer::admit_opening_inspect(
     const double fraction = spec->margin
         ? (inspect.incoming_short ? spec->margin->initial_short : spec->margin->initial_long)
         : (spec->initial_margin_fraction ? *spec->initial_margin_fraction : 0.0);
+    // Every FX-bearing term converts at `fx`, the rate of the gate's own point
+    // (E21): the inspection's notional and ticket were taken at it by the
+    // caller, and the equity is marked at it here.
     if (!skip_initial_margin && fraction > 0.0) {
-        const double equity = engine.marked_equity(resolved_price) - inspect.current_ticket;
+        const double equity = engine.marked_equity_at(resolved_price, fx) - inspect.current_ticket;
         const double required = inspect.resulting_abs_notional * fraction;
         if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
             if (reason) *reason = native_order::MatchRejectReason::InitialMargin;
@@ -4170,21 +4162,22 @@ std::optional<double> NativeExecutionConsumer::placement_scope_units(
 // quantity instead of waiting for the candidate. It is the same gate the
 // candidate applies (allowed directions, max_abs_units, max_open_lots, initial
 // margin), fed by the same pure settlement inspection, at the sizing price and
-// at the acceptance point's instant, which make_command_context presents. A
+// at `fx`, the acceptance point's rate make_command_context hands in. A
 // host that owns its own margin rule declares no kernel margin, exactly as it
 // does for the candidate gate, and only the caps apply here.
 bool NativeExecutionConsumer::admit_placement_units(
         const BacktestEngine& engine, const native_order::Sized& sized,
-        double units, double price) const {
+        double units, double price, double fx) const {
     if (!spec_ptr() || !std::isfinite(units) || units <= 0.0) return true;
     if (!std::isfinite(price) || price <= 0.0) return true;
     const double signed_units = sized.side == native_order::Side::Long ? units : -units;
     execution::Fill fill;
     fill.price = price;
-    const auto inspect = engine.inspect_native_settlement_scoped(
-        order_action::Transact{signed_units}, fill, execution::Book{});
+    const auto inspect = engine.inspect_native_settlement_scoped_at(
+        order_action::Transact{signed_units}, fill, execution::Book{}, fx);
     if (inspect.status != execution::Status::Applied) return true;
-    return admit_opening_inspect(engine, price, inspect, /*skip_initial_margin=*/false, nullptr);
+    return admit_opening_inspect(engine, price, fx, inspect, /*skip_initial_margin=*/false,
+                                 nullptr);
 }
 
 std::optional<double> NativeExecutionConsumer::resolve_sized_units(
@@ -4665,9 +4658,11 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             }
         }
         native_order::MatchRejectReason reason{};
+        // The candidate gate converts at its cursor's rate: the inspection
+        // above was taken at the instant this function presents, the cursor's.
         if (inspect.would_open
             && !admit_opening_inspect(
-                engine, resolved_price, inspect,
+                engine, resolved_price, margin_check_fx(engine, evaluation.cursor), inspect,
                 verdict == NativePrecommitVerdict::AdmitWithHostMargin, &reason)) {
             return terminal(reason, nonidentity_attempt);
         }

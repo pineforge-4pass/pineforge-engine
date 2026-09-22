@@ -605,8 +605,11 @@ void placement_gate_step_up(const char* key, bool model_spelling) {
     near(host.rate_at(host.presented_ms), 2.5);
     CHECK(host.placed->status == no::SubmitStatus::Accepted);
     CHECK(!host.placed->reason.has_value());
-    // The point's instant is the gate's alone: the callback still stands on
-    // the clock it was presented once submit has returned.
+    // The callback still stands on the clock it was presented once submit
+    // has returned. With the rate threaded, nothing on the submit path writes
+    // that clock at all, so this now holds trivially; section 11 is the row
+    // that fails if a write comes back, even one restored before submit
+    // returns.
     CHECK(host.presented_after_ms == host.presented_ms);
 
     const auto rejected = host.sized_rejections();
@@ -1026,6 +1029,100 @@ void the_inspection_converts_at_the_rate_it_is_given() {
     CHECK(host.presented_after_ms == host.presented_ms);
 }
 
+// ── 11. Submitting a command touches no clock (R5 lane E21) ─────────────
+// The placement gate's rate is threaded, never presented. E21's first design
+// wrote the acceptance point's instant into the engine's bar clock around the
+// acceptance block and restored it on exit, and every runtime row above stays
+// green under that: nothing inside the block calls out, so no host ever sees
+// the write. So this row reads the kernel's sources instead. The consumer's
+// acceptance block takes the engine const and never names the bar clock or
+// casts constness away; the submit and replace entries never name the bar
+// clock; and every engine function the gate's inspection runs through is a
+// const member that reads no clock at all -- it converts at the rate it is
+// handed.
+std::vector<std::pair<std::string, std::string>> definitions_of(const std::string& code,
+                                                                 const std::string& head) {
+    std::vector<std::pair<std::string, std::string>> out;  // (signature, body)
+    for (auto at = code.find(head); at != std::string::npos; at = code.find(head, at + 1)) {
+        const auto open = code.find('{', at);
+        if (open == std::string::npos || code.find(';', at) < open) continue;
+        int depth = 0;
+        for (auto i = open; i < code.size(); ++i) {
+            if (code[i] == '{') ++depth;
+            if (code[i] == '}' && --depth == 0) {
+                out.emplace_back(code.substr(at, open - at), code.substr(open + 1, i - open - 1));
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+void submitting_touches_no_clock() {
+#ifdef PINEFORGE_E21_KERNEL_FILES
+    std::string engine_execution, consumer;
+    const std::string joined = PINEFORGE_E21_KERNEL_FILES;
+    for (std::size_t start = 0; start <= joined.size();) {
+        const auto bar = joined.find('|', start);
+        const auto path = joined.substr(start, bar == std::string::npos ? std::string::npos
+                                                                        : bar - start);
+        if (ends_with(path, "/src/engine_execution.cpp")) engine_execution = code_of(read_text(path));
+        if (ends_with(path, "/src/native_execution_consumer.cpp")) consumer = code_of(read_text(path));
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+    REQUIRE(!engine_execution.empty());
+    REQUIRE(!consumer.empty());
+
+    for (const char* head : {"NativeExecutionConsumer::make_command_context(",
+                             "NativeExecutionConsumer::admit_placement_units(",
+                             "NativeExecutionConsumer::admit_opening_inspect("}) {
+        const auto found = definitions_of(consumer, head);
+        REQUIRE(found.size() == 1);
+        const bool const_engine =
+            squeezed(found[0].first).find("(constBacktestEngine&engine,") != std::string::npos;
+        const bool names_clock = found[0].second.find("current_bar_") != std::string::npos;
+        const bool casts = found[0].second.find("const_cast") != std::string::npos;
+        if (!const_engine || names_clock || casts) {
+            std::printf("  %s: const engine %d, names the bar clock %d, const_cast %d\n",
+                        head, const_engine, names_clock, casts);
+        }
+        CHECK(const_engine);
+        CHECK(!names_clock);
+        CHECK(!casts);
+    }
+    for (const char* head : {"NativeExecutionConsumer::submit_with_surface(",
+                             "NativeExecutionConsumer::replace_with_surface("}) {
+        const auto found = definitions_of(consumer, head);
+        REQUIRE(found.size() == 1);
+        CHECK(found[0].second.find("current_bar_") == std::string::npos);
+    }
+
+    const std::pair<const char*, std::size_t> inspection[] = {
+        {"BacktestEngine::inspect_native_settlement_scoped_at(", 1},
+        {"BacktestEngine::inspect_with_membership(", 1},
+        {"BacktestEngine::stage_native_settlement(", 2},
+        {"BacktestEngine::finish_native_settlement_stage(", 1},
+        {"BacktestEngine::quote_execution_commissions(", 1},
+        {"BacktestEngine::inspect_native_settlement_stage(", 1},
+        {"BacktestEngine::marked_equity_at(", 1},
+    };
+    for (const auto& row : inspection) {
+        const auto found = definitions_of(engine_execution, row.first);
+        REQUIRE(found.size() == row.second);
+        for (const auto& definition : found) {
+            CHECK(squeezed(definition.first).find(")const") != std::string::npos);
+            CHECK(definition.second.find("current_bar_") == std::string::npos);
+            CHECK(definition.second.find("active_account_currency_fx") == std::string::npos);
+            CHECK(definition.second.find("const_cast") == std::string::npos);
+        }
+    }
+#else
+    std::printf("  PINEFORGE_E21_KERNEL_FILES is undefined\n");
+    CHECK(false);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -1053,6 +1150,7 @@ int main() {
     test("one marked equity, one implementation", one_marked_equity_implementation);
     test("the inspection converts at the rate it is given",
          the_inspection_converts_at_the_rate_it_is_given);
+    test("submitting touches no clock", submitting_touches_no_clock);
     std::printf("E3 margin FX clock: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

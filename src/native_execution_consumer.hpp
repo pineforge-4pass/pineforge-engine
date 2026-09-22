@@ -240,7 +240,7 @@ private:
     std::optional<double> placement_scope_units(
         const BacktestEngine& engine, const native_order::Request& request) const;
     bool admit_placement_units(const BacktestEngine& engine, const native_order::Sized& sized,
-                               double units, double price) const;
+                               double units, double price, double fx) const;
     std::optional<NativeCurrentExecutionResult> consume_matched_request(
         BacktestEngine& engine, const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& evaluation, double raw_price,
@@ -520,7 +520,7 @@ private:
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
     native_order::CommandContext make_command_context(
-            BacktestEngine& engine, const native_order::Request& request,
+            const BacktestEngine& engine, const native_order::Request& request,
             native_order::CommandSurface surface) const;
     void refresh_target_scalars(const BacktestEngine& engine,
                                 native_order::TargetObservation& target) const noexcept;
@@ -528,7 +528,7 @@ private:
         const BacktestEngine& engine, const native_order::LiveRequest& live) const;
     bool request_is_buy(const BacktestEngine& engine,
                         const native_order::LiveRequest& live) const;
-    bool admit_opening_inspect(const BacktestEngine& engine, double resolved_price,
+    bool admit_opening_inspect(const BacktestEngine& engine, double resolved_price, double fx,
                                const execution::SettlementInspection& inspect,
                                bool skip_initial_margin,
                                native_order::MatchRejectReason* reason) const;
