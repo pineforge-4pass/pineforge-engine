@@ -48,7 +48,7 @@ Speed was measured on a quiet host, re-checked before every timing batch; the de
 - **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.2 in between.
 - **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host and timed in the same window as the current one, still runs close to its June timings (5–16 % over them in the quieter pass). On the three probes both populations share, the current engine is 10–18× slower with the magnifier on; see [the provenance](results/speed.md#provenance).
 
-Every number in this section traces to a committed file or a pinned commit. The raw timing files are in [`results/raw/`](results/raw/), and [`check_provenance.py`](check_provenance.py) derives each number from its source and fails on any number without one.
+Every number in this section traces to a committed file or a pinned commit. The raw timing files are in [`results/raw/`](results/raw/), and [`check_provenance.py`](check_provenance.py) derives each number from its source and fails on any number without one. The PineForge sweep's own Google Benchmark files were not kept, so its row derives from the per-strategy column of [`results/speed.md`](results/speed.md).
 
 ### Where the non-excellent rows come from
 
