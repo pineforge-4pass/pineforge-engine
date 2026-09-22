@@ -1641,15 +1641,22 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
 void source::PineStrategyHost::scheduler_update_session_state(
         const Bar& bar, std::optional<std::int64_t> next_script_open_ms) {
     const bool in_session = chart_bar_ismarket(bar.timestamp);
+    // With no retained next bar, the live tail's forming bar and a stream's
+    // realtime bar read the next script bar on the calendar, one bar width on
+    // (ab9714be pine_stream.cpp:458-469); only a run's final bar reads "last".
+    const auto lifecycle = native_state();
+    const bool realtime_bar = realtime_tail_
+        || (lifecycle.kind == NativeLifecycleKind::Running
+            && lifecycle.phase == NativeRunPhase::Realtime);
     bool next_in_session = false;
     if (in_session && next_script_open_ms) {
         next_in_session = chart_bar_ismarket(*next_script_open_ms);
-    } else if (in_session && realtime_tail_ && script_tf_seconds_ > 0
+    } else if (in_session && realtime_bar && script_tf_seconds_ > 0
                && bar.timestamp <= std::numeric_limits<std::int64_t>::max()
                     - static_cast<std::int64_t>(script_tf_seconds_) * 1000) {
         next_in_session = chart_bar_ismarket(
             bar.timestamp + static_cast<std::int64_t>(script_tf_seconds_) * 1000);
-    } else if (in_session && realtime_tail_) {
+    } else if (in_session && realtime_bar) {
         next_in_session = true;
     }
     scheduler_set_session_bar_state(in_session, in_session && !next_in_session);

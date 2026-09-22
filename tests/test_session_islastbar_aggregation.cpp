@@ -33,6 +33,10 @@
  * aggregated rule flagged only the run's final bar. The chart-timeframe rows
  * are the control: they pass unchanged before and after.
  *
+ * A stream's realtime bar had the same hole — no retained next bar — so it
+ * too read every in-session bar as last. It reads the next script bar on the
+ * calendar again, as ab9714be's stream and the batch live tail do (section 5).
+ *
  * RECORDED, not fixed: TradingView draws the boundary at the session day, and
  * a day ends where the next bar belongs to another day even if it is in
  * session again. The registry's NYSE:F feeds hold regular hours only and a
@@ -386,6 +390,47 @@ void test_tv_eth_24x7() {
     }
 }
 
+// ── 5. a stream's realtime bars ───────────────────────────────────────────
+
+// A realtime bar has no retained next bar either, and it is not the run's
+// final bar: the next script bar opens one bar width on, on the calendar
+// (ab9714be pine_stream.cpp:458-469, the rule the batch live tail reads).
+// Warmup 15:30 .. 15:45 ET, realtime ticks 15:50 .. 15:59: the realtime 15:50
+// is not the session's last bar, 15:55 is. Since R4 slice C both realtime bars
+// were flagged. The warmup's final bar keeps the run-end convention the
+// legacy chart-timeframe warmup read too.
+void test_stream_realtime() {
+    std::printf("test_stream_realtime\n");
+    struct Shape {
+        const char* tag;
+        const char* input_tf;
+        std::int64_t step;
+        std::int64_t warmup_last;
+    };
+    const Shape shapes[] = {
+        {"stream 5 -> 5", "5", 5 * kMinute, kTue0930Et + 375 * kMinute},
+        {"stream 1 -> 5", "1", kMinute, kTue0930Et + 379 * kMinute},
+    };
+    for (const Shape& shape : shapes) {
+        SessionHost host(kRth, kNewYork);
+        const auto warmup = ladder(kTue0930Et + 360 * kMinute, shape.warmup_last, shape.step);
+        CHECK(host.stream_begin(warmup.data(), static_cast<int>(warmup.size()),
+                                shape.input_tf, "5"));
+        std::uint64_t sequence = 0;
+        for (std::int64_t ts = kTue0930Et + 380 * kMinute; ts < kTue0930Et + 390 * kMinute;
+             ts += kMinute) {
+            CHECK(host.stream_push_tick(TradeTick{ts + 1000, ++sequence, 100.0, 1.0}));
+        }
+        CHECK(host.stream_advance_time(kTue0930Et + 395 * kMinute));
+        CHECK(host.stream_end(false));
+        const Run run{host.seen, host.last_error()};
+        CHECK(run.error.empty());
+        CHECK(bits(run.seen, &Seen::ismarket) == "111111");
+        CHECK(bits(run.seen, &Seen::islastbar) == "000101");
+        if (bits(run.seen, &Seen::islastbar) != "000101") show(shape.tag, run);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -393,6 +438,7 @@ int main() {
     test_two_sessions();
     test_tv_nyse_f();
     test_tv_eth_24x7();
+    test_stream_realtime();
 
     std::printf("\nsession_islastbar_aggregation: %d passed, %d failed\n",
                 tests_passed, tests_failed);
