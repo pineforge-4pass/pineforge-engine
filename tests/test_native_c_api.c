@@ -7479,6 +7479,219 @@ static void check_decision_session_facts(void) {
           "the decision's base length is not an aligned prefix of the current one");
 }
 
+/* ── A working row's anchor and owner relation (lane F4, E13 f4) ───
+ *
+ * pf_native_working_v1 read back a leg's trigger numbers but not how the
+ * leg is anchored or whom it waits on: before its owner filled, an anchored
+ * limit read p1 = 0 with nothing saying why, and a C host could not rebuild
+ * a pending bracket from the book. The readout's second additive tail
+ * carries the request's anchor (kind, rounding, offset -- a tick-spelled
+ * offset already resolved to price units at acceptance) and its owner
+ * relation (the owner handle, how many, the bound cycle, and a
+ * WAIT_FOR_APPLIED child's visibility, first-match rule and scope), exactly
+ * as NativeWorkingRequest::definition holds them. A caller of either earlier
+ * layout is written only as far as the length it sent. */
+
+#define RELATION_SENTINEL 0x5A
+
+typedef struct relation_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    uint64_t      parent;
+    uint64_t      leg;
+    uint64_t      bound;
+    int           waiting_read;
+    int           armed_read;
+    int           bound_read;
+    int           older_read;
+    double        parent_fill;
+} relation_state;
+
+static int relation_row(pf_strategy_t host, uint64_t incarnation, pf_native_working_v1* row) {
+    const int rows = strategy_native_working_len_v1(host);
+    int i;
+    for (i = 0; i < rows; ++i) {
+        memset(row, 0, sizeof(*row));
+        row->struct_size = (uint32_t)sizeof(*row);
+        if (strategy_native_working_get_v1(host, i, row) == PF_NATIVE_OK
+            && row->incarnation == incarnation) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int relation_on_applied(void* user, const pf_native_applied_v1* applied,
+                               const pf_native_decision_v1* at) {
+    relation_state* state = (relation_state*)user;
+    pf_native_working_v1 row;
+    (void)at;
+    if (applied->incarnation != state->parent) return 0;
+    state->parent_fill = applied->resolved_price;
+    /* Armed by that fill: the level is installed and the anchor is spent. */
+    if (relation_row(state->host, state->leg, &row) >= 0) {
+        LCHECK(state, row.anchor == PF_NATIVE_ANCHOR_ABSOLUTE && row.anchor_offset == 0.0,
+               "an armed leg still reads its anchor");
+        LCHECK(state, fabs(row.p1 - (applied->resolved_price + 1.5)) < 1e-9,
+               "the armed leg's level is not fill + offset");
+        LCHECK(state, row.owner == PF_NATIVE_OWNER_WAIT_FOR_APPLIED
+                          && row.owner_handle == state->parent && row.owner_n == 1u
+                          && row.arm_first_match == PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT
+                          && row.arm_scope == PF_NATIVE_ARM_SCOPE_BOOK,
+               "an armed leg lost its owner relation");
+        ++state->armed_read;
+    }
+    return 0;
+}
+
+static int relation_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    relation_state* state = (relation_state*)user;
+    pf_native_request_v1 request;
+    pf_native_working_v1 row;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == 1) {
+        /* A parent bid at 102.5, which bar 1's open (101) already fills. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 2.0;
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.p1 = 102.5;
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->parent, NULL)
+                          == PF_NATIVE_OK,
+               "the relation parent was refused");
+        /* Its take-profit: 150 ticks above the fill, rounded HALF_UP, armed
+         * after the fill's own print, bound to the whole book. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL;
+        request.anchor_offset = 150.0;
+        request.anchor_offset_in_ticks = 1;
+        request.anchor_rounding = PF_NATIVE_ANCHOR_ROUNDING_HALF_UP;
+        request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        request.owner_n = 1u;
+        request.owner_incarnations = &state->parent;
+        request.arm_first_match = PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT;
+        request.arm_scope = PF_NATIVE_ARM_SCOPE_BOOK;
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->leg, NULL)
+                          == PF_NATIVE_OK,
+               "the relation leg was refused");
+        if (relation_row(state->host, state->leg, &row) >= 0) {
+            LCHECK(state, row.anchor == PF_NATIVE_ANCHOR_FROM_OWNER_FILL
+                              && row.anchor_rounding == PF_NATIVE_ANCHOR_ROUNDING_HALF_UP
+                              && row.anchor_offset == 1.5 && row.p1 == 0.0,
+                   "a waiting leg does not read back its anchor");
+            LCHECK(state, row.owner_handle == state->parent && row.owner_n == 1u
+                              && row.owner_cycle == 0
+                              && row.visibility == PF_NATIVE_ARM_VISIBILITY_WORKING
+                              && row.arm_first_match
+                                     == PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT
+                              && row.arm_scope == PF_NATIVE_ARM_SCOPE_BOOK,
+                   "a waiting leg does not read back its owner relation");
+            ++state->waiting_read;
+        }
+        /* Earlier layouts are served exactly as far as their own length. */
+        {
+            const uint32_t lengths[2] = {PF_NATIVE_WORKING_V1_BASE_SIZE,
+                                         PF_NATIVE_WORKING_V1_ARM_SIZE};
+            const int index = relation_row(state->host, state->leg, &row);
+            int l;
+            for (l = 0; l < 2 && index >= 0; ++l) {
+                pf_native_working_v1 older;
+                const unsigned char* bytes = (const unsigned char*)&older;
+                size_t b;
+                int untouched = 1;
+                memset(&older, RELATION_SENTINEL, sizeof(older));
+                older.struct_size = lengths[l];
+                LCHECK(state, strategy_native_working_get_v1(state->host, index, &older)
+                                  == PF_NATIVE_OK,
+                       "an earlier working-row length was refused");
+                for (b = lengths[l]; b < sizeof(older); ++b) {
+                    if (bytes[b] != RELATION_SENTINEL) untouched = 0;
+                }
+                LCHECK(state, untouched && older.incarnation == state->leg,
+                       "an earlier-length row was written past its own struct");
+                if (untouched) ++state->older_read;
+            }
+        }
+    } else if (state->calculations == 3) {
+        /* The bracket closed the parent's book on bar 1; a fresh opening
+         * for the bound reduce below, filled at bar 3's open. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.trigger = PF_NATIVE_TRIGGER_MARKET;
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+               "the fresh opening was refused");
+    } else if (state->calculations == 5) {
+        /* A reduce bound to the one live opening, in its cycle. */
+        pf_native_open_lot_v1 lot;
+        memset(&lot, 0, sizeof(lot));
+        lot.struct_size = (uint32_t)sizeof(lot);
+        if (strategy_native_open_lot_count_v1(state->host, 100.0) > 0
+            && strategy_native_open_lot_get_v1(state->host, 0, &lot) == PF_NATIVE_OK) {
+            request = blank_request();
+            request.intent = PF_NATIVE_INTENT_REDUCE;
+            request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+            request.intent_value = 1.0;
+            request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+            request.p1 = 250.0;
+            request.owner = PF_NATIVE_OWNER_BIND_OPENING;
+            request.owner_n = 1u;
+            request.owner_incarnations = &lot.entry_incarnation;
+            request.owner_cycle = lot.cycle;
+            LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->bound, NULL)
+                              == PF_NATIVE_OK,
+                   "the bound reduce was refused");
+            if (relation_row(state->host, state->bound, &row) >= 0) {
+                LCHECK(state, row.owner == PF_NATIVE_OWNER_BIND_OPENING
+                                  && row.owner_handle == lot.entry_incarnation
+                                  && row.owner_n == 1u && row.owner_cycle == lot.cycle
+                                  && row.anchor == PF_NATIVE_ANCHOR_ABSOLUTE
+                                  && row.visibility == 0u && row.arm_first_match == 0u
+                                  && row.arm_scope == 0u,
+                       "a bound reduce does not read back its opening and cycle");
+                ++state->bound_read;
+            }
+        }
+    }
+    return 0;
+}
+
+static void check_working_relation_tail(void) {
+    relation_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    const pf_bar_t* bars;
+    int n = 0;
+
+    CHECK(PF_NATIVE_WORKING_V1_BASE_SIZE < PF_NATIVE_WORKING_V1_ARM_SIZE
+              && PF_NATIVE_WORKING_V1_ARM_SIZE < (uint32_t)sizeof(pf_native_working_v1),
+          "the working row's three layouts are out of order");
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = relation_on_bar;
+    table.on_applied = relation_on_applied;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "relation host create failed");
+    if (!state.host) return;
+    spec.session_key = "native-c-api-working-relation";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "relation configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 8, NULL), PF_NATIVE_OK,
+                 "the relation run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback relation rows failed");
+    CHECK_EQ_INT(state.waiting_read, 1, "the waiting leg was not read back");
+    CHECK_EQ_INT(state.older_read, 2, "the earlier working-row lengths were not served");
+    CHECK_EQ_INT(state.armed_read, 1, "the armed leg was not read back");
+    CHECK_EQ_INT(state.bound_read, 1, "the bound reduce was not read back");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -7522,5 +7735,6 @@ int pf_native_c_api_checks(void) {
     check_sized_units_query();
     check_policy_hooks();
     check_decision_session_facts();
+    check_working_relation_tail();
     return failures;
 }

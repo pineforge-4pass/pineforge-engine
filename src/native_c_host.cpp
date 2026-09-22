@@ -373,9 +373,16 @@ static_assert(PF_NATIVE_WORKING_V1_BASE_SIZE
                       == offsetof(pf_native_working_v1, comment) + sizeof(const char*)
                   && PF_NATIVE_WORKING_V1_BASE_SIZE % alignof(pf_native_working_v1) == 0u,
               "PF_NATIVE_WORKING_V1_BASE_SIZE is not the base layout's sizeof");
-static_assert(sizeof(pf_native_working_v1)
+static_assert(PF_NATIVE_WORKING_V1_ARM_SIZE
                   == PF_NATIVE_WORKING_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_working_v1 arm-presence tail moved");
+/* The relation tail is written too, so the arm length must be exactly what an
+ * arm-layout caller's sizeof was, and the tail its eight fields. */
+static_assert(PF_NATIVE_WORKING_V1_ARM_SIZE % alignof(pf_native_working_v1) == 0u
+                  && sizeof(pf_native_working_v1)
+                         == PF_NATIVE_WORKING_V1_ARM_SIZE + 6u * sizeof(std::uint32_t)
+                                + sizeof(double) + sizeof(std::uint64_t) + sizeof(std::int64_t),
+              "the pf_native_working_v1 relation tail moved");
 
 /* ── The readout words, pinned enumerator by enumerator ─────────────
  * Every word the runtime WRITES for a C host is named in the C header, and
@@ -1214,6 +1221,43 @@ constexpr std::uint32_t c_word(pineforge::NativeAnchoredTrigger value) noexcept 
     case V::Limit: return PF_NATIVE_ANCHORED_TRIGGER_LIMIT;
     case V::Stop: return PF_NATIVE_ANCHORED_TRIGGER_STOP;
     case V::TrailArm: return PF_NATIVE_ANCHORED_TRIGGER_TRAIL_ARM;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::NativeAnchorRounding value) noexcept {
+    using V = no::NativeAnchorRounding;
+    switch (value) {
+    case V::Raw: return PF_NATIVE_ANCHOR_ROUNDING_RAW;
+    case V::HalfUp: return PF_NATIVE_ANCHOR_ROUNDING_HALF_UP;
+    case V::Directional: return PF_NATIVE_ANCHOR_ROUNDING_DIRECTIONAL;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::NativeArmVisibility value) noexcept {
+    using V = no::NativeArmVisibility;
+    switch (value) {
+    case V::Working: return PF_NATIVE_ARM_VISIBILITY_WORKING;
+    case V::PendingUntilArmed: return PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::NativeArmFirstMatch value) noexcept {
+    using V = no::NativeArmFirstMatch;
+    switch (value) {
+    case V::AtArmPrint: return PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT;
+    case V::AfterArmPrint: return PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::NativeArmScope value) noexcept {
+    using V = no::NativeArmScope;
+    switch (value) {
+    case V::OwnerLot: return PF_NATIVE_ARM_SCOPE_OWNER_LOT;
+    case V::Book: return PF_NATIVE_ARM_SCOPE_BOOK;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -2527,6 +2571,37 @@ void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working
     }
     out.trigger_state = static_cast<std::uint32_t>(live.trigger_state.index());
     out.origin = c_word(definition.origin);
+    /* The relation tail: the request's anchor and owner as the kernel holds
+     * them now -- an armed leg's anchor is already Absolute. */
+    out.anchor = static_cast<std::uint32_t>(definition.request.anchor.index());
+    if (const auto* from = std::get_if<no::FromOwnerFill>(&definition.request.anchor)) {
+        out.anchor_rounding = c_word(from->rounding);
+        out.anchor_offset = from->offset;
+    }
+    std::visit([&out](const auto& owner) {
+        using T = std::decay_t<decltype(owner)>;
+        if constexpr (std::is_same_v<T, no::Independent>) {
+        } else if constexpr (std::is_same_v<T, no::WaitForApplied>) {
+            out.owner_handle = owner.parent.incarnation;
+            out.owner_n = 1u;
+            out.visibility = c_word(owner.visibility);
+            out.arm_first_match = c_word(owner.first_match);
+            out.arm_scope = c_word(owner.scope);
+        } else if constexpr (std::is_same_v<T, no::BindOpening>) {
+            out.owner_handle = owner.opening.incarnation;
+            out.owner_n = 1u;
+            out.owner_cycle = owner.cycle;
+        } else if constexpr (std::is_same_v<T, no::BindOpenings>) {
+            out.owner_handle = owner.openings.empty() ? 0u : owner.openings.front().incarnation;
+            out.owner_n = static_cast<std::uint32_t>(owner.openings.size());
+            out.owner_cycle = owner.cycle;
+        } else if constexpr (std::is_same_v<T, no::BindCohort>) {
+            out.owner_handle = owner.cohort.value;
+            out.owner_n = 1u;
+        } else {
+            static_assert(!sizeof(T), "untranslated owner relation");
+        }
+    }, definition.request.owner);
     out.acceptance_ordinal = definition.birth.acceptance_ordinal;
     out.decision_time_lower_bound = definition.birth.decision_time_lower_bound;
     out.label = definition.request.label.c_str();
@@ -3307,11 +3382,13 @@ PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!out) return PF_NATIVE_E_ARGUMENT;
-        /* Two published layouts: the base one the L13 lane first shipped and
-         * the current one with the arm-presence tail. A base-layout caller's
-         * struct ends at `comment`, so the row is written exactly that far. */
+        /* Three published layouts: the base one the L13 lane first shipped,
+         * that plus the arm-presence tail, and the current one with the
+         * relation tail. An earlier caller's struct ends at its own length,
+         * so the row is written exactly that far. */
         const std::uint32_t struct_size = out->struct_size;
         if (struct_size != sizeof(pf_native_working_v1)
+            && struct_size != PF_NATIVE_WORKING_V1_ARM_SIZE
             && struct_size != PF_NATIVE_WORKING_V1_BASE_SIZE) {
             return PF_NATIVE_E_STRUCT;
         }

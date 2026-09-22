@@ -133,7 +133,8 @@
  *   [C]  cancel                            strategy_native_cancel_v1
  *   [C]  native_working_requests           strategy_native_working_len_v1 / strategy_native_working_get_v1;
  *                                          a Trail's arm_price presence is
- *                                          pf_native_working_v1::trail_has_arm_price
+ *                                          pf_native_working_v1::trail_has_arm_price, the anchor and
+ *                                          owner relation are pf_native_working_v1::anchor .. arm_scope
  *   [C]  native_open_lots                  strategy_native_open_lot_count_v1 / strategy_native_open_lot_get_v1
  *   [C]  cancel_all                        strategy_native_cancel_all_v1
  *   [C]  cancel_where                      strategy_native_cancel_where_v1
@@ -1492,12 +1493,21 @@ typedef struct pf_native_event_v1 {
  *  the next call to that function, or until the host is freed; copy them if
  *  the host keeps them longer.
  *
- *  This readout has TWO published layouts and the runtime fills either: the
- *  base layout the L13 lane first shipped (#PF_NATIVE_WORKING_V1_BASE_SIZE)
- *  and the current one, which appends `trail_has_arm_price`. A caller
- *  compiled against the base layout keeps working unchanged: its row is
- *  written up to `comment` and never past it. Any other `struct_size` is
- *  PF_NATIVE_E_STRUCT.
+ *  This readout has THREE published layouts and the runtime fills any: the
+ *  base layout the L13 lane first shipped (#PF_NATIVE_WORKING_V1_BASE_SIZE),
+ *  that plus `trail_has_arm_price` (#PF_NATIVE_WORKING_V1_ARM_SIZE), and the
+ *  current one, which appends the anchor and the owner relation. A caller
+ *  compiled against an earlier layout keeps working unchanged: its row is
+ *  written up to its own length and never past it. Any other `struct_size`
+ *  is PF_NATIVE_E_STRUCT.
+ *
+ *  The relation tail is the request's own anchor and owner as the kernel
+ *  holds them now: an anchored leg reads FROM_OWNER_FILL, its rounding and
+ *  its offset (a tick-spelled one already resolved to price units at
+ *  acceptance) until its owner fills, and ABSOLUTE with the installed level
+ *  in `p1` / `p2` after; the owner relation names the owner handle, how many
+ *  there are and the bound cycle, and a WAIT_FOR_APPLIED child's visibility,
+ *  first-match rule and scope.
  *
  *  `trail_has_arm_price` is the request's own flag read back, so a TRAIL with
  *  no arm price and one armed at 0.0 are two different rows even though both
@@ -1540,6 +1550,21 @@ typedef struct pf_native_working_v1 {
                                    *   the trail carries none. 0 for every other
                                    *   trigger. */
     uint32_t reserved1;           /**< Always 0. */
+
+    /* ── The additive relation tail (R5 lane F4). Written only when
+     * `struct_size` is the current sizeof; see the struct note. ── */
+    uint32_t anchor;              /**< #pf_native_anchor_t as the request stands. */
+    uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_t, FROM_OWNER_FILL only. */
+    double   anchor_offset;       /**< FROM_OWNER_FILL: the signed offset, price units. */
+    uint64_t owner_handle;        /**< WAIT_FOR_APPLIED: the parent; BIND_OPENING: the
+                                   *   opening; BIND_OPENINGS: the first of them as
+                                   *   the kernel ordered the list; BIND_COHORT: the
+                                   *   cohort; 0 for INDEPENDENT. */
+    int64_t  owner_cycle;         /**< BIND_OPENING / BIND_OPENINGS: the bound cycle. */
+    uint32_t owner_n;             /**< How many owner handles the relation names. */
+    uint32_t visibility;          /**< #pf_native_arm_visibility_t, WAIT_FOR_APPLIED only. */
+    uint32_t arm_first_match;     /**< #pf_native_arm_first_match_t, WAIT_FOR_APPLIED only. */
+    uint32_t arm_scope;           /**< #pf_native_arm_scope_t, WAIT_FOR_APPLIED only. */
 } pf_native_working_v1;
 
 /** Byte length of #pf_native_working_v1 as the L13 lane first published it,
@@ -1551,6 +1576,14 @@ typedef struct pf_native_working_v1 {
  *  rather than a layout break. */
 #define PF_NATIVE_WORKING_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_working_v1, trail_has_arm_price))
+
+/** Byte length of #pf_native_working_v1 with the arm-presence tail but
+ *  without the relation tail — the second of its three published layouts,
+ *  and the `sizeof` every caller compiled before that tail existed sends.
+ *  The offset of the first relation field, for the same reason
+ *  #PF_NATIVE_WORKING_V1_BASE_SIZE is an offset. */
+#define PF_NATIVE_WORKING_V1_ARM_SIZE \
+    ((uint32_t)offsetof(pf_native_working_v1, anchor))
 
 /** One open physical lot, copied out by #strategy_native_open_lot_get_v1 —
  *  the C spelling of `NativeOpenLot` (R5 gap lane N18): the book that
@@ -2586,8 +2619,9 @@ PF_API int strategy_native_working_len_v1(pf_strategy_t s);
  *
  *  @p out is an in/out size prefix: set `out->struct_size` to
  *  `sizeof(pf_native_working_v1)` before the call. Everything else is filled.
- *  A caller built against the base layout sends
- *  #PF_NATIVE_WORKING_V1_BASE_SIZE and is filled exactly that far.
+ *  A caller built against an earlier layout sends
+ *  #PF_NATIVE_WORKING_V1_BASE_SIZE or #PF_NATIVE_WORKING_V1_ARM_SIZE and is
+ *  filled exactly that far.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for an out-of-range index,
  *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status. */
 PF_API int strategy_native_working_get_v1(pf_strategy_t s, int index,
