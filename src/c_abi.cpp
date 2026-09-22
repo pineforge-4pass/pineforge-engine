@@ -424,10 +424,14 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
  * HIGH_FIRST (O -> H -> L -> C), 2 LOW_FIRST (O -> L -> H -> C); any other
  * @p mode is clamped to AUTO. A live probe runs the SAME forming bar under
  * both forced orders and keeps only the fills that agree between the two.
- * Persistent configuration, like strategy_set_realtime_tail -- applies to
- * run() only, a stream continued via strategy_stream_begin always sees
- * AUTO. Default AUTO (mode=0): every historical run stays byte-identical to
- * before this flag existed. */
+ * Persistent configuration, like strategy_set_realtime_tail. The mode is
+ * carried by the RUN (NativeRunSpec::path_order, projected at begin), so it
+ * takes effect at the next begin rather than mid-run and a stream is not
+ * exempt: a confirmed bar pushed through strategy_stream_push_bar is sealed
+ * on the same forced waypoint sequence a run() walks. An observed tick
+ * (strategy_stream_push_tick) is one price, not a modeled path, so it has no
+ * legs to order. Default AUTO (mode=0): every historical run stays
+ * byte-identical to before this flag existed. */
 PF_API void strategy_set_path_order(pf_strategy_t s, int mode) {
     pf_cabi_void([&] {
         if (!s) return;

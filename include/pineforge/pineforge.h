@@ -825,11 +825,10 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  *  tail bar the call is accepted and inert, as it always was there. */
 PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on);
 /** Force this run's intrabar path order (ABI v4 live-runtime surface): the
- *  leg order every OHLC-path helper (`bar_path_uses_high_first` and
- *  everything built on it -- stop/limit fill priority, exit trail walking,
- *  dual-entry-stop arbitration, and bar-magnifier sub-bar sampling) uses for
- *  the CURRENT and every subsequent run(), until a caller sets a different
- *  mode. Values:
+ *  leg order every modeled OHLC path the engine walks uses -- stop/limit
+ *  fill priority, exit trail walking, dual-entry-stop arbitration,
+ *  bar-magnifier sub-bar sampling, and the excursion columns a source host
+ *  reports on a closed row. Values:
  *    - `0` AUTO (default): the unchanged TV-emulator rule -- the leg nearer
  *      `open` (by `|high-open|` vs `|open-low|`) goes first.
  *    - `1` HIGH_FIRST: force `O -> H -> L -> C` regardless of the bar's own
@@ -844,9 +843,20 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on);
  *  This is persistent configuration, like #strategy_set_realtime_tail -- it
  *  stays in effect until a caller passes @p mode == 0, so a handle reused
  *  for a later plain historical replay must be explicitly set back to AUTO.
- *  Applies to run() only: a stream continued via #strategy_stream_begin
- *  dispatches its realtime ticks outside any run() and always sees AUTO,
- *  regardless of this setting.
+ *  Scope: the mode is carried by the RUN, in `NativeRunSpec::path_order`. A
+ *  native-bound source host projects this setting into that field at begin
+ *  -- at run() and at #strategy_stream_begin alike -- and a bare native host
+ *  declares the field itself; every modeled path the native driver walks
+ *  then resolves its leg order from that field. So the setting takes effect
+ *  at the next begin rather than mid-run, and a stream is NOT exempt: a
+ *  confirmed bar pushed with #strategy_stream_push_bar is sealed on the same
+ *  forced waypoint sequence a run() walks (measured on a 99/101 bracket and
+ *  an AUTO-low-first touch bar: both routes exit at 99.00 under AUTO and at
+ *  101.00 under HIGH_FIRST). What a forced order cannot reach is an OBSERVED
+ *  TICK (#strategy_stream_push_tick): one price is not a modeled path and
+ *  has no legs to order, so the same tape fills identically under all three
+ *  modes; the forming bar those ticks build is ordered only when it seals,
+ *  on the waypoint sequence above.
  *  Default AUTO (@p mode == 0): every historical run stays byte-identical to
  *  before this flag existed. */
 PF_API void strategy_set_path_order(pf_strategy_t s, int mode);

@@ -138,10 +138,10 @@ before this flag existed.
 
 ### §3.3 — `strategy_set_path_order(s, mode)`
 
-Forces the intrabar leg order every OHLC-path helper uses (stop/limit fill
-priority, exit trail walking, dual-entry-stop arbitration, bar-magnifier
-sub-bar sampling) for the current and every subsequent `run()`, until a
-caller sets a different mode:
+Forces the intrabar leg order every modeled OHLC path the engine walks uses
+(stop/limit fill priority, exit trail walking, dual-entry-stop arbitration,
+bar-magnifier sub-bar sampling, and the excursion columns a source host
+reports on a closed row), until a caller sets a different mode:
 
 - `0` **AUTO** (default) — the unchanged TV-emulator rule: the leg nearer
   `open` (by `|high-open|` vs `|open-low|`) goes first.
@@ -155,9 +155,22 @@ bar under both forced orders and emits only the fills that agree between
 the two — a fill that depends on which leg TradingView's own (unobservable,
 still-forming) bar will resolve to is path-dependent and must be suppressed
 rather than guessed. Persistent configuration, like
-`strategy_set_realtime_tail`. Applies to `run()` only — a stream continued
-via `strategy_stream_begin` dispatches its realtime ticks outside any
-`run()` and always sees AUTO.
+`strategy_set_realtime_tail`.
+
+The mode is carried by the **run**, in `NativeRunSpec::path_order`: a
+native-bound source host projects this setting into that field at begin —
+at `run()` and at `strategy_stream_begin` alike — and a bare native host
+declares the field itself; every modeled path the native driver walks then
+resolves its leg order from that field. So the setting takes effect at the
+next begin rather than mid-run, and a stream is **not** exempt: a confirmed
+bar pushed with `strategy_stream_push_bar` is sealed on the same forced
+waypoint sequence a `run()` walks (measured on a 99/101 bracket and an
+AUTO-low-first touch bar: both routes exit at 99.00 under AUTO and at
+101.00 under HIGH_FIRST). What a forced order cannot reach is an observed
+tick (`strategy_stream_push_tick`): one price is not a modeled path and has
+no legs to order, so the same tape fills identically under all three modes;
+the forming bar those ticks build is ordered only when it seals, on the
+waypoint sequence above.
 
 Default AUTO (`mode == 0`): every historical run stays byte-identical to
 before this flag existed.
