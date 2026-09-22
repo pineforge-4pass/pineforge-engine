@@ -34,7 +34,7 @@ install(TARGETS pineforge-live RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_library(native_live_example MODULE examples/strategy.cpp)
     target_link_libraries(native_live_example PRIVATE PineForge::pineforge)
-    target_compile_options(native_live_example PRIVATE -fvisibility=hidden -ffp-contract=off)
+    target_compile_options(native_live_example PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
     set_target_properties(native_live_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-example")
 else()
     message(STATUS
@@ -67,6 +67,11 @@ endforeach()
 
 add_library(native_live_parser_example MODULE examples/demo_parser.cpp)
 target_include_directories(native_live_parser_example PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# The runner's own two example modules (examples/strategy.cpp above and this
+# parser) take -UNDEBUG as well, so an assert() added to either checks
+# instead of compiling to a no-op. Neither holds one today, and neither is an
+# examples/native source, so the examples-assert-live stage does not read them.
+target_compile_options(native_live_parser_example PRIVATE -UNDEBUG)
 set_target_properties(native_live_parser_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-parser-example")
 
 if(PINEFORGE_BUILD_TESTS)
