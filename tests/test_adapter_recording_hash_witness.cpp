@@ -12,8 +12,8 @@
 // points where a retained row has just been rewritten in place: a replaced
 // working order, an exit that re-issues every bar, a cancel receipt, an OCA
 // sibling cancelled by a fill, a trail that arms, and an entry that filled
-// long ago and is only now given its bracket (its row's
-// has_full_entry_bracket flips 60 bars after the fill in lane F9's probe).
+// long ago and is only now given its bracket (in lane F9's probe its row's
+// has_full_entry_bracket flips 59 bars after the fill, at the attach).
 // A reset -- the same host running again -- must answer the fresh values.
 //
 // So this witness is data: every recorded row, a read after every command
@@ -189,8 +189,8 @@ private:
         if (phase == 6) { strategy_close_all(); read(); }
     }
 
-    // An entry that fills at once and is given its first exit only eight
-    // bars later; the exit then re-issues every bar, and its last re-issue
+    // An entry issued at bar 0 fills at bar 1 and is given its first exit
+    // only at bar 8; the exit then re-issues every bar, and its last re-issue
     // raises the stop into the tape, where it fills. A second entry
     // re-issues its exit to the end of the tape and is still open there.
     void reissue(int i, const Bar& bar) {

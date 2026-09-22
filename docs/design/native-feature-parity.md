@@ -950,10 +950,10 @@ moving a single value, but not from inside lane F9's files:
    not only rows still working. Lane F9's probe hashed every row callback to
    callback: the order-and-cancel shape rewrites none, the re-issue shape
    1,339 rows each one callback old, an OCA re-price and a trail attach rows
-   two callbacks old, and an entry that filled at bar 1 is rewritten at bar 61
-   when its first exit is attached (`has_full_entry_bracket`
-   pine_adapter.cpp:7155). Full-table scans rewrite rows as well
-   (`suspend_brackets_for_reversal` pine_adapter.cpp:1020,
+   two callbacks old, and the row of an entry that filled at bar 1 is
+   rewritten at bar 60, when its first exit is attached
+   (`has_full_entry_bracket` pine_adapter.cpp:7155). Full-table scans
+   rewrite rows as well (`suspend_brackets_for_reversal` pine_adapter.cpp:1020,
    `revive_brackets_after_margin` pine_adapter.cpp:1172,
    `preserved_by_close_all` pine_adapter.cpp:9859), and
    `admission::Journal::retain` market_admission.hpp:205 drops events from
@@ -966,12 +966,14 @@ with the adapter's read-only lookups and scans moved to the const accessors so
 that they stop bumping it; a home for the composed transforms beside it; the
 same for the journal (an append composes, `retain` and `reset` rebuild) and
 for the scheduler's consumed prefix. That is at least
-`include/pineforge/source/pine_adapter.hpp`, `market_admission.hpp`,
-`pine_scheduler.hpp` and `src/source/pine_adapter.cpp`, plus a scaling row
-that fails the reproduced ×3.9 to ×4.0 per doubling and passes at ×2.3 or
-less. The alternative — fold one cached digest per row instead of the row's
-bytes — is simpler and moves every Pine hash, so it is an epoch decision
-(`pineforge-source-adapter/v3` to v4), not a neutral change.
+`include/pineforge/source/pine_adapter.hpp`, `market_admission.hpp` and
+`pine_scheduler.hpp`, `src/source/pine_adapter.cpp` and `market_admission.cpp`
+beside `pine_state_hash.cpp`, plus a scaling row that fails the reproduced
+×3.9 to ×4.0 per doubling and passes at ×2.3 or less. The alternative — fold
+one cached digest per row instead of the row's bytes — needs the same barrier
+and the same home, saves only the 256-entry tables, and moves every Pine
+hash: an epoch decision (`pineforge-source-adapter/v3` to v4), not a neutral
+change.
 
 **The witness, pinned now.** `tests/test_adapter_recording_hash_witness.cpp`
 records every row, a read after every command and the final scalar of six
@@ -994,9 +996,9 @@ host — one round trip per 20 bars, one request accepted and cancelled per bar
 — from 1,500 to 24,000 bars and 75 to 1,200 closed rows: recording 0.0087 /
 0.0228 / 0.0676 / 0.2201 / 0.8014 s (×2.61, ×2.96, ×3.26, ×3.64); the same
 with no trades 0.0056 to 0.0884 s (×1.94 to ×2.08); trading with recording off
-0.0038 to 0.0596 s (×2.00). The walk, not the recording, is the growth: about
-0.71 s of the 0.80 s at 24,000 bars, some 48 folded bytes per closed row per
-recorded row.
+0.0038 to 0.0596 s (×2.00). Recording without trades stays linear, so the
+growth is the closed-row walk: about 0.71 s of the 0.80 s at 24,000 bars,
+some 48 folded bytes per closed row per recorded row.
 
 **Ruling (ADR-0001 rule 2: a cost ruling for every host, with no TradingView
 fact in it): the walk stays, and this is its documented cost.** An exact
@@ -1012,8 +1014,9 @@ after booking, the Pine host, rewrites `close_cause`, `exit_from_bracket`,
 writes are pine_strategy_host.cpp:452, :536-537, :549-557, :1153 and :1341-1343.
 But `trades_` engine.hpp:538 is a protected member any host can write, so a
 lane that takes the consumer-side digest has to make that contract explicit.
-Folding `(count, digest)` in place of the rows is simpler and moves every
-broker hash: an epoch decision (`pineforge-broker-state/v18`).
+Folding `(count, digest)` in place of the rows saves the 256-entry table but
+still needs the storage and the contract, and it moves every broker hash: an
+epoch decision (`pineforge-broker-state/v18`).
 
 **C. The terminal continuation capture (E24 STOP1).** A Pine run's scalar
 `broker_state_hash()` folds the continuation as it stood at the run's last
