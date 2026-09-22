@@ -493,23 +493,30 @@ void source::PineStrategyHost::on_native_applied(
     // TradingView dates every fill of a chart bar at the bar's open, a
     // process_orders_on_close fill included (the e25-f-islastbar tape, lane
     // E27). The chart timeframe's zero-width interval gives exactly that:
-    // every point of a bar sits at its label. On an aggregated chart the
-    // kernel dates a close point (the calculation, the close after it, a
-    // modeled bar's close leg) at the bucket's close, and books a fill the
-    // host executes at the current point (a calc_on_order_fills first-open
-    // chain, a same-bar cover) at its decision floor, which the bucket's
-    // inputs have already carried to the close on the no-path route. The
-    // adapter dates the rows it presents at the chart bar's open: every fill
-    // of a plain aggregated chart, as ab9714be's aggregation loop did, and
-    // under the magnifier, whose sub-bar fills keep their sub-bar's instant,
-    // the close points alone. The kernel's own instant, which its FX lookup,
-    // decision floor and ordering read, is untouched (lane F1).
+    // every point of a confirmed bar's modeled path (its open, the segments,
+    // the calculation, the close after it) sits at the bar's label. On an
+    // aggregated chart the kernel dates a close point at the bucket's close,
+    // and books a fill the host executes at such a point (a
+    // calc_on_order_fills first-open chain, a same-bar cover) at its decision
+    // floor, which the bucket's inputs have already carried to the close on
+    // the no-path route. The adapter dates the rows it presents at the chart
+    // bar's open: every modeled point of a plain aggregated chart, as
+    // ab9714be's aggregation loop did, and under the magnifier, whose sub-bar
+    // fills keep their sub-bar's instant, the close points alone. A realtime
+    // print keeps its own instant, as it does on the chart timeframe, and so
+    // does a stream's quiet carried interval, whose context still names the
+    // bar before it. The kernel's own instant, which its FX lookup, decision
+    // floor and ordering read, is untouched (lane F1).
     const auto provenance = context.coordinate.provenance;
+    const bool modeled_point = provenance == NativePriceProvenance::Confirmed
+        || provenance == NativePriceProvenance::ModeledOHLCOpen
+        || provenance == NativePriceProvenance::Calculation
+        || provenance == NativePriceProvenance::AfterCalculationClose;
     const bool close_point = provenance == NativePriceProvenance::Calculation
         || provenance == NativePriceProvenance::AfterCalculationClose
         || (provenance == NativePriceProvenance::Confirmed
             && context.coordinate.path_phase == NativePathPhase::Close);
-    if (aggregated && (close_point || !scheduler_.bar_magnifier_enabled())) {
+    if (aggregated && (scheduler_.bar_magnifier_enabled() ? close_point : modeled_point)) {
         const std::int64_t script_open = context.script_bar_open_ms;
         if (event.opened_units != 0.0) {
             for (auto& lot : pyramid_entries_) {

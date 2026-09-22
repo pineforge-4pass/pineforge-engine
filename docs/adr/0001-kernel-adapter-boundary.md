@@ -193,11 +193,11 @@ into kernel driving — never by special-casing the kernel *for a specific scrip
 kernel and own these quirks, each at its site:
 
 - **Seams the adapter overrides.** The kernel is driven, not patched. `PineStrategyHost` overrides
-  `resolve_execution_terms` (`pine_strategy_host.cpp:667`) for TV sizing and fill spelling;
-  `validate_execution_precommit` (`pine_strategy_host.cpp:692`), whose
+  `resolve_execution_terms` (`pine_strategy_host.cpp:730`) for TV sizing and fill spelling;
+  `validate_execution_precommit` (`pine_strategy_host.cpp:755`), whose
   `validate_precommit` (`pine_adapter.cpp:11433`) returns `AdmitWithHostMargin`
   (`pine_adapter.cpp:11678`) to own the opening margin decision; `owns_lot_excursions() = true`
-  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:777`), so
+  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:869`), so
   MFE/MAE are measured on TV tick-quantized prices; and `on_native_tick`
   (`pine_strategy_host.cpp:361`) / `on_native_applied` (`pine_strategy_host.cpp:457`) for
   `calc_on_order_fills` re-entry. `process_orders_on_close` becomes
@@ -294,7 +294,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   lot flags: `skip_entry_bar_high` / `skip_entry_bar_low` (`engine.hpp:149`), hashed
   (`skip_entry_bar_high` `src/engine_state_hash.cpp:65`) and, since R5 lane E6, set by no host at
   all: the excursion owner declares where its fill sat (`declare_opened_lot_entry_bar_mask`
-  `pine_strategy_host.cpp:542`) and the kernel derives the pair — the intrabar-fill excursion
+  `pine_strategy_host.cpp:605`) and the kernel derives the pair — the intrabar-fill excursion
   mask. Rule 5 is now scoped to that pair and to the comment residue.
 - **The wider coupling inventory, re-derived.** `docs/design/native-feature-parity.md` §2.ii
   lists the kernel↔TradingView couplings; three of the ones earlier drafts named are closed.
@@ -516,7 +516,7 @@ Every line number in this section names its symbol on this tree, which
 | `initial_margin_fraction` | **adapter-policy** | TradingView's ten-significant-digit money admission against the signal-time tuple, answered as `AdmitWithHostMargin`; the `margin` model the adapter does declare is maintenance-only (`NativeMarginModel` `pine_adapter.cpp:1583-1591`, `margin.maintenance_long` `pine_adapter.cpp:1598`) | design row MG4 and the wave-4 ruling recorded in `project()`: a positive initial requirement would decline openings TradingView takes | `tests/test_native_precommit_view.cpp`, `tests/test_native_margin_model.cpp` |
 | `report_open_position_at_end` | **adapter-policy** | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it (`scheduler_record_range_end`): report shape, not a mark-to-market row (`pine_adapter.cpp:1530-1537`) | design row RP5; the kernel reads the field under `KernelRecorded` only, which `scripts/check_adapter_spec_shadowing.py` gates | `examples/native/native_sized_report_strategy.cpp`, `tests/test_native_report_truth.cpp` |
 | `open_bar_view` | **adapter-policy** | `Complete`: TradingView's bar-open scheduling and its `calc_on_order_fills` callback read the whole script bar (`pine_adapter.cpp:1521-1522`) | design rows CT4 and E5: the open-only view is opt-in because the adapter needs the full bar | `examples/native/native_calc_on_fills_strategy.cpp`, `tests/test_native_calc_timing.cpp` |
-| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1588`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
+| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1661`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
 | `auxiliary_feed` | **adapter-policy** | the adapter's own auxiliary drive: the chart-slice mapping and the deferred first bucket (`src/source/pine_aux_security.cpp`) | lane N7, retained on three measurements: 0 of 312 corpus probes install an auxiliary feed; TradingView's chart slice leaves pre-range coverage inert where the kernel folds it by time, and evaluates after the bar's matching pass where the kernel delivers before it (`tests/test_native_auxiliary_feed_twin.cpp`, rows B and C). Design §2.iv | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
 <!-- native-feature-rulings:end -->
 

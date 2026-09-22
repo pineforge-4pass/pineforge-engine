@@ -209,9 +209,14 @@ int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) co
     // all fills after that callback (including COOF/POOC notifications) belong
     // to the already-published source index.  This is the same cadence the
     // legacy aggregation loop used for Trade.entry_bar_index/exit_bar_index.
-    const bool published = last_published_script_open_ms_
-        == context.script_bar_open_ms;
-    const bool coof_published = coof_callback_script_open_ == context.script_bar_open_ms;
+    // A stream's quiet carried interval is matched at its own open before it
+    // joins a script bar, while the context still names the bar before it:
+    // that fill belongs to the bar the carried interval opens into (lane F1).
+    const std::int64_t script_open_ms =
+        context.coordinate.provenance == NativePriceProvenance::CarriedOpen
+        ? context.coordinate.open_ms : context.script_bar_open_ms;
+    const bool published = last_published_script_open_ms_ == script_open_ms;
+    const bool coof_published = coof_callback_script_open_ == script_open_ms;
     if (published || coof_published)
         return std::max(0, source_bar_count_ - 1);
     return source_bar_count_;

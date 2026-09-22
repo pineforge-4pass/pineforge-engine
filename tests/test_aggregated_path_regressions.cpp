@@ -39,6 +39,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -539,6 +540,100 @@ void test_same_bar_add_cover() {
     if (!rows_equal) show(path_name(Path::Aggregated), agg);
 }
 
+// A stream is aggregated the same way, and it adds one kind of fill a batch
+// run never has: when time advances past the last print, the kernel carries
+// the last price into each quiet interval and matches the pending orders at
+// that interval's open, before the interval joins a script bar — so the
+// fill's context still names the bar before it. The chart-timeframe stream
+// books that fill on the bar the quiet interval opens (11:00 ET, bar 18), and
+// every realtime fill at its print's own instant; the aggregated one must
+// too. 5m warmup bars that are the exact aggregates of the 1m ones, the same
+// realtime prints on both, then silence past 10:57.
+class StreamHost final : public ProbeHost {
+public:
+    StreamHost() : ProbeHost(/*pooc=*/false, /*coof=*/false) {}
+    void on_source_bar(const Bar&) override {
+        ++callbacks_;
+        if (bar_index_ % 2 == 0) return;
+        if (position_entry_count_ > 0) strategy_close("L");
+        else strategy_entry("L", true, kNaN, kNaN, 1.0);
+    }
+};
+
+Run run_stream(int input_minutes) {
+    std::vector<Bar> one;
+    for (int k = 0; k < 60; ++k) {
+        const double px = 100.0 + 0.05 * k + ((k % 3) == 0 ? 0.2 : -0.1);
+        Bar b{};
+        b.timestamp = kTue0930Et + k * kMinute;
+        b.open = px;
+        b.high = px + 0.15 + 0.01 * (k % 4);
+        b.low = px - 0.12 - 0.01 * (k % 5);
+        b.close = px + 0.03 * ((k % 2) ? 1 : -1);
+        b.volume = 1;
+        one.push_back(b);
+    }
+    std::vector<Bar> five;
+    for (std::size_t i = 0; i < one.size(); i += 5) {
+        Bar b = one[i];
+        for (std::size_t j = i + 1; j < i + 5; ++j) {
+            b.high = std::max(b.high, one[j].high);
+            b.low = std::min(b.low, one[j].low);
+            b.close = one[j].close;
+            b.volume += one[j].volume;
+        }
+        five.push_back(b);
+    }
+    StreamHost host;
+    const std::vector<Bar>& warmup = input_minutes == 5 ? five : one;
+    const std::string input_tf = std::to_string(input_minutes);
+    Run run;
+    if (!host.stream_begin(warmup.data(), static_cast<int>(warmup.size()), input_tf.c_str(),
+                           "5")) {
+        run.error = host.last_error();
+        return run;
+    }
+    std::uint64_t sequence = 0;
+    double px = 103.0;
+    for (std::int64_t ts = kTue0930Et + 60 * kMinute; ts < kTue0930Et + 88 * kMinute;
+         ts += 20'000) {
+        host.stream_push_tick(TradeTick{ts + 1000, ++sequence, px, 1.0});
+        px += (sequence % 7 < 4) ? 0.02 : -0.03;
+    }
+    host.stream_advance_time(kTue0930Et + 95 * kMinute);
+    host.stream_end(false);
+    return host.read();
+}
+
+void test_stream_carried_open() {
+    std::printf("test_stream_carried_open\n");
+    const Run chart = run_stream(5);
+    const Run agg = run_stream(1);
+    CHECK(chart.error.empty());
+    CHECK(agg.error.empty());
+    CHECK(chart.closed.size() == 4);
+    CHECK(agg.callbacks == chart.callbacks);
+    bool rows_equal = agg.closed.size() == chart.closed.size();
+    for (std::size_t i = 0; rows_equal && i < agg.closed.size(); ++i)
+        rows_equal = agg.closed[i] == chart.closed[i];
+    CHECK(rows_equal);
+    // A realtime fill keeps its print's instant: the exit on bar 12 at the
+    // 10:30:01 print, not at 10:30.
+    if (chart.closed.size() == 4)
+        CHECK(chart.closed[2].exit_ms == kTue0930Et + 60 * kMinute + 1000);
+    // The quiet interval's fill: 11:00 ET, bar 18, on both.
+    CHECK(chart.open_count == 1 && agg.open_count == 1);
+    CHECK(chart.open_entry_ms == kTue0930Et + 90 * kMinute && chart.open_entry_bar == 18);
+    CHECK(agg.open_entry_ms == chart.open_entry_ms);
+    CHECK(agg.open_entry_bar == chart.open_entry_bar);
+    CHECK(agg.open_entry_price == chart.open_entry_price);
+    if (!rows_equal || agg.open_entry_ms != chart.open_entry_ms
+        || agg.open_entry_bar != chart.open_entry_bar) {
+        show("stream 5 -> 5", chart);
+        show("stream 1 -> 5", agg);
+    }
+}
+
 // ── 5. session flags under calc_on_order_fills ────────────────────────────
 
 // The reviewer's coof_session.cpp: a market order placed on a session day's
@@ -760,6 +855,7 @@ int main() {
     test_pooc_fills();
     test_aggregated_equals_chart();
     test_same_bar_add_cover();
+    test_stream_carried_open();
     test_coof_session_flags();
     test_coof_session_flags_post_market();
     test_coof_fill_before_the_last_bar();
