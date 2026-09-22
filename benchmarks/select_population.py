@@ -2,8 +2,8 @@
 """Select the benchmark population: 100 corpus probes + 100 closed scraped scripts.
 
 Deterministic (``--seed``, default 20260921). Writes
-``benchmarks/results/staged/selection.json`` (machine manifest) and
-``benchmarks/results/staged/selection.md`` (the printed manifest).
+``benchmarks/results/selection.json`` (machine manifest) and
+``benchmarks/results/selection.md`` (the printed manifest).
 
 Corpus half (public)
     Drawn from ``corpus/validation/<probe>/`` (the engine's corpus gitlink).
@@ -269,7 +269,7 @@ def main() -> int:
     ap.add_argument("--scrapper-data", type=Path,
                     default=Path(os.environ.get("PINESCRIPT_SCRAPPER_DIR",
                                                 Path.home() / "code" / "pinescript-scrapper")) / "data")
-    ap.add_argument("--out-dir", type=Path, default=BENCH / "results" / "staged")
+    ap.add_argument("--out-dir", type=Path, default=BENCH / "results")
     ap.add_argument("--replace", action="append", default=[], metavar='NNN="reason"',
                     help="slot number lost to a PyneSys compile rejection (repeatable)")
     args = ap.parse_args()

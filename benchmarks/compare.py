@@ -33,7 +33,7 @@ Usage:
     # stage one engine's grades, the other columns marked pending:
     python benchmarks/compare.py --engines PyneCore \
         --pending "PineForge=pending wave D (BENCH2)" --pending "vectorbt=runs in BENCH2" \
-        --out-dir benchmarks/results/staged --summary-name pynecore_summary.md \
+        --out-dir /tmp/bench-staged --summary-name pynecore_summary.md \
         --detail-name pynecore_trade_comparison.md
 """
 from __future__ import annotations
