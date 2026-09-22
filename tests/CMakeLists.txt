@@ -846,6 +846,10 @@ list(APPEND TEST_SOURCES test_session_islastbar_aggregation)
 # against the chart-timeframe path and against TradingView's own tape.
 list(APPEND TEST_SOURCES test_pooc_fill_stamp_aggregation)
 
+# R5 F3: the contracts the kernel documents for every host, witnessed on bare
+# hosts. Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_bare_host_contracts)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is
@@ -1488,6 +1492,19 @@ string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES
 if(TARGET test_native_margin_fx_clock)
     target_compile_definitions(test_native_margin_fx_clock PRIVATE
         PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
+endif()
+
+# R5 F3 reads the kernel's own code (headers included) to prove it carries no
+# source-adapter order-id sentinel. Kernel files only, like E21's set.
+file(GLOB PINEFORGE_F3_KERNEL_FILES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.h")
+string(REPLACE ";" "|" PINEFORGE_F3_KERNEL_JOINED "${PINEFORGE_F3_KERNEL_FILES}")
+if(TARGET test_native_bare_host_contracts)
+    target_compile_definitions(test_native_bare_host_contracts PRIVATE
+        PINEFORGE_F3_KERNEL_FILES="${PINEFORGE_F3_KERNEL_JOINED}")
 endif()
 
 # R5 E25 reads its TradingView tapes from the fixture tree; source-bound too.
