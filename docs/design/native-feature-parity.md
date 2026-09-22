@@ -162,7 +162,7 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 | RP6 | Per-trade accessors | **partial** — `get_trade` is public; the `closed_trade_*` family is protected engine.hpp:1791 **Closed:** `closed_trade_count()` / `closed_trade(i)` and `report_trade_count()` / `get_report_trade(i)` are public, and `closed_trade_close_cause(i)` engine.hpp:1797 answers the typed `execution::CloseCause` the closer recorded (`tests/test_native_report_truth.cpp`). | K | L2 | F:H6 | (single-source) |
 | RP7 | Live order-action stream (runner ledger / webhook) | **yes** — engine_execution.cpp:691, enabled native_execution_consumer.cpp:5111, C ABI c_abi.cpp:567-584 | K | — | F:H5 | (single-source) |
 | RP8 | Continuation hash | **yes** — `native_continuation_hash` native_host.hpp:1282, native_execution_consumer.cpp:9495; the spec is folded by `hash_spec` native_execution_consumer.cpp:177-198 | K | — | F:I1 O:J2 S:X3 | — |
-| RP9 | Broker-state hash: scalar + per-bar recording | **partial** — scalar engine_state_hash.cpp:12-114, C ABI c_abi.cpp:442; per-bar rows are appended only by the source scheduler pine_strategy_host.cpp:1605 **Closed:** under `KernelRecorded` with `set_broker_state_hash_recording(true)` the consumer appends one `broker_state_hash()` row after each report point, so `broker_state_hash_len == equity_curve_len == script_bars_processed` in batch and across a stream's warmup and realtime legs. A row is the run's continuation identity at that bar, per driving mode — the broker half alone is mode-invariant (`tests/test_native_report_truth.cpp`). | K | L2 | F:I2 O:J1 S:X3 | O's "yes" covers the scalar only |
+| RP9 | Broker-state hash: scalar + per-bar recording | **partial** — scalar engine_state_hash.cpp:12-114, C ABI c_abi.cpp:442; per-bar rows are appended only by the source scheduler pine_strategy_host.cpp:1605 **Closed:** under `KernelRecorded` with `set_broker_state_hash_recording(true)` the consumer appends one `broker_state_hash()` row after each report point, so `broker_state_hash_len == equity_curve_len == script_bars_processed` in batch and across a stream's warmup and realtime legs. A row is the run's continuation identity at that bar, per driving mode — the broker half alone is mode-invariant (`tests/test_native_report_truth.cpp`). | K | L2 | F:I2 O:J1 S:X3 | O's "yes" covers the scalar only. What a recorded row costs — quadratic on the Pine adapter, O(closed rows) per row in the kernel — is measured and ruled in §3.8 |
 | RP10 | Fold the host's own durable state into the hash | **partial** — the protected virtual `hash_source_extension` engine.hpp:404 is overridable but source-named; the kernel default folds `"source:none"` engine_state_hash.cpp:8-10 **Closed:** `hash_host_extension(BrokerStateHashSink&)` engine.hpp:398 is the generic seam — protected virtual on `BacktestEngine`, called once per hash, last — and `hash_source_extension` engine.hpp:404 is its deprecated spelling, which the generic default forwards to (`tests/test_native_host_hash_extension.cpp`). | K | L2 (the virtual rides the shared bump) | F:I3 O:J1 S:X3 | — |
 
 ### 1.9 Other runtime surface
@@ -900,6 +900,7 @@ scalar once per run, and its values are what they were.
 | # | cost | measured on `fd785928` | ruling |
 |---|---|---|---|
 | **A** | the Pine adapter's recording fold: O(retained history) per row | ×3.92 to ×4.02 per doubling — 9.26 s at 800 bars of order-and-cancel, 19.5 s at 2,688 bars of re-issue — against at most 0.015 s with recording off | **open**: blocked on storage and a write barrier outside lane F9's files; no epoch needed; value witness pinned |
+| **B** | the kernel recorder's closed-row walk: O(closed rows) per row | ×2.61 rising to ×3.64 per doubling with trades (0.80 s at 24,000 bars and 1,200 closed rows) against ×1.94 to ×2.08 without | **ruled**: retained, cost documented |
 
 **A. The adapter's recording fold.** `PineExecutionAdapter::hash_state`
 pine_state_hash.cpp:236 folds, at every row, every placement snapshot the run
@@ -983,6 +984,35 @@ moves: never re-folding `has_full_entry_bracket` (first at the re-issue
 scenario's row 8, the bar its late bracket attaches), freezing the cancel
 receipts of older rows (first at each cancel or re-price), and a
 consumed-prefix cache that stops at 16 bars (row 16 in all six scenarios).
+
+**B. The kernel recorder's closed rows.**
+`broker_state_hash_from_execution_hash` engine_state_hash.cpp:29 folds six
+fields of every closed row (`trades_` engine_state_hash.cpp:107-112) at every
+recorded row, so the recorder costs O(closed rows) per row. The audit's bare
+host — one round trip per 20 bars, one request accepted and cancelled per bar
+— from 1,500 to 24,000 bars and 75 to 1,200 closed rows: recording 0.0087 /
+0.0228 / 0.0676 / 0.2201 / 0.8014 s (×2.61, ×2.96, ×3.26, ×3.64); the same
+with no trades 0.0056 to 0.0884 s (×1.94 to ×2.08); trading with recording off
+0.0038 to 0.0596 s (×2.00). The walk, not the recording, is the growth: about
+0.71 s of the 0.80 s at 24,000 bars, some 48 folded bytes per closed row per
+recorded row.
+
+**Ruling (ADR-0001 rule 2: a cost ruling for every host, with no TradingView
+fact in it): the walk stays, and this is its documented cost.** An exact
+running digest is possible by the same algebra as A and would move no value,
+but it needs two things the kernel does not have. One is storage for the
+composed transform: a `BacktestEngine` member changes the layout of the
+`engine_script_run_v18` script ABI, which is an epoch decision, while a
+member of the heap-owned execution consumer (`ExecutionConsumerSlot`
+engine.hpp:1782) is not. The other is a contract that the six folded fields of
+a booked row are never rewritten. In the tree they are not; the only writer
+after booking, the Pine host, rewrites `close_cause`, `exit_from_bracket`,
+`exit_bar_index`, `exit_id`, `exit_comment` and `entry_incarnation` only; its
+writes are pine_strategy_host.cpp:452, :536-537, :549-557, :1153 and :1341-1343.
+But `trades_` engine.hpp:538 is a protected member any host can write, so a
+lane that takes the consumer-side digest has to make that contract explicit.
+Folding `(count, digest)` in place of the rows is simpler and moves every
+broker hash: an epoch decision (`pineforge-broker-state/v18`).
 
 ---
 
