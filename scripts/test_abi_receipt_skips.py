@@ -19,6 +19,7 @@ import tempfile
 import unittest
 
 import check_abi_receipt_skips as skips
+from ci_verify import ctest_rows
 from prepare_settlement_cpp_abi_base import PROVIDERS
 
 # The ctest the CTest row passes with --ctest (CMAKE_CTEST_COMMAND), else PATH's.
@@ -73,6 +74,9 @@ class GatedRows(unittest.TestCase):
 class AgainstRealCTest(unittest.TestCase):
     """Rows written to a CTestTestfile.cmake and listed by the real ctest."""
 
+    # The gated rows build_tree registers, in the order ctest lists them.
+    GATED = ('test_gated_pair', 'test_gated_settlement', 'test_gated_budget')
+
     @classmethod
     def setUpClass(cls):
         if not CTEST:
@@ -124,7 +128,17 @@ class AgainstRealCTest(unittest.TestCase):
         build = self.build_tree(export_compile_commands=True)
         run = subprocess.run([CTEST, '--test-dir', str(build)], capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stdout)
-        self.assertIn('100% tests passed out of 4', run.stdout)
+        # The summary wording is CMake's, not this tree's: 3.28 always spells
+        # the failed count, 4.x drops the clause when nothing failed (see
+        # CTestSummarySpelling below). Read the counts with ci_verify's parser,
+        # the one the CI floor reads the same line with, rather than matching
+        # one host's wording.
+        # expectation corrected: literal '100% tests passed out of 4' ->
+        # ctest_rows() counts, because that string is the CMake >= 4 wording
+        # only and ubuntu-24.04 CI runs CMake 3.28.
+        rows = ctest_rows(run.stdout.encode())
+        self.assertEqual((rows.total, rows.ran), (4, 1), run.stdout)
+        self.assertEqual(rows.skipped, self.GATED, run.stdout)
         self.assertIn('test_gated_pair (Skipped)', run.stdout)
         code, out = self.check(build)
         self.assertEqual(code, 1, out)
@@ -174,6 +188,45 @@ class AgainstRealCTest(unittest.TestCase):
                 code = skips.main(['--build-dir', temporary, '--ctest', CTEST])
         self.assertEqual(code, 2)
         self.assertIn('not a configured CMake build tree', err.getvalue())
+
+
+class CTestSummarySpelling(unittest.TestCase):
+    """Both wordings CTest prints for the summary the row above reads.
+
+    Verbatim runs of the four rows build_tree registers, three of them
+    skipped, on the two CMake generations in use: 3.28.3 is ubuntu-24.04's
+    apt cmake, which the kernel-only CI job runs; 4.4.0 is the local macOS
+    one. Only the summary line differs, and a row that matched one of them
+    literally passed on that host alone -- so the fixtures keep both readable
+    from either host.
+    """
+
+    ROWS = ('Test project BUILD\n'
+            '    Start 1: test_plain_python_row\n'
+            '1/4 Test #1: test_plain_python_row ............   Passed    0.01 sec\n'
+            '    Start 2: test_gated_pair\n'
+            '2/4 Test #2: test_gated_pair ..................***Skipped   0.01 sec\n'
+            '    Start 3: test_gated_settlement\n'
+            '3/4 Test #3: test_gated_settlement ............***Skipped   0.01 sec\n'
+            '    Start 4: test_gated_budget\n'
+            '4/4 Test #4: test_gated_budget ................***Skipped   0.01 sec\n')
+    DID_NOT_RUN = ('\nTotal Test time (real) =   0.04 sec\n'
+                   '\nThe following tests did not run:\n'
+                   '\t  2 - test_gated_pair (Skipped)\n'
+                   '\t  3 - test_gated_settlement (Skipped)\n'
+                   '\t  4 - test_gated_budget (Skipped)\n')
+    SUMMARIES = {
+        'cmake 3.28.3 (ubuntu-24.04)': '\n100% tests passed, 0 tests failed out of 4\n',
+        'cmake 4.4.0 (macOS)': '\n100% tests passed out of 4\n',
+    }
+
+    def test_either_wording_reads_as_four_rows_of_which_the_three_gated_skipped(self):
+        for spelling, summary in self.SUMMARIES.items():
+            with self.subTest(spelling):
+                rows = ctest_rows((self.ROWS + summary + self.DID_NOT_RUN).encode())
+                self.assertEqual((rows.total, rows.ran), (4, 1))
+                self.assertEqual(rows.skipped, AgainstRealCTest.GATED)
+                self.assertEqual((rows.not_run, rows.disabled), ((), ()))
 
 
 class Preparation(unittest.TestCase):
