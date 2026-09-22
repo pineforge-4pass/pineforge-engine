@@ -2052,6 +2052,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     }
     engine.diag_input_bars_processed_ = 0;
     engine.diag_script_bars_processed_ = 0;
+    // The report's "was a magnifier active for this run": exactly when the
+    // spec declares an intrabar path, which is when this consumer walks one
+    // (driver_statistics_.intrabar_path_enabled below). Reporting only; a
+    // host that keeps its own notion of the flag rewrites it in its callbacks.
+    engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;

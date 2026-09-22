@@ -200,6 +200,77 @@ void configure_phase_refusal_is_wrong_phase() {
     }
 }
 
+// ─── item 3: the report's magnifier flag is the run spec's intrabar path ───
+// pf_report_t::bar_magnifier_enabled is "1 if magnifier was active for this
+// run" (pineforge.h). The kernel runs that path whenever the spec declares one
+// (NativeRunSpec::intrabar), but only the Pine adapter ever wrote the flag, so
+// a bare host with a synthesized path read 0. Fails at the base on the two
+// declared paths; the flag is re-derived per run, so a reused host that drops
+// its path reads 0 again.
+struct EntersOnce : NativeStrategyHost {
+    int bars = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (bars++ == 0) (void)submit({no::Transact{1.0}, "entry", ""});
+    }
+};
+
+int report_magnifier_flag(NativeStrategyHost& host) {
+    ReportC report{};
+    host.fill_report(&report);
+    const int flag = report.bar_magnifier_enabled;
+    BacktestEngine::free_report(&report);
+    return flag;
+}
+
+void magnifier_flag_follows_the_spec() {
+    std::vector<Bar> bars;
+    for (int i = 0; i < 4; ++i) {
+        const double p = 100.0 + i;
+        bars.push_back(Bar{p, p + 2.0, p - 1.0, p + 1.0, 4.0, kT0 + i * 5 * kMinute});
+    }
+    const auto run = [&](NativeStrategyHost& host, const NativeRunSpec& spec) {
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        return report_magnifier_flag(host);
+    };
+    const auto five = [](const char* key, std::uint64_t run_number) {
+        NativeRunSpec s = base_spec(key, run_number);
+        s.input_tf = "5";
+        s.script_tf = "5";
+        return s;
+    };
+    {
+        EntersOnce host;
+        CHECK(run(host, five("f3-magnifier-none", 1)) == 0);
+    }
+    {
+        EntersOnce host;
+        NativeRunSpec s = five("f3-magnifier-synthesized", 1);
+        IntrabarPath::synthesized path;
+        path.samples = 4;
+        s.intrabar.value = path;
+        CHECK(run(host, s) == 1);
+        // The same host, re-configured without a path: the flag is this
+        // run's, not a leftover of the last one.
+        CHECK(run(host, five("f3-magnifier-synthesized", 2)) == 0);
+    }
+    {
+        EntersOnce host;
+        NativeRunSpec s = five("f3-magnifier-lower", 1);
+        IntrabarPath::lower_tf path;
+        path.tf = "1";
+        for (const Bar& bar : bars) {
+            for (int m = 0; m < 5; ++m) {
+                const double p = bar.open + 0.1 * m;
+                path.bars.push_back(Bar{p, p + 0.5, p - 0.5, p, 1.0, bar.timestamp + m * kMinute});
+            }
+        }
+        s.intrabar.value = path;
+        CHECK(run(host, s) == 1);
+    }
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -226,6 +297,7 @@ void close_prefix_is_not_kernel_code() {
 int main() {
     close_prefix_is_not_kernel_code();
     configure_phase_refusal_is_wrong_phase();
+    magnifier_flag_follows_the_spec();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }
