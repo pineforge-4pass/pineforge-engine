@@ -119,6 +119,11 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # no commit. E18, E20, E21 and E22 add no row either: every one of their
 # witnesses is a scenario inside a TU that already existed.
 # 203 registered, 202 run: the WebSocket row still skips on a system libcurl.
+# The R5 post-wave-E lanes (INT15) leave this profile alone: E26 changes
+# src/source/pine_strategy_host.cpp and adds its checks to the TU lane E25
+# already registered, and E27's witness includes pineforge/source/, so it
+# registers in release only -- see RELEASE_MIN_TESTS. Still 203 registered,
+# 202 run, recounted on the integrated tree.
 KERNEL_MIN_TESTS = 202
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
@@ -154,7 +159,13 @@ KERNEL_MIN_TESTS = 202
 #   +1 E19 test_e19_excursion_path_order
 #   +1 E25 test_session_islastbar_aggregation
 # No release row skips, so 571 registered is 571 run.
-RELEASE_MIN_TESTS = 571
+# 572 = those 571 plus the one TU of the R5 post-wave-E lanes (INT15):
+#   +1 E27 test_pooc_fill_stamp_aggregation
+# Its TU reaches the source layer, so it registers in release only and the
+# kernel floor does not move. Lane E26 adds no row: its witnesses are
+# scenarios inside test_session_islastbar_aggregation, which lane E25
+# already registered. No release row skips, so 572 registered is 572 run.
+RELEASE_MIN_TESTS = 572
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
