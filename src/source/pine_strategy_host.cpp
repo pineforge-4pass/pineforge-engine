@@ -437,6 +437,18 @@ void source::PineStrategyHost::on_native_bar(
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
+    // R5 lane F3: the kernel records CloseCause::Bracket for a close its
+    // owner's fill armed (WaitForApplied). A Pine row keeps the cause this host
+    // has always given it -- a strategy.exit leg by its order family
+    // (exit_from_bracket), a strategy.close armed on a reversal parent as a
+    // script close -- so the kernel's reading is not taken on these rows.
+    for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+        const std::size_t index = event.first_trade_index + i;
+        if (index < trades_.size()
+            && trades_[index].close_cause == execution::CloseCause::Bracket) {
+            trades_[index].close_cause = execution::CloseCause::Unspecified;
+        }
+    }
     if (source_prepare_failed_) return;
     if (scheduler_.bar_magnifier_enabled()) {
         const int source_index = scheduler_.source_bar_index_for(context);

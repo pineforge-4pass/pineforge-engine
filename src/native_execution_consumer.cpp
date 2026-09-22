@@ -1179,8 +1179,14 @@ constexpr char kNativeRiskComment[] = "Risk limit";
 // R5 lane L12 (2.ii l): the settling row records why it closed. Authorship is
 // the generic fact — a host request never carries a kernel cause, and a host
 // that runs its own forced-close policy records its own cause afterwards.
-execution::CloseCause close_cause_for_origin(native_order::RequestOrigin origin) {
-    switch (origin) {
+// R5 lane F3: so is the owner relation. A host request its owner's fill armed
+// (WaitForApplied, the one relation that arms: what native_toolkit's bracket
+// builds and what an anchored FromOwnerFill level requires) and whose intent
+// only closes is a bracket leg. An armed OPENING transaction that reverses the
+// book is not one, and neither is a close with no owner relation; both leave
+// the row to the generic classification (closed_trade_close_cause).
+execution::CloseCause close_cause_for(const native_order::RequestDefinition& definition) {
+    switch (definition.origin) {
         case native_order::RequestOrigin::KernelLiquidation:
             return execution::CloseCause::Liquidation;
         case native_order::RequestOrigin::KernelRisk:
@@ -1188,7 +1194,14 @@ execution::CloseCause close_cause_for_origin(native_order::RequestOrigin origin)
         case native_order::RequestOrigin::Host:
             break;
     }
-    return execution::CloseCause::Unspecified;
+    const auto& request = definition.request;
+    if (!std::holds_alternative<native_order::WaitForApplied>(request.owner))
+        return execution::CloseCause::Unspecified;
+    const auto* host_sized = std::get_if<native_order::HostSized>(&request.intent);
+    const bool closes_only = std::holds_alternative<native_order::Reduce>(request.intent)
+        || std::holds_alternative<native_order::Flatten>(request.intent)
+        || (host_sized && host_sized->kind == native_order::HostSizedKind::Close);
+    return closes_only ? execution::CloseCause::Bracket : execution::CloseCause::Unspecified;
 }
 
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
@@ -4126,7 +4139,7 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
     }
     candidate.fill = execution::Fill{resolved, live.request().label, live.request().comment,
                                     live.handle().incarnation, std::nullopt,
-                                    close_cause_for_origin(live.definition->origin)};
+                                    close_cause_for(*live.definition)};
     if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
         candidate.inspect = engine.inspect_native_reversal_v1(*reversal, candidate.fill);
     } else {

@@ -6,10 +6,12 @@
 //
 // Source-free: this TU runs in the kernel-only profile.
 #include <pineforge/native_host.hpp>
+#include <pineforge/native_toolkit.hpp>
 
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -271,6 +273,160 @@ void magnifier_flag_follows_the_spec() {
     }
 }
 
+// ─── item 1: an armed contingent close records CloseCause::Bracket ─────────
+// closed_trade_close_cause distinguishes "a script close, a bracket leg, a
+// liquidation, a risk flatten and the range end" (pine-to-native.md), and a
+// closer that knows why it closed records execution::CloseCause on the row.
+// The kernel knows a bracket leg: a closing request its owner's fill armed
+// (WaitForApplied -- the relation native_toolkit::submit_bracket builds, and
+// the only one an anchored FromOwnerFill level may use). Yet only the Pine
+// adapter ever wrote the bracket fact (Trade::exit_from_bracket), so a bare
+// host's take-profit read 1 SCRIPT. Fails at the base on the two armed legs;
+// the three boundary rows (a market close, an unowned resting stop, an armed
+// OPENING transaction that reverses the book) read SCRIPT before and after.
+struct Scripted : NativeStrategyHost {
+    std::function<void(Scripted&, int)> script;
+    std::optional<no::RequestHandle> entry;
+    int bars = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        script(*this, bars++);
+    }
+};
+
+std::vector<Bar> bracket_tape() {
+    return {
+        Bar{100.0, 100.0, 100.0, 100.0, 1.0, kT0},
+        Bar{100.0, 102.0, 100.0, 101.8, 1.0, kT0 + kMinute},
+        Bar{101.5, 103.0, 97.5, 100.8, 1.0, kT0 + 2 * kMinute},
+        Bar{100.8, 100.8, 100.8, 100.8, 1.0, kT0 + 3 * kMinute},
+    };
+}
+
+struct CauseRun {
+    int trades = 0;
+    std::string exit_id;
+    int cause = -2;
+    execution::CloseCause recorded = execution::CloseCause::Unspecified;
+};
+
+CauseRun run_cause(const char* key, std::function<void(Scripted&, int)> script) {
+    Scripted host;
+    host.script = std::move(script);
+    CauseRun out;
+    if (host.configure_native(base_spec(key)).status != NativeSetupStatus::Applied) return out;
+    const auto bars = bracket_tape();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    out.trades = host.report_trade_count();
+    if (out.trades > 0) {
+        const Trade& row = host.get_report_trade(0);
+        out.exit_id = row.exit_id;
+        out.cause = host.closed_trade_close_cause(0);
+        out.recorded = row.close_cause;
+    }
+    return out;
+}
+
+void enter_long(Scripted& host) {
+    const auto placed = host.submit({no::Transact{1.0}, "entry", ""});
+    CHECK(placed.status == no::SubmitStatus::Accepted && placed.handle.has_value());
+    host.entry = placed.handle;
+}
+
+no::Request armed_close(const char* label, no::Trigger trigger, const no::RequestHandle& parent) {
+    no::Request leg{no::Reduce{no::OwnerOpenedUnits{}}, label, ""};
+    leg.trigger = trigger;
+    leg.owner = no::WaitForApplied{parent};
+    return leg;
+}
+
+void armed_close_records_bracket() {
+    constexpr int kBracket = static_cast<int>(execution::CloseCause::Bracket);
+    constexpr int kScript = static_cast<int>(execution::CloseCause::Script);
+    {
+        // The toolkit's bracket: take-profit +2 and stop-loss -2 anchored on
+        // the entry's fill (bar 1's open, 100). Bar 2 reaches 102 first.
+        const auto r = run_cause("f3-cause-bracket", [](Scripted& host, int bar) {
+            if (bar != 0) return;
+            enter_long(host);
+            if (!host.entry) return;
+            native_toolkit::BracketSpec spec;
+            spec.parent = *host.entry;
+            no::Request tp{no::Reduce{no::OwnerOpenedUnits{}}, "take-profit", ""};
+            tp.trigger = no::Limit{0.0};
+            tp.anchor = no::FromOwnerFill{+2.0};
+            no::Request sl{no::Reduce{no::OwnerOpenedUnits{}}, "stop-loss", ""};
+            sl.trigger = no::Stop{0.0};
+            sl.anchor = no::FromOwnerFill{-2.0};
+            spec.take_profit = tp;
+            spec.stop_loss = sl;
+            CHECK(native_toolkit::submit_bracket(host, spec).every_requested_leg_accepted());
+        });
+        CHECK(r.trades == 1);
+        CHECK(r.exit_id == "take-profit");
+        CHECK(r.cause == kBracket);
+        CHECK(r.recorded == execution::CloseCause::Bracket);
+    }
+    {
+        // An armed trail riding 1.0 behind the best: 102 on bar 1, so bar 2's
+        // low crosses 101.
+        const auto r = run_cause("f3-cause-trail", [](Scripted& host, int bar) {
+            if (bar != 0) return;
+            enter_long(host);
+            if (!host.entry) return;
+            no::Trail trail;
+            trail.offset = 1.0;
+            CHECK(host.submit(armed_close("trail", trail, *host.entry)).status
+                  == no::SubmitStatus::Accepted);
+        });
+        CHECK(r.trades == 1);
+        CHECK(r.exit_id == "trail");
+        CHECK(r.cause == kBracket);
+        CHECK(r.recorded == execution::CloseCause::Bracket);
+    }
+    {
+        // A market close the host decided: SCRIPT.
+        const auto r = run_cause("f3-cause-market", [](Scripted& host, int bar) {
+            if (bar == 0) enter_long(host);
+            if (bar == 1) (void)host.submit({no::Flatten{}, "flat", ""});
+        });
+        CHECK(r.trades == 1);
+        CHECK(r.cause == kScript);
+        CHECK(r.recorded == execution::CloseCause::Unspecified);
+    }
+    {
+        // A resting stop with no owner relation is the host's own close, not
+        // an armed leg: SCRIPT.
+        const auto r = run_cause("f3-cause-unowned-stop", [](Scripted& host, int bar) {
+            if (bar == 0) enter_long(host);
+            if (bar == 1) {
+                no::Request stop{no::Reduce{no::ExplicitUnits{1.0}}, "stop", ""};
+                stop.trigger = no::Stop{99.0};
+                CHECK(host.submit(stop).status == no::SubmitStatus::Accepted);
+            }
+        });
+        CHECK(r.trades == 1);
+        CHECK(r.exit_id == "stop");
+        CHECK(r.cause == kScript);
+    }
+    {
+        // An armed OPENING transaction (sell 2 against the long 1 its owner
+        // opened) closes the long as a reversal, which is a script close.
+        const auto r = run_cause("f3-cause-armed-reversal", [](Scripted& host, int bar) {
+            if (bar != 0) return;
+            enter_long(host);
+            if (!host.entry) return;
+            no::Request flip{no::Transact{-2.0}, "flip", ""};
+            flip.trigger = no::Stop{98.0};
+            flip.owner = no::WaitForApplied{*host.entry};
+            CHECK(host.submit(flip).status == no::SubmitStatus::Accepted);
+        });
+        CHECK(r.trades >= 1);
+        CHECK(r.exit_id == "flip");
+        CHECK(r.cause == kScript);
+    }
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -298,6 +454,7 @@ int main() {
     close_prefix_is_not_kernel_code();
     configure_phase_refusal_is_wrong_phase();
     magnifier_flag_follows_the_spec();
+    armed_close_records_bracket();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }
