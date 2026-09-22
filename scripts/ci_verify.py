@@ -105,9 +105,21 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # E12, E13 and E15 add no row: every one of their witnesses is a scenario
 # inside a TU that already existed.
 # 200 registered, 199 run: the WebSocket row still skips on a system libcurl.
-# 200 run = those 199 plus gap lane E24's test_native_continuation_digest_tail
-# (source-free: it drives NativeStrategyHost only), so 201 register.
-KERNEL_MIN_TESTS = 200
+# 202 run = those 199 plus the three TUs of the R5 follow-up wave (INT14,
+# wave E) that this profile builds -- measured on the integrated tree, not
+# summed from the lanes' own bases:
+#   +1 E16 test_native_trail_stop_ladder
+#   +1 E23 test_native_continuation_portable
+#   +1 E24 test_native_continuation_digest_tail
+# All three are source-free: each drives NativeStrategyHost alone, so the
+# include-closure filter above keeps them. Lanes E19 and E25 add a row each
+# (test_e19_excursion_path_order, test_session_islastbar_aggregation), but both
+# TUs reach the source layer, so they register in release only -- see
+# RELEASE_MIN_TESTS. E17 adds nothing: it ruled the engine not guilty and has
+# no commit. E18, E20, E21 and E22 add no row either: every one of their
+# witnesses is a scenario inside a TU that already existed.
+# 203 registered, 202 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 202
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -136,9 +148,13 @@ KERNEL_MIN_TESTS = 200
 #   +1 E5  test_offset_trail_quantized_arm
 #   +1 E9  test_trail_activation_tick_reach
 # No release row skips, so 566 registered is 566 run.
-# 567 = those 566 plus gap lane E24's test_native_continuation_digest_tail,
-# which registers in every profile the tests build.
-RELEASE_MIN_TESTS = 567
+# 571 = those 566 plus the five TUs of the R5 follow-up wave (INT14, wave E):
+# the three KERNEL_MIN_TESTS lists above, which register here too, plus the two
+# source-bound ones the kernel profile does not build:
+#   +1 E19 test_e19_excursion_path_order
+#   +1 E25 test_session_islastbar_aggregation
+# No release row skips, so 571 registered is 571 run.
+RELEASE_MIN_TESTS = 571
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
