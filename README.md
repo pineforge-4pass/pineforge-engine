@@ -317,12 +317,12 @@ Four slots have no PyneCore trade list:
 - **PyneCore:** a median of 1,475 ms per subprocess (36.6k bars/s). The median per-strategy speedup is **15×** across the 196 strategies both engines time (p5 6×, p95 68×).
 - **vectorbt:** a median of 102 ms for its 13 ports; PineForge is 1.3× faster on the same 13.
 - **PineTS:** 486 ms for the canonical 10-indicator script.
-- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.61 M bars/s** per strategy (N=201, median of five quiet runs). Those runs were measured at `e9ad37dd`; they were not re-timed at `063e4460` because the host was never quiet.
+- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.64 M bars/s** per strategy (N=201, median of five quiet runs).
 
 **Not comparable with the 2026-06-11 table** (PineForge 100/100, PyneCore 85/100, 162×):
 
 - **Tiers:** they now come from the canonical `scripts/verify_corpus.py::analyze_strategy` rubric. The old table graded a different 100-strategy population with `compare.py`'s own copy of the rubric, which had drifted from the canonical one and no longer parsed the current tape format.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on the same host, reproduced its June timings, while engine `e9ad37dd` was 12–20× slower on the probes both populations share. That A/B was measured at `e9ad37dd`; `063e4460` times those probes within 7 % of it ([provenance](benchmarks/results/speed.md#provenance)).
+- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt and timed on the same host in the same window, still runs close to its June timings (5–16 % over them in the quieter pass), while the current engine is 10–18× slower on the probes both populations share ([provenance](benchmarks/results/speed.md#provenance)).
 
 Last refresh **2026-09-22** (engine `063e4460`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max). Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
 

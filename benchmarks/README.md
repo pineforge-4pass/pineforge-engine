@@ -40,13 +40,13 @@ Speed was measured on a quiet host, re-checked before every timing batch; the de
 | PineTS | subprocess wall time of the canonical 10-indicator script | 1 | 485.8 ms | — |
 
 - PineForge's median speedup is **15× over PyneCore**, per strategy across the 196 strategies both engines time (p5 6×, p95 68×), and 1.3× over vectorbt across its 13 ports.
-- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.61 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs at engine `e9ad37dd`. It was not re-timed at `063e4460` because the host was never quiet.
-- Per strategy, the `063e4460` sweep takes 1.02× the `e9ad37dd` sweep's time at the median (p5 0.95×, p95 1.07×), at a higher host load (5.41–5.90 against 3.79).
+- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.64 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs.
+- The PineForge sweep ran at a 1-minute load of 5.41 (slots 001–100) and 5.90 (slots 101–201). Against engine `e9ad37dd`, timed alternately with `063e4460` in one window on 26 public slots, `063e4460` takes 0.94× the time per strategy at the median.
 
 **These numbers are not comparable with the 2026-06-11 table** (PineForge 100/100 excellent, PyneCore 85/100, 162×):
 
 - **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.2 in between.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host in the `e9ad37dd` window, reproduced its June timings. On the three probes both populations share, engine `e9ad37dd` was 12–20× slower with the magnifier on. That A/B was measured at `e9ad37dd` and not re-run; `063e4460` times the same probes within 7 % of `e9ad37dd`. See [the provenance](results/speed.md#provenance).
+- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host and timed in the same window as the current one, still runs close to its June timings (5–16 % over them in the quieter pass). On the three probes both populations share, the current engine is 10–18× slower with the magnifier on; see [the provenance](results/speed.md#provenance).
 
 ### Where the non-excellent rows come from
 

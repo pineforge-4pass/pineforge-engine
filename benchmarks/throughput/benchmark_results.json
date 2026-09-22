@@ -1,6 +1,6 @@
 {
   "context": {
-    "date": "2026-09-22T13:22:16+08:00",
+    "date": "2026-09-22T21:38:27+08:00",
     "host_name": "HaoLiangWendeMac-Studio-2.local",
     "executable": "./build/bin/pineforge_bench",
     "num_cpus": 16,
@@ -26,7 +26,7 @@
         "num_sharing": 1
       }
     ],
-    "load_avg": [5.17041,5.26562,5.4502],
+    "load_avg": [5.04297,5.00977,6.41357],
     "library_version": "v1.9.0",
     "library_build_type": "release",
     "json_schema_version": 1
@@ -42,10 +42,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2087995801120996e+04,
-      "cpu_time": 7.2006400000000009e+04,
+      "real_time": 6.8125510378740728e+04,
+      "cpu_time": 6.8058799999999974e+04,
       "time_unit": "us",
-      "items_per_second": 7.4894731579415151e+05
+      "items_per_second": 7.9238834654739755e+05
     },
     {
       "name": "061-pyramid-deferred-flip-close-all-01/throughput/no_magnifier/iterations:20",
@@ -57,10 +57,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0258991038426757e+05,
-      "cpu_time": 1.0252660000000001e+05,
+      "real_time": 9.7479887492954731e+04,
+      "cpu_time": 9.7389849999999977e+04,
       "time_unit": "us",
-      "items_per_second": 5.2600008192995773e+05
+      "items_per_second": 5.5374353692915651e+05
     },
     {
       "name": "010-cap-gatekeeper-intraday-risk-01/throughput/no_magnifier/iterations:20",
@@ -72,10 +72,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1584846249315888e+05,
-      "cpu_time": 1.1575484999999998e+05,
+      "real_time": 1.0852017919532955e+05,
+      "cpu_time": 1.0844895000000000e+05,
       "time_unit": "us",
-      "items_per_second": 4.6588976617394440e+05
+      "items_per_second": 4.9727544618919771e+05
     },
     {
       "name": "019-composite-kkb-margin-100-pct-01/throughput/no_magnifier/iterations:20",
@@ -87,10 +87,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.0108579164370894e+04,
-      "cpu_time": 8.9989550000000003e+04,
+      "real_time": 8.4678904199972749e+04,
+      "cpu_time": 8.4553949999999968e+04,
       "time_unit": "us",
-      "items_per_second": 5.9928069425838895e+05
+      "items_per_second": 6.3780580327707960e+05
     },
     {
       "name": "053-order-flip-stop-no-paired-close-01/throughput/no_magnifier/iterations:20",
@@ -102,10 +102,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.9124591662548482e+04,
-      "cpu_time": 7.9059900000000023e+04,
+      "real_time": 7.4374149995855987e+04,
+      "cpu_time": 7.4319950000000026e+04,
       "time_unit": "us",
-      "items_per_second": 6.8212836090103805e+05
+      "items_per_second": 7.2563288861200772e+05
     },
     {
       "name": "084-ta-sar-flip-entry-01/throughput/no_magnifier/iterations:20",
@@ -117,10 +117,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0855707295704633e+05,
-      "cpu_time": 1.0806244999999998e+05,
+      "real_time": 9.9951822916045785e+04,
+      "cpu_time": 9.9846299999999916e+04,
       "time_unit": "us",
-      "items_per_second": 4.9905401922684530e+05
+      "items_per_second": 5.4012016469313379e+05
     },
     {
       "name": "078-ta-pivot-atr-stop-target-01/throughput/no_magnifier/iterations:20",
@@ -132,10 +132,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1843707086518407e+05,
-      "cpu_time": 1.1809420000000000e+05,
+      "real_time": 1.1329141459427774e+05,
+      "cpu_time": 1.1322615000000002e+05,
       "time_unit": "us",
-      "items_per_second": 4.5666086903505848e+05
+      "items_per_second": 4.7629456622873771e+05
     },
     {
       "name": "057-order-same-id-market-entry-repeat-01/throughput/no_magnifier/iterations:20",
@@ -147,10 +147,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8697241656482220e+04,
-      "cpu_time": 7.8626150000000009e+04,
+      "real_time": 7.4044241639785469e+04,
+      "cpu_time": 7.3971550000000076e+04,
       "time_unit": "us",
-      "items_per_second": 6.8589139872675936e+05
+      "items_per_second": 7.2905056065473740e+05
     },
     {
       "name": "020-composite-marketshift-pivot-state-machine-01/throughput/no_magnifier/iterations:20",
@@ -162,10 +162,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.3761812504380941e+04,
-      "cpu_time": 7.3605600000000137e+04,
+      "real_time": 6.9007956236600876e+04,
+      "cpu_time": 6.8950549999999843e+04,
       "time_unit": "us",
-      "items_per_second": 7.3267523123240483e+05
+      "items_per_second": 7.8214024398645305e+05
     },
     {
       "name": "049-order-dual-four-bar-stop-no-close-01/throughput/no_magnifier/iterations:20",
@@ -177,10 +177,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4430366698652506e+04,
-      "cpu_time": 7.4330000000000146e+04,
+      "real_time": 6.9565302110277116e+04,
+      "cpu_time": 6.9536249999999985e+04,
       "time_unit": "us",
-      "items_per_second": 7.2553477734427410e+05
+      "items_per_second": 7.7555231983318063e+05
     },
     {
       "name": "043-na-deep-history-int-na-01/throughput/no_magnifier/iterations:20",
@@ -192,10 +192,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8893291647545993e+04,
-      "cpu_time": 7.8719350000000079e+04,
+      "real_time": 7.6386887487024069e+04,
+      "cpu_time": 7.6280150000000009e+04,
       "time_unit": "us",
-      "items_per_second": 6.8507933563983883e+05
+      "items_per_second": 7.0698602454242669e+05
     },
     {
       "name": "031-magnifier-tick-dist-volume-weighted-on-01/throughput/no_magnifier/iterations:20",
@@ -207,10 +207,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.5981758348643780e+04,
-      "cpu_time": 7.5890249999999956e+04,
+      "real_time": 7.1743133361451328e+04,
+      "cpu_time": 7.1683099999999904e+04,
       "time_unit": "us",
-      "items_per_second": 7.1061829418140044e+05
+      "items_per_second": 7.5232516450879036e+05
     },
     {
       "name": "080-ta-plumbline-pvt-vwma-01/throughput/no_magnifier/iterations:20",
@@ -222,10 +222,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.0952883302234113e+04,
-      "cpu_time": 8.0781050000000047e+04,
+      "real_time": 7.6255114609375596e+04,
+      "cpu_time": 7.6176650000000023e+04,
       "time_unit": "us",
-      "items_per_second": 6.6759468959613633e+05
+      "items_per_second": 7.0794659518369450e+05
     },
     {
       "name": "039-mtf-htf-60-close-change-baseline-01/throughput/no_magnifier/iterations:20",
@@ -237,10 +237,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.0392065208870918e+05,
-      "cpu_time": 2.0375445000000010e+05,
+      "real_time": 1.8390763541683555e+05,
+      "cpu_time": 1.8383479999999999e+05,
       "time_unit": "us",
-      "items_per_second": 2.6467642792586848e+05
+      "items_per_second": 2.9335577377079858e+05
     },
     {
       "name": "067-ta-aperture-cog-linreg-01/throughput/no_magnifier/iterations:20",
@@ -252,10 +252,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4322141706943512e+04,
-      "cpu_time": 7.4168249999999956e+04,
+      "real_time": 6.9702222896739841e+04,
+      "cpu_time": 6.9649549999999930e+04,
       "time_unit": "us",
-      "items_per_second": 7.2711706154587748e+05
+      "items_per_second": 7.7429071688187588e+05
     },
     {
       "name": "041-mtf-orbit-trend-01/throughput/no_magnifier/iterations:20",
@@ -267,10 +267,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3876876875292510e+05,
-      "cpu_time": 1.3859810000000009e+05,
+      "real_time": 1.2186296039726585e+05,
+      "cpu_time": 1.2179535000000018e+05,
       "time_unit": "us",
-      "items_per_second": 3.8910345812821359e+05
+      "items_per_second": 4.4278373517543910e+05
     },
     {
       "name": "094-udt-method-in-while-loop-01/throughput/no_magnifier/iterations:20",
@@ -282,10 +282,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.1538754203356802e+04,
-      "cpu_time": 7.1362299999999843e+04,
+      "real_time": 6.3996335444971919e+04,
+      "cpu_time": 6.3956349999999955e+04,
       "time_unit": "us",
-      "items_per_second": 7.5570714508921548e+05
+      "items_per_second": 8.4321572447458375e+05
     },
     {
       "name": "047-order-cross-exit-close-same-pass-01/throughput/no_magnifier/iterations:20",
@@ -297,10 +297,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.3568320842459798e+04,
-      "cpu_time": 8.3476050000000148e+04,
+      "real_time": 7.3346043750643730e+04,
+      "cpu_time": 7.3298449999999706e+04,
       "time_unit": "us",
-      "items_per_second": 6.4604158917437878e+05
+      "items_per_second": 7.3574543527182657e+05
     },
     {
       "name": "051-order-dual-stop-source-order-short-first-01/throughput/no_magnifier/iterations:20",
@@ -312,10 +312,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4303331249393523e+04,
-      "cpu_time": 7.3740300000000047e+04,
+      "real_time": 6.5562691632658243e+04,
+      "cpu_time": 6.5522999999999956e+04,
       "time_unit": "us",
-      "items_per_second": 7.3133686735746893e+05
+      "items_per_second": 8.2305449994658423e+05
     },
     {
       "name": "052-order-entry-implicit-reversal-exit-01/throughput/no_magnifier/iterations:20",
@@ -327,10 +327,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.3465604158118367e+04,
-      "cpu_time": 7.8673149999999834e+04,
+      "real_time": 7.0509327063336968e+04,
+      "cpu_time": 7.0446499999999898e+04,
       "time_unit": "us",
-      "items_per_second": 6.8548164144946670e+05
+      "items_per_second": 7.6553128970211546e+05
     },
     {
       "name": "060-order-stop-entry-touch-boundary-01/throughput/no_magnifier/iterations:20",
@@ -342,10 +342,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.9464270803146064e+04,
-      "cpu_time": 7.9333799999999843e+04,
+      "real_time": 7.2651822888292372e+04,
+      "cpu_time": 7.2581049999999785e+04,
       "time_unit": "us",
-      "items_per_second": 6.7977331225782831e+05
+      "items_per_second": 7.4301763339053583e+05
     },
     {
       "name": "016-composite-kanuck-calc-on-every-tick-01/throughput/no_magnifier/iterations:20",
@@ -357,10 +357,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8549879221245646e+04,
-      "cpu_time": 6.8484749999999651e+04,
+      "real_time": 6.0215641697868705e+04,
+      "cpu_time": 6.0183350000000151e+04,
       "time_unit": "us",
-      "items_per_second": 7.8745998196679226e+05
+      "items_per_second": 8.9607840042137681e+05
     },
     {
       "name": "042-mtf-triple-tf-macd-hist-confluence-01/throughput/no_magnifier/iterations:20",
@@ -372,10 +372,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.7824637498706579e+04,
-      "cpu_time": 9.7699749999999593e+04,
+      "real_time": 8.9487929199822247e+04,
+      "cpu_time": 8.9435849999999919e+04,
       "time_unit": "us",
-      "items_per_second": 5.5198708287380694e+05
+      "items_per_second": 6.0299085881109256e+05
     },
     {
       "name": "011-composite-4emarsi-rsi-pullback-latch-01/throughput/no_magnifier/iterations:20",
@@ -387,10 +387,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7786120786331594e+04,
-      "cpu_time": 6.7667099999999889e+04,
+      "real_time": 6.3591747940517962e+04,
+      "cpu_time": 6.3550000000000036e+04,
       "time_unit": "us",
-      "items_per_second": 7.9697519178448734e+05
+      "items_per_second": 8.4860739575137629e+05
     },
     {
       "name": "024-composite-trendmaster-trend-momentum-structure-gate-01/throughput/no_magnifier/iterations:20",
@@ -402,10 +402,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.4843468763865530e+04,
-      "cpu_time": 6.4784100000000326e+04,
+      "real_time": 6.2177535402588546e+04,
+      "cpu_time": 6.2141299999999683e+04,
       "time_unit": "us",
-      "items_per_second": 8.3244191090097313e+05
+      "items_per_second": 8.6784473450024810e+05
     },
     {
       "name": "073-ta-inside-bar-engulfing-01/throughput/no_magnifier/iterations:20",
@@ -417,10 +417,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0663248545024544e+05,
-      "cpu_time": 1.0653269999999963e+05,
+      "real_time": 9.6644810400903225e+04,
+      "cpu_time": 9.6603049999999872e+04,
       "time_unit": "us",
-      "items_per_second": 5.0622015587702353e+05
+      "items_per_second": 5.5825359551277186e+05
     },
     {
       "name": "075-ta-mantle-keltner-regime-01/throughput/no_magnifier/iterations:20",
@@ -432,10 +432,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.0889991652220488e+04,
-      "cpu_time": 6.0837150000000045e+04,
+      "real_time": 5.8434916660189629e+04,
+      "cpu_time": 5.8401699999999932e+04,
       "time_unit": "us",
-      "items_per_second": 8.8644849405338604e+05
+      "items_per_second": 9.2341490059364820e+05
     },
     {
       "name": "045-oca-raw-strategy-order-reduce-01/throughput/no_magnifier/iterations:20",
@@ -447,10 +447,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.9937689555808902e+04,
-      "cpu_time": 6.9867299999999945e+04,
+      "real_time": 6.7534829163923860e+04,
+      "cpu_time": 6.7501500000000189e+04,
       "time_unit": "us",
-      "items_per_second": 7.7187754500317096e+05
+      "items_per_second": 7.9893039413938718e+05
     },
     {
       "name": "013-composite-boscurv-pivot-bos-trigger-01/throughput/no_magnifier/iterations:20",
@@ -462,10 +462,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7541014612652361e+04,
-      "cpu_time": 6.7505799999999988e+04,
+      "real_time": 6.5127960406243801e+04,
+      "cpu_time": 6.5086750000000036e+04,
       "time_unit": "us",
-      "items_per_second": 7.9887950368709071e+05
+      "items_per_second": 8.2857109934049507e+05
     },
     {
       "name": "064-session-ny-spring-forward-dst-01/throughput/no_magnifier/iterations:20",
@@ -477,10 +477,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.6875897892750800e+04,
-      "cpu_time": 7.6847299999999668e+04,
+      "real_time": 7.3419408337213099e+04,
+      "cpu_time": 7.3370800000000003e+04,
       "time_unit": "us",
-      "items_per_second": 7.0176831196411897e+05
+      "items_per_second": 7.3501992618316819e+05
     },
     {
       "name": "069-ta-closedtrades-risk-introspection-01/throughput/no_magnifier/iterations:20",
@@ -492,10 +492,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8159547937102616e+04,
-      "cpu_time": 6.8089449999999735e+04,
+      "real_time": 6.4813250000588596e+04,
+      "cpu_time": 6.4765450000000164e+04,
       "time_unit": "us",
-      "items_per_second": 7.9203165835529903e+05
+      "items_per_second": 8.3268162268616783e+05
     },
     {
       "name": "062-pyramid-flip-stop-pyramiding-2-01/throughput/no_magnifier/iterations:20",
@@ -507,10 +507,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.3125960384495556e+04,
-      "cpu_time": 8.3086750000000364e+04,
+      "real_time": 7.9332202114164829e+04,
+      "cpu_time": 7.9291049999999785e+04,
       "time_unit": "us",
-      "items_per_second": 6.4906859396955301e+05
+      "items_per_second": 6.8013981401432003e+05
     },
     {
       "name": "054-order-keystone-limit-replace-01/throughput/no_magnifier/iterations:20",
@@ -522,10 +522,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.8319246461614966e+05,
-      "cpu_time": 1.8305320000000016e+05,
+      "real_time": 1.6218794998712838e+05,
+      "cpu_time": 1.6213590000000020e+05,
       "time_unit": "us",
-      "items_per_second": 2.9460834336684609e+05
+      "items_per_second": 3.3261603383334563e+05
     },
     {
       "name": "082-ta-rsi14-cross-50-01/throughput/no_magnifier/iterations:20",
@@ -537,10 +537,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1057694584596902e+05,
-      "cpu_time": 1.1024735000000021e+05,
+      "real_time": 1.0432440419681370e+05,
+      "cpu_time": 1.0427239999999998e+05,
       "time_unit": "us",
-      "items_per_second": 4.8916368511351879e+05
+      "items_per_second": 5.1719342798286042e+05
     },
     {
       "name": "097-udt-method-udt-return-from-func-01/throughput/no_magnifier/iterations:20",
@@ -552,10 +552,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.8304208284243941e+04,
-      "cpu_time": 5.8268500000000138e+04,
+      "real_time": 5.5510522960685194e+04,
+      "cpu_time": 5.5454449999999873e+04,
       "time_unit": "us",
-      "items_per_second": 9.2552579867338040e+05
+      "items_per_second": 9.7249183789578883e+05
     },
     {
       "name": "079-ta-pivot-confirmed-break-01/throughput/no_magnifier/iterations:20",
@@ -567,10 +567,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.5107410387136042e+04,
-      "cpu_time": 7.5034099999999526e+04,
+      "real_time": 7.1244431240484118e+04,
+      "cpu_time": 7.1191800000000076e+04,
       "time_unit": "us",
-      "items_per_second": 7.1872655232754629e+05
+      "items_per_second": 7.5751701740930765e+05
     },
     {
       "name": "059-order-stop-entry-cancel-opposite-01/throughput/no_magnifier/iterations:20",
@@ -582,10 +582,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.2697727098129690e+04,
-      "cpu_time": 9.2572200000000739e+04,
+      "real_time": 8.5197714529931545e+04,
+      "cpu_time": 8.5150199999999997e+04,
       "time_unit": "us",
-      "items_per_second": 5.8256150334549206e+05
+      "items_per_second": 6.3333967506829114e+05
     },
     {
       "name": "050-order-dual-stop-open-low-first-path-01/throughput/no_magnifier/iterations:20",
@@ -597,10 +597,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5576531249098480e+04,
-      "cpu_time": 6.5504949999999699e+04,
+      "real_time": 6.1189331253990531e+04,
+      "cpu_time": 6.1130800000000105e+04,
       "time_unit": "us",
-      "items_per_second": 8.2328129400908248e+05
+      "items_per_second": 8.8219031977333699e+05
     },
     {
       "name": "002-analyzer-parity-percent-of-equity-sizing-01/throughput/no_magnifier/iterations:20",
@@ -612,10 +612,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.9636462503112853e+04,
-      "cpu_time": 5.9585100000000326e+04,
+      "real_time": 5.3987941658124328e+04,
+      "cpu_time": 5.3955199999999699e+04,
       "time_unit": "us",
-      "items_per_second": 9.0507526210411172e+05
+      "items_per_second": 9.9951441195659188e+05
     },
     {
       "name": "025-composite-vcp-rsi-smooth-divergence-01/throughput/no_magnifier/iterations:20",
@@ -627,10 +627,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.0365708358585835e+04,
-      "cpu_time": 6.0327900000000060e+04,
+      "real_time": 5.6447799992747605e+04,
+      "cpu_time": 5.6411800000000061e+04,
       "time_unit": "us",
-      "items_per_second": 8.9393133193762670e+05
+      "items_per_second": 9.5598793160296150e+05
     },
     {
       "name": "072-ta-highestbars-lowestbars-breakout-01/throughput/no_magnifier/iterations:20",
@@ -642,10 +642,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.8034324999898672e+04,
-      "cpu_time": 8.7870850000000180e+04,
+      "real_time": 8.2914316700771451e+04,
+      "cpu_time": 8.2871349999999919e+04,
       "time_unit": "us",
-      "items_per_second": 6.1373026435956731e+05
+      "items_per_second": 6.5075565922360448e+05
     },
     {
       "name": "081-ta-rsi-bb-self-bands-01/throughput/no_magnifier/iterations:20",
@@ -657,10 +657,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.4109106245450675e+04,
-      "cpu_time": 6.4014849999999511e+04,
+      "real_time": 5.9994114586152136e+04,
+      "cpu_time": 5.9945450000000732e+04,
       "time_unit": "us",
-      "items_per_second": 8.4244515139847097e+05
+      "items_per_second": 8.9963458444301179e+05
     },
     {
       "name": "093-udt-method-in-switch-arms-01/throughput/no_magnifier/iterations:20",
@@ -672,10 +672,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.2052779202349484e+04,
-      "cpu_time": 6.1985800000000068e+04,
+      "real_time": 5.8267860393971205e+04,
+      "cpu_time": 5.8211000000000015e+04,
       "time_unit": "us",
-      "items_per_second": 8.7002184371259133e+05
+      "items_per_second": 9.2644001992750494e+05
     },
     {
       "name": "100-vwap-bands-mean-reversion-2sigma-01/throughput/no_magnifier/iterations:20",
@@ -687,10 +687,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.0855535464361310e+04,
-      "cpu_time": 6.0753449999999990e+04,
+      "real_time": 5.6233541644178331e+04,
+      "cpu_time": 5.6182600000000348e+04,
       "time_unit": "us",
-      "items_per_second": 8.8766975373415032e+05
+      "items_per_second": 9.5988793683452997e+05
     },
     {
       "name": "092-udt-method-extra-primitive-args-01/throughput/no_magnifier/iterations:20",
@@ -702,10 +702,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0788153749890625e+05,
-      "cpu_time": 1.0780749999999984e+05,
+      "real_time": 9.7876750002615154e+04,
+      "cpu_time": 9.7823999999999956e+04,
       "time_unit": "us",
-      "items_per_second": 5.0023421376063896e+05
+      "items_per_second": 5.5128598298985953e+05
     },
     {
       "name": "014-composite-ies-adx-regime-classify-01/throughput/no_magnifier/iterations:20",
@@ -717,10 +717,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6659091645851731e+04,
-      "cpu_time": 6.6601349999999831e+04,
+      "real_time": 6.2560439598746598e+04,
+      "cpu_time": 6.2505499999999614e+04,
       "time_unit": "us",
-      "items_per_second": 8.0972833133262524e+05
+      "items_per_second": 8.6278807464943617e+05
     },
     {
       "name": "004-barstate-isconfirmed-magnifier-off-01b/throughput/no_magnifier/iterations:20",
@@ -732,10 +732,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6729860380291939e+04,
-      "cpu_time": 6.6621649999999732e+04,
+      "real_time": 6.2444902118295431e+04,
+      "cpu_time": 6.2399299999999872e+04,
       "time_unit": "us",
-      "items_per_second": 8.0948160245205904e+05
+      "items_per_second": 8.6425649005678133e+05
     },
     {
       "name": "046-order-close-immediate-vs-next-bar-01/throughput/no_magnifier/iterations:20",
@@ -747,10 +747,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2445835405960679e+04,
-      "cpu_time": 7.2393850000000268e+04,
+      "real_time": 7.0023412490263581e+04,
+      "cpu_time": 6.9984699999999837e+04,
       "time_unit": "us",
-      "items_per_second": 7.4493896926327026e+05
+      "items_per_second": 7.7058271307871758e+05
     },
     {
       "name": "070-ta-cog-10-signal-cross-01/throughput/no_magnifier/iterations:20",
@@ -762,10 +762,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2662318749353290e+05,
-      "cpu_time": 1.2655955000000035e+05,
+      "real_time": 1.1887349793687463e+05,
+      "cpu_time": 1.1883454999999970e+05,
       "time_unit": "us",
-      "items_per_second": 4.2611561118856579e+05
+      "items_per_second": 4.5381583049710828e+05
     },
     {
       "name": "048-order-deferred-flip-guaranteed-gap-stops-01/throughput/no_magnifier/iterations:20",
@@ -777,10 +777,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2981231240555644e+04,
-      "cpu_time": 7.2902750000000087e+04,
+      "real_time": 7.1269549988210201e+04,
+      "cpu_time": 7.1225749999999971e+04,
       "time_unit": "us",
-      "items_per_second": 7.3973889873838692e+05
+      "items_per_second": 7.5715594430385099e+05
     },
     {
       "name": "033-math-kiln-power-efficiency-01/throughput/no_magnifier/iterations:20",
@@ -792,10 +792,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.8891677041538060e+04,
-      "cpu_time": 5.8851749999999462e+04,
+      "real_time": 5.3699012496508658e+04,
+      "cpu_time": 5.3663699999999182e+04,
       "time_unit": "us",
-      "items_per_second": 9.1635337946620933e+05
+      "items_per_second": 1.0049437515490140e+06
     },
     {
       "name": "015-composite-ies-cooldown-daily-cap-01/throughput/no_magnifier/iterations:20",
@@ -807,10 +807,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6233989549800754e+04,
-      "cpu_time": 6.6211999999999447e+04,
+      "real_time": 6.3058220851235092e+04,
+      "cpu_time": 6.3011799999999595e+04,
       "time_unit": "us",
-      "items_per_second": 8.1448982057633740e+05
+      "items_per_second": 8.5585556990913360e+05
     },
     {
       "name": "065-stats-ledger-outcome-throttle-01/throughput/no_magnifier/iterations:20",
@@ -822,10 +822,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.3760389620438218e+04,
-      "cpu_time": 6.3640950000000630e+04,
+      "real_time": 5.8623274997808039e+04,
+      "cpu_time": 5.8588350000000130e+04,
       "time_unit": "us",
-      "items_per_second": 8.4739464134334051e+05
+      "items_per_second": 9.2047309746732714e+05
     },
     {
       "name": "034-matrix-bool-mask-transpose-roundtrip-01/throughput/no_magnifier/iterations:20",
@@ -837,10 +837,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0821271040476859e+05,
-      "cpu_time": 1.0811715000000034e+05,
+      "real_time": 1.0653045624494553e+05,
+      "cpu_time": 1.0645765000000011e+05,
       "time_unit": "us",
-      "items_per_second": 4.9880153148690867e+05
+      "items_per_second": 5.0657702851791243e+05
     },
     {
       "name": "076-ta-obv-ema-cross-01/throughput/no_magnifier/iterations:20",
@@ -852,10 +852,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1507892289664596e+05,
-      "cpu_time": 1.1501740000000069e+05,
+      "real_time": 1.1428619376383722e+05,
+      "cpu_time": 1.1423309999999986e+05,
       "time_unit": "us",
-      "items_per_second": 4.6887688297596428e+05
+      "items_per_second": 4.7209609123800427e+05
     },
     {
       "name": "044-oca-multi-bracket-isolation-01/throughput/no_magnifier/iterations:20",
@@ -867,10 +867,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.4569871251005679e+05,
-      "cpu_time": 1.4559919999999949e+05,
+      "real_time": 1.4289814166259021e+05,
+      "cpu_time": 1.4282715000000008e+05,
       "time_unit": "us",
-      "items_per_second": 3.7039351864570816e+05
+      "items_per_second": 3.7758227339829970e+05
     },
     {
       "name": "096-udt-method-tuple-return-destructure-01/throughput/no_magnifier/iterations:20",
@@ -882,10 +882,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.8276945818215609e+04,
-      "cpu_time": 5.8142749999999665e+04,
+      "real_time": 5.7378070801496506e+04,
+      "cpu_time": 5.7336300000000047e+04,
       "time_unit": "us",
-      "items_per_second": 9.2752750772882788e+05
+      "items_per_second": 9.4057342381702259e+05
     },
     {
       "name": "099-udt-tessellate-tuple-method-01/throughput/no_magnifier/iterations:20",
@@ -897,10 +897,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.2311395839788020e+04,
-      "cpu_time": 6.2258200000000128e+04,
+      "real_time": 6.3274489599280059e+04,
+      "cpu_time": 6.3227200000000747e+04,
       "time_unit": "us",
-      "items_per_second": 8.6621521341766848e+05
+      "items_per_second": 8.5293987397827767e+05
     },
     {
       "name": "090-ta-zenith-rci-wpr-01/throughput/no_magnifier/iterations:20",
@@ -912,10 +912,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.1759093734435737e+04,
-      "cpu_time": 9.1642000000000218e+04,
+      "real_time": 9.5315597904846072e+04,
+      "cpu_time": 9.5257100000000602e+04,
       "time_unit": "us",
-      "items_per_second": 5.8847471683289181e+05
+      "items_per_second": 5.6614152645839169e+05
     },
     {
       "name": "022-composite-trendmaster-line-new-projection-01/throughput/no_magnifier/iterations:20",
@@ -927,10 +927,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4795325007289648e+04,
-      "cpu_time": 7.4718700000000390e+04,
+      "real_time": 7.6715104142203927e+04,
+      "cpu_time": 7.6649500000000611e+04,
       "time_unit": "us",
-      "items_per_second": 7.2176041606719233e+05
+      "items_per_second": 7.0357927970827685e+05
     },
     {
       "name": "001-analyzer-anvil-percent-costs-01/throughput/no_magnifier/iterations:20",
@@ -942,10 +942,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.2340472890064120e+04,
-      "cpu_time": 8.2272100000000137e+04,
+      "real_time": 8.2291714590974152e+04,
+      "cpu_time": 8.2249000000000204e+04,
       "time_unit": "us",
-      "items_per_second": 6.5549560543610668e+05
+      "items_per_second": 6.5567970431251288e+05
     },
     {
       "name": "077-ta-pivot-array-unshift-pop-01/throughput/no_magnifier/iterations:20",
@@ -957,10 +957,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.9888775004073977e+04,
-      "cpu_time": 6.9844049999999668e+04,
+      "real_time": 7.1874641696922481e+04,
+      "cpu_time": 7.1833449999999750e+04,
       "time_unit": "us",
-      "items_per_second": 7.7213449105543352e+05
+      "items_per_second": 7.5075052082282270e+05
     },
     {
       "name": "066-syntax-glyph-string-regex-01/throughput/no_magnifier/iterations:20",
@@ -972,10 +972,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.7918827710673213e+05,
-      "cpu_time": 1.7914070000000065e+05,
+      "real_time": 1.8466262293513864e+05,
+      "cpu_time": 1.8459334999999939e+05,
       "time_unit": "us",
-      "items_per_second": 3.0104269995595526e+05
+      "items_per_second": 2.9215028602059704e+05
     },
     {
       "name": "088-ta-vwma-vs-sma-divergence-01/throughput/no_magnifier/iterations:20",
@@ -987,10 +987,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.7507945811375976e+04,
-      "cpu_time": 8.7460650000000576e+04,
+      "real_time": 8.9749329141341150e+04,
+      "cpu_time": 8.9703650000000576e+04,
       "time_unit": "us",
-      "items_per_second": 6.1660872632434859e+05
+      "items_per_second": 6.0119069848327967e+05
     },
     {
       "name": "007-bracket-tp-sl-oca-reduce-isolate-01/throughput/no_magnifier/iterations:20",
@@ -1002,10 +1002,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.3122072890400887e+04,
-      "cpu_time": 9.3056849999999962e+04,
+      "real_time": 9.3592016655020416e+04,
+      "cpu_time": 9.3548499999999272e+04,
       "time_unit": "us",
-      "items_per_second": 5.7952746090158890e+05
+      "items_per_second": 5.7648171803931030e+05
     },
     {
       "name": "012-composite-boscurv-integration-01/throughput/no_magnifier/iterations:20",
@@ -1017,10 +1017,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8996062511578202e+04,
-      "cpu_time": 7.8962150000000271e+04,
+      "real_time": 8.1292220856994390e+04,
+      "cpu_time": 8.1257500000000247e+04,
       "time_unit": "us",
-      "items_per_second": 6.8297279139435559e+05
+      "items_per_second": 6.6368027566685947e+05
     },
     {
       "name": "095-udt-method-reads-strategy-state-01/throughput/no_magnifier/iterations:20",
@@ -1032,10 +1032,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.4713666704483330e+04,
-      "cpu_time": 6.4619449999999997e+04,
+      "real_time": 6.5606460394337773e+04,
+      "cpu_time": 6.5570950000000041e+04,
       "time_unit": "us",
-      "items_per_second": 8.3456296827038913e+05
+      "items_per_second": 8.2245262574356433e+05
     },
     {
       "name": "037-mtf-daily-array-median-percentrank-01/throughput/no_magnifier/iterations:20",
@@ -1047,10 +1047,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.6341947955079377e+04,
-      "cpu_time": 9.6305300000000221e+04,
+      "real_time": 9.9707618751563132e+04,
+      "cpu_time": 9.9645249999999665e+04,
       "time_unit": "us",
-      "items_per_second": 5.5997956498759543e+05
+      "items_per_second": 5.4120994227020536e+05
     },
     {
       "name": "038-mtf-dual-tf-60-240-rising-01/throughput/no_magnifier/iterations:20",
@@ -1062,10 +1062,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8596031269989908e+04,
-      "cpu_time": 7.8503549999999930e+04,
+      "real_time": 7.8043668740428984e+04,
+      "cpu_time": 7.8001900000000285e+04,
       "time_unit": "us",
-      "items_per_second": 6.8696256411334325e+05
+      "items_per_second": 6.9138059457525774e+05
     },
     {
       "name": "058-order-same-id-stop-after-flat-01/throughput/no_magnifier/iterations:20",
@@ -1077,10 +1077,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.6499847904779017e+04,
-      "cpu_time": 7.6442600000000020e+04,
+      "real_time": 7.7843441697768867e+04,
+      "cpu_time": 7.7802950000000230e+04,
       "time_unit": "us",
-      "items_per_second": 7.0548359160991362e+05
+      "items_per_second": 6.9314852457393752e+05
     },
     {
       "name": "008-bracket-trail-points-no-offset-explicit-01/throughput/no_magnifier/iterations:20",
@@ -1092,10 +1092,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.3482585381716490e+04,
-      "cpu_time": 8.3417949999999764e+04,
+      "real_time": 8.5884539550170302e+04,
+      "cpu_time": 8.5840100000000064e+04,
       "time_unit": "us",
-      "items_per_second": 6.4649155247761612e+05
+      "items_per_second": 6.2824950110729085e+05
     },
     {
       "name": "091-udt-method-drives-strategy-entry-01/throughput/no_magnifier/iterations:20",
@@ -1107,10 +1107,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.0889652064070106e+04,
-      "cpu_time": 8.0804849999999817e+04,
+      "real_time": 8.0729199992492795e+04,
+      "cpu_time": 8.0661900000000489e+04,
       "time_unit": "us",
-      "items_per_second": 6.6739805840862426e+05
+      "items_per_second": 6.6858082936305343e+05
     },
     {
       "name": "023-composite-trendmaster-three-tier-ema-state-01/throughput/no_magnifier/iterations:20",
@@ -1122,10 +1122,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.1252252059057355e+04,
-      "cpu_time": 6.1190200000000768e+04,
+      "real_time": 5.8875352051109076e+04,
+      "cpu_time": 5.8821050000000243e+04,
       "time_unit": "us",
-      "items_per_second": 8.8133393909481121e+05
+      "items_per_second": 9.1683164445380995e+05
     },
     {
       "name": "083-ta-rsi14-gt60-lt45-no-matrix-01/throughput/no_magnifier/iterations:20",
@@ -1137,10 +1137,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7819297942332923e+04,
-      "cpu_time": 6.7754100000000501e+04,
+      "real_time": 6.2847143737599254e+04,
+      "cpu_time": 6.2816149999999732e+04,
       "time_unit": "us",
-      "items_per_second": 7.9595183169726399e+05
+      "items_per_second": 8.5852125607825734e+05
     },
     {
       "name": "026-composite-vcp-vol-zscore-anomaly-01/throughput/no_magnifier/iterations:20",
@@ -1152,10 +1152,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7872808361425996e+04,
-      "cpu_time": 6.7820099999999424e+04,
+      "real_time": 6.2872006255201995e+04,
+      "cpu_time": 6.2828650000000154e+04,
       "time_unit": "us",
-      "items_per_second": 7.9517724096544320e+05
+      "items_per_second": 8.5835044999375078e+05
     },
     {
       "name": "055-order-one-side-four-bar-far-opposite-01/throughput/no_magnifier/iterations:20",
@@ -1167,10 +1167,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.1042092291172594e+05,
-      "cpu_time": 3.1027625000000116e+05,
+      "real_time": 3.1054092084523290e+05,
+      "cpu_time": 3.1041930000000022e+05,
       "time_unit": "us",
-      "items_per_second": 1.7380962932225654e+05
+      "items_per_second": 1.7372953292530446e+05
     },
     {
       "name": "087-ta-torque-tsi-signal-01/throughput/no_magnifier/iterations:20",
@@ -1182,10 +1182,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.1543308361433446e+04,
-      "cpu_time": 6.1503100000000188e+04,
+      "real_time": 5.8298104163259268e+04,
+      "cpu_time": 5.8250099999999351e+04,
       "time_unit": "us",
-      "items_per_second": 8.7685010999445291e+05
+      "items_per_second": 9.2581815310189337e+05
     },
     {
       "name": "009-bracket-trail-points-with-offset-only-01/throughput/no_magnifier/iterations:20",
@@ -1197,10 +1197,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.6946200011298060e+04,
-      "cpu_time": 7.6880549999999916e+04,
+      "real_time": 7.1443718764930964e+04,
+      "cpu_time": 7.1405450000000317e+04,
       "time_unit": "us",
-      "items_per_second": 7.0146480481734406e+05
+      "items_per_second": 7.5525047457861772e+05
     },
     {
       "name": "005-bracket-compass-partial-ladder-01/throughput/no_magnifier/iterations:20",
@@ -1212,10 +1212,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2672512498684227e+05,
-      "cpu_time": 1.2662794999999960e+05,
+      "real_time": 1.1715726249385625e+05,
+      "cpu_time": 1.1709864999999979e+05,
       "time_unit": "us",
-      "items_per_second": 4.2588543840439786e+05
+      "items_per_second": 4.6054331113125640e+05
     },
     {
       "name": "063-session-borough-new-york-01/throughput/no_magnifier/iterations:20",
@@ -1227,10 +1227,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4013162497431040e+04,
-      "cpu_time": 7.3944600000001519e+04,
+      "real_time": 7.0623562508262694e+04,
+      "cpu_time": 7.0585599999999715e+04,
       "time_unit": "us",
-      "items_per_second": 7.2931627191165951e+05
+      "items_per_second": 7.6402269018043648e+05
     },
     {
       "name": "018-composite-kkb-kalman-filter-1d-01/throughput/no_magnifier/iterations:20",
@@ -1242,10 +1242,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1628454376477748e+05,
-      "cpu_time": 1.1623469999999969e+05,
+      "real_time": 1.1293098540045321e+05,
+      "cpu_time": 1.1288545000000027e+05,
       "time_unit": "us",
-      "items_per_second": 4.6396644031429634e+05
+      "items_per_second": 4.7773207264532201e+05
     },
     {
       "name": "030-input-source-subscript-hl2-01/throughput/no_magnifier/iterations:20",
@@ -1257,10 +1257,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.3746545000467449e+05,
-      "cpu_time": 3.3740344999999792e+05,
+      "real_time": 3.2802128959447145e+05,
+      "cpu_time": 3.2794805000000051e+05,
       "time_unit": "us",
-      "items_per_second": 1.5983535438063936e+05
+      "items_per_second": 1.6444372820634217e+05
     },
     {
       "name": "056-order-process-on-close-true-01/throughput/no_magnifier/iterations:20",
@@ -1272,10 +1272,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.1063710446469486e+04,
-      "cpu_time": 7.1020249999999403e+04,
+      "real_time": 6.7895620851777494e+04,
+      "cpu_time": 6.7845850000000501e+04,
       "time_unit": "us",
-      "items_per_second": 7.5934680601660023e+05
+      "items_per_second": 7.9487544190248346e+05
     },
     {
       "name": "021-composite-scalping-integration-01/throughput/no_magnifier/iterations:20",
@@ -1287,10 +1287,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1204440000001341e+05,
-      "cpu_time": 1.1199500000000028e+05,
+      "real_time": 1.0731662085745484e+05,
+      "cpu_time": 1.0728004999999996e+05,
       "time_unit": "us",
-      "items_per_second": 4.8153042546542134e+05
+      "items_per_second": 5.0269365086984972e+05
     },
     {
       "name": "017-composite-kkb-ema-atr-breakout-band-01/throughput/no_magnifier/iterations:20",
@@ -1302,10 +1302,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5237891650758684e+04,
-      "cpu_time": 6.5184299999999952e+04,
+      "real_time": 6.3277152110822499e+04,
+      "cpu_time": 6.3195799999999734e+04,
       "time_unit": "us",
-      "items_per_second": 8.2733112114420254e+05
+      "items_per_second": 8.5336367290231667e+05
     },
     {
       "name": "089-ta-wpr-14-bands-01/throughput/no_magnifier/iterations:20",
@@ -1317,10 +1317,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.9828185448423028e+04,
-      "cpu_time": 7.9710699999999691e+04,
+      "real_time": 7.5087056262418628e+04,
+      "cpu_time": 7.5057049999998068e+04,
       "time_unit": "us",
-      "items_per_second": 6.7655910687022202e+05
+      "items_per_second": 7.1850678916905727e+05
     },
     {
       "name": "028-drawing-line-level-breakout/throughput/no_magnifier/iterations:20",
@@ -1332,10 +1332,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.8929579150862992e+04,
-      "cpu_time": 8.8838849999999074e+04,
+      "real_time": 8.1729945843107998e+04,
+      "cpu_time": 8.1670399999998714e+04,
       "time_unit": "us",
-      "items_per_second": 6.0704297725601541e+05
+      "items_per_second": 6.6032491575896344e+05
     },
     {
       "name": "003-array-atlas-momentum-rotation-01/throughput/no_magnifier/iterations:20",
@@ -1347,10 +1347,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0413265624083579e+05,
-      "cpu_time": 1.0401624999999939e+05,
+      "real_time": 1.0012468751519918e+05,
+      "cpu_time": 1.0008089999999896e+05,
       "time_unit": "us",
-      "items_per_second": 5.1846706644394813e+05
+      "items_per_second": 5.3885406705975428e+05
     },
     {
       "name": "086-ta-str-match-regex-filter-01/throughput/no_magnifier/iterations:20",
@@ -1362,10 +1362,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3052837711293250e+05,
-      "cpu_time": 1.3048229999999990e+05,
+      "real_time": 1.3156959998887032e+05,
+      "cpu_time": 1.3150854999999952e+05,
       "time_unit": "us",
-      "items_per_second": 4.1330509961887583e+05
+      "items_per_second": 4.1007980089507642e+05
     },
     {
       "name": "074-ta-macd-histogram-reversal-01/throughput/no_magnifier/iterations:20",
@@ -1377,10 +1377,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.1084141656756401e+04,
-      "cpu_time": 9.0961150000001115e+04,
+      "real_time": 8.4799737506546080e+04,
+      "cpu_time": 8.4750650000000867e+04,
       "time_unit": "us",
-      "items_per_second": 5.9287948756144068e+05
+      "items_per_second": 6.3632550310822926e+05
     },
     {
       "name": "006-bracket-exit-tp-sl-fixed-01/throughput/no_magnifier/iterations:20",
@@ -1392,10 +1392,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6236704145558178e+04,
-      "cpu_time": 6.6156649999999223e+04,
+      "real_time": 6.1206020857207477e+04,
+      "cpu_time": 6.1169700000000666e+04,
       "time_unit": "us",
-      "items_per_second": 8.1517126396213588e+05
+      "items_per_second": 8.8162930339693371e+05
     },
     {
       "name": "027-composite-wunderscalper-integration-01/throughput/no_magnifier/iterations:20",
@@ -1407,10 +1407,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.5571308350190520e+04,
-      "cpu_time": 9.5537000000000204e+04,
+      "real_time": 9.0739962505176663e+04,
+      "cpu_time": 9.0686599999999366e+04,
       "time_unit": "us",
-      "items_per_second": 5.6448287051090028e+05
+      "items_per_second": 5.9467440614159498e+05
     },
     {
       "name": "040-mtf-htf-weekly-sma-cross-01/throughput/no_magnifier/iterations:20",
@@ -1422,10 +1422,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8857595869340003e+04,
-      "cpu_time": 7.8811849999999598e+04,
+      "real_time": 7.6629487494938076e+04,
+      "cpu_time": 7.6588349999998682e+04,
       "time_unit": "us",
-      "items_per_second": 6.8427527078732802e+05
+      "items_per_second": 7.0414103450460709e+05
     },
     {
       "name": "071-ta-dual-thrust-open-anchored-range-01/throughput/no_magnifier/iterations:20",
@@ -1437,10 +1437,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.4207145832479000e+04,
-      "cpu_time": 9.4162350000000573e+04,
+      "real_time": 9.0862612496130168e+04,
+      "cpu_time": 9.0819650000000256e+04,
       "time_unit": "us",
-      "items_per_second": 5.7272359918799473e+05
+      "items_per_second": 5.9380321329139511e+05
     },
     {
       "name": "036-matrix-eigen-covariance-01/throughput/no_magnifier/iterations:20",
@@ -1452,10 +1452,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.3481191718019545e+04,
-      "cpu_time": 7.3449200000000303e+04,
+      "real_time": 7.2011483344249427e+04,
+      "cpu_time": 7.1975349999999598e+04,
       "time_unit": "us",
-      "items_per_second": 7.3423536267242907e+05
+      "items_per_second": 7.4927040993896255e+05
     },
     {
       "name": "032-map-mosaic-regime-weight-01/throughput/no_magnifier/iterations:20",
@@ -1467,10 +1467,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3072474375367165e+05,
-      "cpu_time": 1.3067740000000045e+05,
+      "real_time": 1.1948693336453289e+05,
+      "cpu_time": 1.1943444999999998e+05,
       "time_unit": "us",
-      "items_per_second": 4.1268803940084379e+05
+      "items_per_second": 4.5153638669579854e+05
     },
     {
       "name": "029-drawing-visual-noise-geometry/throughput/no_magnifier/iterations:20",
@@ -1482,10 +1482,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0529255419969559e+05,
-      "cpu_time": 1.0523079999999965e+05,
+      "real_time": 9.8567052115686238e+04,
+      "cpu_time": 9.8521200000000419e+04,
       "time_unit": "us",
-      "items_per_second": 5.1248303728566330e+05
+      "items_per_second": 5.4738472531800030e+05
     },
     {
       "name": "085-ta-stdev-sma-expansion-break-01/throughput/no_magnifier/iterations:20",
@@ -1497,10 +1497,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.5432066665962338e+04,
-      "cpu_time": 7.5381550000000178e+04,
+      "real_time": 6.9451808347366750e+04,
+      "cpu_time": 6.9417299999999217e+04,
       "time_unit": "us",
-      "items_per_second": 7.1541378493808990e+05
+      "items_per_second": 7.7688126734979043e+05
     },
     {
       "name": "098-udt-method-var-instance-streak-01/throughput/no_magnifier/iterations:20",
@@ -1512,10 +1512,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8506827089004219e+04,
-      "cpu_time": 6.8445850000000530e+04,
+      "real_time": 6.4782237494364381e+04,
+      "cpu_time": 6.4733999999999978e+04,
       "time_unit": "us",
-      "items_per_second": 7.8790752105495939e+05
+      "items_per_second": 8.3308616801062832e+05
     },
     {
       "name": "035-matrix-cadence-transpose-pairs-01/throughput/no_magnifier/iterations:20",
@@ -1527,10 +1527,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.2387375002726912e+04,
-      "cpu_time": 9.2306600000000573e+04,
+      "real_time": 8.6581489606760442e+04,
+      "cpu_time": 8.6537200000000783e+04,
       "time_unit": "us",
-      "items_per_second": 5.8423774681333371e+05
+      "items_per_second": 6.2318864026106126e+05
     },
     {
       "name": "139-francescodimichele-gold-ai-strategy-v2-0/throughput/no_magnifier/iterations:20",
@@ -1542,10 +1542,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.9713002052158117e+04,
-      "cpu_time": 9.9600399999999921e+04,
+      "real_time": 9.6606631251052022e+04,
+      "cpu_time": 9.6547849999998900e+04,
       "time_unit": "us",
-      "items_per_second": 5.4145364878052741e+05
+      "items_per_second": 5.5857276987525471e+05
     },
     {
       "name": "188-theforexguy0777-9-ema-20-ema-retest-strategy/throughput/no_magnifier/iterations:20",
@@ -1557,10 +1557,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1267887500580400e+05,
-      "cpu_time": 1.1260289999999883e+05,
+      "real_time": 1.0884489584714174e+05,
+      "cpu_time": 1.0878809999999816e+05,
       "time_unit": "us",
-      "items_per_second": 4.7893082682595705e+05
+      "items_per_second": 4.9572517582346697e+05
     },
     {
       "name": "184-shurben5-tradingview-bot-goat/throughput/no_magnifier/iterations:20",
@@ -1572,10 +1572,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3609938544686884e+05,
-      "cpu_time": 1.3602970000000027e+05,
+      "real_time": 1.3037312501110137e+05,
+      "cpu_time": 1.3031354999999962e+05,
       "time_unit": "us",
-      "items_per_second": 3.9645018698122463e+05
+      "items_per_second": 4.1384031054330233e+05
     },
     {
       "name": "182-sadtrader9-fair-value-gap-strategy/throughput/no_magnifier/iterations:20",
@@ -1587,10 +1587,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.9148347894661129e+04,
-      "cpu_time": 8.9095349999999482e+04,
+      "real_time": 8.4581829188391566e+04,
+      "cpu_time": 8.4521850000001563e+04,
       "time_unit": "us",
-      "items_per_second": 6.0529533808442659e+05
+      "items_per_second": 6.3804803136702522e+05
     },
     {
       "name": "140-gonzowiththewind-sisyphus-happiness/throughput/no_magnifier/iterations:20",
@@ -1602,10 +1602,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.6421807294245809e+05,
-      "cpu_time": 1.6404299999999948e+05,
+      "real_time": 1.6414778330363333e+05,
+      "cpu_time": 1.6409019999999969e+05,
       "time_unit": "us",
-      "items_per_second": 3.2874916942509077e+05
+      "items_per_second": 3.2865460582045792e+05
     },
     {
       "name": "165-officialjackofalltrades-concordance-regime-synthesis-joat/throughput/no_magnifier/iterations:20",
@@ -1617,10 +1617,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4121136039029807e+05,
-      "cpu_time": 3.4100835000000132e+05,
+      "real_time": 3.2169394998345524e+05,
+      "cpu_time": 3.2161790000000113e+05,
       "time_unit": "us",
-      "items_per_second": 1.5814568763492093e+05
+      "items_per_second": 1.6768034366246348e+05
     },
     {
       "name": "117-antoniolinux-rsi-mfi-divergence-momentum/throughput/no_magnifier/iterations:20",
@@ -1632,10 +1632,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6162958368659019e+04,
-      "cpu_time": 6.6051649999999994e+04,
+      "real_time": 6.3573118764907122e+04,
+      "cpu_time": 6.3525799999999326e+04,
       "time_unit": "us",
-      "items_per_second": 8.1646711323638400e+05
+      "items_per_second": 8.4893067068813893e+05
     },
     {
       "name": "161-mylivingedge-gold-asian-range-breakout-signals/throughput/no_magnifier/iterations:20",
@@ -1647,10 +1647,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2306422914844006e+05,
-      "cpu_time": 1.2294349999999951e+05,
+      "real_time": 1.2240914581343532e+05,
+      "cpu_time": 1.2233420000000023e+05,
       "time_unit": "us",
-      "items_per_second": 4.3864864754948585e+05
+      "items_per_second": 4.4083338919124741e+05
     },
     {
       "name": "123-chadow6875-swing-high-low-ict-clean-pro/throughput/no_magnifier/iterations:20",
@@ -1662,10 +1662,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.0395067918580025e+05,
-      "cpu_time": 3.0389175000000105e+05,
+      "real_time": 2.9249164373613894e+05,
+      "cpu_time": 2.9240774999999959e+05,
       "time_unit": "us",
-      "items_per_second": 1.7746121768688952e+05
+      "items_per_second": 1.8443081621468678e+05
     },
     {
       "name": "153-jos-protrader-edward-smart-momentum-pro/throughput/no_magnifier/iterations:20",
@@ -1677,10 +1677,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5423452109098434e+04,
-      "cpu_time": 6.5309949999999619e+04,
+      "real_time": 6.2814564607106149e+04,
+      "cpu_time": 6.2780950000001212e+04,
       "time_unit": "us",
-      "items_per_second": 8.2573941642889509e+05
+      "items_per_second": 8.5900261146094406e+05
     },
     {
       "name": "125-cleightyp-cleightyp-bos-sma-macd-vwap/throughput/no_magnifier/iterations:20",
@@ -1692,10 +1692,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.2476079578045756e+05,
-      "cpu_time": 2.5084324999999977e+05,
+      "real_time": 3.4178351250011474e+05,
+      "cpu_time": 2.5884690000000031e+05,
       "time_unit": "us",
-      "items_per_second": 2.1499083591047415e+05
+      "items_per_second": 2.0834323300761927e+05
     },
     {
       "name": "164-officialjackofalltrades-concordance-execution-mandate-joat/throughput/no_magnifier/iterations:20",
@@ -1707,10 +1707,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.6337265002075583e+05,
-      "cpu_time": 2.6321145000000147e+05,
+      "real_time": 2.6403595625888556e+05,
+      "cpu_time": 2.6393504999999923e+05,
       "time_unit": "us",
-      "items_per_second": 2.0488850314072470e+05
+      "items_per_second": 2.0432678418421565e+05
     },
     {
       "name": "132-dinkus3-obsidian/throughput/no_magnifier/iterations:20",
@@ -1722,10 +1722,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.7999514788389206e+05,
-      "cpu_time": 2.7977084999999986e+05,
+      "real_time": 2.7656502497848123e+05,
+      "cpu_time": 2.7647385000000068e+05,
       "time_unit": "us",
-      "items_per_second": 1.9276132592083851e+05
+      "items_per_second": 1.9506003913209101e+05
     },
     {
       "name": "154-khanhtq26-psol-01-donchian-channels/throughput/no_magnifier/iterations:20",
@@ -1737,10 +1737,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8803195841610432e+04,
-      "cpu_time": 6.8768000000001455e+04,
+      "real_time": 6.6458900016732514e+04,
+      "cpu_time": 6.6395099999999729e+04,
       "time_unit": "us",
-      "items_per_second": 7.8421649604465545e+05
+      "items_per_second": 8.1224367460852116e+05
     },
     {
       "name": "120-benblackdiamond-l2gmom-network-momentum/throughput/no_magnifier/iterations:20",
@@ -1752,10 +1752,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.5465673960279673e+05,
-      "cpu_time": 1.5459354999999987e+05,
+      "real_time": 1.4798644999973476e+05,
+      "cpu_time": 1.4793540000000008e+05,
       "time_unit": "us",
-      "items_per_second": 3.4884379070148815e+05
+      "items_per_second": 3.6454425377563434e+05
     },
     {
       "name": "183-shiroi-macd-zero-line-candles-alert/throughput/no_magnifier/iterations:20",
@@ -1767,10 +1767,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.9943566643632948e+04,
-      "cpu_time": 6.9917300000000192e+04,
+      "real_time": 6.6378039587289095e+04,
+      "cpu_time": 6.6320050000000207e+04,
       "time_unit": "us",
-      "items_per_second": 7.7132555175900471e+05
+      "items_per_second": 8.1316283687964396e+05
     },
     {
       "name": "178-remarkablefreddy-ultimate-smc-emas-day-trading-strategy/throughput/no_magnifier/iterations:20",
@@ -1782,10 +1782,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.8811203539371490e+05,
-      "cpu_time": 2.8806790000000002e+05,
+      "real_time": 2.7713300420437008e+05,
+      "cpu_time": 2.7706660000000056e+05,
       "time_unit": "us",
-      "items_per_second": 1.8720933502136124e+05
+      "items_per_second": 1.9464273210845294e+05
     },
     {
       "name": "200-ygd-consulting-llc-yuri-garcia-narrow-state-strategy-ygils/throughput/no_magnifier/iterations:20",
@@ -1797,10 +1797,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.8908426670823246e+05,
-      "cpu_time": 5.7594940000000037e+05,
+      "real_time": 5.2706831875257194e+05,
+      "cpu_time": 5.2693620000000007e+05,
       "time_unit": "us",
-      "items_per_second": 9.3634961682397741e+04
+      "items_per_second": 1.0234445839932802e+05
     },
     {
       "name": "168-officialjackofalltrades-parallax-covenant-strategy-joat/throughput/no_magnifier/iterations:20",
@@ -1812,10 +1812,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2448958125896752e+05,
-      "cpu_time": 1.2435359999999919e+05,
+      "real_time": 1.2013923958875239e+05,
+      "cpu_time": 1.2009130000000000e+05,
       "time_unit": "us",
-      "items_per_second": 4.3367461818556406e+05
+      "items_per_second": 4.4906666844309290e+05
     },
     {
       "name": "104-3commas-gram-rsi-strategy-3commas/throughput/no_magnifier/iterations:20",
@@ -1827,10 +1827,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8037668731994927e+04,
-      "cpu_time": 6.7959000000000451e+04,
+      "real_time": 6.5174312493763864e+04,
+      "cpu_time": 6.5125949999999473e+04,
       "time_unit": "us",
-      "items_per_second": 7.9355199458496505e+05
+      "items_per_second": 8.2807237360837625e+05
     },
     {
       "name": "169-officialjackofalltrades-regime-execution-strategy-joat/throughput/no_magnifier/iterations:20",
@@ -1842,10 +1842,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2266907501034439e+05,
-      "cpu_time": 1.2256084999999928e+05,
+      "real_time": 1.1271470210049301e+05,
+      "cpu_time": 1.1267419999999789e+05,
       "time_unit": "us",
-      "items_per_second": 4.4001816240667651e+05
+      "items_per_second": 4.7862776039236144e+05
     },
     {
       "name": "102-3commas-3commas-pol-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
@@ -1857,10 +1857,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.6911439592950046e+04,
-      "cpu_time": 8.6810599999998318e+04,
+      "real_time": 8.3569077053107321e+04,
+      "cpu_time": 8.3528350000000268e+04,
       "time_unit": "us",
-      "items_per_second": 6.2122597931590199e+05
+      "items_per_second": 6.4563708010513580e+05
     },
     {
       "name": "173-quantitativealpha-strategy-forecast-engine/throughput/no_magnifier/iterations:20",
@@ -1872,10 +1872,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.3177755000069737e+05,
-      "cpu_time": 3.3168670000000019e+05,
+      "real_time": 3.1475857086479664e+05,
+      "cpu_time": 3.1468440000000014e+05,
       "time_unit": "us",
-      "items_per_second": 1.6259017922636020e+05
+      "items_per_second": 1.7137487590741701e+05
     },
     {
       "name": "124-cihanozdemir-trade-id-signal-engine-buy-only-option/throughput/no_magnifier/iterations:20",
@@ -1887,10 +1887,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2474197903648019e+04,
-      "cpu_time": 7.2410249999998647e+04,
+      "real_time": 6.4985891641117632e+04,
+      "cpu_time": 6.4934249999998880e+04,
       "time_unit": "us",
-      "items_per_second": 7.4477025006820168e+05
+      "items_per_second": 8.3051702298865281e+05
     },
     {
       "name": "130-delta-crypto-mu-overnight-gap-capture/throughput/no_magnifier/iterations:20",
@@ -1902,10 +1902,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.5068841874599457e+05,
-      "cpu_time": 1.5061420000000112e+05,
+      "real_time": 1.4225347288884223e+05,
+      "cpu_time": 1.4219934999999567e+05,
       "time_unit": "us",
-      "items_per_second": 3.5806052815736894e+05
+      "items_per_second": 3.7924927223648806e+05
     },
     {
       "name": "181-roi10x-shiva-lt-ls-blend/throughput/no_magnifier/iterations:20",
@@ -1917,10 +1917,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.3460346874780953e+05,
-      "cpu_time": 3.3448679999999912e+05,
+      "real_time": 3.3522142290603369e+05,
+      "cpu_time": 3.3512335000000068e+05,
       "time_unit": "us",
-      "items_per_second": 1.6122908288159696e+05
+      "items_per_second": 1.6092283632280442e+05
     },
     {
       "name": "147-jaydeepp095-candle-harry/throughput/no_magnifier/iterations:20",
@@ -1932,10 +1932,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.1534239603206515e+04,
-      "cpu_time": 8.1473999999997206e+04,
+      "real_time": 7.8547395835630596e+04,
+      "cpu_time": 7.8498649999997375e+04,
       "time_unit": "us",
-      "items_per_second": 6.6191668507747073e+05
+      "items_per_second": 6.8700544531659840e+05
     },
     {
       "name": "134-elomadablah-atr-trailing-stoploss-multi/throughput/no_magnifier/iterations:20",
@@ -1947,10 +1947,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.2597727105021477e+04,
-      "cpu_time": 9.2557199999998818e+04,
+      "real_time": 8.7539639603346586e+04,
+      "cpu_time": 8.7493849999998478e+04,
       "time_unit": "us",
-      "items_per_second": 5.8265591439672641e+05
+      "items_per_second": 6.1637475091107481e+05
     },
     {
       "name": "197-waranyutrkm-asian-box-breakout-eda-tuned/throughput/no_magnifier/iterations:20",
@@ -1962,10 +1962,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.9351716251112521e+05,
-      "cpu_time": 1.9345959999999992e+05,
+      "real_time": 1.8572388747707009e+05,
+      "cpu_time": 1.8565780000000133e+05,
       "time_unit": "us",
-      "items_per_second": 2.7876104364942358e+05
+      "items_per_second": 2.9047527224818792e+05
     },
     {
       "name": "122-cb85wj5jmt-moja-strategia-harami-bb/throughput/no_magnifier/iterations:20",
@@ -1977,10 +1977,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2524717499036342e+05,
-      "cpu_time": 1.2518385000000193e+05,
+      "real_time": 1.2151609587017447e+05,
+      "cpu_time": 1.2146019999999851e+05,
       "time_unit": "us",
-      "items_per_second": 4.3079838174012996e+05
+      "items_per_second": 4.4400552609003329e+05
     },
     {
       "name": "152-jos-protrader-edward-smart-liquidity-sweep/throughput/no_magnifier/iterations:20",
@@ -1992,10 +1992,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.1073643746785820e+04,
-      "cpu_time": 7.1037350000000297e+04,
+      "real_time": 6.8514352105557919e+04,
+      "cpu_time": 6.8474550000001953e+04,
       "time_unit": "us",
-      "items_per_second": 7.5916401723881566e+05
+      "items_per_second": 7.8757728236254875e+05
     },
     {
       "name": "176-rakesh-09-edge-confirmation-system-ecs-v2-0/throughput/no_magnifier/iterations:20",
@@ -2007,10 +2007,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5794300008565187e+04,
-      "cpu_time": 6.5714399999998815e+04,
+      "real_time": 6.2688104202970862e+04,
+      "cpu_time": 6.2662299999999501e+04,
       "time_unit": "us",
-      "items_per_second": 8.2065726842215669e+05
+      "items_per_second": 8.6062911830559082e+05
     },
     {
       "name": "155-legalrice2697-nse-elite-strategy-v6-full-system/throughput/no_magnifier/iterations:20",
@@ -2022,10 +2022,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.5738043123856187e+05,
-      "cpu_time": 1.5726390000000095e+05,
+      "real_time": 1.5480541875585914e+05,
+      "cpu_time": 1.5474574999999788e+05,
       "time_unit": "us",
-      "items_per_second": 3.4292040322031744e+05
+      "items_per_second": 3.4850068580236123e+05
     },
     {
       "name": "111-ajayinderbrar-ajay-fibonacci-market-structure-pro-ai-v2-1/throughput/no_magnifier/iterations:20",
@@ -2037,10 +2037,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3134032080415636e+05,
-      "cpu_time": 1.3124789999999962e+05,
+      "real_time": 1.2439578336197883e+05,
+      "cpu_time": 1.2434665000000110e+05,
       "time_unit": "us",
-      "items_per_second": 4.1089419335471391e+05
+      "items_per_second": 4.3369885718673986e+05
     },
     {
       "name": "194-usamotorcars-sedat-xi-crypto-ai-bias-engine/throughput/no_magnifier/iterations:20",
@@ -2052,10 +2052,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0493929584044963e+05,
-      "cpu_time": 1.0490219999999795e+05,
+      "real_time": 9.9496356234885752e+04,
+      "cpu_time": 9.9453899999997477e+04,
       "time_unit": "us",
-      "items_per_second": 5.1408836039664614e+05
+      "items_per_second": 5.4225123398882663e+05
     },
     {
       "name": "145-imtiyazali73-imtiyaz-signature-liquidity-compass-smc/throughput/no_magnifier/iterations:20",
@@ -2067,10 +2067,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1581173751037568e+05,
-      "cpu_time": 1.1573145000000126e+05,
+      "real_time": 1.1197005414869636e+05,
+      "cpu_time": 1.1191604999999926e+05,
       "time_unit": "us",
-      "items_per_second": 4.6598396546487079e+05
+      "items_per_second": 4.8187011603787268e+05
     },
     {
       "name": "101-3commas-3commas-bch-overbought-rsi-fade-short-indicator/throughput/no_magnifier/iterations:20",
@@ -2082,10 +2082,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.5834816647693515e+04,
-      "cpu_time": 7.5436549999997747e+04,
+      "real_time": 6.9923695852048695e+04,
+      "cpu_time": 6.9887850000000646e+04,
       "time_unit": "us",
-      "items_per_second": 7.1489218422636797e+05
+      "items_per_second": 7.7165058017952344e+05
     },
     {
       "name": "118-averagepoe-mnq-anomaly-candle-sma-confluence-v6/throughput/no_magnifier/iterations:20",
@@ -2097,10 +2097,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5408566663973033e+04,
-      "cpu_time": 6.5308450000000557e+04,
+      "real_time": 6.2131645786575973e+04,
+      "cpu_time": 6.2090900000001173e+04,
       "time_unit": "us",
-      "items_per_second": 8.2575838195516099e+05
+      "items_per_second": 8.6854917548302538e+05
     },
     {
       "name": "146-inr3d-r3d-jackofxc-rtp-strategy/throughput/no_magnifier/iterations:20",
@@ -2112,10 +2112,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3974066874943674e+05,
-      "cpu_time": 1.3963784999999971e+05,
+      "real_time": 1.3226583960931748e+05,
+      "cpu_time": 1.3220064999999863e+05,
       "time_unit": "us",
-      "items_per_second": 3.8620617547463032e+05
+      "items_per_second": 4.0793294132820494e+05
     },
     {
       "name": "180-robmagnaye14-eb-ict-v5-pro-trader-daily-5-10-trade-60-target/throughput/no_magnifier/iterations:20",
@@ -2127,10 +2127,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1130586669314653e+05,
-      "cpu_time": 1.1113469999999949e+05,
+      "real_time": 1.0662961250636727e+05,
+      "cpu_time": 1.0659870000000070e+05,
       "time_unit": "us",
-      "items_per_second": 4.8525797973090532e+05
+      "items_per_second": 5.0590673244607722e+05
     },
     {
       "name": "135-finnp17-atm/throughput/no_magnifier/iterations:20",
@@ -2142,10 +2142,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.5436597291845828e+05,
-      "cpu_time": 1.5420519999999838e+05,
+      "real_time": 1.4488309375010431e+05,
+      "cpu_time": 1.4480235000000050e+05,
       "time_unit": "us",
-      "items_per_second": 3.4972231805412890e+05
+      "items_per_second": 3.7243180100322829e+05
     },
     {
       "name": "199-yahmis13-nyo-day-type-early-read/throughput/no_magnifier/iterations:20",
@@ -2157,10 +2157,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.4233679147437215e+04,
-      "cpu_time": 7.4087949999997712e+04,
+      "real_time": 7.0670793764293194e+04,
+      "cpu_time": 7.0609400000000736e+04,
       "time_unit": "us",
-      "items_per_second": 7.2790514516870386e+05
+      "items_per_second": 7.6376516441152932e+05
     },
     {
       "name": "127-codetradesalgo-fix-webhook-latency-dh-905-errors-pinescript-to-python-bridge/throughput/no_magnifier/iterations:20",
@@ -2172,10 +2172,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.8328258311375976e+04,
-      "cpu_time": 7.8195749999997584e+04,
+      "real_time": 7.5116008310578763e+04,
+      "cpu_time": 7.5021549999996758e+04,
       "time_unit": "us",
-      "items_per_second": 6.8966663789274567e+05
+      "items_per_second": 7.1884678469056333e+05
     },
     {
       "name": "128-colasbreugnon-nq-scalp-fix-signals/throughput/no_magnifier/iterations:20",
@@ -2187,10 +2187,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.8618827085010707e+05,
-      "cpu_time": 1.8608589999999764e+05,
+      "real_time": 1.6710291665513068e+05,
+      "cpu_time": 1.6702165000000093e+05,
       "time_unit": "us",
-      "items_per_second": 2.8980701923144463e+05
+      "items_per_second": 3.2288628450263606e+05
     },
     {
       "name": "167-officialjackofalltrades-large-lot-reverse-engineer-joat/throughput/no_magnifier/iterations:20",
@@ -2202,10 +2202,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.9933360405266285e+04,
-      "cpu_time": 7.9801449999999357e+04,
+      "real_time": 7.4527160404250026e+04,
+      "cpu_time": 7.4423699999999822e+04,
       "time_unit": "us",
-      "items_per_second": 6.7578972562529170e+05
+      "items_per_second": 7.2462132358375262e+05
     },
     {
       "name": "142-hermescore-momentum-conviction-hermescore/throughput/no_magnifier/iterations:20",
@@ -2217,10 +2217,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2179910209961236e+05,
-      "cpu_time": 1.2173380000000408e+05,
+      "real_time": 1.1345848538912833e+05,
+      "cpu_time": 1.1341494999999781e+05,
       "time_unit": "us",
-      "items_per_second": 4.4300761169041134e+05
+      "items_per_second": 4.7550168650606502e+05
     },
     {
       "name": "119-backtestbay-strategy-validation-framework-standardised-atr-exits-1-ris/throughput/no_magnifier/iterations:20",
@@ -2232,10 +2232,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.7592308751773089e+05,
-      "cpu_time": 3.7443769999999861e+05,
+      "real_time": 3.4246428955812007e+05,
+      "cpu_time": 3.4239515000000154e+05,
       "time_unit": "us",
-      "items_per_second": 1.4402662979716039e+05
+      "items_per_second": 1.5750515157705871e+05
     },
     {
       "name": "175-rakesh-09-edge-confirmation-system/throughput/no_magnifier/iterations:20",
@@ -2247,10 +2247,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2597706248052418e+04,
-      "cpu_time": 7.2456650000000867e+04,
+      "real_time": 6.8530374998226762e+04,
+      "cpu_time": 6.8476499999997031e+04,
       "time_unit": "us",
-      "items_per_second": 7.4429331193202210e+05
+      "items_per_second": 7.8755485458518378e+05
     },
     {
       "name": "136-fondbird7020-vishall-ema-9-20-50-200-dmi-adx-strategy/throughput/no_magnifier/iterations:20",
@@ -2262,10 +2262,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.6441793749108911e+04,
-      "cpu_time": 7.6306350000001548e+04,
+      "real_time": 7.1323879156261683e+04,
+      "cpu_time": 7.1275699999998207e+04,
       "time_unit": "us",
-      "items_per_second": 7.0674327890141401e+05
+      "items_per_second": 7.5662532953027962e+05
     },
     {
       "name": "115-anji-ga-9-21ema-anji/throughput/no_magnifier/iterations:20",
@@ -2277,10 +2277,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.8802016647532582e+04,
-      "cpu_time": 6.8750399999998990e+04,
+      "real_time": 6.6013852087780833e+04,
+      "cpu_time": 6.5904699999998687e+04,
       "time_unit": "us",
-      "items_per_second": 7.8441725429962284e+05
+      "items_per_second": 8.1828761833376193e+05
     },
     {
       "name": "106-3commas-sol-rsi-dca-long-strategy/throughput/no_magnifier/iterations:20",
@@ -2292,10 +2292,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.6067922892980278e+04,
-      "cpu_time": 7.5884699999997451e+04,
+      "real_time": 7.1763647906482220e+04,
+      "cpu_time": 7.1729949999999575e+04,
       "time_unit": "us",
-      "items_per_second": 7.1067026686541305e+05
+      "items_per_second": 7.5183378769956366e+05
     },
     {
       "name": "108-a-popal-simple-smart-buy-sell-strategy/throughput/no_magnifier/iterations:20",
@@ -2307,10 +2307,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.1795341249089688e+05,
-      "cpu_time": 6.0822560000000300e+05,
+      "real_time": 5.2725950623862445e+05,
+      "cpu_time": 5.2643075000000012e+05,
       "time_unit": "us",
-      "items_per_second": 8.8666113363199009e+04
+      "items_per_second": 1.0244272394802164e+05
     },
     {
       "name": "160-mehranazizi219-goldsiggy-murk/throughput/no_magnifier/iterations:20",
@@ -2322,10 +2322,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2200858336873353e+04,
-      "cpu_time": 7.1945500000001062e+04,
+      "real_time": 6.7361735389567912e+04,
+      "cpu_time": 6.7307649999997913e+04,
       "time_unit": "us",
-      "items_per_second": 7.4958128027464123e+05
+      "items_per_second": 8.0123136077402299e+05
     },
     {
       "name": "187-thebitcoin37-9-15-ema-strategy-trade-room/throughput/no_magnifier/iterations:20",
@@ -2337,10 +2337,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.3820649995468557e+04,
-      "cpu_time": 7.3308049999999974e+04,
+      "real_time": 6.8909054156392813e+04,
+      "cpu_time": 6.8851050000000658e+04,
       "time_unit": "us",
-      "items_per_second": 7.3564908628724969e+05
+      "items_per_second": 7.8327055288190197e+05
     },
     {
       "name": "137-fran-pineda-strategy-501-de-franpineda/throughput/no_magnifier/iterations:20",
@@ -2352,10 +2352,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.6473595418501645e+05,
-      "cpu_time": 1.6460470000000100e+05,
+      "real_time": 1.5787488750647753e+05,
+      "cpu_time": 1.5782480000000304e+05,
       "time_unit": "us",
-      "items_per_second": 3.2762733992407063e+05
+      "items_per_second": 3.4170168439940340e+05
     },
     {
       "name": "196-vimalboiling-refined-supertrend-atr-tsl-filters-nifty-banknifty-v2/throughput/no_magnifier/iterations:20",
@@ -2367,10 +2367,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.3810152083169669e+05,
-      "cpu_time": 1.3739214999999659e+05,
+      "real_time": 1.2986228959634900e+05,
+      "cpu_time": 1.2980030000000226e+05,
       "time_unit": "us",
-      "items_per_second": 3.9251878655368107e+05
+      "items_per_second": 4.1547669766556052e+05
     },
     {
       "name": "110-aiscripts-lvn-rejection-acceptance-strategy/throughput/no_magnifier/iterations:20",
@@ -2382,10 +2382,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.7471474579069763e+05,
-      "cpu_time": 5.7151934999999695e+05,
+      "real_time": 5.1186449788510799e+05,
+      "cpu_time": 5.1175175000000198e+05,
       "time_unit": "us",
-      "items_per_second": 9.4360759613826347e+04
+      "items_per_second": 1.0538117358660678e+05
     },
     {
       "name": "141-hariss369-crypto-sniper-pro-smart-trend-range-filter-strategy-hariss-369/throughput/no_magnifier/iterations:20",
@@ -2397,10 +2397,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4634837501216680e+05,
-      "cpu_time": 3.4608084999999846e+05,
+      "real_time": 3.1137406874913722e+05,
+      "cpu_time": 3.1128324999999965e+05,
       "time_unit": "us",
-      "items_per_second": 1.5582774949841993e+05
+      "items_per_second": 1.7324735590495175e+05
     },
     {
       "name": "157-madue2014-twe-2-bar-break-strategy/throughput/no_magnifier/iterations:20",
@@ -2412,10 +2412,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.4026404165197164e+05,
-      "cpu_time": 1.4017119999999751e+05,
+      "real_time": 1.2935631249565631e+05,
+      "cpu_time": 1.2930284999999912e+05,
       "time_unit": "us",
-      "items_per_second": 3.8473666487838415e+05
+      "items_per_second": 4.1707510700653825e+05
     },
     {
       "name": "144-igreycrypto-adapted-rsi-w-multi-asset-regime-detection-v1-1/throughput/no_magnifier/iterations:20",
@@ -2427,10 +2427,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.2721737483516335e+04,
-      "cpu_time": 7.2652700000000434e+04,
+      "real_time": 6.7112091649323702e+04,
+      "cpu_time": 6.7069999999998225e+04,
       "time_unit": "us",
-      "items_per_second": 7.4228487034892954e+05
+      "items_per_second": 8.0407037423589418e+05
     },
     {
       "name": "158-market-logic-india-low-lag-strength-oscillator/throughput/no_magnifier/iterations:20",
@@ -2442,10 +2442,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.2854544164147228e+05,
-      "cpu_time": 2.2844294999999873e+05,
+      "real_time": 2.2445200416259468e+05,
+      "cpu_time": 2.2437395000000036e+05,
       "time_unit": "us",
-      "items_per_second": 2.3607206963489263e+05
+      "items_per_second": 2.4035321390919003e+05
     },
     {
       "name": "143-hungpixi-hungpixi-macd-enhanced-mtf-with-signal-filter-anti-sideway/throughput/no_magnifier/iterations:20",
@@ -2457,10 +2457,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.7528633289039135e+04,
-      "cpu_time": 9.7391700000000012e+04,
+      "real_time": 9.4277397915720940e+04,
+      "cpu_time": 9.4222249999998559e+04,
       "time_unit": "us",
-      "items_per_second": 5.5373301831675589e+05
+      "items_per_second": 5.7235950107326906e+05
     },
     {
       "name": "171-options7700-2min-bullish-confluence/throughput/no_magnifier/iterations:20",
@@ -2472,10 +2472,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.9096659170463681e+05,
-      "cpu_time": 1.9091650000000017e+05,
+      "real_time": 1.8431989788077772e+05,
+      "cpu_time": 1.8425705000000220e+05,
       "time_unit": "us",
-      "items_per_second": 2.8247427540312102e+05
+      "items_per_second": 2.9268350926056481e+05
     },
     {
       "name": "133-drgunjanpupadhyay-swing-trend-strategy-pro-sideways-filtered-nifty-500/throughput/no_magnifier/iterations:20",
@@ -2487,10 +2487,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.3155666654929519e+04,
-      "cpu_time": 7.3127400000001333e+04,
+      "real_time": 7.2410231246612966e+04,
+      "cpu_time": 7.2368649999998524e+04,
       "time_unit": "us",
-      "items_per_second": 7.3746639426533715e+05
+      "items_per_second": 7.4519836973608180e+05
     },
     {
       "name": "198-wellmanapex-ut-bot-stc-conjunction-strategy-tester-v4-8/throughput/no_magnifier/iterations:20",
@@ -2502,10 +2502,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.8061437485739589e+04,
-      "cpu_time": 9.8018500000003420e+04,
+      "real_time": 9.8783420794643462e+04,
+      "cpu_time": 9.8712000000000437e+04,
       "time_unit": "us",
-      "items_per_second": 5.5019205558132508e+05
+      "items_per_second": 5.4632668773806386e+05
     },
     {
       "name": "190-tomukasss-engulfing-mitigation-strategy/throughput/no_magnifier/iterations:20",
@@ -2517,10 +2517,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.8972506253048778e+04,
-      "cpu_time": 8.8870050000002724e+04,
+      "real_time": 8.8900887500494719e+04,
+      "cpu_time": 8.8851099999999409e+04,
       "time_unit": "us",
-      "items_per_second": 6.0682986000343587e+05
+      "items_per_second": 6.0695928356542985e+05
     },
     {
       "name": "177-rampatel9912-super-rsi-strategy/throughput/no_magnifier/iterations:20",
@@ -2532,10 +2532,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0389784374274313e+05,
-      "cpu_time": 1.0384734999999807e+05,
+      "real_time": 1.0299583959858865e+05,
+      "cpu_time": 1.0295500000000004e+05,
       "time_unit": "us",
-      "items_per_second": 5.1931031461083022e+05
+      "items_per_second": 5.2381137390121876e+05
     },
     {
       "name": "109-acalvillo20-amd1/throughput/no_magnifier/iterations:20",
@@ -2547,10 +2547,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0570883960463107e+05,
-      "cpu_time": 1.0561984999999937e+05,
+      "real_time": 1.0945957086514682e+05,
+      "cpu_time": 1.0940375000000131e+05,
       "time_unit": "us",
-      "items_per_second": 5.1059530949911714e+05
+      "items_per_second": 4.9293557122127310e+05
     },
     {
       "name": "150-jdceagle-zigzag-de-fractales-williams/throughput/no_magnifier/iterations:20",
@@ -2562,10 +2562,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.6700234578456730e+05,
-      "cpu_time": 1.6687655000000063e+05,
+      "real_time": 1.7163554793223739e+05,
+      "cpu_time": 1.7159195000000126e+05,
       "time_unit": "us",
-      "items_per_second": 3.2316703575187642e+05
+      "items_per_second": 3.1428630538903258e+05
     },
     {
       "name": "170-ollie-b-ollie-asia-sweep-model/throughput/no_magnifier/iterations:20",
@@ -2577,10 +2577,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.2602753539104015e+05,
-      "cpu_time": 2.2589054999999973e+05,
+      "real_time": 2.4002905834931880e+05,
+      "cpu_time": 2.3991005000000313e+05,
       "time_unit": "us",
-      "items_per_second": 2.3873951345020879e+05
+      "items_per_second": 2.2478841549155317e+05
     },
     {
       "name": "156-m-f-atipey-hybrid-3-strategy-smart-system-v6-1/throughput/no_magnifier/iterations:20",
@@ -2592,10 +2592,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1150555834174156e+05,
-      "cpu_time": 1.1143994999999905e+05,
+      "real_time": 1.1472984580323100e+05,
+      "cpu_time": 1.1467240000000061e+05,
       "time_unit": "us",
-      "items_per_second": 4.8392878855383967e+05
+      "items_per_second": 4.7028753213501867e+05
     },
     {
       "name": "166-officialjackofalltrades-concordance-strategy-joat/throughput/no_magnifier/iterations:20",
@@ -2607,10 +2607,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.5334591038990766e+05,
-      "cpu_time": 3.5324104999999976e+05,
+      "real_time": 3.6245813749264926e+05,
+      "cpu_time": 3.6238184999999986e+05,
       "time_unit": "us",
-      "items_per_second": 1.5266911928837275e+05
+      "items_per_second": 1.4881815962913158e+05
     },
     {
       "name": "116-anonycryptous-ev-edge-anonycryptous/throughput/no_magnifier/iterations:20",
@@ -2622,10 +2622,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.0585212493315339e+04,
-      "cpu_time": 8.0464200000000114e+04,
+      "real_time": 7.9592062486335635e+04,
+      "cpu_time": 7.9542900000001275e+04,
       "time_unit": "us",
-      "items_per_second": 6.7022352797890140e+05
+      "items_per_second": 6.7798634447573742e+05
     },
     {
       "name": "103-3commas-eth-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
@@ -2637,10 +2637,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.5478672902099788e+04,
-      "cpu_time": 6.5305999999998217e+04,
+      "real_time": 6.5729918750002980e+04,
+      "cpu_time": 6.5696150000002264e+04,
       "time_unit": "us",
-      "items_per_second": 8.2578936085507413e+05
+      "items_per_second": 8.2088524213364313e+05
     },
     {
       "name": "174-quantnomad-ut-bot-v2-atr-trailing-stop/throughput/no_magnifier/iterations:20",
@@ -2652,10 +2652,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.0578011039178818e+05,
-      "cpu_time": 1.0570359999999823e+05,
+      "real_time": 1.0498273961711675e+05,
+      "cpu_time": 1.0494590000000414e+05,
       "time_unit": "us",
-      "items_per_second": 5.1019075982275821e+05
+      "items_per_second": 5.1387429142060690e+05
     },
     {
       "name": "112-alexgrover-g-channel-trend-detection-alerts-non-repainting/throughput/no_magnifier/iterations:20",
@@ -2667,10 +2667,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.3822256238199770e+04,
-      "cpu_time": 6.3790700000001270e+04,
+      "real_time": 6.2457816652022302e+04,
+      "cpu_time": 6.2420099999999933e+04,
       "time_unit": "us",
-      "items_per_second": 8.4540536473183287e+05
+      "items_per_second": 8.6396849732698372e+05
     },
     {
       "name": "159-mdfe3757-trade-strategy-v8-4-pine-v6-ready/throughput/no_magnifier/iterations:20",
@@ -2682,10 +2682,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.2317845835350454e+04,
-      "cpu_time": 9.2194500000002226e+04,
+      "real_time": 8.7932083313353360e+04,
+      "cpu_time": 8.7902149999999325e+04,
       "time_unit": "us",
-      "items_per_second": 5.8494812597279344e+05
+      "items_per_second": 6.1351172866648214e+05
     },
     {
       "name": "195-van007trader-micro-momentum-oscillator-dyna/throughput/no_magnifier/iterations:20",
@@ -2697,10 +2697,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.1650133351795375e+04,
-      "cpu_time": 7.1577450000000914e+04,
+      "real_time": 6.6015712497755885e+04,
+      "cpu_time": 6.5983949999997538e+04,
       "time_unit": "us",
-      "items_per_second": 7.5343561414941878e+05
+      "items_per_second": 8.1730481427683553e+05
     },
     {
       "name": "138-fran-pineda-strategy-502-de-franpineda/throughput/no_magnifier/iterations:20",
@@ -2712,10 +2712,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.4518777919001877e+05,
-      "cpu_time": 1.4512949999999878e+05,
+      "real_time": 1.4009867289569229e+05,
+      "cpu_time": 1.4005075000000032e+05,
       "time_unit": "us",
-      "items_per_second": 3.7159226759549550e+05
+      "items_per_second": 3.8506755586813972e+05
     },
     {
       "name": "189-therealbouga-apex-mtf-index-model/throughput/no_magnifier/iterations:20",
@@ -2727,10 +2727,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.4254266039934009e+05,
-      "cpu_time": 2.4244754999999999e+05,
+      "real_time": 2.4258816665969789e+05,
+      "cpu_time": 2.4251725000000023e+05,
       "time_unit": "us",
-      "items_per_second": 2.2243573919389991e+05
+      "items_per_second": 2.2237181066501435e+05
     },
     {
       "name": "162-nicocashfx-prime-strategy-swing/throughput/no_magnifier/iterations:20",
@@ -2742,10 +2742,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.6079231665935367e+05,
-      "cpu_time": 3.6063054999999906e+05,
+      "real_time": 3.6158988750539720e+05,
+      "cpu_time": 3.6150664999999834e+05,
       "time_unit": "us",
-      "items_per_second": 1.4954085282015111e+05
+      "items_per_second": 1.4917844526511544e+05
     },
     {
       "name": "172-projectsyndicate-strong-breakout-signals-projectsyndicate/throughput/no_magnifier/iterations:20",
@@ -2757,10 +2757,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 2.4127124170772731e+05,
-      "cpu_time": 2.4122009999999817e+05,
+      "real_time": 2.2364544374868274e+05,
+      "cpu_time": 2.2357700000000023e+05,
       "time_unit": "us",
-      "items_per_second": 2.2356760485548430e+05
+      "items_per_second": 2.4120996345777941e+05
     },
     {
       "name": "193-ttagkoin-adaptive-multi-facto-9-years/throughput/no_magnifier/iterations:20",
@@ -2772,10 +2772,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.2542164796032012e+05,
-      "cpu_time": 1.2533505000000105e+05,
+      "real_time": 1.1795118961017579e+05,
+      "cpu_time": 1.1791044999999940e+05,
       "time_unit": "us",
-      "items_per_second": 4.3027868102338130e+05
+      "items_per_second": 4.5737252296128351e+05
     },
     {
       "name": "149-jayentriken-bbwp-macd-ema-trend-strategy/throughput/no_magnifier/iterations:20",
@@ -2787,10 +2787,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.6873695859685540e+04,
-      "cpu_time": 8.6804799999998751e+04,
+      "real_time": 8.2461114600300789e+04,
+      "cpu_time": 8.2420249999995576e+04,
       "time_unit": "us",
-      "items_per_second": 6.2126748751222028e+05
+      "items_per_second": 6.5431735526163643e+05
     },
     {
       "name": "129-daytrader4beginners-box-breakout-strategy-dt4b-trader/throughput/no_magnifier/iterations:20",
@@ -2802,10 +2802,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.1388676876667887e+05,
-      "cpu_time": 1.1375625000000015e+05,
+      "real_time": 1.0985778954345733e+05,
+      "cpu_time": 1.0981470000000400e+05,
       "time_unit": "us",
-      "items_per_second": 4.7407505082138284e+05
+      "items_per_second": 4.9109090130918752e+05
     },
     {
       "name": "131-devildk-option-point/throughput/no_magnifier/iterations:20",
@@ -2817,10 +2817,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.6101106256246567e+04,
-      "cpu_time": 6.5991949999997247e+04,
+      "real_time": 6.4731491636484861e+04,
+      "cpu_time": 6.4700850000002676e+04,
       "time_unit": "us",
-      "items_per_second": 8.1720573494194751e+05
+      "items_per_second": 8.3351300639787223e+05
     },
     {
       "name": "191-tomukasss-trend-pivot-scale-in/throughput/no_magnifier/iterations:20",
@@ -2832,10 +2832,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 1.6678668335080147e+05,
-      "cpu_time": 1.6668630000000066e+05,
+      "real_time": 1.4890221040695906e+05,
+      "cpu_time": 1.4884524999999939e+05,
       "time_unit": "us",
-      "items_per_second": 3.2353588747245452e+05
+      "items_per_second": 3.6231589519988187e+05
     },
     {
       "name": "186-tharris235106-reversal-signals-with-profit-target-and-continuation/throughput/no_magnifier/iterations:20",
@@ -2847,10 +2847,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7052085394971073e+04,
-      "cpu_time": 6.7006699999998877e+04,
+      "real_time": 6.5034833294339478e+04,
+      "cpu_time": 6.5009899999998313e+04,
       "time_unit": "us",
-      "items_per_second": 8.0482996476473089e+05
+      "items_per_second": 8.2955057614303974e+05
     },
     {
       "name": "113-algo-aakash-macd-pullback-validation-with-divergence-filters-algo-aakash/throughput/no_magnifier/iterations:20",
@@ -2862,10 +2862,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.1434652083553374e+04,
-      "cpu_time": 7.1385799999998766e+04,
+      "real_time": 6.8905977113172412e+04,
+      "cpu_time": 6.8884150000002366e+04,
       "time_unit": "us",
-      "items_per_second": 7.5545836847105355e+05
+      "items_per_second": 7.8289417812367796e+05
     },
     {
       "name": "151-jos-protrader-edward-smart-channel-reversal/throughput/no_magnifier/iterations:20",
@@ -2877,10 +2877,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.1861535394564271e+04,
-      "cpu_time": 6.1741900000001231e+04,
+      "real_time": 5.8867658302187920e+04,
+      "cpu_time": 5.8839250000002605e+04,
       "time_unit": "us",
-      "items_per_second": 8.7345870470456721e+05
+      "items_per_second": 9.1654805253291992e+05
     },
     {
       "name": "105-3commas-heikin-ashi-rsi-fade-short-strategy/throughput/no_magnifier/iterations:20",
@@ -2892,10 +2892,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.7741795796900988e+04,
-      "cpu_time": 9.7691749999998472e+04,
+      "real_time": 9.3027870799414814e+04,
+      "cpu_time": 9.2991399999996807e+04,
       "time_unit": "us",
-      "items_per_second": 5.5203228522368404e+05
+      "items_per_second": 5.7993534886023705e+05
     },
     {
       "name": "114-amandaborgeson06-bias-status-dashboard/throughput/no_magnifier/iterations:20",
@@ -2907,10 +2907,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.0128448545001447e+05,
-      "cpu_time": 3.0113875000000122e+05,
+      "real_time": 3.0192145209293813e+05,
+      "cpu_time": 3.0180335000000300e+05,
       "time_unit": "us",
-      "items_per_second": 1.7908356197931943e+05
+      "items_per_second": 1.7868920275404322e+05
     },
     {
       "name": "126-cntvxiao-smc-vsa-oi/throughput/no_magnifier/iterations:20",
@@ -2922,10 +2922,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.1764374985359609e+04,
-      "cpu_time": 9.1702250000000160e+04,
+      "real_time": 8.7086329143494368e+04,
+      "cpu_time": 8.7046200000000332e+04,
       "time_unit": "us",
-      "items_per_second": 5.8808807853678509e+05
+      "items_per_second": 6.1954456369146262e+05
     },
     {
       "name": "201-robmagnaye14-eb-ict-one-trade-setup-for-life-70-filter-model-v2/throughput/no_magnifier/iterations:20",
@@ -2937,10 +2937,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.6184614594094455e+04,
-      "cpu_time": 8.6031950000003126e+04,
+      "real_time": 8.3020866638980806e+04,
+      "cpu_time": 8.2981200000000390e+04,
       "time_unit": "us",
-      "items_per_second": 6.2684851383698778e+05
+      "items_per_second": 6.4989419290152157e+05
     },
     {
       "name": "163-nightowlxtrader-azt-strategy-v11-first-draft/throughput/no_magnifier/iterations:20",
@@ -2952,10 +2952,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 5.7236407920718193e+05,
-      "cpu_time": 5.7217775000000023e+05,
+      "real_time": 5.8871988961473107e+05,
+      "cpu_time": 5.8861599999999604e+05,
       "time_unit": "us",
-      "items_per_second": 9.4252179501911742e+04
+      "items_per_second": 9.1620003533713578e+04
     },
     {
       "name": "179-richmondhillcm-richmondhillcm-vwap-volume-spike-suite-v1-3/throughput/no_magnifier/iterations:20",
@@ -2967,10 +2967,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 7.7102143736556172e+04,
-      "cpu_time": 7.7045300000000338e+04,
+      "real_time": 7.8159006242640316e+04,
+      "cpu_time": 7.8126549999998926e+04,
       "time_unit": "us",
-      "items_per_second": 6.9996482588814327e+05
+      "items_per_second": 6.9027750489431235e+05
     },
     {
       "name": "107-3commas-xmr-grid-bot-long-strategy/throughput/no_magnifier/iterations:20",
@@ -2982,10 +2982,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.8567660469561815e+04,
-      "cpu_time": 8.8470950000004232e+04,
+      "real_time": 8.8687724992632866e+04,
+      "cpu_time": 8.8662850000002887e+04,
       "time_unit": "us",
-      "items_per_second": 6.0956732125061867e+05
+      "items_per_second": 6.0824798661444162e+05
     },
     {
       "name": "192-trendchain0719-9-21-ema-volume-spike-bollinger-bands-vwap/throughput/no_magnifier/iterations:20",
@@ -2997,10 +2997,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.0188631247729063e+04,
-      "cpu_time": 6.0119400000002082e+04,
+      "real_time": 6.1206922889687121e+04,
+      "cpu_time": 6.1180550000000265e+04,
       "time_unit": "us",
-      "items_per_second": 8.9703157383470435e+05
+      "items_per_second": 8.8147295177960582e+05
     },
     {
       "name": "185-simon20cent-efi-macd-advanced-pro/throughput/no_magnifier/iterations:20",
@@ -3012,10 +3012,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 8.9173966646194458e+04,
-      "cpu_time": 8.9061399999999936e+04,
+      "real_time": 9.0337854158133268e+04,
+      "cpu_time": 9.0276100000002654e+04,
       "time_unit": "us",
-      "items_per_second": 6.0552607526942133e+05
+      "items_per_second": 5.9737848666478076e+05
     },
     {
       "name": "148-jayendranath4-banknifty-15m-clear-tp-sl-strategy/throughput/no_magnifier/iterations:20",
@@ -3027,10 +3027,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 6.7652549990452826e+04,
-      "cpu_time": 6.7522699999997829e+04,
+      "real_time": 6.8624956253916025e+04,
+      "cpu_time": 6.8542450000001059e+04,
       "time_unit": "us",
-      "items_per_second": 7.9867955517184199e+05
+      "items_per_second": 7.8679708706063428e+05
     },
     {
       "name": "121-bipinbiharipatra-5m-sol-scalper-ha-lorentzian/throughput/no_magnifier/iterations:20",
@@ -3042,10 +3042,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 9.9718297948129475e+04,
-      "cpu_time": 9.9542099999999322e+04,
+      "real_time": 1.0066921669058502e+05,
+      "cpu_time": 1.0061725000000195e+05,
       "time_unit": "us",
-      "items_per_second": 5.4177076834827045e+05
+      "items_per_second": 5.3598165324533277e+05
     }
   ]
 }

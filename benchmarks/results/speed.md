@@ -32,11 +32,12 @@ Timing is valid only on a quiet host: 1-minute load average below 6.0 and no `cm
 | pynecore-c10+178 (e9ad37dd window, not re-measured) | 2026-09-22T04:36:29Z | 5.77 | 0 |
 | pinets (e9ad37dd window, not re-measured) | 2026-09-22T04:44:08Z | 4.54 | 0 |
 | vectorbt (e9ad37dd window, not re-measured) | 2026-09-22T04:44:28Z | 4.31 | 0 |
-| throughput-r1 (e9ad37dd) | 2026-09-22T04:47:36Z | 3.98 | 0 |
-| throughput-r2 (e9ad37dd) | 2026-09-22T04:56:19Z | 5.90 | 0 |
-| throughput-r3 (e9ad37dd) | 2026-09-22T05:04:55Z | 5.93 | 0 |
-| throughput-r4 (e9ad37dd) | 2026-09-22T05:13:32Z | 5.45 | 0 |
-| throughput-r5 (e9ad37dd) | 2026-09-22T05:22:05Z | 4.93 | 0 |
+| throughput-r1 (063e4460) | 2026-09-22T13:29:51Z | 3.62 | 0 |
+| throughput-r2 (063e4460) | 2026-09-22T13:38:22Z | 4.95 | 0 |
+| throughput-r3 (063e4460) | 2026-09-22T13:46:30Z | 3.18 | 0 |
+| throughput-r4 (063e4460) | 2026-09-22T14:00:07Z | 2.97 | 0 |
+| throughput-r5 (063e4460) | 2026-09-22T14:08:13Z | 3.82 | 0 |
+| A/B 063e4460 vs e9ad37dd vs ac011d84 | 2026-09-22T14:17:12Z | 5.40 | 0 |
 
 ## Methodology
 
@@ -295,31 +296,40 @@ realistic cost for engines whose entry point IS the process.
 - **PineForge re-timed at `063e4460`.** Lane BENCH3 re-ran the PineForge sweep on 2026-09-22 at
   11:57–12:07 UTC, on engine `main` `063e4460` running the committed `generated.cpp` (codegen
   `89645d6`). The sweep ran as two Google Benchmark batches, slots 001–100 and slots 101–201, on an
-  Apple M4 Max (12 performance + 4 efficiency cores).
+  Apple M4 Max (12 performance + 4 efficiency cores). The throughput package and a paired A/B
+  followed, 13:29–14:22 UTC.
 - **The other engines were not re-measured.** The PyneCore 6.10.2, PineTS 0.9.34 and vectorbt
   0.28.2 columns are lane BENCH2's, measured 2026-09-22 03:03–05:30 UTC on the same host with the
   same versions and harness. They are regenerated from the same timing files, which reproduce
   BENCH2's report byte for byte.
 - **Quiet-host gate.** Before every batch, the 1-minute load average had to be below 6.0 with no
   `cmake --build`, `ctest` or `ci_verify` process, counted by executable name.
-  - The two PineForge batches passed at 5.41 and 5.90, with zero such processes. Google
+  - The two PineForge sweep batches passed at 5.41 and 5.90, with zero such processes. Google
     Benchmark's own start-of-batch reading was 5.62 / 7.09 / 8.21 (1/5/15-min) and
-    5.90 / 6.62 / 7.71.
-  - BENCH2's single PineForge batch had passed at 3.79.
-  - The residual load came from processes outside this benchmark: orphaned test runs from
-    another project, each holding one core, plus intermittent container and headless-browser work.
-- **`063e4460` against `e9ad37dd`.** Across all 201 slots, the median per-strategy ratio of this
-  sweep's time to BENCH2's is 1.02 (p5 0.95, p95 1.07; min 0.89, max 1.13). The median moved from
-  88.3 ms to 89.4 ms. This sweep ran at a higher host load than BENCH2's, and a paired A/B in one
-  quiet window was not possible, so the 2 % is not attributed to the engine. The engine's
-  runtime-budget gains between the two commits do not show up in this hot loop.
-- **The throughput package was not re-timed at `063e4460`; the host was never quiet.** The five
-  `throughput-r*` rows above are BENCH2's runs at `e9ad37dd`, and the package's published figures
-  come from them.
-  - One run at `063e4460` passed the gate at 12:08:00 UTC (load 5.88). The 1-minute load was 16.8
-    when its benchmark started, because another project's container work began. The run was
-    discarded (median 0.551 M bars/s over 201 slots).
-  - After that, the gate did not pass again during the lane's window.
+    5.90 / 6.62 / 7.71. BENCH2's single PineForge batch had passed at 3.79.
+  - The residual load came from processes outside this benchmark: orphaned test runs, container
+    and headless-browser work, and a front-end build from other projects. From 12:49 UTC the gate
+    was re-checked every 5 minutes while it failed; it passed at 13:09, 13:29 and 14:00 UTC, and
+    the runs that followed each other directly re-checked it before starting.
+- **`063e4460` against `e9ad37dd`: 0.94× the time, paired.** Both engines were built on this host
+  and timed in one window (14:17–14:22 UTC, gate 5.40), alternating new, old, old, new over 26
+  public slots (every fourth slot, plus 004, 021 and 061).
+  - Per strategy, `063e4460` takes 0.94× the time of `e9ad37dd` at the median (p10 0.91×,
+    p90 1.01×), and is faster on 22 of the 26 slots. In the first pair, run at equal load, it is
+    faster on all 26 (median 0.93×).
+  - The sweep above, set against BENCH2's sweep, reads 1.02× at the median (p5 0.95×, p95 1.07×).
+    The two sweeps ran at different host loads (5.41–5.90 against 3.79), so that comparison is
+    the weaker one. The published PineForge column is this sweep.
+- **Throughput package: five quiet runs at `063e4460`.** `bash benchmarks/throughput/reproduce.sh`
+  ran five times, gate-checked before each (`throughput-r1`…`r5` above). Their medians were 0.621,
+  0.638, 0.611, 0.646 and 0.640 M bars/s. The package publishes run 2, the median run. The
+  1-minute load sampled every 10 s during the runs had medians of 4.37, 3.54, 5.06, 3.09 and 4.08,
+  and maxima of 5.98, 6.18, 7.82, 4.66 and 6.18.
+  - Two earlier runs were discarded. The first passed the gate at 12:08:00 UTC (load 5.88), but
+    another project's container work took the 1-minute load to 16.8 before its benchmark began.
+    The second passed at 13:09:51 UTC (5.80), but the script's own build step recompiled the
+    bench tree after a commit had changed the version header, and the run hit the tool's time
+    bound.
 - **The 2026-09-21 attempt (lane BENCH1) timed nothing.** The same gate was polled every ~5 minutes
   for four hours (15:49–19:49 UTC, 100 probes), and no probe passed.
   - The 1-minute load was at least 7.74 (17:49:26 UTC, with 8 build/test processes), 97.0 at the
@@ -341,19 +351,19 @@ realistic cost for engines whose entry point IS the process.
     193–201 (7 workers plus 1).
 - **vectorbt: 13 of the 14 carried-over ports.** `061-pyramid-deferred-flip-close-all-01`'s port
   imports `speed.vbt_helpers`, a module that was never committed, so it does not load.
-- **Same-host check against the 2026-06-11 table.** BENCH2 rebuilt the engine that table measured
-  (`ac011d84`) and timed it on the same host, feed and harness, in its own window at `e9ad37dd`. It
-  was not re-run at `063e4460`. Three probes appear in both populations (magnifier-on hot loop, ms
-  per 53,929-bar run):
+- **Same-host check against the 2026-06-11 table.** The engine that table measured (`ac011d84`)
+  was rebuilt and timed in the paired window above, on the same host, feed and harness. Three
+  probes appear in both populations. The figures are magnifier-on hot-loop ms per 53,929-bar run,
+  as the mean of the window's two passes:
 
-  | Probe | 2026-06-11 table | `ac011d84`, BENCH2 window | `e9ad37dd`, BENCH2 window | `063e4460`, this sweep |
-  |---|---:|---:|---:|---:|
-  | `barstate-isconfirmed-magnifier-off-01b` | 4.80 | 5.34 | 69.63 | 70.50 |
-  | `composite-scalping-integration-01` | 5.58 | 5.84 | 113.94 | 116.74 |
-  | `pyramid-deferred-flip-close-all-01` | 8.72 | 8.40 | 98.31 | 104.47 |
+  | Probe | 2026-06-11 table | `ac011d84` | `e9ad37dd` | `063e4460` | `063e4460` ÷ `ac011d84` |
+  |---|---:|---:|---:|---:|---:|
+  | `barstate-isconfirmed-magnifier-off-01b` | 4.80 | 6.11 | 75.68 | 70.85 | 11.6× |
+  | `composite-scalping-integration-01` | 5.58 | 6.65 | 124.67 | 118.07 | 17.8× |
+  | `pyramid-deferred-flip-close-all-01` | 8.72 | 9.85 | 108.56 | 99.57 | 10.1× |
 
-  The host reproduced the June figures. The per-bar cost at `e9ad37dd` was 12–20× the June
-  engine's, and this sweep's `063e4460` times for the same probes are 12–20× those `ac011d84`
-  figures too. The last column comes from this sweep, not from a paired run, so the June "162× vs
-  PyneCore" still does not carry over.
+  - In the window's first, quieter pass, the June engine ran at 5.56, 6.09 and 9.15 ms, which is
+    5–16 % over its June figures. BENCH2's quieter window measured 5.34, 5.84 and 8.40.
+  - The per-bar cost at `063e4460` is 10–18× the June engine's, against 11–19× at `e9ad37dd` in
+    the same window. The June "162× vs PyneCore" does not carry over.
 
