@@ -214,7 +214,9 @@ fi
 
 if [[ "${SKIP_PINEFORGE:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
     CANON_BIN="${BENCH_DIR}/runners/run_pineforge_canonical"
-    if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" ]]; then
+    # The runner links libpineforge.a statically: a rebuilt library needs a relink too.
+    if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" \
+          || "${ROOT_DIR}/build/lib/libpineforge.a" -nt "${CANON_BIN}" ]]; then
         log "building PineForge canonical indicator runner"
         c++ -std=c++17 -O2 -I "${ROOT_DIR}/include" \
             "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" \
