@@ -4551,17 +4551,31 @@ static const word_step direction_steps[] = {
     {9, PF_NATIVE_INTENT_TRANSACT, -1.0},   /* a short opening */
     {12, PF_NATIVE_INTENT_FLATTEN, 0.0}};
 
-static int count_events(pf_strategy_t host, uint32_t kind) {
-    static pf_native_event_v1 events[256];
-    int written;
+/* Walks the whole event history a page at a time and answers how many
+ * events are of `kind`, copying the first `cap` of them into `out`. */
+static int page_events(pf_strategy_t host, uint32_t kind, pf_native_event_v1* out, int cap) {
+    static pf_native_event_v1 page[32];
+    uint64_t cursor = 0;
     int count = 0;
+    int written;
     int i;
-    memset(events, 0, sizeof(events));
-    written = strategy_native_events_v1(host, 0, events, 256);
-    for (i = 0; i < written; ++i) {
-        if (events[i].kind == kind) ++count;
+    for (;;) {
+        memset(page, 0, sizeof(page));
+        written = strategy_native_events_v1(host, cursor, page, 32);
+        CHECK(written >= 0, "a word scenario's event history did not read");
+        if (written <= 0) break;
+        for (i = 0; i < written; ++i) {
+            if (page[i].kind != kind) continue;
+            if (count < cap) out[count] = page[i];
+            ++count;
+        }
+        cursor = page[written - 1].ordinal;
     }
     return count;
+}
+
+static int count_events(pf_strategy_t host, uint32_t kind) {
+    return page_events(host, kind, NULL, 0);
 }
 
 static void check_open_directions_word(void) {
@@ -4710,13 +4724,12 @@ static int grid_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision
  * and booked prices in `raw` / `booked`. */
 static int run_grid_tape(pf_native_price_grid_t grid, pf_native_grid_rounding_t rounding,
                          int refuse, double* raw, double* booked) {
-    static pf_native_event_v1 events[128];
+    pf_native_event_v1 applied[GRID_FILLS];
     pf_native_run_spec_v1 spec = twin_spec();
     pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_PRICE_GRID);
     pf_native_callbacks_v1 table;
     grid_state state;
-    int written;
-    int fills = 0;
+    int fills;
     int rc;
     int i;
 
@@ -4747,15 +4760,11 @@ static int run_grid_tape(pf_native_price_grid_t grid, pf_native_grid_rounding_t 
     CHECK_EQ_INT(strategy_native_run_v1(state.host, grid_bars, GRID_BARS, NULL), PF_NATIVE_OK,
                  "the grid-word run did not complete");
     CHECK_EQ_INT(state.failures, 0, "in-callback grid-word rows failed");
-    memset(events, 0, sizeof(events));
-    written = strategy_native_events_v1(state.host, 0, events, 128);
-    for (i = 0; i < written; ++i) {
-        if (events[i].kind != PF_NATIVE_EVENT_APPLIED) continue;
-        if (fills < GRID_FILLS) {
-            raw[fills] = events[i].raw_price;
-            booked[fills] = events[i].resolved_price;
-        }
-        ++fills;
+    memset(applied, 0, sizeof(applied));
+    fills = page_events(state.host, PF_NATIVE_EVENT_APPLIED, applied, GRID_FILLS);
+    for (i = 0; i < fills && i < GRID_FILLS; ++i) {
+        raw[i] = applied[i].raw_price;
+        booked[i] = applied[i].resolved_price;
     }
     strategy_native_host_free(state.host);
     return fills;
