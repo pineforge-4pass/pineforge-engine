@@ -115,12 +115,14 @@ public:
     // Reporting only, and inert under every other policy.
     void mark_script_report_point(BacktestEngine& engine, int64_t script_bar_ts) const;
     std::optional<Bar> series_bar(std::size_t subscription) const;
-    // NativeStrategyHost::declare_timeframe_subscriptions: replace the staged
-    // list from inside on_native_run_begin, before the kernel registers.
-    bool declare_timeframe_subscriptions(std::vector<NativeTimeframeSubscription> declared);
-    // NativeStrategyHost::declare_auxiliary_feed: replace the staged feed
-    // from inside on_native_run_begin, before the kernel registers.
-    bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> declared);
+    // NativeStrategyHost::declare_timeframe_subscriptions_result: replace the
+    // staged list from inside on_native_run_begin, before the kernel
+    // registers. The bool spelling on the host is this answer's status.
+    NativeSetupResult declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> declared);
+    // NativeStrategyHost::declare_auxiliary_feed_result: replace the staged
+    // feed from inside on_native_run_begin, before the kernel registers.
+    NativeSetupResult declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> declared);
     // NativeStrategyHost::append_auxiliary_bars: a realtime stream's later
     // bars of the declared feed, queued for the next accepted input.
     bool append_auxiliary_bars(BacktestEngine& engine, const Bar* bars, std::size_t n);

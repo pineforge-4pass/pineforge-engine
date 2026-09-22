@@ -7167,19 +7167,25 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
 // the staged spec keeps naming exactly what ran. A list this run's input
 // timeframe would refuse is refused here, leaving the staged list untouched:
 // the same validation configure_native applied, against the running spec's
-// own input timeframe.
-bool NativeExecutionConsumer::declare_timeframe_subscriptions(
+// own input timeframe. The two refusals are separate answers -- a call made
+// anywhere but inside on_native_run_begin judged no list at all and says so
+// with WrongPhase, where a judged list carries the validation's own first
+// error field.
+NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
         std::vector<NativeTimeframeSubscription> declared) {
-    if (!in_run_begin_ || failed()) return false;
+    NativeSetupResult result;
     auto* running = std::get_if<NativeRunning>(&state_);
-    if (running == nullptr) return false;
-    if (!validate_native_timeframe_subscriptions(declared, running->spec.input_tf,
-                                                 running->spec.timeframe_undetected,
-                                                 running->spec.auxiliary_feed)) {
-        return false;
+    if (!in_run_begin_ || failed() || running == nullptr) {
+        result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
+        return result;
     }
+    result.validation = validate_native_timeframe_subscriptions(
+        declared, running->spec.input_tf, running->spec.timeframe_undetected,
+        running->spec.auxiliary_feed);
+    if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
-    return true;
+    result.status = NativeSetupStatus::Applied;
+    return result;
 }
 
 // The same begin-time hook for the auxiliary feed. The feed REPLACES the
@@ -7189,19 +7195,21 @@ bool NativeExecutionConsumer::declare_timeframe_subscriptions(
 // would refuse, or one that leaves a staged AuxiliaryFeed series without its
 // bars or finer than them, is refused and changes nothing. A host that names
 // both at begin therefore declares the feed first and the series second.
-bool NativeExecutionConsumer::declare_auxiliary_feed(
+NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
         std::optional<NativeAuxiliaryFeed> declared) {
-    if (!in_run_begin_ || failed()) return false;
+    NativeSetupResult result;
     auto* running = std::get_if<NativeRunning>(&state_);
-    if (running == nullptr) return false;
-    if (!validate_native_timeframe_subscriptions(running->spec.subscriptions,
-                                                 running->spec.input_tf,
-                                                 running->spec.timeframe_undetected,
-                                                 declared)) {
-        return false;
+    if (!in_run_begin_ || failed() || running == nullptr) {
+        result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
+        return result;
     }
+    result.validation = validate_native_timeframe_subscriptions(
+        running->spec.subscriptions, running->spec.input_tf,
+        running->spec.timeframe_undetected, declared);
+    if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
-    return true;
+    result.status = NativeSetupStatus::Applied;
+    return result;
 }
 
 // A realtime stream learns its finer bars as they complete. They join the
@@ -8889,14 +8897,27 @@ std::optional<Bar> NativeStrategyHost::native_series_bar(std::size_t subscriptio
         .series_bar(subscription);
 }
 
-bool NativeStrategyHost::declare_timeframe_subscriptions(
+NativeSetupResult NativeStrategyHost::declare_timeframe_subscriptions_result(
         std::vector<NativeTimeframeSubscription> subscriptions) {
     return as_native_consumer(execution_consumer())
         .declare_timeframe_subscriptions(std::move(subscriptions));
 }
 
-bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed) {
+// The established spelling, kept exactly: same signature, same staging, and
+// the same answer this call has always given.
+bool NativeStrategyHost::declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> subscriptions) {
+    return declare_timeframe_subscriptions_result(std::move(subscriptions)).status
+        == NativeSetupStatus::Applied;
+}
+
+NativeSetupResult NativeStrategyHost::declare_auxiliary_feed_result(
+        std::optional<NativeAuxiliaryFeed> feed) {
     return as_native_consumer(execution_consumer()).declare_auxiliary_feed(std::move(feed));
+}
+
+bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed) {
+    return declare_auxiliary_feed_result(std::move(feed)).status == NativeSetupStatus::Applied;
 }
 
 bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {

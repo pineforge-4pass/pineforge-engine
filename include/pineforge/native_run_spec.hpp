@@ -728,6 +728,14 @@ enum class NativeRunSpecError : std::uint8_t {
     SubscriptionWithoutAuxiliaryFeed,
     // A series built from the auxiliary feed and strictly finer than it.
     SubscriptionFinerThanAuxiliaryFeed,
+    // Not a field at all: the CALL was refused before any field was judged,
+    // because the host was not in the phase that call is legal in. Only a
+    // setup call answers it -- validate_native_run_spec and the two
+    // validate_native_* functions below judge a value, never a phase, and
+    // never report it. NativeFxCurveError::WrongPhase is the same word for
+    // the same reason on the curve. Read with NativeRunSpecField::None: there
+    // is no "where", only a "when".
+    WrongPhase,
 };
 
 /// Allocation-free facts suitable for the host's durable failure variant.

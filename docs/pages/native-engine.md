@@ -266,12 +266,12 @@ the sub-bar sections of `tests/test_native_calc_timing.cpp`.
 
 ### Validating a spec
 
-`validate_native_run_spec(spec)` (`native_run_spec.hpp:752`) answers a
-`NativeRunSpecValidation` (`native_run_spec.hpp:735`): a
+`validate_native_run_spec(spec)` (`native_run_spec.hpp:760`) answers a
+`NativeRunSpecValidation` (`native_run_spec.hpp:743`): a
 `NativeRunSpecError` (`native_run_spec.hpp:642`) and the
 `NativeRunSpecField` (`native_run_spec.hpp:611`) it first failed on, with
 `ok()` and an explicit `operator bool`. `normalize_native_run_spec(spec)`
-(`native_run_spec.hpp:762`) validates and rewrites the one admitted literal —
+(`native_run_spec.hpp:770`) validates and rewrites the one admitted literal —
 a numeric `-0` fee becomes `+0` — leaving every other literal alone. Neither
 allocates on the failure path, neither changes a spec it rejects, and the
 field order is deterministic, so a host can report "which field" rather than
@@ -289,7 +289,7 @@ field order is deterministic, so a host can report "which field" rather than
 valid and clear the curve. `validate_native_fx_curve`
 (`native_fx_curve.hpp:48`) is the same judgement as a pure query.
 
-`native_run_spec_digest(spec)` (`native_run_spec.hpp:835`) is the portable
+`native_run_spec_digest(spec)` (`native_run_spec.hpp:843`) is the portable
 constant described under *Lifecycle and run identity*: exactly the fields the
 consumer folds into a run's continuation identity, and nothing else. Each
 feature suite pins the refusals of the fields it owns — the eighteen
@@ -1720,8 +1720,8 @@ says otherwise, and the C spellings are in
 | `current_partial_bar()` | the lookahead-free bar so far at this cursor | `strategy_native_partial_bar_v1` |
 | `native_series_bar(i)` | the latest delivered bucket of subscription `i` | `strategy_native_series_bar_v1` |
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
-| `native_decision_floor()` (`native_host.hpp:1186`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
-| `native_consumed_high_water()` (`native_host.hpp:1191`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
+| `native_decision_floor()` (`native_host.hpp:1210`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
+| `native_consumed_high_water()` (`native_host.hpp:1215`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
 | `native_continuation_hash()` | the consumer's continuation identity, local to this machine | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:639` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
@@ -1757,8 +1757,8 @@ decision context plus the print's sequence, where zero keeps the public
 
 **Cohorts.** A cohort is a host-built roster of openings a later close binds
 to: `cohort_open()` answers a `native_order::CohortHandle`, `cohort_add`
-(`native_host.hpp:1140`) enrolls one accepted opening's handle,
-`cohort_remove` (`native_host.hpp:1143`) takes it back off, and a request with
+(`native_host.hpp:1164`) enrolls one accepted opening's handle,
+`cohort_remove` (`native_host.hpp:1167`) takes it back off, and a request with
 `owner = native_order::BindCohort{cohort}` closes what the roster holds at
 the match. The C spellings are `strategy_native_cohort_open_v1` / `_add_v1` /
 `_remove_v1`; in C the pairing is fixed — a `BindCohort` owner is reachable
@@ -2195,6 +2195,17 @@ anywhere else, and for a list this run's `input_tf` would refuse (the same
 validation `configure_native` applies), it stages nothing, changes nothing and
 answers `false`. It is not virtual — the host calls the kernel here.
 
+Those are two refusals and one bit, so the call has a second spelling that
+names them: `declare_timeframe_subscriptions_result(...)` answers a
+`NativeSetupResult`, exactly as `configure_native` answers the identical
+validation. A judged list carries that validation's own first error and field
+(`SubscriptionFinerThanInput` at `SubscriptionTimeframe`, and the rest of the
+table under *A series finer than the input*); a call made anywhere but inside
+`on_native_run_begin` — or on a host that has already failed — judged no list
+at all and is `NativeRunSpecError::WrongPhase` at `NativeRunSpecField::None`.
+The bool spelling is `...status == NativeSetupStatus::Applied` and nothing
+else: same staging, same commands, same answer.
+
 The kernel registers the declared series **after** `on_native_run_begin`
 returns, which is what makes that hook usable: a host that registers its own
 `request.security` evaluators there (clearing
@@ -2359,6 +2370,12 @@ folds it. The feed is judged together with the series staged at that moment —
 a host that names both at begin declares the **feed first and its series
 second** — and a declaration that would leave a staged `AuxiliaryFeed` series
 without its bars, or finer than them, changes nothing and answers `false`.
+`declare_auxiliary_feed_result(...)` is the same call answering a
+`NativeSetupResult`: `AuxiliaryFeedNotFinerThanInput` at
+`AuxiliaryFeedTimeframe` for a feed the input refuses,
+`SubscriptionWithoutAuxiliaryFeed` at `SubscriptionSource` for a withdrawal
+that would strand a staged series, and `WrongPhase` at `None` for a call made
+outside `on_native_run_begin`. The bool is that result's `status`.
 
 **Streams.** The begin-time feed covers what the host knows then; the warmup
 resolves its series exactly as a `run()` over the same inputs and the same
@@ -2576,7 +2593,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`native_c_api.h:28-29`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:1569`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:1578`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the

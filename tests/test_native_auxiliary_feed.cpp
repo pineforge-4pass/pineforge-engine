@@ -542,15 +542,30 @@ public:
     bool series_first = false;
     bool feed_accepted = false;
     bool series_accepted = false;
+    // The typed spelling of the same two calls, taken first; the bare bools
+    // above are then taken again from the old spelling, so each run proves
+    // the projection as well as the answer (R5 gap lane E18).
+    NativeSetupResult feed_result;
+    NativeSetupResult series_result;
 
     void on_native_run_begin() override {
         if (series_first) {
+            series_result = declare_timeframe_subscriptions_result(declared);
             series_accepted = declare_timeframe_subscriptions(declared);
+            feed_result = declare_auxiliary_feed_result(feed);
             feed_accepted = declare_auxiliary_feed(feed);
             return;
         }
+        feed_result = declare_auxiliary_feed_result(feed);
         feed_accepted = declare_auxiliary_feed(feed);
+        series_result = declare_timeframe_subscriptions_result(declared);
         series_accepted = declare_timeframe_subscriptions(declared);
+    }
+
+    // Every scenario below asserts this: the bool IS the typed status.
+    bool projections_agree() const {
+        return feed_accepted == (feed_result.status == NativeSetupStatus::Applied)
+            && series_accepted == (series_result.status == NativeSetupStatus::Applied);
     }
 };
 
@@ -574,6 +589,9 @@ void test_declaring_at_begin() {
         if (!run_batch(host, base_spec("native-aux-begin"), inputs)) return;
         CHECK(host.feed_accepted);
         CHECK(host.series_accepted);
+        CHECK(host.projections_agree());
+        CHECK(host.feed_result.validation.ok());
+        CHECK(host.series_result.validation.ok());
         check_deliveries_equal(host.deliveries, staged.deliveries);
         check_logs_equal(host.log, staged.log);
         // The staged spec names what ran, so the identity folds it.
@@ -591,6 +609,11 @@ void test_declaring_at_begin() {
         if (!run_batch(host, base_spec("native-aux-begin-order"), inputs)) return;
         CHECK(!host.series_accepted);
         CHECK(host.feed_accepted);
+        CHECK(host.projections_agree());
+        // Named: the series is built from a feed nothing had declared yet.
+        CHECK(host.series_result.validation.error
+              == NativeRunSpecError::SubscriptionWithoutAuxiliaryFeed);
+        CHECK(host.series_result.validation.field == NativeRunSpecField::SubscriptionSource);
         CHECK(host.deliveries.empty());
     }
 
@@ -602,6 +625,20 @@ void test_declaring_at_begin() {
         host.feed->tf = "15";
         if (!run_batch(host, base_spec("native-aux-begin-refused"), inputs)) return;
         CHECK(!host.feed_accepted);
+        CHECK(host.projections_agree());
+        // Named: a feed of the input's own period states nothing new -- the
+        // words configure_native gives for the same feed.
+        CHECK(host.feed_result.validation.error
+              == NativeRunSpecError::AuxiliaryFeedNotFinerThanInput);
+        CHECK(host.feed_result.validation.field == NativeRunSpecField::AuxiliaryFeedTimeframe);
+        NativeRunSpec same_feed = base_spec("native-aux-begin-refused-staged");
+        same_feed.auxiliary_feed = minute_feed(feed);
+        same_feed.auxiliary_feed->tf = "15";
+        FeedHost staged_refusal;
+        const auto setup = staged_refusal.configure_native(same_feed);
+        CHECK(setup.status == host.feed_result.status);
+        CHECK(setup.validation.error == host.feed_result.validation.error);
+        CHECK(setup.validation.field == host.feed_result.validation.field);
         const auto view = host.native_state();
         CHECK(view.spec != nullptr && !view.spec->auxiliary_feed.has_value());
     }
@@ -615,6 +652,11 @@ void test_declaring_at_begin() {
         if (!run_batch(host, spec, inputs)) return;
         CHECK(!host.feed_accepted);  // the staged "5" series still needs it
         CHECK(host.series_accepted);
+        CHECK(host.projections_agree());
+        // Named: the withdrawal would strand the staged series.
+        CHECK(host.feed_result.validation.error
+              == NativeRunSpecError::SubscriptionWithoutAuxiliaryFeed);
+        CHECK(host.feed_result.validation.field == NativeRunSpecField::SubscriptionSource);
         CHECK(host.deliveries.size() == 12);
     }
 
@@ -622,9 +664,24 @@ void test_declaring_at_begin() {
     {
         FeedHost host;
         CHECK(!host.declare_auxiliary_feed(minute_feed(feed)));
+        // Unconfigured, so no feed was judged at all: the phase refused it.
+        const auto unconfigured = host.declare_auxiliary_feed_result(minute_feed(feed));
+        CHECK(unconfigured.status == NativeSetupStatus::Failed);
+        CHECK(unconfigured.validation.error == NativeRunSpecError::WrongPhase);
+        CHECK(unconfigured.validation.field == NativeRunSpecField::None);
         CHECK(host.configure_native(base_spec("native-aux-begin-outside")).status
               == NativeSetupStatus::Applied);
         CHECK(!host.declare_auxiliary_feed(minute_feed(feed)));
+        const auto ready = host.declare_auxiliary_feed_result(minute_feed(feed));
+        CHECK(ready.status == NativeSetupStatus::Failed);
+        CHECK(ready.validation.error == NativeRunSpecError::WrongPhase);
+        // Ready is not on_native_run_begin either, and this feed is a feed the
+        // very same spec WOULD accept -- so the bare bool's "false" here and
+        // its "false" for a refused feed are two different answers.
+        NativeRunSpec acceptable = base_spec("native-aux-begin-outside-staged");
+        acceptable.auxiliary_feed = minute_feed(feed);
+        FeedHost staged_ok;
+        CHECK(staged_ok.configure_native(acceptable).status == NativeSetupStatus::Applied);
         const auto view = host.native_state();
         CHECK(view.spec != nullptr && !view.spec->auxiliary_feed.has_value());
         // A batch has no live phase to append to.

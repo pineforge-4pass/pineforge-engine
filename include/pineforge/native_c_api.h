@@ -96,12 +96,21 @@
  *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1 -- a row is
  *                                          pf_native_subscription_v1, whose `lookahead` / `gaps` bools are
  *                                          pf_native_lookahead_e / pf_native_gaps_e words
+ *   [--] declare_timeframe_subscriptions_result  the typed answer of the call above. Its C spelling
+ *                                          is that same symbol, which flattens every refusal to
+ *                                          PF_NATIVE_E_STATE:
+ *                                          carrying NativeRunSpecValidation (a NativeRunSpecError beside a
+ *                                          NativeRunSpecField) to C needs a size-prefixed POD and a symbol
+ *                                          of its own, exactly as the run spec's own validation does, and
+ *                                          this API version has neither
  *   [--] declare_auxiliary_feed            a C host declares the run's auxiliary finer feed up front, in
  *                                          pf_native_run_spec_ext_v1's auxiliary tail under
  *                                          PF_NATIVE_SPEC_EXT_AUXILIARY_FEED; the begin-time REPLACEMENT
  *                                          takes a std::optional<NativeAuxiliaryFeed> with no size-
  *                                          prefixed POD, and withdrawing a feed the spec declared has no
  *                                          C caller
+ *   [--] declare_auxiliary_feed_result      the typed answer of the call above, which has no C caller for
+ *                                          the same reason
  *   [C]  append_auxiliary_bars             strategy_native_append_auxiliary_bars_v1
  *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)

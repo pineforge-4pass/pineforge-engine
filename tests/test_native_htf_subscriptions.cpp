@@ -66,6 +66,13 @@ public:
     // What the hook answered inside on_native_run_begin, and outside it.
     bool declared_at_begin = false;
     bool declared_outside_begin = true;
+    // The same two calls in their typed spelling, and -- when one is staged --
+    // a list this run's input timeframe refuses, declared at begin beside the
+    // good one so the two refusals can be told apart by name.
+    NativeSetupResult begin_result;
+    NativeSetupResult outside_result;
+    std::vector<NativeTimeframeSubscription> declare_refused;
+    NativeSetupResult refused_result;
     std::vector<Delivery> deliveries;
     int own_evaluations = 0;
     int bars_seen = 0;
@@ -75,6 +82,10 @@ public:
             security_eval_states_.clear();
             register_security_eval(0, "240", "15");
         }
+        if (!declare_refused.empty()) {
+            refused_result = declare_timeframe_subscriptions_result(declare_refused);
+        }
+        begin_result = declare_timeframe_subscriptions_result(declare);
         declared_at_begin = declare_timeframe_subscriptions(declare);
     }
 
@@ -99,6 +110,7 @@ public:
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         ++bars_seen;
+        outside_result = declare_timeframe_subscriptions_result(declare);
         declared_outside_begin = declare_timeframe_subscriptions(declare);
     }
 
@@ -409,6 +421,15 @@ void test_begin_time_declaration() {
     // Outside a run there is nothing to declare against.
     DeclaringHost unconfigured;
     CHECK(!unconfigured.declare_timeframe_subscriptions({hourly}));
+    // ... and the typed spelling says WHICH refusal that is: the call was not
+    // made from on_native_run_begin, so no list was ever judged (R5 gap lane
+    // E18, E12 finding 3). The bare bool above cannot tell this apart from a
+    // list the input timeframe refuses.
+    const auto unconfigured_result =
+        unconfigured.declare_timeframe_subscriptions_result({hourly});
+    CHECK(unconfigured_result.status == NativeSetupStatus::Failed);
+    CHECK(unconfigured_result.validation.error == NativeRunSpecError::WrongPhase);
+    CHECK(unconfigured_result.validation.field == NativeRunSpecField::None);
 
     // The spec names NO series; the host names one at begin, after clearing
     // and rebuilding the engine's evaluator states as generated code does.
@@ -425,6 +446,12 @@ void test_begin_time_declaration() {
     CHECK(host.declared_at_begin);
     // Legal only inside on_native_run_begin.
     CHECK(!host.declared_outside_begin);
+    // The typed answer is exactly that bool, plus the reason it hides.
+    CHECK(host.begin_result.status == NativeSetupStatus::Applied);
+    CHECK(host.begin_result.validation.ok());
+    CHECK(host.outside_result.status == NativeSetupStatus::Failed);
+    CHECK(host.outside_result.validation.error == NativeRunSpecError::WrongPhase);
+    CHECK(host.outside_result.validation.field == NativeRunSpecField::None);
     CHECK(host.deliveries.size() == 4);
     if (host.deliveries.size() == 4) {
         for (std::size_t k = 0; k < 4; ++k) {
@@ -469,6 +496,49 @@ void test_begin_time_declaration() {
         check_bucket(refused.deliveries[0].bar, hand_aggregate(bars, 0, 4, origin),
                      "staged bucket after a refused declaration");
     }
+}
+
+// ---- 2d-bis. the begin-time refusals are told apart by name ---------------
+
+// The hook's two refusals are distinct, and the second is the one
+// configure_native would have given for the same list.
+void test_begin_time_declaration_refusals() {
+    scenario = "begin-time declaration refusals";
+    const std::vector<Bar> bars = quarter_hour_bars(16);
+    NativeTimeframeSubscription hourly;
+    hourly.tf = "60";
+    NativeTimeframeSubscription finer;
+    finer.tf = "5";
+
+    DeclaringHost host;
+    host.declare.push_back(hourly);
+    host.declare_refused.push_back(finer);
+    CHECK(host.configure_native(base_spec("15", "15", "native-htf-declare-refused")).status
+          == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false, 4,
+             MagnifierDistribution::ENDPOINTS);
+    CHECK(host.last_error().empty());
+
+    // A list the run's input timeframe refuses: the validation's own words,
+    // not the phase's.
+    CHECK(host.refused_result.status == NativeSetupStatus::Failed);
+    CHECK(host.refused_result.validation.error
+          == NativeRunSpecError::SubscriptionFinerThanInput);
+    CHECK(host.refused_result.validation.field == NativeRunSpecField::SubscriptionTimeframe);
+
+    // Which is the same answer configure_native gives for the same list, as
+    // the hook's contract says: the same validation, the same words.
+    NativeRunSpec staged = base_spec("15", "15", "native-htf-declare-refused-staged");
+    staged.subscriptions.push_back(finer);
+    SeriesHost setup_host;
+    const auto setup = setup_host.configure_native(staged);
+    CHECK(setup.status == host.refused_result.status);
+    CHECK(setup.validation.error == host.refused_result.validation.error);
+    CHECK(setup.validation.field == host.refused_result.validation.field);
+
+    // The refusal staged nothing: the good list that followed it still ran.
+    CHECK(host.begin_result.status == NativeSetupStatus::Applied);
+    CHECK(host.deliveries.size() == 4);
 }
 
 // ---- 2e. the previous run's series are torn down before on_native_run_begin
@@ -948,6 +1018,7 @@ int main() {
     test_same_timeframe_instances();
     test_gaps_clears_between_deliveries();
     test_begin_time_declaration();
+    test_begin_time_declaration_refusals();
     test_teardown_precedes_run_begin();
     test_authoritative_bars_override();
     test_finer_than_input_is_refused();

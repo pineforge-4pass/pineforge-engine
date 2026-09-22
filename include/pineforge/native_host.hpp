@@ -1022,7 +1022,20 @@ public:
     /// configure_native applies), it stages nothing, changes nothing and
     /// answers false. Not virtual: the host calls the kernel here, never the
     /// other way round.
+    ///
+    /// The bool cannot tell those two refusals apart:
+    /// declare_timeframe_subscriptions_result below answers the same call by
+    /// name and this spelling is exactly `... .status == Applied`.
     bool declare_timeframe_subscriptions(
+        std::vector<NativeTimeframeSubscription> subscriptions);
+    /// The same call, answered the way configure_native answers the identical
+    /// validation: Applied, or Failed with the first error field
+    /// validate_native_timeframe_subscriptions found. A call made outside
+    /// on_native_run_begin -- or on a host that has already failed -- judged
+    /// no list at all and is NativeRunSpecError::WrongPhase at
+    /// NativeRunSpecField::None. Same commands, same staging, same
+    /// refusals as the bool spelling above.
+    NativeSetupResult declare_timeframe_subscriptions_result(
         std::vector<NativeTimeframeSubscription> subscriptions);
 
     /// The same begin-time hook for NativeRunSpec::auxiliary_feed: the feed
@@ -1034,7 +1047,18 @@ public:
     /// feed this run's input timeframe would refuse, and for one that would
     /// leave a staged AuxiliaryFeed series without its bars, it changes
     /// nothing and answers false. Not virtual.
+    ///
+    /// Three refusals, one bit: declare_auxiliary_feed_result below answers
+    /// the same call by name, and this spelling is `... .status == Applied`.
     bool declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed);
+    /// The same call, answered the way configure_native answers the identical
+    /// validation: Applied, or Failed with the first error field the judged
+    /// feed-and-series pair produced (AuxiliaryFeedNotFinerThanInput for a
+    /// feed the input refuses, SubscriptionWithoutAuxiliaryFeed for a
+    /// withdrawal that would strand a staged series). Outside
+    /// on_native_run_begin nothing was judged: WrongPhase at
+    /// NativeRunSpecField::None.
+    NativeSetupResult declare_auxiliary_feed_result(std::optional<NativeAuxiliaryFeed> feed);
 
     /// A realtime stream's later bars of its declared auxiliary feed. They
     /// join the feed behind every bar it holds and ride on the next accepted
