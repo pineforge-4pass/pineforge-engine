@@ -6760,6 +6760,570 @@ static void check_sized_units_query(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── The four policy hooks' C routes (lane F4, item 4) ─────────────
+ *
+ * The rest of the generic hooks the Pine adapter uses without a C route
+ * (audit AUDIT3 §3.1 4) are answering callbacks in the table's third
+ * published layout: the price half of resolve_execution_terms
+ * (on_execution_terms: price, opening shape, grid policy),
+ * validate_execution_precommit (on_precommit), resolve_anchored_level
+ * (on_anchored_level) and hash_host_extension (on_hash_extension). Each
+ * answers DEFAULT to keep the kernel's own, exactly as the C++ default
+ * does, or PROVIDED to use its output. */
+
+typedef struct terms_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    uint64_t      buy;          /* re-priced by the hook */
+    uint64_t      sell;         /* kept at the kernel's price */
+    uint64_t      bad;          /* answered an unknown shape word */
+    uint64_t      reversal;     /* a SIZED opening answered REVERSE_TO */
+    int           buy_views;
+    pf_native_terms_view_v1 buy_view;
+    int           sell_views;
+    pf_native_terms_view_v1 sell_view;
+    double        buy_price;
+    double        sell_price;
+    double        reversal_units;
+} terms_state;
+
+static int terms_on_execution_terms(void* user, const pf_native_terms_view_v1* view,
+                                    pf_native_terms_v1* out) {
+    terms_state* state = (terms_state*)user;
+    if (view->incarnation == state->buy) {
+        if (state->buy_views++ == 0) state->buy_view = *view;
+        out->resolved_price = view->default_resolved_price + 0.25;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    if (view->incarnation == state->sell) {
+        if (state->sell_views++ == 0) state->sell_view = *view;
+        out->resolved_price = -1.0;   /* ignored: the answer is DEFAULT */
+        return PF_NATIVE_ANSWER_DEFAULT;
+    }
+    if (view->incarnation == state->bad) {
+        out->shape = 9u;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    if (view->incarnation == state->reversal) {
+        out->shape = PF_NATIVE_OPENING_SHAPE_REVERSE_TO;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int terms_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    terms_state* state = (terms_state*)user;
+    (void)at;
+    if (applied->incarnation == state->buy) state->buy_price = applied->resolved_price;
+    if (applied->incarnation == state->sell) state->sell_price = applied->resolved_price;
+    if (applied->incarnation == state->reversal) state->reversal_units = applied->opened_units;
+    return 0;
+}
+
+static int terms_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    terms_state* state = (terms_state*)user;
+    pf_native_request_v1 request = blank_request();
+    uint64_t* slot = NULL;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    if (state->calculations == 1) {
+        request.intent_value = 1.0;
+        slot = &state->buy;
+    } else if (state->calculations == 3) {
+        request.intent_value = -1.0;
+        slot = &state->sell;
+    } else if (state->calculations == 4) {
+        request.intent_value = 1.0;
+        slot = &state->bad;
+    } else if (state->calculations == 5) {
+        request.intent_value = -1.0;   /* short one, so the SIZED long reverses */
+    } else if (state->calculations == 6) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_SIZED;
+        request.side = PF_NATIVE_SIDE_LONG;
+        request.size_basis = PF_NATIVE_SIZE_BASIS_CASH;
+        request.grid_policy = PF_NATIVE_GRID_EXPLICIT_UNITS;
+        request.intent_value = 530.0;  /* 5 units at bar 6's open, 106 */
+        request.trigger = PF_NATIVE_TRIGGER_MARKET;
+        slot = &state->reversal;
+    } else {
+        return 0;
+    }
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, slot, NULL) == PF_NATIVE_OK,
+           "a terms-hook request was refused");
+    return 0;
+}
+
+static void check_execution_terms_hook(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    terms_state state;
+    const pf_bar_t* bars;
+    static pf_native_event_v1 events[PF_TWIN_MAX_EVENTS];
+    double units = 0.0;
+    int invalid_terms = 0;
+    int n = 0;
+    int written, i;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = terms_on_bar;
+    table.on_applied = terms_on_applied;
+    table.on_execution_terms = terms_on_execution_terms;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "terms host create failed");
+    if (!state.host) return;
+    spec.session_key = "native-c-api-terms-hook";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "terms configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 10, NULL), PF_NATIVE_OK,
+                 "the terms run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback terms rows failed");
+
+    /* The facts of the buy's candidate: bar 1's open, 101, no slippage. */
+    CHECK(state.buy_views > 0, "the terms hook was never consulted");
+    CHECK_EQ_INT(state.buy_view.struct_size, (int)sizeof(pf_native_terms_view_v1),
+                 "the terms view is another struct");
+    CHECK(state.buy_view.raw_price == 101.0 && state.buy_view.default_resolved_price == 101.0,
+          "the buy's candidate facts are not bar 1's open");
+    CHECK(state.buy_view.is_buy == 1u && state.buy_view.intent == PF_NATIVE_INTENT_TRANSACT
+              && state.buy_view.trigger == PF_NATIVE_TRIGGER_MARKET,
+          "the buy's candidate is not a market buy");
+    CHECK(state.buy_view.price_kind == PF_NATIVE_CANDIDATE_PRICE_POINT_PRICE
+              && state.buy_view.quote_kind == PF_NATIVE_QUOTE_MARKET_DECISION
+              && state.buy_view.cursor_path_phase == PF_NATIVE_PATH_PHASE_OPEN,
+          "the buy's candidate is not the open point's price");
+    CHECK(state.buy_view.position_units == 0.0, "the buy's candidate saw a position");
+    CHECK(state.sell_views > 0 && state.sell_view.is_buy == 0u
+              && state.sell_view.position_units == 1.0,
+          "the sell's candidate facts are not the long 1");
+    /* PROVIDED re-prices, DEFAULT keeps the kernel's. */
+    CHECK(state.buy_price == 101.25, "the answered price was not booked");
+    CHECK(state.sell_price == 103.0, "a DEFAULT answer did not keep the kernel's price");
+    /* An answer word outside its enumeration is the kernel's InvalidTerms. */
+    memset(events, 0, sizeof(events));
+    written = strategy_native_events_v1(state.host, 0, events, PF_TWIN_MAX_EVENTS);
+    for (i = 0; i < written; ++i) {
+        if (events[i].kind == PF_NATIVE_EVENT_MATCH_REJECTED && events[i].incarnation == state.bad
+            && events[i].reason == PF_NATIVE_MATCH_REJECT_INVALID_TERMS) {
+            ++invalid_terms;
+        }
+    }
+    CHECK(invalid_terms > 0, "an unknown shape word was not refused as INVALID_TERMS");
+    /* REVERSE_TO: the SIZED long closes the short 1 and opens its 5 units. */
+    CHECK(fabs(state.reversal_units - 5.0) < 1e-9, "the reversal opened another size");
+    strategy_native_position_v1(state.host, &units, NULL, NULL);
+    CHECK(fabs(units - 5.0) < 1e-9, "a REVERSE_TO opening did not reverse the short");
+    strategy_native_host_free(state.host);
+}
+
+typedef struct precommit_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    int           mode;          /* 0 = verdict run, 1 = host margin, 2 = default margin */
+    uint64_t      entry;
+    uint64_t      refused;
+    uint64_t      garbled;
+    int           entry_views;
+    pf_native_precommit_view_v1 entry_view;
+    int           refused_views;
+    pf_native_precommit_view_v1 refused_view;
+    double        refused_first_pnl;
+} precommit_state;
+
+static int precommit_on_precommit(void* user, const pf_native_precommit_view_v1* view,
+                                  uint32_t* verdict) {
+    precommit_state* state = (precommit_state*)user;
+    if (state->mode == 1) {
+        *verdict = PF_NATIVE_PRECOMMIT_ADMIT_WITH_HOST_MARGIN;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    if (state->mode == 2) return PF_NATIVE_ANSWER_DEFAULT;
+    if (view->incarnation == state->entry) {
+        if (state->entry_views++ == 0) state->entry_view = *view;
+        *verdict = PF_NATIVE_PRECOMMIT_ADMIT;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    if (view->incarnation == state->refused) {
+        if (state->refused_views++ == 0) {
+            state->refused_view = *view;
+            state->refused_first_pnl =
+                view->closed_row_count > 0u ? view->closed_row_pnl[0] : 0.0;
+        }
+        *verdict = PF_NATIVE_PRECOMMIT_REFUSE;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    if (view->incarnation == state->garbled) {
+        *verdict = 77u;
+        return PF_NATIVE_ANSWER_PROVIDED;
+    }
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int precommit_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    precommit_state* state = (precommit_state*)user;
+    pf_native_request_v1 request = blank_request();
+    uint64_t* slot = NULL;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    if (state->calculations == 1) {
+        request.intent_value = 2.0;
+        slot = &state->entry;
+    } else if (state->mode == 0 && state->calculations == 3) {
+        request.intent_value = -1.0;
+        slot = &state->refused;
+    } else if (state->mode == 0 && state->calculations == 4) {
+        request.intent_value = 1.0;
+        slot = &state->garbled;
+    } else {
+        return 0;
+    }
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, slot, NULL) == PF_NATIVE_OK,
+           "a precommit request was refused");
+    return 0;
+}
+
+static double precommit_run(int mode, precommit_state* state, int* host_precommit,
+                            int* initial_margin) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    static pf_native_event_v1 events[PF_TWIN_MAX_EVENTS];
+    const pf_bar_t* bars;
+    double units = -1.0;
+    int n = 0;
+    int written, i;
+
+    memset(state, 0, sizeof(*state));
+    state->mode = mode;
+    table = blank_callbacks(state);
+    table.on_bar = precommit_on_bar;
+    table.on_precommit = precommit_on_precommit;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "precommit host create failed");
+    if (!state->host) return units;
+    spec.session_key = "native-c-api-precommit-hook";
+    if (mode != 0) {
+        /* 2 units at 101 need 202 of opening margin; the account has 100. */
+        spec.initial_capital = 100.0;
+        spec.optional_mask = PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION;
+        spec.initial_margin_fraction = 1.0;
+    }
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "precommit configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, 6, NULL), PF_NATIVE_OK,
+                 "the precommit run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback precommit rows failed");
+    memset(events, 0, sizeof(events));
+    written = strategy_native_events_v1(state->host, 0, events, PF_TWIN_MAX_EVENTS);
+    *host_precommit = 0;
+    *initial_margin = 0;
+    for (i = 0; i < written; ++i) {
+        if (events[i].kind != PF_NATIVE_EVENT_MATCH_REJECTED) continue;
+        if (events[i].reason == PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT) ++*host_precommit;
+        if (events[i].reason == PF_NATIVE_MATCH_REJECT_INITIAL_MARGIN) ++*initial_margin;
+    }
+    strategy_native_position_v1(state->host, &units, NULL, NULL);
+    strategy_native_host_free(state->host);
+    return units;
+}
+
+static void check_precommit_hook(void) {
+    precommit_state state;
+    int host_precommit = 0;
+    int initial_margin = 0;
+    double units;
+
+    units = precommit_run(0, &state, &host_precommit, &initial_margin);
+    /* The entry's view: a 2-unit opening from flat at bar 1's open, 101. */
+    CHECK(state.entry_views > 0, "the precommit hook was never consulted");
+    CHECK_EQ_INT(state.entry_view.struct_size, (int)sizeof(pf_native_precommit_view_v1),
+                 "the precommit view is another struct");
+    CHECK(state.entry_view.plan == PF_NATIVE_PLAN_TRANSACT && state.entry_view.plan_units == 2.0,
+          "the entry's plan is not a 2-unit transaction");
+    CHECK(state.entry_view.resolved_price == 101.0 && state.entry_view.raw_price == 101.0,
+          "the entry's price is not bar 1's open");
+    CHECK(state.entry_view.inspected_opened_units == 2.0
+              && state.entry_view.inspected_closed_units == 0.0
+              && state.entry_view.would_open == 1u,
+          "the entry's inspection is not a 2-unit opening");
+    CHECK(state.entry_view.signed_units_after == 2.0
+              && state.entry_view.resulting_lot_count == 1u
+              && state.entry_view.marked_equity == 10000.0
+              && state.entry_view.closed_row_count == 0u,
+          "the entry's account projection is not the hand-derived one");
+    CHECK_EQ_INT(state.entry_view.current, 0, "a matched fill was reported current");
+    /* REFUSE: the reduction's view carried its one closed row, 2 x (103 - 101)
+     * would have been 2 on one unit: 2.0. */
+    CHECK(state.refused_views > 0 && state.refused_view.closed_row_count == 1u
+              && fabs(state.refused_first_pnl - 2.0) < 1e-9
+              && state.refused_view.inspected_closed_units == 1.0,
+          "the refused reduction's closed row is not the hand-derived one");
+    CHECK(host_precommit >= 2, "REFUSE and an unknown verdict word did not refuse");
+    CHECK(fabs(units - 2.0) < 1e-9, "a refused execution moved the position");
+
+    /* ADMIT_WITH_HOST_MARGIN hands the opening margin check to the host. */
+    units = precommit_run(2, &state, &host_precommit, &initial_margin);
+    CHECK(initial_margin > 0 && fabs(units) < 1e-9,
+          "the kernel's own margin gate did not refuse the unaffordable entry");
+    units = precommit_run(1, &state, &host_precommit, &initial_margin);
+    CHECK(initial_margin == 0 && fabs(units - 2.0) < 1e-9,
+          "ADMIT_WITH_HOST_MARGIN did not take the opening margin check off the kernel");
+}
+
+typedef struct anchored_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    int           provide;
+    uint64_t      parent;
+    uint64_t      leg;
+    int           views;
+    pf_native_anchored_level_view_v1 view;
+    double        armed_level;
+    double        leg_fill;
+} anchored_state;
+
+static int anchored_on_level(void* user, const pf_native_anchored_level_view_v1* view,
+                             double* level) {
+    anchored_state* state = (anchored_state*)user;
+    if (state->views++ == 0) state->view = *view;
+    if (!state->provide) return PF_NATIVE_ANSWER_DEFAULT;
+    *level = 104.5;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int anchored_on_applied(void* user, const pf_native_applied_v1* applied,
+                               const pf_native_decision_v1* at) {
+    anchored_state* state = (anchored_state*)user;
+    (void)at;
+    if (applied->incarnation == state->parent) {
+        const int rows = strategy_native_working_len_v1(state->host);
+        int i;
+        for (i = 0; i < rows; ++i) {
+            pf_native_working_v1 row;
+            memset(&row, 0, sizeof(row));
+            row.struct_size = (uint32_t)sizeof(row);
+            if (strategy_native_working_get_v1(state->host, i, &row) == PF_NATIVE_OK
+                && row.incarnation == state->leg) {
+                state->armed_level = row.p1;
+            }
+        }
+    }
+    if (applied->incarnation == state->leg) state->leg_fill = applied->resolved_price;
+    return 0;
+}
+
+static int anchored_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    anchored_state* state = (anchored_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (state->calculations++ != 0) return 0;
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 2.0;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->parent, NULL)
+                      == PF_NATIVE_OK,
+           "the anchored parent was refused");
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL;
+    request.anchor_offset = 2.0;
+    request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+    request.owner_n = 1u;
+    request.owner_incarnations = &state->parent;
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->leg, NULL)
+                      == PF_NATIVE_OK,
+           "the anchored leg was refused");
+    return 0;
+}
+
+static void anchored_run(int provide, anchored_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->provide = provide;
+    table = blank_callbacks(state);
+    table.on_bar = anchored_on_bar;
+    table.on_applied = anchored_on_applied;
+    table.on_anchored_level = anchored_on_level;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "anchored host create failed");
+    if (!state->host) return;
+    spec.session_key = "native-c-api-anchored-level";
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "anchored configure");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, 6, NULL), PF_NATIVE_OK,
+                 "the anchored run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback anchored rows failed");
+    strategy_native_host_free(state->host);
+}
+
+static void check_anchored_level_hook(void) {
+    anchored_state state;
+
+    /* DEFAULT: the kernel's level, fill + offset = 101 + 2 = 103. */
+    anchored_run(0, &state);
+    CHECK_EQ_INT(state.views, 1, "the level hook was not offered exactly once");
+    CHECK_EQ_INT(state.view.struct_size, (int)sizeof(pf_native_anchored_level_view_v1),
+                 "the level view is another struct");
+    CHECK(state.view.owner == state.parent && state.view.leg == state.leg
+              && state.view.owner_lot_incarnation != 0u && state.view.owner_applied_ordinal != 0u,
+          "the level view names another owner or leg");
+    CHECK(state.view.owner_fill_price == 101.0 && state.view.offset == 2.0
+              && state.view.kernel_level == 103.0 && state.view.price_tick == 0.01,
+          "the level view's numbers are not the hand-derived ones");
+    CHECK(state.view.trigger == PF_NATIVE_ANCHORED_TRIGGER_LIMIT
+              && state.view.leg_side == PF_NATIVE_SIDE_SHORT
+              && state.view.owner_cursor_path_phase == PF_NATIVE_PATH_PHASE_OPEN,
+          "the level view's words are not a selling limit armed at the open");
+    CHECK(state.armed_level == 103.0, "a DEFAULT answer did not install the kernel's level");
+    CHECK(state.leg_fill == 103.0, "the kernel-level leg filled elsewhere");
+    /* PROVIDED: the host's level is the one installed and traded. */
+    anchored_run(1, &state);
+    CHECK(state.armed_level == 104.5, "the answered level was not installed");
+    CHECK(state.leg_fill == 104.5, "the answered level did not trade");
+}
+
+typedef struct hash_run_state {
+    twin_state twin;   /* first: twin_on_bar reads the shared user pointer as this */
+    int        provide;
+    uint64_t   digest;
+    int        calls;
+} hash_run_state;
+
+static int hash_on_extension(void* user, uint64_t* digest) {
+    hash_run_state* state = (hash_run_state*)user;
+    ++state->calls;
+    if (!state->provide) return PF_NATIVE_ANSWER_DEFAULT;
+    *digest = state->digest;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+typedef struct hash_outcome {
+    uint64_t final_hash;
+    uint64_t rows_digest;
+    uint64_t row[TWIN_BARS];
+    uint64_t continuation;
+    int64_t  rows;
+    int      calls;
+} hash_outcome;
+
+/* One recorded twin-market run: the final broker hash, a digest of its
+ * per-bar rows, and the continuation hash. `table_size` 0 sends the current
+ * table; anything else is a caller of that published layout. */
+static hash_outcome hash_run(int install, int provide, uint64_t digest, uint32_t table_size) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    hash_run_state state;
+    hash_outcome out;
+    pf_report_t report;
+    const pf_bar_t* bars;
+    int n = 0;
+    int64_t i;
+
+    memset(&state, 0, sizeof(state));
+    memset(&out, 0, sizeof(out));
+    memset(&report, 0, sizeof(report));
+    state.provide = provide;
+    state.digest = digest;
+    table = blank_callbacks(&state);
+    if (table_size) table.struct_size = table_size;
+    table.on_bar = twin_on_bar;
+    if (install) table.on_hash_extension = hash_on_extension;
+    state.twin.host = strategy_native_host_create_v1(&table);
+    CHECK(state.twin.host != NULL, "hash host create failed");
+    if (!state.twin.host) return out;
+    spec.session_key = "native-c-api-hash-extension";
+    /* The kernel records the report, so every script bar has a hash row. */
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_REPORT;
+    ext.report_policy = PF_NATIVE_REPORT_KERNEL_RECORDED;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.twin.host, &spec, &ext), PF_NATIVE_OK,
+                 "hash configure");
+    strategy_set_broker_state_hash_recording(state.twin.host, 1);
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.twin.host, bars, n, &report), PF_NATIVE_OK,
+                 "the hash run did not complete");
+    out.rows_digest = 1469598103934665603ULL;
+    for (i = 0; i < report.broker_state_hash_len; ++i) {
+        const uint64_t row = report.broker_state_hash[i];
+        int b;
+        for (b = 0; b < 8; ++b) {
+            out.rows_digest ^= (row >> (8 * b)) & 0xffu;
+            out.rows_digest *= 1099511628211ULL;
+        }
+        if (i < TWIN_BARS) out.row[i] = row;
+    }
+    out.rows = report.broker_state_hash_len;
+    out.final_hash = strategy_broker_state_hash(state.twin.host);
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.twin.host, &out.continuation),
+                 PF_NATIVE_OK, "the continuation hash was refused");
+    out.calls = state.calls;
+    strategy_native_report_free_v1(&report);
+    strategy_native_host_free(state.twin.host);
+    return out;
+}
+
+static void check_hash_extension_hook(void) {
+    static hash_outcome none, declined, one, again, two, older;
+    int64_t i;
+    int moved = 0;
+
+    none = hash_run(0, 0, 0u, 0u);
+    declined = hash_run(1, 0, 0u, 0u);
+    one = hash_run(1, 1, 0x1234u, 0u);
+    again = hash_run(1, 1, 0x1234u, 0u);
+    two = hash_run(1, 1, 0x5678u, 0u);
+    /* A caller of the hooks layout sends a table that ends before the hook:
+     * whatever sits past its struct_size is never read. */
+    older = hash_run(1, 1, 0x1234u, PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE);
+
+    CHECK(none.rows == TWIN_BARS && one.rows == TWIN_BARS,
+          "a hash run did not record one row per twin bar");
+    CHECK(declined.calls > 0, "the extension hook was never consulted");
+    CHECK(declined.final_hash == none.final_hash && declined.rows_digest == none.rows_digest,
+          "a DEFAULT extension moved the broker hash");
+    for (i = 0; i < one.rows && i < TWIN_BARS; ++i) moved += one.row[i] != none.row[i];
+    CHECK(one.final_hash != none.final_hash && moved == TWIN_BARS,
+          "a provided extension did not move every broker hash");
+    CHECK(two.final_hash != one.final_hash, "two different extensions folded the same");
+    CHECK(again.final_hash == one.final_hash && again.rows_digest == one.rows_digest,
+          "the same extension folded differently");
+    CHECK(one.continuation == none.continuation,
+          "the extension moved the continuation, which is the kernel's alone");
+    CHECK(older.calls == 0 && older.final_hash == none.final_hash,
+          "a hook past a hooks-layout table was read");
+    CHECK(PF_NATIVE_CALLBACKS_V1_BASE_SIZE < PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
+              && PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE < (uint32_t)sizeof(pf_native_callbacks_v1),
+          "the callback table's three layouts are out of order");
+}
+
+static void check_policy_hooks(void) {
+    check_execution_terms_hook();
+    check_precommit_hook();
+    check_anchored_level_hook();
+    check_hash_extension_hook();
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -6801,5 +7365,6 @@ int pf_native_c_api_checks(void) {
     check_typed_setup_refusals();
     check_arm_relation_tail();
     check_sized_units_query();
+    check_policy_hooks();
     return failures;
 }

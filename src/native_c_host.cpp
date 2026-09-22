@@ -341,12 +341,16 @@ static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
  * c_word() make each name its kernel value. */
 static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
                   == PF_NATIVE_MARGIN_CHECK_FX_ROLL, "NativeMarginCheckKind drifted");
-/* The hook tail is append-only: the base layout must still end exactly where
- * PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, and the tail must be the six
- * function pointers below it and nothing else. */
-static_assert(sizeof(pf_native_callbacks_v1)
+/* The hook tails are append-only: the base layout must still end exactly
+ * where PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, the six-hook tail must be the
+ * seven function pointers below it, and the policy-hook tail the four after
+ * those. */
+static_assert(PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
                   == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 7u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 hook tail moved");
+static_assert(sizeof(pf_native_callbacks_v1)
+                  == PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE + 4u * sizeof(void (*)(void)),
+              "the pf_native_callbacks_v1 policy-hook tail moved");
 /* The working readout's tail is append-only too, and it is WRITTEN, so the
  * base length must be exactly what a base-layout caller's sizeof was: the
  * tail starts where `comment` ended, and that end carried no padding. The
@@ -460,6 +464,41 @@ PF_PIN_WORD(pineforge::NativeFailureOperation::Callback, PF_NATIVE_OPERATION_CAL
 PF_PIN_WORD(pineforge::NativeFailureOperation::Settlement, PF_NATIVE_OPERATION_SETTLEMENT);
 PF_PIN_WORD(pineforge::NativeFailureOperation::Mutation, PF_NATIVE_OPERATION_MUTATION);
 PF_PIN_WORD(pineforge::NativeFailureOperation::Stream, PF_NATIVE_OPERATION_STREAM);
+PF_PIN_WORD(no::OpeningShape::Transact, PF_NATIVE_OPENING_SHAPE_TRANSACT);
+PF_PIN_WORD(no::OpeningShape::ReverseTo, PF_NATIVE_OPENING_SHAPE_REVERSE_TO);
+PF_PIN_WORD(no::OpeningShape::CloseOpposite, PF_NATIVE_OPENING_SHAPE_CLOSE_OPPOSITE);
+PF_PIN_WORD(no::ExecutionGridPolicy::SnapToGrid, PF_NATIVE_GRID_SNAP);
+PF_PIN_WORD(no::NativeCandidatePriceKind::PointPrice, PF_NATIVE_CANDIDATE_PRICE_POINT_PRICE);
+PF_PIN_WORD(no::NativeCandidatePriceKind::TriggerLevel, PF_NATIVE_CANDIDATE_PRICE_TRIGGER_LEVEL);
+PF_PIN_WORD(no::NativeCandidatePriceKind::CurrentQuote, PF_NATIVE_CANDIDATE_PRICE_CURRENT_QUOTE);
+PF_PIN_WORD(no::DriverEligibilityClass::ObservedPrint, PF_NATIVE_DRIVER_CLASS_OBSERVED_PRINT);
+PF_PIN_WORD(no::DriverEligibilityClass::CarriedOpen, PF_NATIVE_DRIVER_CLASS_CARRIED_OPEN);
+PF_PIN_WORD(no::DriverEligibilityClass::TickAfterCalculation,
+            PF_NATIVE_DRIVER_CLASS_TICK_AFTER_CALCULATION);
+PF_PIN_WORD(no::DriverEligibilityClass::ConfirmedOpen, PF_NATIVE_DRIVER_CLASS_CONFIRMED_OPEN);
+PF_PIN_WORD(no::DriverEligibilityClass::ConfirmedExcursion,
+            PF_NATIVE_DRIVER_CLASS_CONFIRMED_EXCURSION);
+PF_PIN_WORD(no::DriverEligibilityClass::ConfirmedAfterCalculationClose,
+            PF_NATIVE_DRIVER_CLASS_CONFIRMED_AFTER_CALCULATION_CLOSE);
+PF_PIN_WORD(no::DriverEligibilityClass::CurrentExecution,
+            PF_NATIVE_DRIVER_CLASS_CURRENT_EXECUTION);
+PF_PIN_WORD(pineforge::NativePrecommitVerdict::Admit, PF_NATIVE_PRECOMMIT_ADMIT);
+PF_PIN_WORD(pineforge::NativePrecommitVerdict::Refuse, PF_NATIVE_PRECOMMIT_REFUSE);
+PF_PIN_WORD(pineforge::NativePrecommitVerdict::AdmitWithHostMargin,
+            PF_NATIVE_PRECOMMIT_ADMIT_WITH_HOST_MARGIN);
+PF_PIN_WORD(pineforge::NativeAnchoredTrigger::Limit, PF_NATIVE_ANCHORED_TRIGGER_LIMIT);
+PF_PIN_WORD(pineforge::NativeAnchoredTrigger::Stop, PF_NATIVE_ANCHORED_TRIGGER_STOP);
+PF_PIN_WORD(pineforge::NativeAnchoredTrigger::TrailArm, PF_NATIVE_ANCHORED_TRIGGER_TRAIL_ARM);
+PF_PIN_WORD(pineforge::NativeCurrentPriceRule::AsPresented, PF_NATIVE_PRICE_AS_PRESENTED);
+/* The plan the precommit view names is an alternative of a variant, in this
+ * order; the visit in precommit_pod() names each one. */
+static_assert(std::variant_size_v<no::ExecutionPlan> == 4, "ExecutionPlan grew");
+static_assert(std::is_same_v<std::variant_alternative_t<0, no::ExecutionPlan>,
+                             pineforge::execution::Flatten>
+                  && std::is_same_v<std::variant_alternative_t<3, no::ExecutionPlan>,
+                                    pineforge::execution::ReverseTo>,
+              "pf_native_plan_e drifted from ExecutionPlan");
+static_assert(std::variant_size_v<no::Remaining> == 5, "Remaining grew");
 PF_PIN_WORD(no::NativeArmFirstMatch::AtArmPrint, PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT);
 PF_PIN_WORD(no::NativeArmFirstMatch::AfterArmPrint, PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT);
 PF_PIN_WORD(no::NativeArmScope::OwnerLot, PF_NATIVE_ARM_SCOPE_OWNER_LOT);
@@ -1130,6 +1169,50 @@ constexpr std::uint32_t c_word(pineforge::NativeAuxiliaryAppendError value) noex
     return static_cast<std::uint32_t>(value);
 }
 
+constexpr std::uint32_t c_word(no::DriverEligibilityClass value) noexcept {
+    using V = no::DriverEligibilityClass;
+    switch (value) {
+    case V::ObservedPrint: return PF_NATIVE_DRIVER_CLASS_OBSERVED_PRINT;
+    case V::CarriedOpen: return PF_NATIVE_DRIVER_CLASS_CARRIED_OPEN;
+    case V::TickAfterCalculation: return PF_NATIVE_DRIVER_CLASS_TICK_AFTER_CALCULATION;
+    case V::ConfirmedOpen: return PF_NATIVE_DRIVER_CLASS_CONFIRMED_OPEN;
+    case V::ConfirmedExcursion: return PF_NATIVE_DRIVER_CLASS_CONFIRMED_EXCURSION;
+    case V::ConfirmedAfterCalculationClose:
+        return PF_NATIVE_DRIVER_CLASS_CONFIRMED_AFTER_CALCULATION_CLOSE;
+    case V::CurrentExecution: return PF_NATIVE_DRIVER_CLASS_CURRENT_EXECUTION;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::NativeCandidatePriceKind value) noexcept {
+    using V = no::NativeCandidatePriceKind;
+    switch (value) {
+    case V::PointPrice: return PF_NATIVE_CANDIDATE_PRICE_POINT_PRICE;
+    case V::TriggerLevel: return PF_NATIVE_CANDIDATE_PRICE_TRIGGER_LEVEL;
+    case V::CurrentQuote: return PF_NATIVE_CANDIDATE_PRICE_CURRENT_QUOTE;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeAnchoredTrigger value) noexcept {
+    using V = pineforge::NativeAnchoredTrigger;
+    switch (value) {
+    case V::Limit: return PF_NATIVE_ANCHORED_TRIGGER_LIMIT;
+    case V::Stop: return PF_NATIVE_ANCHORED_TRIGGER_STOP;
+    case V::TrailArm: return PF_NATIVE_ANCHORED_TRIGGER_TRAIL_ARM;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCurrentPriceRule value) noexcept {
+    using V = pineforge::NativeCurrentPriceRule;
+    switch (value) {
+    case V::AsPresented: return PF_NATIVE_PRICE_AS_PRESENTED;
+    case V::NearestTick: return PF_NATIVE_PRICE_NEAREST_TICK;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
 /* The narrow words of the decision, event and margin-view PODs. */
 constexpr std::uint8_t c_byte(std::uint32_t word) noexcept {
     return static_cast<std::uint8_t>(word);
@@ -1169,6 +1252,10 @@ private:
 /* Defined below, beside the other C++ value -> C POD translations; declared
  * here because the recalculation hook flattens an applied cause. */
 pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied);
+/* Defined below with the working-row readout; the policy hooks' views name a
+ * request's intent and trigger the same way. */
+std::uint32_t working_intent_tag(const no::OrderIntent& intent, double& value);
+std::uint32_t working_trigger_tag(const no::Trigger& trigger, double& p1, double& p2);
 
 /* ── The host ───────────────────────────────────────────────────── */
 
@@ -1343,12 +1430,15 @@ private:
 
     no::ExecutionTerms resolve_execution_terms(
             const pineforge::NativeExecutionTermsFacts& facts) const override {
-        const no::ExecutionTerms fallback{facts.default_resolved_price, std::nullopt,
-                                          no::OpeningShape::Transact};
-        if (!table_.on_close_units) return fallback;
+        no::ExecutionTerms terms{facts.default_resolved_price, std::nullopt,
+                                 no::OpeningShape::Transact};
+        /* The price half first, the units half after it: the C++ hook
+         * answers both at once, and so does this pair. */
+        if (table_.on_execution_terms && !answer_execution_terms(facts, terms)) return terms;
+        if (!table_.on_close_units) return terms;
         if (!facts.definition
             || !std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
-            return fallback;
+            return terms;
         }
         pf_native_close_view_v1 view;
         std::memset(&view, 0, sizeof(view));
@@ -1363,9 +1453,34 @@ private:
         view.is_buy = facts.is_buy ? 1u : 0u;
         double units = 0.0;
         if (table_.on_close_units(table_.user, &view, &units) == PF_NATIVE_ANSWER_DEFAULT) {
-            return fallback;
+            return terms;
         }
-        return {facts.default_resolved_price, units, no::OpeningShape::Transact};
+        terms.units = units;
+        return terms;
+    }
+
+    /* on_execution_terms' answer into `terms`; false when the answer names
+     * a word the kernel cannot read, in which case `terms` carries non-finite
+     * units -- the kernel's own InvalidTerms for every candidate. */
+    bool answer_execution_terms(const pineforge::NativeExecutionTermsFacts& facts,
+                                no::ExecutionTerms& terms) const;
+
+    pineforge::NativePrecommitVerdict validate_execution_precommit(
+            const pineforge::NativePrecommitView& view) const override;
+
+    std::optional<double> resolve_anchored_level(
+            const pineforge::NativeAnchoredLevelView& view) const override;
+
+    /* The kernel's own bytes, then -- when the host answers -- its digest
+     * under a domain tag of this transport's own. A host that installs no
+     * hook, or answers DEFAULT, folds exactly what it always folded. */
+    void hash_host_extension(pineforge::BrokerStateHashSink& sink) const override {
+        BacktestEngine::hash_host_extension(sink);
+        if (!table_.on_hash_extension) return;
+        std::uint64_t digest = 0;
+        if (table_.on_hash_extension(table_.user, &digest) == PF_NATIVE_ANSWER_DEFAULT) return;
+        sink.s("native-c-host:extension");
+        sink.u(digest);
     }
 
     bool owns_lot_excursions() const noexcept override {
@@ -2091,6 +2206,195 @@ std::uint32_t working_trigger_tag(const no::Trigger& trigger, double& p1, double
     }, trigger);
 }
 
+/* ── The policy hooks' views and answers ────────────────────────── */
+
+void fill_view_cursor(const no::MatchCursor& cursor, std::uint64_t& ordinal,
+                      std::int64_t& effective_time_ms, double& t, std::int32_t& interval_index,
+                      std::uint8_t& provenance, std::uint8_t& path_phase) {
+    ordinal = cursor.point.ordinal;
+    effective_time_ms = cursor.point.effective_time_ms;
+    t = cursor.t;
+    interval_index = cursor.point.interval_index;
+    provenance = c_byte(c_word(cursor.point.provenance));
+    path_phase = c_byte(c_word(cursor.point.path_phase));
+}
+
+pf_native_terms_view_v1 terms_view(const pineforge::NativeExecutionTermsFacts& facts) {
+    pf_native_terms_view_v1 out;
+    std::memset(&out, 0, sizeof(out));
+    out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+    out.version = PF_NATIVE_API_VERSION;
+    out.incarnation = facts.target.incarnation;
+    if (facts.definition) {
+        double value = 0.0;
+        double p1 = 0.0;
+        double p2 = 0.0;
+        out.intent = working_intent_tag(facts.definition->request.intent, value);
+        out.trigger = working_trigger_tag(facts.definition->request.trigger, p1, p2);
+    }
+    out.trigger_state = static_cast<std::uint32_t>(facts.trigger_state.index());
+    out.remaining_kind = static_cast<std::uint32_t>(facts.remaining.index());
+    if (const auto* units = std::get_if<no::RemainingUnits>(&facts.remaining)) {
+        out.remaining_units = units->q;
+    }
+    out.driver_class = c_word(facts.driver_class);
+    out.price_kind = c_word(facts.price_kind);
+    out.quote_kind = c_word(facts.quote_kind);
+    out.price_rule = c_word(facts.price_rule);
+    out.is_buy = facts.is_buy ? 1u : 0u;
+    out.shared_cursor_collision = facts.shared_cursor_collision ? 1u : 0u;
+    out.raw_price = facts.raw_price;
+    if (facts.trigger_level) {
+        out.has_trigger_level = 1u;
+        out.trigger_level = *facts.trigger_level;
+    }
+    out.default_resolved_price = facts.default_resolved_price;
+    out.scope_exposure_units = facts.scope_exposure_units;
+    out.position_units = facts.position.signed_units;
+    out.position_average_price = facts.position.average_price;
+    out.position_lot_count = static_cast<std::uint64_t>(facts.position.lot_count);
+    out.opposite_book_units = facts.opposite_book_units;
+    out.pending_group_deduction = facts.pending_group_deduction;
+    out.fx_effective_time_ms = facts.fx_effective_time_ms;
+    out.active_fx = facts.active_fx;
+    fill_view_cursor(facts.cursor, out.cursor_ordinal, out.cursor_effective_time_ms,
+                     out.cursor_t, out.cursor_interval_index, out.cursor_provenance,
+                     out.cursor_path_phase);
+    return out;
+}
+
+bool CCallbackHost::answer_execution_terms(const pineforge::NativeExecutionTermsFacts& facts,
+                                           no::ExecutionTerms& terms) const {
+    const pf_native_terms_view_v1 view = terms_view(facts);
+    pf_native_terms_v1 answer;
+    std::memset(&answer, 0, sizeof(answer));
+    answer.struct_size = static_cast<std::uint32_t>(sizeof(answer));
+    answer.version = PF_NATIVE_API_VERSION;
+    answer.resolved_price = terms.resolved_price;
+    answer.shape = PF_NATIVE_OPENING_SHAPE_TRANSACT;
+    answer.grid_policy = PF_NATIVE_GRID_SNAP;
+    if (table_.on_execution_terms(table_.user, &view, &answer) == PF_NATIVE_ANSWER_DEFAULT) {
+        return true;
+    }
+    terms.resolved_price = answer.resolved_price;
+    bool readable = true;
+    switch (answer.shape) {
+    case PF_NATIVE_OPENING_SHAPE_TRANSACT: terms.shape = no::OpeningShape::Transact; break;
+    case PF_NATIVE_OPENING_SHAPE_REVERSE_TO: terms.shape = no::OpeningShape::ReverseTo; break;
+    case PF_NATIVE_OPENING_SHAPE_CLOSE_OPPOSITE:
+        terms.shape = no::OpeningShape::CloseOpposite;
+        break;
+    default: readable = false; break;
+    }
+    switch (answer.grid_policy) {
+    case PF_NATIVE_GRID_SNAP: terms.grid_policy = no::ExecutionGridPolicy::SnapToGrid; break;
+    case PF_NATIVE_GRID_EXPLICIT_UNITS:
+        terms.grid_policy = no::ExecutionGridPolicy::ExplicitUnits;
+        break;
+    default: readable = false; break;
+    }
+    if (!readable) {
+        /* Never cast a word onto an enumeration: terms carrying non-finite
+         * units are the kernel's own InvalidTerms, whatever the candidate. */
+        terms.units = kNaN;
+        return false;
+    }
+    return true;
+}
+
+pineforge::NativePrecommitVerdict CCallbackHost::validate_execution_precommit(
+        const pineforge::NativePrecommitView& view) const {
+    if (!table_.on_precommit) return NativeStrategyHost::validate_execution_precommit(view);
+    pf_native_precommit_view_v1 pod;
+    std::memset(&pod, 0, sizeof(pod));
+    pod.struct_size = static_cast<std::uint32_t>(sizeof(pod));
+    pod.version = PF_NATIVE_API_VERSION;
+    pod.incarnation = view.target.incarnation;
+    if (view.definition) {
+        double value = 0.0;
+        pod.intent = working_intent_tag(view.definition->request.intent, value);
+    }
+    std::visit([&pod](const auto& plan) {
+        using T = std::decay_t<decltype(plan)>;
+        if constexpr (std::is_same_v<T, pineforge::execution::Flatten>) {
+            pod.plan = PF_NATIVE_PLAN_FLATTEN;
+        } else if constexpr (std::is_same_v<T, pineforge::order_action::Reduce>) {
+            pod.plan = PF_NATIVE_PLAN_REDUCE;
+            pod.plan_units = plan.units;
+        } else if constexpr (std::is_same_v<T, pineforge::order_action::Transact>) {
+            pod.plan = PF_NATIVE_PLAN_TRANSACT;
+            pod.plan_units = plan.signed_units;
+        } else if constexpr (std::is_same_v<T, pineforge::execution::ReverseTo>) {
+            pod.plan = PF_NATIVE_PLAN_REVERSE_TO;
+            pod.plan_units = plan.signed_units;
+        } else {
+            static_assert(!sizeof(T), "untranslated execution plan");
+        }
+    }, view.plan);
+    pod.raw_price = view.raw_price;
+    pod.resolved_price = view.resolved_price;
+    pod.inspected_closed_units = view.inspected_closed_units;
+    pod.inspected_opened_units = view.inspected_opened_units;
+    pod.inspected_current_ticket = view.inspected_current_ticket;
+    pod.current = view.current ? 1u : 0u;
+    pod.would_open = view.account.would_open ? 1u : 0u;
+    pod.incoming_short = view.account.incoming_short ? 1u : 0u;
+    pod.resulting_abs_units = view.account.resulting_abs_units;
+    pod.resulting_lot_count = static_cast<std::uint64_t>(view.account.resulting_lot_count);
+    pod.resulting_abs_notional = view.account.resulting_abs_notional;
+    pod.realized_balance = view.account.realized_balance;
+    pod.remaining_entry_cost = view.account.remaining_entry_cost;
+    pod.marked_equity = view.account.marked_equity;
+    pod.cycle_after = view.account.cycle_after;
+    pod.signed_units_after = view.account.signed_units_after;
+    pod.closed_row_pnl = view.closed_row_pnl.empty() ? nullptr : view.closed_row_pnl.data();
+    pod.closed_row_count = static_cast<std::uint64_t>(view.closed_row_pnl.size());
+    fill_view_cursor(view.cursor, pod.cursor_ordinal, pod.cursor_effective_time_ms,
+                     pod.cursor_t, pod.cursor_interval_index, pod.cursor_provenance,
+                     pod.cursor_path_phase);
+    std::uint32_t verdict = PF_NATIVE_PRECOMMIT_ADMIT;
+    if (table_.on_precommit(table_.user, &pod, &verdict) == PF_NATIVE_ANSWER_DEFAULT) {
+        return pineforge::NativePrecommitVerdict::Admit;
+    }
+    switch (verdict) {
+    case PF_NATIVE_PRECOMMIT_ADMIT: return pineforge::NativePrecommitVerdict::Admit;
+    case PF_NATIVE_PRECOMMIT_REFUSE: return pineforge::NativePrecommitVerdict::Refuse;
+    case PF_NATIVE_PRECOMMIT_ADMIT_WITH_HOST_MARGIN:
+        return pineforge::NativePrecommitVerdict::AdmitWithHostMargin;
+    default:
+        /* An answer the kernel cannot act on admits nothing. */
+        return pineforge::NativePrecommitVerdict::Refuse;
+    }
+}
+
+std::optional<double> CCallbackHost::resolve_anchored_level(
+        const pineforge::NativeAnchoredLevelView& view) const {
+    if (!table_.on_anchored_level) return std::nullopt;
+    pf_native_anchored_level_view_v1 pod;
+    std::memset(&pod, 0, sizeof(pod));
+    pod.struct_size = static_cast<std::uint32_t>(sizeof(pod));
+    pod.version = PF_NATIVE_API_VERSION;
+    pod.owner = view.owner.incarnation;
+    pod.owner_applied_ordinal = view.owner_applied_ordinal;
+    pod.owner_lot_incarnation = view.owner_lot_incarnation;
+    pod.owner_fill_price = view.owner_fill_price;
+    pod.leg = view.leg.incarnation;
+    pod.leg_side = c_word(view.leg_side);
+    pod.trigger = c_word(view.trigger);
+    pod.offset = view.offset;
+    pod.price_tick = view.price_tick;
+    pod.kernel_level = view.kernel_level;
+    fill_view_cursor(view.owner_cursor, pod.owner_cursor_ordinal,
+                     pod.owner_cursor_effective_time_ms, pod.owner_cursor_t,
+                     pod.owner_cursor_interval_index, pod.owner_cursor_provenance,
+                     pod.owner_cursor_path_phase);
+    double level = view.kernel_level;
+    if (table_.on_anchored_level(table_.user, &pod, &level) == PF_NATIVE_ANSWER_DEFAULT) {
+        return std::nullopt;
+    }
+    return level;
+}
+
 /* N18: one NativeOpenLot row into its C POD. The strings borrow the cached
  * snapshot exactly as fill_working's label/comment do. */
 void fill_open_lot(const pineforge::NativeOpenLot& lot, pf_native_open_lot_v1& out) {
@@ -2693,12 +2997,15 @@ PF_API int strategy_native_api_version(void) { return PF_NATIVE_API_VERSION; }
 PF_API pf_strategy_t strategy_native_host_create_v1(const pf_native_callbacks_v1* callbacks) {
     try {
         if (!callbacks) return nullptr;
-        /* Two published layouts, and only two: the base one the lane first
-         * shipped and the current one with the six-hook tail. A base-sized
-         * caller's tail is never read; it is zero-filled here, which is
-         * exactly "no hook installed". */
-        const bool has_hook_tail = callbacks->struct_size == sizeof(pf_native_callbacks_v1);
-        if (!has_hook_tail && callbacks->struct_size != PF_NATIVE_CALLBACKS_V1_BASE_SIZE) {
+        /* Three published layouts, and only three: the base one the lane
+         * first shipped, that plus the six-hook tail, and the current one
+         * with the policy-hook tail. An earlier caller's tails are never
+         * read; they are zero-filled here, which is exactly "no hook
+         * installed". */
+        const std::uint32_t caller_size = callbacks->struct_size;
+        if (caller_size != sizeof(pf_native_callbacks_v1)
+            && caller_size != PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
+            && caller_size != PF_NATIVE_CALLBACKS_V1_BASE_SIZE) {
             return nullptr;
         }
         if (callbacks->version != PF_NATIVE_API_VERSION) return nullptr;

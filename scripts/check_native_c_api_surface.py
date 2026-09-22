@@ -122,6 +122,11 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_spec_error_e": ("native_run_spec.hpp", "NativeRunSpecError", {}),
     "pf_native_spec_field_e": ("native_run_spec.hpp", "NativeRunSpecField", {}),
     "pf_native_append_error_e": ("native_host.hpp", "NativeAuxiliaryAppendError", {}),
+    "pf_native_opening_shape_e": ("native_order.hpp", "OpeningShape", {}),
+    "pf_native_candidate_price_e": ("native_order.hpp", "NativeCandidatePriceKind", {}),
+    "pf_native_driver_class_e": ("native_order.hpp", "DriverEligibilityClass", {}),
+    "pf_native_precommit_verdict_e": ("native_host.hpp", "NativePrecommitVerdict", {}),
+    "pf_native_anchored_trigger_e": ("native_host.hpp", "NativeAnchoredTrigger", {}),
 }
 
 # Every C enumeration with no kernel `enum class` to mirror, and why. A
@@ -154,6 +159,7 @@ C_ONLY: dict[str, str] = {
     "pf_native_gaps_e": "NativeTimeframeSubscription::gaps is a bool",
     "pf_native_intrabar_kind_e": "alternative index of the std::variant IntrabarPath::value",
     "pf_native_answer_e": "the C answering-hook protocol; a C++ hook answers a std::optional",
+    "pf_native_plan_e": "alternative index of the std::variant native_order::ExecutionPlan",
 }
 
 _C_ENUM = re.compile(r"typedef\s+enum\s+(\w+)\s*\{(.*?)\}\s*\w+\s*;", re.DOTALL)

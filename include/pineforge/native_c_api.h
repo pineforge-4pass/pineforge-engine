@@ -36,15 +36,14 @@
  * ✗ Streaming has no new symbols: strategy_stream_begin / _push_bar /
  *   _push_tick / _advance_time / _end / _fill_report take any handle this
  *   header produces, unchanged.
- * ✗ resolve_execution_terms is exposed only as its UNITS half, for a
- *   host-sized close (pf_native_callbacks_v1::on_close_units). Its price and
- *   opening-shape halves, validate_execution_precommit and
- *   resolve_anchored_level stay C++-only; see the exclusion list below.
- * ✗ hash_host_extension is not exposed: the callback table carries no hash
- *   hook, so a C host's broker-state hash is the kernel's own fold. The
- *   per-bar rows need no new symbol: `report_policy` =
+ * ✓ Answer the kernel's policy hooks: a host-sized close's units
+ *   (on_close_units), a candidate's settlement price and opening shape
+ *   (on_execution_terms), the last gate before a fill (on_precommit), where
+ *   an anchored leg is armed (on_anchored_level), and the host's own state
+ *   folded into the broker-state hash (on_hash_extension). The per-bar hash
+ *   rows need no new symbol: `report_policy` =
  *   PF_NATIVE_REPORT_KERNEL_RECORDED with
- *   strategy_set_broker_state_hash_recording on fills
+ *   strategy_set_broker_state_hash_recording fills
  *   pf_report_t::broker_state_hash, one row per script bar.
  *
  * COVERAGE
@@ -70,17 +69,13 @@
  *   [C]  on_native_margin_call             pf_native_callbacks_v1::on_margin_call -- the call's whole
  *                                          MarginCallEvent is strategy_native_margin_call_v1, by the
  *                                          ordinal the hook is handed
- *   [C]  resolve_execution_terms           pf_native_callbacks_v1::on_close_units -- the UNITS half only; the
- *                                          price and the opening shape stay the kernel's
- *   [--] validate_execution_precommit      its view is an ExecutionPlan, an AccountEffectProjection and a
- *                                          variable-length closed-row P&L vector, none of which has a size-
- *                                          prefixed POD; a C host gates an opening with
- *                                          PF_NATIVE_INTENT_SIZED's placement-time admission or with
- *                                          on_margin_requirement
- *   [--] resolve_anchored_level            the generic knob for where an anchored level sits is
- *                                          pf_native_request_v1::anchor_rounding; the hook exists for a source
- *                                          language's own level arithmetic, and a C host that wants another
- *                                          level replaces the leg on its PF_NATIVE_EVENT_ARMED
+ *   [C]  resolve_execution_terms           pf_native_callbacks_v1::on_close_units (the units of a host-sized
+ *                                          close) and pf_native_callbacks_v1::on_execution_terms (the price,
+ *                                          the opening shape and the grid policy)
+ *   [C]  validate_execution_precommit      pf_native_callbacks_v1::on_precommit -- the plan, the inspection
+ *                                          and the projected account flattened into
+ *                                          pf_native_precommit_view_v1, the closed rows' P&L borrowed
+ *   [C]  resolve_anchored_level            pf_native_callbacks_v1::on_anchored_level
  *   [C]  resolve_margin_requirement        pf_native_callbacks_v1::on_margin_requirement
  *   [C]  margin_check_allowed              pf_native_callbacks_v1::on_margin_check
  *   [C]  resolve_margin_call_units         pf_native_callbacks_v1::on_margin_call_units
@@ -192,9 +187,11 @@
  *   [C]  declare_opened_lot_entry_bar_mask strategy_native_declare_opened_lot_entry_bar_mask_v1 -- legal
  *                                          inside on_applied alone; executed by the entry-bar mask
  *                                          scenario of tests/test_native_c_api.c
- *   [--] hash_host_extension               the callback table carries no hash hook, so a C host's broker-
- *                                          state hash is the kernel's own fold (see SCOPE)
- *   [--] hash_source_extension             the deprecated spelling of hash_host_extension; the same reason
+ *   [C]  hash_host_extension               pf_native_callbacks_v1::on_hash_extension -- the host folds a
+ *                                          64-bit digest of its own state after the kernel's bytes
+ *   [--] hash_source_extension             the deprecated spelling of hash_host_extension, kept for C++
+ *                                          subclasses written against it; a C host has only the current
+ *                                          spelling, on_hash_extension
  *
  * HARDENING RULES
  * ───────────────
@@ -1249,6 +1246,71 @@ typedef enum pf_native_append_error_e {
                                                                *   this fails the host. */
 } pf_native_append_error_t;
 
+/* ── The policy hooks' words ───────────────────────────────────── */
+
+/** How an opening settles against an opposite book —
+ *  `native_order::OpeningShape`, #pf_native_terms_v1::shape. Only an OPENING
+ *  may name a shape other than TRANSACT: a kernel-sized one
+ *  (#PF_NATIVE_INTENT_SIZED) that the answer is about; the kernel refuses any
+ *  other with #PF_NATIVE_MATCH_REJECT_INVALID_TERMS. */
+typedef enum pf_native_opening_shape_e {
+    PF_NATIVE_OPENING_SHAPE_TRANSACT       = 0, /**< Net against the book (the default). */
+    PF_NATIVE_OPENING_SHAPE_REVERSE_TO     = 1, /**< Close the opposite book, then open the
+                                                 *   units. */
+    PF_NATIVE_OPENING_SHAPE_CLOSE_OPPOSITE = 2  /**< Close the opposite book and open the
+                                                 *   remainder. */
+} pf_native_opening_shape_t;
+
+/** Which price a matching candidate is at — `native_order::NativeCandidatePriceKind`,
+ *  #pf_native_terms_view_v1::price_kind. */
+typedef enum pf_native_candidate_price_e {
+    PF_NATIVE_CANDIDATE_PRICE_POINT_PRICE   = 0, /**< The driver point's own price. */
+    PF_NATIVE_CANDIDATE_PRICE_TRIGGER_LEVEL = 1, /**< A resting level the path crossed. */
+    PF_NATIVE_CANDIDATE_PRICE_CURRENT_QUOTE = 2  /**< A current execution's quote. */
+} pf_native_candidate_price_t;
+
+/** Which kind of driver point a candidate matched at —
+ *  `native_order::DriverEligibilityClass`,
+ *  #pf_native_terms_view_v1::driver_class. */
+typedef enum pf_native_driver_class_e {
+    PF_NATIVE_DRIVER_CLASS_OBSERVED_PRINT                    = 0,
+    PF_NATIVE_DRIVER_CLASS_CARRIED_OPEN                      = 1,
+    PF_NATIVE_DRIVER_CLASS_TICK_AFTER_CALCULATION            = 2,
+    PF_NATIVE_DRIVER_CLASS_CONFIRMED_OPEN                    = 3,
+    PF_NATIVE_DRIVER_CLASS_CONFIRMED_EXCURSION               = 4,
+    PF_NATIVE_DRIVER_CLASS_CONFIRMED_AFTER_CALCULATION_CLOSE = 5,
+    PF_NATIVE_DRIVER_CLASS_CURRENT_EXECUTION                 = 6
+} pf_native_driver_class_t;
+
+/** The settlement shape an execution is about to take — the alternative of
+ *  `native_order::ExecutionPlan`, #pf_native_precommit_view_v1::plan. */
+typedef enum pf_native_plan_e {
+    PF_NATIVE_PLAN_FLATTEN    = 0, /**< Close the whole book; `plan_units` 0. */
+    PF_NATIVE_PLAN_REDUCE     = 1, /**< Close `plan_units` units. */
+    PF_NATIVE_PLAN_TRANSACT   = 2, /**< Trade `plan_units` signed units. */
+    PF_NATIVE_PLAN_REVERSE_TO = 3  /**< Reach `plan_units` signed exposure. */
+} pf_native_plan_t;
+
+/** What #pf_native_callbacks_v1::on_precommit answers —
+ *  `NativePrecommitVerdict`. */
+typedef enum pf_native_precommit_verdict_e {
+    PF_NATIVE_PRECOMMIT_ADMIT                  = 0, /**< The kernel's own path. */
+    PF_NATIVE_PRECOMMIT_REFUSE                 = 1, /**< A nonfinancial
+                                                     *   #PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT. */
+    PF_NATIVE_PRECOMMIT_ADMIT_WITH_HOST_MARGIN = 2  /**< Admit, and the host owns this one
+                                                     *   opening's margin check: the
+                                                     *   kernel's initial-margin gate is
+                                                     *   skipped for it. */
+} pf_native_precommit_verdict_t;
+
+/** Which trigger of an anchored leg the owner's fill supplies —
+ *  `NativeAnchoredTrigger`, #pf_native_anchored_level_view_v1::trigger. */
+typedef enum pf_native_anchored_trigger_e {
+    PF_NATIVE_ANCHORED_TRIGGER_LIMIT     = 0,
+    PF_NATIVE_ANCHORED_TRIGGER_STOP      = 1,
+    PF_NATIVE_ANCHORED_TRIGGER_TRAIL_ARM = 2
+} pf_native_anchored_trigger_t;
+
 /** @} */ /* end of pf_native_c_enums */
 
 /** @defgroup pf_native_c_types Transport types
@@ -1602,6 +1664,128 @@ typedef struct pf_native_lot_excursion_v1 {
     uint8_t  entry_bar_low_masked;  /**< The entry bar's low is not this trade's. */
     uint8_t  reserved0;
 } pf_native_lot_excursion_v1;
+
+/** The facts of one matching candidate, handed to
+ *  #pf_native_callbacks_v1::on_execution_terms — the price half of
+ *  `NativeExecutionTermsFacts`. Every field is what the kernel measured at
+ *  this candidate; `default_resolved_price` is the price it would settle at
+ *  (slippage and the grid applied), i.e. what the host answers DEFAULT to. */
+typedef struct pf_native_terms_view_v1 {
+    uint32_t struct_size;             /**< sizeof(pf_native_terms_view_v1). */
+    uint32_t version;                 /**< PF_NATIVE_API_VERSION. */
+    uint64_t incarnation;             /**< The request being resolved. */
+    uint32_t intent;                  /**< #pf_native_intent_t of that request. */
+    uint32_t trigger;                 /**< #pf_native_trigger_t of that request. */
+    uint32_t trigger_state;           /**< #pf_native_trigger_state_t. */
+    uint32_t remaining_kind;          /**< #pf_native_remaining_t. */
+    double   remaining_units;         /**< Valid when `remaining_kind` is UNITS. */
+    uint32_t driver_class;            /**< #pf_native_driver_class_t. */
+    uint32_t price_kind;              /**< #pf_native_candidate_price_t. */
+    uint32_t quote_kind;              /**< #pf_native_quote_kind_t. */
+    uint32_t price_rule;              /**< #pf_native_price_rule_t. */
+    uint32_t is_buy;                  /**< 0/1: the side this candidate trades on. */
+    uint32_t shared_cursor_collision; /**< 0/1: a rounded quote shared with another level. */
+    double   raw_price;               /**< The path price the match was found at. */
+    double   trigger_level;           /**< The level crossed, when `has_trigger_level`. */
+    uint32_t has_trigger_level;       /**< 0/1. */
+    uint32_t reserved0;               /**< Always 0. */
+    double   default_resolved_price;  /**< The kernel's own settlement price. */
+    double   scope_exposure_units;    /**< What the bound scope holds here. */
+    double   position_units;          /**< The whole physical book, signed. */
+    double   position_average_price;
+    uint64_t position_lot_count;
+    double   opposite_book_units;
+    double   pending_group_deduction;
+    int64_t  fx_effective_time_ms;    /**< Where the account rate is read. */
+    double   active_fx;               /**< The account rate there. */
+    uint64_t cursor_ordinal;
+    int64_t  cursor_effective_time_ms;
+    double   cursor_t;
+    int32_t  cursor_interval_index;
+    uint8_t  cursor_provenance;       /**< #pf_native_price_provenance_t. */
+    uint8_t  cursor_path_phase;       /**< #pf_native_path_phase_t. */
+    uint8_t  reserved1[2];            /**< Always 0. */
+} pf_native_terms_view_v1;
+
+/** The price half of the terms #pf_native_callbacks_v1::on_execution_terms
+ *  answers — `ExecutionTerms` less its units, which
+ *  #pf_native_callbacks_v1::on_close_units answers for a host-sized close.
+ *  The runtime fills it with the kernel's default (`default_resolved_price`,
+ *  TRANSACT, SNAP) before the call. */
+typedef struct pf_native_terms_v1 {
+    uint32_t struct_size;    /**< sizeof(pf_native_terms_v1). */
+    uint32_t version;        /**< PF_NATIVE_API_VERSION. */
+    double   resolved_price; /**< The price to settle at. */
+    uint32_t shape;          /**< #pf_native_opening_shape_t. */
+    uint32_t grid_policy;    /**< #pf_native_grid_policy_t. */
+} pf_native_terms_v1;
+
+/** The last facts before one execution's physical effect, handed to
+ *  #pf_native_callbacks_v1::on_precommit — `NativePrecommitView`: the plan,
+ *  the prices, the settlement inspection, and the account the fill would
+ *  leave (the projection's closed rows' P&L, borrowed for the call, in
+ *  roster order). Offered once per ready attempt, never for an inspection,
+ *  and only when the settlement is ready to apply. */
+typedef struct pf_native_precommit_view_v1 {
+    uint32_t struct_size;              /**< sizeof(pf_native_precommit_view_v1). */
+    uint32_t version;                  /**< PF_NATIVE_API_VERSION. */
+    uint64_t incarnation;              /**< The request about to execute. */
+    uint32_t intent;                   /**< #pf_native_intent_t of that request. */
+    uint32_t plan;                     /**< #pf_native_plan_t. */
+    double   plan_units;               /**< See #pf_native_plan_t. */
+    double   raw_price;
+    double   resolved_price;
+    double   inspected_closed_units;
+    double   inspected_opened_units;
+    double   inspected_current_ticket;
+    uint32_t current;                  /**< 1 for #strategy_native_execute_current_v1. */
+    uint32_t would_open;               /**< 0/1: the fill opens a lot. */
+    uint32_t incoming_short;           /**< 0/1: the opened lot is short. */
+    uint32_t reserved0;                /**< Always 0. */
+    double   resulting_abs_units;
+    uint64_t resulting_lot_count;
+    double   resulting_abs_notional;
+    double   realized_balance;         /**< After the fill, account currency. */
+    double   remaining_entry_cost;     /**< Paid costs on the resulting book. */
+    double   marked_equity;            /**< After the fill, at its price. */
+    int64_t  cycle_after;
+    double   signed_units_after;
+    const double* closed_row_pnl;      /**< `closed_row_count` values; borrowed. */
+    uint64_t closed_row_count;
+    uint64_t cursor_ordinal;
+    int64_t  cursor_effective_time_ms;
+    double   cursor_t;
+    int32_t  cursor_interval_index;
+    uint8_t  cursor_provenance;        /**< #pf_native_price_provenance_t. */
+    uint8_t  cursor_path_phase;        /**< #pf_native_path_phase_t. */
+    uint8_t  reserved1[2];             /**< Always 0. */
+} pf_native_precommit_view_v1;
+
+/** One anchored leg's materialization, handed to
+ *  #pf_native_callbacks_v1::on_anchored_level exactly once, before its armed
+ *  event — `NativeAnchoredLevelView`. `kernel_level` is fill + offset after
+ *  the anchor's own rounding: what the host answers DEFAULT to. */
+typedef struct pf_native_anchored_level_view_v1 {
+    uint32_t struct_size;             /**< sizeof(pf_native_anchored_level_view_v1). */
+    uint32_t version;                 /**< PF_NATIVE_API_VERSION. */
+    uint64_t owner;                   /**< The request whose fill arms the leg. */
+    uint64_t owner_applied_ordinal;   /**< That fill's applied execution. */
+    uint64_t owner_lot_incarnation;   /**< The lot it opened. */
+    double   owner_fill_price;        /**< Its resolved price. */
+    uint64_t leg;                     /**< The anchored request. */
+    uint32_t leg_side;                /**< #pf_native_side_t the leg trades on. */
+    uint32_t trigger;                 /**< #pf_native_anchored_trigger_t. */
+    double   offset;                  /**< The anchor's offset, price units. */
+    double   price_tick;              /**< The run's tick, 0 when none. */
+    double   kernel_level;            /**< The level the kernel would install. */
+    uint64_t owner_cursor_ordinal;
+    int64_t  owner_cursor_effective_time_ms;
+    double   owner_cursor_t;
+    int32_t  owner_cursor_interval_index;
+    uint8_t  owner_cursor_provenance; /**< #pf_native_price_provenance_t. */
+    uint8_t  owner_cursor_path_phase; /**< #pf_native_path_phase_t. */
+    uint8_t  reserved0[2];            /**< Always 0. */
+} pf_native_anchored_level_view_v1;
 
 /** The run's generic risk ledger — the C spelling of `NativeRiskState` (L9).
  *
@@ -1986,8 +2170,8 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  There are two classes of entry, and they read their return value
  *  differently. An OBSERVATION callback — everything down to and including
  *  `on_sub_bar` — returns 0 to continue; any other value ends the run Failed
- *  with PF_NATIVE_FAILURE_CALLBACK. An ANSWERING callback — the four margin
- *  and excursion hooks at the end — returns a #pf_native_answer_t selecting
+ *  with PF_NATIVE_FAILURE_CALLBACK. An ANSWERING callback — every hook from
+ *  `on_margin_requirement` on — returns a #pf_native_answer_t selecting
  *  WHOSE answer the kernel uses; every value is in contract, so an answering
  *  hook can never fail the run. That split is deliberate: the answering hooks
  *  are consulted from kernel paths that are not inside the callback guard, so
@@ -2098,16 +2282,65 @@ typedef struct pf_native_callbacks_v1 {
      *  other value to close @p units of
      *  #pf_native_close_view_v1::scope_exposure_units. */
     int (*on_close_units)(void* user, const pf_native_close_view_v1* view, double* units);
+
+    /* ── The additive policy-hook tail (R5 lane F4). Read only when
+     * `struct_size` is the current sizeof; a caller sending an earlier layout
+     * stops at `on_close_units` (or at `on_margin_call`) and gets the
+     * kernel's own answers for all four, exactly the C++ defaults. All four
+     * are ANSWERING callbacks. ── */
+
+    /** The price half of `resolve_execution_terms`, consulted at EVERY
+     *  matching candidate once installed. ANSWERING callback: return
+     *  #PF_NATIVE_ANSWER_DEFAULT to keep the kernel's terms, any other value
+     *  to settle at @p out's price, shape and grid policy. @p out arrives
+     *  holding the kernel's own. A shape or grid word outside its enumeration
+     *  is the kernel's #PF_NATIVE_MATCH_REJECT_INVALID_TERMS, as is a shape
+     *  other than TRANSACT on anything but an opening. The units half stays
+     *  `on_close_units`'. */
+    int (*on_execution_terms)(void* user, const pf_native_terms_view_v1* view,
+                              pf_native_terms_v1* out);
+
+    /** The last gate before one execution's physical effect —
+     *  `validate_execution_precommit`. ANSWERING callback: return
+     *  #PF_NATIVE_ANSWER_DEFAULT to admit it on the kernel's own path, any
+     *  other value to use @p verdict (#pf_native_precommit_verdict_t). A
+     *  verdict word outside the enumeration refuses, the conservative
+     *  reading of an answer the kernel cannot act on. */
+    int (*on_precommit)(void* user, const pf_native_precommit_view_v1* view,
+                        uint32_t* verdict);
+
+    /** Where an anchored leg is armed — `resolve_anchored_level`. ANSWERING
+     *  callback: return #PF_NATIVE_ANSWER_DEFAULT to install the kernel's
+     *  level, any other value to install @p level; the kernel's
+     *  representability check still applies. */
+    int (*on_anchored_level)(void* user, const pf_native_anchored_level_view_v1* view,
+                             double* level);
+
+    /** The host's own durable state, folded into the broker-state hash —
+     *  `hash_host_extension`. Called once per hash (every per-bar row, the
+     *  final and the stream hash) after the kernel's own bytes. ANSWERING
+     *  callback: return #PF_NATIVE_ANSWER_DEFAULT to fold nothing more, any
+     *  other value to fold a domain tag and @p digest, a 64-bit digest of
+     *  whatever the host's next decision depends on. It must be a pure
+     *  function of that state. The continuation hash is the kernel's alone
+     *  and does not move. */
+    int (*on_hash_extension)(void* user, uint64_t* digest);
 } pf_native_callbacks_v1;
 
 /** Byte length of #pf_native_callbacks_v1 as the L13 lane first published it,
  *  before the six-hook tail was appended. It is the offset of the first
  *  appended field, so it stays correct on every target this header builds for
  *  — it is not a literal. #strategy_native_host_create_v1 accepts this length
- *  as well as the current `sizeof`, which is what makes the tail additive
- *  rather than a layout break. */
+ *  as well as #PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE and the current `sizeof`,
+ *  which is what makes each tail additive rather than a layout break. */
 #define PF_NATIVE_CALLBACKS_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_callbacks_v1, on_recalculate))
+
+/** Byte length of #pf_native_callbacks_v1 with the six-hook tail but without
+ *  the policy-hook tail — the second of its three published layouts, and the
+ *  `sizeof` every caller compiled before that tail existed sends. */
+#define PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE \
+    ((uint32_t)offsetof(pf_native_callbacks_v1, on_execution_terms))
 
 /** @} */ /* end of pf_native_c_types */
 
