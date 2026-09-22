@@ -8,7 +8,8 @@
  *     lanes L2-L8 already built.
  *   - Field-by-field translation between the C PODs and the C++ values. A C
  *     request is never cast onto `native_order::Request`; every enum field is
- *     read by an exhaustive switch whose default refuses.
+ *     read by an exhaustive switch that refuses a value outside its
+ *     enumeration.
  *   - The PF_API definitions themselves. They are pinned by the
  *     EXPECTED_NATIVE_C_API inventory in scripts/check_c_abi_runtime.py, the
  *     separate half of the same guard that pins src/c_abi.cpp — adding or
@@ -41,6 +42,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -124,6 +126,110 @@ static_assert(offsetof(pf_native_subscription_v1, lookahead) == sizeof(std::uint
                   && sizeof(pf_native_subscription_v1)
                          == offsetof(pf_native_subscription_v1, gaps) + sizeof(std::uint32_t),
               "the pf_native_subscription_v1 layout moved");
+/* The nine enum-valued words of the two run specifications: each C
+ * enumeration names its kernel enumeration's values one for one, so every
+ * enumerator is pinned, not only the last -- translate_word() reads a word
+ * by its integer, and these pins are what make that integer name the same
+ * rule on both sides. NativeReportPolicy's third value has no C name;
+ * c_spelled() below refuses it. */
+static_assert(static_cast<int>(pineforge::NativeFeeKind::Percent) == PF_NATIVE_FEE_PERCENT
+                  && static_cast<int>(pineforge::NativeFeeKind::CashPerUnit)
+                         == PF_NATIVE_FEE_CASH_PER_UNIT
+                  && static_cast<int>(pineforge::NativeFeeKind::CashPerExecution)
+                         == PF_NATIVE_FEE_CASH_PER_EXECUTION,
+              "pf_native_fee_kind_e drifted from NativeFeeKind");
+static_assert(static_cast<int>(pineforge::NativeCloseExecution::NextEligiblePoint)
+                      == PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT
+                  && static_cast<int>(pineforge::NativeCloseExecution::AfterCalculation)
+                         == PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION,
+              "pf_native_close_execution_e drifted from NativeCloseExecution");
+static_assert(static_cast<int>(pineforge::NativeOpenDirections::None)
+                      == PF_NATIVE_OPEN_DIRECTIONS_NONE
+                  && static_cast<int>(pineforge::NativeOpenDirections::Long)
+                         == PF_NATIVE_OPEN_DIRECTIONS_LONG
+                  && static_cast<int>(pineforge::NativeOpenDirections::Short)
+                         == PF_NATIVE_OPEN_DIRECTIONS_SHORT
+                  && static_cast<int>(pineforge::NativeOpenDirections::Both)
+                         == PF_NATIVE_OPEN_DIRECTIONS_BOTH,
+              "pf_native_open_directions_e drifted from NativeOpenDirections");
+static_assert(static_cast<int>(pineforge::NativeReportPolicy::HostRecorded)
+                      == PF_NATIVE_REPORT_HOST_RECORDED
+                  && static_cast<int>(pineforge::NativeReportPolicy::KernelRecorded)
+                         == PF_NATIVE_REPORT_KERNEL_RECORDED,
+              "pf_native_report_policy_e drifted from NativeReportPolicy");
+static_assert(static_cast<int>(pineforge::NativePriceGrid::None) == PF_NATIVE_PRICE_GRID_NONE
+                  && static_cast<int>(pineforge::NativePriceGrid::QuantizeFills)
+                         == PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS
+                  && static_cast<int>(pineforge::NativePriceGrid::QuantizeFillsAndTriggers)
+                         == PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS,
+              "pf_native_price_grid_e drifted from NativePriceGrid");
+static_assert(static_cast<int>(pineforge::NativeGridRounding::HalfUp)
+                      == PF_NATIVE_GRID_ROUNDING_HALF_UP
+                  && static_cast<int>(pineforge::NativeGridRounding::Directional)
+                         == PF_NATIVE_GRID_ROUNDING_DIRECTIONAL,
+              "pf_native_grid_rounding_e drifted from NativeGridRounding");
+static_assert(static_cast<int>(pineforge::NativeCalculationTrigger::BarClose)
+                      == PF_NATIVE_CALC_TRIGGER_BAR_CLOSE
+                  && static_cast<int>(pineforge::NativeCalculationTrigger::BarCloseAndFills)
+                         == PF_NATIVE_CALC_TRIGGER_BAR_CLOSE_AND_FILLS
+                  && static_cast<int>(pineforge::NativeCalculationTrigger::EveryModeledPoint)
+                         == PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT,
+              "pf_native_calc_trigger_e drifted from NativeCalculationTrigger");
+static_assert(static_cast<int>(pineforge::NativeOpenBarView::Complete)
+                      == PF_NATIVE_OPEN_BAR_VIEW_COMPLETE
+                  && static_cast<int>(pineforge::NativeOpenBarView::OpenOnly)
+                         == PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY,
+              "pf_native_open_bar_view_e drifted from NativeOpenBarView");
+static_assert(static_cast<int>(pineforge::NativeLiquidationSizing::RestoreMinimum)
+                      == PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM
+                  && static_cast<int>(pineforge::NativeLiquidationSizing::ShortfallMultiple)
+                         == PF_NATIVE_LIQUIDATION_SIZING_SHORTFALL_MULTIPLE
+                  && static_cast<int>(pineforge::NativeLiquidationSizing::Flatten)
+                         == PF_NATIVE_LIQUIDATION_SIZING_FLATTEN,
+              "pf_native_liquidation_sizing_e drifted from NativeLiquidationSizing");
+/* Typing the nine words moved nothing: each is still the uint32_t word its
+ * spec published, the six extension words at the offsets they always had
+ * (the fourth to eleventh words of the struct, ahead of any pointer), and
+ * the three base-spec words beside the words they always followed. */
+static_assert(std::is_same_v<decltype(pf_native_run_spec_v1::fee_kind), std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_v1::close_execution),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_v1::allowed_open_directions),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::report_policy),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::price_grid),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::grid_rounding),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::calculation),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::open_bar_view),
+                                    std::uint32_t>
+                  && std::is_same_v<decltype(pf_native_run_spec_ext_v1::margin_sizing),
+                                    std::uint32_t>,
+              "the run specifications' enum-valued words must stay uint32_t words");
+static_assert(offsetof(pf_native_run_spec_ext_v1, report_policy) == 3u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_ext_v1, price_grid)
+                         == 5u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_ext_v1, grid_rounding)
+                         == 6u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_ext_v1, calculation)
+                         == 7u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_ext_v1, open_bar_view)
+                         == 9u * sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_ext_v1, margin_sizing)
+                         == 10u * sizeof(std::uint32_t),
+              "a pf_native_run_spec_ext_v1 enum-valued word moved");
+static_assert(offsetof(pf_native_run_spec_v1, fee_kind)
+                      == offsetof(pf_native_run_spec_v1, slippage_ticks) + sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_v1, close_execution)
+                         == offsetof(pf_native_run_spec_v1, optional_mask)
+                                + sizeof(std::uint32_t)
+                  && offsetof(pf_native_run_spec_v1, allowed_open_directions)
+                         == offsetof(pf_native_run_spec_v1, close_execution)
+                                + sizeof(std::uint32_t),
+              "a pf_native_run_spec_v1 enum-valued word moved");
 static_assert(static_cast<int>(pineforge::NativeFailureCode::CallbackException)
                   == PF_NATIVE_FAILURE_CALLBACK,
               "PF_NATIVE_FAILURE_CALLBACK must mirror NativeFailureCode::CallbackException");
@@ -1203,6 +1309,155 @@ int guarded(Fn&& fn) noexcept {
     }
 }
 
+/* ── The run specifications' enum-valued words ─────────────────────
+ * Each of the nine words is its kernel enumerator's own integer, pinned name
+ * by name above, and each kernel enumeration has a fixed uint32_t underlying
+ * type, so a word converts to it for EVERY value -- none is cast onto a value
+ * its type cannot hold. c_spelled() is then an exhaustive switch over that
+ * enumeration with no default: an enumerator the kernel adds is a -Wswitch
+ * diagnostic in its overload until the C surface spells it or refuses it
+ * here, and a word that names no enumerator falls out of the switch. Either
+ * way translate_word() answers false, which every call site refuses with
+ * PF_NATIVE_E_TAG, at the point of the spec where it always did. */
+constexpr bool c_spelled(pineforge::NativeFeeKind kind) noexcept {
+    switch (kind) {
+    case pineforge::NativeFeeKind::Percent:
+    case pineforge::NativeFeeKind::CashPerUnit:
+    case pineforge::NativeFeeKind::CashPerExecution:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeCloseExecution rule) noexcept {
+    switch (rule) {
+    case pineforge::NativeCloseExecution::NextEligiblePoint:
+    case pineforge::NativeCloseExecution::AfterCalculation:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeOpenDirections directions) noexcept {
+    switch (directions) {
+    case pineforge::NativeOpenDirections::None:
+    case pineforge::NativeOpenDirections::Long:
+    case pineforge::NativeOpenDirections::Short:
+    case pineforge::NativeOpenDirections::Both:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeReportPolicy policy) noexcept {
+    switch (policy) {
+    case pineforge::NativeReportPolicy::HostRecorded:
+    case pineforge::NativeReportPolicy::KernelRecorded:
+        return true;
+    case pineforge::NativeReportPolicy::KernelRecordedAtHostMarks:
+        /* No C name: its host names each report point from inside its own
+         * callbacks, and the C callback table has no call that marks one. */
+        return false;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativePriceGrid grid) noexcept {
+    switch (grid) {
+    case pineforge::NativePriceGrid::None:
+    case pineforge::NativePriceGrid::QuantizeFills:
+    case pineforge::NativePriceGrid::QuantizeFillsAndTriggers:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeGridRounding rounding) noexcept {
+    switch (rounding) {
+    case pineforge::NativeGridRounding::HalfUp:
+    case pineforge::NativeGridRounding::Directional:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeCalculationTrigger trigger) noexcept {
+    switch (trigger) {
+    case pineforge::NativeCalculationTrigger::BarClose:
+    case pineforge::NativeCalculationTrigger::BarCloseAndFills:
+    case pineforge::NativeCalculationTrigger::EveryModeledPoint:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeOpenBarView view) noexcept {
+    switch (view) {
+    case pineforge::NativeOpenBarView::Complete:
+    case pineforge::NativeOpenBarView::OpenOnly:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool c_spelled(pineforge::NativeLiquidationSizing sizing) noexcept {
+    switch (sizing) {
+    case pineforge::NativeLiquidationSizing::RestoreMinimum:
+    case pineforge::NativeLiquidationSizing::ShortfallMultiple:
+    case pineforge::NativeLiquidationSizing::Flatten:
+        return true;
+    }
+    return false;
+}
+
+template <typename Enum>
+bool translate_word(std::uint32_t word, Enum& out) noexcept {
+    static_assert(std::is_same_v<std::underlying_type_t<Enum>, std::uint32_t>,
+                  "a C word converts only to a kernel enumeration fixed on uint32_t");
+    const auto value = static_cast<Enum>(word);
+    if (!c_spelled(value)) return false;
+    out = value;
+    return true;
+}
+
+/* The translation accepts exactly the C enumerations: every value the header
+ * names is a word c_spelled() admits, and the one kernel value with no C name
+ * is not. With the pins above, that makes each C enumeration the whole set
+ * its word accepts. */
+template <typename Enum, typename... Words>
+constexpr bool all_spelled(Words... words) noexcept {
+    return (c_spelled(static_cast<Enum>(words)) && ...);
+}
+static_assert(all_spelled<pineforge::NativeFeeKind>(PF_NATIVE_FEE_PERCENT,
+                                                    PF_NATIVE_FEE_CASH_PER_UNIT,
+                                                    PF_NATIVE_FEE_CASH_PER_EXECUTION)
+                  && all_spelled<pineforge::NativeCloseExecution>(
+                      PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT,
+                      PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION)
+                  && all_spelled<pineforge::NativeOpenDirections>(
+                      PF_NATIVE_OPEN_DIRECTIONS_NONE, PF_NATIVE_OPEN_DIRECTIONS_LONG,
+                      PF_NATIVE_OPEN_DIRECTIONS_SHORT, PF_NATIVE_OPEN_DIRECTIONS_BOTH)
+                  && all_spelled<pineforge::NativeReportPolicy>(
+                      PF_NATIVE_REPORT_HOST_RECORDED, PF_NATIVE_REPORT_KERNEL_RECORDED)
+                  && all_spelled<pineforge::NativePriceGrid>(
+                      PF_NATIVE_PRICE_GRID_NONE, PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS,
+                      PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS)
+                  && all_spelled<pineforge::NativeGridRounding>(
+                      PF_NATIVE_GRID_ROUNDING_HALF_UP, PF_NATIVE_GRID_ROUNDING_DIRECTIONAL)
+                  && all_spelled<pineforge::NativeCalculationTrigger>(
+                      PF_NATIVE_CALC_TRIGGER_BAR_CLOSE,
+                      PF_NATIVE_CALC_TRIGGER_BAR_CLOSE_AND_FILLS,
+                      PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT)
+                  && all_spelled<pineforge::NativeOpenBarView>(
+                      PF_NATIVE_OPEN_BAR_VIEW_COMPLETE, PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY)
+                  && all_spelled<pineforge::NativeLiquidationSizing>(
+                      PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM,
+                      PF_NATIVE_LIQUIDATION_SIZING_SHORTFALL_MULTIPLE,
+                      PF_NATIVE_LIQUIDATION_SIZING_FLATTEN),
+              "a value the C header names is refused by its translation");
+static_assert(!c_spelled(pineforge::NativeReportPolicy::KernelRecordedAtHostMarks),
+              "KernelRecordedAtHostMarks has no C name, so its word must stay refused");
+
 /* The v1 base specification, translated exactly as
  * strategy_configure_native_v1 translates it (src/c_abi.cpp). It is
  * duplicated rather than shared because that symbol both translates and
@@ -1233,24 +1488,11 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
     out.account_fx = in.account_fx;
     out.price_tick = in.price_tick;
     out.slippage_ticks = in.slippage_ticks;
-    switch (in.fee_kind) {
-    case 0: out.fee_kind = pineforge::NativeFeeKind::Percent; break;
-    case 1: out.fee_kind = pineforge::NativeFeeKind::CashPerUnit; break;
-    case 2: out.fee_kind = pineforge::NativeFeeKind::CashPerExecution; break;
-    default: return PF_NATIVE_E_TAG;
-    }
+    if (!translate_word(in.fee_kind, out.fee_kind)) return PF_NATIVE_E_TAG;
     out.fee_value = in.fee_value;
-    switch (in.close_execution) {
-    case 0: out.close_execution = pineforge::NativeCloseExecution::NextEligiblePoint; break;
-    case 1: out.close_execution = pineforge::NativeCloseExecution::AfterCalculation; break;
-    default: return PF_NATIVE_E_TAG;
-    }
-    switch (in.allowed_open_directions) {
-    case 0: out.allowed_open_directions = pineforge::NativeOpenDirections::None; break;
-    case 1: out.allowed_open_directions = pineforge::NativeOpenDirections::Long; break;
-    case 2: out.allowed_open_directions = pineforge::NativeOpenDirections::Short; break;
-    case 3: out.allowed_open_directions = pineforge::NativeOpenDirections::Both; break;
-    default: return PF_NATIVE_E_TAG;
+    if (!translate_word(in.close_execution, out.close_execution)) return PF_NATIVE_E_TAG;
+    if (!translate_word(in.allowed_open_directions, out.allowed_open_directions)) {
+        return PF_NATIVE_E_TAG;
     }
     if (in.optional_mask & 1u) out.quantity_grid = in.quantity_grid;
     if (in.optional_mask & 2u) out.max_abs_units = in.max_abs_units;
@@ -1408,42 +1650,20 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
     }
 
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_REPORT) {
-        switch (ext.report_policy) {
-        case 0: spec.report_policy = pineforge::NativeReportPolicy::HostRecorded; break;
-        case 1: spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded; break;
-        default: return PF_NATIVE_E_TAG;
-        }
+        if (!translate_word(ext.report_policy, spec.report_policy)) return PF_NATIVE_E_TAG;
         if (ext.report_open_position_at_end > 1u) return PF_NATIVE_E_TAG;
         spec.report_open_position_at_end = ext.report_open_position_at_end != 0u;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_PRICE_GRID) {
-        switch (ext.price_grid) {
-        case 0: spec.price_grid = pineforge::NativePriceGrid::None; break;
-        case 1: spec.price_grid = pineforge::NativePriceGrid::QuantizeFills; break;
-        case 2: spec.price_grid = pineforge::NativePriceGrid::QuantizeFillsAndTriggers; break;
-        default: return PF_NATIVE_E_TAG;
-        }
-        switch (ext.grid_rounding) {
-        case 0: spec.grid_rounding = pineforge::NativeGridRounding::HalfUp; break;
-        case 1: spec.grid_rounding = pineforge::NativeGridRounding::Directional; break;
-        default: return PF_NATIVE_E_TAG;
-        }
+        if (!translate_word(ext.price_grid, spec.price_grid)) return PF_NATIVE_E_TAG;
+        if (!translate_word(ext.grid_rounding, spec.grid_rounding)) return PF_NATIVE_E_TAG;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_CALCULATION) {
-        switch (ext.calculation) {
-        case 0: spec.calculation = pineforge::NativeCalculationTrigger::BarClose; break;
-        case 1: spec.calculation = pineforge::NativeCalculationTrigger::BarCloseAndFills; break;
-        case 2: spec.calculation = pineforge::NativeCalculationTrigger::EveryModeledPoint; break;
-        default: return PF_NATIVE_E_TAG;
-        }
+        if (!translate_word(ext.calculation, spec.calculation)) return PF_NATIVE_E_TAG;
         spec.max_recalculations_per_point = ext.max_recalculations_per_point;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_OPEN_BAR_VIEW) {
-        switch (ext.open_bar_view) {
-        case 0: spec.open_bar_view = pineforge::NativeOpenBarView::Complete; break;
-        case 1: spec.open_bar_view = pineforge::NativeOpenBarView::OpenOnly; break;
-        default: return PF_NATIVE_E_TAG;
-        }
+        if (!translate_word(ext.open_bar_view, spec.open_bar_view)) return PF_NATIVE_E_TAG;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_MARGIN) {
         pineforge::NativeMarginModel margin;
@@ -1457,12 +1677,7 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
         if (ext.margin_has_maintenance_short) {
             margin.maintenance_short = ext.margin_maintenance_short;
         }
-        switch (ext.margin_sizing) {
-        case 0: margin.sizing = pineforge::NativeLiquidationSizing::RestoreMinimum; break;
-        case 1: margin.sizing = pineforge::NativeLiquidationSizing::ShortfallMultiple; break;
-        case 2: margin.sizing = pineforge::NativeLiquidationSizing::Flatten; break;
-        default: return PF_NATIVE_E_TAG;
-        }
+        if (!translate_word(ext.margin_sizing, margin.sizing)) return PF_NATIVE_E_TAG;
         margin.shortfall_multiple = ext.margin_shortfall_multiple;
         if (ext.margin_has_min_units) margin.liquidation_min_units = ext.margin_min_units;
         switch (ext.margin_check) {
