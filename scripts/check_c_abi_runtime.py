@@ -127,10 +127,13 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_append_auxiliary_bars_v1",
     "strategy_native_declare_opened_lot_entry_bar_mask_v1",
     "strategy_native_margin_call_v1",
+    "strategy_native_declare_subscriptions_ext_v1",
+    "strategy_native_declare_auxiliary_feed_v1",
+    "strategy_native_append_auxiliary_bars_ext_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 35
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 35
+EXPECTED_NATIVE_C_API_DECLARATIONS = 38
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 38
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

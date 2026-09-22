@@ -24,8 +24,9 @@
  *   comment and its close cause — with the pineforge.h accessors, which take
  *   any handle this header produces
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
- * ✓ Declare an auxiliary finer feed, build a series from it, and append its
- *   later bars to a realtime stream
+ * ✓ Declare an auxiliary finer feed — up front, or from `on_run_begin` —
+ *   build a series from it, and append its later bars to a realtime stream,
+ *   each refusal named by the kernel's own typed answer
  * ✓ Declare, from `on_applied`, where a lot's opening fill sat on its entry
  *   bar, for a host that owns its lots' excursions
  *
@@ -101,27 +102,18 @@
  *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1 -- a row is
  *                                          pf_native_subscription_v1, whose `lookahead` / `gaps` bools are
  *                                          pf_native_lookahead_e / pf_native_gaps_e words
- *   [--] declare_timeframe_subscriptions_result  the typed answer of the call above. Its C spelling
- *                                          is that same symbol, which flattens every refusal to
- *                                          PF_NATIVE_E_STATE:
- *                                          carrying NativeRunSpecValidation (a NativeRunSpecError beside a
- *                                          NativeRunSpecField) to C needs a size-prefixed POD and a symbol
- *                                          of its own, exactly as the run spec's own validation does, and
- *                                          this API version has neither
- *   [--] declare_auxiliary_feed            a C host declares the run's auxiliary finer feed up front, in
- *                                          pf_native_run_spec_ext_v1's auxiliary tail under
- *                                          PF_NATIVE_SPEC_EXT_AUXILIARY_FEED; the begin-time REPLACEMENT
- *                                          takes a std::optional<NativeAuxiliaryFeed> with no size-
- *                                          prefixed POD, and withdrawing a feed the spec declared has no
- *                                          C caller
- *   [--] declare_auxiliary_feed_result      the typed answer of the call above, which has no C caller for
- *                                          the same reason
+ *   [C]  declare_timeframe_subscriptions_result  strategy_native_declare_subscriptions_ext_v1 -- the
+ *                                          same call, its NativeRunSpecValidation written to `error` /
+ *                                          `field` (pf_native_spec_error_e / pf_native_spec_field_e), plus
+ *                                          a series source per row
+ *   [C]  declare_auxiliary_feed            strategy_native_declare_auxiliary_feed_v1 -- a NULL `tf`
+ *                                          withdraws the staged feed
+ *   [C]  declare_auxiliary_feed_result      strategy_native_declare_auxiliary_feed_v1, whose `error` /
+ *                                          `field` out-parameters are the typed answer
  *   [C]  append_auxiliary_bars             strategy_native_append_auxiliary_bars_v1
- *   [--] append_auxiliary_bars_result      the typed answer of the call above. That symbol reports the
- *                                          same refusals as PF_NATIVE_E_STATE (and PF_NATIVE_E_ARGUMENT
- *                                          for the null array it screens itself); carrying
- *                                          NativeAuxiliaryAppendError and the bar index it stopped on
- *                                          needs an out-parameter this version's signature does not have
+ *   [C]  append_auxiliary_bars_result      strategy_native_append_auxiliary_bars_ext_v1 --
+ *                                          NativeAuxiliaryAppendError (pf_native_append_error_e) and the
+ *                                          bar of the call it stopped on
  *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1 --
  *                                          the two specs' enum-valued words are pf_native_fee_kind_e,
  *                                          pf_native_close_execution_e, pf_native_open_directions_e,
@@ -1055,6 +1047,180 @@ typedef enum pf_native_completion_e {
     PF_NATIVE_COMPLETION_BATCH_COMPLETE = 0,
     PF_NATIVE_COMPLETION_STREAM_ENDED   = 1
 } pf_native_completion_t;
+
+/* ── The typed refusal words of a declaration and an append ──────── */
+
+/** Why a declaration was refused — `NativeRunSpecError`, the kernel's own
+ *  validation word: the `error` out-parameter of
+ *  #strategy_native_declare_subscriptions_ext_v1 and
+ *  #strategy_native_declare_auxiliary_feed_v1. Read beside the
+ *  #pf_native_spec_field_t the same call writes. Every value the run spec's
+ *  validation can answer is named, the ones a begin-time declaration cannot
+ *  reach included, so one enumeration reads every setup refusal. */
+typedef enum pf_native_spec_error_e {
+    PF_NATIVE_SPEC_ERROR_NONE                                   = 0, /**< Applied. */
+    PF_NATIVE_SPEC_ERROR_EMPTY_REQUIRED_STRING                  = 1,
+    PF_NATIVE_SPEC_ERROR_EMBEDDED_NUL                           = 2,
+    PF_NATIVE_SPEC_ERROR_INVALID_UTF8                           = 3,
+    PF_NATIVE_SPEC_ERROR_ZERO_RUN_NUMBER                        = 4,
+    PF_NATIVE_SPEC_ERROR_INVALID_TIMEFRAME                      = 5,
+    PF_NATIVE_SPEC_ERROR_INCOMPATIBLE_TIMEFRAMES                = 6,
+    PF_NATIVE_SPEC_ERROR_UNRESOLVED_TIMEZONE                    = 7,
+    PF_NATIVE_SPEC_ERROR_INVALID_SESSION                        = 8,
+    PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE                    = 9,
+    PF_NATIVE_SPEC_ERROR_SLIPPAGE_OUT_OF_RANGE                  = 10,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_FEE_KIND                       = 11,
+    PF_NATIVE_SPEC_ERROR_NOT_FINITE_NONNEGATIVE                 = 12,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_CLOSE_EXECUTION                = 13,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_ABORT_REPORTING                = 14,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_DIRECTIONS                = 15,
+    PF_NATIVE_SPEC_ERROR_ZERO_LOT_LIMIT                         = 16,
+    PF_NATIVE_SPEC_ERROR_ALLOCATION_FAILURE                     = 17, /**< Staging threw. */
+    PF_NATIVE_SPEC_ERROR_CALENDAR_FAILURE                       = 18, /**< No calendar resolved it. */
+    PF_NATIVE_SPEC_ERROR_INVALID_INTRABAR_PATH                  = 19,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_INTRABAR_SAMPLE_ELIGIBILITY    = 20,
+    PF_NATIVE_SPEC_ERROR_INVALID_UNDETECTED_TIMEFRAME           = 21,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_SLOT_LABEL_POLICY              = 22,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_FEED_TOLERANCE                 = 23, /**< `feed_tolerance`: the
+                                                                       *   kernel's
+                                                                       *   `legacy_tolerance`. */
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_PATH_ORDER                     = 24,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_REPORT_POLICY                  = 25,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_PRICE_GRID                     = 26,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_GRID_ROUNDING                  = 27,
+    PF_NATIVE_SPEC_ERROR_GRID_REQUIRES_PRICE_TICK               = 28,
+    PF_NATIVE_SPEC_ERROR_INVALID_SUBSCRIPTION_TIMEFRAME         = 29,
+    PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_INPUT          = 30,
+    PF_NATIVE_SPEC_ERROR_DUPLICATE_SUBSCRIPTION_TIMEFRAME       = 31,
+    PF_NATIVE_SPEC_ERROR_UNORDERED_SUBSCRIPTION_BARS            = 32,
+    PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_TIMEFRAME         = 33,
+    PF_NATIVE_SPEC_ERROR_MARGIN_MODEL_CONFLICT                  = 34,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_SIZING             = 35,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_CHECK              = 36,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_MARGIN_EQUITY_BASIS            = 37,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_LEVEL_BASE         = 38,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_CALCULATION_TRIGGER            = 39,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_BAR_VIEW                  = 40,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_DAY                       = 41,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_ACTION                    = 42,
+    PF_NATIVE_SPEC_ERROR_ZERO_RISK_LIMIT                        = 43,
+    PF_NATIVE_SPEC_ERROR_MARGIN_SIDE_UNDECLARED                 = 44,
+    PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_TIMEFRAME       = 45,
+    PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_NOT_FINER_THAN_INPUT    = 46,
+    PF_NATIVE_SPEC_ERROR_UNORDERED_AUXILIARY_FEED_BARS          = 47,
+    PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_BAR             = 48,
+    PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_WITHOUT_TIMEFRAME       = 49,
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_SERIES_SOURCE                  = 50,
+    PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_AUXILIARY_FEED    = 51,
+    PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED = 52,
+    PF_NATIVE_SPEC_ERROR_WRONG_PHASE                            = 53  /**< The CALL was refused
+                                                                       *   before any field was
+                                                                       *   judged: not in the
+                                                                       *   phase it is legal
+                                                                       *   in. Read with
+                                                                       *   FIELD_NONE. */
+} pf_native_spec_error_t;
+
+/** Where a declaration was refused — `NativeRunSpecField`, the first field
+ *  the kernel's validation found: the `field` out-parameter of
+ *  #strategy_native_declare_subscriptions_ext_v1 and
+ *  #strategy_native_declare_auxiliary_feed_v1. */
+typedef enum pf_native_spec_field_e {
+    PF_NATIVE_SPEC_FIELD_NONE                        = 0, /**< Not about one field. */
+    PF_NATIVE_SPEC_FIELD_SESSION_KEY                 = 1,
+    PF_NATIVE_SPEC_FIELD_RUN_NUMBER                  = 2,
+    PF_NATIVE_SPEC_FIELD_INPUT_TIMEFRAME             = 3,
+    PF_NATIVE_SPEC_FIELD_SCRIPT_TIMEFRAME            = 4,
+    PF_NATIVE_SPEC_FIELD_TICKER                      = 5,
+    PF_NATIVE_SPEC_FIELD_TICKER_ID                   = 6,
+    PF_NATIVE_SPEC_FIELD_TYPE                        = 7,
+    PF_NATIVE_SPEC_FIELD_CURRENCY                    = 8,
+    PF_NATIVE_SPEC_FIELD_BASE_CURRENCY               = 9,
+    PF_NATIVE_SPEC_FIELD_DESCRIPTION                 = 10,
+    PF_NATIVE_SPEC_FIELD_VOLUME_TYPE                 = 11,
+    PF_NATIVE_SPEC_FIELD_TIMEZONE                    = 12,
+    PF_NATIVE_SPEC_FIELD_SESSION                     = 13,
+    PF_NATIVE_SPEC_FIELD_CHART_TIMEZONE              = 14,
+    PF_NATIVE_SPEC_FIELD_INITIAL_CAPITAL             = 15,
+    PF_NATIVE_SPEC_FIELD_POINT_VALUE                 = 16,
+    PF_NATIVE_SPEC_FIELD_ACCOUNT_FX                  = 17,
+    PF_NATIVE_SPEC_FIELD_PRICE_TICK                  = 18,
+    PF_NATIVE_SPEC_FIELD_SLIPPAGE_TICKS              = 19,
+    PF_NATIVE_SPEC_FIELD_FEE_KIND                    = 20,
+    PF_NATIVE_SPEC_FIELD_FEE_VALUE                   = 21,
+    PF_NATIVE_SPEC_FIELD_QUANTITY_GRID               = 22,
+    PF_NATIVE_SPEC_FIELD_CLOSE_EXECUTION             = 23,
+    PF_NATIVE_SPEC_FIELD_ABORT_REPORTING             = 24,
+    PF_NATIVE_SPEC_FIELD_MAX_ABS_UNITS               = 25,
+    PF_NATIVE_SPEC_FIELD_MAX_OPEN_LOTS               = 26,
+    PF_NATIVE_SPEC_FIELD_ALLOWED_OPEN_DIRECTIONS     = 27,
+    PF_NATIVE_SPEC_FIELD_INITIAL_MARGIN_FRACTION     = 28,
+    PF_NATIVE_SPEC_FIELD_INTRABAR_TIMEFRAME          = 29,
+    PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLES            = 30,
+    PF_NATIVE_SPEC_FIELD_INTRABAR_DISTRIBUTION       = 31,
+    PF_NATIVE_SPEC_FIELD_INTRABAR_VOLUME_SAMPLES     = 32,
+    PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLE_ELIGIBILITY = 33,
+    PF_NATIVE_SPEC_FIELD_TIMEFRAME_UNDETECTED        = 34,
+    PF_NATIVE_SPEC_FIELD_SLOT_LABEL_POLICY           = 35,
+    PF_NATIVE_SPEC_FIELD_FEED_TOLERANCE              = 36, /**< `feed_tolerance`: the kernel's
+                                                            *   `legacy_tolerance`. */
+    PF_NATIVE_SPEC_FIELD_PATH_ORDER                  = 37,
+    PF_NATIVE_SPEC_FIELD_REPORT_POLICY               = 38,
+    PF_NATIVE_SPEC_FIELD_PRICE_GRID                  = 39,
+    PF_NATIVE_SPEC_FIELD_GRID_ROUNDING               = 40,
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_TIMEFRAME      = 41,
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_BARS           = 42,
+    PF_NATIVE_SPEC_FIELD_MARGIN_MODEL                = 43,
+    PF_NATIVE_SPEC_FIELD_MARGIN_INITIAL              = 44,
+    PF_NATIVE_SPEC_FIELD_MARGIN_MAINTENANCE          = 45,
+    PF_NATIVE_SPEC_FIELD_MARGIN_SIZING               = 46,
+    PF_NATIVE_SPEC_FIELD_MARGIN_SHORTFALL_MULTIPLE   = 47,
+    PF_NATIVE_SPEC_FIELD_MARGIN_MIN_UNITS            = 48,
+    PF_NATIVE_SPEC_FIELD_MARGIN_CHECK                = 49,
+    PF_NATIVE_SPEC_FIELD_MARGIN_EQUITY_BASIS         = 50,
+    PF_NATIVE_SPEC_FIELD_MARGIN_LEVEL_BASE           = 51,
+    PF_NATIVE_SPEC_FIELD_CALCULATION                 = 52,
+    PF_NATIVE_SPEC_FIELD_OPEN_BAR_VIEW               = 53,
+    PF_NATIVE_SPEC_FIELD_RISK_LIMITS                 = 54,
+    PF_NATIVE_SPEC_FIELD_RISK_DRAWDOWN               = 55,
+    PF_NATIVE_SPEC_FIELD_RISK_INTRADAY_LOSS          = 56,
+    PF_NATIVE_SPEC_FIELD_RISK_LOSS_DAYS              = 57,
+    PF_NATIVE_SPEC_FIELD_RISK_FILLS_PER_DAY          = 58,
+    PF_NATIVE_SPEC_FIELD_RISK_DAY_BASIS              = 59,
+    PF_NATIVE_SPEC_FIELD_RISK_ACTION                 = 60,
+    PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME    = 61,
+    PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS         = 62,
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63 
+} pf_native_spec_field_t;
+
+/** Why an append was refused — `NativeAuxiliaryAppendError`: the `error`
+ *  out-parameter of #strategy_native_append_auxiliary_bars_ext_v1. None of
+ *  them fails the host but REENTRANT, which latches the contract failure
+ *  every reentrant stream input is, and ALLOCATION_FAILURE. */
+typedef enum pf_native_append_error_e {
+    PF_NATIVE_APPEND_ERROR_NONE                          = 0, /**< Applied. */
+    PF_NATIVE_APPEND_ERROR_HOST_FAILED                   = 1, /**< The host had already
+                                                               *   failed. */
+    PF_NATIVE_APPEND_ERROR_REENTRANT                     = 2, /**< From inside a callback or
+                                                               *   an in-flight input. */
+    PF_NATIVE_APPEND_ERROR_NOT_REALTIME                  = 3, /**< Not on a stream's
+                                                               *   realtime leg. */
+    PF_NATIVE_APPEND_ERROR_NO_AUXILIARY_FEED             = 4, /**< The run declared no
+                                                               *   feed. */
+    PF_NATIVE_APPEND_ERROR_INVALID_BAR_ARRAY             = 5, /**< A NULL array with a
+                                                               *   non-zero count. */
+    PF_NATIVE_APPEND_ERROR_INVALID_BAR                   = 6, /**< `index` has invalid
+                                                               *   OHLCV. */
+    PF_NATIVE_APPEND_ERROR_UNORDERED_BARS                = 7, /**< `index` is not strictly
+                                                               *   after its predecessor
+                                                               *   (the feed's last bar
+                                                               *   for index 0). */
+    PF_NATIVE_APPEND_ERROR_INPUT_PERIOD_ALREADY_ACCEPTED = 8, /**< The first bar opened
+                                                               *   inside an input period
+                                                               *   already accepted. */
+    PF_NATIVE_APPEND_ERROR_ALLOCATION_FAILURE            = 9  /**< Growing the feed threw;
+                                                               *   this fails the host. */
+} pf_native_append_error_t;
 
 /** @} */ /* end of pf_native_c_enums */
 
@@ -2139,10 +2305,74 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out);
  *  @return PF_NATIVE_OK when the list was staged; PF_NATIVE_E_STATE anywhere
  *  but inside `on_run_begin` and for a list this run's input timeframe would
  *  refuse — the same validation #strategy_configure_native_ext_v1 applies —
- *  in which case nothing is staged and nothing changes. */
+ *  in which case nothing is staged and nothing changes.
+ *  #strategy_native_declare_subscriptions_ext_v1 names which. */
 PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
                                                     const pf_native_subscription_v1* rows,
                                                     int n);
+
+/** The same declaration, answered by name — `declare_timeframe_subscriptions_result()`.
+ *
+ *  The same call as #strategy_native_declare_subscriptions_v1 — same
+ *  legality, same staging, same statuses — with the refusal's words written
+ *  out, and with a series source per row, so a series declared here may be
+ *  built from the auxiliary feed #strategy_native_declare_auxiliary_feed_v1
+ *  staged. #strategy_native_declare_subscriptions_v1 stays exactly what it
+ *  was: this call with @p sources, @p error and @p field NULL.
+ *
+ *  @param s        The host this run is driving.
+ *  @param rows     @p n rows, borrowed for the call; NULL when @p n is 0.
+ *  @param n        Row count (0 declares no series at all).
+ *  @param sources  Optional: @p n #pf_native_series_source_t words, one per
+ *                  row. NULL builds every series from the input.
+ *  @param error    Optional; receives a #pf_native_spec_error_t whenever the
+ *                  kernel judged the call: #PF_NATIVE_SPEC_ERROR_NONE when
+ *                  staged, #PF_NATIVE_SPEC_ERROR_WRONG_PHASE outside
+ *                  `on_run_begin`, else the first error the list's
+ *                  validation found — the validation
+ *                  #strategy_configure_native_ext_v1 applies.
+ *  @param field    Optional; receives the #pf_native_spec_field_t beside it.
+ *  @return PF_NATIVE_OK when the list was staged; PF_NATIVE_E_STATE for every
+ *  refusal the kernel names in @p error, in which case nothing is staged;
+ *  PF_NATIVE_E_ARGUMENT / E_STRUCT / E_TAG for a row the C layer refuses
+ *  before the kernel sees the list, leaving @p error and @p field untouched.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
+PF_API int strategy_native_declare_subscriptions_ext_v1(pf_strategy_t s,
+                                                        const pf_native_subscription_v1* rows,
+                                                        int n, const uint32_t* sources,
+                                                        uint32_t* error, uint32_t* field);
+
+/** Declare, replace or withdraw this run's auxiliary finer feed from inside
+ *  `on_run_begin` — `declare_auxiliary_feed_result()`.
+ *
+ *  The feed REPLACES the one staged by #strategy_configure_native_ext_v1's
+ *  auxiliary tail, and the kernel registers from the staged spec after the
+ *  callback returns. It is judged together with the series staged at that
+ *  moment, so a host that declares both here declares the feed first and its
+ *  feed-built series second (#strategy_native_declare_subscriptions_ext_v1).
+ *
+ *  @param s      The host this run is driving.
+ *  @param tf     The feed's timeframe literal, or NULL to withdraw the staged
+ *                feed (with @p n 0 and @p bars NULL).
+ *  @param bars   @p n strictly increasing bars, copied; NULL when @p n is 0.
+ *  @param n      Bar count.
+ *  @param error  Optional; receives a #pf_native_spec_error_t whenever the
+ *                kernel judged the call (#PF_NATIVE_SPEC_ERROR_NONE when
+ *                staged, #PF_NATIVE_SPEC_ERROR_WRONG_PHASE outside
+ *                `on_run_begin`).
+ *  @param field  Optional; receives the #pf_native_spec_field_t beside it.
+ *  @return PF_NATIVE_OK when the feed was staged or withdrawn;
+ *  PF_NATIVE_E_STATE for every refusal the kernel names in @p error — a feed
+ *  the input timeframe refuses, or a withdrawal that would strand a staged
+ *  feed-built series — changing nothing; PF_NATIVE_E_ARGUMENT for a negative
+ *  @p n, NULL @p bars with @p n > 0, or a withdrawal carrying bars, leaving
+ *  @p error and @p field untouched.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
+PF_API int strategy_native_declare_auxiliary_feed_v1(pf_strategy_t s, const char* tf,
+                                                     const pf_bar_t* bars, int32_t n,
+                                                     uint32_t* error, uint32_t* field);
 
 /** The bar so far at the current cursor — `current_partial_bar()`.
  *
@@ -2264,11 +2494,36 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
  *  of order or not after the feed's last bar, a bar with invalid OHLCV, a bar
  *  that opened inside an input period already accepted, a host that declared
  *  no feed, and a run that is not realtime: PF_NATIVE_E_STATE, the reason
- *  readable with #strategy_get_last_error. A call from inside a callback fails the
+ *  readable with #strategy_get_last_error and, by name, from
+ *  #strategy_native_append_auxiliary_bars_ext_v1. A call from inside a callback fails the
  *  run, as every reentrant stream input does.
  *  @return PF_NATIVE_OK, or a negative status. */
 PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
                                                     int32_t n);
+
+/** The same append, answered by name — `append_auxiliary_bars_result()`.
+ *
+ *  The same call as #strategy_native_append_auxiliary_bars_v1 — same
+ *  legality, same appended bars, same statuses, the same latched contract
+ *  failure for a call from inside a callback — with the refusal written out.
+ *  #strategy_native_append_auxiliary_bars_v1 stays this call with both
+ *  out-parameters NULL.
+ *
+ *  @param error  Optional; receives a #pf_native_append_error_t whenever the
+ *                kernel judged the call (#PF_NATIVE_APPEND_ERROR_NONE when
+ *                appended).
+ *  @param index  Optional; receives the bar OF THIS CALL the refusal stopped
+ *                on, 0 for a refusal that is not about one bar and for an
+ *                applied append.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_STATE for every refusal the kernel names
+ *  in @p error, or PF_NATIVE_E_ARGUMENT for a negative @p n or NULL @p bars
+ *  with @p n > 0, which the C layer refuses itself, leaving both
+ *  out-parameters untouched.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
+PF_API int strategy_native_append_auxiliary_bars_ext_v1(pf_strategy_t s, const pf_bar_t* bars,
+                                                        int32_t n, uint32_t* error,
+                                                        int32_t* index);
 
 /** Declare where the fill that opened a lot sits on its entry bar —
  *  `declare_opened_lot_entry_bar_mask()`, the entry-side half of the

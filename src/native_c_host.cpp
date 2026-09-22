@@ -488,6 +488,209 @@ PF_PIN_WORD(pineforge::execution::CloseCause::Liquidation, PF_CLOSE_CAUSE_LIQUID
 PF_PIN_WORD(pineforge::execution::CloseCause::RiskLimit, PF_CLOSE_CAUSE_RISK_LIMIT);
 PF_PIN_WORD(pineforge::execution::CloseCause::FillCap, PF_CLOSE_CAUSE_FILL_CAP);
 PF_PIN_WORD(pineforge::execution::CloseCause::RangeEnd, PF_CLOSE_CAUSE_RANGE_END);
+/* The typed refusal words of a begin-time declaration and of an append: the
+ * run spec's own validation words, and the append's. */
+PF_PIN_WORD(pineforge::NativeRunSpecError::None, PF_NATIVE_SPEC_ERROR_NONE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::EmptyRequiredString,
+            PF_NATIVE_SPEC_ERROR_EMPTY_REQUIRED_STRING);
+PF_PIN_WORD(pineforge::NativeRunSpecError::EmbeddedNul, PF_NATIVE_SPEC_ERROR_EMBEDDED_NUL);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidUtf8, PF_NATIVE_SPEC_ERROR_INVALID_UTF8);
+PF_PIN_WORD(pineforge::NativeRunSpecError::ZeroRunNumber, PF_NATIVE_SPEC_ERROR_ZERO_RUN_NUMBER);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidTimeframe,
+            PF_NATIVE_SPEC_ERROR_INVALID_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::IncompatibleTimeframes,
+            PF_NATIVE_SPEC_ERROR_INCOMPATIBLE_TIMEFRAMES);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnresolvedTimezone,
+            PF_NATIVE_SPEC_ERROR_UNRESOLVED_TIMEZONE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidSession, PF_NATIVE_SPEC_ERROR_INVALID_SESSION);
+PF_PIN_WORD(pineforge::NativeRunSpecError::NotFinitePositive,
+            PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SlippageOutOfRange,
+            PF_NATIVE_SPEC_ERROR_SLIPPAGE_OUT_OF_RANGE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownFeeKind, PF_NATIVE_SPEC_ERROR_UNKNOWN_FEE_KIND);
+PF_PIN_WORD(pineforge::NativeRunSpecError::NotFiniteNonnegative,
+            PF_NATIVE_SPEC_ERROR_NOT_FINITE_NONNEGATIVE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownCloseExecution,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_CLOSE_EXECUTION);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownAbortReporting,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_ABORT_REPORTING);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownOpenDirections,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_DIRECTIONS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::ZeroLotLimit, PF_NATIVE_SPEC_ERROR_ZERO_LOT_LIMIT);
+PF_PIN_WORD(pineforge::NativeRunSpecError::AllocationFailure,
+            PF_NATIVE_SPEC_ERROR_ALLOCATION_FAILURE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::CalendarFailure,
+            PF_NATIVE_SPEC_ERROR_CALENDAR_FAILURE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidIntrabarPath,
+            PF_NATIVE_SPEC_ERROR_INVALID_INTRABAR_PATH);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownIntrabarSampleEligibility,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_INTRABAR_SAMPLE_ELIGIBILITY);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidUndetectedTimeframe,
+            PF_NATIVE_SPEC_ERROR_INVALID_UNDETECTED_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownSlotLabelPolicy,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_SLOT_LABEL_POLICY);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownLegacyTolerance,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_FEED_TOLERANCE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownPathOrder,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_PATH_ORDER);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownReportPolicy,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_REPORT_POLICY);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownPriceGrid,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_PRICE_GRID);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownGridRounding,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_GRID_ROUNDING);
+PF_PIN_WORD(pineforge::NativeRunSpecError::GridRequiresPriceTick,
+            PF_NATIVE_SPEC_ERROR_GRID_REQUIRES_PRICE_TICK);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidSubscriptionTimeframe,
+            PF_NATIVE_SPEC_ERROR_INVALID_SUBSCRIPTION_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionFinerThanInput,
+            PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_INPUT);
+PF_PIN_WORD(pineforge::NativeRunSpecError::DuplicateSubscriptionTimeframe,
+            PF_NATIVE_SPEC_ERROR_DUPLICATE_SUBSCRIPTION_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnorderedSubscriptionBars,
+            PF_NATIVE_SPEC_ERROR_UNORDERED_SUBSCRIPTION_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionWithoutTimeframe,
+            PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::MarginModelConflict,
+            PF_NATIVE_SPEC_ERROR_MARGIN_MODEL_CONFLICT);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownLiquidationSizing,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_SIZING);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownLiquidationCheck,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_CHECK);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownMarginEquityBasis,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_MARGIN_EQUITY_BASIS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownLiquidationLevelBase,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_LEVEL_BASE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownCalculationTrigger,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_CALCULATION_TRIGGER);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownOpenBarView,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_BAR_VIEW);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownRiskDay, PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_DAY);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownRiskAction,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_ACTION);
+PF_PIN_WORD(pineforge::NativeRunSpecError::ZeroRiskLimit, PF_NATIVE_SPEC_ERROR_ZERO_RISK_LIMIT);
+PF_PIN_WORD(pineforge::NativeRunSpecError::MarginSideUndeclared,
+            PF_NATIVE_SPEC_ERROR_MARGIN_SIDE_UNDECLARED);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidAuxiliaryFeedTimeframe,
+            PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::AuxiliaryFeedNotFinerThanInput,
+            PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_NOT_FINER_THAN_INPUT);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnorderedAuxiliaryFeedBars,
+            PF_NATIVE_SPEC_ERROR_UNORDERED_AUXILIARY_FEED_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecError::InvalidAuxiliaryFeedBar,
+            PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_BAR);
+PF_PIN_WORD(pineforge::NativeRunSpecError::AuxiliaryFeedWithoutTimeframe,
+            PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_WITHOUT_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownSeriesSource,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_SERIES_SOURCE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionWithoutAuxiliaryFeed,
+            PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_AUXILIARY_FEED);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionFinerThanAuxiliaryFeed,
+            PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED);
+PF_PIN_WORD(pineforge::NativeRunSpecError::WrongPhase, PF_NATIVE_SPEC_ERROR_WRONG_PHASE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::None, PF_NATIVE_SPEC_FIELD_NONE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SessionKey, PF_NATIVE_SPEC_FIELD_SESSION_KEY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RunNumber, PF_NATIVE_SPEC_FIELD_RUN_NUMBER);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InputTimeframe, PF_NATIVE_SPEC_FIELD_INPUT_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::ScriptTimeframe,
+            PF_NATIVE_SPEC_FIELD_SCRIPT_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Ticker, PF_NATIVE_SPEC_FIELD_TICKER);
+PF_PIN_WORD(pineforge::NativeRunSpecField::TickerId, PF_NATIVE_SPEC_FIELD_TICKER_ID);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Type, PF_NATIVE_SPEC_FIELD_TYPE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Currency, PF_NATIVE_SPEC_FIELD_CURRENCY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::BaseCurrency, PF_NATIVE_SPEC_FIELD_BASE_CURRENCY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Description, PF_NATIVE_SPEC_FIELD_DESCRIPTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::VolumeType, PF_NATIVE_SPEC_FIELD_VOLUME_TYPE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Timezone, PF_NATIVE_SPEC_FIELD_TIMEZONE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Session, PF_NATIVE_SPEC_FIELD_SESSION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::ChartTimezone, PF_NATIVE_SPEC_FIELD_CHART_TIMEZONE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InitialCapital, PF_NATIVE_SPEC_FIELD_INITIAL_CAPITAL);
+PF_PIN_WORD(pineforge::NativeRunSpecField::PointValue, PF_NATIVE_SPEC_FIELD_POINT_VALUE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::AccountFx, PF_NATIVE_SPEC_FIELD_ACCOUNT_FX);
+PF_PIN_WORD(pineforge::NativeRunSpecField::PriceTick, PF_NATIVE_SPEC_FIELD_PRICE_TICK);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SlippageTicks, PF_NATIVE_SPEC_FIELD_SLIPPAGE_TICKS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::FeeKind, PF_NATIVE_SPEC_FIELD_FEE_KIND);
+PF_PIN_WORD(pineforge::NativeRunSpecField::FeeValue, PF_NATIVE_SPEC_FIELD_FEE_VALUE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::QuantityGrid, PF_NATIVE_SPEC_FIELD_QUANTITY_GRID);
+PF_PIN_WORD(pineforge::NativeRunSpecField::CloseExecution, PF_NATIVE_SPEC_FIELD_CLOSE_EXECUTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::AbortReporting, PF_NATIVE_SPEC_FIELD_ABORT_REPORTING);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MaxAbsUnits, PF_NATIVE_SPEC_FIELD_MAX_ABS_UNITS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MaxOpenLots, PF_NATIVE_SPEC_FIELD_MAX_OPEN_LOTS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::AllowedOpenDirections,
+            PF_NATIVE_SPEC_FIELD_ALLOWED_OPEN_DIRECTIONS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::InitialMarginFraction,
+            PF_NATIVE_SPEC_FIELD_INITIAL_MARGIN_FRACTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::IntrabarTimeframe,
+            PF_NATIVE_SPEC_FIELD_INTRABAR_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::IntrabarSamples,
+            PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLES);
+PF_PIN_WORD(pineforge::NativeRunSpecField::IntrabarDistribution,
+            PF_NATIVE_SPEC_FIELD_INTRABAR_DISTRIBUTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::IntrabarVolumeSamples,
+            PF_NATIVE_SPEC_FIELD_INTRABAR_VOLUME_SAMPLES);
+PF_PIN_WORD(pineforge::NativeRunSpecField::IntrabarSampleEligibility,
+            PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLE_ELIGIBILITY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::TimeframeUndetected,
+            PF_NATIVE_SPEC_FIELD_TIMEFRAME_UNDETECTED);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SlotLabelPolicy,
+            PF_NATIVE_SPEC_FIELD_SLOT_LABEL_POLICY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::LegacyTolerance, PF_NATIVE_SPEC_FIELD_FEED_TOLERANCE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::PathOrder, PF_NATIVE_SPEC_FIELD_PATH_ORDER);
+PF_PIN_WORD(pineforge::NativeRunSpecField::ReportPolicy, PF_NATIVE_SPEC_FIELD_REPORT_POLICY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::PriceGrid, PF_NATIVE_SPEC_FIELD_PRICE_GRID);
+PF_PIN_WORD(pineforge::NativeRunSpecField::GridRounding, PF_NATIVE_SPEC_FIELD_GRID_ROUNDING);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionTimeframe,
+            PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionBars,
+            PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginModel, PF_NATIVE_SPEC_FIELD_MARGIN_MODEL);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginInitial, PF_NATIVE_SPEC_FIELD_MARGIN_INITIAL);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginMaintenance,
+            PF_NATIVE_SPEC_FIELD_MARGIN_MAINTENANCE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginSizing, PF_NATIVE_SPEC_FIELD_MARGIN_SIZING);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginShortfallMultiple,
+            PF_NATIVE_SPEC_FIELD_MARGIN_SHORTFALL_MULTIPLE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginMinUnits, PF_NATIVE_SPEC_FIELD_MARGIN_MIN_UNITS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginCheck, PF_NATIVE_SPEC_FIELD_MARGIN_CHECK);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginEquityBasis,
+            PF_NATIVE_SPEC_FIELD_MARGIN_EQUITY_BASIS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::MarginLevelBase,
+            PF_NATIVE_SPEC_FIELD_MARGIN_LEVEL_BASE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::Calculation, PF_NATIVE_SPEC_FIELD_CALCULATION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::OpenBarView, PF_NATIVE_SPEC_FIELD_OPEN_BAR_VIEW);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskLimits, PF_NATIVE_SPEC_FIELD_RISK_LIMITS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskDrawdown, PF_NATIVE_SPEC_FIELD_RISK_DRAWDOWN);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskIntradayLoss,
+            PF_NATIVE_SPEC_FIELD_RISK_INTRADAY_LOSS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskLossDays, PF_NATIVE_SPEC_FIELD_RISK_LOSS_DAYS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskFillsPerDay,
+            PF_NATIVE_SPEC_FIELD_RISK_FILLS_PER_DAY);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskDayBasis, PF_NATIVE_SPEC_FIELD_RISK_DAY_BASIS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::RiskAction, PF_NATIVE_SPEC_FIELD_RISK_ACTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::AuxiliaryFeedTimeframe,
+            PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME);
+PF_PIN_WORD(pineforge::NativeRunSpecField::AuxiliaryFeedBars,
+            PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS);
+PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionSource,
+            PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::None, PF_NATIVE_APPEND_ERROR_NONE);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::HostFailed,
+            PF_NATIVE_APPEND_ERROR_HOST_FAILED);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::Reentrant, PF_NATIVE_APPEND_ERROR_REENTRANT);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::NotRealtime,
+            PF_NATIVE_APPEND_ERROR_NOT_REALTIME);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::NoAuxiliaryFeed,
+            PF_NATIVE_APPEND_ERROR_NO_AUXILIARY_FEED);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::InvalidBarArray,
+            PF_NATIVE_APPEND_ERROR_INVALID_BAR_ARRAY);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::InvalidBar,
+            PF_NATIVE_APPEND_ERROR_INVALID_BAR);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::UnorderedBars,
+            PF_NATIVE_APPEND_ERROR_UNORDERED_BARS);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::InputPeriodAlreadyAccepted,
+            PF_NATIVE_APPEND_ERROR_INPUT_PERIOD_ALREADY_ACCEPTED);
+PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::AllocationFailure,
+            PF_NATIVE_APPEND_ERROR_ALLOCATION_FAILURE);
 static_assert((PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID | PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS
                | PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION
                | PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS)
@@ -748,6 +951,164 @@ constexpr std::uint32_t c_word(no::RiskLimitKind value) noexcept {
     case V::MaxIntradayLoss: return PF_NATIVE_RISK_MAX_INTRADAY_LOSS;
     case V::MaxConsecutiveLossDays: return PF_NATIVE_RISK_MAX_CONSECUTIVE_LOSS_DAYS;
     case V::MaxFillsPerDay: return PF_NATIVE_RISK_MAX_FILLS_PER_DAY;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeRunSpecError value) noexcept {
+    using V = pineforge::NativeRunSpecError;
+    switch (value) {
+    case V::None: return PF_NATIVE_SPEC_ERROR_NONE;
+    case V::EmptyRequiredString: return PF_NATIVE_SPEC_ERROR_EMPTY_REQUIRED_STRING;
+    case V::EmbeddedNul: return PF_NATIVE_SPEC_ERROR_EMBEDDED_NUL;
+    case V::InvalidUtf8: return PF_NATIVE_SPEC_ERROR_INVALID_UTF8;
+    case V::ZeroRunNumber: return PF_NATIVE_SPEC_ERROR_ZERO_RUN_NUMBER;
+    case V::InvalidTimeframe: return PF_NATIVE_SPEC_ERROR_INVALID_TIMEFRAME;
+    case V::IncompatibleTimeframes: return PF_NATIVE_SPEC_ERROR_INCOMPATIBLE_TIMEFRAMES;
+    case V::UnresolvedTimezone: return PF_NATIVE_SPEC_ERROR_UNRESOLVED_TIMEZONE;
+    case V::InvalidSession: return PF_NATIVE_SPEC_ERROR_INVALID_SESSION;
+    case V::NotFinitePositive: return PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE;
+    case V::SlippageOutOfRange: return PF_NATIVE_SPEC_ERROR_SLIPPAGE_OUT_OF_RANGE;
+    case V::UnknownFeeKind: return PF_NATIVE_SPEC_ERROR_UNKNOWN_FEE_KIND;
+    case V::NotFiniteNonnegative: return PF_NATIVE_SPEC_ERROR_NOT_FINITE_NONNEGATIVE;
+    case V::UnknownCloseExecution: return PF_NATIVE_SPEC_ERROR_UNKNOWN_CLOSE_EXECUTION;
+    case V::UnknownAbortReporting: return PF_NATIVE_SPEC_ERROR_UNKNOWN_ABORT_REPORTING;
+    case V::UnknownOpenDirections: return PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_DIRECTIONS;
+    case V::ZeroLotLimit: return PF_NATIVE_SPEC_ERROR_ZERO_LOT_LIMIT;
+    case V::AllocationFailure: return PF_NATIVE_SPEC_ERROR_ALLOCATION_FAILURE;
+    case V::CalendarFailure: return PF_NATIVE_SPEC_ERROR_CALENDAR_FAILURE;
+    case V::InvalidIntrabarPath: return PF_NATIVE_SPEC_ERROR_INVALID_INTRABAR_PATH;
+    case V::UnknownIntrabarSampleEligibility:
+        return PF_NATIVE_SPEC_ERROR_UNKNOWN_INTRABAR_SAMPLE_ELIGIBILITY;
+    case V::InvalidUndetectedTimeframe: return PF_NATIVE_SPEC_ERROR_INVALID_UNDETECTED_TIMEFRAME;
+    case V::UnknownSlotLabelPolicy: return PF_NATIVE_SPEC_ERROR_UNKNOWN_SLOT_LABEL_POLICY;
+    case V::UnknownLegacyTolerance: return PF_NATIVE_SPEC_ERROR_UNKNOWN_FEED_TOLERANCE;
+    case V::UnknownPathOrder: return PF_NATIVE_SPEC_ERROR_UNKNOWN_PATH_ORDER;
+    case V::UnknownReportPolicy: return PF_NATIVE_SPEC_ERROR_UNKNOWN_REPORT_POLICY;
+    case V::UnknownPriceGrid: return PF_NATIVE_SPEC_ERROR_UNKNOWN_PRICE_GRID;
+    case V::UnknownGridRounding: return PF_NATIVE_SPEC_ERROR_UNKNOWN_GRID_ROUNDING;
+    case V::GridRequiresPriceTick: return PF_NATIVE_SPEC_ERROR_GRID_REQUIRES_PRICE_TICK;
+    case V::InvalidSubscriptionTimeframe:
+        return PF_NATIVE_SPEC_ERROR_INVALID_SUBSCRIPTION_TIMEFRAME;
+    case V::SubscriptionFinerThanInput: return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_INPUT;
+    case V::DuplicateSubscriptionTimeframe:
+        return PF_NATIVE_SPEC_ERROR_DUPLICATE_SUBSCRIPTION_TIMEFRAME;
+    case V::UnorderedSubscriptionBars: return PF_NATIVE_SPEC_ERROR_UNORDERED_SUBSCRIPTION_BARS;
+    case V::SubscriptionWithoutTimeframe:
+        return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_TIMEFRAME;
+    case V::MarginModelConflict: return PF_NATIVE_SPEC_ERROR_MARGIN_MODEL_CONFLICT;
+    case V::UnknownLiquidationSizing: return PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_SIZING;
+    case V::UnknownLiquidationCheck: return PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_CHECK;
+    case V::UnknownMarginEquityBasis: return PF_NATIVE_SPEC_ERROR_UNKNOWN_MARGIN_EQUITY_BASIS;
+    case V::UnknownLiquidationLevelBase: return PF_NATIVE_SPEC_ERROR_UNKNOWN_LIQUIDATION_LEVEL_BASE;
+    case V::UnknownCalculationTrigger: return PF_NATIVE_SPEC_ERROR_UNKNOWN_CALCULATION_TRIGGER;
+    case V::UnknownOpenBarView: return PF_NATIVE_SPEC_ERROR_UNKNOWN_OPEN_BAR_VIEW;
+    case V::UnknownRiskDay: return PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_DAY;
+    case V::UnknownRiskAction: return PF_NATIVE_SPEC_ERROR_UNKNOWN_RISK_ACTION;
+    case V::ZeroRiskLimit: return PF_NATIVE_SPEC_ERROR_ZERO_RISK_LIMIT;
+    case V::MarginSideUndeclared: return PF_NATIVE_SPEC_ERROR_MARGIN_SIDE_UNDECLARED;
+    case V::InvalidAuxiliaryFeedTimeframe:
+        return PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_TIMEFRAME;
+    case V::AuxiliaryFeedNotFinerThanInput:
+        return PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_NOT_FINER_THAN_INPUT;
+    case V::UnorderedAuxiliaryFeedBars: return PF_NATIVE_SPEC_ERROR_UNORDERED_AUXILIARY_FEED_BARS;
+    case V::InvalidAuxiliaryFeedBar: return PF_NATIVE_SPEC_ERROR_INVALID_AUXILIARY_FEED_BAR;
+    case V::AuxiliaryFeedWithoutTimeframe:
+        return PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_WITHOUT_TIMEFRAME;
+    case V::UnknownSeriesSource: return PF_NATIVE_SPEC_ERROR_UNKNOWN_SERIES_SOURCE;
+    case V::SubscriptionWithoutAuxiliaryFeed:
+        return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_AUXILIARY_FEED;
+    case V::SubscriptionFinerThanAuxiliaryFeed:
+        return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED;
+    case V::WrongPhase: return PF_NATIVE_SPEC_ERROR_WRONG_PHASE;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeRunSpecField value) noexcept {
+    using V = pineforge::NativeRunSpecField;
+    switch (value) {
+    case V::None: return PF_NATIVE_SPEC_FIELD_NONE;
+    case V::SessionKey: return PF_NATIVE_SPEC_FIELD_SESSION_KEY;
+    case V::RunNumber: return PF_NATIVE_SPEC_FIELD_RUN_NUMBER;
+    case V::InputTimeframe: return PF_NATIVE_SPEC_FIELD_INPUT_TIMEFRAME;
+    case V::ScriptTimeframe: return PF_NATIVE_SPEC_FIELD_SCRIPT_TIMEFRAME;
+    case V::Ticker: return PF_NATIVE_SPEC_FIELD_TICKER;
+    case V::TickerId: return PF_NATIVE_SPEC_FIELD_TICKER_ID;
+    case V::Type: return PF_NATIVE_SPEC_FIELD_TYPE;
+    case V::Currency: return PF_NATIVE_SPEC_FIELD_CURRENCY;
+    case V::BaseCurrency: return PF_NATIVE_SPEC_FIELD_BASE_CURRENCY;
+    case V::Description: return PF_NATIVE_SPEC_FIELD_DESCRIPTION;
+    case V::VolumeType: return PF_NATIVE_SPEC_FIELD_VOLUME_TYPE;
+    case V::Timezone: return PF_NATIVE_SPEC_FIELD_TIMEZONE;
+    case V::Session: return PF_NATIVE_SPEC_FIELD_SESSION;
+    case V::ChartTimezone: return PF_NATIVE_SPEC_FIELD_CHART_TIMEZONE;
+    case V::InitialCapital: return PF_NATIVE_SPEC_FIELD_INITIAL_CAPITAL;
+    case V::PointValue: return PF_NATIVE_SPEC_FIELD_POINT_VALUE;
+    case V::AccountFx: return PF_NATIVE_SPEC_FIELD_ACCOUNT_FX;
+    case V::PriceTick: return PF_NATIVE_SPEC_FIELD_PRICE_TICK;
+    case V::SlippageTicks: return PF_NATIVE_SPEC_FIELD_SLIPPAGE_TICKS;
+    case V::FeeKind: return PF_NATIVE_SPEC_FIELD_FEE_KIND;
+    case V::FeeValue: return PF_NATIVE_SPEC_FIELD_FEE_VALUE;
+    case V::QuantityGrid: return PF_NATIVE_SPEC_FIELD_QUANTITY_GRID;
+    case V::CloseExecution: return PF_NATIVE_SPEC_FIELD_CLOSE_EXECUTION;
+    case V::AbortReporting: return PF_NATIVE_SPEC_FIELD_ABORT_REPORTING;
+    case V::MaxAbsUnits: return PF_NATIVE_SPEC_FIELD_MAX_ABS_UNITS;
+    case V::MaxOpenLots: return PF_NATIVE_SPEC_FIELD_MAX_OPEN_LOTS;
+    case V::AllowedOpenDirections: return PF_NATIVE_SPEC_FIELD_ALLOWED_OPEN_DIRECTIONS;
+    case V::InitialMarginFraction: return PF_NATIVE_SPEC_FIELD_INITIAL_MARGIN_FRACTION;
+    case V::IntrabarTimeframe: return PF_NATIVE_SPEC_FIELD_INTRABAR_TIMEFRAME;
+    case V::IntrabarSamples: return PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLES;
+    case V::IntrabarDistribution: return PF_NATIVE_SPEC_FIELD_INTRABAR_DISTRIBUTION;
+    case V::IntrabarVolumeSamples: return PF_NATIVE_SPEC_FIELD_INTRABAR_VOLUME_SAMPLES;
+    case V::IntrabarSampleEligibility: return PF_NATIVE_SPEC_FIELD_INTRABAR_SAMPLE_ELIGIBILITY;
+    case V::TimeframeUndetected: return PF_NATIVE_SPEC_FIELD_TIMEFRAME_UNDETECTED;
+    case V::SlotLabelPolicy: return PF_NATIVE_SPEC_FIELD_SLOT_LABEL_POLICY;
+    case V::LegacyTolerance: return PF_NATIVE_SPEC_FIELD_FEED_TOLERANCE;
+    case V::PathOrder: return PF_NATIVE_SPEC_FIELD_PATH_ORDER;
+    case V::ReportPolicy: return PF_NATIVE_SPEC_FIELD_REPORT_POLICY;
+    case V::PriceGrid: return PF_NATIVE_SPEC_FIELD_PRICE_GRID;
+    case V::GridRounding: return PF_NATIVE_SPEC_FIELD_GRID_ROUNDING;
+    case V::SubscriptionTimeframe: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_TIMEFRAME;
+    case V::SubscriptionBars: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_BARS;
+    case V::MarginModel: return PF_NATIVE_SPEC_FIELD_MARGIN_MODEL;
+    case V::MarginInitial: return PF_NATIVE_SPEC_FIELD_MARGIN_INITIAL;
+    case V::MarginMaintenance: return PF_NATIVE_SPEC_FIELD_MARGIN_MAINTENANCE;
+    case V::MarginSizing: return PF_NATIVE_SPEC_FIELD_MARGIN_SIZING;
+    case V::MarginShortfallMultiple: return PF_NATIVE_SPEC_FIELD_MARGIN_SHORTFALL_MULTIPLE;
+    case V::MarginMinUnits: return PF_NATIVE_SPEC_FIELD_MARGIN_MIN_UNITS;
+    case V::MarginCheck: return PF_NATIVE_SPEC_FIELD_MARGIN_CHECK;
+    case V::MarginEquityBasis: return PF_NATIVE_SPEC_FIELD_MARGIN_EQUITY_BASIS;
+    case V::MarginLevelBase: return PF_NATIVE_SPEC_FIELD_MARGIN_LEVEL_BASE;
+    case V::Calculation: return PF_NATIVE_SPEC_FIELD_CALCULATION;
+    case V::OpenBarView: return PF_NATIVE_SPEC_FIELD_OPEN_BAR_VIEW;
+    case V::RiskLimits: return PF_NATIVE_SPEC_FIELD_RISK_LIMITS;
+    case V::RiskDrawdown: return PF_NATIVE_SPEC_FIELD_RISK_DRAWDOWN;
+    case V::RiskIntradayLoss: return PF_NATIVE_SPEC_FIELD_RISK_INTRADAY_LOSS;
+    case V::RiskLossDays: return PF_NATIVE_SPEC_FIELD_RISK_LOSS_DAYS;
+    case V::RiskFillsPerDay: return PF_NATIVE_SPEC_FIELD_RISK_FILLS_PER_DAY;
+    case V::RiskDayBasis: return PF_NATIVE_SPEC_FIELD_RISK_DAY_BASIS;
+    case V::RiskAction: return PF_NATIVE_SPEC_FIELD_RISK_ACTION;
+    case V::AuxiliaryFeedTimeframe: return PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME;
+    case V::AuxiliaryFeedBars: return PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS;
+    case V::SubscriptionSource: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeAuxiliaryAppendError value) noexcept {
+    using V = pineforge::NativeAuxiliaryAppendError;
+    switch (value) {
+    case V::None: return PF_NATIVE_APPEND_ERROR_NONE;
+    case V::HostFailed: return PF_NATIVE_APPEND_ERROR_HOST_FAILED;
+    case V::Reentrant: return PF_NATIVE_APPEND_ERROR_REENTRANT;
+    case V::NotRealtime: return PF_NATIVE_APPEND_ERROR_NOT_REALTIME;
+    case V::NoAuxiliaryFeed: return PF_NATIVE_APPEND_ERROR_NO_AUXILIARY_FEED;
+    case V::InvalidBarArray: return PF_NATIVE_APPEND_ERROR_INVALID_BAR_ARRAY;
+    case V::InvalidBar: return PF_NATIVE_APPEND_ERROR_INVALID_BAR;
+    case V::UnorderedBars: return PF_NATIVE_APPEND_ERROR_UNORDERED_BARS;
+    case V::InputPeriodAlreadyAccepted: return PF_NATIVE_APPEND_ERROR_INPUT_PERIOD_ALREADY_ACCEPTED;
+    case V::AllocationFailure: return PF_NATIVE_APPEND_ERROR_ALLOCATION_FAILURE;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -1739,6 +2100,14 @@ void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working
     out.comment = definition.request.comment.c_str();
 }
 
+/* A setup call's typed answer, written to the C out-parameters that asked for
+ * it: the error word and the field it was found at. */
+void write_validation(const pineforge::NativeRunSpecValidation& validation,
+                      std::uint32_t* error, std::uint32_t* field) {
+    if (error) *error = c_word(validation.error);
+    if (field) *field = c_word(validation.field);
+}
+
 /* Every PF_API body below runs inside one of these: a C++ exception must
  * never cross the boundary, and the kernel throws on an illegal command. */
 template <typename Fn>
@@ -2606,25 +2975,59 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out) {
     });
 }
 
-PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
-                                                    const pf_native_subscription_v1* rows,
-                                                    int n) {
+PF_API int strategy_native_declare_subscriptions_ext_v1(pf_strategy_t s,
+                                                        const pf_native_subscription_v1* rows,
+                                                        int n, const uint32_t* sources,
+                                                        uint32_t* error, uint32_t* field) {
     return guarded([&] {
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (n < 0 || (n > 0 && !rows)) return PF_NATIVE_E_ARGUMENT;
         std::vector<pineforge::NativeTimeframeSubscription> declared;
-        /* The begin-time declaration carries no source column: it rides in
-         * the run spec's auxiliary tail, so a series declared here is built
-         * from the input. */
-        if (int rc = translate_subscriptions(rows, static_cast<std::uint32_t>(n), nullptr,
+        /* NULL sources build every series from the input, exactly as the
+         * run spec's own subscription block does without its source column. */
+        if (int rc = translate_subscriptions(rows, static_cast<std::uint32_t>(n), sources,
                                              declared);
             rc != PF_NATIVE_OK) {
             return rc;
         }
-        return host->declare_timeframe_subscriptions(std::move(declared))
-            ? PF_NATIVE_OK
-            : PF_NATIVE_E_STATE;
+        const auto result = host->declare_timeframe_subscriptions_result(std::move(declared));
+        write_validation(result.validation, error, field);
+        return result.status == pineforge::NativeSetupStatus::Applied ? PF_NATIVE_OK
+                                                                      : PF_NATIVE_E_STATE;
+    });
+}
+
+/* The established spelling: the call above with no source column and no
+ * words written. */
+PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
+                                                    const pf_native_subscription_v1* rows,
+                                                    int n) {
+    return strategy_native_declare_subscriptions_ext_v1(s, rows, n, nullptr, nullptr, nullptr);
+}
+
+PF_API int strategy_native_declare_auxiliary_feed_v1(pf_strategy_t s, const char* tf,
+                                                     const pf_bar_t* bars, int32_t n,
+                                                     uint32_t* error, uint32_t* field) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (n < 0 || (n > 0 && !bars)) return PF_NATIVE_E_ARGUMENT;
+        std::optional<pineforge::NativeAuxiliaryFeed> feed;
+        if (tf) {
+            pineforge::NativeAuxiliaryFeed declared;
+            declared.tf = tf;
+            const auto* begin = reinterpret_cast<const Bar*>(bars);
+            declared.bars.assign(begin, begin + n);
+            feed = std::move(declared);
+        } else if (n != 0 || bars) {
+            /* A withdrawal names no feed, so it can carry no bars either. */
+            return PF_NATIVE_E_ARGUMENT;
+        }
+        const auto result = host->declare_auxiliary_feed_result(std::move(feed));
+        write_validation(result.validation, error, field);
+        return result.status == pineforge::NativeSetupStatus::Applied ? PF_NATIVE_OK
+                                                                      : PF_NATIVE_E_STATE;
     });
 }
 
@@ -2853,17 +3256,27 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
     });
 }
 
-PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
-                                                    int32_t n) {
+PF_API int strategy_native_append_auxiliary_bars_ext_v1(pf_strategy_t s, const pf_bar_t* bars,
+                                                        int32_t n, uint32_t* error,
+                                                        int32_t* index) {
     return guarded([&] {
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (n < 0 || (n > 0 && !bars)) return PF_NATIVE_E_ARGUMENT;
-        return host->append_auxiliary_bars(reinterpret_cast<const Bar*>(bars),
-                                           static_cast<std::size_t>(n))
-            ? PF_NATIVE_OK
-            : PF_NATIVE_E_STATE;
+        const auto result = host->append_auxiliary_bars_result(
+            reinterpret_cast<const Bar*>(bars), static_cast<std::size_t>(n));
+        if (error) *error = c_word(result.error);
+        /* The bar of THIS call, which a count of int32_t bars bounds. */
+        if (index) *index = static_cast<std::int32_t>(result.index);
+        return result.status == pineforge::NativeSetupStatus::Applied ? PF_NATIVE_OK
+                                                                      : PF_NATIVE_E_STATE;
     });
+}
+
+/* The established spelling: the call above with no words written. */
+PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_bar_t* bars,
+                                                    int32_t n) {
+    return strategy_native_append_auxiliary_bars_ext_v1(s, bars, n, nullptr, nullptr);
 }
 
 PF_API int strategy_native_declare_opened_lot_entry_bar_mask_v1(pf_strategy_t s,

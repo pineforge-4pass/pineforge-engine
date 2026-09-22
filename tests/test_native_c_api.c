@@ -6112,6 +6112,280 @@ static void check_readout_words(void) {
     check_readout_words_buckets();
 }
 
+/* ── Typed setup and append refusals (lane F4, item 3) ─────────────
+ *
+ * The C spellings of declare_timeframe_subscriptions and
+ * append_auxiliary_bars flattened every kernel refusal to PF_NATIVE_E_STATE,
+ * and declare_auxiliary_feed had no C spelling at all (audit AUDIT3 E18
+ * GAPs). The _ext_v1 spellings are the same calls with the same statuses,
+ * plus out-parameters naming the refusal the kernel's typed answer carries:
+ * a pf_native_spec_error_t at a pf_native_spec_field_t for a declaration, a
+ * pf_native_append_error_t at the bar of the call for an append. An
+ * out-parameter is written whenever the kernel judged the call, and left
+ * alone when the C layer refused first. */
+
+#define TYPED_UNTOUCHED 0xdeadbeefu
+#define TYPED_CALLS 7
+
+typedef struct typed_state {
+    aux_state     buckets;   /* first: aux_on_timeframe_bar reads it */
+    pf_strategy_t host;
+    int           rc[TYPED_CALLS];
+    uint32_t      error[TYPED_CALLS];
+    uint32_t      field[TYPED_CALLS];
+} typed_state;
+
+static int typed_on_run_begin(void* user) {
+    typed_state* state = (typed_state*)user;
+    pf_native_subscription_v1 row;
+    pf_native_subscription_v1 rows[2];
+    const uint32_t sources[2] = {PF_NATIVE_SERIES_SOURCE_INPUT,
+                                 PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED};
+    int i;
+    for (i = 0; i < TYPED_CALLS; ++i) {
+        state->error[i] = TYPED_UNTOUCHED;
+        state->field[i] = TYPED_UNTOUCHED;
+    }
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    /* 0: a series finer than the 15-minute input. */
+    row.tf = "5";
+    state->rc[0] = strategy_native_declare_subscriptions_ext_v1(state->host, &row, 1, NULL,
+                                                                &state->error[0],
+                                                                &state->field[0]);
+    /* 1: a literal no timeframe parses. */
+    row.tf = "fortnight";
+    state->rc[1] = strategy_native_declare_subscriptions_ext_v1(state->host, &row, 1, NULL,
+                                                                &state->error[1],
+                                                                &state->field[1]);
+    /* 2: a word the C layer refuses before the kernel sees the list. */
+    row.tf = "60";
+    row.lookahead = 7u;
+    state->rc[2] = strategy_native_declare_subscriptions_ext_v1(state->host, &row, 1, NULL,
+                                                                &state->error[2],
+                                                                &state->field[2]);
+    row.lookahead = PF_NATIVE_LOOKAHEAD_AT_COMPLETION;
+    /* 3: a feed no finer than the input. */
+    state->rc[3] = strategy_native_declare_auxiliary_feed_v1(state->host, "15", aux_minutes, 15,
+                                                             &state->error[3], &state->field[3]);
+    /* 4: the one-minute feed, then 5: an hour from the input and five
+     * minutes from the feed -- the feed first, as the kernel judges them. */
+    state->rc[4] = strategy_native_declare_auxiliary_feed_v1(state->host, "1", aux_minutes,
+                                                             AUX_MINUTES, &state->error[4],
+                                                             &state->field[4]);
+    rows[0] = row;
+    rows[1] = row;
+    rows[1].tf = "5";
+    state->rc[5] = strategy_native_declare_subscriptions_ext_v1(state->host, rows, 2, sources,
+                                                                &state->error[5],
+                                                                &state->field[5]);
+    /* 6: withdrawing the feed would strand the feed-built series. */
+    state->rc[6] = strategy_native_declare_auxiliary_feed_v1(state->host, NULL, NULL, 0,
+                                                             &state->error[6], &state->field[6]);
+    return 0;
+}
+
+static void check_typed_declarations(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    typed_state state;
+    uint32_t error = TYPED_UNTOUCHED;
+    uint32_t field = TYPED_UNTOUCHED;
+    pf_native_subscription_v1 row;
+
+    aux_fill();
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_run_begin = typed_on_run_begin;
+    table.on_timeframe_bar = aux_on_timeframe_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "typed-declaration host create failed");
+    if (!state.host) return;
+    spec.session_key = "native-c-api-typed-declarations";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0,
+                 "the typed-declaration spec was refused");
+
+    /* Outside on_run_begin nothing is judged: the phase is the refusal. */
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "60";
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_ext_v1(state.host, &row, 1, NULL, &error,
+                                                              &field),
+                 PF_NATIVE_E_STATE, "a declaration outside on_run_begin was staged");
+    CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_WRONG_PHASE, "an early declaration is not WRONG_PHASE");
+    CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_NONE, "a phase refusal named a field");
+    error = field = TYPED_UNTOUCHED;
+    CHECK_EQ_INT(strategy_native_declare_auxiliary_feed_v1(state.host, "1", aux_minutes, 15,
+                                                           &error, &field),
+                 PF_NATIVE_E_STATE, "a feed declared outside on_run_begin was staged");
+    CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_WRONG_PHASE, "an early feed is not WRONG_PHASE");
+    CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_NONE, "a phase refusal named a field");
+    /* The C layer's own refusals come first and write nothing. */
+    error = field = TYPED_UNTOUCHED;
+    CHECK_EQ_INT(strategy_native_declare_auxiliary_feed_v1(state.host, "1", NULL, 3, &error,
+                                                           &field),
+                 PF_NATIVE_E_ARGUMENT, "a feed of NULL bars was accepted");
+    CHECK_EQ_INT(strategy_native_declare_auxiliary_feed_v1(state.host, NULL, aux_minutes, 3,
+                                                           &error, &field),
+                 PF_NATIVE_E_ARGUMENT, "a withdrawal carrying bars was accepted");
+    CHECK_EQ_INT(strategy_native_declare_subscriptions_ext_v1(state.host, NULL, 2, NULL, &error,
+                                                              &field),
+                 PF_NATIVE_E_ARGUMENT, "a NULL list of two rows was accepted");
+    CHECK(error == TYPED_UNTOUCHED && field == TYPED_UNTOUCHED,
+          "a refusal the kernel never judged wrote its out-parameters");
+    CHECK_EQ_INT(strategy_native_declare_auxiliary_feed_v1(NULL, "1", aux_minutes, 3, NULL, NULL),
+                 PF_NATIVE_E_HANDLE, "a feed was declared on a NULL handle");
+
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, aux_inputs, AUX_INPUTS, NULL), PF_NATIVE_OK,
+                 "the typed-declaration run did not complete");
+    CHECK_EQ_INT(state.rc[0], PF_NATIVE_E_STATE, "a finer series was staged");
+    CHECK_EQ_INT(state.error[0], PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_INPUT,
+                 "a finer series is not SUBSCRIPTION_FINER_THAN_INPUT");
+    CHECK_EQ_INT(state.field[0], PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_TIMEFRAME,
+                 "a finer series named another field");
+    CHECK_EQ_INT(state.rc[1], PF_NATIVE_E_STATE, "an unparsed series was staged");
+    CHECK_EQ_INT(state.error[1], PF_NATIVE_SPEC_ERROR_INVALID_SUBSCRIPTION_TIMEFRAME,
+                 "an unparsed series is not INVALID_SUBSCRIPTION_TIMEFRAME");
+    CHECK_EQ_INT(state.field[1], PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_TIMEFRAME,
+                 "an unparsed series named another field");
+    CHECK_EQ_INT(state.rc[2], PF_NATIVE_E_TAG, "an unknown lookahead word was staged");
+    CHECK(state.error[2] == TYPED_UNTOUCHED && state.field[2] == TYPED_UNTOUCHED,
+          "the C layer's tag refusal wrote the kernel's out-parameters");
+    CHECK_EQ_INT(state.rc[3], PF_NATIVE_E_STATE, "a coarse feed was staged");
+    CHECK_EQ_INT(state.error[3], PF_NATIVE_SPEC_ERROR_AUXILIARY_FEED_NOT_FINER_THAN_INPUT,
+                 "a coarse feed is not AUXILIARY_FEED_NOT_FINER_THAN_INPUT");
+    CHECK_EQ_INT(state.field[3], PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME,
+                 "a coarse feed named another field");
+    CHECK_EQ_INT(state.rc[4], PF_NATIVE_OK, "the one-minute feed was refused");
+    CHECK(state.error[4] == PF_NATIVE_SPEC_ERROR_NONE && state.field[4] == PF_NATIVE_SPEC_FIELD_NONE,
+          "an applied feed named a refusal");
+    CHECK_EQ_INT(state.rc[5], PF_NATIVE_OK, "the feed-built series were refused");
+    CHECK(state.error[5] == PF_NATIVE_SPEC_ERROR_NONE && state.field[5] == PF_NATIVE_SPEC_FIELD_NONE,
+          "applied series named a refusal");
+    CHECK_EQ_INT(state.rc[6], PF_NATIVE_E_STATE, "a stranding withdrawal was applied");
+    CHECK_EQ_INT(state.error[6], PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_AUXILIARY_FEED,
+                 "a stranding withdrawal is not SUBSCRIPTION_WITHOUT_AUXILIARY_FEED");
+    CHECK_EQ_INT(state.field[6], PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE,
+                 "a stranding withdrawal named another field");
+    /* What ran is what the host declared at begin, bucket for bucket. */
+    CHECK_EQ_INT(state.buckets.from_input, 2, "the begin-declared hour series");
+    CHECK_EQ_INT(state.buckets.from_feed, 24, "the begin-declared feed-built five-minute series");
+    CHECK_EQ_INT(state.buckets.wrong, 0, "a begin-declared feed bucket is not the hand-derived one");
+    strategy_native_host_free(state.host);
+}
+
+/* An append's refusal by name and by the bar of the call it stopped on. */
+static void check_typed_appends(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_subscription_v1 rows[2];
+    const uint32_t sources[2] = {PF_NATIVE_SERIES_SOURCE_INPUT,
+                                 PF_NATIVE_SERIES_SOURCE_AUXILIARY_FEED};
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 run;
+    aux_state state;
+    pf_strategy_t host;
+    pf_bar_t pair[2];
+    pf_bar_t bent;
+    uint32_t error = TYPED_UNTOUCHED;
+    int32_t index = -7;
+
+    aux_fill();
+    spec.session_key = "native-c-api-typed-appends";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    memset(rows, 0, sizeof(rows));
+    rows[0].struct_size = (uint32_t)sizeof(rows[0]);
+    rows[0].tf = "60";
+    rows[1].struct_size = (uint32_t)sizeof(rows[1]);
+    rows[1].tf = "5";
+
+    /* A stream with no feed has nothing to append to. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "no-feed append host create failed");
+    if (!host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "the no-feed spec was refused");
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, &aux_minutes[60], 1, &error,
+                                                              &index),
+                 PF_NATIVE_E_STATE, "an append before any run was accepted");
+    CHECK_EQ_INT(error, PF_NATIVE_APPEND_ERROR_NOT_REALTIME, "an append before any run");
+    CHECK_EQ_INT(strategy_stream_begin(host, aux_inputs, 4, "15", "15"), 0,
+                 "the no-feed stream did not begin");
+    error = TYPED_UNTOUCHED;
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, &aux_minutes[60], 1, &error,
+                                                              &index),
+                 PF_NATIVE_E_STATE, "an append to no feed was accepted");
+    CHECK_EQ_INT(error, PF_NATIVE_APPEND_ERROR_NO_AUXILIARY_FEED, "an append to no feed");
+    CHECK_EQ_INT(index, 0, "a whole-call refusal named a bar");
+    strategy_native_host_free(host);
+
+    /* The feed declared as far as minute 49: the warmup's four inputs accept
+     * every period up to minute 60, so minute 50 is after the feed yet inside
+     * a period already accepted. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_timeframe_bar = aux_on_timeframe_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "typed append host create failed");
+    if (!host) return;
+    ext = aux_ext(rows, sources, 50);
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the typed-append feed was refused");
+    CHECK_EQ_INT(strategy_stream_begin(host, aux_inputs, 4, "15", "15"), 0,
+                 "the typed-append stream did not begin");
+    error = TYPED_UNTOUCHED;
+    index = -7;
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, &aux_minutes[50], 1, &error,
+                                                              &index),
+                 PF_NATIVE_E_STATE, "a bar of an accepted period was appended");
+    CHECK_EQ_INT(error, PF_NATIVE_APPEND_ERROR_INPUT_PERIOD_ALREADY_ACCEPTED,
+                 "a bar of an accepted period");
+    CHECK_EQ_INT(index, 0, "the accepted-period refusal named a bar");
+    pair[0] = aux_minutes[61];
+    pair[1] = aux_minutes[60];
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, pair, 2, &error, &index),
+                 PF_NATIVE_E_STATE, "unordered bars were appended");
+    CHECK_EQ_INT(error, PF_NATIVE_APPEND_ERROR_UNORDERED_BARS, "unordered bars");
+    CHECK_EQ_INT(index, 1, "the unordered refusal stopped on another bar");
+    pair[0] = aux_minutes[60];
+    bent = aux_minutes[61];
+    bent.high = bent.low - 1.0;
+    pair[1] = bent;
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, pair, 2, &error, &index),
+                 PF_NATIVE_E_STATE, "a bar with invalid OHLCV was appended");
+    CHECK_EQ_INT(error, PF_NATIVE_APPEND_ERROR_INVALID_BAR, "a bar with invalid OHLCV");
+    CHECK_EQ_INT(index, 1, "the invalid-bar refusal stopped on another bar");
+    /* The C layer screens a NULL array itself: nothing written. */
+    error = TYPED_UNTOUCHED;
+    index = -7;
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, NULL, 2, &error, &index),
+                 PF_NATIVE_E_ARGUMENT, "a NULL append array was accepted");
+    CHECK(error == TYPED_UNTOUCHED && index == -7,
+          "the C layer's own refusal wrote the kernel's out-parameters");
+    /* None of it touched the stream: the next input's own bars append. */
+    CHECK_EQ_INT(strategy_native_append_auxiliary_bars_ext_v1(host, &aux_minutes[60], 15, &error,
+                                                              &index),
+                 PF_NATIVE_OK, "a live append was refused");
+    CHECK(error == PF_NATIVE_APPEND_ERROR_NONE && index == 0, "an applied append named a refusal");
+    CHECK_EQ_INT(strategy_stream_push_bar(host, &aux_inputs[4]), 0, "the live input was refused");
+    CHECK_EQ_INT(strategy_stream_end(host, 0), 0, "the typed-append stream did not end");
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &run), PF_NATIVE_OK, "typed-append state read");
+    CHECK_EQ_INT(run.lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED,
+                 "a refused append failed the stream");
+    strategy_native_host_free(host);
+}
+
+static void check_typed_setup_refusals(void) {
+    check_typed_declarations();
+    check_typed_appends();
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -6150,5 +6424,6 @@ int pf_native_c_api_checks(void) {
     check_open_bar_view_word();
     check_liquidation_sizing_word();
     check_readout_words();
+    check_typed_setup_refusals();
     return failures;
 }
