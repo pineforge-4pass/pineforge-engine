@@ -1794,12 +1794,10 @@ double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizi
 
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
         const PineSizingSnapshot& sizing, bool is_long) const noexcept {
-    // The core converts at the run's own point value and at the FX rate of the
-    // acceptance coordinate; the source samples its rate at the sub-bar open.
-    // The two are the same number only while the run carries no FX series, so
-    // a run that declares one keeps its host-resolved sizing.
-    if (!staged_.account_fx_effective_from_ms.empty()
-        || !finite_positive(staged_.account_fx) || sizing.fx != staged_.account_fx
+    // The core converts at the run's own point value; whether it also converts
+    // at the source's FX rate is decided where it accepts the command
+    // (core_sizing_price_matches), so a staged FX series keeps this shape.
+    if (!finite_positive(staged_.account_fx)
         || !finite_positive(sizing.price) || !finite_positive(staged_.syminfo.pointvalue)
         || !finite_positive(staged_.syminfo.mintick)) {
         return std::nullopt;
@@ -1835,6 +1833,10 @@ bool PineExecutionAdapter::core_sizing_price_matches(
     if (!finite_positive(tick) || !finite_positive(sizing.price)) return false;
     const auto point = require_host().current_execution_point();
     if (!point || !finite_positive(point->price)) return false;
+    // The core freezes the quotient at the FX of the acceptance coordinate (a
+    // script calculation's coordinate is the next bar's open); the source
+    // sized at its sub-bar open's. They differ only across a curve step.
+    if (active_staged_fx(point->decision.coordinate.effective_time_ms) != sizing.fx) return false;
     // SizePrice::SignalOnTick in the core's own arithmetic -- its nearest tick
     // is std::round with ties away from zero, not this file's
     // floor(v / tick + 0.5) -- so this is a comparison against the core and

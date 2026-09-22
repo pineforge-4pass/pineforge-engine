@@ -1176,6 +1176,83 @@ void a_typed_quantity_is_the_kernel_quotient_under_the_source_floor() {
 #endif
 }
 
+// ===========================================================================
+// 12. A staged FX series keeps the kernel's Sized path wherever the kernel
+//     converts at the source's rate (R5 lane F7, M4).
+// ===========================================================================
+//
+// The kernel freezes a Sized{AtAcceptance} quotient at the account FX of the
+// acceptance coordinate (a script calculation's coordinate is the NEXT bar's
+// open); the source sizes at the rate of the current sub-bar's open. On a
+// constant curve, and on every bar of a stepped one but the bar whose next
+// open is the step, those are one rate, so the command is lowered exactly as
+// without a series; on the step's own bar the two differ and the command
+// keeps its host-resolved intent. Until F7 any staged series withdrew the
+// Sized path (design §4.4, N6 follow-up 2; audit M4). Booked quantities are
+// harvested at fd785928 and do not move: which intent carries the opening is
+// the only thing that changes.
+void a_staged_fx_series_keeps_sized_where_the_rates_agree() {
+    Account account;
+    account.capital = 10000.0;
+    account.qty_step = 1.0;
+    const auto bars = flat_bars(100.0, 12);
+
+    // (a) A one-point series restating the scalar rate: the same book as the
+    //     run without a series, lowered the same way.
+    PineProbe plain(account, QtyType::PERCENT_OF_EQUITY, 50.0);
+    plain.script = "L.C.";
+    plain.run(bars.data(), 4);
+    PineProbe restated(account, QtyType::PERCENT_OF_EQUITY, 50.0);
+    const std::int64_t one_ts[] = {0};
+    const double one_rate[] = {1.0};
+    REQUIRE(restated.set_account_currency_fx_series(one_ts, one_rate, 1));
+    restated.script = "L.C.";
+    restated.run(bars.data(), 4);
+    REQUIRE(plain.trade_count() == 1);
+    REQUIRE(restated.trade_count() == 1);
+    REQUIRE(restated.core_sized_at_command.size() == 1);
+    CHECK(plain.core_sized_at_command[0] == 1);
+    CHECK(restated.core_sized_at_command[0] == 1);
+    CHECK(bits(restated.rows()[0].qty) == bits(plain.rows()[0].qty));
+    CHECK(bits(restated.rows()[0].qty) == bits(50.0));
+    std::printf("  [fx one point] core_sized=%d booked=%.17g (no series: %d, %.17g)\n",
+                restated.core_sized_at_command[0], restated.rows()[0].qty,
+                plain.core_sized_at_command[0], plain.rows()[0].qty);
+
+    // (b) On an aggregated chart (1-minute inputs, 5-minute script bars) a
+    //     script calculation is accepted at the NEXT script bar's open while
+    //     the source sizes at its own bar's open. A 1 -> 2 step at script bar
+    //     4's open (1 200 000 ms): bar 0 converts at 1 on both sides; bar 3's
+    //     calculation is accepted AT the step, where the kernel would convert
+    //     at 2 and the source sized at 1, so it keeps its host-resolved
+    //     intent; bar 7 is past the step on both sides.
+    std::vector<Bar> minutes;
+    for (int i = 0; i < 55; ++i) {
+        Bar b = mk_bar(0, 100.0, 100.0, 100.0, 100.0);
+        b.timestamp = 60000LL * i;
+        minutes.push_back(b);
+    }
+    PineProbe stepped(account, QtyType::PERCENT_OF_EQUITY, 50.0);
+    const std::int64_t step_ts[] = {0, 1200000};
+    const double step_rate[] = {1.0, 2.0};
+    REQUIRE(stepped.set_account_currency_fx_series(step_ts, step_rate, 2));
+    stepped.script = "L.CL.C.L.C.";
+    stepped.run(minutes.data(), static_cast<int>(minutes.size()), "1", "5", false);
+    REQUIRE(stepped.last_error().empty());
+    REQUIRE(stepped.core_sized_at_command.size() == 3);
+    REQUIRE(stepped.trade_count() == 3);
+    CHECK(stepped.core_sized_at_command[0] == 1);
+    CHECK(stepped.core_sized_at_command[1] == 0);
+    CHECK(stepped.core_sized_at_command[2] == 1);
+    CHECK(bits(stepped.rows()[0].qty) == bits(50.0));
+    CHECK(bits(stepped.rows()[1].qty) == bits(50.0));
+    CHECK(bits(stepped.rows()[2].qty) == bits(25.0));
+    std::printf("  [fx step] core_sized=%d,%d,%d booked=%.17g,%.17g,%.17g\n",
+                stepped.core_sized_at_command[0], stepped.core_sized_at_command[1],
+                stepped.core_sized_at_command[2], stepped.rows()[0].qty,
+                stepped.rows()[1].qty, stepped.rows()[2].qty);
+}
+
 void test(const char* name, void (*fn)()) {
     const int before = failures;
     std::printf("-- %s\n", name);
@@ -1201,6 +1278,8 @@ int main() {
          a_pure_stop_default_entry_keeps_its_own_sizing_branch);
     test("a typed quantity is the kernel quotient",
          a_typed_quantity_is_the_kernel_quotient_under_the_source_floor);
+    test("a staged FX series keeps Sized where the rates agree",
+         a_staged_fx_series_keeps_sized_where_the_rates_agree);
     std::printf("R5 R2 adapter sizing re-lowering: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
