@@ -440,7 +440,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1889-1900`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:7841-7879`), which admits the begin, checks the
+(`native_execution_consumer.cpp:7836-7874`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -599,7 +599,7 @@ segment, and discrete points, keep the ordinary birth gate above.
 `on_native_bar_open` fires at the modeled opening, before that point's matching
 pass (`native_execution_consumer.cpp:6151-6153`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = bar` (`native_execution_consumer.cpp:4183`) — so its
+`engine.current_bar_ = bar` (`native_execution_consumer.cpp:4176`) — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
 `current_partial_bar()` (`native_host.hpp:1020`; C:

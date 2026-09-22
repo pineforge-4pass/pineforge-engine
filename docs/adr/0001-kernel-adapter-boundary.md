@@ -271,7 +271,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   source host casts it back (`pine_strategy_host.cpp`). `check_native_include_independence.py`
   therefore whitelists no source symbol at all.
 - **The four rules earlier drafts named — one survives as code, and it is hashed.** The
-  ten-significant-digit money rule **was** a comment block at `engine.hpp:921-955` (35 lines,
+  ten-significant-digit money rule **was** a comment block at `engine.hpp:927-961` (35 lines,
   between `round_to_mintick` and `bar_fill_price`), deleted by R5 lane E6; the `:73-180` span
   earlier drafts cited is and was live code (`ClosedLotExcursionFacts`, `PyramidEntry`,
   `Trade`, each with its own doc). The arithmetic is
