@@ -201,7 +201,7 @@ For each slot:
 - applies the strict or production threshold profile;
 - honours the slot's `inputs.json` overrides.
 
-A slot where an engine produced no trade list reads `n/a`, with the compile or runtime error that explains why.
+A slot where an engine produced no trade list, or whose run left an `_<engine>_error.log`, reads `n/a`, with the compile or runtime error that explains why.
 
 ### Indicator-value comparison (three-way)
 

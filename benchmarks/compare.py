@@ -20,7 +20,9 @@ public assets and, when present, the maintainer-local closed root):
 
 An engine without output is reported ``n/a`` with its reason: the PyneSys
 compile error for a slot without ``strategy_pyne.py`` (from the compile log
-ledger), else the first line of the runner's ``_<engine>_error.log``.
+ledger), else the first line of the runner's ``_<engine>_error.log``. A slot
+whose run left that error log reads ``n/a`` even when a trade list is present:
+the list is not that run's output.
 
 Output lives in ``benchmarks/results/``:
     - trade_comparison.md   per-strategy metrics per engine
@@ -152,7 +154,7 @@ def na_reason(engine: str, slot: Path, csv_name: str, errors: dict[str, str]) ->
 
 def grade(slot: Path, engine: str, csv_name: str, scratch: Path, errors: dict[str, str]) -> Grade:
     src = slot / csv_name
-    if not src.exists():
+    if not src.exists() or (slot / f"_{engine.lower()}_error.log").exists():
         return Grade(engine, "n/a", reason=na_reason(engine, slot, csv_name, errors))
     d = scratch / engine / slot.name
     d.mkdir(parents=True, exist_ok=True)
