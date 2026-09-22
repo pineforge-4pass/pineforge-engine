@@ -7792,15 +7792,17 @@ static void check_session_day_tail(void) {
     pf_strategy_t host;
     int i;
 
-    /* The bytes fill the former tail padding: nothing before them moved. */
+    /* The bytes fill the former tail padding: nothing before them moved, and
+     * they end where the first layout's 80 bytes end, so a later additive tail
+     * starts after them at the next 8-byte boundary. */
     CHECK_EQ_INT(offsetof(pf_native_decision_v1, quote_kind) + 1,
                  offsetof(pf_native_decision_v1, session_facts),
                  "the session-day bytes do not follow quote_kind");
-    CHECK_EQ_INT(offsetof(pf_native_decision_v1, closes_session_day) + 1,
-                 sizeof(pf_native_decision_v1),
-                 "the session-day bytes grew the decision");
     if (sizeof(void*) == 8) {
-        CHECK_EQ_INT(sizeof(pf_native_decision_v1), 80, "pf_native_decision_v1 resized");
+        CHECK_EQ_INT(offsetof(pf_native_decision_v1, session_facts), 76,
+                     "the session-day bytes left the former padding");
+        CHECK_EQ_INT(offsetof(pf_native_decision_v1, closes_session_day), 79,
+                     "the session-day bytes outgrew the first layout's 80 bytes");
     }
 
     session_fill();
