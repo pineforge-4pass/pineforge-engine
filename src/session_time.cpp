@@ -153,12 +153,6 @@ static void parse_day_filter(const std::string& session_in,
     }
 }
 
-static bool minute_in_window(int mod, int start, int end) {
-    if (start <= end)
-        return mod >= start && mod < end;
-    return mod >= start || mod < end;
-}
-
 static int64_t calendar_week_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
 static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz) {

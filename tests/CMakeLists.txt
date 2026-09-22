@@ -22,6 +22,7 @@ set(TEST_SOURCES
     test_l11a_host_excursion_twin
     test_e6_entry_bar_mask_declaration
     test_e10_dead_path_prefix
+    test_f6_dead_kernel_members
     test_e19_excursion_path_order
     test_l11b_same_bar_stopout_excursion
     test_l10l_corpus_parity

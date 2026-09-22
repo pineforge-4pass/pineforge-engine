@@ -48,20 +48,6 @@ std::vector<uint64_t> source_opening_membership(
     return incarnations;
 }
 } // namespace
-// Settle an already resolved same-side fill as a distinct physical lot.
-// Admission, sizing, side selection and source interpretation precede this
-// seam. It neither consults a pyramiding cap nor invents a source-policy bit.
-// The caller supplies the lot's immutable label, identity and fill metadata;
-// accounting and stream observations still use the engine's sole lot ledger.
-// Test-only compatibility construction seam; no production caller. Live
-// source entries use settle_source_opening and the shared settlement owner.
-void BacktestEngine::append_same_side_fill(PyramidEntry lot) {
-    snapshot_entry_commission(lot);
-    const double total_qty = position_qty_ + lot.qty;
-    const double average_price =
-        (position_entry_price_ * position_qty_ + lot.price * lot.qty) / total_qty;
-    append_quoted_lot(std::move(lot), total_qty, average_price);
-}
 
 void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
                                       double average_price) {
@@ -283,44 +269,6 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_open_bar_ = -1;
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     pyramid_entries_.clear();
-}
-
-
-
-// After a partial exit potentially empties pyramid_entries_, either reset
-// position state to FLAT (no entries left or qty effectively zero) or
-// recompute volume-weighted average entry price across surviving entries.
-// Body was previously inlined identically at the end of every partial-exit
-// path.
-void BacktestEngine::settle_position_after_partial_exit(
-        PositionReductionCause cause) {
-    if (position_qty_ <= kQtyEpsilon || pyramid_entries_.empty()) {
-        reset_position_state_to_flat();
-    } else {
-        double total_qty = 0, weighted_sum = 0;
-        for (auto& pe : pyramid_entries_) {
-            weighted_sum += pe.price * pe.qty;
-            total_qty += pe.qty;
-        }
-        position_entry_price_ = weighted_sum / total_qty;
-        // TV returns a pyramid slot when the entry is retired by a close-path
-        // order — the grid-bot family depends on it (3commas-ena: 1021 fills
-        // over 64 reused ids, 776 entries between flats under a cap of 200,
-        // never more than 50 CONCURRENT entries). TV does NOT return the slot
-        // when a strategy.exit bracket drains another logical slot by FIFO
-        // (thulashimohanr 2026-03-29: the 03-26 entry was fully retired by two
-        // T1 fills and TV still refused the third entry). The narrowly proven
-        // unique-owner retirement in apply_exit_order_fill can release a slot
-        // after this conservative settlement; a prior foreign-bracket slice
-        // or ambiguous same-ID ownership remains pinned.
-        if (cause == PositionReductionCause::BRACKET_EXIT) {
-            position_entry_count_ =
-                std::max(position_entry_count_, (int)pyramid_entries_.size());
-        } else {
-            position_entry_count_ = (int)pyramid_entries_.size();
-        }
-
-    }
 }
 
 // Establish a fresh position at fill_price/qty after a transition from FLAT

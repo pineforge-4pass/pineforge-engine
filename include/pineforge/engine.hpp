@@ -853,14 +853,6 @@ protected:
         }
         return level;
     }
-    Bar broker_tick_bar(const Bar& bar) const {
-        Bar b = bar;
-        b.open = tick_grid_price(bar.open);
-        b.high = tick_grid_price(bar.high);
-        b.low = tick_grid_price(bar.low);
-        b.close = tick_grid_price(bar.close);
-        return b;
-    }
     // --- Commission helper ---
     // PERCENT commission is a % of the order's notional value. The notional
     // (fill_price × qty × pointvalue) is in the symbol's QUOTE currency; the
@@ -959,27 +951,6 @@ protected:
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
         double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
         return floored < qty ? floored : qty;
-    }
-
-    // Integer-lot symbols keep one minimum contract/share for any positive
-    // percent-derived strategy.exit request when at least one whole step is
-    // still unreserved. TradingView evidence on one-contract ES/NQ/NIFTY
-    // positions shows a pair of qty_percent=50 siblings reserving 1 + 0, not
-    // 0 + 0. Fractional-lot symbols retain the floor/dust rule above.
-    //
-    // This helper is intentionally exit-percent-specific: explicit exit qty,
-    // full-percent exits, entries and other broker quantities must not acquire
-    // a minimum-one-step fallback.
-    double apply_percent_exit_qty_step(double requested_qty,
-                                       double available_qty) const {
-        double gridded = apply_exit_qty_step(requested_qty);
-        if (qty_step_ >= 1.0
-            && requested_qty > 0.0
-            && requested_qty < qty_step_
-            && available_qty >= qty_step_) {
-            return qty_step_;
-        }
-        return gridded;
     }
 
     // The basis of a default-sized request is the request's own: SizeTime says
@@ -1699,15 +1670,6 @@ protected:
         const execution::ReverseTo& reversal,
         const execution::Fill& fill,
         const execution::LifecycleEffects* lifecycle, double fx) const;
-    enum class PositionReductionCause {
-        SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal
-        BRACKET_EXIT,   // a strategy.exit bracket leg fill
-        MARGIN_CALL,
-    };
-
-
-
-    void append_same_side_fill(PyramidEntry lot);
     void append_quoted_lot(PyramidEntry lot, double total_qty, double average_price);
     // Allocates the new position cycle, lots and observations, then binds
     // exits that still remain in request_roster. Settlement that authorized
@@ -1745,8 +1707,6 @@ protected:
     void reset_run_state();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
-    void settle_position_after_partial_exit(
-        PositionReductionCause cause);
 
     // Native HTF feed routing (engine_aux_security.cpp): per-state label maps
     // built after the evaluators' aggregators exist for this run, and the
