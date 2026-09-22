@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 
 - **Proven, not promised.** All 4,190 probes — 312 open reference strategies plus 413 real community scripts on 15 markets and timeframes — grade *excellent* or *strong* against TradingView's own trade lists: **4,182 excellent, 8 strong, zero moderate**. The current full sweep evaluates 2,819,967 TradingView trades, with 2,818,237 matched by the verifier.
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
-- **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 611k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
+- **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
 - **Yours to embed.** 97 `extern "C"` functions across two headers — 65 to run a compiled strategy, 32 to drive the kernel yourself — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
@@ -311,20 +311,20 @@ Four slots have no PyneCore trade list:
 - **1 compile rejection:** PyneSys rejects slot 192 (`"Empty document."`).
 - **3 runtime errors:** PyneCore raises a `RuntimeError` in its `request.security` engine on slots 140, 166 and 197. It hits the same error intermittently on a fourth slot, 143, which could not be timed.
 
-**Speed** was measured on a quiet host ([`benchmarks/results/speed.md`](benchmarks/results/speed.md)):
+**Speed** was measured on a quiet host ([`benchmarks/results/speed.md`](benchmarks/results/speed.md)). PineForge was re-timed at engine `063e4460`. PyneCore, vectorbt and PineTS were not re-measured; their figures come from the same host's earlier 2026-09-22 window, at engine `e9ad37dd`.
 
-- **PineForge:** a median of 88 ms per strategy over the feed, in-process with the bar magnifier on (611k bars/s; quartiles 434k–726k).
-- **PyneCore:** a median of 1,475 ms per subprocess (36.6k bars/s). The median per-strategy speedup is **15×** across the 196 strategies both engines time (p5 6×, p95 70×).
+- **PineForge:** a median of 89 ms per strategy over the feed, in-process with the bar magnifier on (603k bars/s; quartiles 425k–731k).
+- **PyneCore:** a median of 1,475 ms per subprocess (36.6k bars/s). The median per-strategy speedup is **15×** across the 196 strategies both engines time (p5 6×, p95 68×).
 - **vectorbt:** a median of 102 ms for its 13 ports; PineForge is 1.3× faster on the same 13.
 - **PineTS:** 486 ms for the canonical 10-indicator script.
-- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.61 M bars/s** per strategy (N=201, median of five quiet runs).
+- **Throughput package** ([`benchmarks/throughput/`](benchmarks/throughput/)): the magnifier-off hot loop runs at a median of **0.61 M bars/s** per strategy (N=201, median of five quiet runs). Those runs were measured at `e9ad37dd`; they were not re-timed at `063e4460` because the host was never quiet.
 
 **Not comparable with the 2026-06-11 table** (PineForge 100/100, PyneCore 85/100, 162×):
 
 - **Tiers:** they now come from the canonical `scripts/verify_corpus.py::analyze_strategy` rubric. The old table graded a different 100-strategy population with `compare.py`'s own copy of the rubric, which had drifted from the canonical one and no longer parsed the current tape format.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on the same host, reproduces its June timings, while the current engine is 12–20× slower on the probes both populations share ([provenance](benchmarks/results/speed.md#provenance)).
+- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on the same host, reproduced its June timings, while engine `e9ad37dd` was 12–20× slower on the probes both populations share. That A/B was measured at `e9ad37dd`; `063e4460` times those probes within 7 % of it ([provenance](benchmarks/results/speed.md#provenance)).
 
-Last refresh **2026-09-22** (engine `e9ad37dd`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max). Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
+Last refresh **2026-09-22** (engine `063e4460`, PyneCore 6.10.2, PineTS 0.9.34, vectorbt 0.28.2, Apple M4 Max). Per-strategy table: [`benchmarks/results/summary.md`](benchmarks/results/summary.md). Population manifest: [`benchmarks/results/selection.md`](benchmarks/results/selection.md). Method, fairness and the reproduction recipe: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

@@ -8,7 +8,7 @@ This directory compares **PineForge** with two open-source PineScript runtimes a
 
 ## Headline
 
-Last refresh **2026-09-22**. Versions: engine `main` `e9ad37dd` running the committed `generated.cpp` (codegen `89645d6`), PyneCore 6.10.2, PineTS 0.9.34 and vectorbt 0.28.2, on an Apple M4 Max.
+Last refresh **2026-09-22**. Versions: engine `main` `063e4460` running the committed `generated.cpp` (codegen `89645d6`), PyneCore 6.10.2, PineTS 0.9.34 and vectorbt 0.28.2, on an Apple M4 Max.
 
 **Population: 200 strategies in 201 slots**, selected by [`select_population.py`](select_population.py) with seed 20260921. The manifest is [`results/selection.md`](results/selection.md).
 
@@ -30,22 +30,23 @@ Each engine's trade list is graded against TradingView's own export (266,451 tra
 
 Counting the 200 strategies (slot `201` in place of `192`), PineForge grades 199 excellent and 1 strong. PyneCore grades 133 excellent, 42 strong, 8 moderate, 12 weak and 2 minimal, and 3 slots have no trade list.
 
-Speed was measured on a quiet host, re-checked before every timing batch; the details are in [`results/speed.md`](results/speed.md):
+Speed was measured on a quiet host, re-checked before every timing batch; the details are in [`results/speed.md`](results/speed.md). PineForge was re-timed at engine `063e4460`. PyneCore, vectorbt and PineTS were not re-measured: their rows come from the same host's earlier 2026-09-22 window, at engine `e9ad37dd`.
 
 | Engine | How it is timed | Strategies | Median per strategy | Bars/s: Q1 · **median** · Q3 |
 |---|---|---:|---:|---|
-| PineForge | in-process Google Benchmark, bar magnifier on | 201 | 88.3 ms | 434k · **611k** · 726k |
+| PineForge | in-process Google Benchmark, bar magnifier on | 201 | 89.4 ms | 425k · **603k** · 731k |
 | PyneCore | subprocess wall time (interpreter start, import, backtest), 8 concurrent | 196 | 1,475 ms | 23.3k · **36.6k** · 58.5k |
 | vectorbt | in-process, the 13 ports that load | 13 | 102.3 ms | — |
 | PineTS | subprocess wall time of the canonical 10-indicator script | 1 | 485.8 ms | — |
 
-- PineForge's median speedup is **15× over PyneCore**, per strategy across the 196 strategies both engines time (p5 6×, p95 70×), and 1.3× over vectorbt across its 13 ports.
-- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.61 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs.
+- PineForge's median speedup is **15× over PyneCore**, per strategy across the 196 strategies both engines time (p5 6×, p95 68×), and 1.3× over vectorbt across its 13 ports.
+- The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.61 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs at engine `e9ad37dd`. It was not re-timed at `063e4460` because the host was never quiet.
+- Per strategy, the `063e4460` sweep takes 1.02× the `e9ad37dd` sweep's time at the median (p5 0.95×, p95 1.07×), at a higher host load (5.41–5.90 against 3.79).
 
 **These numbers are not comparable with the 2026-06-11 table** (PineForge 100/100 excellent, PyneCore 85/100, 162×):
 
 - **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.2 in between.
-- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host in the same window, reproduces its June timings. On the three probes both populations share, the current engine is 12–20× slower with the magnifier on; see [the provenance](results/speed.md#provenance).
+- **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host in the `e9ad37dd` window, reproduced its June timings. On the three probes both populations share, engine `e9ad37dd` was 12–20× slower with the magnifier on. That A/B was measured at `e9ad37dd` and not re-run; `063e4460` times the same probes within 7 % of `e9ad37dd`. See [the provenance](results/speed.md#provenance).
 
 ### Where the non-excellent rows come from
 
@@ -105,6 +106,7 @@ python3 benchmarks/compare.py && python3 benchmarks/compare_indicators.py   # re
 QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PYNE=1 SKIP_PINETS=1 SKIP_REPORTS=1 bash benchmarks/run_all.sh
 #   or in chunks, re-checking the gate before each; the closed PyneCore slots run 1-72 s per backtest:
 ./build/bin/pineforge_bench --benchmark_filter='/throughput/with_magnifier' --benchmark_format=json > benchmarks/_workdir/pf_speed.json
+#   (or per slot range, e.g. --benchmark_filter='^(0[0-9][0-9]|100)-[^/]*/throughput/with_magnifier', then merge the "benchmarks" arrays)
 (cd benchmarks && uv run python speed/time_pynecore.py --n 20 --workers 8 --slots 1-56 --out _workdir/pc_speed_c01.json)
 #   ... one chunk per slot range up to 201, then merge them into _workdir/pc_speed.json
 (cd benchmarks && N=20 node speed/time_pinets.mjs > _workdir/pt_speed.json)

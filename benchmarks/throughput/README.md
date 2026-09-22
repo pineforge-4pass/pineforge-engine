@@ -26,7 +26,9 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 *Last measured 2026-09-22 on an Apple M4 Max (16 cores) with engine `main` `e9ad37dd`. This is the median of five quiet runs: the five run medians were 0.604, 0.615, 0.606, 0.620 and 0.614 M/s, and the table and chart come from the run with the median result (run 5). Every run started at a 1-minute load below 6 with no build or test process running; the loads are in [`../results/speed.md`](../results/speed.md). A public checkout only has the 100 public slots, whose median in the same run is 0.686 M/s.*
 
-*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check against the engine of the 2026-06-11 speed table shows the current engine's per-bar cost is 12–20× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
+*These figures were measured at `e9ad37dd` and not re-timed at `063e4460`, because the host was never quiet during that refresh. The bar-magnifier sweep was re-timed at `063e4460`, and per strategy it takes 1.02× the `e9ad37dd` time at the median; see [`../results/speed.md`](../results/speed.md), Provenance.*
+
+*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check at `e9ad37dd` against the engine of the 2026-06-11 speed table showed a per-bar cost 12–20× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
 
 ### 🛠️ FFI Grid Search Optimization Result
 
