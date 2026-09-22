@@ -2473,7 +2473,7 @@ bool NativeExecutionConsumer::request_is_buy(
 }
 
 native_order::CommandContext NativeExecutionConsumer::make_command_context(
-        const BacktestEngine& engine, const native_order::Request& request,
+        BacktestEngine& engine, const native_order::Request& request,
         native_order::CommandSurface surface) const {
     native_order::CommandContext ctx;
     // A request submitted by the generic pre-open provider is born at this
@@ -2502,6 +2502,26 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
                     ctx.sizing_price = price;
                 }
                 if (native_sized->time == native_order::SizeTime::AtAcceptance) {
+                    // E21: the freeze and its placement gate are one
+                    // measurement at the acceptance point. The rate below is
+                    // that point's; the marked equity, and the settlement
+                    // inspection the gate reads (the resulting notional and a
+                    // percent ticket), convert where the engine presents --
+                    // which, in an applied callback drained at its script
+                    // bar's calculation, is that bar's close, not the print
+                    // the fill landed on. So the point's own instant is
+                    // presented for this block and the caller's clock is
+                    // handed back on exit. Nothing inside calls out of the
+                    // kernel, so no host code ever sees that instant, exactly
+                    // as when consume_matched_request presents a candidate's
+                    // cursor for its own inspection and gate. With no curve
+                    // every instant has one rate and the block is inert.
+                    struct PresentedInstant {
+                        int64_t& clock;
+                        const int64_t caller;
+                        ~PresentedInstant() { clock = caller; }
+                    } presented{engine.current_bar_.timestamp, engine.current_bar_.timestamp};
+                    engine.current_bar_.timestamp = point->decision.coordinate.effective_time_ms;
                     ctx.sizing_units = sized_basis_units(
                         *native_sized, price, marked(engine, price),
                         engine.account_currency_fx_at(
@@ -4174,7 +4194,8 @@ std::optional<double> NativeExecutionConsumer::placement_scope_units(
 // The run's opening admission, run at placement against an acceptance-resolved
 // quantity instead of waiting for the candidate. It is the same gate the
 // candidate applies (allowed directions, max_abs_units, max_open_lots, initial
-// margin), fed by the same pure settlement inspection, at the sizing price. A
+// margin), fed by the same pure settlement inspection, at the sizing price and
+// at the acceptance point's instant, which make_command_context presents. A
 // host that owns its own margin rule declares no kernel margin, exactly as it
 // does for the candidate gate, and only the caps apply here.
 bool NativeExecutionConsumer::admit_placement_units(

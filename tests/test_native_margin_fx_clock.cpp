@@ -21,6 +21,10 @@
  * this TU pins the margin model onto the same rule, for every check kind and
  * in batch and stream alike.
  *
+ * R5 lane E21 holds the opening gate to the same rule (section 8): its
+ * placement site, run when a Sized{SizeTime::AtAcceptance} is accepted, read
+ * the presented clock while its freeze converted at the acceptance point.
+ *
  * No Pine twin lives here on purpose: the TU reaches no source header, so the
  * kernel-only build (PINEFORGE_BUILD_SOURCE_LAYER=OFF) runs every row.
  *
@@ -138,14 +142,14 @@ struct ClockHost final : Host {
     }
 };
 
-void begin(ClockHost& host, const NativeRunSpec& spec, const std::optional<NativeFxCurve>& curve) {
+void begin(Host& host, const NativeRunSpec& spec, const std::optional<NativeFxCurve>& curve) {
     REQUIRE(host.configure_native(spec).status == NativeSetupStatus::Applied);
     if (curve) {
         REQUIRE(host.configure_native_fx_curve(*curve).status == NativeSetupStatus::Applied);
     }
 }
 
-void run_bars(ClockHost& host, const NativeRunSpec& spec,
+void run_bars(Host& host, const NativeRunSpec& spec,
               const std::optional<NativeFxCurve>& curve, const std::vector<Bar>& bars) {
     begin(host, spec, curve);
     host.run(bars.data(), static_cast<int>(bars.size()));
@@ -153,7 +157,7 @@ void run_bars(ClockHost& host, const NativeRunSpec& spec,
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
 }
 
-void stream_bars(ClockHost& host, const NativeRunSpec& spec, const NativeFxCurve& curve,
+void stream_bars(Host& host, const NativeRunSpec& spec, const NativeFxCurve& curve,
                  const std::vector<Bar>& bars, int n_warmup) {
     begin(host, spec, curve);
     REQUIRE(host.stream_begin(bars.data(), n_warmup, "1", "1"));
@@ -476,6 +480,331 @@ void the_tick_route_keeps_its_refusal() {
     CHECK(host.last_error() == "a declared native FX curve requires confirmed-bar stream input");
 }
 
+// ── 8. The opening gate converts at its own point too (R5 lane E21) ─────
+// The opening gate is the margin model's other half, and it has two sites.
+// The CANDIDATE gate converts at its cursor: consume_matched_request presents
+// the cursor's instant before it inspects and admits. The PLACEMENT gate runs
+// when a Sized{SizeTime::AtAcceptance} is accepted, against the quantity the
+// freeze computed at the acceptance point's rate — and it read the PRESENTED
+// clock. In an applied callback drained at its script bar's calculation that
+// is the bar's close coordinate, while the acceptance point is the opening
+// print the fill landed on. These rows hold both sites to one rule: a gate
+// converts at the instant its own point names, for the requirement, the
+// marked equity it is compared with and the ticket netted from that equity,
+// and the freeze takes its equity basis at the same instant as its rate.
+//
+// Hand arithmetic (point_value = 1, capital 1000, fraction f):
+//   required(fx) = resulting_units * price * fx * f
+//   equity(fx)   = 1000 + sum (price - entry) * q * fx - open entry fees - ticket(fx)
+
+// Transact openings at chosen script bars' calculations, and one kernel-sized
+// opening submitted from the applied callback of a chosen fill: the frame whose
+// coordinate stands behind the clock the engine presents.
+struct AdmitHost final : Host {
+    std::vector<std::pair<int, double>> entries;  // (script bar, units)
+    std::optional<no::Sized> sized;
+    std::size_t sized_after = 0;                  // which applied fill, 0-based
+    int bars = 0;
+    std::size_t applied = 0;
+    std::optional<no::SubmitResult> placed;
+    std::int64_t acceptance_ms = 0;
+    std::int64_t presented_ms = 0;
+    std::int64_t presented_after_ms = 0;          // the clock once submit returned
+
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        Host::on_native_bar(bar, context);
+        for (const auto& entry : entries) {
+            if (entry.first == bars) (void)put(*this, tx(entry.second, "entry"));
+        }
+        ++bars;
+    }
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const NativeDecisionContext& context) override {
+        Host::on_native_applied(event, context);
+        if (!sized || placed || applied++ != sized_after) return;
+        acceptance_ms = context.coordinate.effective_time_ms;
+        presented_ms = current_bar_.timestamp;
+        no::Request request;
+        request.intent = *sized;
+        request.label = "sized";
+        placed = submit(request);
+        presented_after_ms = current_bar_.timestamp;
+    }
+
+    double rate_at(std::int64_t at_ms) const { return account_currency_fx_at(at_ms); }
+    std::vector<no::MatchRejectedEvent> sized_rejections() const {
+        std::vector<no::MatchRejectedEvent> out;
+        for (const auto& event : events<no::MatchRejectedEvent>(*this)) {
+            if (event.request().label == "sized") out.push_back(event);
+        }
+        return out;
+    }
+    std::optional<no::ExecutionAppliedEvent> sized_fill() const {
+        for (const auto& event : events<no::ExecutionAppliedEvent>(*this)) {
+            if (event.request().label == "sized") return event;
+        }
+        return std::nullopt;
+    }
+};
+
+// Priced at the acceptance point's own print (SizePrice::Resolved).
+no::Sized at_acceptance(no::SizeBasis basis) {
+    no::Sized sized;
+    sized.side = no::Side::Long;
+    sized.basis = basis;
+    sized.time = no::SizeTime::AtAcceptance;
+    return sized;
+}
+
+// A model whose per-side initial is positive, so it gates openings itself;
+// its maintenance line stays far from every book below.
+NativeMarginModel gated_model(double initial) {
+    auto m = model();
+    m.initial_long = initial;
+    m.initial_short = initial;
+    m.maintenance_long = 0.1;
+    m.maintenance_short = 0.1;
+    return m;
+}
+
+// P4's geometry again: LONG 15 fills on bar 1's opening print (T+1m), and the
+// curve steps to 2.5 at T+2m — the clock presented while that fill's applied
+// callback runs. The callback places Sized{CashValue 500}: 500 / (100 * 1.0)
+// = 5 frozen units on 15 held.
+//   at the point T+1m : 20 * 100 * 1.0 * 0.4 =  800 <= 1000, placed
+//   at the clock T+2m : 20 * 100 * 2.5 * 0.4 = 2000 >  1000, PlacementAdmission
+// The candidate then matches at T+2m, after the step, and ITS gate refuses the
+// same book there with its own reason: each site on its own point's rate.
+void placement_gate_step_up(const char* key, bool model_spelling) {
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    const NativeFxCurve curve{{T + 2 * kMinute}, {2.5}};
+    auto spec = clock_spec(key);
+    if (model_spelling) {
+        spec.margin = gated_model(0.4);
+    } else {
+        spec.initial_margin_fraction = 0.4;
+    }
+
+    AdmitHost host;
+    host.entries = {{0, 15.0}};
+    host.sized = at_acceptance(no::CashValue{500.0});
+    run_bars(host, spec, curve, bars);
+
+    REQUIRE(host.placed.has_value());
+    CHECK(host.acceptance_ms == T + kMinute);
+    CHECK(host.presented_ms == T + 2 * kMinute);
+    near(host.rate_at(host.acceptance_ms), 1.0);
+    near(host.rate_at(host.presented_ms), 2.5);
+    CHECK(host.placed->status == no::SubmitStatus::Accepted);
+    CHECK(!host.placed->reason.has_value());
+    // The point's instant is the gate's alone: the callback still stands on
+    // the clock it was presented once submit has returned.
+    CHECK(host.presented_after_ms == host.presented_ms);
+
+    const auto rejected = host.sized_rejections();
+    REQUIRE(rejected.size() == 1);
+    CHECK(rejected[0].reason == no::MatchRejectReason::InitialMargin);
+    CHECK(rejected[0].cursor.point.effective_time_ms == T + 2 * kMinute);
+    CHECK(!host.sized_fill().has_value());
+    near(host.physical_position().signed_units, 15.0);
+    CHECK(events<no::MarginCallEvent>(host).empty());
+}
+
+void placement_gate_converts_at_its_acceptance_point() {
+    placement_gate_step_up("fx-admit-step-up", false);
+}
+
+void the_model_spelling_takes_the_same_gate() {
+    placement_gate_step_up("fx-admit-step-up-model", true);
+}
+
+// The other direction: the clock's rate is LOWER than the point's, so reading
+// it admits a book the account cannot fund where the command was accepted.
+// LONG 5 fills at T+1m, where the curve already stands at 2.5
+// (5 * 100 * 2.5 * 0.4 = 500 <= 1000); it steps back to 1.0 at T+2m.
+// Sized{CashValue 1500} freezes 1500 / (100 * 2.5) = 6 units:
+//   at the point T+1m : 11 * 100 * 2.5 * 0.4 = 1100 > 1000, PlacementAdmission
+//   at the clock T+2m : 11 * 100 * 1.0 * 0.4 =  440, placed and filled
+void placement_gate_refuses_what_its_point_cannot_fund() {
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    const NativeFxCurve curve{{T + kMinute, T + 2 * kMinute}, {2.5, 1.0}};
+    auto spec = clock_spec("fx-admit-step-down");
+    spec.initial_margin_fraction = 0.4;
+
+    AdmitHost host;
+    host.entries = {{0, 5.0}};
+    host.sized = at_acceptance(no::CashValue{1500.0});
+    run_bars(host, spec, curve, bars);
+
+    REQUIRE(host.placed.has_value());
+    near(host.rate_at(host.acceptance_ms), 2.5);
+    near(host.rate_at(host.presented_ms), 1.0);
+    CHECK(host.placed->status == no::SubmitStatus::Rejected);
+    REQUIRE(host.placed->reason.has_value());
+    CHECK(*host.placed->reason == no::RequestRejectReason::PlacementAdmission);
+    CHECK(!host.placed->handle.has_value());
+    CHECK(!host.sized_fill().has_value());
+    near(host.physical_position().signed_units, 5.0);
+}
+
+// Both terms, not just the requirement. LONG 10 at 100 (T+1m), bar 1 closes
+// at 120, LONG 1 at 120 on bar 2's opening print (T+2m) — the acceptance
+// point, while the clock presents T+3m. The curve is 2.0 at T+2m and 1.0 from
+// T+3m. Sized{CashValue 120} freezes 120 / (120 * 2.0) = 0.5 units:
+//   required 11.5 * 120 * 2.0 * 0.5 = 1380
+//   equity at the point  1000 + (120 - 100) * 10 * 2.0 = 1400: placed
+//   equity at the clock  1000 + (120 - 100) * 10 * 1.0 = 1200 would refuse it
+// (This row alone does not move with the defect: the clock read BOTH terms at
+// 1.0, 690 against 1200. It fails a fix that moves the requirement only.)
+void placement_gate_takes_its_equity_at_its_point() {
+    const std::vector<Bar> bars = {calm(0), ohlc(1, 100.0, 120.0, 100.0, 120.0),
+                                   calm(2, 120.0), calm(3, 120.0), calm(4, 120.0)};
+    const NativeFxCurve curve{{T + 2 * kMinute, T + 3 * kMinute}, {2.0, 1.0}};
+    auto spec = clock_spec("fx-admit-equity");
+    spec.initial_margin_fraction = 0.5;
+
+    AdmitHost host;
+    host.entries = {{0, 10.0}, {1, 1.0}};
+    host.sized = at_acceptance(no::CashValue{120.0});
+    host.sized_after = 1;
+    run_bars(host, spec, curve, bars);
+
+    REQUIRE(host.placed.has_value());
+    CHECK(host.acceptance_ms == T + 2 * kMinute);
+    CHECK(host.presented_ms == T + 3 * kMinute);
+    near(host.rate_at(host.acceptance_ms), 2.0);
+    near(host.rate_at(host.presented_ms), 1.0);
+    CHECK(host.placed->status == no::SubmitStatus::Accepted);
+    const auto fill = host.sized_fill();
+    REQUIRE(fill.has_value());
+    near(fill->opened_units, 0.5);
+    near(host.physical_position().signed_units, 11.5);
+}
+
+// The ticket netted from the equity is FX-bearing too under a percent fee.
+// LONG 5 at 100 (T+1m, rate 1.0) paid 100 * 5 * 1.0 * 1 % = 5, so the equity is
+// 995; the curve steps to 3.0 at T+2m. Sized{CashValue 1450} freezes 14.5 units:
+//   required 19.5 * 100 * 1.0 * 0.5 = 975
+//   ticket at the point  100 * 14.5 * 1.0 * 1 % = 14.5 -> 995 - 14.5 = 980.5: placed
+//   ticket at the clock  100 * 14.5 * 3.0 * 1 % = 43.5 -> 951.5 would refuse it
+// The candidate at T+2m converts at 3.0 and refuses: 2925 > 951.5.
+void placement_gate_nets_its_ticket_at_its_point() {
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    const NativeFxCurve curve{{T + 2 * kMinute}, {3.0}};
+    auto spec = clock_spec("fx-admit-ticket");
+    spec.fee_kind = NativeFeeKind::Percent;
+    spec.fee_value = 1.0;
+    spec.initial_margin_fraction = 0.5;
+
+    AdmitHost host;
+    host.entries = {{0, 5.0}};
+    host.sized = at_acceptance(no::CashValue{1450.0});
+    run_bars(host, spec, curve, bars);
+
+    REQUIRE(host.placed.has_value());
+    near(host.rate_at(host.acceptance_ms), 1.0);
+    near(host.rate_at(host.presented_ms), 3.0);
+    CHECK(host.placed->status == no::SubmitStatus::Accepted);
+    const auto rejected = host.sized_rejections();
+    REQUIRE(rejected.size() == 1);
+    CHECK(rejected[0].reason == no::MatchRejectReason::InitialMargin);
+    near(host.physical_position().signed_units, 5.0);
+}
+
+// The freeze's own equity basis. The same two lots with no margin at all, and
+// the curve stepping to 3.0 at T+3m, the clock of the second fill's callback.
+// Sized{EquityFraction 0.5}:
+//   at the point  (1000 + 20 * 10 * 1.0) * 0.5 = 600 -> 600 / (120 * 1.0) = 5
+//   at the clock  (1000 + 20 * 10 * 3.0) * 0.5 = 800 -> 6.67 units, frozen
+//                 against the point's rate: an equity of one instant divided
+//                 by the rate of another
+void the_freeze_takes_its_equity_at_the_same_point() {
+    const std::vector<Bar> bars = {calm(0), ohlc(1, 100.0, 120.0, 100.0, 120.0),
+                                   calm(2, 120.0), calm(3, 120.0), calm(4, 120.0)};
+    const NativeFxCurve curve{{T + 3 * kMinute}, {3.0}};
+    auto spec = clock_spec("fx-freeze-equity");
+
+    AdmitHost host;
+    host.entries = {{0, 10.0}, {1, 1.0}};
+    host.sized = at_acceptance(no::EquityFraction{0.5});
+    host.sized_after = 1;
+    run_bars(host, spec, curve, bars);
+
+    REQUIRE(host.placed.has_value());
+    near(host.rate_at(host.acceptance_ms), 1.0);
+    near(host.rate_at(host.presented_ms), 3.0);
+    CHECK(host.placed->status == no::SubmitStatus::Accepted);
+    const auto fill = host.sized_fill();
+    REQUIRE(fill.has_value());
+    near(fill->opened_units, 5.0);
+    near(host.physical_position().signed_units, 16.0);
+}
+
+// With no curve the point and the clock are one rate, so the gate and the
+// freeze decide exactly what they always did: 500 / (100 * fx) units on 5
+// held owe (5 * 100 * fx + 500) * 0.4 = 200 * fx + 200 <= 1000, placed and filled.
+void a_gate_without_a_curve_is_untouched() {
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    for (const double account_fx : {1.0, 2.5}) {
+        auto spec = clock_spec(account_fx == 1.0 ? "fx-admit-bare-1" : "fx-admit-bare-25");
+        spec.account_fx = account_fx;
+        spec.initial_margin_fraction = 0.4;
+        AdmitHost host;
+        host.entries = {{0, 5.0}};
+        host.sized = at_acceptance(no::CashValue{500.0});
+        run_bars(host, spec, std::nullopt, bars);
+        REQUIRE(host.placed.has_value());
+        CHECK(host.acceptance_ms < host.presented_ms);
+        near(host.rate_at(host.acceptance_ms), account_fx);
+        near(host.rate_at(host.presented_ms), account_fx);
+        CHECK(host.placed->status == no::SubmitStatus::Accepted);
+        const auto fill = host.sized_fill();
+        REQUIRE(fill.has_value());
+        near(fill->opened_units, 500.0 / (100.0 * account_fx));
+    }
+}
+
+// A confirmed-bar stream accepts the command at the same point with the same
+// clock standing, so it decides exactly what the batch decides.
+void the_stream_gate_decides_what_the_batch_decides() {
+    struct Row {
+        const char* key;
+        double held;
+        double cash;
+        NativeFxCurve curve;
+    };
+    const std::vector<Row> rows = {
+        {"fx-admit-twin-up", 15.0, 500.0, NativeFxCurve{{T + 2 * kMinute}, {2.5}}},
+        {"fx-admit-twin-down", 5.0, 1500.0,
+         NativeFxCurve{{T + kMinute, T + 2 * kMinute}, {2.5, 1.0}}},
+    };
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    for (const auto& row : rows) {
+        auto spec = clock_spec(row.key);
+        spec.initial_margin_fraction = 0.4;
+        AdmitHost batch;
+        batch.entries = {{0, row.held}};
+        batch.sized = at_acceptance(no::CashValue{row.cash});
+        run_bars(batch, spec, row.curve, bars);
+        REQUIRE(batch.placed.has_value());
+        for (const int n_warmup : {1, 3}) {
+            AdmitHost stream;
+            stream.entries = {{0, row.held}};
+            stream.sized = at_acceptance(no::CashValue{row.cash});
+            stream_bars(stream, spec, row.curve, bars, n_warmup);
+            REQUIRE(stream.placed.has_value());
+            CHECK(stream.acceptance_ms == batch.acceptance_ms);
+            CHECK(stream.presented_ms == batch.presented_ms);
+            CHECK(stream.placed->status == batch.placed->status);
+            CHECK(stream.placed->reason == batch.placed->reason);
+            CHECK(stream.sized_rejections().size() == batch.sized_rejections().size());
+            CHECK(stream.sized_fill().has_value() == batch.sized_fill().has_value());
+            CHECK(stream.physical_position().signed_units
+                  == batch.physical_position().signed_units);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -486,6 +815,20 @@ int main() {
     test("a run without a curve is untouched", a_run_without_a_curve_is_untouched);
     test("batch and stream take the same instants", stream_twin);
     test("the tick route keeps its refusal", the_tick_route_keeps_its_refusal);
+    test("placement gate converts at its acceptance point",
+         placement_gate_converts_at_its_acceptance_point);
+    test("the model spelling takes the same gate", the_model_spelling_takes_the_same_gate);
+    test("placement gate refuses what its point cannot fund",
+         placement_gate_refuses_what_its_point_cannot_fund);
+    test("placement gate takes its equity at its point",
+         placement_gate_takes_its_equity_at_its_point);
+    test("placement gate nets its ticket at its point",
+         placement_gate_nets_its_ticket_at_its_point);
+    test("the freeze takes its equity at the same point",
+         the_freeze_takes_its_equity_at_the_same_point);
+    test("a gate without a curve is untouched", a_gate_without_a_curve_is_untouched);
+    test("the stream gate decides what the batch decides",
+         the_stream_gate_decides_what_the_batch_decides);
     std::printf("E3 margin FX clock: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

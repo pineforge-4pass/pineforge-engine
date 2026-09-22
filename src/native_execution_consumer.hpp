@@ -520,7 +520,7 @@ private:
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
     native_order::CommandContext make_command_context(
-            const BacktestEngine& engine, const native_order::Request& request,
+            BacktestEngine& engine, const native_order::Request& request,
             native_order::CommandSurface surface) const;
     void refresh_target_scalars(const BacktestEngine& engine,
                                 native_order::TargetObservation& target) const noexcept;
