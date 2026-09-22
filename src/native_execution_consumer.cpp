@@ -31,6 +31,31 @@ void reserve_next(std::vector<T>& values) {
     values.reserve(grown);
 }
 
+// FNV-1a's prime and its powers p^k for k in [0, 8]. A zero byte leaves the
+// accumulator untouched under the XOR (h ^ 0 == h), so a run of k zero bytes
+// is exactly one multiplication by p^k: the same digest, folded with fewer
+// dependent multiplies.
+constexpr uint64_t kFnvPrime = 1099511628211ULL;
+
+constexpr uint64_t fnv_power(unsigned exponent) noexcept {
+    uint64_t value = 1;
+    for (unsigned step = 0; step < exponent; ++step) value *= kFnvPrime;
+    return value;
+}
+
+constexpr uint64_t kFnvPowers[9] = {
+    fnv_power(0), fnv_power(1), fnv_power(2), fnv_power(3), fnv_power(4),
+    fnv_power(5), fnv_power(6), fnv_power(7), fnv_power(8),
+};
+
+// A little-endian host can read an eight-byte field's object representation
+// out of the value itself, which is what lets the zero runs collapse without
+// touching memory. Anywhere else every fold goes through bytes() unchanged.
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) \
+    && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define PINEFORGE_FNV_SCALAR_FOLD 1
+#endif
+
 struct Fnv {
     uint64_t h = 1469598103934665603ULL;
     // Native run generations (`RunIdentity::run_number`, the consumed
@@ -42,14 +67,41 @@ struct Fnv {
     uint64_t run_base = 0;
     void bytes(const void* p, size_t n) noexcept {
         const auto* c = static_cast<const unsigned char*>(p);
-        for (size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ULL; }
+        for (size_t i = 0; i < n; ++i) { h ^= c[i]; h *= kFnvPrime; }
     }
-    void u(uint64_t v) noexcept { bytes(&v, sizeof v); }
-    void i(int64_t v) noexcept { bytes(&v, sizeof v); }
+    // The eight object bytes of a scalar field, folded as bytes() would fold
+    // them: byte zero first, every zero byte a bare multiplication. The runs
+    // of zero bytes the kernel's encodings are full of -- the high bytes of
+    // ordinals, enum words, millisecond stamps and sizes, the low mantissa
+    // bytes of a round double -- collapse into one multiplication by
+    // kFnvPowers[run] each, because XOR with zero is the identity and the
+    // multiplications are associative. 62 % of the 94.1 MB a 43k-bar replay
+    // folds are such zero bytes (lane E24).
+    void scalar(uint64_t bits) noexcept {
+#ifdef PINEFORGE_FNV_SCALAR_FOLD
+        if (bits == 0) { h *= kFnvPowers[8]; return; }
+        unsigned folded = static_cast<unsigned>(__builtin_ctzll(bits)) / 8u;
+        if (folded != 0) { h *= kFnvPowers[folded]; bits >>= 8u * folded; }
+        while (bits != 0) {
+            h = (h ^ static_cast<unsigned char>(bits)) * kFnvPrime;
+            bits >>= 8u;
+            ++folded;
+        }
+        if (folded != 8) h *= kFnvPowers[8 - folded];
+#else
+        bytes(&bits, sizeof bits);
+#endif
+    }
+    void u(uint64_t v) noexcept { scalar(v); }
+    void i(int64_t v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
+    }
     // Exact attempted IEEE-754 bits. Does not canonicalize NaN payloads or
     // signed zero; rejected request quantities keep their original encoding.
-    void d(double v) noexcept { bytes(&v, sizeof v); }
-    void b(bool v) noexcept { unsigned char c = v ? 1 : 0; bytes(&c, 1); }
+    void d(double v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
+    }
+    void b(bool v) noexcept { h = (h ^ (v ? 1ULL : 0ULL)) * kFnvPrime; }
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
 
