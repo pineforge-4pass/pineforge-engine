@@ -57,6 +57,17 @@ void replace_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, Position
     }
 }
 
+// A chart whose script bar aggregates several input bars: the input timeframe
+// is finer than the script's (PineScheduler::run_begin's needs_aggregation).
+// There the kernel's interval index names the INPUT bar a script bucket opens
+// on (390 for the 26th 15m bar of a 1m feed), where a Pine script counts chart
+// bars, as ab9714be's aggregation loop did (lane F1).
+bool aggregates_input_bars(const NativeStateView& state) {
+    if (!state.spec || state.spec->timeframe_undetected) return false;
+    const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
+    return ratio > 1 || ratio == -1;
+}
+
 [[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail) {
     throw std::invalid_argument(
         "bar[" + std::to_string(index) + "]." + field + (detail ? detail : ""));
@@ -354,8 +365,10 @@ void source::PineStrategyHost::on_native_tick(
         stream_warmup_mode_ = false;
     {
         // ab9714be pine_stream.cpp:298/:450 samples the excursion at every
-        // realtime print (a price point: H == L == C == print).
+        // realtime print (a price point: H == L == C == print). The lots carry
+        // chart-bar indices wherever on_native_applied re-stamps them.
         const int sample_index = scheduler_.bar_magnifier_enabled()
+                || aggregates_input_bars(native_state())
             ? scheduler_.source_bar_index_for(context.decision)
             : context.decision.coordinate.interval_index;
         sample_open_trade_extremes(
@@ -386,20 +399,24 @@ void source::PineStrategyHost::on_native_bar(
     diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.observe_terminal_receipts();
-    {
-        const int sample_index = scheduler_.bar_magnifier_enabled()
-            ? scheduler_.source_bar_index_for(context)
-            : context.coordinate.interval_index;
-        sample_open_trade_extremes(
-            pyramid_entries_, position_side_, sample_index, bar);
-        replace_masked_entry_bar_extremes(
-            pyramid_entries_, position_side_, sample_index, bar);
-    }
+    // The lots carry chart-bar indices wherever on_native_applied re-stamps
+    // them, so the entry-bar tests below read the chart bar there. Under the
+    // magnifier the slippage mask keeps the kernel index it has always read.
+    const bool aggregated = aggregates_input_bars(native_state());
+    const int sample_index = scheduler_.bar_magnifier_enabled() || aggregated
+        ? scheduler_.source_bar_index_for(context)
+        : context.coordinate.interval_index;
+    const int slippage_mask_index = aggregated && !scheduler_.bar_magnifier_enabled()
+        ? sample_index : context.coordinate.interval_index;
+    sample_open_trade_extremes(
+        pyramid_entries_, position_side_, sample_index, bar);
+    replace_masked_entry_bar_extremes(
+        pyramid_entries_, position_side_, sample_index, bar);
     scheduler_.bar(bar, context, *this);
     adapter_.on_bar_close(bar, context);
     if (adapter_.config_.slippage > 0) {
         for (auto& lot : pyramid_entries_) {
-            if (lot.entry_bar_index == context.coordinate.interval_index && lot.qty > 0.0) {
+            if (lot.entry_bar_index == slippage_mask_index && lot.qty > 0.0) {
                 const auto found = adapter_.placement_.find(lot.entry_incarnation);
                 if (found != adapter_.placement_.end()) {
                     const auto& snap = found->second;
@@ -453,7 +470,13 @@ void source::PineStrategyHost::on_native_applied(
         }
     }
     if (source_prepare_failed_) return;
-    if (scheduler_.bar_magnifier_enabled()) {
+    // Pine counts chart bars. Under the bar magnifier and on an aggregated
+    // chart the kernel books a fill at an input bar's index, so the lot the
+    // fill opened and the rows it closed carry the chart bar instead, as
+    // ab9714be's aggregation loops booked them (lane F1 extended this from
+    // the magnifier to every aggregated chart).
+    const bool aggregated = aggregates_input_bars(native_state());
+    if (scheduler_.bar_magnifier_enabled() || aggregated) {
         const int source_index = scheduler_.source_bar_index_for(context);
         for (auto& lot : pyramid_entries_) {
             if (lot.entry_incarnation == event.handle().incarnation
@@ -757,14 +780,26 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
         fill_fav = 0.0;
     }
     ClosedLotExcursion owned;
+    // Whether the lot opened on the bar this fill closes it on. A plain
+    // aggregated chart's lot carries its chart bar (on_native_applied
+    // re-stamps it, lane F1) while the kernel states the exit at its own
+    // interval index, the input bar the bucket opens on; the exit's chart bar
+    // is the one the adapter opened last. Under the magnifier the test keeps
+    // the kernel index it has always read.
+    int exit_bar_index = facts.exit_bar_index;
+    if (!scheduler_.bar_magnifier_enabled() && aggregates_input_bars(native_state())) {
+        NativeDecisionContext current{};
+        current.script_bar_open_ms = adapter_.last_broker_open_ms_;
+        exit_bar_index = scheduler_.source_bar_index_for(current);
+    }
+    const bool same_bar = facts.entry_bar_index == exit_bar_index;
     // ab9714be src/source/pine_scheduler.cpp:242,257 samples the bar's H/L/C
     // into every OPEN trade (update_per_trade_extremes, step 2) only after the
     // resting priced exits of step 1 have closed. A leg this route force-fills
     // at its level on its own entry bar therefore keeps the owner's unsampled
     // entry seed: no bar of this trade was ever walked by the sampler, so the
     // exit fill and the pre-fill path prefix below are the whole excursion.
-    const bool unsampled_entry_bar = facts.entry_bar_index == facts.exit_bar_index
-        && excursion_level_fill_;
+    const bool unsampled_entry_bar = same_bar && excursion_level_fill_;
     const double carried_favorable = unsampled_entry_bar ? 0.0 : facts.carried_favorable;
     const double carried_adverse = unsampled_entry_bar ? 0.0 : facts.carried_adverse;
     owned.favorable = std::max(carried_favorable * slice, fill_fav);
@@ -811,10 +846,9 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
         const Bar sample_bar = margin_call_sample_bar(
             current_bar_, facts.fill_price, excursion_margin_prefix_,
             path_high_first, syminfo_.mintick, config_.slippage);
-        const bool margin_same_bar = facts.entry_bar_index == facts.exit_bar_index;
-        const double margin_high = (margin_same_bar && facts.entry_bar_high_masked)
+        const double margin_high = (same_bar && facts.entry_bar_high_masked)
                                        ? facts.entry_price : sample_bar.high;
-        const double margin_low = (margin_same_bar && facts.entry_bar_low_masked)
+        const double margin_low = (same_bar && facts.entry_bar_low_masked)
                                       ? facts.entry_price : sample_bar.low;
         const double fav_px = facts.is_long ? margin_high : margin_low;
         const double adv_px = facts.is_long ? margin_low : margin_high;
@@ -851,7 +885,6 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
         return owned;
     const double high_pos = path_high_first ? 1.0 : 2.0;
     const double low_pos = path_high_first ? 2.0 : 1.0;
-    const bool same_bar = facts.entry_bar_index == facts.exit_bar_index;
     const bool mask_high = same_bar && facts.entry_bar_high_masked;
     const bool mask_low = same_bar && facts.entry_bar_low_masked;
     if (high_pos < fill_pos && !mask_high) {

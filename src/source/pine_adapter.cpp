@@ -16463,7 +16463,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         auto* pine = dynamic_cast<PineStrategyHost*>(&require_host());
         const auto cohort = cohorts_by_id_.find(placement_snapshot->from_entry);
         if (pine && cohort != cohorts_by_id_.end()) {
-            const int bar = pine->scheduler_.bar_magnifier_enabled()
+            // The lots carry the chart bar wherever the host re-stamps them
+            // (PineStrategyHost::on_native_applied): under the magnifier and,
+            // since lane F1, on every aggregated chart.
+            const auto state = pine->native_state();
+            const int ratio = state.spec && !state.spec->timeframe_undetected
+                ? tf_ratio(state.spec->input_tf, state.spec->script_tf) : 1;
+            const int bar = pine->scheduler_.bar_magnifier_enabled() || ratio > 1 || ratio == -1
                 ? pine->scheduler_.source_bar_index_for(context)
                 : context.coordinate.interval_index;
             std::vector<native_order::RequestHandle> adds;

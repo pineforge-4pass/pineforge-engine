@@ -52,12 +52,12 @@
  * move them on purpose.
  *
  * SECOND RESIDUAL, a separate finding of the same mechanism: on the PLAIN
- * aggregated path the trade rows carry the INPUT bar index, not the chart bar
- * index — 375 and 390 where the chart path says 25 and 26, and where the same
- * tape row says "Duration (bars)" 1. The magnified aggregated path is right
- * because PineStrategyHost::on_native_applied re-stamps it; the plain one has
- * no such writer. It is pinned here because this lane measured it, and it is
- * not this lane's target.
+ * aggregated path the trade rows carried the INPUT bar index, not the chart
+ * bar index — 375 and 390 where the chart path says 25 and 26, and where the
+ * same tape row says "Duration (bars)" 1. The magnified aggregated path was
+ * right because PineStrategyHost::on_native_applied re-stamped it; the plain
+ * one had no such writer. Lane F1 extended that re-stamp to every aggregated
+ * chart (a regression of R4 slice C against ab9714be; row 6 below).
  */
 
 #include <pineforge/bar.hpp>
@@ -460,13 +460,16 @@ void test_aggregated_bar_index() {
     CHECK(magnified.closed[0].entry_bar == 25 && magnified.closed[0].exit_bar == 26);
     CHECK(magnified.closed[1].entry_bar == 39 && magnified.closed[1].exit_bar == 40);
     CHECK(magnified.open_entry_bar == 65);
-    // RESIDUAL (second finding): with no magnifier there is no re-stamp, so the
-    // row carries the 1m INPUT index. 375 is the input bar the 19:45 bucket
-    // opens on, 390 the one the 09:30 bucket after it opens on: 15 "bars"
-    // between an entry and an exit one chart bar apart.
-    CHECK(plain.closed[0].entry_bar == 375 && plain.closed[0].exit_bar == 390);
-    CHECK(plain.closed[1].entry_bar == 585 && plain.closed[1].exit_bar == 600);
-    CHECK(plain.open_entry_bar == 975);
+    // expectation corrected (lane F1): 375/390, 585/600 and 975 -> 25/26,
+    // 39/40 and 65, because the plain aggregated chart's rows are re-stamped
+    // with the chart bar too, as the magnified ones always were. With no
+    // magnifier there was no re-stamp, so the row carried the 1m INPUT index
+    // the kernel books a fill at — 375 is the input bar the 19:45 bucket opens
+    // on, 390 the one the 09:30 bucket after it opens on — where ab9714be and
+    // the tape's "Duration (bars)" 1 count chart bars.
+    CHECK(plain.closed[0].entry_bar == 25 && plain.closed[0].exit_bar == 26);
+    CHECK(plain.closed[1].entry_bar == 39 && plain.closed[1].exit_bar == 40);
+    CHECK(plain.open_entry_bar == 65);
 }
 
 }  // namespace

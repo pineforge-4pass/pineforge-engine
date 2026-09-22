@@ -859,6 +859,10 @@ list(APPEND TEST_SOURCES test_native_session_day_facts)
 # the same tapes flag for flag through the adapter, its live-probe tail
 # policy, and the close flags of a calc_on_order_fills run. Source-bound.
 list(APPEND TEST_SOURCES test_session_day_facts_adapter)
+# R5 F1: the aggregated-path regressions of R4 slice C — trade rows on input
+# bars, close fills dated at the bucket close, and calc_on_order_fills
+# recalculations reading the previous bar's session flags — against ab9714be.
+list(APPEND TEST_SOURCES test_aggregated_path_regressions)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

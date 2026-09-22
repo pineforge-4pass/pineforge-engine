@@ -35,6 +35,15 @@ std::optional<std::int64_t> next_aggregated_script_open(
     return bucket(next->timestamp);
 }
 
+// A chart whose script bar aggregates several input bars, as run_begin's
+// needs_aggregation reads it: the kernel's interval index is then the INPUT bar
+// a script bucket opens on, where the host's lots carry the chart bar.
+bool aggregates_input_bars(const NativeStateView& state) {
+    if (!state.spec || state.spec->timeframe_undetected) return false;
+    const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
+    return ratio > 1 || ratio == -1;
+}
+
 }  // namespace
 
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
@@ -655,8 +664,15 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     if (host.config_.process_orders_on_close && host.config_.slippage > 0 && open_point) {
         extremes_bar.high = extremes_bar.low = extremes_bar.close = extremes_bar.open;
     }
+    // A plain aggregated chart's lots carry the chart bar (the host re-stamps
+    // them, lane F1) where the kernel left its interval index, the input bar
+    // the bucket opens on, in bar_index_: the entry-bar mask reads the chart
+    // bar there. Under the magnifier it keeps the index it has always read.
+    const int extremes_index = !retained_.bar_magnifier
+            && aggregates_input_bars(host.native_state())
+        ? source_bar_index_for(context) : host.bar_index_;
     sample_open_trade_extremes(
-        host.pyramid_entries_, host.position_side_, host.bar_index_, extremes_bar);
+        host.pyramid_entries_, host.position_side_, extremes_index, extremes_bar);
     try {
         host.scheduler_publish_source_bar(
             callback_bar, true, callback_advances_source_bar);
