@@ -835,6 +835,10 @@ list(APPEND TEST_SOURCES test_offset_trail_quantized_arm)
 # R5 E24: the continuation digest folds an append-only log's tail, so a host
 # that reads the continuation once per bar stays linear in the bar count.
 list(APPEND TEST_SOURCES test_native_continuation_digest_tail)
+# R5 E25: session.islastbar on an aggregated chart, read as the chart-timeframe
+# path reads it, and TradingView's session-bar tapes (tests/fixtures/
+# session_islastbar) replayed through the Pine adapter on both paths.
+list(APPEND TEST_SOURCES test_session_islastbar_aggregation)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1478,6 +1482,10 @@ string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES
 if(TARGET test_native_margin_fx_clock)
     target_compile_definitions(test_native_margin_fx_clock PRIVATE
         PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
+# R5 E25 reads its TradingView tapes from the fixture tree; source-bound too.
+if(TARGET test_session_islastbar_aggregation)
+    target_compile_definitions(test_session_islastbar_aggregation PRIVATE
+        PINEFORGE_E25_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.

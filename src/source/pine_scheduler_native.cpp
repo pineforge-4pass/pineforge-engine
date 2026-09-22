@@ -9,6 +9,34 @@
 
 namespace pineforge::source {
 
+namespace {
+
+// The open of the aggregated script bar after the one that opened at
+// script_open_ms: the chart-grid bucket of the first retained input past that
+// bar's bucket, or none when the retained input ends inside it. A bucket is
+// at most one script bar wide, so only the inputs of that span are asked for
+// their bucket.
+std::optional<std::int64_t> next_aggregated_script_open(
+        const std::vector<Bar>& inputs, std::int64_t script_open_ms,
+        int script_tf_seconds, const std::string& timezone, const std::string& session) {
+    const auto bucket = [&](std::int64_t ms) {
+        return session_intraday_bucket_open_ms(ms, script_tf_seconds, timezone, session);
+    };
+    const auto before = [](const Bar& bar, std::int64_t ms) { return bar.timestamp < ms; };
+    const auto span_begin = std::lower_bound(inputs.begin(), inputs.end(),
+                                             script_open_ms, before);
+    const auto span_end = std::lower_bound(
+        span_begin, inputs.end(),
+        script_open_ms + static_cast<std::int64_t>(script_tf_seconds) * 1000, before);
+    const auto next = std::partition_point(span_begin, span_end, [&](const Bar& bar) {
+        return bucket(bar.timestamp) <= script_open_ms;
+    });
+    if (next == inputs.end()) return std::nullopt;
+    return bucket(next->timestamp);
+}
+
+}  // namespace
+
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     RetainedBegin next;
     if (args.bars && args.n > 0) next.bars.assign(args.bars, args.bars + args.n);
@@ -492,13 +520,23 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
             !language_.coof_checkpoint_contains_current_bar_;
     }
     publish_series(script_bar, host);
+    // session.islastbar looks one script bar ahead: on the chart timeframe to
+    // the next retained bar, aggregated to the next bucket the retained input
+    // holds, so both paths read the same chart alike. (ab9714be
+    // pine_scheduler.cpp:1865-1869 read the aggregated flag as
+    // in_session && barstate.islast.)
     std::optional<std::int64_t> next_script_open_ms;
     if (const auto state = host.native_state(); state.spec
         && !state.spec->timeframe_undetected) {
-        if (tf_ratio(state.spec->input_tf, state.spec->script_tf) == 1
+        const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
+        if (ratio == 1
             && source_bar_count_ + 1 < static_cast<int>(retained_.bars.size())) {
             next_script_open_ms = retained_.bars[
                 static_cast<std::size_t>(source_bar_count_ + 1)].timestamp;
+        } else if ((ratio > 1 || ratio == -1) && tf_is_intraday(state.spec->script_tf)) {
+            next_script_open_ms = next_aggregated_script_open(
+                retained_.bars, script_bar.timestamp, tf_to_seconds(state.spec->script_tf),
+                state.spec->timezone, state.spec->session);
         }
         host.scheduler_update_session_state(script_bar, next_script_open_ms);
     }

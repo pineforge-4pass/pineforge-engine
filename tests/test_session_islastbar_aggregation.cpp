@@ -1,0 +1,400 @@
+/*
+ * test_session_islastbar_aggregation.cpp — R5 lane E25.
+ *
+ * Lane E20 (its report, "(f) Findings" 2): since R4 slice C (73817c1d) every
+ * in-session bar of an AGGREGATED run — input timeframe finer than the
+ * chart's, 1m bars under a 5m or 15m script — read session.islastbar = true.
+ * scheduler_update_session_state reads "last" when the next script bar's open
+ * is out of session, and a run's final bar, which has no next one, counts as
+ * last. PineScheduler::bar found that next open only when the input and chart
+ * timeframes are equal (the next retained bar IS the next chart bar); an
+ * aggregated run passed none, so every in-session bar looked like the run's
+ * final bar.
+ *
+ * What the flag is, three ways:
+ * - The legacy engine (ab9714be src/source/pine_scheduler.cpp): the
+ *   chart-timeframe loop (run_simple_bar_loop, :1714-1737) set it when the
+ *   next input bar is out of session; the aggregated loop (:1865-1869) set
+ *   in_session && barstate.islast, the run's final bar only; the magnified
+ *   loop (:1839-1845) never set it.
+ * - TradingView (tests/fixtures/session_islastbar, three `lab tv` tapes): the
+ *   last chart bar of every session DAY. NYSE:F 15m flags 15:45 ET on 252
+ *   days and 12:45 ET on its three half days; session.isfirstbar flags 09:30
+ *   ET on all 255; BINANCE:ETHUSDT.P 15m flags 23:45 UTC on all 370 days.
+ * - The chart-timeframe path today: the legacy lookahead, untouched.
+ *
+ * Ruling (adapter; the kernel is not involved): an aggregated chart reads the
+ * flag with the chart-timeframe path's own lookahead, on its own next script
+ * bar — the label of the next aggregated bucket the retained input holds. The
+ * chart a script sees does not depend on the timeframe its bars were fed at,
+ * so the aggregated and the chart-timeframe run of the same bars agree bar
+ * for bar, plain or magnified. Where out-of-session bars separate two
+ * sessions each session's last bar is flagged, as on TradingView; the legacy
+ * aggregated rule flagged only the run's final bar. The chart-timeframe rows
+ * are the control: they pass unchanged before and after.
+ *
+ * RECORDED, not fixed: TradingView draws the boundary at the session day, and
+ * a day ends where the next bar belongs to another day even if it is in
+ * session again. The registry's NYSE:F feeds hold regular hours only and a
+ * 24x7 feed never leaves its session, so on them both paths still flag only
+ * the run's final bar. Closing that changes the chart-timeframe path, which
+ * this lane keeps byte-identical; the rows marked RESIDUAL pin exactly what
+ * both paths miss, so the change that closes it has to move them on purpose.
+ */
+
+#include <pineforge/bar.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
+
+#include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace pineforge;
+
+static int tests_passed = 0;
+static int tests_failed = 0;
+
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            std::printf("  FAIL  %s:%d  %s\n", __FILE__, __LINE__, #expr);     \
+            ++tests_failed;                                                    \
+        } else {                                                               \
+            ++tests_passed;                                                    \
+        }                                                                      \
+    } while (0)
+
+#ifndef PINEFORGE_E25_FIXTURE_DIR
+#error "PINEFORGE_E25_FIXTURE_DIR must name tests/fixtures/session_islastbar"
+#endif
+
+namespace {
+
+struct FeedBar {
+    std::int64_t ts;
+    double open, high, low, close, volume;
+};
+
+#include "fixtures/session_islastbar/bars.inc"
+
+constexpr std::int64_t kMinute = 60'000;
+// 2026-04-07 (Tuesday, EDT) 09:30 America/New_York.
+constexpr std::int64_t kTue0930Et = 1775568600000LL;
+constexpr std::int64_t kDay = 1440 * kMinute;
+
+const std::string kRth = "0930-1600";
+const std::string kNewYork = "America/New_York";
+
+// One source callback, as generated code reads it.
+struct Seen {
+    std::int64_t ts = 0;
+    bool ismarket = false;
+    bool isfirstbar = false;
+    bool islastbar = false;
+};
+
+class SessionHost final : public source::PineStrategyHost {
+public:
+    SessionHost(const std::string& session, const std::string& timezone) {
+        set_syminfo_session(session);
+        set_syminfo_timezone(timezone);
+    }
+
+    void on_source_bar(const Bar&) override {
+        seen.push_back({current_bar_.timestamp, session_ismarket_,
+                        session_isfirstbar_, session_islastbar_});
+    }
+
+    std::vector<Seen> seen;
+};
+
+struct Run {
+    std::vector<Seen> seen;
+    std::string error;
+};
+
+Run run_batch(const std::vector<Bar>& bars, const std::string& session,
+              const std::string& timezone, const char* input_tf,
+              const char* script_tf, bool magnifier) {
+    SessionHost host(session, timezone);
+    host.run(bars.data(), static_cast<int>(bars.size()), input_tf, script_tf, magnifier);
+    return {host.seen, host.last_error()};
+}
+
+Bar flat_bar(std::int64_t ts) {
+    Bar b{};
+    b.timestamp = ts;
+    b.open = 100.0; b.high = 101.0; b.low = 99.0; b.close = 100.5;
+    b.volume = 1.0;
+    return b;
+}
+
+// Flat bars every `step` from `first` through `last`, both included.
+std::vector<Bar> ladder(std::int64_t first, std::int64_t last, std::int64_t step) {
+    std::vector<Bar> bars;
+    for (std::int64_t ts = first; ts <= last; ts += step) bars.push_back(flat_bar(ts));
+    return bars;
+}
+
+template <std::size_t N>
+std::vector<Bar> feed(const FeedBar (&rows)[N]) {
+    std::vector<Bar> bars;
+    for (const FeedBar& row : rows) {
+        Bar b{};
+        b.timestamp = row.ts;
+        b.open = row.open; b.high = row.high; b.low = row.low; b.close = row.close;
+        b.volume = row.volume;
+        bars.push_back(b);
+    }
+    return bars;
+}
+
+std::string bits(const std::vector<Seen>& seen, bool Seen::*flag) {
+    std::string text;
+    for (const Seen& s : seen) text += (s.*flag) ? '1' : '0';
+    return text;
+}
+
+std::set<std::int64_t> flagged(const std::vector<Seen>& seen, bool Seen::*flag) {
+    std::set<std::int64_t> stamps;
+    for (const Seen& s : seen)
+        if (s.*flag) stamps.insert(s.ts);
+    return stamps;
+}
+
+bool same_bars(const std::vector<Seen>& a, const std::vector<Seen>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].ts != b[i].ts || a[i].ismarket != b[i].ismarket
+            || a[i].isfirstbar != b[i].isfirstbar || a[i].islastbar != b[i].islastbar)
+            return false;
+    }
+    return true;
+}
+
+void show(const char* tag, const Run& run) {
+    std::printf("    %-34s n=%zu ismarket %s\n", tag, run.seen.size(),
+                bits(run.seen, &Seen::ismarket).c_str());
+    std::printf("    %-34s      isfirstbar %s\n", "", bits(run.seen, &Seen::isfirstbar).c_str());
+    std::printf("    %-34s      islastbar  %s\n", "", bits(run.seen, &Seen::islastbar).c_str());
+    if (!run.error.empty()) std::printf("    last_error: %s\n", run.error.c_str());
+}
+
+std::int64_t days_from_civil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return static_cast<std::int64_t>(era) * 146097 + static_cast<std::int64_t>(doe) - 719468;
+}
+
+// "YYYY-MM-DD HH:MM" at a fixed UTC offset in hours -> UTC milliseconds.
+std::int64_t utc_ms(int y, int mo, int d, int h, int mi, int offset_hours = 0) {
+    const std::int64_t days = days_from_civil(y, static_cast<unsigned>(mo),
+                                              static_cast<unsigned>(d));
+    return ((days * 24 + h - offset_hours) * 60 + mi) * kMinute;
+}
+
+// The tape's entry times (UTC+8): every entry fills at the close of a bar
+// TradingView flagged, and the tape dates it at that bar's open.
+std::set<std::int64_t> tape_flags(const char* slug, std::int64_t first, std::int64_t last) {
+    std::ifstream in(std::string(PINEFORGE_E25_FIXTURE_DIR) + "/" + slug + "/tv_trades.csv");
+    std::set<std::int64_t> stamps;
+    std::string line;
+    bool header = true;
+    while (std::getline(in, line)) {
+        if (header) { header = false; continue; }
+        std::vector<std::string> cell;
+        std::stringstream fields(line);
+        std::string field;
+        while (std::getline(fields, field, ',')) cell.push_back(field);
+        if (cell.size() < 3 || cell[1].rfind("Entry", 0) != 0) continue;
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0;
+        if (std::sscanf(cell[2].c_str(), "%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) != 5) continue;
+        const std::int64_t ts = utc_ms(y, mo, d, h, mi, 8);
+        if (ts >= first && ts <= last) stamps.insert(ts);
+    }
+    return stamps;
+}
+
+std::set<std::int64_t> minus(const std::set<std::int64_t>& a, const std::set<std::int64_t>& b) {
+    std::set<std::int64_t> out;
+    for (std::int64_t ts : a)
+        if (!b.count(ts)) out.insert(ts);
+    return out;
+}
+
+// ── 1. one session close, post-market bars after it ───────────────────────
+
+// 1m bars 15:30 .. 16:14 ET: nine 5m script bars, six in session. The flag
+// belongs to 15:55 alone, the bar whose next bar (16:00) is out of session.
+// Before this lane the aggregated run flagged all six in-session bars.
+void test_one_session_close() {
+    std::printf("test_one_session_close\n");
+    const auto one_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 404 * kMinute, kMinute);
+    const auto five_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 400 * kMinute,
+                                    5 * kMinute);
+    const Run chart = run_batch(five_minute, kRth, kNewYork, "5", "5", false);
+    const Run chart_mag = run_batch(five_minute, kRth, kNewYork, "5", "5", true);
+    const Run agg = run_batch(one_minute, kRth, kNewYork, "1", "5", false);
+    const Run agg_mag = run_batch(one_minute, kRth, kNewYork, "1", "5", true);
+
+    // The control: the chart-timeframe path, as it has always read it.
+    CHECK(chart.error.empty());
+    CHECK(bits(chart.seen, &Seen::ismarket) == "111111000");
+    CHECK(bits(chart.seen, &Seen::islastbar) == "000001000");
+    CHECK(same_bars(chart_mag.seen, chart.seen));
+
+    CHECK(agg.error.empty());
+    CHECK(agg_mag.error.empty());
+    CHECK(bits(agg.seen, &Seen::islastbar) == "000001000");
+    CHECK(same_bars(agg.seen, chart.seen));
+    CHECK(same_bars(agg_mag.seen, chart.seen));
+    if (!same_bars(agg.seen, chart.seen) || !same_bars(agg_mag.seen, chart.seen)) {
+        show("chart 5 -> 5", chart);
+        show("aggregated 1 -> 5", agg);
+        show("aggregated 1 -> 5, magnifier", agg_mag);
+    }
+}
+
+// ── 2. two sessions, out-of-session bars between them ─────────────────────
+
+// Tuesday 15:30 .. 16:14 ET, then Wednesday 09:15 .. 09:44 ET (pre-market
+// from 09:15). Each session's last bar is flagged: Tuesday 15:55, and
+// Wednesday 09:40, the run's final bar. The legacy aggregated rule
+// (in_session && barstate.islast) saw only 09:40 — "000000000000001".
+void test_two_sessions() {
+    std::printf("test_two_sessions\n");
+    auto one_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 404 * kMinute, kMinute);
+    const auto wednesday = ladder(kTue0930Et + kDay - 15 * kMinute,
+                                  kTue0930Et + kDay + 14 * kMinute, kMinute);
+    one_minute.insert(one_minute.end(), wednesday.begin(), wednesday.end());
+    auto five_minute = ladder(kTue0930Et + 360 * kMinute, kTue0930Et + 400 * kMinute,
+                              5 * kMinute);
+    const auto wednesday_5 = ladder(kTue0930Et + kDay - 15 * kMinute,
+                                    kTue0930Et + kDay + 10 * kMinute, 5 * kMinute);
+    five_minute.insert(five_minute.end(), wednesday_5.begin(), wednesday_5.end());
+
+    const Run chart = run_batch(five_minute, kRth, kNewYork, "5", "5", false);
+    const Run agg = run_batch(one_minute, kRth, kNewYork, "1", "5", false);
+    const Run agg_mag = run_batch(one_minute, kRth, kNewYork, "1", "5", true);
+
+    CHECK(chart.error.empty());
+    CHECK(bits(chart.seen, &Seen::ismarket) == "111111000000111");
+    CHECK(bits(chart.seen, &Seen::isfirstbar) == "100000000000100");
+    CHECK(bits(chart.seen, &Seen::islastbar) == "000001000000001");
+
+    CHECK(agg.error.empty());
+    CHECK(bits(agg.seen, &Seen::islastbar) == "000001000000001");
+    CHECK(same_bars(agg.seen, chart.seen));
+    CHECK(same_bars(agg_mag.seen, chart.seen));
+    if (!same_bars(agg.seen, chart.seen) || !same_bars(agg_mag.seen, chart.seen)) {
+        show("chart 5 -> 5", chart);
+        show("aggregated 1 -> 5", agg);
+        show("aggregated 1 -> 5, magnifier", agg_mag);
+    }
+}
+
+// ── 3. TradingView's NYSE:F tapes, on the registry feeds they ran on ──────
+
+// 2025-07-02, 2025-07-03 (half day, last bar 12:45 ET) and 2025-07-07: the
+// f-15 lane's 1m finer feed aggregated to 15m, and its 15m chart feed. Both
+// paths flag exactly the same bars, and none that TradingView does not.
+void test_tv_nyse_f() {
+    std::printf("test_tv_nyse_f\n");
+    const Run chart = run_batch(feed(kFord15), kRth, kNewYork, "15", "15", false);
+    const Run agg = run_batch(feed(kFord1m), kRth, kNewYork, "1", "15", false);
+    const Run agg_mag = run_batch(feed(kFord1m), kRth, kNewYork, "1", "15", true);
+    CHECK(chart.error.empty());
+    CHECK(agg.error.empty());
+    CHECK(chart.seen.size() == 66);
+    CHECK(same_bars(agg.seen, chart.seen));
+    CHECK(same_bars(agg_mag.seen, chart.seen));
+    if (chart.seen.size() != 66 || !same_bars(agg.seen, chart.seen)
+        || !same_bars(agg_mag.seen, chart.seen)) {
+        show("chart 15 -> 15", chart);
+        show("aggregated 1 -> 15", agg);
+        show("aggregated 1 -> 15, magnifier", agg_mag);
+    }
+    if (chart.seen.empty()) return;
+    const std::int64_t first = chart.seen.front().ts;
+    const std::int64_t last = chart.seen.back().ts;
+    CHECK(first == utc_ms(2025, 7, 2, 13, 30));
+    CHECK(last == utc_ms(2025, 7, 7, 19, 45));
+
+    const auto tv_last = tape_flags("e25-f-islastbar", first, last);
+    const auto tv_first = tape_flags("e25-f-isfirstbar", first, last);
+    CHECK((tv_last == std::set<std::int64_t>{utc_ms(2025, 7, 2, 19, 45),
+                                             utc_ms(2025, 7, 3, 16, 45),
+                                             utc_ms(2025, 7, 7, 19, 45)}));
+    CHECK((tv_first == std::set<std::int64_t>{utc_ms(2025, 7, 2, 13, 30),
+                                              utc_ms(2025, 7, 3, 13, 30),
+                                              utc_ms(2025, 7, 7, 13, 30)}));
+    for (const Run* run : {&chart, &agg}) {
+        const auto engine_last = flagged(run->seen, &Seen::islastbar);
+        const auto engine_first = flagged(run->seen, &Seen::isfirstbar);
+        // No bar TradingView leaves unflagged.
+        CHECK(minus(engine_last, tv_last).empty());
+        CHECK(minus(engine_first, tv_first).empty());
+        // RESIDUAL: the day boundaries a regular-hours feed hides. Only the
+        // run's edges are flagged — its final bar (no next bar) and its first
+        // (no prior bar); the half day's 12:45 and the other two days' 15:45 /
+        // 09:30 are missed on both paths.
+        CHECK((minus(tv_last, engine_last)
+               == std::set<std::int64_t>{utc_ms(2025, 7, 2, 19, 45),
+                                         utc_ms(2025, 7, 3, 16, 45)}));
+        CHECK((minus(tv_first, engine_first)
+               == std::set<std::int64_t>{utc_ms(2025, 7, 3, 13, 30),
+                                         utc_ms(2025, 7, 7, 13, 30)}));
+    }
+}
+
+// ── 4. TradingView's 24x7 tape ────────────────────────────────────────────
+
+// BINANCE:ETHUSDT.P 2025-06-10 23:00 .. 06-11 00:59 UTC: the corpus 1m feed
+// aggregated to 15m, and the 15m feed derived from it. Both paths agree; a
+// 24x7 feed never leaves its session, so neither sees the midnight boundary.
+void test_tv_eth_24x7() {
+    std::printf("test_tv_eth_24x7\n");
+    const Run chart = run_batch(feed(kEth15), "24x7", "UTC", "15", "15", false);
+    const Run agg = run_batch(feed(kEth1m), "24x7", "UTC", "1", "15", false);
+    CHECK(chart.error.empty());
+    CHECK(agg.error.empty());
+    CHECK(chart.seen.size() == 8);
+    CHECK(same_bars(agg.seen, chart.seen));
+    if (chart.seen.size() != 8 || !same_bars(agg.seen, chart.seen)) {
+        show("chart 15 -> 15", chart);
+        show("aggregated 1 -> 15", agg);
+    }
+    if (chart.seen.empty()) return;
+    const std::int64_t first = chart.seen.front().ts;
+    const std::int64_t last = chart.seen.back().ts;
+    const auto tv_last = tape_flags("e25-eth-islastbar", first, last);
+    CHECK((tv_last == std::set<std::int64_t>{utc_ms(2025, 6, 10, 23, 45)}));
+    for (const Run* run : {&chart, &agg}) {
+        // RESIDUAL: TradingView's 23:45 is missed, and the run's final bar,
+        // 00:45, is flagged only because no bar follows it (the legacy
+        // run-end convention both paths share).
+        CHECK(bits(run->seen, &Seen::islastbar) == "00000001");
+        CHECK((flagged(run->seen, &Seen::islastbar)
+               == std::set<std::int64_t>{utc_ms(2025, 6, 11, 0, 45)}));
+    }
+}
+
+}  // namespace
+
+int main() {
+    test_one_session_close();
+    test_two_sessions();
+    test_tv_nyse_f();
+    test_tv_eth_24x7();
+
+    std::printf("\nsession_islastbar_aggregation: %d passed, %d failed\n",
+                tests_passed, tests_failed);
+    return tests_failed > 0 ? 1 : 0;
+}
