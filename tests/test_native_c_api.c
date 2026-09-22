@@ -759,6 +759,8 @@ static int lifecycle_on_bar(void* user, const pf_bar_t* bar, const pf_native_dec
     pf_native_request_v1 request;
     pf_native_working_v1 working;
     uint32_t refusal = 0xffffffffu;
+    uint32_t replace_reject = 0xffffffffu;
+    uint64_t replace_successor = 0xffffffffu;
     uint64_t immediate = 0;
     double units = 0.0;
     int rc;
@@ -820,6 +822,89 @@ static int lifecycle_on_bar(void* user, const pf_bar_t* bar, const pf_native_dec
     LCHECK(state, strategy_native_replace_v1(state->host, state->resting, &request, NULL)
                   == PF_NATIVE_E_NOT_WORKING,
            "replacing the predecessor again was not refused");
+
+    /* A REJECTED replace. strategy_native_replace_v1 answers
+     * PF_NATIVE_E_REJECTED and stops there: its signature has nowhere to put
+     * the RequestRejectReason that both the C++ replace and the C SUBMIT
+     * surface, so a C host learns "rejected" and nothing else.
+     * strategy_native_replace_ext_v1 is that same call with submit's own
+     * `reject` out-parameter (R5 gap lane E18, lane E12 finding 6). */
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+    request.intent_value = 0.0;
+    request.label = "rejected-quantity";
+    LCHECK(state, strategy_native_replace_v1(state->host, state->successor, &request, NULL)
+                  == PF_NATIVE_E_REJECTED,
+           "a reduce of zero units was not a rejected replace");
+    replace_reject = 0xffffffffu;
+    replace_successor = 0xffffffffu;
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, state->successor, &request,
+                                                 &replace_successor, &replace_reject)
+                  == PF_NATIVE_E_REJECTED,
+           "the extended replace did not report the rejection");
+    /* InvalidQuantity is 0, so the sentinel is what proves it was WRITTEN. */
+    LCHECK(state, replace_reject == 0u, "the rejected replace named another reason");
+    LCHECK(state, replace_successor == 0xffffffffu,
+           "a rejected replace wrote a successor handle");
+
+    /* A second reason, so the value is the reason and not a zeroing: a limit
+     * below zero is InvalidTrigger. */
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.p1 = -1.0;
+    request.label = "rejected-trigger";
+    replace_reject = 0xffffffffu;
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, state->successor, &request,
+                                                 NULL, &replace_reject)
+                  == PF_NATIVE_E_REJECTED,
+           "a negative limit was not a rejected replace");
+    LCHECK(state, replace_reject == 2u, "the rejected replace named another reason");
+
+    /* Neither refusal touched the book: the named order is still working and
+     * is still the successor the accepted replace issued. */
+    LCHECK(state, strategy_native_working_len_v1(state->host) == 1,
+           "a rejected replace changed the working book");
+    memset(&working, 0, sizeof(working));
+    working.struct_size = (uint32_t)sizeof(working);
+    LCHECK(state, strategy_native_working_get_v1(state->host, 0, &working) == PF_NATIVE_OK
+                  && working.incarnation == state->successor,
+           "a rejected replace retired the request it named");
+
+    /* The extended spelling answers every other verdict exactly as the v1 one
+     * does, writes the successor on success, and leaves `reject` untouched. */
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.p1 = 3.0;
+    request.label = "replaced-ext";
+    replace_reject = 0xffffffffu;
+    replace_successor = 0;
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, state->successor, &request,
+                                                 &replace_successor, &replace_reject)
+                  == PF_NATIVE_OK,
+           "the extended replace refused a good amendment");
+    LCHECK(state, replace_reject == 0xffffffffu,
+           "an accepted replace wrote a rejection reason");
+    LCHECK(state, replace_successor != 0u && replace_successor != state->successor,
+           "the extended replace did not issue a successor");
+    state->successor = replace_successor;
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, state->resting, &request,
+                                                 NULL, NULL)
+                  == PF_NATIVE_E_NOT_WORKING,
+           "the extended replace admitted a retired incarnation");
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, 0u, &request, NULL, NULL)
+                  == PF_NATIVE_E_INVALID_TARGET,
+           "the extended replace admitted a handle this run never issued");
+    LCHECK(state, strategy_native_replace_ext_v1(NULL, state->successor, &request, NULL, NULL)
+                  == PF_NATIVE_E_HANDLE,
+           "the extended replace accepted a NULL host");
+    LCHECK(state, strategy_native_replace_ext_v1(state->host, state->successor, NULL, NULL,
+                                                 NULL)
+                  == PF_NATIVE_E_ARGUMENT,
+           "the extended replace accepted a NULL request");
 
     /* cancel round-trip. */
     LCHECK(state, strategy_native_cancel_v1(state->host, state->successor) == PF_NATIVE_OK,

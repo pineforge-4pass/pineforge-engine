@@ -1681,9 +1681,9 @@ PF_API int strategy_native_submit_v1(pf_strategy_t s, const pf_native_request_v1
     });
 }
 
-PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
-                                      const pf_native_request_v1* request,
-                                      uint64_t* successor) {
+PF_API int strategy_native_replace_ext_v1(pf_strategy_t s, uint64_t incarnation,
+                                          const pf_native_request_v1* request,
+                                          uint64_t* successor, uint32_t* reject) {
     return guarded([&] {
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
@@ -1698,6 +1698,9 @@ PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
             if (successor && result.successor) *successor = result.successor->incarnation;
             return PF_NATIVE_OK;
         case no::ReplaceStatus::ReplaceRejected:
+            /* The one verdict that carries a reason, written exactly as
+             * strategy_native_submit_v1 writes a refused submit's. */
+            if (reject && result.reason) *reject = static_cast<std::uint32_t>(*result.reason);
             return PF_NATIVE_E_REJECTED;
         case no::ReplaceStatus::NotWorking:
             return PF_NATIVE_E_NOT_WORKING;
@@ -1706,6 +1709,13 @@ PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
         }
         return PF_NATIVE_E_EXCEPTION;
     });
+}
+
+/* The established spelling: this call with no reason to write. */
+PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
+                                      const pf_native_request_v1* request,
+                                      uint64_t* successor) {
+    return strategy_native_replace_ext_v1(s, incarnation, request, successor, nullptr);
 }
 
 PF_API int strategy_native_cancel_v1(pf_strategy_t s, uint64_t incarnation) {

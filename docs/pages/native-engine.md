@@ -460,7 +460,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:1619-1669`), under the same legality rule; see *Driving the
+(`native_c_api.h:1671-1721`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v6`
@@ -3285,12 +3285,20 @@ with `strategy_native_report_free_v1`, because the unprefixed `report_free` is
 one of the eight per-strategy exports the transpiler emits and is absent from
 a runtime a C host links on its own.
 
-**Commands.** `strategy_native_submit_v1`, `_replace_v1`, `_cancel_v1`,
-`_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1` follow the
-kernel's existing legality rule: inside a callback, or between realtime inputs. A command issued
+**Commands.** `strategy_native_submit_v1`, `_replace_v1` / `_replace_ext_v1`,
+`_cancel_v1`, `_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1`
+follow the kernel's existing legality rule: inside a callback, or between realtime inputs. A command issued
 anywhere else answers `PF_NATIVE_E_STATE` and changes nothing — the kernel
 throws there, and the C boundary contains that throw rather than letting it
-unwind through the C frame. `strategy_native_position_v1`,
+unwind through the C frame. A rejected command names its
+`RequestRejectReason` in the `reject` out-parameter:
+`strategy_native_submit_v1` has always had one, and
+`strategy_native_replace_ext_v1` is `_replace_v1` with the same parameter — a
+second symbol rather than a wider signature, because this header's signatures
+never change within a major version (the reason
+`strategy_configure_native_ext_v1` exists beside `strategy_configure_native_v1`).
+`_cancel_v1` needs no such spelling: its status is its reason.
+`strategy_native_position_v1`,
 `_working_len_v1` / `_working_get_v1` (the working view, copied out),
 `_open_lot_count_v1(s, mark)` / `_open_lot_get_v1` (the open-lot snapshot,
 copied out into `pf_native_open_lot_v1` — the C spelling of

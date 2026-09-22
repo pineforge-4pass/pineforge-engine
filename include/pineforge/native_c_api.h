@@ -121,7 +121,8 @@
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1
  *   [C]  submit                            strategy_native_submit_v1
- *   [C]  replace                           strategy_native_replace_v1
+ *   [C]  replace                           strategy_native_replace_v1, or strategy_native_replace_ext_v1
+ *                                          for the ReplaceResult::reason the first one drops
  *   [--] submit_market                     a C++ convenience that REFUSES non-market extras instead of dropping
  *                                          them; the same request is strategy_native_submit_v1 with
  *                                          PF_NATIVE_TRIGGER_MARKET and a zero-filled struct
@@ -1597,10 +1598,47 @@ PF_API int strategy_native_submit_v1(pf_strategy_t s, const pf_native_request_v1
  *  @return PF_NATIVE_OK, PF_NATIVE_E_REJECTED, PF_NATIVE_E_NOT_WORKING,
  *  PF_NATIVE_E_INVALID_TARGET, or PF_NATIVE_E_STATE.
  *
+ *  PF_NATIVE_E_REJECTED is where this signature stops: it has nowhere to put
+ *  the RequestRejectReason that #strategy_native_submit_v1 writes to its
+ *  `reject`, so use #strategy_native_replace_ext_v1 when the reason matters.
+ *
  *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
                                       const pf_native_request_v1* request,
                                       uint64_t* successor);
+
+/** Replace the live request @p incarnation, reporting a rejection's reason.
+ *
+ *  The same call as #strategy_native_replace_v1 — same legality, same
+ *  amendment, same verdicts, same successor — with the `reject`
+ *  out-parameter #strategy_native_submit_v1 has always had. That asymmetry
+ *  was the whole gap: a C++ replace answers ReplaceResult::reason and the C
+ *  submit writes it out, while the C replace dropped it, so a C host learned
+ *  "rejected" and no more. (#strategy_native_cancel_v1 needs no such
+ *  spelling: its status IS its reason.)
+ *
+ *  It is an additional symbol rather than a wider signature because this
+ *  header's STABILITY rule is that a signature never changes within a major
+ *  version — the same reason #strategy_configure_native_ext_v1 exists beside
+ *  #strategy_configure_native_v1. Use either; #strategy_native_replace_v1
+ *  stays exactly what it was and is this call with @p reject NULL.
+ *
+ *  @param s           The host this run is driving, from #strategy_create.
+ *  @param incarnation The live request to amend.
+ *  @param request     Borrowed for the call only.
+ *  @param successor   Optional; receives the successor's handle. Untouched
+ *                     unless the replace is accepted.
+ *  @param reject      Optional; receives a RequestRejectReason, and only on
+ *                     PF_NATIVE_E_REJECTED. Untouched otherwise — including
+ *                     for NOT_WORKING and INVALID_TARGET, which are the
+ *                     target's verdict and not the request's.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_REJECTED, PF_NATIVE_E_NOT_WORKING,
+ *  PF_NATIVE_E_INVALID_TARGET, or PF_NATIVE_E_STATE.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
+PF_API int strategy_native_replace_ext_v1(pf_strategy_t s, uint64_t incarnation,
+                                          const pf_native_request_v1* request,
+                                          uint64_t* successor, uint32_t* reject);
 
 /** Cancel one live request.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_NOT_WORKING, PF_NATIVE_E_INVALID_TARGET
