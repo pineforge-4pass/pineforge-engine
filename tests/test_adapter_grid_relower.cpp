@@ -23,12 +23,17 @@
 //      (engine.hpp:1035-1063, ab9714be engine_path_resolve.cpp:392-424,
 //      745-766, 939-947) — whereas NativeRunSpec::price_grid is a property of
 //      the RUN and the matcher hands one GridThreshold to every trigger kind,
-//      the trail stop included. Even on an on-grid feed the two differ:
-//      best - offset lands one ULP under its ladder point on 14% of (best,
-//      offset) pairs, the raw compare holds through an exact touch and the
-//      grid's nanotick guard fires it (section 4 TrailUlp, section 5). A
-//      per-kind grid mask would spell that inconsistency into the kernel,
-//      which is not generic, so the lane stops there.
+//      the trail stop included. A per-kind grid mask would spell that
+//      inconsistency into the kernel, which is not generic, so the lane stops
+//      there. The one part of this row that was NOT the per-kind rule is
+//      closed (R5 lane E16): best - offset landed one ULP under its ladder
+//      point on 14% of (best, offset) pairs, so the raw compare held through
+//      an exact touch while the grid's nanotick guard fired it — a level the
+//      kernel spelled wrong on both paths, not a quantization TradingView
+//      applies to one kind. A stop a whole number of ticks from a best on the
+//      run's ladder now IS that ladder point, section 4's TrailUlp row exits
+//      on the bar TradingView exits on (lane E14's tape), and section 5 pins
+//      the two paths agreeing.
 // Two further effects are adapter-side and were left alone with the rest:
 // the grid pre-rounds facts.default_resolved_price, which TradingView's
 // directional snap of a sub-tick open needs raw (AAPL 196.135 -> 196.13), and
@@ -63,8 +68,8 @@
 //      UNCHANGED adapter on the lane base 86ef9ed by compiling this TU with
 //      -DPINEFORGE_R7_HARVEST against that tree's libpineforge.a (Release,
 //      the run_corpus.sh build); rebuild them the same way, never by hand.
-//   5. the measured divergence: the kernel grid fires the trail stop of
-//      section 4's TrailUlp scenario one tick early (B2).
+//   5. what that divergence was: the trail stop of section 4's TrailUlp
+//      scenario was a level one ULP off its ladder point, closed by lane E16.
 //   6. the grid's trigger mode on a sub-tick cursor print (B1): fills since L8b.
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
@@ -447,10 +452,14 @@ std::vector<Bar> feed(Shape shape) {
         break;
     case Shape::TrailUlp:
         // On-grid feed (the corpus shape). Activation 1500.05 (5 ticks),
-        // offset 15 ticks: the best 1500.07 puts the stop at
+        // offset 15 ticks: the best 1500.07 put the stop at
         // 1500.07 - 15 * 0.01 = 1499.9199999999998, one ULP UNDER the ladder
-        // point 1499.92, so a low printing exactly 1499.92 does not reach it
-        // on the raw path (BASE, TradingView) and the exit waits for bar 4.
+        // point 1499.92, so a low printing exactly 1499.92 did not reach it on
+        // the raw path and the exit waited for bar 4. R5 lane E16: that ULP
+        // was the LEVEL, not the rule -- a stop a whole number of ticks from a
+        // best on the ladder IS the ladder point -- and TradingView books the
+        // exit on this bar (lane E14's NYSE:F tape, 11.44 - 5 ticks against a
+        // low of 11.39). The stop is now 1499.92 and bar 3 reaches it.
         push(1500.00, 1500.00, 1500.00, 1500.00);   // 0: entry placed
         push(1500.00, 1500.03, 1499.98, 1500.02);   // 1: L fills @1500.00, trail placed
         push(1500.02, 1500.07, 1500.01, 1500.05);   // 2: arms; best 1500.07
@@ -532,8 +541,16 @@ constexpr Row kTrailActivation_rows[] = {
 };
 constexpr double kTrailActivation_position_units = 0;
 
+// expectation corrected: exit_time 1700000240000 (bar 4) -> 1700000180000
+// (bar 3), because R5 lane E16 rules the stop 15 ticks under an on-ladder best
+// to BE the ladder point 1499.92 rather than the subtraction's ULP-off
+// neighbour, so bar 3's low of exactly 1499.92 reaches it -- which is the bar
+// TradingView books (lane E14's tape, the same defect at 11.44 / 5 ticks).
+// Re-harvested with -DPINEFORGE_R7_HARVEST on this tree; the other four
+// scenarios came back byte-identical, and the booked price and P&L of this one
+// did not move either.
 constexpr Row kTrailUlp_rows[] = {
-    {1700000060000LL, 1700000240000LL, 1500, 1499.9200000000001, 1, -0.07999999999992724, 1},
+    {1700000060000LL, 1700000180000LL, 1500, 1499.9200000000001, 1, -0.07999999999992724, 1},
 };
 constexpr double kTrailUlp_position_units = 0;
 // R7_PINNED_DATA_END
@@ -563,9 +580,11 @@ constexpr Expected kScenarios[] = {
     {"trail-activation", Shape::TrailActivation, kTrailActivation_rows,
      std::size(kTrailActivation_rows), kTrailActivation_position_units,
      kT + 2 * 60000, 9.4100000000000001},
+    // expectation corrected: exit bar kT + 4 * 60000 -> kT + 3 * 60000, with
+    // the same reason and the same booked price (R5 lane E16).
     {"trail-ulp", Shape::TrailUlp, kTrailUlp_rows,
      std::size(kTrailUlp_rows), kTrailUlp_position_units,
-     kT + 4 * 60000, 1499.9200000000001},
+     kT + 3 * 60000, 1499.9200000000001},
 };
 
 void compare(const Expected& pinned) {
@@ -591,24 +610,47 @@ void compare(const Expected& pinned) {
     CHECK(same_bits(got.position_units, pinned.position_units));
 }
 
-// --- 5. the measured divergence -------------------------------------------
+// --- 5. the divergence that was a mis-spelled level -----------------------
+// R5 lane E16. This section measured the grid firing TrailUlp's stop one bar
+// before the raw path did, and read that as B2: TradingView keeps a trail stop
+// on the raw path, the grid quantizes every kind. Lane E14's NYSE:F tape says
+// otherwise — TradingView books the exit on the bar whose low IS the stop's
+// ladder point — and the difference was never the path: `best - ticks * tick`
+// simply did not name the ladder point it stands for. With the run's declared
+// tick handed to the same geometry, the raw path reaches the stop on the same
+// bar the grid does, and the two readings agree here.
 void grid_fires_the_trail_stop_one_tick_early() {
     scenario = "trail-ulp kernel twin";
     // TrailUlp, bar 3, the H -> L leg: best 1500.07, offset TrailTicks{15}
     // resolved as 15 * 0.01 (native_order.cpp:1387), a long's sell trail.
     const double best = 1500.07;
     const double offset = 15.0 * 0.01;
+    double raw = 0.0;
+    CHECK(nm::checked_trail_stop(best, offset, /*buy=*/false, &raw));
+    // With no ladder named, the subtraction is still the level, one ULP under
+    // the point it stands for: that is the defect, stated.
+    CHECK(raw < 1499.92);
+    CHECK(same_bits(std::nextafter(1499.92, -kInf), raw));
+    // expectation corrected: the ladder point is unreachable on the raw path
+    // -> the run's own tick names it, because a stop a whole number of ticks
+    // from a best on the ladder IS that ladder point (lane E16).
     double stop = 0.0;
-    CHECK(nm::checked_trail_stop(best, offset, /*buy=*/false, &stop));
-    CHECK(stop < 1499.92);
-    CHECK(same_bits(std::nextafter(1499.92, -kInf), stop));
+    CHECK(nm::checked_trail_stop(best, offset, /*buy=*/false, &stop, /*ladder_tick=*/0.01));
+    CHECK(same_bits(stop, 1499.92));
     const nm::GeometricHit start{0.0, 1500.06, false};
-    // Raw path (the adapter's None): the 1499.92 low does not reach a stop one
-    // ULP under it — the pinned BASE row above exits on bar 4.
+    // The adapter's None path, which is what the pinned row above runs: the
+    // 1499.92 low reaches the stop on bar 3.
+    const auto reached = nm::trail_stop_hit(1500.06, 1499.92, start, best, offset, false,
+                                            {}, /*ladder_tick=*/0.01);
+    CHECK(reached.has_value());
+    if (reached) CHECK(same_bits(reached->price, stop));
+    // Without the ladder the same segment still holds through the touch.
     CHECK(!nm::trail_stop_hit(1500.06, 1499.92, start, best, offset, false).has_value());
-    // The grid absorbs the ULP by its nanotick guard and fires on bar 3.
+    // The grid reached it all along, through its nanotick guard, and now books
+    // the same level on the same bar.
     const nm::GridThreshold half{0.01, true};
-    const auto early = nm::trail_stop_hit(1500.06, 1499.92, start, best, offset, false, half);
+    const auto early = nm::trail_stop_hit(1500.06, 1499.92, start, best, offset, false, half,
+                                          /*ladder_tick=*/0.01);
     CHECK(early.has_value());
     if (early) CHECK(same_bits(early->price, stop));
     // The same grid AGREES with the adapter on every resting stop / limit of
@@ -617,8 +659,9 @@ void grid_fires_the_trail_stop_one_tick_early() {
     CHECK(kernel_reaches(14.0351, 14.04, 0.01, false));    // sub-tick-buy-stop fills
     CHECK(kernel_reaches(10.175, 10.18, 0.01, false));     // sub-tick-sell-limit fills
     CHECK(kernel_reaches(9.415, 9.41, 0.01, true));        // trail activation reached
-    // and disagrees with the raw compare TradingView keeps for its trail stop:
-    // one grid, two TradingView rules — the per-kind mask is not generic.
+    // What is left of B2 here is the per-kind rule of section 4, not this row:
+    // the trail stop's ULP was a level defect on both paths and is closed for
+    // both. The remaining grid-vs-adapter differences stay what they were.
 }
 
 // --- 6. the trigger mode on a sub-tick cursor print (B1, ruled in L8b) -----

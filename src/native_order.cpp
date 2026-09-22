@@ -1151,15 +1151,17 @@ std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan
 }
 
 bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
-                                        double* stop) const noexcept {
+                                        double* stop, double ladder_tick) const noexcept {
     if (!valid_trail_offset(offset) || !std::isfinite(best)) return false;
-    const double level = is_buy ? best + offset : best - offset;
-    if (!std::isfinite(level)) return false;
-    // A zero offset rides the best, so its level IS the best. Every positive
-    // offset must still land strictly beyond it.
-    if (offset != 0.0) {
-        if (is_buy && !(level > best)) return false;
-        if (!is_buy && !(level < best)) return false;
+    // One definition of a trailing level, shared with the matcher: finite, a
+    // zero offset riding the best, every positive offset landing strictly
+    // beyond it, and a whole tick count from a best on the run's ladder
+    // naming that ladder point (R5 lane E16). The core re-validates an
+    // activation the matcher reported, so a second spelling here would refuse
+    // a hit the matcher just booked.
+    double level = 0.0;
+    if (!native_matching::checked_trail_stop(best, offset, is_buy, &level, ladder_tick)) {
+        return false;
     }
     if (stop) *stop = level;
     return true;
@@ -1895,6 +1897,10 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
                 best = active->best_at_trigger;
             }
             const auto* trail = std::get_if<Trail>(&staged.trigger);
+            // Representability only, on both sides, and a command carries no
+            // activation grid: the ladder spelling of a level never changes
+            // this verdict, because a ladder point a whole tick from the best
+            // is finite and strictly past it exactly when the subtraction is.
             if (best && (!trail || !trail_level_ok(*best, trail->offset, true, nullptr)
                          || !trail_level_ok(*best, trail->offset, false, nullptr))) {
                 reason = RequestRejectReason::InvalidTrigger;
@@ -2333,6 +2339,10 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     }
     const bool is_buy = working_is_buy(updated, cohort_side);
     const native_matching::GridThreshold grid = matcher_grid(activation_grid);
+    // The run's own tick ladder, which is a separate fact from whether prints
+    // are tested on it: a trailing level spelled a whole number of ticks away
+    // names a ladder point under either mode (R5 lane E16).
+    const double ladder_tick = activation_grid.ladder_tick;
     MutationPlan plan = begin_plan();
 
     auto emit_activated = [&](ActivationKind kind, TriggerState after, const MatchCursor& cursor,
@@ -2367,7 +2377,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                                     target};
         }
         const auto* trail = std::get_if<Trail>(&updated.request().trigger);
-        if (!trail || !trail_level_ok(begin->reached_price, trail->offset, is_buy, nullptr)) {
+        if (!trail || !trail_level_ok(begin->reached_price, trail->offset, is_buy, nullptr,
+                                      ladder_tick)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
@@ -2396,7 +2407,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                 native_matching::grid_best_print(*trail->best_seed, is_buy, grid);
             best = is_buy ? std::min(best, seed) : std::max(best, seed);
         }
-        if (best != begin->reached_price && !trail_level_ok(best, trail->offset, is_buy, nullptr)) {
+        if (best != begin->reached_price
+            && !trail_level_ok(best, trail->offset, is_buy, nullptr, ladder_tick)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
@@ -2417,7 +2429,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                                         : std::max(track->best, print);
         if (next_best == track->best) return NoChange{NoChangeReason::NoTransition};
         const auto* trail = std::get_if<Trail>(&updated.request().trigger);
-        if (!trail || !trail_level_ok(next_best, trail->offset, is_buy, nullptr)) {
+        if (!trail || !trail_level_ok(next_best, trail->offset, is_buy, nullptr,
+                                      ladder_tick)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
@@ -2473,7 +2486,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     }
     const auto* trail = std::get_if<Trail>(&updated.request().trigger);
     double level = 0.0;
-    if (!trail || !trail_level_ok(track->best, trail->offset, is_buy, &level)
+    if (!trail || !trail_level_ok(track->best, trail->offset, is_buy, &level, ladder_tick)
         || !stop_price_reached(is_buy, level, trail_hit.reached_price, grid)) {
         return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
     }

@@ -1410,9 +1410,19 @@ using TriggerTransition = std::variant<BeginTrailTracking, ObserveTrailExtremum,
 /// price, and keeps a trail's running best on the ladder. A default-constructed
 /// value (no ladder) is exactly the raw compare and the raw print every
 /// activation used before. Host-free: values only.
+///
+/// ladder_tick is a different question, appended last so every existing
+/// aggregate initializer keeps its meaning: the run's DECLARED price tick
+/// (NativeRunSpec::price_tick), whatever the quantization mode. Nothing is
+/// tested or rounded on it; it is the ladder a level spelled in ticks names,
+/// so a trailing stop a whole number of ticks from a best on that ladder is
+/// the ladder point it names rather than the subtraction's ULP-off neighbour
+/// (native_matching::ladder_trail_stop, R5 lane E16). Zero leaves the raw
+/// arithmetic, which is what a run with no declared tick has.
 struct ActivationGrid {
     double price_tick = 0.0;  // finite and positive when a ladder is in force
     bool half_up = true;      // nearest tick, ties away from zero; else directional
+    double ladder_tick = 0.0; // the run's own price tick, quantized or not
 };
 
 struct ExecutionProposal {
@@ -1745,7 +1755,12 @@ private:
                                  GroupEffect effect, uint64_t* outcome) const;
     bool authenticate_receipt_outcome(const CommandEvent& event, const EventId& cause,
                                       const RequestHandle& recipient, GroupEffect effect) const;
-    bool trail_level_ok(double best, double offset, bool is_buy, double* stop) const noexcept;
+    /// The trailing level for a best and an offset, through the one geometry the
+    /// matcher uses (native_matching::checked_trail_stop): finite, and strictly
+    /// past the best for a positive offset. `ladder_tick` is the run's declared
+    /// price tick (ActivationGrid::ladder_tick); zero keeps the raw subtraction.
+    bool trail_level_ok(double best, double offset, bool is_buy, double* stop,
+                        double ladder_tick = 0.0) const noexcept;
     const RequestDefinition* definition_for(const RequestHandle& handle) const noexcept;
     std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
     std::size_t cohort_index(CohortHandle cohort) const noexcept;

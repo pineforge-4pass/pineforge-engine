@@ -267,9 +267,13 @@ def check_texts(files):
     # R5 L8b: the activation grid is a host-free value the consumer hands to
     # prepare_trigger; a default-constructed one (no ladder) is the raw rule,
     # so the members keep their inactive defaults and the parameter its default.
+    # R5 E16 appended ladder_tick last, inactive at 0.0 like the other two: the
+    # run's declared price tick, which names a tick-spelled trailing level's
+    # ladder point without quantizing anything onto it.
     activation_grid = re.sub(r'\s+', '', body(order, r'struct\s+ActivationGrid\s*\{', 'activation grid'))
-    if activation_grid != 'doubleprice_tick=0.0;boolhalf_up=true;':
-        raise ValueError('ActivationGrid must keep {price_tick = 0.0, half_up = true}')
+    if activation_grid != 'doubleprice_tick=0.0;boolhalf_up=true;doubleladder_tick=0.0;':
+        raise ValueError(
+            'ActivationGrid must keep {price_tick = 0.0, half_up = true, ladder_tick = 0.0}')
     if len(re.findall(r'\bconst\s+ActivationGrid\s*&\s*grid\s*=\s*\{\s*\}\s*\)', order)) != 1:
         raise ValueError('prepare_trigger must take a defaulted ActivationGrid last')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),

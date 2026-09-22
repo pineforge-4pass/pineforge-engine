@@ -106,6 +106,10 @@ native_order::ActivationGrid activation_grid(const NativeRunSpec& spec) noexcept
     native_order::ActivationGrid grid;
     grid.price_tick = threshold.tick;
     grid.half_up = threshold.half_up;
+    // The declared ladder is a separate fact from the quantization mode: a
+    // trailing stop spelled a whole number of ticks from a best on it names
+    // that ladder point under every mode (R5 lane E16).
+    grid.ladder_tick = spec.price_tick;
     return grid;
 }
 
@@ -1311,6 +1315,11 @@ bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
         return false;
     }
     return true;
+}
+
+double NativeExecutionConsumer::ladder_tick() const {
+    const auto* spec = spec_ptr();
+    return spec ? spec->price_tick : 0.0;
 }
 
 const NativeRunSpec* NativeExecutionConsumer::spec_ptr() const {
@@ -3961,7 +3970,7 @@ NativeExecutionTermsFacts NativeExecutionConsumer::build_terms_facts(
         const auto* trail = std::get_if<native_order::Trail>(&trigger);
         double stop = 0.0;
         if (!trail || !native_matching::checked_trail_stop(
-                active->best_at_trigger, trail->offset, out.is_buy, &stop)) {
+                active->best_at_trigger, trail->offset, out.is_buy, &stop, ladder_tick())) {
             throw std::logic_error("native active trail has no representable trigger");
         }
         out.trigger_level = stop;
@@ -4868,13 +4877,14 @@ void NativeExecutionConsumer::match_path(
             const auto* trail = std::get_if<native_order::Trail>(&trigger);
             double stop = 0.0;
             if (trail && native_matching::checked_trail_stop(
-                    tracking->best, trail->offset, buy, &stop)) return stop;
+                    tracking->best, trail->offset, buy, &stop, ladder_tick())) return stop;
         }
         if (const auto* active = std::get_if<native_order::TrailActive>(&state)) {
             const auto* trail = std::get_if<native_order::Trail>(&trigger);
             double stop = 0.0;
             if (trail && native_matching::checked_trail_stop(
-                    active->best_at_trigger, trail->offset, buy, &stop)) return stop;
+                    active->best_at_trigger, trail->offset, buy, &stop,
+                    ladder_tick())) return stop;
         }
         (void)kind;
         return std::nullopt;
@@ -5100,14 +5110,16 @@ void NativeExecutionConsumer::match_path(
                     const auto* trail = std::get_if<native_order::Trail>(&trigger);
                     if (!trail) continue;
                     double stop = 0.0;
-                    if (!native_matching::checked_trail_stop(track->best, trail->offset, buy, &stop)) {
+                    if (!native_matching::checked_trail_stop(track->best, trail->offset, buy,
+                                                            &stop, ladder_tick())) {
                         fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                                                    NativeFailureOperation::Settlement, P});
                         render(engine, "native trailing offset is not representable");
                         return;
                     }
                     hit = native_matching::trail_stop_hit(
-                        from_price, to_price, start, track->best, trail->offset, buy, grid);
+                        from_price, to_price, start, track->best, trail->offset, buy, grid,
+                        ladder_tick());
                     kind = Kind::ActivateTrail;
                 } else if (std::holds_alternative<native_order::LimitReady>(state)
                            || std::holds_alternative<native_order::StopLimitLive>(state)) {
@@ -5433,7 +5445,7 @@ std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
     const auto& trail = std::get<native_order::Trail>(live->request().trigger);
     if (!native_matching::checked_trail_stop(
             state.best_price, trail.offset, request_is_buy(engine, *live),
-            &state.current_level)) {
+            &state.current_level, ladder_tick())) {
         return std::nullopt;
     }
     for (auto it = requests_.history().rbegin(); it != requests_.history().rend(); ++it) {

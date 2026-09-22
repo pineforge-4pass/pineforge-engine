@@ -53,6 +53,13 @@
  * TradingView exits all eleven on the next bar at activation -/+ 5 ticks, so
  * the running best starts at the level the position already reached — which
  * the trailing leg now names in the generic native_order::Trail::best_seed.
+ *
+ * One of those eleven then needed a second lane: the seventh long's stop is
+ * 11.44 - 5 ticks, a level the kernel spelled one binary64 ULP under the
+ * ladder point 11.39 that count names, so the bar's 11.39 low missed it and
+ * the trade ran to the timeout. R5 follow-up lane E16 rules that level to BE
+ * the ladder point (native_matching::ladder_trail_stop, kernel-only witness
+ * tests/test_native_trail_stop_ladder.cpp), and all eleven match.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -132,16 +139,21 @@ constexpr double kFordShortCellPoints[] = {2.0};
 constexpr double kFordLongShallowPoints[] = {4.0, 4.0, 4.0, 2.0, 1.0, 3.0, 1.0};
 constexpr double kFordShortShallowPoints[] = {1.0, 4.0, 5.0, 1.0};
 
-// Entry 5 of the long shallow tape (2025-09-10 19:00Z) is the one recorded
-// divergence in this file, and it is NOT this question: its activation is
+// Entry 5 of the long shallow tape (2025-09-10 19:00Z) was the one recorded
+// divergence in this file, and it was NOT this question: its activation is
 // 11.44 and its stop 11.44 - 5 ticks, whose binary64 value
-// 11.389999999999998792 lies one ULP UNDER the bar's low 11.390000000000000568.
-// The kernel's trail stop is best - ticks * price_tick, raw by ruling (lane
-// E5), so the low does not reach it and the trade runs to the timeout.
-// TradingView books it. That is the tick-product residual lane E5 recorded
-// for the half-up spelling, on the trail stop instead of the arm; it needs
-// its own lane and its own tape.
-constexpr unsigned kLongShallowUlpResidual = 1u << 4;
+// 11.389999999999998792 lies one ULP UNDER the bar's low 11.390000000000000568,
+// so the kernel's `best - ticks * price_tick` did not reach it and the trade
+// ran to the timeout while TradingView booked the exit.
+//
+// expectation corrected: entry 5 of e14-f-long-shallow-next asserts the row
+// DIFFERS -> asserts it matches (6/7 -> 7/7), because R5 lane E16 rules a
+// trail stop a whole number of ticks from a best on the run's ladder to BE
+// the ladder point it names (native_matching::ladder_trail_stop): the level
+// is 11.390000000000000568, the low reaches it, and the engine books
+// TradingView's bar at TradingView's price. No probe carries a recorded
+// divergence now; the mask stays as the protocol for the next tape that
+// needs one.
 
 const Probe kProbes[] = {
     {"e5-eth-long-oneshot-p004", true, 0.01, 1.0, 16, nullptr, 0.0, 0.004,
@@ -157,7 +169,7 @@ const Probe kProbes[] = {
     {"e9-f-short-cell-oneshot", false, 0.01, 100.0, 20, kFordShortCellPoints, 0.0, kNaN,
      &kFordShortCell[0][0], 1, 23, 0u, true},
     {"e14-f-long-shallow-next", true, 0.01, 100.0, 25, kFordLongShallowPoints, 5.0, kNaN,
-     &kFordLongShallow[0][0], 7, 28, kLongShallowUlpResidual, false},
+     &kFordLongShallow[0][0], 7, 28, 0u, false},
     {"e14-f-short-shallow-next", false, 0.01, 100.0, 25, kFordShortShallowPoints, 5.0, kNaN,
      &kFordShortShallow[0][0], 4, 28, 0u, false},
 };

@@ -96,6 +96,25 @@ inline double grid_index_down(double price, double tick) noexcept {
     return std::floor(price / tick + kGridBoundaryTicks);
 }
 
+// A ladder point, spelled so no binary64 ULP hides it from the side it is
+// reached from. A point has two spellings the exactness rule above already
+// reads as one index -- k * tick, and k / n for a decimal tick 1 / n, which
+// is what a price literal parses to -- and they can differ by one ULP. A
+// level the kernel puts ON the ladder names the outer of the two on the
+// reachable side (the higher for a `price <= level` region, the lower for a
+// `price >= level` one), so a print that IS the point lies inside the region
+// under either spelling.
+inline double grid_ladder_price(double index, double tick, bool le) noexcept {
+    const double product = index * tick;
+    if (!grid_active(tick) || !std::isfinite(product)) return product;
+    const double inverse = 1.0 / tick;
+    const double n = std::round(inverse);
+    if (!(n > 0.0) || std::abs(inverse - n) > 1e-6 * n) return product;
+    const double quotient = index / n;
+    if (!std::isfinite(quotient)) return product;
+    return le ? std::max(product, quotient) : std::min(product, quotient);
+}
+
 // Nearest tick, ties away from zero. Spelled as the product on purpose: the
 // sizing rule SizePrice::SignalOnTick pins this exact form.
 inline double grid_round_half_up(double price, double tick) noexcept {
@@ -245,6 +264,36 @@ inline double protect_limit(double slipped, double limit, bool buy) noexcept {
     return buy ? std::min(slipped, limit) : std::max(slipped, limit);
 }
 
+// A trailing stop that stands a whole number of ticks from a best that is
+// itself a ladder point IS the ladder point that many ticks away (R5 lane
+// E16). The subtraction cannot name it: 11.44 - 5 * 0.01 is
+// 11.389999999999998792, one binary64 ULP under 11.390000000000000568, so a
+// print that IS 11.39 never reaches a stop the run put five ticks under
+// 11.44. Both ends are decimal numbers the host measured on its own ladder,
+// and the ladder index is the only exact arithmetic between them.
+//
+// It is the LEVEL that moves, not the comparison, and only where the ladder
+// names it: a best inside a tick cell, an offset that is not a whole number
+// of ticks, and a run that declares no price tick are not ladder distances
+// and keep the raw subtraction. Nor is this a quantization of the stop --
+// nothing is rounded ONTO the ladder, a level already on it is merely spelled
+// without the ULP (design native-feature-parity.md row B2 keeps the trail
+// stop and the running best on the raw path). Returns false when the ladder
+// does not name the level, leaving the caller's raw arithmetic in force.
+inline bool ladder_trail_stop(double best, double offset, bool buy, double tick,
+                              double* stop_out) noexcept {
+    if (!grid_active(tick)) return false;
+    const double best_index = grid_exact_index(best, tick);
+    if (std::isnan(best_index)) return false;
+    const double offset_index = grid_exact_index(offset, tick);
+    if (std::isnan(offset_index) || !(offset_index >= 1.0)) return false;
+    const double stop = grid_ladder_price(
+        buy ? best_index + offset_index : best_index - offset_index, tick, !buy);
+    if (!std::isfinite(stop)) return false;
+    if (stop_out) *stop_out = stop;
+    return true;
+}
+
 // Sell trail: stop = best - offset, must sit strictly below best.
 // Buy trail: stop = best + offset, must sit strictly above best.
 // A zero offset is the "ride the best" spelling: the stop IS the best and the
@@ -252,12 +301,19 @@ inline double protect_limit(double slipped, double limit, bool buy) noexcept {
 // strictly past it (trail_zero_stop_hit). Returns false on a nonfinite or
 // negative offset or an absorbed/overflowed level. A finite nonpositive stop
 // is still reported; callers do not clamp it.
-inline bool checked_trail_stop(double best, double offset, bool buy, double* stop_out) noexcept {
+// `ladder_tick` is the run's own declared price tick (NativeRunSpec::price_tick),
+// whatever the quantization mode: a stop it names a whole number of ticks away
+// from a best on the ladder is that ladder point (ladder_trail_stop). Zero --
+// the default every caller without a ladder keeps -- is the raw subtraction.
+inline bool checked_trail_stop(double best, double offset, bool buy, double* stop_out,
+                               double ladder_tick = 0.0) noexcept {
     if (stop_out) *stop_out = std::numeric_limits<double>::quiet_NaN();
     if (!std::isfinite(best) || !std::isfinite(offset) || offset < 0.0) return false;
-    const double stop = buy ? best + offset : best - offset;
+    double stop = buy ? best + offset : best - offset;
     if (!std::isfinite(stop)) return false;
     if (offset != 0.0) {
+        double ladder = 0.0;
+        if (ladder_trail_stop(best, offset, buy, ladder_tick, &ladder)) stop = ladder;
         if (buy && !(stop > best)) return false;
         if (!buy && !(stop < best)) return false;
     }
@@ -320,10 +376,10 @@ inline std::optional<GeometricHit> trail_zero_stop_hit(
 // motion cannot hit the trailing stop on one linear segment.
 inline std::optional<GeometricHit> trail_stop_hit(
         double from, double to, const GeometricHit& start, double best, double offset, bool buy,
-        const GridThreshold& grid = {}) noexcept {
+        const GridThreshold& grid = {}, double ladder_tick = 0.0) noexcept {
     const double t_start = start.t;
     double stop = 0.0;
-    if (!checked_trail_stop(best, offset, buy, &stop)) return std::nullopt;
+    if (!checked_trail_stop(best, offset, buy, &stop, ladder_tick)) return std::nullopt;
     if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(t_start)
         || t_start < 0.0 || t_start > 1.0) {
         return std::nullopt;

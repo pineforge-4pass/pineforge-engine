@@ -372,6 +372,9 @@ private:
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
     void render(BacktestEngine& engine, const char* text) const;
     const NativeRunSpec* spec_ptr() const;
+    // The run's declared price tick: the ladder a trailing stop spelled a
+    // whole number of ticks away names (R5 lane E16). Zero with no spec.
+    double ladder_tick() const;
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
     bool has_undetected_timeframe() const noexcept;

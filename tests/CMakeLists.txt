@@ -151,6 +151,7 @@ set(TEST_SOURCES
     test_native_trail_state_l5k
     test_native_trail_best_seed
     test_native_continuation_portable
+    test_native_trail_stop_ladder
     test_native_zero_price_tick_l5o
     test_native_price_grid
     test_native_price_grid_twin
