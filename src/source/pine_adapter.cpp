@@ -10869,6 +10869,20 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         return result;
     }
+    // A typed quantity (qty_type cash / percent_of_equity) names its own money.
+    // The source chooses that money and keeps its lot floor; the conversion
+    // cash / (fill price * point value * fx) and a percentage's fee reserve
+    // are the kernel's (native_sized_units), as for a default quantity.
+    const auto typed_units = [&](double cash, bool percent) {
+        native_order::Sized sized;
+        sized.basis = native_order::CashValue{cash};
+        sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+        sized.reserve_percent_fee = percent
+            && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            && config_.commission_value > 0.0;
+        return require_host().native_sized_units(sized, result.resolved_price, 0.0,
+                                                 facts.active_fx).value_or(0.0);
+    };
     if (source.family == PineOrderFamily::Entry && source.terms_priced_reverse) {
         const bool opposite_now = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
@@ -10880,11 +10894,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         double own_units = source.requested_qty;
         if (source.qty_type == static_cast<int>(QtyType::CASH)) {
-            const double denominator = result.resolved_price * staged_.syminfo.pointvalue
-                * facts.active_fx;
-            own_units = finite_positive(denominator)
-                ? floor_quantity_grid(source.requested_qty / denominator,
-                                      staged_.quantity_grid) : 0.0;
+            own_units = floor_quantity_grid(typed_units(source.requested_qty, false),
+                                            staged_.quantity_grid);
         } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
             // ab9714be pine_orders.cpp:96-191: a typed percentage reversal
             // sizes from the hypothetical Flatten's realized balance.  The
@@ -10895,15 +10906,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             const auto projection = pine_host->adapter_project_flatten(
                 result.resolved_price, source.source_id, source.comment,
                 facts.target.incarnation);
-            double cash = projection.realized_balance * source.requested_qty / 100.0;
-            if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-                && config_.commission_value > 0.0) {
-                cash /= 1.0 + config_.commission_value / 100.0;
-            }
-            const double denominator = result.resolved_price * staged_.syminfo.pointvalue
-                * facts.active_fx;
-            own_units = std::isfinite(cash) && finite_positive(denominator)
-                ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
+            own_units = floor_quantity_grid(
+                typed_units(projection.realized_balance * source.requested_qty / 100.0, true),
+                staged_.quantity_grid);
         }
         result.units = own_units;
         const auto created_side = static_cast<PositionSide>(
@@ -10935,20 +10940,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     }
     if (source.family == PineOrderFamily::Entry && finite_positive(source.requested_qty)) {
         if (source.qty_type == static_cast<int>(QtyType::CASH)) {
-            result.units = finite_positive(result.resolved_price)
-                ? source.requested_qty / (result.resolved_price * staged_.syminfo.pointvalue
-                                          * facts.active_fx) : 0.0;
+            result.units = typed_units(source.requested_qty, false);
         } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            const double equity = percent_commission_live_equity(result.resolved_price);
-            const double denominator = result.resolved_price * staged_.syminfo.pointvalue
-                * facts.active_fx;
-            double cash = equity * source.requested_qty / 100.0;
-            if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-                && config_.commission_value > 0.0) {
-                cash /= 1.0 + config_.commission_value / 100.0;
-            }
-            result.units = finite_positive(equity) && finite_positive(denominator)
-                ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
+            result.units = floor_quantity_grid(
+                typed_units(percent_commission_live_equity(result.resolved_price)
+                                * source.requested_qty / 100.0, true),
+                staged_.quantity_grid);
         } else {
             result.units = source.requested_qty;
         }

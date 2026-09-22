@@ -967,6 +967,215 @@ void a_pure_stop_default_entry_keeps_its_own_sizing_branch() {
     CHECK(bits(pine.rows()[0].qty) != bits(100.0));
 }
 
+// ===========================================================================
+// 11. A typed per-entry quantity is the kernel's conversion too (R5 lane F7).
+// ===========================================================================
+//
+// strategy.entry(qty=, qty_type=strategy.cash / strategy.percent_of_equity)
+// names money of its own. The source still chooses that money -- the cash
+// itself, a percentage of TradingView's margin equity at the fill for a flat
+// opening, or of the hypothetical Flatten's realized balance for a reversal
+// (ab9714be pine_orders.cpp:96-191) -- and still applies its lot floor; the
+// conversion cash / (price * point value * fx) and the percentage fee reserve
+// are the kernel's (NativeStrategyHost::native_sized_units), exactly as for a
+// default quantity (case 8). Every booked quantity below was harvested from
+// the adapter at fd785928, the tree before this lane touched src/source/,
+// where the two resolve_terms branches still divided on their own.
+
+// Scripted typed entries. Bar 0 opens a FIXED `seed` long when `seed` > 0;
+// `bar`'s typed entry fills at the next open; `close_bar` flattens.
+class TypedProbe : public pineforge::source::PineStrategyHost {
+public:
+    explicit TypedProbe(const Account& account) {
+        initial_capital_ = account.capital;
+        syminfo_.pointvalue = account.point_value;
+        syminfo_mintick_ = account.mintick;
+        qty_step_ = account.qty_step;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = account.fee_percent;
+        slippage_ = account.slippage;
+        pyramiding_ = 0;
+        process_orders_on_close_ = false;
+        margin_call_enabled_ = false;
+    }
+    double seed = 0.0;
+    int bar = 2;
+    bool is_long = true;
+    double qty = kNaN;
+    QtyType qty_type = QtyType::CASH;
+    int close_bar = 4;
+    void on_source_bar(const Bar&) override {
+        if (bar_index_ == 0 && seed > 0.0) strategy_entry("Seed", true, kNaN, kNaN, seed);
+        if (bar_index_ == bar) {
+            strategy_entry(is_long ? "L" : "S", is_long, kNaN, kNaN, qty, "", "", 0,
+                           static_cast<int>(qty_type));
+        }
+        if (bar_index_ == close_bar) strategy_close_all();
+    }
+    const std::vector<Trade>& rows() const { return trades_; }
+};
+
+// The kernel's conversion of `cash` at `price`, raw (ExplicitUnits), on the
+// run spec the adapter projects for `account`.
+double kernel_quotient(const Account& account, double cash, double price, bool reserve_fee) {
+    CoreProbe core;
+    if (core.configure_native(core_spec(account, "f7-typed")).status
+        != NativeSetupStatus::Applied) {
+        return kNaN;
+    }
+    no::Sized sized;
+    sized.basis = no::CashValue{cash};
+    sized.grid_policy = no::ExecutionGridPolicy::ExplicitUnits;
+    sized.reserve_percent_fee = reserve_fee;
+    const auto units = core.native_sized_units(sized, price, account.capital, 1.0);
+    return units ? *units : kNaN;
+}
+
+std::string collapse_whitespace(const std::string& text) {
+    std::string out;
+    bool space = false;
+    for (const char c : text) {
+        if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+            space = true;
+            continue;
+        }
+        if (space && !out.empty()) out.push_back(' ');
+        space = false;
+        out.push_back(c);
+    }
+    return out;
+}
+
+void a_typed_quantity_is_the_kernel_quotient_under_the_source_floor() {
+    // (a) A typed CASH opening from flat divides the cash by the fill price;
+    //     this branch applies no lot floor of its own. (The placement
+    //     admission at pine_adapter.cpp entry() prices the typed quantity as
+    //     if it were units -- 1000 * 125 > 100000 drops a 1000-cash entry at
+    //     125 -- so both fills stay at or below 100: a separate finding.)
+    {
+        struct Row { const char* name; double close; double previous; };
+        const Row rows[] = {
+            {"on-grid fill", 100.0, 10.0},
+            {"off-grid fill", 99.99, 10.00100010001},
+        };
+        for (const Row& row : rows) {
+            Account account;
+            account.capital = 100000.0;
+            const auto bars = flat_bars(row.close, 6);
+            TypedProbe pine(account);
+            pine.qty = 1000.0;
+            pine.qty_type = QtyType::CASH;
+            pine.run(bars.data(), static_cast<int>(bars.size()));
+            REQUIRE(pine.trade_count() == 1);
+            // The fill books at the source's chart-tick fill price (99.99 books
+            // 99.990000000000009), which is the price the quantity divides by.
+            const double booked = pine.rows()[0].qty;
+            const double fill = pine.rows()[0].entry_price;
+            CHECK(bits(booked) == bits(row.previous));
+            CHECK(bits(kernel_quotient(account, 1000.0, fill, false)) == bits(booked));
+            std::printf("  [typed cash %-13s] fill=%.17g booked=%.17g kernel=%.17g\n", row.name,
+                        fill, booked, kernel_quotient(account, 1000.0, fill, false));
+        }
+    }
+    // (b) A typed PERCENT opening from flat: 50 % of the margin equity, the
+    //     0.1 % fee reserve, the source floor on a one-unit grid.
+    //     5000 / 1.001 / 100 = 49.95 -> 49.
+    {
+        Account account;
+        account.capital = 10000.0;
+        account.qty_step = 1.0;
+        account.fee_percent = 0.1;
+        const auto bars = flat_bars(100.0, 6);
+        TypedProbe pine(account);
+        pine.qty = 50.0;
+        pine.qty_type = QtyType::PERCENT_OF_EQUITY;
+        pine.run(bars.data(), static_cast<int>(bars.size()));
+        REQUIRE(pine.trade_count() == 1);
+        const double booked = pine.rows()[0].qty;
+        CHECK(bits(booked) == bits(49.0));
+        CHECK(bits(pine.rows()[0].entry_price) == bits(100.0));
+        const double quotient = kernel_quotient(account, 10000.0 * 50.0 / 100.0, 100.0, true);
+        CHECK(bits(quotient) == bits(5000.0 / (1.0 + 0.1 / 100.0) / 100.0));
+        CHECK(bits(floor_quantity_grid(quotient, account.qty_step)) == bits(booked));
+        std::printf("  [typed percent flat ] booked=%.17g kernel=%.17g\n", booked, quotient);
+    }
+    // (c) A typed CASH reversal: 10 long at 100 reversed by a 500-cash short
+    //     at 104. The closing row keeps the long's 10; the short opens
+    //     floor(500 / 104) = 4 on the one-unit grid.
+    {
+        Account account;
+        account.capital = 10000.0;
+        account.qty_step = 1.0;
+        std::vector<Bar> bars;
+        for (int i = 0; i < 3; ++i) bars.push_back(mk_bar(i, 100.0, 100.0, 100.0, 100.0));
+        for (int i = 3; i < 7; ++i) bars.push_back(mk_bar(i, 104.0, 104.0, 104.0, 104.0));
+        TypedProbe pine(account);
+        pine.seed = 10.0;
+        pine.is_long = false;
+        pine.qty = 500.0;
+        pine.qty_type = QtyType::CASH;
+        pine.close_bar = 5;
+        pine.run(bars.data(), static_cast<int>(bars.size()));
+        REQUIRE(pine.trade_count() == 2);
+        CHECK(bits(pine.rows()[0].qty) == bits(10.0));
+        const double booked = pine.rows()[1].qty;
+        CHECK(bits(booked) == bits(4.0));
+        CHECK(bits(pine.rows()[1].entry_price) == bits(104.0));
+        const double quotient = kernel_quotient(account, 500.0, 104.0, false);
+        CHECK(bits(floor_quantity_grid(quotient, account.qty_step)) == bits(booked));
+        std::printf("  [typed cash reversal] booked=%.17g kernel=%.17g\n", booked, quotient);
+    }
+    // (d) A typed PERCENT reversal sizes from the hypothetical Flatten's
+    //     realized balance, net of the 0.1 % reserve: 10 long at 100, reversed
+    //     at 110 by a 50 % short. Balance 10000 + 100 - 1.0 (entry fee)
+    //     - 1.1 (the flatten's fee) = 10097.9; 5048.95 / 1.001 / 110 = 45.85
+    //     -> 45 on the one-unit grid.
+    {
+        Account account;
+        account.capital = 10000.0;
+        account.qty_step = 1.0;
+        account.fee_percent = 0.1;
+        std::vector<Bar> bars;
+        for (int i = 0; i < 3; ++i) bars.push_back(mk_bar(i, 100.0, 100.0, 100.0, 100.0));
+        for (int i = 3; i < 7; ++i) bars.push_back(mk_bar(i, 110.0, 110.0, 110.0, 110.0));
+        TypedProbe pine(account);
+        pine.seed = 10.0;
+        pine.is_long = false;
+        pine.qty = 50.0;
+        pine.qty_type = QtyType::PERCENT_OF_EQUITY;
+        pine.close_bar = 5;
+        pine.run(bars.data(), static_cast<int>(bars.size()));
+        REQUIRE(pine.trade_count() == 2);
+        CHECK(bits(pine.rows()[0].qty) == bits(10.0));
+        const double booked = pine.rows()[1].qty;
+        CHECK(bits(booked) == bits(45.0));
+        CHECK(bits(pine.rows()[1].entry_price) == bits(110.0));
+        const double balance = 10000.0 + (110.0 - 100.0) * 10.0 - 1.0 - 1.1;
+        const double quotient = kernel_quotient(account, balance * 50.0 / 100.0, 110.0, true);
+        CHECK(bits(floor_quantity_grid(quotient, account.qty_step)) == bits(booked));
+        std::printf("  [typed percent rev  ] booked=%.17g kernel=%.17g\n", booked, quotient);
+    }
+#if defined(PINEFORGE_R2_ADAPTER_FILE)
+    // (e) The division and the reserve exist in the kernel alone: neither
+    //     typed resolve_terms branch restates cash / (fill price * point value
+    //     * fx) or the 1 + c / 100 divisor (the audit's M3 / A3-6 sites).
+    const std::string adapter = collapse_whitespace(read_file(PINEFORGE_R2_ADAPTER_FILE));
+    REQUIRE(!adapter.empty());
+    for (const char* restated : {
+             "1.0 + config_.commission_value / 100.0",
+             "resolved_price * staged_.syminfo.pointvalue * facts.active_fx"}) {
+        const bool found = adapter.find(restated) != std::string::npos;
+        if (found) std::printf("  adapter still restates `%s`\n", restated);
+        CHECK(!found);
+    }
+#else
+    std::printf("  PINEFORGE_R2_ADAPTER_FILE undefined\n");
+    CHECK(false);
+#endif
+}
+
 void test(const char* name, void (*fn)()) {
     const int before = failures;
     std::printf("-- %s\n", name);
@@ -990,6 +1199,8 @@ int main() {
          the_source_lot_floors_are_not_the_kernel_floor);
     test("pure-stop default entry keeps its own branch",
          a_pure_stop_default_entry_keeps_its_own_sizing_branch);
+    test("a typed quantity is the kernel quotient",
+         a_typed_quantity_is_the_kernel_quotient_under_the_source_floor);
     std::printf("R5 R2 adapter sizing re-lowering: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
