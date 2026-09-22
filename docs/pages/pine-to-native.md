@@ -813,8 +813,9 @@ them (`tests/test_pine_to_native_worked.cpp`), and runs them on sixteen
 `Applied` and no request is refused. The first close above the hourly close,
 101, buys `2500 / (101 × (1 + 0.1 / 100))` = 24.7277 units at the next open,
 101; the take-profit leg closes them at 111, forty ticks up, with `exit_id`
-`tp`, and one-cancels-all withdraws its two siblings; the row's commission is
-0.1 % of both notionals, 5.2423. The row computes every one of those numbers
+`tp`, and its two siblings are withdrawn with it — the history records them
+as `CancelReason::OwnerGone`, because the lots they close are gone; the row's
+commission is 0.1 % of both notionals, 5.2423. The row computes every one of those numbers
 from the Pine block at the top of this section, so a block that stops
 configuring, or stops charging what the Pine declares, fails it.
 

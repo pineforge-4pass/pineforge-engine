@@ -16,7 +16,9 @@
 //   * no request is refused, at submission or at a match;
 //   * the entry is Sized by cash with the fee reserved, so it buys
 //     default_qty_value / (price * (1 + commission_value / 100)) units;
-//   * the take-profit leg ("tp", +profit ticks) closes it, one-cancels-all;
+//   * the take-profit leg ("tp", +profit ticks) closes it, and its two
+//     siblings ("sl", "trail") are withdrawn with it: the lots they close are
+//     gone, so the kernel cancels them as CancelReason::OwnerGone;
 //   * the row's commission is commission_value percent of both notionals.
 //
 // The binary re-reads the page and refuses to run when the page changed
@@ -121,11 +123,16 @@ int main() {
     check(host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
           "the run completes");
 
-    int accepted = 0, rejected = 0;
+    int accepted = 0, rejected = 0, sibling_cancels = 0;
     for (const pineforge::NativeMarketEvent& row : host.native_events(0)) {
         if (!row.command) continue;
         namespace no = pineforge::native_order;
         if (std::holds_alternative<no::AcceptedEvent>(*row.command)) ++accepted;
+        if (const auto* c = std::get_if<no::CancelledEvent>(&*row.command)) {
+            const std::string& label = c->request().label;
+            if (c->reason == no::CancelReason::OwnerGone && (label == "sl" || label == "trail"))
+                ++sibling_cancels;
+        }
         if (const auto* r = std::get_if<no::RejectedEvent>(&*row.command)) {
             ++rejected;
             std::printf("  refused at submission: %s reason %d\n", r->request.label.c_str(),
@@ -141,9 +148,11 @@ int main() {
             std::printf("  replace refused: reason %d\n", static_cast<int>(r->reason));
         }
     }
-    std::printf("requests accepted=%d rejected=%d\n", accepted, rejected);
+    std::printf("requests accepted=%d rejected=%d owner-gone cancels of sl/trail=%d\n", accepted,
+                rejected, sibling_cancels);
     check(accepted >= 4, "the entry and its three legs are accepted");
     check(rejected == 0, "no request is refused");
+    check(sibling_cancels == 2, "the take-profit's two siblings are withdrawn (OwnerGone)");
 
     const double fee = PF_P2N_PINE_COMMISSION_PERCENT / 100.0;
     check(host.trade_count() >= 1, "the entry closes");
