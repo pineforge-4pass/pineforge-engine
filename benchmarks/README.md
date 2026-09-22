@@ -48,6 +48,8 @@ Speed was measured on a quiet host, re-checked before every timing batch; the de
 - **Tiers:** that table graded a different 100-strategy population with `compare.py`'s own copy of the rubric. The copy had drifted from the canonical rubric and no longer parsed the current tape format. `compare.py` now calls the canonical rubric directly, and PyneCore moved from 6.4.6 to 6.10.2 in between.
 - **Speed:** the ratio fell because the engine is slower per bar, not because the host changed. The 2026-06-11 engine, rebuilt on this host and timed in the same window as the current one, still runs close to its June timings (5–16 % over them in the quieter pass). On the three probes both populations share, the current engine is 10–18× slower with the magnifier on; see [the provenance](results/speed.md#provenance).
 
+Every number in this section traces to a committed file or a pinned commit. The raw timing files are in [`results/raw/`](results/raw/), and [`check_provenance.py`](check_provenance.py) derives each number from its source and fails on any number without one.
+
 ### Where the non-excellent rows come from
 
 **PineForge.** The one strong row is closed slot `181`. Every TradingView trade is matched, but PineForge also emits one extra trade: a long on the window's opening bars (count Δ 1 of 2,411).
@@ -131,6 +133,8 @@ PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are t
 
 Every engine run removes the slot's previous trade list first, so a failed run leaves an `_<engine>_error.log` and no trade list, never an earlier run's. A PineForge failure on any slot (a run error, or a `generated.cpp` without its built strategy library) stops `run_all.sh` with exit status 1 before any report is written. PyneCore and vectorbt failures are results: the reports grade those slots n/a with the error.
 
+The harness checks itself without a build or the assets: `python3 benchmarks/check_provenance.py` traces every headline number to its committed source, and `python3 -m unittest discover -s benchmarks/tests` runs the harness tests.
+
 ## What gets reproduced
 
 The harness writes these reports to [`results/`](results/):
@@ -143,6 +147,7 @@ The harness writes these reports to [`results/`](results/):
 | [`speed.md`](results/speed.md) | Per-strategy wall time and bars/s, the host load at every timing batch, and the provenance | all four |
 | [`selection.md`](results/selection.md), [`selection.json`](results/selection.json) | The population manifest: slots, strata, bins, input shas and the replacement | — |
 | [`pynesys-compile-log.md`](results/pynesys-compile-log.md) | Every PyneSys request of the refresh | PyneCore |
+| [`raw/`](results/raw/) | The raw timing files behind the speed figures, with a sha256 [`manifest.json`](results/raw/manifest.json); committed by hand, not regenerated | all four |
 
 Each public slot, `benchmarks/assets/strategies/<NNN-slug>/`, holds:
 
@@ -173,6 +178,9 @@ benchmarks/
 │   └── CMakeLists.txt               GBench fetch + build config
 ├── throughput/                      throughput reproduction package (magnifier-off hot loop, grid search)
 ├── results/                         refreshed reports (committed)
+│   └── raw/                         the timing files behind the published speed figures + manifest.json
+├── tests/                           the harness's own tests (python3 -m unittest discover -s benchmarks/tests)
+├── check_provenance.py              every headline number -> its committed source
 ├── select_population.py             the seeded population draw -> results/selection.{json,md}
 ├── compare.py                       trade-list grader (canonical rubric; every engine vs TV)
 ├── compare_indicators.py            per-bar indicator comparator
