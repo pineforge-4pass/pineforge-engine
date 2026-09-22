@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep three kinds of rot out of the published documentation.
+"""Keep seven kinds of rot out of the published documentation.
 
 Why a second script rather than a mode of ``check_doc_anchors.py``
 ------------------------------------------------------------------
@@ -12,8 +12,8 @@ Keeping them apart means the anchor gate can go binding on its own schedule
 and this one's offender list reads as a work list rather than as noise inside
 another report.
 
-The four rules
---------------
+The seven rules
+---------------
 1. ``lane L<n>`` in a published page (``docs/pages/*.md``, ``README.md``).
    A roadmap label is a promise about the future.  Fifteen of them in
    ``pine-to-native.md`` describe work that landed campaigns ago, so a reader
@@ -48,11 +48,50 @@ The four rules
    never made.  Only the span's *content* is masked, so the label of a real
    link (``[`docs/ci.md`](docs/ci.md)``) is still read as one.
 
+5. A cited ``tests/…``, ``examples/…`` or ``scripts/…`` path that does not
+   exist, anywhere the rules above look.  A migration table's "Runs in"
+   column and a reference page's "pinned by" clause are the reader's way to
+   the witness; a file that never existed sends them nowhere (four of them on
+   ``pine-to-native.md`` did).  A ``<placeholder>`` or ``*`` in a path is a
+   pattern and must match at least one file.  A path that is gone on purpose
+   may stay only where its sentence says so (``deleted``, ``retired``, ``was``
+   …) *and* its line carries the ``<!-- verified HEAD -->`` marker.
+
+6. A stated count the tree can derive, stated wrong.  Three families are read
+   out of their one source each, never hardcoded here:
+
+   * the ``PF_API`` declarations of ``include/pineforge/native_c_api.h`` (and,
+     beside them, of ``pineforge.h``, the runtime set
+     ``scripts/check_c_abi_runtime.py`` pins, and their sum);
+   * ``KERNEL_MIN_TESTS`` / ``RELEASE_MIN_TESTS`` in ``scripts/ci_verify.py``;
+   * the example manifest of ``scripts/check_native_include_independence.py``
+     (how many sources, how many of them C).
+
+   A sentence is read for the phrasings the pages use - ``34 further PF_API
+   functions``, ``32 strategy_native_* functions``, ``native_c_api.h — 32``,
+   ``KERNEL_MIN_TESTS … (193 rows)``, ``all fifteen sources``, ``thirteen C++
+   and two C``, ``the C one`` - and the number must be the derived one.  When
+   a source cannot be read, a sentence that states its count is an offender
+   too: the claim can no longer be checked.  The marker exempts a line that
+   records a count as history.
+
+7. A ``<!-- verified HEAD -->`` marker on a line that states a non-live epoch
+   as the tree's present.  The marker exempts rule 3 because a line may
+   discuss an epoch's *history*; it was also sitting on sentences such as
+   "its inline namespace is now ``engine_script_run_v4``" and "the current
+   baseline uses ``native_order_v5``", which hid them from rule 3.  The
+   clause around each non-live token (to the nearest sentence end, ``;`` or
+   table bar) is read: a present-tense framing (``is``, ``are``, ``now``,
+   ``uses``, ``current`` …) with no history framing (``was``, ``stood``,
+   ``frozen``, ``until``, ``advanced`` …), or a ``file:line`` citation right
+   after the token (which says the token lives in today's tree), keeps the
+   marker from exempting it.  A version *above* every live one is a forward
+   reference (``removed at lifecycle_v2``) and is judged by its framing only.
+
 Exit status
 -----------
-0 when no offender is found.  On HEAD this guard FAILS by design: lanes L14-B
-and L14-C are the ones that remove today's offenders, so ``ci_preflight`` runs
-it advisory until then (see ``--strict-docs`` there and ``docs/ci.md``).
+0 when no offender is found, 1 otherwise.  ``ci_preflight`` runs it as a
+binding stage.
 """
 from __future__ import annotations
 
@@ -88,6 +127,79 @@ LITERAL_DOMAIN_RE = re.compile(r'"pineforge-([a-z-]+)/v([0-9]+)')
 
 TREE_GLOBS = ('include/pineforge/**/*.hpp', 'include/pineforge/**/*.h',
               'src/**/*.cpp', 'src/**/*.hpp')
+
+# Rule 5.  A path starts at a token boundary, so `./build/examples/native/x`
+# (a build output) and `runner/examples/strategy.cpp` are not read as rooted.
+CITED_PATH_RE = re.compile(r'(?<![\w/.\-])((?:tests|examples|scripts)/[A-Za-z0-9_./*<>+\-]*[A-Za-z0-9_*/>])')
+# Words that say a path is gone on purpose (rule 5), or that a clause is about
+# the past (rule 7).
+HISTORY_RE = re.compile(
+    r'\b(?:was|were|used|stood|historical|history|frozen|immutable|previous(?:ly)?|'
+    r'former(?:ly)?|until|removed|deleted|retired|superseded|advanced|bumped|moved|'
+    r'old|older|earlier|originally|gone|no longer|predat\w*|pre-[a-z0-9]+)\b|→|->',
+    re.IGNORECASE)
+PRESENT_RE = re.compile(
+    r'\b(?:is|are|now|uses?|current(?:ly)?|today|remains?|stays?|holds?|carries)\b',
+    re.IGNORECASE)
+# A `file:line` right after a token (rule 7): the page says the token is there.
+TRAILING_ANCHOR_RE = re.compile(r'^[`"\s]*\(?`?[A-Za-z0-9_./+-]+\.(?:cpp|hpp|h|c|py|md):\d+')
+
+NUMBER_WORDS = {w: n for n, w in enumerate(
+    'zero one two three four five six seven eight nine ten eleven twelve thirteen '
+    'fourteen fifteen sixteen seventeen eighteen nineteen twenty'.split())}
+NUMBER_WORDS.update({'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+                     'seventy': 70, 'eighty': 80, 'ninety': 90})
+_N = r'(?P<n>\d+|' + '|'.join(sorted(NUMBER_WORDS, key=len, reverse=True)) + r')'
+_SENTENCE_BREAK = re.compile(r'\.\s|\n\s*\n|\|')
+
+#: Rule 6: (family, phrasing, context the sentence must also name or None).
+#: Matched against the sentence with `**` and backticks removed.
+COUNT_PHRASINGS = (
+    ('native-c-api', re.compile(r'\b' + _N + r'\s+(?:additive|further)\s+(?:PF_API\s+)?'
+                                r'(?:symbols|functions)\b', re.I), None),
+    ('native-c-api', re.compile(r'\b' + _N + r'\s+strategy_native_\*\s+(?:symbols|functions)\b',
+                                re.I), None),
+    ('native-c-api', re.compile(r'native_c_api\.h>?\s*(?:\([^)]*\))?\s*[—–]+\s*' + _N + r'\b',
+                                re.I), None),
+    ('pineforge-h', re.compile(r'pineforge\.h>?\s*[—–]+\s*' + _N + r'\b', re.I), None),
+    ('pineforge-h', re.compile(r'\b' + _N + r'\s+public\s+(?:PF_API\s+)?'
+                               r'(?:functions|declarations|symbols)\b', re.I), None),
+    ('runtime', re.compile(r'\b' + _N + r'\s+(?:codegen-facing\s+|compiled-strategy\s+)?'
+                           r'runtime\s+(?:PF_API\s+)?(?:symbols|implementations|exports)\b',
+                           re.I), None),
+    ('pf-api-total', re.compile(r'\b' + _N + r'\s+PF_API\s+declarations\s+across\s+two\s+'
+                                r'headers\b', re.I), None),
+    ('kernel-floor', re.compile(r'KERNEL_MIN_TESTS\b(?:[^.;|]|\.(?!\s)){0,80}?\b(?P<n>\d+)\s+rows\b'), None),
+    ('kernel-floor', re.compile(r'KERNEL_MIN_TESTS\s*(?:=|is|of)\s*(?P<n>\d+)\b'), None),
+    ('release-floor', re.compile(r'RELEASE_MIN_TESTS\b(?:[^.;|]|\.(?!\s)){0,80}?\b(?P<n>\d+)\s+rows\b'), None),
+    ('release-floor', re.compile(r'RELEASE_MIN_TESTS\s*(?:=|is|of)\s*(?P<n>\d+)\b'), None),
+    # The whole set, not a part of it: "three native examples added" and
+    # "thirteen more hosts" count a subset (PARTIAL_COUNT_RE below).
+    ('examples', re.compile(r'\b' + _N + r'\s+(?:native\s+|Pine-free\s+)?(?:example\s+)?'
+                            r'(?:examples|hosts|sources)\b(?!\s+(?:added|landed|joined))', re.I),
+     re.compile(r'examples/native|native examples?|example hosts|include.independence', re.I)),
+    ('examples-cpp', re.compile(r'\b' + _N + r'\s+C\+\+\s+and\s+\w+\s+C\b', re.I),
+     re.compile(r'examples/native|examples|hosts', re.I)),
+    ('examples-c', re.compile(r'\b\w+\s+C\+\+\s+and\s+' + _N + r'\s+C\b', re.I),
+     re.compile(r'examples/native|examples|hosts', re.I)),
+    ('examples-c', re.compile(r'\bthe\s+' + _N + r'\s+C\s+(?:ones|sources|examples|hosts)\b',
+                              re.I), None),
+    ('examples-c', re.compile(r'\bthe\s+C\s+(?P<n>one)\b', re.I),
+     re.compile(r'examples|sources|include.independence', re.I)),
+)
+# A count right after one of these words is a subset of the family, not the family.
+PARTIAL_COUNT_RE = re.compile(r'\b(?:new|more|another|further|extra|other)\s*$', re.I)
+COUNT_SOURCES = {
+    'native-c-api': 'include/pineforge/native_c_api.h',
+    'pineforge-h': 'include/pineforge/pineforge.h',
+    'runtime': 'scripts/check_c_abi_runtime.py',
+    'pf-api-total': 'include/pineforge/native_c_api.h + include/pineforge/pineforge.h',
+    'kernel-floor': 'scripts/ci_verify.py',
+    'release-floor': 'scripts/ci_verify.py',
+    'examples': 'scripts/check_native_include_independence.py',
+    'examples-cpp': 'scripts/check_native_include_independence.py',
+    'examples-c': 'scripts/check_native_include_independence.py',
+}
 
 
 class Offender:
@@ -178,6 +290,167 @@ def pages(root: Path, globs: tuple[str, ...]) -> list[Path]:
     return out
 
 
+def derived_counts(root: Path) -> dict[str, int | None]:
+    """Rule 6's numbers, each read out of its one source; None when unreadable."""
+    def read(rel: str) -> str | None:
+        path = root / rel
+        return path.read_text(errors='replace') if path.is_file() else None
+
+    counts: dict[str, int | None] = dict.fromkeys(COUNT_SOURCES)
+    native = read('include/pineforge/native_c_api.h')
+    public = read('include/pineforge/pineforge.h')
+    if native is not None:
+        counts['native-c-api'] = len(re.findall(r'^PF_API\b', native, re.MULTILINE))
+    if public is not None:
+        counts['pineforge-h'] = len(re.findall(r'^PF_API\b', public, re.MULTILINE))
+    if native is not None and public is not None:
+        counts['pf-api-total'] = counts['native-c-api'] + counts['pineforge-h']
+    runtime = read('scripts/check_c_abi_runtime.py')
+    if runtime is not None:
+        block = re.search(r'^EXPECTED_RUNTIME\s*=\s*frozenset\(\{(.*?)\}\)', runtime,
+                          re.MULTILINE | re.DOTALL)
+        if block:
+            counts['runtime'] = len(re.findall(r'"[A-Za-z_][A-Za-z0-9_]*"', block.group(1)))
+    verify = read('scripts/ci_verify.py')
+    if verify is not None:
+        for family, name in (('kernel-floor', 'KERNEL_MIN_TESTS'),
+                             ('release-floor', 'RELEASE_MIN_TESTS')):
+            value = re.search(r'^' + name + r'\s*=\s*(\d+)\s*$', verify, re.MULTILINE)
+            if value:
+                counts[family] = int(value.group(1))
+    manifest = read('scripts/check_native_include_independence.py')
+    if manifest is not None:
+        block = re.search(r'^NATIVE_EXAMPLES\s*=\s*\((.*?)^\)', manifest,
+                          re.MULTILINE | re.DOTALL)
+        if block:
+            sources = re.findall(r'\(\s*"[^"]+"\s*,\s*"([^"]+)"\s*\)', block.group(1))
+            counts['examples'] = len(sources)
+            counts['examples-c'] = sum(1 for s in sources if s.endswith('.c'))
+            counts['examples-cpp'] = len(sources) - counts['examples-c']
+    return counts
+
+
+def as_number(text: str) -> int:
+    return int(text) if text.isdigit() else NUMBER_WORDS[text.lower()]
+
+
+def sentences(body: str):
+    """(start, end) of each sentence of a masked page: to '. ', a blank line or a bar."""
+    start = 0
+    for match in _SENTENCE_BREAK.finditer(body):
+        yield start, match.start() + 1
+        start = match.end()
+    yield start, len(body)
+
+
+def stale_counts(page: Path, body: str, counts: dict[str, int | None]) -> list[Offender]:
+    out: list[Offender] = []
+    lines = body.splitlines()
+    for start, end in sentences(body):
+        raw = body[start:end]
+        flat = re.sub(r'\*\*|`', '', raw)
+        flat = re.sub(r'\s+', ' ', flat)
+        for family, phrasing, context in COUNT_PHRASINGS:
+            if context is not None and not context.search(flat):
+                continue
+            for match in phrasing.finditer(flat):
+                if family.startswith('examples') and PARTIAL_COUNT_RE.search(flat[:match.start()]):
+                    continue
+                first = body.count('\n', 0, start) + 1
+                last = min(body.count('\n', 0, end) + 1, len(lines))
+                if any(VERIFIED in lines[n - 1] for n in range(first, last + 1)):
+                    continue
+                # Report the line that carries the number, not the sentence's first.
+                number = re.compile(r'\b' + re.escape(match.group('n')) + r'\b', re.I)
+                line = next((n for n in range(first, last + 1) if number.search(lines[n - 1])),
+                            first)
+                stated = as_number(match.group('n'))
+                derived = counts.get(family)
+                where = COUNT_SOURCES[family]
+                if derived is None:
+                    out.append(Offender(page, line, 'stale-count', match.group(0),
+                                        f'states a {family} count, but {where} cannot be read '
+                                        'to derive it'))
+                elif stated != derived:
+                    out.append(Offender(page, line, 'stale-count', match.group(0),
+                                        f'states {stated}; {where} derives {derived} '
+                                        f'({family})'))
+    return out
+
+
+def dead_paths(root: Path, page: Path, text: str) -> list[Offender]:
+    out: list[Offender] = []
+    for number, line in code_free(text):
+        for match in CITED_PATH_RE.finditer(line):
+            cited = match.group(1)
+            if cited.endswith('/') and (root / cited).is_dir():
+                continue
+            pattern = re.sub(r'<[^<>]*>', '*', cited)
+            if '*' in pattern:
+                if any(root.glob(pattern.rstrip('/'))):
+                    continue
+                problem = f'no file matches the pattern `{cited}`'
+            elif (root / cited.rstrip('/')).exists():
+                continue
+            else:
+                problem = f'`{cited}` does not exist'
+            if VERIFIED in line and HISTORY_RE.search(clause_around(line, match.start(), match.end())):
+                continue                               # gone on purpose, and said so
+            out.append(Offender(page, number, 'dead-path', line.strip(),
+                                problem + ': cite the file that pins it, or say it is gone'))
+    return out
+
+
+def clause_around(text: str, start: int, end: int) -> str:
+    """The clause holding text[start:end]: to the nearest sentence end, ';' or bar."""
+    left = max(text.rfind(token, 0, start) for token in ('. ', '; ', '|', '\n\n'))
+    left = 0 if left < 0 else left + 1
+    rights = [i for i in (text.find(token, end) for token in ('. ', '; ', '|', '\n\n'))
+              if i >= 0]
+    return text[left:min(rights) if rights else len(text)]
+
+
+def verified_live_claims(page: Path, body: str, live_ns_families: dict[str, set[str]],
+                         live_domain_families: dict[str, set[str]]) -> list[Offender]:
+    """Rule 7: a marker may not exempt a non-live epoch stated as today's."""
+    out: list[Offender] = []
+    lines = body.splitlines()
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line) + 1)
+    for index, line in enumerate(lines):
+        if VERIFIED not in line:
+            continue
+        tokens = []
+        for match in EPOCH_RE.finditer(line):
+            family, version = match.group(1), int(match.group(2))
+            live = live_ns_families.get(family)
+            if live and match.group(0) not in live:
+                newest = max(int(t.rsplit('_v', 1)[1]) for t in live)
+                tokens.append((match, version > newest))
+        for match in DOMAIN_RE.finditer(line):
+            key = f'pineforge-{match.group(1)}'
+            live = live_domain_families.get(key)
+            if live and match.group(0) not in live:
+                newest = max(int(t.rsplit('/v', 1)[1]) for t in live)
+                tokens.append((match, int(match.group(2)) > newest))
+        for match, forward in tokens:
+            at, until = offsets[index] + match.start(), offsets[index] + match.end()
+            clause = re.sub(r'<!--.*?-->', ' ', clause_around(body, at, until))
+            cited_here = bool(TRAILING_ANCHOR_RE.match(body[until:until + 120]))
+            present = PRESENT_RE.search(clause) and not HISTORY_RE.search(clause)
+            if forward:
+                present = present and re.search(r'\b(?:is now|current(?:ly)?)\b', clause, re.I)
+            if present or cited_here:
+                why = ('cites it at a file:line of today\'s tree' if cited_here
+                       else 'states it in the present tense')
+                out.append(Offender(page, index + 1, 'verified-stale-epoch', line.strip(),
+                                    f'`{match.group(0)}` is not live, and the line {why}: '
+                                    f'the {VERIFIED} marker exempts history, not a false '
+                                    'present'))
+    return out
+
+
 def check(root: Path) -> list[Offender]:
     found: list[Offender] = []
     namespaces, domains = live_epochs(root)
@@ -185,6 +458,7 @@ def check(root: Path) -> list[Offender]:
     live_domain_families = families(domains, lambda t: t.rsplit('/v', 1))
     published = set(pages(root, PUBLISHED_GLOBS))
     anchors_cache: dict[Path, set[str]] = {}
+    counts = derived_counts(root)
 
     for page in pages(root, DOC_GLOBS):
         text = page.read_text(errors='replace')
@@ -232,6 +506,10 @@ def check(root: Path) -> list[Offender]:
                 problem = dead_link(root, page, target, anchors_cache)
                 if problem:
                     found.append(Offender(page, number, 'dead-link', line.strip(), problem))
+        found.extend(dead_paths(root, page, text))
+        body = masked(text)
+        found.extend(stale_counts(page, body, counts))
+        found.extend(verified_live_claims(page, body, live_ns_families, live_domain_families))
     found.sort(key=lambda o: (str(o.page), o.line, o.rule))
     return found
 
@@ -282,7 +560,8 @@ def main(argv: list[str] | None = None) -> int:
                          or 'none'))
 
     if not found:
-        print('\nno lane labels, stale negatives, stale epochs or dead links')
+        print('\nno lane labels, stale negatives, stale epochs, dead links, dead paths, '
+              'stale counts or markers on a stale present')
         return 0
     print(f'\n{len(found)} offenders:')
     for offender in found:
