@@ -134,13 +134,13 @@ struct PyramidEntry {
     std::string entry_comment;
     double max_runup = 0.0;
     double max_drawdown = 0.0;
-    // Intrabar-fill excursion masks: when a priced (stop/limit) entry fills
-    // mid-bar, the portion of the bar's range traversed BEFORE the fill is
-    // not part of the trade's excursion (TV convention). On the assumed
-    // OHLC path (bar_path_uses_high_first), an extreme that occurs before
-    // the fill position is excluded from update_per_trade_extremes sampling
-    // for the fill bar only. Both default false (market/open fills sample
-    // the full bar).
+    // The lot's entry-bar excursion mask: which end of its entry bar the
+    // modeled path had already reached before the lot's own opening fill.
+    // The kernel derives both flags from the bar's path, walked in the leg
+    // order the run declares, when the lot's excursion owner declares where
+    // its fill sat (declare_opened_lot_entry_bar_mask), and hands them back
+    // on the closing row's ClosedLotExcursionFacts; no kernel sampler reads
+    // them. Both default false (nothing declared masks nothing).
     bool skip_entry_bar_high = false;
     bool skip_entry_bar_low = false;
     // Entry-leg commission in account currency at this slice's actual fill
@@ -179,15 +179,13 @@ struct Trade {
     // True when this trade's exit fill came from a REAL strategy.exit
     // bracket leg (stop/limit/trail/profit/loss), as opposed to a
     // strategy.close/close_all market close, a reversal-driven close, a
-    // margin-call slice, or an intraday-cap close. Set at two sites:
-    //   1. The native applied-event projection classifies a live EXIT request
-    //      whose id is not the adapter's internal "__close__" close command.
-    //   2. Adapter receipt reconciliation preserves the classification for a
-    //      bracket that survives a margin reduction.
+    // margin-call slice, or an intraday-cap close. The kernel never sets it:
+    // its one writer is the Pine adapter, which labels the rows an exit-leg
+    // fill closed (source::PineStrategyHost::adapter_label_bracket_trades),
+    // so a bare host's bracket leg reads SCRIPT.
     // ABI v4 task 9: closed_trade_close_cause() reads this to distinguish
-    // BRACKET (2) from SCRIPT (1); it is never set on a margin-call /
-    // intraday-cap row (those stay false and are classified from exit_id /
-    // exit_comment instead).
+    // BRACKET (2) from SCRIPT (1), after the row's recorded close_cause, which
+    // a margin-call or intraday-cap row carries instead.
     bool exit_from_bracket = false;
     double max_runup = 0.0;
     double max_drawdown = 0.0;
@@ -410,16 +408,11 @@ protected:
     // eligibility is decided there, independently of this lifecycle model.
     broker::OpeningObligations opening_obligations_;
     int64_t position_entry_time_ = 0;
-    // Position is FLAT until the first entry fires; the canonical
-    // accessor ``signed_position_size`` already reads as 0 when FLAT
-    // regardless of this default, but several internal carry- and
-    // risk-gating reads (strategy_entry's tv_carry_qty capture,
-    // check_risk_allow_entry's max-position check) read position_qty_
-    // directly. A non-zero default leaks into those reads on the very
-    // first call of any session, producing phantom carry growth (probe
-    // 62 trade #1 fired qty=2 from a default-leaked carry=1) and
-    // spuriously blocked entries when ``risk_max_position_size_=1``.
-    // Initialising to 0 keeps the canonical and direct reads aligned.
+    // Position is FLAT until the first opening fill. The canonical accessor
+    // ``signed_position_size`` already reads 0 when FLAT whatever this holds,
+    // but the settlement and every host that reads position_qty_ directly
+    // must see the same 0 on the first call of a run, so the default is 0
+    // and the two reads stay aligned.
     double position_qty_ = 0.0;
     int position_entry_count_ = 0;  // number of entries in current direction (for pyramiding)
     int position_open_bar_ = -1;    // bar_index_ when position was opened (for exit delay)
@@ -438,11 +431,12 @@ protected:
     double commission_value_ = 0.0;
     int slippage_ = 0;              // slippage in ticks
     double syminfo_mintick_ = 0.01; // tick size for slippage calculation
-    // Per-instrument lot-size step for forced-liquidation quantization.
+    // Per-instrument lot-size step (the instrument's quantity increment).
     // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata
     // channel ("qty_step") or the SymInfo struct on the explicit run() path.
-    // process_margin_call floors each liquidation lot DOWN to a multiple of
-    // this, matching TradingView's per-instrument margin-call lot sizing.
+    // The kernel's own readers are the apply_*qty_step floors below; a host
+    // that sizes in lots declares the step as the run spec's quantity_grid
+    // (the source host projects this field there).
     double qty_step_ = 0.0;
     // Account-currency FX multiplier for every quote->account money path. When a
     // strategy declares ``currency=currency.XXX`` differing from the symbol's
@@ -528,12 +522,14 @@ protected:
     // the evaluators, for each bar it feeds; never for a stream's live input.
     int64_t security_next_input_ms_ = 0;
     uint64_t next_order_incarnation_ = 1;
-    // Transient companion for TRAIL exits: the trail's best (peak) price at
-    // fill time. The peak that armed the trailing stop is by definition a
-    // pre-fill favorable excursion of the closing trade (TV reports
-    // MFE == fill + offset == peak), but first_touch_position can't place a
-    // trail fill on the bar path (the level is only active after the peak),
-    // so emit_close_trade folds the peak directly. NaN = not a trail fill.
+    // Transient companion for trail exits: the trail's best (peak) price at
+    // fill time, a pre-fill favorable excursion of the closing trade that
+    // first_touch_position cannot place on the bar path (the level is only
+    // active after the peak). The settlement hands it to
+    // build_close_trade_with_costs as the context's preceding_exit_trail_peak.
+    // NaN = not a trail fill -- and nothing in the tree assigns it anything
+    // else today (reset_run_state writes the NaN), so that fold never fires;
+    // it stays because it is hashed broker state (engine_state_hash.cpp).
     double fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     std::vector<Trade> trades_;
     // Report-only rows for a position still open when the feed ends, produced
@@ -899,7 +895,8 @@ protected:
     // --- Position sizing helper ---
     // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
     // currency (equity, and a strategy.cash default_qty_value are both
-    // account-currency-native — see emit_close_trade / current_equity()),
+    // account-currency-native — see build_close_trade_with_costs /
+    // current_equity()),
     // then convert it into a quantity of the instrument, whose price is in
     // QUOTE currency. Divide the account-currency cash by account_currency_fx_
     // first (the inverse of the instrument->account multiply used for
@@ -1017,14 +1014,16 @@ protected:
     }
 
     // Mark-to-market open profit in account currency. The point-value
-    // multiplier keeps this consistent with realized PnL (emit_close_trade)
+    // multiplier keeps this consistent with realized PnL
+    // (build_close_trade_with_costs)
     // so equity = capital + net_profit + open_profit stays in one unit.
     double open_profit(double current_price) const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
         double diff = (position_side_ == PositionSide::LONG)
             ? (current_price - position_entry_price_)
             : (position_entry_price_ - current_price);
-        // Account-currency, matching emit_close_trade / open_trade_profit —
+        // Account-currency, matching build_close_trade_with_costs /
+        // open_trade_profit —
         // callers combine this with initial_capital_ + net_profit_sum_ (both
         // account-currency) to get total equity. fx=1.0 is a no-op.
         return diff * position_qty_ * syminfo_.pointvalue * active_account_currency_fx();
@@ -1102,9 +1101,6 @@ protected:
     // --- Bar magnifier state ---
     bool bar_magnifier_enabled_ = false;
     bool barstate_islast_ = false;
-    // Independent from barstate.isnew. False only when a COOF execution
-    // restores a completed ordinary-close checkpoint that already contains
-    // the current bar's one committed history slot.
     int magnifier_samples_ = 4;
     MagnifierDistribution magnifier_dist_ = MagnifierDistribution::ENDPOINTS;
     // When true, the intrabar path scales per-sub-bar sample count by
@@ -1116,58 +1112,12 @@ protected:
     // deliver_intrabar_script samples by (sample_price_path_volume_weighted).
     bool magnifier_volume_weighted_ = false;
 
-    // KI-60 scheduler transients. Script executions see the complete
-    // historical bar, while direct POOC/immediate market closes use the
-    // monotonic broker cursor price held here.
-    // finding-446: true when coof_cursor_price_ is a RAW OHLC path point /
-    // magnifier tick (a broker-price fill there is nearest-tick rounded via
-    // bar_fill_price); false when it is a resolved fill price (a bar-point
-    // fill is already rounded, a level fill keeps its directional snap).
-    // KI-67: true only while the active fill recalc owns the FIRST fill event
-    // at the bar-open tick (O). Orders placed while this holds keep STANDARD
-    // exact-level semantics. Later fills at that same O, like fills at every
-    // other path point, are MID-BAR cascades (the Pine historical cascade permission).
-    // True only while executing a fill recalc triggered by a later fill event
-    // at O, after the first O fill has already consumed bar-open provenance.
-    // Such a recalc is mid-bar for KI-67 and resumes on leg 0 (O->W1). This bit
-    // lets strategy.exit apply the one pinned exception: a marketable LIMIT may
-    // resume at W1, while marketable STOP suppression remains whole-entry-bar.
-    // Round15: identify the MARKET opening whose first callback is active.
-    // A direct close/partial/reentry in that body changes the serial and must
-    // not inherit the original fill's permission to arm a recrossing limit.
-    // KI-67: true only during a point-bar evaluation that sits AT an extreme
-    // waypoint (W1 or W2) of the historical 4-tick path. Cascade orders born
-    // this bar may fill only while this holds; on segments, at O, at C, and on
-    // the ordinary-close / POOC-C / margin passes it is false so cascade orders
-    // are held (they convert to ordinary resting orders at bar end). Set only by
-    // the historical dispatch; the magnifier path never sets it.
-    // KI-67 exit cascade: the historical dispatch publishes its current path
-    // position here for the strategy.exit cascade gate. coof_hist_is_segment_
-    // marks a segment (vs point) evaluation; coof_hist_path_index_ is the LEG
-    // index (0..2) on a segment, or the path WAYPOINT index (0..3, cursor =
-    // path[index]) on a point. Meaningful only while coof_scheduler_active_ on
-    // the non-magnifier historical path; the POOC-C / margin passes publish the
-    // C waypoint (index 3) so cascade exits are held there.
-    // KI-67 exit cascade: the in-flight leg index (0..2) the CURRENT fill recalc
-    // was triggered on — the leg the dispatch cursor traverses next after the
-    // triggering fill. Published by the loop right before each recalc so a
-    // strategy.exit placed in that recalc records its seg_i from the loop's real
-    // position ("a fill AT a waypoint starts the NEXT leg"), rather than
-    // re-deriving it from the fill price (ambiguous exactly at waypoints). -1 (or
-    // >=3) outside a mid-bar historical recalc / at the terminal C tick.
-    // KI-67 exit cascade: set by the gate immediately before evaluate_fill_price
-    // so the exit fill evaluation runs its open-gap shortcut on the in-flight
-    // leg-end waypoint POINT even when is_entry_bar (entry + exit share a bar).
-    // Reset right after that evaluation; never set on the magnifier path.
-    // Direct strategy.close / POOC fills can occur inside on_bar rather than
-    // through process_next_pending_order. The scheduler refreshes this budget
-    // before every speculative execution so those fills consume the same
-    // finite historical/magnifier event budget as every other broker fill.
     // @broker-state begin
-    // Monotonic cross-bar fill sequence counter; compared against
-    // trail_best_before_bar_fill_seq_ (hashed above) and against
-    // adapter placement fact `signal_close_mc_fill_seq` by fill-time gates
-    // that cross the bar boundary.
+    // Monotonic cross-bar fill sequence counter, folded with the broker
+    // state. The Pine adapter advances it (PineStrategyHost, one step per
+    // applied broker instruction) and compares its placement fact
+    // `signal_close_mc_fill_seq` against it in fill-time gates that cross the
+    // bar boundary; the kernel only resets and folds it.
     uint64_t broker_fill_event_seq_ = 0;
     // @broker-state end
 
@@ -1354,7 +1304,7 @@ protected:
 
     // Captured by the public run() wrappers when the underlying engine logic
     // throws. Cleared at the start of every run(). Surfaces through
-    // last_error() / pf_strategy_get_last_error() so the C ABI never
+    // last_error() / strategy_get_last_error() so the C ABI never
     // unwinds a C++ exception across the extern "C" boundary.
     std::string last_error_;
 
@@ -1525,7 +1475,7 @@ protected:
         return trades_[idx].max_runup;
     }
     // Percent excursions: trade.max_runup / max_drawdown are stored in
-    // account currency (× pointvalue, see emit_close_trade), so the entry
+    // account currency (× pointvalue, see build_close_trade_with_costs), so the entry
     // cost denominator must be in currency too (entry × qty × pointvalue).
     // pointvalue=1 cancels out and matches the legacy ratio bit-for-bit.
     double closed_trade_max_runup_percent(int idx) const {
@@ -1671,10 +1621,8 @@ protected:
         const execution::Fill& fill,
         const execution::LifecycleEffects* lifecycle, double fx) const;
     void append_quoted_lot(PyramidEntry lot, double total_qty, double average_price);
-    // Allocates the new position cycle, lots and observations, then binds
-    // exits that still remain in request_roster. Settlement that authorized
-    // pending removals applies those erasures after old-cycle unbind and
-    // before this opening bind.
+    // Opens a new position cycle with `lot` as its only lot: a fresh cycle
+    // id, the per-position state reset, and the stream observation recorded.
     void open_quoted_position(PositionSide requested, PyramidEntry lot);
 
     void record_close_trade(Trade trade);
@@ -1686,11 +1634,11 @@ protected:
     std::vector<double> quote_execution_commissions(
         const std::vector<double>& closed_units, double opening_units,
         const execution::Fill& fill, double fx) const;
-    // The arithmetic of emit_close_trade without its bookkeeping: the Trade
-    // row a close of ``close_qty`` of ``pe`` at ``fill_price`` on the
-    // current bar would record (pnl, pnl_pct, commission, excursions, bar
-    // indexes). emit_close_trade builds and commits; the range-end close
-    // builds only.
+    // The Trade row a close of ``close_qty`` of ``pe`` at ``fill_price`` on
+    // the current bar would record (pnl, pnl_pct, commission, excursions, bar
+    // indexes), without its bookkeeping: the settlement builds it here and
+    // commits it through record_close_trade; the range-end report row builds
+    // only.
 
     Trade build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
         double fill_price, bool was_long, double entry_commission,
@@ -1700,9 +1648,9 @@ protected:
     // Reset ALL per-run state (trades, accumulators, position, pending orders,
     // equity extremes, risk latches, intraday/day counters, source-series
     // history) so a reused handle's run N is bit-identical to a fresh handle's
-    // run 1. Preserves configuration (initial_capital_, pyramiding_, slippage_,
-    // commission_*, default_qty_*, syminfo_, inputs_, risk thresholds) — those
-    // are set before run() and must survive it. Called at the top of every
+    // run 1. Preserves configuration (initial_capital_, slippage_,
+    // commission_*, syminfo_, inputs_) — those are set before run() and must
+    // survive it. Called at the top of every
     // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
     void reset_run_state();
     double account_currency_fx_at(int64_t timestamp_ms) const;
@@ -1922,7 +1870,7 @@ public:
     // Returns the error message captured by the most recent run() if it
     // failed, or an empty string if the run completed normally. Cleared at
     // the start of every run(). The C ABI exposes this via
-    // pf_strategy_get_last_error().
+    // strategy_get_last_error().
     const std::string& last_error() const { return last_error_; }
 
     // Per-input override (title -> serialized value). Must be set before run()

@@ -80,8 +80,8 @@ double BacktestEngine::active_account_currency_fx() const {
 // Reset all per-run STATE (not configuration) so a reused handle's run N is
 // bit-identical to a fresh handle's run 1. See header doc + tests/
 // test_handle_reuse_reset.cpp. Configuration fields (initial_capital_,
-// pyramiding_, slippage_, commission_*, default_qty_*, syminfo_, inputs_, risk
-// thresholds) are intentionally NOT touched — they are set before run().
+// slippage_, commission_*, syminfo_, inputs_) are intentionally NOT touched —
+// they are set before run().
 void BacktestEngine::reset_run_state() {
     // Closed-trade list + cached P&L / count accumulators.
     trades_.clear();

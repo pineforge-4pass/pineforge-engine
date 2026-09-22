@@ -114,7 +114,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // Excursions: TV's per-trade excursion includes the exit fill itself —
     // a stop-out's adverse excursion is at least the loss at the SL fill and
     // a take-profit's favorable excursion includes the move to the TP fill.
-    // The per-bar sampler (update_per_trade_extremes) cannot see this: exit
+    // The per-bar sampler (NativeExecutionConsumer::apply_excursion) cannot see this: exit
     // fills happen inside request matching and the pyramid entry is
     // removed before the next sample, so same-bar entry+exit trades would
     // otherwise report 0/0. Fold the fill price in here. The carried

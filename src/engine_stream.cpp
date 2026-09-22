@@ -51,7 +51,9 @@ void BacktestEngine::stream_observe_exit(size_t trade_index) {
 }
 
 void BacktestEngine::stream_refresh_action_metadata(size_t first_action, size_t first_trade) {
-    // Fill kernels finish assigning close IDs/comments after emit_close_trade.
+    // The settlement's commit calls this after recording its rows and its
+    // opening lot: re-read each observed action's id and comment from the
+    // row or lot it names, so the stream carries the final values.
     // Refresh only events produced by this input, retaining physical hook order.
     for (size_t i = first_action; i < stream_order_actions_.size(); ++i) {
         auto& action = stream_order_actions_[i];

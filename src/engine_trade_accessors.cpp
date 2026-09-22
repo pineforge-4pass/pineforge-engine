@@ -24,7 +24,7 @@ double BacktestEngine::open_trade_profit(int idx) const {
     bool is_long = (position_side_ == PositionSide::LONG);
     double px = current_bar_.close;
     // Currency PnL: price-points × qty × pointvalue × account_currency_fx_,
-    // consistent with the realized-trade path in emit_close_trade
+    // consistent with the realized-trade path in build_close_trade_with_costs
     // (pointvalue=1, fx=1.0 leaves the corpus unchanged).
     double pnl = (is_long ? (px - pe.price) * pe.qty : (pe.price - px) * pe.qty)
                  * syminfo_.pointvalue * active_account_currency_fx();
@@ -38,7 +38,7 @@ double BacktestEngine::open_trade_profit_percent(int idx) const {
     const PyramidEntry& pe = pyramid_entries_[(size_t)idx];
     if (pe.price <= 0.0) return na<double>();
     // TV net return-on-cost convention (same shape as the closed-trade
-    // pnl_pct fixed 2026-06-12 in emit_close_trade): the profit value this
+    // pnl_pct fixed 2026-06-12 in build_close_trade_with_costs): the profit value this
     // accessor pairs with — open_trade_profit, which is net of the
     // entry-leg commission — as a percent of entry cost (entry_price * qty
     // * pointvalue * account_currency_fx_, matching open_trade_profit's
@@ -93,10 +93,11 @@ double BacktestEngine::open_trade_size(int idx) const {
     return pyramid_entries_[(size_t)idx].qty;
 }
 
-// pe.max_drawdown / pe.max_runup are tracked in price-points × qty
-// (update_per_trade_extremes); the currency accessors scale by pointvalue
-// and account_currency_fx_ (default 1.0, no-op) so they match the
-// closed-trade fields emitted by emit_close_trade. The percent accessors
+// pe.max_drawdown / pe.max_runup are tracked in price-points × qty (the
+// consumer's per-lot sampler, NativeExecutionConsumer::apply_excursion); the
+// currency accessors scale by pointvalue and account_currency_fx_ (default
+// 1.0, no-op) so they match the closed-trade fields
+// build_close_trade_with_costs writes. The percent accessors
 // below intentionally use the UNSCALED excursion over the unscaled entry
 // cost — pointvalue and fx both cancel in the ratio.
 double BacktestEngine::open_trade_max_drawdown(int idx) const {
@@ -149,9 +150,9 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 //      position happens to also carry a stale exit_id from an earlier
 //      partial close of the same physical lot.
 //   2. a recorded cause -- the closer's own statement.
-//   3. exit_from_bracket -- set only at the shared exit-fill site
-//      (the native execution application path) when the filling request was
-//      an EXIT leg, i.e. a real strategy.exit leg.
+//   3. exit_from_bracket -- set by the Pine adapter alone
+//      (source::PineStrategyHost::adapter_label_bracket_trades) on the rows a
+//      real strategy.exit leg closed; no kernel path sets it.
 //   4. Otherwise: a strategy.close/close_all market close or a
 //      reversal-driven close -- SCRIPT.
 int BacktestEngine::closed_trade_close_cause(int i) const {
