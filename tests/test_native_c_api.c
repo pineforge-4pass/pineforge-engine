@@ -6386,6 +6386,380 @@ static void check_typed_setup_refusals(void) {
     check_typed_appends();
 }
 
+/* ── The arm relation and the sizing query (lane F4, item 4) ───────
+ *
+ * Two of the generic hooks the Pine adapter uses had no C route: the arm
+ * options of a WaitForApplied child -- `first_match` (does the armed child
+ * trade on its owner's own fill print?) and `scope` (does a closing child
+ * close its owner's lot, or the whole book that fill left?) -- and
+ * native_sized_units, the kernel's sizing function as a pure query. The
+ * request's additive arm tail carries the first two; a Book-scoped child may
+ * then be the host-sized close on_close_units sizes. The query is
+ * strategy_native_sized_units_v1, which reads a SIZED request's own sizing
+ * block. */
+
+#define ARM_PARENT_UNITS 2.0
+#define ARM_ADD_UNITS    3.0
+#define ARM_TAKE_PROFIT  106.5   /* bar 5 reaches it on its way up (high 107) */
+#define ARM_EARLY_LIMIT  100.5   /* bar 1's own open, 101, already satisfies it */
+
+typedef struct arm_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    int           case_id;          /* see arm_on_bar */
+    uint64_t      parent;
+    uint64_t      child;
+    int           child_rc;
+    uint32_t      child_reject;
+    int           child_fills;
+    int64_t       parent_fill_ms;
+    uint32_t      parent_fill_phase;
+    int64_t       child_fill_ms;
+    uint32_t      child_fill_phase;
+    double        child_fill_price;
+    double        close_view_units;  /* on_close_units' scope_exposure_units */
+    int           close_calls;
+} arm_state;
+
+enum {
+    ARM_CASE_AT_PRINT = 0,     /* AT_ARM_PRINT child limit already satisfied by the print */
+    ARM_CASE_AFTER_PRINT = 1,  /* the same child, AFTER_ARM_PRINT */
+    ARM_CASE_OWNER_LOT = 2,    /* a flatten child, OWNER_LOT, after a later add */
+    ARM_CASE_BOOK = 3,         /* the same child, BOOK */
+    ARM_CASE_HOST_SIZED = 4    /* a host-sized close, BOOK, sized by on_close_units */
+};
+
+static int arm_on_close_units(void* user, const pf_native_close_view_v1* view, double* units) {
+    arm_state* state = (arm_state*)user;
+    ++state->close_calls;
+    state->close_view_units = view->scope_exposure_units;
+    *units = view->scope_exposure_units;   /* close everything the bound book holds */
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int arm_on_applied(void* user, const pf_native_applied_v1* applied,
+                          const pf_native_decision_v1* at) {
+    arm_state* state = (arm_state*)user;
+    (void)at;
+    if (applied->incarnation == state->parent) {
+        pf_native_event_v1 row;
+        int written;
+        memset(&row, 0, sizeof(row));
+        written = strategy_native_events_v1(state->host, applied->ordinal - 1u, &row, 1);
+        if (written == 1) {
+            state->parent_fill_ms = row.effective_time_ms;
+            state->parent_fill_phase = row.path_phase;
+        }
+    }
+    if (applied->incarnation == state->child) {
+        pf_native_event_v1 row;
+        memset(&row, 0, sizeof(row));
+        if (strategy_native_events_v1(state->host, applied->ordinal - 1u, &row, 1) == 1) {
+            state->child_fill_ms = row.effective_time_ms;
+            state->child_fill_phase = row.path_phase;
+        }
+        state->child_fill_price = applied->resolved_price;
+        ++state->child_fills;
+    }
+    return 0;
+}
+
+static int arm_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    arm_state* state = (arm_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == 1) {
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = ARM_PARENT_UNITS;
+        request.trigger = PF_NATIVE_TRIGGER_MARKET;
+        request.label = "arm-parent";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->parent, NULL)
+                          == PF_NATIVE_OK,
+               "the arm parent was refused");
+        request = blank_request();
+        request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        request.owner_n = 1u;
+        request.owner_incarnations = &state->parent;
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.label = "arm-child";
+        switch (state->case_id) {
+        case ARM_CASE_AT_PRINT:
+        case ARM_CASE_AFTER_PRINT:
+            request.intent = PF_NATIVE_INTENT_REDUCE;
+            request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+            request.p1 = ARM_EARLY_LIMIT;
+            request.arm_first_match = state->case_id == ARM_CASE_AT_PRINT
+                ? PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT
+                : PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT;
+            break;
+        case ARM_CASE_OWNER_LOT:
+        case ARM_CASE_BOOK:
+            request.intent = PF_NATIVE_INTENT_FLATTEN;
+            request.p1 = ARM_TAKE_PROFIT;
+            request.arm_scope = state->case_id == ARM_CASE_BOOK ? PF_NATIVE_ARM_SCOPE_BOOK
+                                                                : PF_NATIVE_ARM_SCOPE_OWNER_LOT;
+            break;
+        default:
+            request.intent = PF_NATIVE_INTENT_HOST_SIZED;
+            request.p1 = ARM_TAKE_PROFIT;
+            request.arm_scope = PF_NATIVE_ARM_SCOPE_BOOK;
+            break;
+        }
+        state->child_rc = strategy_native_submit_v1(state->host, &request, &state->child,
+                                                    &state->child_reject);
+    } else if (state->calculations == 2) {
+        /* A later add the parent never opened. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = ARM_ADD_UNITS;
+        request.trigger = PF_NATIVE_TRIGGER_MARKET;
+        request.label = "arm-add";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+               "the later add was refused");
+    }
+    return 0;
+}
+
+static double arm_run(int case_id, arm_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    const pf_bar_t* bars;
+    double units = -1.0;
+    int n = 0;
+
+    memset(state, 0, sizeof(*state));
+    state->case_id = case_id;
+    table = blank_callbacks(state);
+    table.on_bar = arm_on_bar;
+    table.on_applied = arm_on_applied;
+    table.on_close_units = arm_on_close_units;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "arm host create failed");
+    if (!state->host) return units;
+    spec.session_key = "native-c-api-arm-tail";
+    CHECK_EQ_INT(strategy_configure_native_v1(state->host, &spec), 0, "the arm spec was refused");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, 8, NULL), PF_NATIVE_OK,
+                 "the arm run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback arm rows failed");
+    strategy_native_position_v1(state->host, &units, NULL, NULL);
+    strategy_native_host_free(state->host);
+    return units;
+}
+
+static void check_arm_relation_tail(void) {
+    arm_state state;
+    double units;
+
+    /* first_match: a child whose level the owner's own fill print already
+     * satisfies trades AT that print under AT_ARM_PRINT, and only on the
+     * path after it under AFTER_ARM_PRINT. */
+    arm_run(ARM_CASE_AT_PRINT, &state);
+    CHECK_EQ_INT(state.child_rc, PF_NATIVE_OK, "an AT_ARM_PRINT child was refused");
+    CHECK_EQ_INT(state.child_fills, 1, "the AT_ARM_PRINT child did not fill");
+    CHECK(state.child_fill_ms == state.parent_fill_ms
+              && state.child_fill_phase == PF_NATIVE_PATH_PHASE_OPEN,
+          "the AT_ARM_PRINT child did not trade on its owner's own print");
+    arm_run(ARM_CASE_AFTER_PRINT, &state);
+    CHECK_EQ_INT(state.child_rc, PF_NATIVE_OK, "an AFTER_ARM_PRINT child was refused");
+    CHECK_EQ_INT(state.child_fills, 1, "the AFTER_ARM_PRINT child did not fill");
+    CHECK(!(state.child_fill_ms == state.parent_fill_ms
+            && state.child_fill_phase == PF_NATIVE_PATH_PHASE_OPEN),
+          "the AFTER_ARM_PRINT child traded on its owner's own print");
+
+    /* scope: a flatten child closes its owner's lot, or the whole book. */
+    units = arm_run(ARM_CASE_OWNER_LOT, &state);
+    CHECK_EQ_INT(state.child_rc, PF_NATIVE_OK, "an OWNER_LOT child was refused");
+    CHECK(fabs(units - ARM_ADD_UNITS) < 1e-9, "an OWNER_LOT flatten closed more than its lot");
+    units = arm_run(ARM_CASE_BOOK, &state);
+    CHECK_EQ_INT(state.child_rc, PF_NATIVE_OK, "a BOOK child was refused");
+    CHECK(fabs(units) < 1e-9, "a BOOK flatten did not close the later add too");
+
+    /* The host-sized close a Book scope admits, sized by on_close_units. */
+    units = arm_run(ARM_CASE_HOST_SIZED, &state);
+    CHECK_EQ_INT(state.child_rc, PF_NATIVE_OK, "a BOOK host-sized close was refused");
+    CHECK(state.close_calls > 0, "the host-sized close never consulted on_close_units");
+    CHECK(fabs(state.close_view_units - (ARM_PARENT_UNITS + ARM_ADD_UNITS)) < 1e-9,
+          "the bound book is not the whole position");
+    CHECK(fabs(units) < 1e-9, "the host-sized close did not close the bound book");
+
+    /* The relation words are refused outside WAIT_FOR_APPLIED, or unknown;
+     * a host-sized close under the owner-lot relation is the kernel's typed
+     * refusal; and a caller sending the seed layout keeps the defaults. */
+    {
+        pf_native_callbacks_v1 table = blank_callbacks(NULL);
+        pf_native_run_spec_v1 spec = twin_spec();
+        pf_strategy_t host = strategy_native_host_create_v1(&table);
+        pf_native_request_v1 request;
+        CHECK(host != NULL, "arm-refusal host create failed");
+        if (!host) return;
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "arm-refusal configure");
+        CHECK_EQ_INT(PF_NATIVE_REQUEST_V1_SEED_SIZE,
+                     (int)offsetof(pf_native_request_v1, reserved2) + 7,
+                     "the seed layout does not end where its padding did");
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.arm_scope = PF_NATIVE_ARM_SCOPE_BOOK;
+        CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                     "an arm scope outside WAIT_FOR_APPLIED was accepted");
+        request.arm_scope = PF_NATIVE_ARM_SCOPE_OWNER_LOT;
+        request.arm_first_match = PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT;
+        CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                     "a first-match rule outside WAIT_FOR_APPLIED was accepted");
+        request.arm_first_match = 9u;
+        CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                     "an unknown first-match word was accepted");
+        request.arm_first_match = PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT;
+        request.reserved2[3] = 1u;
+        CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL), PF_NATIVE_E_TAG,
+                     "a non-zero reserved byte was accepted");
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_HOST_SIZED;
+        request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        request.struct_size = PF_NATIVE_REQUEST_V1_SEED_SIZE;
+        CHECK_EQ_INT(strategy_native_submit_v1(host, &request, NULL, NULL),
+                     PF_NATIVE_E_UNSUPPORTED,
+                     "a seed-layout host-sized child was not refused as unsupported");
+        strategy_native_host_free(host);
+    }
+}
+
+/* strategy_native_sized_units_v1: the kernel's own sizing, before a submit. */
+typedef struct sized_query_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    uint64_t      entry;
+    double        filled_units;
+    double        fill_price;
+} sized_query_state;
+
+static pf_native_request_v1 sized_query_request(double cash) {
+    pf_native_request_v1 request = blank_request();
+    request.intent = PF_NATIVE_INTENT_SIZED;
+    request.side = PF_NATIVE_SIDE_LONG;
+    request.size_basis = PF_NATIVE_SIZE_BASIS_CASH;
+    request.size_time = PF_NATIVE_SIZE_AT_MATCH;
+    request.grid_policy = PF_NATIVE_GRID_EXPLICIT_UNITS;
+    request.intent_value = cash;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    return request;
+}
+
+static int sized_query_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    sized_query_state* state = (sized_query_state*)user;
+    (void)bar;
+    (void)at;
+    if (state->calculations++ == 0) {
+        pf_native_request_v1 request = sized_query_request(1000.0);
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, &state->entry, NULL)
+                          == PF_NATIVE_OK,
+               "the sized entry was refused");
+    }
+    return 0;
+}
+
+static int sized_query_on_applied(void* user, const pf_native_applied_v1* applied,
+                                  const pf_native_decision_v1* at) {
+    sized_query_state* state = (sized_query_state*)user;
+    (void)at;
+    if (applied->incarnation == state->entry) {
+        state->filled_units = applied->opened_units;
+        state->fill_price = applied->resolved_price;
+    }
+    return 0;
+}
+
+static void check_sized_units_query(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    sized_query_state state;
+    pf_native_request_v1 request;
+    const pf_bar_t* bars;
+    double units = 0.0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = sized_query_on_bar;
+    table.on_applied = sized_query_on_applied;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "sized-query host create failed");
+    if (!state.host) return;
+
+    /* Before configure there is no spec to size under: the empty. */
+    request = sized_query_request(1000.0);
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_ABSENT, "an unconfigured host sized a request");
+    CHECK(units != units, "the empty sizing answer is not NaN");
+
+    spec.session_key = "native-c-api-sized-query";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "sized-query configure");
+    /* cash / (price * point value * fx): 1000 / (125 * 1 * 1) = 8, and 1000 /
+     * (100 * 1 * 2) = 5 -- the account rate divides like the price. */
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 125.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_OK, "a cash basis was not sized");
+    CHECK(fabs(units - 8.0) < 1e-12, "a cash basis sized to another quantity");
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 2.0,
+                                                &units),
+                 PF_NATIVE_OK, "a cash basis at an account rate was not sized");
+    CHECK(fabs(units - 5.0) < 1e-12, "the account rate did not divide the cash");
+    /* fraction * equity: 0.25 * 10000 / 125 = 20. */
+    request.size_basis = PF_NATIVE_SIZE_BASIS_EQUITY_FRACTION;
+    request.intent_value = 0.25;
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 125.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_OK, "an equity fraction was not sized");
+    CHECK(fabs(units - 20.0) < 1e-12, "an equity fraction sized to another quantity");
+    /* A basis the query cannot resolve is the documented empty. */
+    request = sized_query_request(1000.0);
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 0.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_ABSENT, "a zero sizing price answered a quantity");
+    /* Only a SIZED request has a sizing block; a bad word is the tag error. */
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 1.0;
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_E_ARGUMENT, "a transact request was sized");
+    request = sized_query_request(1000.0);
+    request.side = 7u;
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_E_TAG, "an unknown side was sized");
+    request = sized_query_request(1000.0);
+    request.struct_size = 12u;
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 1.0,
+                                                &units),
+                 PF_NATIVE_E_STRUCT, "a mis-sized request was sized");
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, NULL, 100.0, 10000.0, 1.0, &units),
+                 PF_NATIVE_E_ARGUMENT, "a NULL request was sized");
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, 100.0, 10000.0, 1.0, NULL),
+                 PF_NATIVE_E_ARGUMENT, "a NULL answer was accepted");
+
+    /* The query is the function the kernel sizes with: the same request,
+     * submitted, opens exactly what the query answers at its fill price. */
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 4, NULL), PF_NATIVE_OK,
+                 "the sized-query run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback sized-query rows failed");
+    request = sized_query_request(1000.0);
+    CHECK(state.filled_units > 0.0, "the sized entry did not fill");
+    CHECK_EQ_INT(strategy_native_sized_units_v1(state.host, &request, state.fill_price,
+                                                10000.0, 1.0, &units),
+                 PF_NATIVE_OK, "the query refused the fill price");
+    CHECK(units == state.filled_units, "the query and the kernel's own sizing disagree");
+    strategy_native_host_free(state.host);
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -6425,5 +6799,7 @@ int pf_native_c_api_checks(void) {
     check_liquidation_sizing_word();
     check_readout_words();
     check_typed_setup_refusals();
+    check_arm_relation_tail();
+    check_sized_units_query();
     return failures;
 }

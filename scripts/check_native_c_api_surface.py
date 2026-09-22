@@ -68,6 +68,8 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_grid_policy_e": ("native_order.hpp", "ExecutionGridPolicy", {}),
     "pf_native_anchor_rounding_e": ("native_order.hpp", "NativeAnchorRounding", {}),
     "pf_native_arm_visibility_e": ("native_order.hpp", "NativeArmVisibility", {}),
+    "pf_native_arm_first_match_e": ("native_order.hpp", "NativeArmFirstMatch", {}),
+    "pf_native_arm_scope_e": ("native_order.hpp", "NativeArmScope", {}),
     "pf_native_group_effect_e": ("native_order.hpp", "GroupEffect", {}),
     "pf_native_request_field_e": ("native_host.hpp", "NativeRequestField", {}),
     "pf_native_price_rule_e": ("native_host.hpp", "NativeCurrentPriceRule", {}),

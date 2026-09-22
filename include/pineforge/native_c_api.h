@@ -23,6 +23,9 @@
  * ✓ Read a closed row's own identifiers — its entry and exit ticket, its exit
  *   comment and its close cause — with the pineforge.h accessors, which take
  *   any handle this header produces
+ * ✓ Arm a WAIT_FOR_APPLIED child after its owner's print, or bound to the
+ *   whole book, and size its close with on_close_units
+ * ✓ Ask the kernel what a SIZED request would resolve to, before submitting
  * ✓ Extend the run specification with the fields pf_native_run_spec_v1 predates
  * ✓ Declare an auxiliary finer feed — up front, or from `on_run_begin` —
  *   build a series from it, and append its later bars to a realtime stream,
@@ -43,10 +46,6 @@
  *   PF_NATIVE_REPORT_KERNEL_RECORDED with
  *   strategy_set_broker_state_hash_recording on fills
  *   pf_report_t::broker_state_hash, one row per script bar.
- * ✗ WaitForApplied::first_match and WaitForApplied::scope are not exposed:
- *   a WAIT_FOR_APPLIED child submitted here keeps the defaults (AtArmPrint,
- *   OwnerLot). NativeArmScope::Book exists for a HostSized close, whose
- *   units the unexposed terms hook answers.
  *
  * COVERAGE
  * ────────
@@ -122,7 +121,9 @@
  *                                          pf_native_open_bar_view_e and pf_native_liquidation_sizing_e words
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1
- *   [C]  submit                            strategy_native_submit_v1
+ *   [C]  submit                            strategy_native_submit_v1 -- a WAIT_FOR_APPLIED child's
+ *                                          first_match / scope are pf_native_request_v1::arm_first_match /
+ *                                          arm_scope
  *   [C]  replace                           strategy_native_replace_v1, or strategy_native_replace_ext_v1
  *                                          for the ReplaceResult::reason the first one drops
  *   [--] submit_market                     a C++ convenience that REFUSES non-market extras instead of dropping
@@ -147,11 +148,9 @@
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
- *   [--] native_sized_units                the basis it converts is the C++ native_order::Sized variant,
- *                                          which has no size-prefixed POD of its own (pf_native_request_v1
- *                                          carries a sizing BLOCK, not the variant); a C host submits
- *                                          PF_NATIVE_INTENT_SIZED and reads the units the kernel resolved
- *                                          from the applied execution
+ *   [C]  native_sized_units                strategy_native_sized_units_v1 -- a PF_NATIVE_INTENT_SIZED
+ *                                          pf_native_request_v1 is the Sized basis; its sizing block is
+ *                                          read, nothing is submitted
  *
  * Two asymmetries this list does not reach, recorded here because a C host
  * will look for them.
@@ -303,10 +302,13 @@ typedef enum pf_native_intent_e {
     PF_NATIVE_INTENT_REDUCE     = 1, /**< Reduce; see #pf_native_reduction_t. */
     PF_NATIVE_INTENT_TRANSACT   = 2, /**< `intent_value` signed units. */
     PF_NATIVE_INTENT_REVERSE_TO = 3, /**< `intent_value` target signed exposure. */
-    PF_NATIVE_INTENT_HOST_SIZED = 4, /**< The cohort close, and nothing else;
-                                      *   see #PF_NATIVE_OWNER_BIND_COHORT.
-                                      *   Refused PF_NATIVE_E_UNSUPPORTED
-                                      *   under any other owner. */
+    PF_NATIVE_INTENT_HOST_SIZED = 4, /**< A close sized by on_close_units: the
+                                      *   cohort close (#PF_NATIVE_OWNER_BIND_COHORT)
+                                      *   or a WAIT_FOR_APPLIED child that carries
+                                      *   the arm tail (#pf_native_arm_scope_t;
+                                      *   the kernel admits it under BOOK only).
+                                      *   Refused PF_NATIVE_E_UNSUPPORTED under
+                                      *   any other owner. */
     PF_NATIVE_INTENT_SIZED      = 5  /**< Kernel-sized opening (L3). */
 } pf_native_intent_t;
 
@@ -382,6 +384,31 @@ typedef enum pf_native_arm_visibility_e {
     PF_NATIVE_ARM_VISIBILITY_WORKING             = 0,
     PF_NATIVE_ARM_VISIBILITY_PENDING_UNTIL_ARMED = 1
 } pf_native_arm_visibility_t;
+
+/** Whether an armed WAIT_FOR_APPLIED child may trade on its owner's own fill
+ *  print — `native_order::NativeArmFirstMatch`. AT_ARM_PRINT (the default) is
+ *  the established book: the armed child is a candidate at that very cursor,
+ *  so a level the print already satisfies matches there. AFTER_ARM_PRINT
+ *  gives it the birth rule of a request submitted from the owner's own
+ *  `on_applied`: on the point that armed it, it sees only the path after the
+ *  print. It governs a priced trigger's level test; a market trigger has no
+ *  level. Both are broker models. */
+typedef enum pf_native_arm_first_match_e {
+    PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT    = 0,
+    PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT = 1
+} pf_native_arm_first_match_t;
+
+/** What an armed CLOSING child (REDUCE, FLATTEN, a host-sized close) closes —
+ *  `native_order::NativeArmScope`. OWNER_LOT (the default) is the lot its
+ *  owner's fill opened, and nothing a later add brings. BOOK binds it, at the
+ *  arm, to the whole position that fill left, so a protective leg placed with
+ *  its entry covers later adds. A host-sized close may wait for its owner only
+ *  under BOOK (its units are #pf_native_callbacks_v1::on_close_units'); a
+ *  waiting transaction closes nothing and must keep OWNER_LOT. */
+typedef enum pf_native_arm_scope_e {
+    PF_NATIVE_ARM_SCOPE_OWNER_LOT = 0,
+    PF_NATIVE_ARM_SCOPE_BOOK      = 1
+} pf_native_arm_scope_t;
 
 /** Capacity — the alternative index of `native_order::Capacity`. */
 typedef enum pf_native_capacity_e {
@@ -1640,16 +1667,18 @@ typedef struct pf_native_margin_call_v1 {
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
  *  set only the fields the chosen `intent` and `trigger` document.
  *
- *  This struct has FOUR published layouts and the runtime accepts any of
+ *  This struct has FIVE published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
  *  (#PF_NATIVE_REQUEST_V1_BASE_SIZE), that layout plus L7b's anchored-leg
  *  tail (#PF_NATIVE_REQUEST_V1_ANCHOR_SIZE), that plus L3b's sizing detail
- *  `size_price`, `reduce_basis` (#PF_NATIVE_REQUEST_V1_SIZING_SIZE), and the
- *  current one, which appends E14's trail seed (`trail_best_seed`,
- *  `trail_has_best_seed`). A caller compiled against an earlier layout keeps
- *  working unchanged and simply gets the later tails' defaults (RAW, WORKING,
- *  RESOLVED, AT_MATCH, no seed). Any other `struct_size` is
- *  PF_NATIVE_E_STRUCT. Every tail is append-only: nothing above it moved. */
+ *  `size_price`, `reduce_basis` (#PF_NATIVE_REQUEST_V1_SIZING_SIZE), that
+ *  plus E14's trail seed (`trail_best_seed`, `trail_has_best_seed`;
+ *  #PF_NATIVE_REQUEST_V1_SEED_SIZE), and the current one, which appends the
+ *  arm relation (`arm_first_match`, `arm_scope`). A caller compiled against
+ *  an earlier layout keeps working unchanged and simply gets the later tails'
+ *  defaults (RAW, WORKING, RESOLVED, AT_MATCH, no seed, AT_ARM_PRINT,
+ *  OWNER_LOT). Any other `struct_size` is PF_NATIVE_E_STRUCT. Every tail is
+ *  append-only: nothing above it moved. */
 typedef struct pf_native_request_v1 {
     uint32_t struct_size;     /**< sizeof(pf_native_request_v1). */
     uint32_t version;         /**< PF_NATIVE_API_VERSION. */
@@ -1725,6 +1754,17 @@ typedef struct pf_native_request_v1 {
                                    *   readback carries the live best, not the
                                    *   seed — see the asymmetry note above. */
     uint8_t  trail_has_best_seed; /**< TRAIL: `trail_best_seed` is set. */
+    uint8_t  reserved2[7];        /**< Must be 0. The seed layout's own padding,
+                                   *   named so the tail below starts where
+                                   *   that layout's sizeof ended. */
+
+    /* ── The additive arm-relation tail (R5 lane F4). Read only when
+     * `struct_size` is the current sizeof; a caller sending any earlier
+     * layout stops above and keeps both defaults (AT_ARM_PRINT, OWNER_LOT),
+     * which is what every child accepted before this tail already armed as.
+     * A non-default value is legal under WAIT_FOR_APPLIED alone. ── */
+    uint32_t arm_first_match;     /**< #pf_native_arm_first_match_t. */
+    uint32_t arm_scope;           /**< #pf_native_arm_scope_t. */
 } pf_native_request_v1;
 
 /** Byte length of #pf_native_request_v1 as the L13 lane first published it,
@@ -1737,19 +1777,28 @@ typedef struct pf_native_request_v1 {
     ((uint32_t)offsetof(pf_native_request_v1, anchor_rounding))
 
 /** Byte length of #pf_native_request_v1 with L7b's anchored-leg tail but
- *  without L3b's sizing-detail tail — the second of its three published
+ *  without L3b's sizing-detail tail — the second of its five published
  *  layouts. Defined as the offset of the first field appended after it, for
  *  the same reason #PF_NATIVE_REQUEST_V1_BASE_SIZE is. */
 #define PF_NATIVE_REQUEST_V1_ANCHOR_SIZE \
     ((uint32_t)offsetof(pf_native_request_v1, size_price))
 
 /** Byte length of #pf_native_request_v1 with L3b's sizing-detail tail but
- *  without E14's trail seed — the third of its four published layouts, and
+ *  without E14's trail seed — the third of its five published layouts, and
  *  the `sizeof` every caller compiled before that seed existed sends.
  *  Defined as the offset of the first field appended after it, for the same
  *  reason #PF_NATIVE_REQUEST_V1_BASE_SIZE is. */
 #define PF_NATIVE_REQUEST_V1_SIZING_SIZE \
     ((uint32_t)offsetof(pf_native_request_v1, trail_best_seed))
+
+/** Byte length of #pf_native_request_v1 with E14's trail seed but without
+ *  the arm-relation tail — the fourth of its five published layouts, and the
+ *  `sizeof` every caller compiled before that tail existed sends. The seed
+ *  layout ended in padding after `trail_has_best_seed`; `reserved2` names
+ *  exactly that padding, so the offset of the first arm field IS that sizeof
+ *  on every target. */
+#define PF_NATIVE_REQUEST_V1_SEED_SIZE \
+    ((uint32_t)offsetof(pf_native_request_v1, arm_first_match))
 
 /** One declared higher-timeframe series of #pf_native_run_spec_ext_v1.
  *
@@ -2422,6 +2471,33 @@ PF_API int strategy_native_marked_equity_v1(pf_strategy_t s, double mark, double
  *  book is flat, or no finite price solves the breach (a long at full
  *  maintenance); @p out is then written NaN. */
 PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out);
+
+/** The units a kernel-sized request resolves to under this run's spec, as a
+ *  pure query — `native_sized_units()`.
+ *
+ *  @p sized is a #PF_NATIVE_INTENT_SIZED request, read for its sizing block
+ *  alone (side, basis and its value, reserve, grid policy): units =
+ *  cash / (price * point_value * fx), the cash being the basis value or the
+ *  fraction of @p equity, net of the percent fee reserve when the request
+ *  asks for it, then the grid policy. It is the very function the kernel
+ *  sizes with, at acceptance and at the candidate, so a host that gates a
+ *  command on its quantity reads the number here before it submits.
+ *  Observation only: it moves and freezes nothing.
+ *
+ *  @param price   The sizing price.
+ *  @param equity  The marked equity an EQUITY_FRACTION basis is a share of.
+ *  @param fx      The account rate the conversion divides by.
+ *  @param units   Receives the units; NaN with #PF_NATIVE_ABSENT.
+ *  @return PF_NATIVE_OK, #PF_NATIVE_ABSENT when the run is not configured or
+ *  the basis is unresolvable there (non-positive money or denominator, a
+ *  below-one-step quotient under a snapping grid), PF_NATIVE_E_ARGUMENT for a
+ *  request that is not SIZED or a NULL pointer, or the request's own
+ *  PF_NATIVE_E_STRUCT / PF_NATIVE_E_TAG.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
+PF_API int strategy_native_sized_units_v1(pf_strategy_t s, const pf_native_request_v1* sized,
+                                          double price, double equity, double fx,
+                                          double* units);
 
 /** The run's generic risk ledger — `native_risk_state()`. Every field is its
  *  zero for a run that declares no risk block. */

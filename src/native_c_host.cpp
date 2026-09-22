@@ -267,6 +267,19 @@ static_assert(PF_NATIVE_REQUEST_V1_SIZING_SIZE
 static_assert(offsetof(pf_native_request_v1, trail_has_best_seed)
                   == PF_NATIVE_REQUEST_V1_SIZING_SIZE + sizeof(double),
               "the pf_native_request_v1 trail-seed tail moved");
+/* The seed layout ended in padding after its one-byte flag. reserved2 names
+ * exactly those bytes, so the arm tail starts where that layout's sizeof
+ * ended -- which is what lets a caller compiled before the arm tail send
+ * PF_NATIVE_REQUEST_V1_SEED_SIZE -- and the tail is its two words. */
+static_assert(offsetof(pf_native_request_v1, reserved2)
+                      == offsetof(pf_native_request_v1, trail_has_best_seed) + 1u
+                  && PF_NATIVE_REQUEST_V1_SEED_SIZE
+                         == PF_NATIVE_REQUEST_V1_SIZING_SIZE + 2u * sizeof(double)
+                  && PF_NATIVE_REQUEST_V1_SEED_SIZE % alignof(pf_native_request_v1) == 0u,
+              "PF_NATIVE_REQUEST_V1_SEED_SIZE is not the seed layout's sizeof");
+static_assert(sizeof(pf_native_request_v1)
+                  == PF_NATIVE_REQUEST_V1_SEED_SIZE + 2u * sizeof(std::uint32_t),
+              "the pf_native_request_v1 arm-relation tail moved");
 static_assert(static_cast<int>(no::SizePrice::SignalOnTick)
                   == PF_NATIVE_SIZE_PRICE_SIGNAL_ON_TICK, "SizePrice drifted");
 static_assert(static_cast<int>(no::ScopeBasis::AtAcceptance)
@@ -447,6 +460,10 @@ PF_PIN_WORD(pineforge::NativeFailureOperation::Callback, PF_NATIVE_OPERATION_CAL
 PF_PIN_WORD(pineforge::NativeFailureOperation::Settlement, PF_NATIVE_OPERATION_SETTLEMENT);
 PF_PIN_WORD(pineforge::NativeFailureOperation::Mutation, PF_NATIVE_OPERATION_MUTATION);
 PF_PIN_WORD(pineforge::NativeFailureOperation::Stream, PF_NATIVE_OPERATION_STREAM);
+PF_PIN_WORD(no::NativeArmFirstMatch::AtArmPrint, PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT);
+PF_PIN_WORD(no::NativeArmFirstMatch::AfterArmPrint, PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT);
+PF_PIN_WORD(no::NativeArmScope::OwnerLot, PF_NATIVE_ARM_SCOPE_OWNER_LOT);
+PF_PIN_WORD(no::NativeArmScope::Book, PF_NATIVE_ARM_SCOPE_BOOK);
 PF_PIN_WORD(pineforge::NativeRunPhase::Batch, PF_NATIVE_PHASE_BATCH);
 PF_PIN_WORD(pineforge::NativeRunPhase::Warmup, PF_NATIVE_PHASE_WARMUP);
 PF_PIN_WORD(pineforge::NativeRunPhase::Realtime, PF_NATIVE_PHASE_REALTIME);
@@ -1686,7 +1703,7 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
 /* ── C POD → C++ value ──────────────────────────────────────────── */
 
 int translate_intent(const pf_native_request_v1& in, bool has_sizing_tail,
-                     no::OrderIntent& out) {
+                     bool has_arm_tail, no::OrderIntent& out) {
     switch (in.intent) {
     case PF_NATIVE_INTENT_FLATTEN:
         out = no::Flatten{};
@@ -1699,16 +1716,20 @@ int translate_intent(const pf_native_request_v1& in, bool has_sizing_tail,
         return PF_NATIVE_OK;
     case PF_NATIVE_INTENT_HOST_SIZED:
         /* HostSized is the adapter's sizing seam and a C host sizes with
-         * SIZED -- with ONE exception the kernel leaves no other spelling
-         * for. native_order.cpp accepts BindCohort only for
-         * HostSized{Close}, and a cohort close has no quantity to write: the
-         * roster's own live openings are the target, so the accepted request
-         * carries NoTarget and the cohort authority decides the units.
-         * Every other HostSized shape needs resolve_execution_terms to
-         * answer the quantity, which this header does not expose, so it
-         * stays unsupported rather than being accepted and then rejected at
-         * the candidate. */
-        if (in.owner != PF_NATIVE_OWNER_BIND_COHORT) return PF_NATIVE_E_UNSUPPORTED;
+         * SIZED -- with two exceptions the kernel leaves no other spelling
+         * for, both a CLOSE whose units on_close_units answers. The cohort
+         * close: native_order.cpp accepts BindCohort only for
+         * HostSized{Close}, the roster's own live openings are the target
+         * and the cohort authority decides the units. And a WAIT_FOR_APPLIED
+         * child carrying the arm tail: the kernel admits a waiting
+         * HostSized{Close} under NativeArmScope::Book alone and refuses the
+         * owner-lot relation with its own typed InvalidOwner, so that choice
+         * is left to it. Any other owner stays unsupported rather than being
+         * accepted and then rejected at the candidate. */
+        if (in.owner != PF_NATIVE_OWNER_BIND_COHORT
+            && !(has_arm_tail && in.owner == PF_NATIVE_OWNER_WAIT_FOR_APPLIED)) {
+            return PF_NATIVE_E_UNSUPPORTED;
+        }
         out = no::HostSized{no::HostSizedKind::Close, std::nullopt};
         return PF_NATIVE_OK;
     case PF_NATIVE_INTENT_REDUCE: {
@@ -1876,11 +1897,13 @@ int translate_owner(const pf_native_request_v1& in, const no::RunIdentity& run,
 
 int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run,
                       no::Request& out) {
-    /* Four published layouts: the base one the L13 lane first shipped, that
-     * plus L7b's anchored-leg tail, that plus L3b's sizing detail, and the
-     * current one with E14's trail seed. An earlier caller's later tails are
-     * never read; it gets their defaults. */
-    const bool has_trail_seed_tail = in.struct_size == sizeof(pf_native_request_v1);
+    /* Five published layouts: the base one the L13 lane first shipped, that
+     * plus L7b's anchored-leg tail, that plus L3b's sizing detail, that plus
+     * E14's trail seed, and the current one with the arm relation. An
+     * earlier caller's later tails are never read; it gets their defaults. */
+    const bool has_arm_tail = in.struct_size == sizeof(pf_native_request_v1);
+    const bool has_trail_seed_tail =
+        has_arm_tail || in.struct_size == PF_NATIVE_REQUEST_V1_SEED_SIZE;
     const bool has_sizing_tail =
         has_trail_seed_tail || in.struct_size == PF_NATIVE_REQUEST_V1_SIZING_SIZE;
     const bool has_anchor_tail =
@@ -1889,7 +1912,8 @@ int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run
         || in.version != PF_NATIVE_API_VERSION) {
         return PF_NATIVE_E_STRUCT;
     }
-    if (int rc = translate_intent(in, has_sizing_tail, out.intent); rc != PF_NATIVE_OK) {
+    if (int rc = translate_intent(in, has_sizing_tail, has_arm_tail, out.intent);
+        rc != PF_NATIVE_OK) {
         return rc;
     }
     if (int rc = translate_trigger(in, has_trail_seed_tail, out.trigger);
@@ -1948,6 +1972,30 @@ int translate_request(const pf_native_request_v1& in, const no::RunIdentity& run
             rounding = no::NativeAnchorRounding::Directional;
             break;
         default: return PF_NATIVE_E_TAG;
+        }
+        if (has_arm_tail) {
+            /* The arm relation belongs to the same owner as visibility: a
+             * non-default word on any other owner is a tag error, not a
+             * silent drop, and the named padding before it must be zero. */
+            for (const auto byte : in.reserved2) {
+                if (byte != 0u) return PF_NATIVE_E_TAG;
+            }
+            switch (in.arm_first_match) {
+            case PF_NATIVE_ARM_FIRST_MATCH_AT_ARM_PRINT: break;
+            case PF_NATIVE_ARM_FIRST_MATCH_AFTER_ARM_PRINT:
+                if (!wait) return PF_NATIVE_E_TAG;
+                wait->first_match = no::NativeArmFirstMatch::AfterArmPrint;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
+            switch (in.arm_scope) {
+            case PF_NATIVE_ARM_SCOPE_OWNER_LOT: break;
+            case PF_NATIVE_ARM_SCOPE_BOOK:
+                if (!wait) return PF_NATIVE_E_TAG;
+                wait->scope = no::NativeArmScope::Book;
+                break;
+            default: return PF_NATIVE_E_TAG;
+            }
         }
     }
     switch (in.anchor) {
@@ -3111,6 +3159,36 @@ PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out) {
             return PF_NATIVE_ABSENT;
         }
         *out = *price;
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_sized_units_v1(pf_strategy_t s, const pf_native_request_v1* sized,
+                                          double price, double equity, double fx,
+                                          double* units) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!sized || !units) return PF_NATIVE_E_ARGUMENT;
+        /* The sizing block is read by the one translation a submit uses. A
+         * SIZED request names no handle, so before configure -- when the run
+         * has no identity yet -- an empty one serves, and the kernel's own
+         * answer for an unconfigured run is the empty. */
+        const auto* run = run_identity(*host);
+        const no::RunIdentity none{};
+        no::Request translated;
+        if (int rc = translate_request(*sized, run ? *run : none, translated);
+            rc != PF_NATIVE_OK) {
+            return rc;
+        }
+        const auto* basis = std::get_if<no::Sized>(&translated.intent);
+        if (!basis) return PF_NATIVE_E_ARGUMENT;
+        const auto answer = host->native_sized_units(*basis, price, equity, fx);
+        if (!answer) {
+            *units = kNaN;
+            return PF_NATIVE_ABSENT;
+        }
+        *units = *answer;
         return PF_NATIVE_OK;
     });
 }
