@@ -468,6 +468,32 @@ int main() {
     verify(kPostExitResizeShort, run<PostExitResizeShort>(post_exit_resize_tape()));
     verify(kGriddedShortfallLong, run<GriddedShortfallLong>(gridded_break_tape()));
     verify(kDisabledLong, run<DisabledLong>(long_break_tape()));
+    // R5 lane F7: the adapter defines no margin-scheduling predicate that no
+    // path consults. These three were defined, declared and reached from
+    // nowhere -- two carried-POOC-short scopes and a COOF waypoint price, a
+    // silent second copy of rules the live schedule no longer reads.
+#if defined(PINEFORGE_F7_ADAPTER_FILE)
+    {
+        std::string adapter;
+        if (std::FILE* in = std::fopen(PINEFORGE_F7_ADAPTER_FILE, "rb")) {
+            char buffer[4096];
+            std::size_t got = 0;
+            while ((got = std::fread(buffer, 1, sizeof buffer, in)) > 0) adapter.append(buffer, got);
+            std::fclose(in);
+        }
+        CHECK(!adapter.empty());
+        for (const char* name : {"carried_pooc_short_margin_before_script_scope(",
+                                 "carried_pooc_short_priced_exit_after_adverse_scope(",
+                                 "next_coof_waypoint_price("}) {
+            const bool defined = adapter.find(name) != std::string::npos;
+            if (defined) std::printf("  adapter still defines %s)\n", name);
+            CHECK(!defined);
+        }
+    }
+#else
+    std::printf("PINEFORGE_F7_ADAPTER_FILE undefined\n");
+    CHECK(false);
+#endif
     std::printf("%d checks, %d failures\n", passed + failed, failed);
     return failed == 0 ? 0 : 1;
 }

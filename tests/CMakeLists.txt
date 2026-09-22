@@ -1493,6 +1493,12 @@ if(TARGET test_adapter_sizing_relower)
         PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
 endif()
 
+# R5 F7: the margin witness pins that no never-called predicate survives.
+if(TARGET test_adapter_margin_relower)
+    target_compile_definitions(test_adapter_margin_relower PRIVATE
+        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp")
+endif()
+
 # R5 F7 (M25): the path-order witness reads the two source files it pins.
 if(TARGET test_e19_excursion_path_order)
     target_compile_definitions(test_e19_excursion_path_order PRIVATE

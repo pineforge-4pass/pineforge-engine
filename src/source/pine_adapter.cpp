@@ -4151,25 +4151,6 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
     return kNaN;
 }
 
-double PineExecutionAdapter::next_coof_waypoint_price() const noexcept {
-    if (!coof_recalc_active_ || !coof_script_bar_valid_) return kNaN;
-    const auto state = require_host().native_state();
-    // A35's generic remaining-path cursor already owns real lower-timeframe
-    // geometry. Keep the newborn MARKET request unpriced so it advances to
-    // the next retained sub-bar point instead of collapsing that path onto
-    // the enclosing script bar's four OHLC waypoints.
-    if (state.spec && state.spec->intrabar.lower()) return kNaN;
-    const bool high_first = source_path_uses_high_first(coof_script_bar_);
-    const NativePathPhase first_extreme = high_first
-        ? NativePathPhase::High : NativePathPhase::Low;
-    const auto phase = coof_context_.coordinate.path_phase;
-    if (phase == NativePathPhase::Open)
-        return high_first ? coof_script_bar_.high : coof_script_bar_.low;
-    if (phase == first_extreme)
-        return high_first ? coof_script_bar_.low : coof_script_bar_.high;
-    return kNaN;
-}
-
 bool PineExecutionAdapter::coof_remaining_recrosses(
         double level, bool long_position) const noexcept {
     if (!finite_positive(level) || !coof_recalc_active_ || !coof_script_bar_valid_)
@@ -12834,88 +12815,6 @@ bool PineExecutionAdapter::market_orders_pending_at_close(
         return true;
     }
     return false;
-}
-
-bool PineExecutionAdapter::carried_pooc_short_margin_before_script_scope(
-        const NativeDecisionContext& context) const {
-    const auto position = require_host().physical_position();
-    if (!config_.process_orders_on_close || config_.calc_on_order_fills
-        || stream_mode_ || position.signed_units >= 0.0 || position.lot_count != 1
-        || position_open_script_bar_ == std::numeric_limits<std::int64_t>::min()
-        || position_open_script_bar_ == context.script_bar_open_ms
-        || config_.pyramiding < 0 || config_.pyramiding > 1
-        || config_.commission_value != 0.0 || config_.slippage != 0
-        || std::abs(config_.margin_short - 100.0) > 1e-12
-        || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
-        || active_staged_fx(context.sub_bar_open_ms) != 1.0
-        || !staged_.account_fx_effective_from_ms.empty()
-        || !staged_.quantity_grid || !(*staged_.quantity_grid > 0.0)
-        || *staged_.quantity_grid >= 1.0 || cap.active()
-        || risk_.max_intraday_loss > 0.0 || risk_.max_drawdown > 0.0
-        || risk_.max_cons_loss_days > 0) {
-        return false;
-    }
-    const PlacementSnapshot* trail = nullptr;
-    for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& candidate = found->second;
-        if (candidate.family == PineOrderFamily::Margin) continue;
-        if (trail != nullptr || candidate.family != PineOrderFamily::ExitTrail) {
-            return false;
-        }
-        trail = &candidate;
-    }
-    if (!trail || trail->from_entry.empty()
-        || trail->projection_created_bar >= context.coordinate.interval_index
-        || std::isfinite(trail->requested_qty)
-        || (!std::isfinite(trail->qty_percent) || trail->qty_percent < 100.0)
-        || std::isfinite(trail->exit_levels.stop)
-        || std::isfinite(trail->exit_levels.limit)
-        || std::isfinite(trail->exit_levels.profit_ticks)
-        || std::isfinite(trail->exit_levels.loss_ticks)
-        || !std::isfinite(trail->exit_levels.trail_offset)
-        || !(trail->exit_levels.trail_offset > 0.0)
-        || (!std::isfinite(trail->exit_levels.trail_points)
-            && !std::isfinite(trail->exit_levels.trail_price))
-        || !trail->oca_name.empty() || trail->oca_type != 0) {
-        return false;
-    }
-    const double cohort = cohort_exposure_for(trail->from_entry);
-    return std::isfinite(cohort)
-        && cohort == std::abs(position.signed_units);
-}
-
-bool PineExecutionAdapter::carried_pooc_short_priced_exit_after_adverse_scope(
-        const Bar& bar) const {
-    const auto position = require_host().physical_position();
-    if (position.signed_units >= 0.0 || position.lot_count != 1
-        || std::abs(bar.high - bar.open) >= std::abs(bar.open - bar.low)) {
-        return false;
-    }
-    const PlacementSnapshot* priced = nullptr;
-    for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& candidate = found->second;
-        if (candidate.family == PineOrderFamily::Margin) continue;
-        if (candidate.family != PineOrderFamily::ExitLimit
-            || priced != nullptr || candidate.from_entry.empty()
-            || cohort_exposure_for(candidate.from_entry) <= 0.0) {
-            return false;
-        }
-        priced = &candidate;
-    }
-    if (!priced || !finite_positive(priced->exit_levels.limit)
-        || bar.low > priced->exit_levels.limit
-        || std::isfinite(priced->requested_qty)
-        || (!std::isfinite(priced->qty_percent)
-            || priced->qty_percent < 100.0)
-        || !priced->oca_name.empty()) {
-        return false;
-    }
-    return cohort_exposure_for(priced->from_entry)
-        == std::abs(position.signed_units);
 }
 
 bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
