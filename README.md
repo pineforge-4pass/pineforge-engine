@@ -496,10 +496,11 @@ declare all fail CI.
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. `pf_native_run_spec_ext_v1` has three published lengths — the
+mutates nothing. `pf_native_run_spec_ext_v1` has four published lengths — the
 layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
-struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`) and
-the current one with the auxiliary-feed tail behind it; `pf_native_callbacks_v1`
+struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
+plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`) and the
+current one with the auxiliary-feed tail behind it; `pf_native_callbacks_v1`
 has two — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`)
 and the same struct with its appended tail. The runtime accepts each, so a host
 compiled against an earlier one keeps working unchanged. An **observation**

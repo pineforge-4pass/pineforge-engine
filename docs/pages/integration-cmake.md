@@ -37,13 +37,14 @@ Or set `CMAKE_PREFIX_PATH=/opt/pineforge`.
 ## Version selection
 
 ```cmake
-find_package(PineForge 0.1 REQUIRED)        # any 0.1.x
-find_package(PineForge 0.1.1 EXACT REQUIRED) # pinned
+find_package(PineForge 0.14 REQUIRED)         # 0.14.0 or any later 0.x.y
+find_package(PineForge 0.14.0 EXACT REQUIRED) # pinned to this tree's VERSION
 ```
 
-Within a major version PineForge guarantees C ABI back-compat — see
-[ABI stability](@ref abi_stability) — so `0.1` (any compatible
-0.x.y) is the recommended pin.
+The package config is `SameMajorVersion`, and within a major version
+PineForge guarantees C ABI back-compat — see
+[ABI stability](@ref abi_stability) — so a minimum `0.x` (any compatible
+later 0.x.y) is the recommended pin.
 
 ## Linking from a hand-written Makefile
 
@@ -73,7 +74,7 @@ libdir=${prefix}/lib
 
 Name: pineforge
 Description: Deterministic PineScript v6 backtest runtime
-Version: 0.1.1
+Version: 0.14.0
 Cflags: -I${includedir}
 Libs: -L${libdir} -lpineforge -lstdc++ -lm
 ```

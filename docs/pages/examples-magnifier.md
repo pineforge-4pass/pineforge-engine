@@ -22,7 +22,7 @@ hourly strategy) makes the magnifier sample intra-hour fills from the
 
 ```
 $ python3 magnifier_ab.py
-PineForge 0.1.1 — 672 input bars → 168 hourly script bars (ratio 4:1)
+PineForge <version> — 672 input bars → 168 hourly script bars (ratio 4:1)
 
 without magnifier:
   trades:  19   net pnl:  -5096.73   sub_bars:     0   ticks:     0

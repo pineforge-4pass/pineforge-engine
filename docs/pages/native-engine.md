@@ -1175,9 +1175,10 @@ stands on the opening print it filled on — and converting there calls a margin
 the account never owed (`tests/test_native_margin_fx_clock.cpp`). The rest of
 the kernel already converts at the cursor: a `Sized` request freezes its units
 at the acceptance coordinate's rate, and an execution term records its
-`active_fx` at its own cursor. `native_liquidation_price()` is the one
-exception, and it is the rule restated: a host query has no cursor of its own,
-so it answers at the instant the engine is presenting.
+`active_fx` at its own cursor. The host queries are the exception, and they
+are the rule restated: `native_liquidation_price()`, `native_open_lots(mark)`
+and `native_marked_equity(mark)` have no cursor of their own, so they answer at
+the rate of the instant the engine is presenting.
 
 Both sides are affine in `P`, so `L` is unique unless the slopes coincide —
 `maintenance == 1.0` on a LONG, where equity and requirement move together and
@@ -1549,8 +1550,9 @@ At **one** point, in this order and no other:
 2. `on_native_applied` for each applied event, FIFO, through the existing
    notification drain under its re-entrancy guard.
 3. With `BarCloseAndFills` or `EveryModeledPoint`, one `OrderFill`
-   recalculation at that event's own cursor, immediately after its
-   `on_native_applied`, driven from the same drain. It is bounded by
+   recalculation at that event's own cursor, right after its
+   `on_native_applied` — and, for a kernel liquidation, after the
+   `on_native_margin_call` that follows it — driven from the same drain. It is bounded by
    `max_recalculations_per_point` (default 8) **per matching point**:
    executions a callback drives through `execute_current` land at the same
    cursor and spend the same budget, so a host that refills on its own fill
@@ -1754,7 +1756,7 @@ says otherwise, and the C spellings are in
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
 | `native_decision_floor()` (`native_host.hpp:1267`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
 | `native_consumed_high_water()` (`native_host.hpp:1272`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
-| `native_continuation_hash()` | the consumer's continuation identity, local to this machine | `strategy_native_continuation_hash_v1` |
+| `native_continuation_hash()` | the consumer's continuation identity: the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:685` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
 
@@ -2143,10 +2145,11 @@ and the input's `on_native_bar` follows it.
 
 - `lookahead = false` (Pine's `barmerge.lookahead_off`): the bucket is
   delivered on the input bar that completes it, never earlier — its **last**
-  contributing input bar when that bar closes it (`Confirmed`), or, for a
-  bucket only a later input reveals as complete (a session-clipped bucket, a
-  hole over its last slot), the next period's **first** input bar
-  (`LazyComplete`), which contributes nothing to it.
+  contributing input bar when that bar closes it (`Confirmed`, a bucket the
+  session close clips short of its nominal end included: the calendar knows
+  that bar is the session's last), or, for a bucket only a later input reveals
+  as complete (a hole over its last slot), the next period's **first** input
+  bar (`LazyComplete`), which contributes nothing to it.
 - `lookahead = true` (`barmerge.lookahead_on`): the completed bucket's final
   OHLCV is delivered at its **first** contributing input bar, and
   `native_series_bar` answers with it from then on.
@@ -2165,9 +2168,9 @@ and the input's `on_native_bar` follows it.
 
 `NativeTimeframeBarContext::completion` is `Confirmed` when the bucket closed
 on its own last contributing bar and `LazyComplete` when the next period's
-first input closed it. `interval` is the calendar span of the bucket's first
-contributing input bar; `delivered_at_ms` is the input bar the delivery rides
-on. A bucket still open at the end of the input is never delivered.
+first input closed it. `interval` is the bucket's own calendar interval — its
+period at the subscription's timeframe, located by its first contributing bar;
+`delivered_at_ms` is the input bar the delivery rides on. A bucket still open at the end of the input is never delivered.
 
 **Chronology against the script interval.** The pump is ordered against the
 *script* interval, not the raw input. With `script_tf` coarser than
@@ -2973,16 +2976,20 @@ and affordability gates, which consume a quantity before any request exists and
 so cannot be a kernel decision. The percentage fee reserve is the kernel's
 (`reserve_percent_fee`), and so is the conversion itself — including the
 placement-time number those gates consume: the adapter reads it through
-`native_sized_units()` and floors it, so the arithmetic exists once
-(`tests/test_adapter_sizing_relower.cpp`, "the conversion exists once"). The two
+`native_sized_units()` and floors it (`tests/test_adapter_sizing_relower.cpp`,
+"the conversion exists once"). The two
 lot floors stay the adapter's because neither is the kernel's `SnapToGrid` on
 every input — the cash floor keeps a quotient a millionth of a lot under a
 boundary raw, and the percent floor has no on-grid tolerance, so an exact lot
 multiple such as `0.0392` on a `0.0001` grid comes out `0.0391` — both measured
 in the same test ("the source lot floors are not the kernel floor"). Paths whose
 sizing price is not the signal rule — a fill-time resize, a pure-stop entry
-sized at its trigger level — keep `HostSized{Open}` and their own terms branch
-(same test, "pure-stop default entry keeps its own branch"), and so do the
+sized at its trigger level, a typed percentage reversal sized from the
+hypothetical flatten's balance — keep `HostSized{Open}` and their own terms
+branch (same test, "pure-stop default entry keeps its own branch"), and that
+branch restates the same `cash / (price × point_value × fx)` quotient and
+percent fee reserve inline in the adapter's `resolve_execution_terms` override
+rather than calling `native_sized_units()`; so do the
 percentage exits: the kernel resolves a `ScopeFraction` as `scope * fraction`,
 which is not `scope * percent / 100`, and no field reconciles the association.
 
@@ -3463,11 +3470,11 @@ has no call that marks one, so its integer, 2, is refused like any other.
 base-spec words: the kernel's validation judges them, and a bad one answers
 -1 and leaves the host failed.
 
-`pf_native_run_spec_ext_v1` now has **three** published lengths and the
-runtime accepts any of them: the layout this header first shipped
-(`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), that plus the risk tail
-(`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), and the current one, which appends
-what the header used to list as unrepresentable — the retained intrabar path
+`pf_native_run_spec_ext_v1`'s third published length,
+`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`, ends the tail after the base layout
+(`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`) and the risk tail
+(`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`); the runtime accepts it and the other
+three. That tail appends what the header used to list as unrepresentable — the retained intrabar path
 (`PF_NATIVE_SPEC_EXT_INTRABAR`), the four feed-shape and presentation
 policies (`PF_NATIVE_SPEC_EXT_FEED_POLICY`: slot labels, feed tolerance, the
 forced path order, abort reporting), and the margin model's remaining knobs
@@ -3501,11 +3508,11 @@ past it, and any other length is `PF_NATIVE_E_STRUCT`.
 The risk block (`PF_NATIVE_SPEC_EXT_RISK`) was the first **additive tail** in
 this header. It appends `risk_*` fields — the two loss limits as a value plus
 a percent flag, the two counts, the day basis and the breach action, each
-limit opt-in through its own `has_` flag — past `reserved0`, so
-`pf_native_run_spec_ext_v1` now has two published lengths and the runtime
-accepts either: `PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE` (the layout this header
-first shipped, defined as the offset of the first appended field rather than
-as a literal, so it stays right on every target) and the current `sizeof`.
+limit opt-in through its own `has_` flag — past `reserved0`, which gave
+`pf_native_run_spec_ext_v1` its second published length — beside
+`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE` (the layout this header first shipped,
+defined as the offset of the first appended field rather than as a literal, so
+it stays right on every target) — ending at `PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`.
 Each subscription row (`pf_native_subscription_v1`) carries `lookahead` and
 `gaps` as `uint32_t` words holding a `pf_native_lookahead_e`
 (`PF_NATIVE_LOOKAHEAD_AT_COMPLETION` / `_AT_FIRST_INPUT`) and a

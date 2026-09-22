@@ -10,7 +10,7 @@ the report.
 
 ```
 $ cargo run --release -- path/to/strategy.so path/to/ohlcv.csv
-PineForge 0.1.1 (97c93d3) — 672 bars
+PineForge <version> (<sha>) — 672 bars
 49 trades, net pnl: -190.85
   L  pnl=  +12.40  qty=10.0
   S  pnl=  -22.10  qty=10.0

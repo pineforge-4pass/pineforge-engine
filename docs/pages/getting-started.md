@@ -63,7 +63,7 @@ Compile and run:
 ```bash
 cc hello.c -lpineforge -lstdc++ -lm -o hello
 ./hello
-# PineForge 0.1.1 (97c93d3)
+# PineForge <version> (<sha>)
 ```
 
 That's it — you have a working install. Next steps:

@@ -274,15 +274,16 @@ lift the missing surface into the public ABI.
 
 ## Version macros
 
-The generated `<pineforge/version.h>` exposes:
+The generated `<pineforge/version.h>` exposes, for this tree's `VERSION`
+(0.14.0):
 
 ```c
 #define PINEFORGE_VERSION_MAJOR  0
-#define PINEFORGE_VERSION_MINOR  1
-#define PINEFORGE_VERSION_PATCH  1
-#define PINEFORGE_VERSION_STRING "0.1.1"
-#define PINEFORGE_VERSION_FULL   "0.1.1"     /* or "0.1.1-3-gabc1234-dirty" */
-#define PINEFORGE_GIT_SHA        "97c93d3"
+#define PINEFORGE_VERSION_MINOR  14
+#define PINEFORGE_VERSION_PATCH  0
+#define PINEFORGE_VERSION_STRING "0.14.0"
+#define PINEFORGE_VERSION_FULL   "0.14.0"    /* or "0.14.0-3-gabc1234-dirty" */
+#define PINEFORGE_GIT_SHA        "<sha>"
 ```
 
 Use these for compile-time gating of features added in later minors:

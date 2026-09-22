@@ -352,7 +352,7 @@ openings TradingView takes.
 | a fill, as it happens | `on_native_applied` native_host.hpp:917 | `on_applied` native_c_api.h:2329 | `native_calc_on_fills_strategy.cpp` | Fires mid-path after each fill; a request born there is eligible on the unconsumed rest of the bar native_execution_consumer.cpp:4838. |
 | raw input before aggregation | `on_native_input` native_host.hpp:856 | `on_input` native_c_api.h:2324 | `native_auxiliary_feed_strategy.cpp` | Every accepted confirmed input bar, before aggregation or matching. |
 | a lower-timeframe sub-bar | `on_native_sub_bar` native_host.hpp:907 | `on_sub_bar` native_c_api.h:2365 | `tests/test_native_calc_timing.cpp` | `NativeCalculationReason::SubBar` is reserved and never delivered to the recalculate hook — a sub-bar has its own callback. |
-| `time`, `bar_index`, session facts | `NativeDecisionContext` market_driver.hpp:114 with `NativeCoordinate` market_driver.hpp:71 | `pf_native_decision_v1` native_c_api.h:916 | `hello_kernel.cpp` | Copied onto the callback stack; mutating it changes nothing. The session-day facts are the three rows below. |
+| `time`, `bar_index`, the bar's calendar interval, session facts | `NativeDecisionContext` market_driver.hpp:114 with `NativeCoordinate` market_driver.hpp:71 | `pf_native_decision_v1` native_c_api.h:916 | `hello_kernel.cpp` | Copied onto the callback stack; mutating it changes nothing. In C++ `script_interval` market_driver.hpp:118 and `input_interval` market_driver.hpp:117 add the calendar facts (eligible open, last traded close, next period and next input opens); the C decision carries the script interval's five instants and the session days of its open and of the next input in its tail, presented to a callback table of the current length, and no input interval. The session-day facts are the three rows below. |
 | `session.ismarket` | `in_session` market_driver.hpp:154 | `in_session` native_c_api.h:934 | `tests/test_native_session_day_facts.cpp` | The script bar's label is in session on the run's own calendar (`NativeRunSpec::session` / `timezone`); a D/W/M bar holds whole session days, so it is always true there. The calendar applies a session's day mask to the session day's trading date: Sunday 17:00 CT of a CME-style `1700-1600:23456` is Monday's session, in session. Pine's own `session.ismarket` is still generated as the time-of-day predicate `pine_session_ismarket` session_time.hpp:247, whose mask reads each instant's weekday, so on such a masked overnight session the two differ. In C, read the three session bytes only when `session_facts` native_c_api.h:933 is 1. |
 | `session.isfirstbar` | `opens_session_day` market_driver.hpp:155 | `opens_session_day` native_c_api.h:935 | `tests/test_native_session_day_facts.cpp` | In session, and the bar before it is not, or is on another session day. The session day rolls at the session's first window start and is keyed to its trading date, so an overnight session is one day across local midnight (Tokyo `2230-0500`: its days open at 22:30). "The bar before" is the one the run holds — the batch input, the stream warmup — else the calendar's slot one script width back; a run's first bar opens its day. |
 | `session.islastbar` | `closes_session_day` market_driver.hpp:156, `closes_session_day_open_ended` market_driver.hpp:157 | `closes_session_day` native_c_api.h:936 | `tests/test_native_session_day_facts.cpp` | In session, and the bar after it is not, or is on another session day, "the bar after" read the same way. A batch's final bar closes its day (a batch is complete input); `closes_session_day_open_ended` reads the calendar there instead, for a host recomputing a batch whose last input is still forming (C++ only: a C host's live edge is a stream). A stream's bars read the calendar, so a stream cannot see an early close its session string does not declare: the NYSE half day's 12:45 closes the day in a batch (the next bar held is the next day's) but not in a stream (ADR-0001, ruling "Session-day facts at a bar with nothing held after it"). |
@@ -488,7 +488,7 @@ rows of that array.
 | `strategy.closedtrades` | `closed_trade_count` engine.hpp:1771 | `total_trades` pineforge.h:392 | `native_open_lots_strategy.cpp` | `trade_count` engine.hpp:1762 is the same number as an `int`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
 | `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:179 | `strategy_closed_trade_entry_id` pineforge.h:1141 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
-| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:180 | `strategy_closed_trade_entry_id` pineforge.h:1141 | `native_open_lots_strategy.cpp` | |
+| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:180 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1141 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1055) before the close. |
 | `strategy.closedtrades.entry_bar_index()` | `entry_bar_index` engine.hpp:177 | `pf_trade_t` pineforge.h:199 | `native_open_lots_strategy.cpp` | Copied from the lot. |
 | `strategy.closedtrades.entry_time()` | `entry_time` engine.hpp:169 | `pf_trade_t` pineforge.h:199 | `native_open_lots_strategy.cpp` | Unix ms. |
 | `strategy.closedtrades.entry_price()` | `entry_price` engine.hpp:171 | `pf_trade_t` pineforge.h:199 | `native_open_lots_strategy.cpp` | |
@@ -509,7 +509,11 @@ rows of that array.
 Pine has no word for *why* a row closed. The native row does:
 `closed_trade_close_cause` engine.hpp:1797 (C:
 `strategy_closed_trade_close_cause` pineforge.h:1216) distinguishes a script
-close, a bracket leg, a liquidation, a risk flatten and the range end.
+close, a liquidation, a risk flatten and the range end — the kernel states the
+last three itself. The bracket-leg cause (`2`) is set by the Pine adapter for
+its own `strategy.exit` legs only: a native host's take-profit, stop or trail
+leg closes as a script close (`1`), so a host that reports by leg reads the
+row's `exit_id` — the leg's own `label`.
 
 ## Series, indicators, higher timeframes {#pine_to_native_map_series}
 
@@ -620,14 +624,18 @@ Three rules make the C door behave like the C++ one:
    only the recalculate hook and still expects the bar hook silently trades
    nothing.
 
-Four members of the C++ host have no C spelling, each for a recorded reason:
+Not every member of the C++ host has a C spelling, and each that has none
+carries a recorded reason. The four a porting author meets first are
 `validate_execution_precommit` native_host.hpp:938, `resolve_anchored_level`
 native_host.hpp:990, the price and opening-shape halves of
 `resolve_execution_terms` native_host.hpp:926, and `native_sized_units`
-native_host.hpp:1250. The COVERAGE block at native_c_api.h:45 lists every public
-member with either its C spelling or that reason, and
-`scripts/check_native_c_api_surface.py` proves the list is exactly that class's
-public surface.
+native_host.hpp:1250; the rest are the market-only conveniences, the typed
+`_result` answers of calls whose C spelling answers a status,
+`inspect_current_execution`, `declare_auxiliary_feed` (a C host declares its
+feed in the spec), `prepare_native_begin` and the `hash_host_extension` seam.
+The `COVERAGE` block at native_c_api.h:48 lists every public member with either
+its C spelling or that reason, and `scripts/check_native_c_api_surface.py`
+proves the list is exactly that class's public surface.
 
 ## A worked migration, end to end {#pine_to_native_worked}
 

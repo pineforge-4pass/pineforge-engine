@@ -368,9 +368,13 @@ drifted".
 
 ## Documentation guards
 
-Four guards hold the published documentation to the tree. Three of them run
-from the source alone — no build, no corpus — and are `ci_preflight` stages;
-the fourth is the documentation build.
+Six guards hold the published documentation to the tree. Four of them run
+from the source alone — no build, no corpus — and are `ci_preflight` stages:
+`doc-anchors`, `doc-lint`, `design-inventory` and `doc-pine-coverage`. The
+fifth is a CTest row that compiles and runs the migration page's worked
+example, and the sixth is the documentation build, which runs after a merge
+(`.github/workflows/docs.yml` triggers on a push to `main`, a `v*` tag or a
+manual dispatch), never on a pull request.
 
 `scripts/check_doc_anchors.py` checks every `file:line` citation the pages
 make: the file must resolve, the line must exist, and when a backticked symbol
@@ -394,7 +398,12 @@ python3 scripts/check_doc_anchors.py --fix      # re-anchor what is provable
 `scripts/check_doc_lint.py` reads the prose instead: a `lane L<n>` roadmap
 label on a published page, a `there is no … yet / in this slice / today` claim <!-- verified HEAD -->
 whose line carries no `<!-- verified HEAD -->` marker, a stale epoch or hash
-domain, and a relative markdown link whose file or `#anchor` is missing. The
+domain, a relative markdown link whose file or `#anchor` is missing, a cited
+`tests/…`, `examples/…` or `scripts/…` path that does not exist, a count the
+tree derives stated wrong (the `PF_API` declarations of the two C headers,
+`KERNEL_MIN_TESTS` / `RELEASE_MIN_TESTS`, the example manifest of
+`check_native_include_independence.py`), and the marker itself sitting on a
+sentence that states a non-live epoch as today's. The
 marker on the line above is the escape hatch itself: this sentence names the
 pattern rather than claiming it, and the guard has no way to tell those apart,
 so somebody has to say so where the diff will show it. The
@@ -432,7 +441,22 @@ profile compiles, and fails when an inventory row's closure marker does not
 match what the tests actually drive. `--ctest-list` cross-checks its transliteration
 against real `ctest -N` output in both directions.
 
-The fourth guard is the documentation build. `docs/build.sh` runs Doxygen over
+The fourth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
+fail-closed from the day it landed as well: it derives the offered Pine set
+from `docs/pine_v6_coverage_detail.md` and the covered set from the migration
+page's own first table column, and fails when a `strategy.*`, `request.*` or
+`barmerge.*` name has no row.
+
+The fifth guard is the CTest row `test_pine_to_native_worked`. At build time
+`tests/extract_pine_to_native_worked.py` copies the six C++ blocks of the
+migration page's worked example out of the page verbatim (and fails the build
+when the page stops holding them); `tests/test_pine_to_native_worked.cpp`
+compiles them against `PineForge::kernel`, runs them, and checks the outcomes
+the page states — `configure_native` applies, no request is refused, the
+take-profit closes the entry, and the units and the commission are the ones
+the page's own Pine declaration computes. The row registers in every profile.
+
+The sixth guard is the documentation build. `docs/build.sh` runs Doxygen over
 the whole public surface — every header under `include/pineforge`, the C API
 and C ABI headers, the fifteen native examples, the adapter units, the pages,
 the front-door documents, the design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.

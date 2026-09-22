@@ -84,4 +84,5 @@ cmake --build build-smoke
 ./build-smoke/smoke_consumer    # prints the runtime version
 ```
 
-If this prints `0.1.1` (or whatever you installed) you're done.
+If this prints the version you installed (`0.14.0` for this tree's `VERSION`)
+you're done.
