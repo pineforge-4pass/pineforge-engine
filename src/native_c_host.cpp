@@ -351,6 +351,20 @@ static_assert(PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
 static_assert(sizeof(pf_native_callbacks_v1)
                   == PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE + 4u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 policy-hook tail moved");
+/* The decision is PRESENTED at the length its caller's table was published
+ * with, so the base length must be exactly the sizeof a base-layout caller
+ * compiled: the tail starts where `quote_kind`'s trailing padding ended, and
+ * is seven 8-byte words and eight bytes after it. */
+static_assert(PF_NATIVE_DECISION_V1_BASE_SIZE
+                      >= offsetof(pf_native_decision_v1, quote_kind) + sizeof(std::uint8_t)
+                  && PF_NATIVE_DECISION_V1_BASE_SIZE
+                         - (offsetof(pf_native_decision_v1, quote_kind) + sizeof(std::uint8_t))
+                         < alignof(std::int64_t)
+                  && PF_NATIVE_DECISION_V1_BASE_SIZE % alignof(pf_native_decision_v1) == 0u,
+              "PF_NATIVE_DECISION_V1_BASE_SIZE is not the base layout's sizeof");
+static_assert(sizeof(pf_native_decision_v1)
+                  == PF_NATIVE_DECISION_V1_BASE_SIZE + 7u * sizeof(std::int64_t) + 8u,
+              "the pf_native_decision_v1 session tail moved");
 /* The working readout's tail is append-only too, and it is WRITTEN, so the
  * base length must be exactly what a base-layout caller's sizeof was: the
  * tail starts where `comment` ended, and that end carried no padding. The
@@ -1261,7 +1275,12 @@ std::uint32_t working_trigger_tag(const no::Trigger& trigger, double& p1, double
 
 class CCallbackHost final : public NativeStrategyHost {
 public:
-    explicit CCallbackHost(const pf_native_callbacks_v1& table) : table_(table) {}
+    /* `caller_size` is the struct_size the caller's table was published at:
+     * the retained copy is always the current layout, and this is the one
+     * fact left about which header the caller compiled -- which layout of a
+     * PRESENTED struct it can read. */
+    CCallbackHost(const pf_native_callbacks_v1& table, std::uint32_t caller_size)
+        : table_(table), caller_table_size_(caller_size) {}
 
     const pf_native_callbacks_v1& table() const noexcept { return table_; }
 
@@ -1287,6 +1306,11 @@ public:
     }
 
     pf_native_decision_v1 decision(const pineforge::NativeDecisionContext& ctx) const;
+
+    /* The session day of `ms` on the run's own calendar -- the spec's
+     * session and timezone, parsed once per spec -- or nullopt when there
+     * is no spec or the calendar cannot key it. */
+    std::optional<std::int64_t> session_day(std::int64_t ms) const;
 
 private:
     void on_native_run_begin() override {
@@ -1542,6 +1566,14 @@ private:
     }
 
     pf_native_callbacks_v1 table_{};
+    std::uint32_t caller_table_size_ = 0;
+    /* The calendar session_day() keys on, and the spec text it was parsed
+     * from. Host-side like the two caches below: a pure function of the
+     * spec, never durable engine state, never hashed. */
+    mutable std::optional<pineforge::native_calendar::SessionCalendar> calendar_;
+    mutable std::string calendar_session_;
+    mutable std::string calendar_timezone_;
+    mutable bool calendar_parsed_ = false;
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
     std::vector<pineforge::NativeOpenLot> open_lot_cache_;
     /* True while the C `on_applied` runs. Host-side, like the two caches:
@@ -1572,7 +1604,56 @@ pf_native_decision_v1 CCallbackHost::decision(
         out.price = point->price;
         out.quote_kind = c_byte(c_word(point->quote_kind));
     }
+    /* A table of an earlier published length is presented the base layout
+     * its header compiled, and nothing past it is computed. */
+    if (caller_table_size_ != sizeof(pf_native_callbacks_v1)) {
+        out.struct_size = PF_NATIVE_DECISION_V1_BASE_SIZE;
+        return out;
+    }
+    const auto& interval = ctx.script_interval;
+    /* Every real interval has a positive length; a point the kernel gave no
+     * interval carries the zero one. */
+    if (interval.next_period_open_ms <= interval.open_ms) return out;
+    out.has_script_interval = 1u;
+    out.script_interval_open_ms = interval.open_ms;
+    out.script_interval_eligible_open_ms = interval.eligible_open_ms;
+    out.script_interval_last_traded_close_ms = interval.last_traded_close_ms;
+    out.script_interval_next_period_open_ms = interval.next_period_open_ms;
+    out.script_interval_next_input_open_ms = interval.next_input_open_ms;
+    if (const auto day = session_day(interval.open_ms)) {
+        out.has_session_day = 1u;
+        out.session_day_ordinal = *day;
+    }
+    if (const auto day = session_day(interval.next_input_open_ms)) {
+        out.has_next_input_session_day = 1u;
+        out.next_input_session_day_ordinal = *day;
+    }
     return out;
+}
+
+std::optional<std::int64_t> CCallbackHost::session_day(std::int64_t ms) const {
+    const auto state = native_state();
+    if (!state.spec) return std::nullopt;
+    if (!calendar_parsed_ || calendar_session_ != state.spec->session
+        || calendar_timezone_ != state.spec->timezone) {
+        calendar_.reset();
+        calendar_session_ = state.spec->session;
+        calendar_timezone_ = state.spec->timezone;
+        calendar_parsed_ = true;
+        try {
+            calendar_ = pineforge::native_calendar::parse_session(calendar_session_,
+                                                                  calendar_timezone_);
+        } catch (...) {
+            calendar_.reset();
+        }
+    }
+    if (!calendar_) return std::nullopt;
+    try {
+        return pineforge::native_calendar::session_day_ordinal(*calendar_, ms);
+    } catch (...) {
+        /* A day the calendar cannot key is no day, never a guessed one. */
+        return std::nullopt;
+    }
 }
 
 /* ── C++ value → C POD ──────────────────────────────────────────── */
@@ -3014,7 +3095,7 @@ PF_API pf_strategy_t strategy_native_host_create_v1(const pf_native_callbacks_v1
         std::memcpy(&table, callbacks, callbacks->struct_size);
         /* The retained copy is always the current layout. */
         table.struct_size = static_cast<std::uint32_t>(sizeof(table));
-        auto host = std::make_unique<CCallbackHost>(table);
+        auto host = std::make_unique<CCallbackHost>(table, caller_size);
         /* Convert through the base the rest of the C ABI casts back to, so
          * `static_cast<BacktestEngine*>(handle)` in c_abi.cpp is exact. */
         auto* engine = static_cast<pineforge::BacktestEngine*>(host.release());

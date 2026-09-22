@@ -17,6 +17,9 @@
  * ✓ Read the physical position, the live working book, the open lots (the
  *   book lot by lot, marked at a price — strategy.opentrades.* for a C host)
  *   and the event history
+ * ✓ Read, at every decision point, the script interval and the session day
+ *   of its open and of the next input — the facts session-day flags are
+ *   derived from
  * ✓ Read the run's lifecycle state and its typed failure
  * ✓ Read a margin call's whole economics — equity, requirement and the
  *   position on either side of it — by its event ordinal
@@ -85,7 +88,9 @@
  *   [C]  current_partial_bar               strategy_native_partial_bar_v1
  *   [C]  native_recalculation_count        strategy_native_recalculations_v1
  *   [C]  native_recalculations_skipped     strategy_native_recalculations_v1
- *   [C]  current_execution_point           pf_native_decision_v1::price / ::quote_kind, on every callback
+ *   [C]  current_execution_point           pf_native_decision_v1::price / ::quote_kind, on every callback;
+ *                                          its script interval and session days are the decision's
+ *                                          session tail
  *   [C]  trail_state                       strategy_native_trail_state_v1
  *   [--] inspect_current_execution         its preview carries the account-effect projection and a variable-
  *                                          length closed-row P&L vector with no size-prefixed POD;
@@ -203,7 +208,9 @@
  *    `*_SIZE` constant and the runtime accepts each — pf_native_request_v1,
  *    pf_native_run_spec_ext_v1 and pf_native_callbacks_v1 as inputs,
  *    pf_native_working_v1 as a readout. A readout is written only as far as
- *    the length its caller sent.
+ *    the length its caller sent. A struct the runtime PRESENTS to a callback
+ *    (pf_native_decision_v1) is presented at the layout the caller's
+ *    callback table was published with, and its `struct_size` says so.
  *  - Every enum-valued field is translated by an exhaustive switch. A value
  *    outside its enumeration is refused with PF_NATIVE_E_TAG; a value this
  *    version deliberately cannot represent is refused with
@@ -1320,7 +1327,24 @@ typedef enum pf_native_anchored_trigger_e {
  *
  *  A read-only snapshot of `NativeDecisionContext` plus the current quote:
  *  `price` is the execution point's price where one exists and NaN where the
- *  callback has no execution point (the bar's own close calculation). */
+ *  callback has no execution point (the bar's own close calculation).
+ *
+ *  It has TWO published layouts, and the runtime PRESENTS the one the
+ *  caller's callback table was published with: a table sent at the current
+ *  length is handed the whole struct, with its session tail; a table sent at
+ *  an earlier published length is handed `struct_size` =
+ *  #PF_NATIVE_DECISION_V1_BASE_SIZE — the sizeof that caller's own header
+ *  compiled — and nothing past it is filled. So an older caller's exact-size
+ *  check keeps holding, and a caller reads a field only below `struct_size`.
+ *
+ *  The session tail is the script interval under delivery and the session
+ *  day of its open and of the NEXT input's open, on the run's own calendar
+ *  (its `session` and `timezone`). Those two days decide the session-day
+ *  flags a C++ host derives from `NativeDecisionContext::script_interval`
+ *  and `native_calendar::session_day_ordinal`: a script bar is the last of
+ *  its session day when `next_input_session_day_ordinal` differs from
+ *  `session_day_ordinal`, and the first when the bar before it was the
+ *  last. */
 typedef struct pf_native_decision_v1 {
     uint32_t struct_size;        /**< sizeof(pf_native_decision_v1). */
     uint32_t version;            /**< PF_NATIVE_API_VERSION. */
@@ -1338,7 +1362,40 @@ typedef struct pf_native_decision_v1 {
     uint8_t  path_phase;         /**< #pf_native_path_phase_t. */
     uint8_t  completion;         /**< #pf_native_completion_kind_t. */
     uint8_t  quote_kind;         /**< #pf_native_quote_kind_t; 0 when price is NaN. */
+
+    /* ── The additive session tail (R5 lane F4). Presented only to a callback
+     * table of the current layout; see the struct note. ── */
+    int64_t  script_interval_open_ms;             /**< The script interval's nominal origin. */
+    int64_t  script_interval_eligible_open_ms;    /**< Its first in-session instant. */
+    int64_t  script_interval_last_traded_close_ms; /**< Its exclusive end of trading. */
+    int64_t  script_interval_next_period_open_ms; /**< The next interval's nominal open,
+                                                   *   a closed slot included. */
+    int64_t  script_interval_next_input_open_ms;  /**< The next actual eligible input
+                                                   *   open at or after that close:
+                                                   *   closed time skipped. */
+    int64_t  session_day_ordinal;                 /**< The session day of
+                                                   *   `script_interval_open_ms`: days
+                                                   *   since 1970-01-01 of its trading
+                                                   *   date. */
+    int64_t  next_input_session_day_ordinal;      /**< The session day of
+                                                   *   `script_interval_next_input_open_ms`. */
+    uint8_t  has_script_interval;                 /**< 1 when the point has a script
+                                                   *   interval; the six fields above
+                                                   *   are 0 otherwise. */
+    uint8_t  has_session_day;                     /**< 1 when the calendar keyed
+                                                   *   `session_day_ordinal`. */
+    uint8_t  has_next_input_session_day;          /**< 1 when it keyed
+                                                   *   `next_input_session_day_ordinal`. */
+    uint8_t  reserved0[5];                        /**< Always 0. */
 } pf_native_decision_v1;
+
+/** Byte length of #pf_native_decision_v1 as the L13 lane first published it,
+ *  before the session tail was appended — the `struct_size` a callback table
+ *  of an earlier published length is presented. It is the offset of the first
+ *  appended field, which is that layout's sizeof on every target (it ended in
+ *  padding the tail's first 8-byte field begins after). */
+#define PF_NATIVE_DECISION_V1_BASE_SIZE \
+    ((uint32_t)offsetof(pf_native_decision_v1, script_interval_open_ms))
 
 /** One applied execution, presented to `on_applied`. */
 typedef struct pf_native_applied_v1 {

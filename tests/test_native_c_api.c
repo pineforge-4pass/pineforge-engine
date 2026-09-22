@@ -7201,11 +7201,32 @@ static void check_anchored_level_hook(void) {
 }
 
 typedef struct hash_run_state {
-    twin_state twin;   /* first: twin_on_bar reads the shared user pointer as this */
-    int        provide;
-    uint64_t   digest;
-    int        calls;
+    pf_strategy_t host;
+    int           calculations;
+    int           provide;
+    uint64_t      digest;
+    int           calls;
 } hash_run_state;
+
+/* A long 1 opened at the fourth calculation and flattened at the twentieth,
+ * so the hash folds real book state. It reads nothing past the base layout
+ * of the decision, as a caller of any table layout may. */
+static int hash_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    hash_run_state* state = (hash_run_state*)user;
+    pf_native_request_v1 request = blank_request();
+    (void)bar;
+    if (at->struct_size < PF_NATIVE_DECISION_V1_BASE_SIZE) return 1;
+    ++state->calculations;
+    if (state->calculations == 4) {
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+    } else if (state->calculations == 20) {
+        request.intent = PF_NATIVE_INTENT_FLATTEN;
+    } else {
+        return 0;
+    }
+    return strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK ? 0 : 1;
+}
 
 static int hash_on_extension(void* user, uint64_t* digest) {
     hash_run_state* state = (hash_run_state*)user;
@@ -7245,11 +7266,11 @@ static hash_outcome hash_run(int install, int provide, uint64_t digest, uint32_t
     state.digest = digest;
     table = blank_callbacks(&state);
     if (table_size) table.struct_size = table_size;
-    table.on_bar = twin_on_bar;
+    table.on_bar = hash_on_bar;
     if (install) table.on_hash_extension = hash_on_extension;
-    state.twin.host = strategy_native_host_create_v1(&table);
-    CHECK(state.twin.host != NULL, "hash host create failed");
-    if (!state.twin.host) return out;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "hash host create failed");
+    if (!state.host) return out;
     spec.session_key = "native-c-api-hash-extension";
     /* The kernel records the report, so every script bar has a hash row. */
     memset(&ext, 0, sizeof(ext));
@@ -7257,11 +7278,11 @@ static hash_outcome hash_run(int install, int provide, uint64_t digest, uint32_t
     ext.version = PF_NATIVE_API_VERSION;
     ext.present_mask = PF_NATIVE_SPEC_EXT_REPORT;
     ext.report_policy = PF_NATIVE_REPORT_KERNEL_RECORDED;
-    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.twin.host, &spec, &ext), PF_NATIVE_OK,
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
                  "hash configure");
-    strategy_set_broker_state_hash_recording(state.twin.host, 1);
+    strategy_set_broker_state_hash_recording(state.host, 1);
     bars = pf_twin_bars(&n);
-    CHECK_EQ_INT(strategy_native_run_v1(state.twin.host, bars, n, &report), PF_NATIVE_OK,
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &report), PF_NATIVE_OK,
                  "the hash run did not complete");
     out.rows_digest = 1469598103934665603ULL;
     for (i = 0; i < report.broker_state_hash_len; ++i) {
@@ -7274,12 +7295,12 @@ static hash_outcome hash_run(int install, int provide, uint64_t digest, uint32_t
         if (i < TWIN_BARS) out.row[i] = row;
     }
     out.rows = report.broker_state_hash_len;
-    out.final_hash = strategy_broker_state_hash(state.twin.host);
-    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.twin.host, &out.continuation),
+    out.final_hash = strategy_broker_state_hash(state.host);
+    CHECK_EQ_INT(strategy_native_continuation_hash_v1(state.host, &out.continuation),
                  PF_NATIVE_OK, "the continuation hash was refused");
     out.calls = state.calls;
     strategy_native_report_free_v1(&report);
-    strategy_native_host_free(state.twin.host);
+    strategy_native_host_free(state.host);
     return out;
 }
 
@@ -7310,7 +7331,9 @@ static void check_hash_extension_hook(void) {
           "the same extension folded differently");
     CHECK(one.continuation == none.continuation,
           "the extension moved the continuation, which is the kernel's alone");
-    CHECK(older.calls == 0 && older.final_hash == none.final_hash,
+    /* ... and the layout a table was sent at changes nothing of the run. */
+    CHECK(older.calls == 0 && older.final_hash == none.final_hash
+              && older.continuation == none.continuation,
           "a hook past a hooks-layout table was read");
     CHECK(PF_NATIVE_CALLBACKS_V1_BASE_SIZE < PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
               && PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE < (uint32_t)sizeof(pf_native_callbacks_v1),
@@ -7322,6 +7345,138 @@ static void check_policy_hooks(void) {
     check_precommit_hook();
     check_anchored_level_hook();
     check_hash_extension_hook();
+}
+
+/* ── A decision point's session facts (lane F4, item 5) ────────────
+ *
+ * A C++ host derives session-day first/last flags from
+ * NativeDecisionContext::script_interval and the run's calendar
+ * (native_calendar::session_day_ordinal); a C host had neither, and the
+ * acid C port hand-coded a fixed UTC offset. pf_native_decision_v1's session
+ * tail carries the script interval and the session day of its open and of
+ * the next input's open, so the flags are a comparison: a bar is the last of
+ * its session day when the next input opens on another day, and the first
+ * when the bar before it was the last. The tail is presented only to a host
+ * whose callback table is the current layout -- an older table is handed the
+ * base layout its own header compiled, so its exact-size check still holds.
+ *
+ * The tape: a one-hour session, 0900-1000 UTC, on two days, 15-minute bars
+ * -- four a day. */
+
+#define SESSION_DAY0_ORDINAL 20458          /* 2026-01-05 */
+#define SESSION_DAY_MS       86400000LL
+#define SESSION_OPEN_MS      ((int64_t)SESSION_DAY0_ORDINAL * SESSION_DAY_MS + 9LL * 3600000LL)
+#define SESSION_BAR_MS       900000LL
+#define SESSION_BARS         8
+
+static pf_bar_t session_bars[SESSION_BARS];
+
+static void session_fill(void) {
+    int i;
+    for (i = 0; i < SESSION_BARS; ++i) {
+        const double open = 100.0 + (double)i;
+        session_bars[i].open = open;
+        session_bars[i].high = open + 1.0;
+        session_bars[i].low = open - 1.0;
+        session_bars[i].close = open + 0.5;
+        session_bars[i].volume = 1.0;
+        session_bars[i].timestamp = SESSION_OPEN_MS + (int64_t)(i / 4) * SESSION_DAY_MS
+                                    + (int64_t)(i % 4) * SESSION_BAR_MS;
+    }
+}
+
+typedef struct session_state {
+    int      failures;
+    int      calculations;
+    int      prev_last;
+    uint32_t sizes_seen;      /* 1: base length, 2: current length, 4: another */
+    int      first[SESSION_BARS];
+    int      last[SESSION_BARS];
+    int64_t  day[SESSION_BARS];
+    int64_t  next_open[SESSION_BARS];
+    int      interval_ok;
+} session_state;
+
+static int session_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    session_state* state = (session_state*)user;
+    const int i = state->calculations++;
+    if (at->struct_size == PF_NATIVE_DECISION_V1_BASE_SIZE) {
+        state->sizes_seen |= 1u;
+        return 0;   /* an older caller's view ends here: nothing past it is read */
+    }
+    state->sizes_seen |= at->struct_size == (uint32_t)sizeof(*at) ? 2u : 4u;
+    if (i >= SESSION_BARS) return 0;
+    LCHECK(state, at->has_script_interval == 1u && at->has_session_day == 1u
+                      && at->has_next_input_session_day == 1u,
+           "a calculation carried no session facts");
+    if (at->script_interval_open_ms == bar->timestamp
+        && at->script_interval_eligible_open_ms == bar->timestamp
+        && at->script_interval_last_traded_close_ms == bar->timestamp + SESSION_BAR_MS
+        && at->script_interval_next_period_open_ms == bar->timestamp + SESSION_BAR_MS) {
+        ++state->interval_ok;
+    }
+    state->day[i] = at->session_day_ordinal;
+    state->next_open[i] = at->script_interval_next_input_open_ms;
+    /* The flags, from the facts alone. */
+    state->last[i] = at->next_input_session_day_ordinal != at->session_day_ordinal;
+    state->first[i] = i == 0 || state->prev_last;
+    state->prev_last = state->last[i];
+    return 0;
+}
+
+static void session_run(uint32_t table_size, session_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_strategy_t host;
+
+    memset(state, 0, sizeof(*state));
+    table = blank_callbacks(state);
+    table.struct_size = table_size;
+    table.on_bar = session_on_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "session host create failed");
+    if (!host) return;
+    spec.session_key = "native-c-api-session-facts";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    spec.session = "0900-1000";
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "the session spec was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(host, session_bars, SESSION_BARS, NULL), PF_NATIVE_OK,
+                 "the session run did not complete");
+    CHECK_EQ_INT(state->failures, 0, "in-callback session rows failed");
+    strategy_native_host_free(host);
+}
+
+static void check_decision_session_facts(void) {
+    session_state state;
+    int i;
+
+    session_fill();
+    session_run((uint32_t)sizeof(pf_native_callbacks_v1), &state);
+    CHECK_EQ_INT(state.calculations, SESSION_BARS, "the session run calculated another count");
+    CHECK_EQ_INT(state.sizes_seen, 2, "a current-layout host was not handed the session tail");
+    CHECK_EQ_INT(state.interval_ok, SESSION_BARS, "a script interval is not its bar's own");
+    for (i = 0; i < SESSION_BARS; ++i) {
+        CHECK_EQ_INT(state.day[i], SESSION_DAY0_ORDINAL + i / 4, "a bar sits on another session day");
+        CHECK_EQ_INT(state.first[i], i % 4 == 0, "a session-day first flag is wrong");
+        CHECK_EQ_INT(state.last[i], i % 4 == 3, "a session-day last flag is wrong");
+    }
+    /* The next input after a day's last bar is the next day's open, closed
+     * time skipped; the tape's final bar still reads the calendar's. */
+    CHECK(state.next_open[0] == session_bars[1].timestamp, "the next input is not the next bar");
+    CHECK(state.next_open[3] == session_bars[4].timestamp,
+          "the next input after a session's end is not the next session's open");
+    CHECK(state.next_open[7] == session_bars[7].timestamp + SESSION_DAY_MS - 3 * SESSION_BAR_MS,
+          "the last bar's next input is not the calendar's next open");
+
+    /* An older table is handed the base layout its header compiled. */
+    session_run(PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE, &state);
+    CHECK_EQ_INT(state.sizes_seen, 1, "a hooks-layout host was handed the session tail");
+    session_run(PF_NATIVE_CALLBACKS_V1_BASE_SIZE, &state);
+    CHECK_EQ_INT(state.sizes_seen, 1, "a base-layout host was handed the session tail");
+    CHECK(PF_NATIVE_DECISION_V1_BASE_SIZE < (uint32_t)sizeof(pf_native_decision_v1)
+              && PF_NATIVE_DECISION_V1_BASE_SIZE % 8u == 0u,
+          "the decision's base length is not an aligned prefix of the current one");
 }
 
 int pf_native_c_api_checks(void) {
@@ -7366,5 +7521,6 @@ int pf_native_c_api_checks(void) {
     check_arm_relation_tail();
     check_sized_units_query();
     check_policy_hooks();
+    check_decision_session_facts();
     return failures;
 }
