@@ -304,16 +304,16 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `src/c_abi.cpp` implements the **57** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **33** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
-  callback table (`strategy_native_host_create_v1` `native_c_api.h:1667`), runs a batch
-  (`strategy_native_run_v1` `native_c_api.h:1680`), and **submits, replaces, cancels and
-  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:1707`), `_replace_v1`
+  callback table (`strategy_native_host_create_v1` `native_c_api.h:2453`), runs a batch
+  (`strategy_native_run_v1` `native_c_api.h:2466`), and **submits, replaces, cancels and
+  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:2494`), `_replace_v1`
   (`:1449`), `_cancel_v1` (`:1456`), `_cancel_all_v1` (`:1460`), `_cancel_where_v1` (`:1481`),
   `_execute_current_v1` (`:1502`) — under the kernel's own legality rule. Streaming needs no new
   symbol: the whole `strategy_stream_*` family takes that handle unchanged. The header's
   COVERAGE block carries one line per public member of `NativeStrategyHost` with either its C
   spelling or the reason it has none, and `scripts/check_native_c_api_surface.py` proves the
   block is exactly that class's public surface. `strategy_create` / `run_backtest` stay
-  codegen-emitted (`include/pineforge/pineforge.h:543`), which is why a C host frees its report
+  codegen-emitted (`include/pineforge/pineforge.h:581`), which is why a C host frees its report
   with `strategy_native_report_free_v1`.
 - **The examples are a gated target with executed assertions.** Fifteen Pine-free hosts ship
   under `examples/native/` — thirteen C++ and two C — each including only
@@ -609,7 +609,7 @@ consults before believing one.
 | `ta::STDEV` `include/pineforge/ta.hpp:421-428` | the population (biased) standard deviation | biased vs sample is a textbook choice, and the kernel states which | a per-instance switch is the *right* answer where two conventions genuinely compete, which is why `ta::EmaSeeding` exists and this one does not need it | `tests/test_ta_indicators_extras.cpp` |
 | `float_band_eq` `include/pineforge/ta_compare_band.hpp:38` | a relative-epsilon float comparison for indicator equality | an epsilon band is needed by any float comparison; the width is the calibration | a band-width field on a comparison the indicators share | `tests/test_dmi_parity.cpp`, `tests/test_ta_osc_edge.cpp` |
 | the two delivery rules `src/native_execution_consumer.cpp:7262`, `:7347` | deliver a completed bucket at its **first** contributing bar (lookahead), and **clear** the series on a bar it publishes nothing on (gaps) | both are delivery rules over a bucket the aggregator already closed; neither reads a platform. They are spec fields: `NativeTimeframeSubscription::lookahead` / `::gaps` | already spelled, and both default to the rule that moves no identity | `tests/test_native_htf_subscriptions.cpp` |
-| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:1357`, `::gaps` `:1361` | the C spelling of those two rules | the doxygen names `barmerge.lookahead_off` / `gaps_on` so a migrating reader finds the field — that is a *pointer to the reader's vocabulary*, which is what a migration surface is for, not a justification | — | `tests/test_native_c_api.c` |
+| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:2090`, `::gaps` `:2094` | the C spelling of those two rules | the doxygen names `barmerge.lookahead_off` / `gaps_on` so a migrating reader finds the field — that is a *pointer to the reader's vocabulary*, which is what a migration surface is for, not a justification | — | `tests/test_native_c_api.c` |
 | the authoritative-feed partition `src/engine_aux_security.cpp` | a feed is the venue's own bars of one timeframe; its stamps are the period partition | already ruled: design §2.ii row s, and the residual table's own row | the policy knob is installing the feed or not | `tests/test_native_htf_subscriptions.cpp`, `tests/test_native_security_feed.cpp` |
 | `session_template_knows_early_close` `src/engine_security.cpp` | the instrument-class classification | already ruled: design §2.ii row t; `SymInfo::type`'s vocabulary is fixed by the frozen C ABI | — | `tests/test_native_wm_buckets.cpp` |
 | `skip_entry_bar_high` / `skip_entry_bar_low` `include/pineforge/engine.hpp:149` | the intrabar-fill excursion mask: the part of a bar traversed before a priced entry filled is not that trade's excursion | the mask is generic — an excursion is measured from the fill — but **the kernel's own default is to sample the whole bar**, and only the adapter raises the flags | already spelled the generic way: `owns_lot_excursions()` + `closed_lot_excursion` hand the whole measurement to a host | `tests/test_l11a_host_excursion.cpp` |
