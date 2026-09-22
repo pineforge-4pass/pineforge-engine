@@ -5,6 +5,7 @@
 // reason its header names; the lane report carries those runs.
 //
 // Source-free: this TU runs in the kernel-only profile.
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/native_toolkit.hpp>
 
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <functional>
@@ -19,6 +21,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 using namespace pineforge;
 namespace no = pineforge::native_order;
@@ -777,6 +782,131 @@ void host_command_keeps_the_presented_clock() {
     CHECK(found);
 }
 
+// ─── item 9: a zone whose identity cannot be derived is refused (E23) ───────
+// The continuation folds the run's timezone by its identity: the source kind,
+// the effective definition and a digest of the zone resources the resolver
+// read (native_calendar.hpp, TimezoneIdentityDescriptor). The descriptor is
+// nullopt when a named resource cannot be read back or is larger than any zone
+// file, or when a POSIX default-DST spec finds no posixrules -- and its own
+// contract says "the caller refuses the descriptor rather than hashing a
+// hole" (native_calendar.cpp). The consumer ran the spec anyway and folded a
+// bare `false`, so two runs over DIFFERENT zone data shared one continuation
+// (AUDIT3: two oversized New_York files, 8010893015232274070 both times). Only
+// a libc that reads TZDIR lets a test present such a zone, so the refusal rows
+// run on glibc (the Linux CI profiles); elsewhere the row pins that the run's
+// own zone is derivable and runs. Fails at the base on glibc (the runs
+// complete, and the two continuations agree).
+struct ZoneProbe final : NativeStrategyHost {
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+};
+
+struct ZoneRun {
+    NativeLifecycleKind kind = NativeLifecycleKind::Unconfigured;
+    NativeFailure failure{};
+    std::string error;
+    std::uint64_t continuation = 0;
+};
+
+ZoneRun run_in_zone(const char* key, const char* timezone) {
+    ZoneProbe host;
+    NativeRunSpec s = base_spec(key);
+    s.timezone = timezone;
+    ZoneRun out;
+    if (host.configure_native(s).status != NativeSetupStatus::Applied) {
+        out.error = "configure refused";
+        out.kind = host.native_state().kind;
+        return out;
+    }
+    const auto bars = flat_tape(3);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    const auto state = host.native_state();
+    out.kind = state.kind;
+    out.failure = state.failure;
+    out.error = host.last_error();
+    out.continuation = host.native_continuation_hash();
+    return out;
+}
+
+#if defined(__GLIBC__)
+bool write_zone_file(const std::string& path, std::size_t bytes, char fill) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+    out.write("TZif", 4);
+    const std::string body(bytes - 4, fill);
+    out.write(body.data(), static_cast<std::streamsize>(body.size()));
+    return static_cast<bool>(out);
+}
+
+bool refused_for_identity(const ZoneRun& run) {
+    return run.kind == NativeLifecycleKind::Failed
+        && run.failure.code == NativeFailureCode::Calendar
+        && run.failure.operation == NativeFailureOperation::Begin
+        && run.error.find("timezone identity") != std::string::npos;
+}
+#endif
+
+void underivable_zone_identity_is_refused() {
+    {
+        // Wherever it runs: the zone this suite uses resolves to an identity,
+        // and a run over it is not refused.
+        CHECK(native_calendar::timezone_identity_descriptor("UTC").has_value());
+        const ZoneRun utc = run_in_zone("f3-zone-utc", "UTC");
+        CHECK(utc.kind == NativeLifecycleKind::Completed);
+    }
+#if defined(__GLIBC__)
+    char pattern[] = "/tmp/f3-zone-XXXXXX";
+    const char* root = mkdtemp(pattern);
+    CHECK(root != nullptr);
+    if (!root) return;
+    const std::string base(root);
+    const std::string two = base + "/two", three = base + "/three", bare = base + "/bare";
+    for (const std::string& dir : {two, three, bare}) CHECK(mkdir(dir.c_str(), 0700) == 0);
+    CHECK(mkdir((two + "/America").c_str(), 0700) == 0);
+    CHECK(mkdir((three + "/America").c_str(), 0700) == 0);
+    // Two different zone files for one name, both past the 1 MiB resource cap;
+    // the two runs are otherwise the same spec over the same bars.
+    CHECK(write_zone_file(two + "/America/New_York", std::size_t{2} << 20, '\x07'));
+    CHECK(write_zone_file(three + "/America/New_York", std::size_t{3} << 20, '\x05'));
+    // A root with a UTC file but no posixrules, for a POSIX default-DST spec.
+    {
+        std::ifstream in("/usr/share/zoneinfo/UTC", std::ios::binary);
+        std::ofstream out(bare + "/UTC", std::ios::binary);
+        out << in.rdbuf();
+    }
+    const char* previous = std::getenv("TZDIR");
+    const std::string saved = previous ? previous : "";
+    setenv("TZDIR", two.c_str(), 1);
+    const ZoneRun oversized_two = run_in_zone("f3-zone-oversized", "America/New_York");
+    setenv("TZDIR", three.c_str(), 1);
+    const ZoneRun oversized_three = run_in_zone("f3-zone-oversized", "America/New_York");
+    setenv("TZDIR", bare.c_str(), 1);
+    const ZoneRun no_posixrules = run_in_zone("f3-zone-posix", "XYZ5ABC");
+    if (previous) setenv("TZDIR", saved.c_str(), 1); else unsetenv("TZDIR");
+    std::printf("  oversized zone (2 MiB): kind=%d code=%d op=%d continuation=%llu error='%s'\n",
+                static_cast<int>(oversized_two.kind), static_cast<int>(oversized_two.failure.code),
+                static_cast<int>(oversized_two.failure.operation),
+                static_cast<unsigned long long>(oversized_two.continuation),
+                oversized_two.error.c_str());
+    std::printf("  oversized zone (3 MiB): kind=%d continuation=%llu\n",
+                static_cast<int>(oversized_three.kind),
+                static_cast<unsigned long long>(oversized_three.continuation));
+    std::printf("  POSIX default-DST without posixrules: kind=%d error='%s'\n",
+                static_cast<int>(no_posixrules.kind), no_posixrules.error.c_str());
+    CHECK(refused_for_identity(oversized_two));
+    CHECK(refused_for_identity(oversized_three));
+    CHECK(refused_for_identity(no_posixrules));
+    std::remove((two + "/America/New_York").c_str());
+    std::remove((three + "/America/New_York").c_str());
+    std::remove((bare + "/UTC").c_str());
+    rmdir((two + "/America").c_str());
+    rmdir((three + "/America").c_str());
+    for (const std::string& dir : {two, three, bare}) rmdir(dir.c_str());
+    rmdir(base.c_str());
+#else
+    std::printf("  zone-identity refusal rows need a libc that reads TZDIR (glibc)\n");
+#endif
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -809,6 +939,8 @@ int main() {
     continuation_read_is_linear_in_the_feed();
     last_row_is_the_final_scalar();
     host_command_keeps_the_presented_clock();
+    // Last: it points TZDIR at scratch trees, and the zone cache is process-wide.
+    underivable_zone_identity_is_refused();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

@@ -2086,6 +2086,16 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native calendar apply failed");
         return false;
     }
+    // R5 lane F3 (E23): the continuation names the zone by its identity, and a
+    // zone whose resources cannot be read back -- one past any zone file's
+    // size, or a POSIX default-DST rule with no posixrules to read -- has none
+    // to name. Such a run is refused, never run under an identity-less hash
+    // that a run over different zone data would share.
+    if (!tz_identity_) {
+        fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Begin});
+        render(engine, "native timezone identity cannot be derived from its zone data");
+        return false;
+    }
     engine.reset_run_state();
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
