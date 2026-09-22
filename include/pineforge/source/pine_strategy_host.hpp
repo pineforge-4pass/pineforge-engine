@@ -931,6 +931,10 @@ protected:
     // Read-only test projection cache; no future execution can observe it.
     mutable std::vector<FixtureIntentRow> source_pending_view_cache_;
 
+    // The owner's sampled excursion of one closing lot, in price points x
+    // quantity; closed_lot_excursion reports it on TradingView's basis.
+    ClosedLotExcursion owner_lot_excursion(const ClosedLotExcursionFacts&) const;
+
     // Transient excursion-sampler caches (RULING A48). Pure caches: each is
     // re-derived from the immutable placement snapshots and the delivered
     // decision context, and cleared at the applied-notification boundary.

@@ -83,7 +83,8 @@ enum class DualEntryStopPathWinner : int;
 // then neither samples excursion at matched trigger prices nor folds bar-path
 // extremes into the closing row.  Everything below is source-blind: the facts
 // are the lot's own booking coordinates plus the carried extremes, and the
-// result is the two price-difference x quantity magnitudes the row reports.
+// result is the two magnitudes the row reports, recorded exactly as answered
+// (the row's account currency; any reporting basis is the owner's to apply).
 // ────────────────────────────────────────────────────────────────────
 struct ClosedLotExcursionFacts {
     uint64_t entry_incarnation = 0;
@@ -102,6 +103,9 @@ struct ClosedLotExcursionFacts {
     // owner never has to be reachable from the closing row.
     bool entry_bar_high_masked = false;
     bool entry_bar_low_masked = false;
+    // The closed slice's share of the lot's entry commission, in account
+    // currency: the entry half of the closing row's `commission`.
+    double entry_commission = 0.0;
 };
 
 struct ClosedLotExcursion {

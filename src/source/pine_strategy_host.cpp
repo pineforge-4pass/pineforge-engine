@@ -717,6 +717,23 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
 
 ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
         const ClosedLotExcursionFacts& facts) const {
+    // The kernel records an owner's answer as given (R5 lane F3), so the
+    // reporting basis is this host's: TradingView's net open-profit basis,
+    // exactly as the kernel's own excursion row applies it
+    // (build_close_trade_with_costs) -- the price-point magnitudes converted
+    // to account currency, the entry fee share taken off the favorable side
+    // (floored at zero) and added to the adverse side.
+    const ClosedLotExcursion owned = owner_lot_excursion(facts);
+    const double pv = syminfo_.pointvalue;
+    return ClosedLotExcursion{
+        std::max(0.0, owned.favorable * pv * active_account_currency_fx()
+                          - facts.entry_commission),
+        std::max(0.0, owned.adverse * pv * active_account_currency_fx()
+                          + facts.entry_commission)};
+}
+
+ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
+        const ClosedLotExcursionFacts& facts) const {
     // ab9714be engine_orders.cpp:319 build_close_trade_with_costs, excursion
     // half. Everything here is the owner's model: the carried per-lot extremes
     // already hold every completed source bar's masked H/L/C walk

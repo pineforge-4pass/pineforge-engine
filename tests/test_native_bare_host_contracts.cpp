@@ -427,6 +427,89 @@ void armed_close_records_bracket() {
     }
 }
 
+// ─── item 4: an owned excursion is recorded as the owner answered it ───────
+// A host that owns its lots' excursions (RULING A48) answers the closing row's
+// two magnitudes: "Facts in, magnitudes out" (native_host.hpp), "the
+// magnitudes the closing row then carries" (native_c_api.h). The kernel
+// post-processed the answer with TradingView's net-of-commission basis --
+// favorable less the entry fee floored at 0, adverse plus the entry fee --
+// after scaling it by point value and FX, so {0.5, 3.0} became {0.0, 4.0}
+// (AUDIT3 probe_excursion_hook). Fails at the base; with point value 2 and a
+// 1.0 cash fee the base records {0.0, 7.0}. The kernel's OWN model keeps its
+// net basis: the second row pins it with hand arithmetic, before and after.
+struct ExcursionRoundTrip : NativeStrategyHost {
+    int bars = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        const int index = bars++;
+        if (index == 0) (void)submit({no::Transact{2.0}, "entry", ""});
+        if (index == 2) (void)submit({no::Flatten{}, "exit", ""});
+    }
+};
+
+struct OwnsExcursion final : ExcursionRoundTrip {
+    mutable std::vector<ClosedLotExcursionFacts> facts;
+    bool owns_lot_excursions() const noexcept override { return true; }
+    ClosedLotExcursion closed_lot_excursion(const ClosedLotExcursionFacts& f) const override {
+        facts.push_back(f);
+        return {0.5, 3.0};
+    }
+};
+
+void owned_excursion_is_recorded_verbatim() {
+    // Flat bars at 100, 101, 104, 99, 102: the lot opens at bar 1's open (101)
+    // and closes at bar 3's open (99).
+    std::vector<Bar> bars;
+    const double closes[] = {100.0, 101.0, 104.0, 99.0, 102.0};
+    for (int i = 0; i < 5; ++i)
+        bars.push_back(Bar{closes[i], closes[i], closes[i], closes[i], 1.0, kT0 + i * kMinute});
+    const auto spec = [](const char* key) {
+        NativeRunSpec s = base_spec(key);
+        s.point_value = 2.0;
+        s.fee_kind = NativeFeeKind::CashPerExecution;
+        s.fee_value = 1.0;
+        return s;
+    };
+    {
+        OwnsExcursion host;
+        CHECK(host.configure_native(spec("f3-excursion-owned")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.trade_count() == 1);
+        if (host.trade_count() == 1) {
+            const Trade& row = host.get_trade(0);
+            CHECK(row.commission == 2.0);
+            CHECK(row.max_runup == 0.5);
+            CHECK(row.max_drawdown == 3.0);
+        }
+        // The owner is handed what it needs to apply a fee basis of its own:
+        // the closed slice's share of the entry fee (the whole 1.0 ticket of
+        // the one opening execution, for a full close).
+        CHECK(!host.facts.empty());
+        for (const ClosedLotExcursionFacts& f : host.facts) {
+            CHECK(f.closed_qty == 2.0);
+            CHECK(f.entry_commission == 1.0);
+        }
+    }
+    {
+        // The kernel's own sampler, 2 units from 101 on flat bars that print
+        // 104 then 99: favorable (104-101)*2 = 6, adverse (101-99)*2 = 4 in
+        // price points x quantity, then x point value 2 and the net basis:
+        // max(0, 12 - 1) = 11 and 8 + 1 = 9.
+        ExcursionRoundTrip host;
+        CHECK(host.configure_native(spec("f3-excursion-kernel")).status
+              == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.trade_count() == 1);
+        if (host.trade_count() == 1) {
+            const Trade& row = host.get_trade(0);
+            CHECK(row.entry_price == 101.0);
+            CHECK(row.exit_price == 99.0);
+            CHECK(row.max_runup == 11.0);
+            CHECK(row.max_drawdown == 9.0);
+        }
+    }
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -455,6 +538,7 @@ int main() {
     configure_phase_refusal_is_wrong_phase();
     magnifier_flag_follows_the_spec();
     armed_close_records_bracket();
+    owned_excursion_is_recorded_verbatim();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

@@ -125,12 +125,12 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     const double slice = (pe.qty > 0.0) ? (close_qty / pe.qty) : 1.0;
     const double fill_fav = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                       * close_qty;
-    double runup = 0.0;
-    double drawdown = 0.0;
     if (lot_excursion_hook_) {
         // The host owns this lot's excursion (RULING A48): it sampled the
-        // lot's path itself and returns the two magnitudes for the closing
-        // row. The kernel contributes nothing beyond the booking facts.
+        // lot's path itself and answers the two magnitudes of the closing
+        // row, which the row records exactly as answered -- facts in,
+        // magnitudes out. The kernel contributes the booking facts, the entry
+        // fee share among them, and applies no reporting basis of its own.
         ClosedLotExcursionFacts facts;
         facts.entry_incarnation = pe.entry_incarnation;
         facts.entry_time_ms = pe.time;
@@ -145,12 +145,14 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         facts.exit_bar_index = context.interval_index;
         facts.entry_bar_high_masked = pe.skip_entry_bar_high;
         facts.entry_bar_low_masked = pe.skip_entry_bar_low;
+        facts.entry_commission = entry_commission;
         const ClosedLotExcursion owned = lot_excursion_hook_(facts);
-        runup = owned.favorable;
-        drawdown = owned.adverse;
-    } else {
-    runup = std::max(pe.max_runup * slice, fill_fav);
-    drawdown = std::max(pe.max_drawdown * slice, -fill_fav);
+        trade.max_runup = owned.favorable;
+        trade.max_drawdown = owned.adverse;
+        return trade;
+    }
+    double runup = std::max(pe.max_runup * slice, fill_fav);
+    double drawdown = std::max(pe.max_drawdown * slice, -fill_fav);
     // A priced (stop / limit / trail) exit fills mid-bar, before that bar's
     // own per-trade extreme sampling, so a bar-path extreme the modeled path
     // reaches ahead of the fill is seen by nothing else. The one such extreme
@@ -162,15 +164,14 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         double peak_fav = (was_long ? (peak - pe.price) : (pe.price - peak)) * close_qty;
         runup = std::max(runup, peak_fav);
     }
-    }
+    // The kernel's own model only -- an excursion owner's answer is recorded
+    // above as given, on whatever basis the owner reports.
     // Excursions are reported on the NET open-profit basis: open profit at
     // the entry tick is already -commission, so the entry-leg commission
     // shrinks the favorable extreme, floored at 0, and grows the adverse
-    // one. It applies on both paths above, a host-owned excursion included
-    // (whether a host's own magnitudes should bypass it is an open question
-    // of the host-excursion contract). ADR-0001 Section B rules this
-    // settlement convention; its calibration record is TradingView's export
-    // of pyramid-cash-fractional-commission-01 (every trade differs from the
+    // one. ADR-0001 Section B rules this settlement convention; its
+    // calibration record is TradingView's export of
+    // pyramid-cash-fractional-commission-01 (every trade differs from the
     // gross excursion by exactly qty * cash_per_contract, both columns) and
     // the corpus's 757k rows (none exports a negative favorable excursion).
     // Both fields remain >= 0 here.
