@@ -196,8 +196,9 @@ struct Trade {
     // separate from entry_id: Pine permits user-visible IDs to be reused.
     uint64_t entry_incarnation = 0;
     // True for the range-end close of a position still open after the final
-    // bar (record_range_end_close_trades); false for every script-driven
-    // or bracket exit. Mirrors pf_trade_t::open_at_end.
+    // bar -- a report-only mark-to-market row
+    // (NativeExecutionConsumer::append_open_position_report_rows); false for
+    // every script-driven or bracket exit. Mirrors pf_trade_t::open_at_end.
     bool open_at_end = false;
     // Why this row exited, when the closer knew. A kernel-originated
     // liquidation or risk flatten carries its own cause through the settling
@@ -551,7 +552,7 @@ protected:
     // state remains exclusively in the compatibility facade above.
     broker::PositionCloseObligation position_close_obligation_;
 
-    // --- Cached trade metrics (updated incrementally in execute_market_exit) ---
+    // --- Cached trade metrics (updated incrementally by record_close_trade) ---
     double net_profit_sum_ = 0.0;
     // Conservative absolute roundoff accumulated by additions to the cached
     // net-profit sum. This is numerical provenance only: reported PnL and
@@ -1126,9 +1127,13 @@ protected:
     // the current bar's one committed history slot.
     int magnifier_samples_ = 4;
     MagnifierDistribution magnifier_dist_ = MagnifierDistribution::ENDPOINTS;
-    // When true, run_magnified_bar scales per-sub-bar sample count by
+    // When true, the intrabar path scales per-sub-bar sample count by
     // (sub_bar.volume / mean_sub_bar_volume) within each script bar — dense
     // tick approximation on high-volume sub-bars without real tick data.
+    // The flag reaches the host as NativeBeginArgs::magnifier_volume_weighted;
+    // a host that projects the magnifier into the run's IntrabarPath carries
+    // it as that path's volume_weighted, which the execution consumer's
+    // deliver_intrabar_script samples by (sample_price_path_volume_weighted).
     bool magnifier_volume_weighted_ = false;
 
     // KI-60 scheduler transients. Script executions see the complete
@@ -2181,14 +2186,15 @@ public:
     int64_t script_bars_processed() const { return diag_script_bars_processed_; }
 
     // ABI v4 live-runtime surface (task 6): when on, every script bar's
-    // dispatch (all four script-bar dispatch sites -- the single-TF run()
-    // loop, run_simple_bar_loop, run_aggregation_bar_loop, and
-    // stream_dispatch_script_bar, engine_stream.cpp, the realtime-stream
-    // continuation of a stream_begin warmup) appends broker_state_hash()
-    // to broker_state_hashes_ immediately after that bar's
-    // record_equity_point() call, so the recorded array's length matches
-    // script_bars_processed and pf_report_t::broker_state_hash_len 1:1 --
-    // including on strategy_stream_fill_report, whose report is the
+    // report point appends broker_state_hash() to broker_state_hashes_
+    // immediately after that bar's record_equity_point() call -- under
+    // KernelRecorded the execution consumer's record_script_report_point,
+    // which every script calculation it delivers reaches (confirmed,
+    // intrabar and aggregated bars, in a batch run and across a stream's
+    // warmup and realtime legs); a host that records or marks its own report
+    // points appends its own row at each -- so the recorded array's length
+    // matches script_bars_processed and pf_report_t::broker_state_hash_len
+    // 1:1 -- including on strategy_stream_fill_report, whose report is the
     // cumulative warmup + realtime run. Default off: broker_state_hashes_
     // stays empty, fill_report emits a null/zero-length array, and every
     // historical run stays byte-identical to before this flag existed.
@@ -2226,8 +2232,9 @@ public:
         broker_state_hash_recording_ = on;
     }
 
-    // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
-    // Has no effect unless bar magnifier is enabled.
+    // Toggle volume-weighted per-sub-bar sampling of the intrabar path (see
+    // magnifier_volume_weighted_). Has no effect unless bar magnifier is
+    // enabled.
     void set_magnifier_volume_weighted(bool on) {
         guard_native_mutation("set_magnifier_volume_weighted");
         magnifier_volume_weighted_ = on;

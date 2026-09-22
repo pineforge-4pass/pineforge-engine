@@ -65,11 +65,11 @@ void BacktestEngine::fill_report(ReportC* out) const {
 }
 
 
-// Copy ``trades_`` — followed by ``range_end_trades_``, TradingView's
-// range-end close of a position still open after the final bar
-// (record_range_end_close_trades) — into a freshly heap-allocated TradeC[]
-// on ``out`` and accumulate ``net_profit`` for the report. Owns the
-// allocation; freed by ``free_report``.
+// Copy ``trades_`` — followed by ``range_end_trades_``, the report-only rows
+// of a position still open after the final bar
+// (NativeExecutionConsumer::append_open_position_report_rows) — into a
+// freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``
+// for the report. Owns the allocation; freed by ``free_report``.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();

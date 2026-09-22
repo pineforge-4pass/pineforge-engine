@@ -1041,10 +1041,11 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // last sub-bar's end is the bucket end, so this fires on exactly
             // the bar the count rule fires on — 24x7/UTC gap-free feeds stay
             // bit-identical. A bucket whose LAST sub-bar is missing still
-            // completes on the boundary bar; the engine feeds every
-            // request.security aggregator before the chart aggregator on
-            // each input bar, so the chart bar whose close reaches the
-            // bucket end still sees it (see run_aggregation_bar_loop).
+            // completes on the boundary bar; each input bar reaches the
+            // request.security aggregators before the chart aggregator (the
+            // execution consumer offers it to the host's on_native_input and
+            // delivers its subscription buckets before aggregating it), so
+            // the chart bar whose close reaches the bucket end still sees it.
             if (!complete && input_seconds > 0) {
                 const int64_t end_clock = (next_bucket + 1) * bucket_ms;
                 complete = in_clock + input_seconds * 1000 >= end_clock;

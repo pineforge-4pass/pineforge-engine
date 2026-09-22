@@ -364,11 +364,11 @@ migration decision:
 2. **The protected accessors your host inherits.** `NativeStrategyHost` derives
    from `BacktestEngine`, so the statistics Pine exposes as `strategy.*` are
    ordinary protected member functions of your own class: `net_profit`
-   engine.hpp:983, `gross_profit` engine.hpp:985, `gross_loss`
-   engine.hpp:986, `current_equity` engine.hpp:986 and the rest. They are
+   engine.hpp:984, `gross_profit` engine.hpp:986, `gross_loss`
+   engine.hpp:987, `current_equity` engine.hpp:987 and the rest. They are
    reachable from inside your host exactly as they are from inside a generated
    Pine strategy, and `native_open_lots_strategy.cpp` reads every one of them.
-3. **The report, after the run** — `fill_report` engine.hpp:1944 into a
+3. **The report, after the run** — `fill_report` engine.hpp:1949 into a
    `pf_report_t` pineforge.h:426, which is what a C host reads.
 
 One rule governs the whole table, in two scopes. The equity **series** is
@@ -456,7 +456,7 @@ native_order.hpp:419 names.
 | `strategy.opentrades.max_runup_percent()` | derive from `favorable_excursion` native_host.hpp:342 | — | `native_open_lots_strategy.cpp` | The snapshot carries the facts, not the ratio. |
 | `strategy.opentrades.max_drawdown()` | `adverse_excursion` native_host.hpp:343 | `pf_native_open_lot_v1` native_c_api.h:932 | `native_open_lots_strategy.cpp` | Largest move against the lot, likewise; both excursions are magnitudes `>= 0`. |
 | `strategy.opentrades.max_drawdown_percent()` | derive from `adverse_excursion` native_host.hpp:343 | — | `native_open_lots_strategy.cpp` | |
-| `strategy.opentrades.capital_held` | `open_trades_capital_held` engine.hpp:1033 | `pf_trade_stats_t` pineforge.h:254 | `native_open_lots_strategy.cpp` | Protected, like the other statistics. |
+| `strategy.opentrades.capital_held` | `open_trades_capital_held` engine.hpp:1034 | `pf_trade_stats_t` pineforge.h:254 | `native_open_lots_strategy.cpp` | Protected, like the other statistics. |
 
 A NaN `mark` keeps every booking fact, leaves `unrealized_pnl`
 native_host.hpp:341 NaN and folds nothing into the excursions — the example
@@ -466,9 +466,9 @@ run the two excursion fields fold `mark` alone.
 
 ## Closed trades {#pine_to_native_map_closed_trades}
 
-`closed_trade_count` engine.hpp:1908 and `closed_trade` engine.hpp:1909 answer
+`closed_trade_count` engine.hpp:1913 and `closed_trade` engine.hpp:1914 answer
 the `Trade` engine.hpp:164 rows this run booked, in booking order;
-`report_trade_count` engine.hpp:1916 and `get_report_trade` engine.hpp:1919
+`report_trade_count` engine.hpp:1921 and `get_report_trade` engine.hpp:1924
 span the same rows followed by the range-end rows
 `report_open_position_at_end` native_run_spec.hpp:582 adds. In C the report's
 `pf_report_t::trades` pineforge.h:370 carries the numeric fields, and the
@@ -480,7 +480,7 @@ rows of that array.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.closedtrades` | `closed_trade_count` engine.hpp:1908 | `total_trades` pineforge.h:366 | `native_open_lots_strategy.cpp` | `trade_count` engine.hpp:1899 is the same number as an `int`. |
+| `strategy.closedtrades` | `closed_trade_count` engine.hpp:1913 | `total_trades` pineforge.h:366 | `native_open_lots_strategy.cpp` | `trade_count` engine.hpp:1904 is the same number as an `int`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
 | `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:175 | `strategy_closed_trade_entry_id` pineforge.h:1074 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
 | `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:176 | `strategy_closed_trade_entry_id` pineforge.h:1074 | `native_open_lots_strategy.cpp` | |
@@ -531,7 +531,7 @@ the same numerics the adapter uses, and the header pulls only `na`, `series`
 and `window_sum` ta.hpp:2-4, so it is engine-free. `pineforge::Series<T>`
 series.hpp:94 is Pine's history operator as a fixed-capacity ring you push what
 you want to keep into. Pine's `input.*` becomes ordinary constructor
-parameters: `set_input` engine.hpp:1955 exists but its getters are protected,
+parameters: `set_input` engine.hpp:1960 exists but its getters are protected,
 and a native host takes its parameters in C++.
 
 ## One strategy, three ways {#pine_to_native_three_ways}
@@ -803,8 +803,8 @@ void on_native_bar(const pineforge::Bar& bar,
    native_order.hpp:97 is ten percent. The one exception is
    `NativeLossLimit::percent` native_run_spec.hpp:260, which is out of 100
    because it is a threshold, not a multiplier.
-5. **The report is opt-in.** `trade_count` engine.hpp:1899 and `get_trade`
-   engine.hpp:1900 are always complete; the equity curve, its metrics and the
+5. **The report is opt-in.** `trade_count` engine.hpp:1904 and `get_trade`
+   engine.hpp:1905 are always complete; the equity curve, its metrics and the
    position-size peaks arrive only with `NativeReportPolicy::KernelRecorded`
    native_run_spec.hpp:62.
 
@@ -854,7 +854,7 @@ pineforge.h:577, `strategy_set_override` pineforge.h:587,
 pineforge.h:528, `run_backtest_full` pineforge.h:545 and `report_free`
 pineforge.h:559. It adds **no** new C symbol: every remaining runtime export —
 `strategy_configure_native_v1` pineforge.h:469, the `strategy_stream_*` family
-c_abi.cpp:522-641, `strategy_execution_contract` pineforge.h:448 — already
+c_abi.cpp:521-640, `strategy_execution_contract` pineforge.h:448 — already
 lives in the engine, and the generated `strategy_create` references
 `pf_abi_version()` so a static link keeps that object.
 

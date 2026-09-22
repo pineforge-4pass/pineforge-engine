@@ -213,12 +213,13 @@ struct PineSecurityEvalState {
     // feed_aux_security_for_chart_bar feeds the calling bar's auxiliary
     // bars only up to the one completing its FIRST bucket before the
     // chart body runs; the rest of the slice is held in ``deferred_aux``
-    // and fed by feed_deferred_aux_security_for_chart_bar right after
-    // dispatch_bar, so the body reads the first-bucket evaluation while
-    // the TA state still sees every sub-bar, in order, before the next
-    // chart bar. publish_gate_tf_seconds stays 0 on this path; lanes
-    // without the auxiliary slice keep the gate. False (the default)
-    // means "not applicable".
+    // and fed by feed_deferred_aux_security_for_chart_bar right after the
+    // chart body (PineScheduler::bar calls scheduler_feed_deferred_aux_security
+    // once the bar is published), so the body reads the first-bucket
+    // evaluation while the TA state still sees every sub-bar, in order,
+    // before the next chart bar. publish_gate_tf_seconds stays 0 on this
+    // path; lanes without the auxiliary slice keep the gate. False (the
+    // default) means "not applicable".
     bool calling_open_latches_first = false;
     // Per calling chart bar: whether this state's first bucket of the
     // slice has been published (the deferral point), and the auxiliary
@@ -451,23 +452,23 @@ public:
     bool realtime_tail() const { return realtime_tail_; }
 
     // Live probe tail suppression (spec §3.2, ABI v4): when `on`, the LAST
-    // bar of every subsequent run() runs only the broker's pre-on_bar steps
-    // (intraday-cap deferred close, _push_source_series, request matching,
-    // evaluate_max_intraday_loss_over_path, update_per_trade_extremes) and
-    // returns — on_bar is never invoked for that bar, and nothing after it
-    // runs (no flush_same_bar_close, no POOC second pass, no
-    // process_margin_call, no settle_dormant_bracket_ reissues, no sizing
-    // refresh). Margin-call / intraday-cap closes therefore surface only at
-    // settlement (the next non-suppressed run), not against the
-    // still-forming probe bar. This is persistent configuration, like
+    // script bar of every subsequent run() is matched but not calculated:
+    // the kernel settles the resting book against it, and PineScheduler::bar
+    // publishes it through scheduler_publish_suppressed_tail instead of
+    // on_source_bar (source history and bar_index advance, the already-
+    // matched receipts settle, the report point is marked; no range-end
+    // row). on_native_bar still runs adapter_.on_bar_close after the
+    // scheduler, so the risk-state update and the TradingView margin-call
+    // checkpoint see the forming bar, and a margin call due against it is
+    // booked there. This is persistent configuration, like
     // set_realtime_tail, and independent of it — do not couple the two
-    // flags. Honoured only on the standard dispatch path (single-TF run
-    // loop, run_simple_bar_loop). Silent no-op under calc_on_order_fills
-    // (COOF scheduler) and under the bar magnifier -- both gated in live v1.
-    // Semantics UNDEFINED on the non-magnifier aggregation path (input_tf <
-    // script_tf) until the partial-bucket forming-bar flag lands; see
-    // pineforge.h. Default off (@p on == 0): every historical run stays
-    // byte-identical to before this flag existed.
+    // flags. Honoured on every batch path (single-TF, timeframe-aware,
+    // magnifier; under aggregation, the last completed script bar). Under
+    // calc_on_order_fills a fill on the forming bar still triggers the fill
+    // recalculation, which runs the script there; COOF and the magnifier
+    // stay gated in live v1. A stream begin refuses the flag
+    // (prepare_native_begin); see pineforge.h. Default off (@p on == 0):
+    // every historical run stays byte-identical to before this flag existed.
     bool set_probe_suppress_tail_logic(bool on) override {
         guard_native_mutation("set_probe_suppress_tail_logic");
         probe_suppress_tail_logic_ = on;
@@ -844,8 +845,9 @@ protected:
     // realtime_tail_ is on and realtime_tail_horizon_bars_ > 0.
     //
     // `script_bar_geometry` says whether `bars` is script-bar geometry:
-    //   true  -- the single-TF run(bars, n) path and the !needs_aggregation
-    //            run_tf_impl call (input_tf == script_tf), where the horizon
+    //   true  -- every run without aggregation (input_tf == script_tf, the
+    //            single-TF run(bars, n) included: PineScheduler::run_begin
+    //            passes !needs_aggregation), where the horizon
     //            indexes `bars` directly; last_bar_time_ is the EXACT
     //            timestamp of bars[horizon_bars - 1] when that bar exists,
     //            else extrapolated from the array's actual final bar.

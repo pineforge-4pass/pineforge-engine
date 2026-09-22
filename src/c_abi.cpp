@@ -396,18 +396,17 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
     });
 }
 
-/* Live probe tail suppression (spec §3.2): the last bar of the array fed to
- * the next run() runs only dispatch_bar()'s pre-on_bar broker steps
- * (intraday-cap deferred close, source-series push, resting-order fills,
- * max-intraday-loss path check, per-trade extreme update) and returns —
- * on_bar is never invoked for that bar, and nothing after it runs (no
- * flush_same_bar_close, no POOC second pass, no process_margin_call, no
- * settle_dormant_bracket_reissues, no sizing refresh). Margin-call /
- * intraday-cap closes therefore surface only at settlement, not against the
- * still-forming probe bar. Independent of strategy_set_realtime_tail.
- * Honoured only on the standard dispatch_bar path; no-op under COOF and the
- * bar magnifier (gated in v1); undefined on input_tf < script_tf until the
- * partial-bucket flag lands -- see pineforge.h.
+/* Live probe tail suppression (spec §3.2): the last script bar of the array
+ * fed to the next run() is matched but not calculated -- the kernel settles
+ * the resting book against it, and the Pine source host's scheduler
+ * publishes it through its suppressed-tail step instead of on_bar (source
+ * history and bar_index advance, no range-end row). The host's own
+ * bar-close policy is not the script and still runs there, so a margin call
+ * due against the forming bar is booked against it. Independent of
+ * strategy_set_realtime_tail. Honoured on every batch path (under
+ * aggregation, on the last completed script bar); under COOF a fill on the
+ * forming bar still recalculates the script there; COOF and the bar
+ * magnifier stay gated in live v1 -- see pineforge.h.
  * Default off (on=0): every historical run stays byte-identical to before
  * this flag existed. Like strategy_set_realtime_tail, the mode is the source
  * host's; on a host that models no forming tail bar the call is accepted

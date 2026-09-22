@@ -435,7 +435,7 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:1884-1895`) is **not** refused as a source mutation: it
+overload (`engine.hpp:1889-1900`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
 (`native_execution_consumer.cpp:7845-7883`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
@@ -578,7 +578,7 @@ host; a failed host cannot retry. Configuration projection is checked before
 in-callback execution as well as after callback return.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:241`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:242`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
@@ -1784,11 +1784,11 @@ host that marks its own equity keeps this default and owns the whole series.
 
 **The scalar extremes are not part of that bargain.** `max_drawdown_`,
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
-through `max_drawdown_percent()` (`engine.hpp:1593`), `max_runup_percent()`
-(`engine.hpp:989`) and `max_contracts_held_all/long/short()`
+through `max_drawdown_percent()` (`engine.hpp:1598`), `max_runup_percent()`
+(`engine.hpp:990`) and `max_contracts_held_all/long/short()`
 (`engine.hpp:1936-1938`) — are a property of the RUN: what it drew down, what
 it ran up, the most it ever held. The kernel folds them
-(`update_equity_extremes`, `engine.hpp:1448`) at every script calculation
+(`update_equity_extremes`, `engine.hpp:1453`) at every script calculation
 under **every** report policy, so a `HostRecorded` host reads them truthfully
 without asking the kernel to record anything. Before R5 lane E2 the fold was
 reachable only through the two recording policies, and a defaulted host read
@@ -1808,7 +1808,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2224`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2230`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
@@ -1939,7 +1939,7 @@ SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1079-1094`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1074-1089`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -1964,11 +1964,11 @@ struct RegimeHost : pineforge::NativeStrategyHost {
 };
 ```
 
-- `hash_host_extension` (`engine.hpp:394`, protected virtual on
+- `hash_host_extension` (`engine.hpp:395`, protected virtual on
   `BacktestEngine`) is called exactly once per hash, last, after the kernel's
   fold. What it writes is part of the scalar `broker_state_hash()`, of every
   per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
-- `BrokerStateHashSink` (`engine.hpp:339`) is a complete public type: FNV-1a
+- `BrokerStateHashSink` (`engine.hpp:340`) is a complete public type: FNV-1a
   over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
   NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
 - An override **replaces** the default. A host that overrides nothing folds
@@ -2530,7 +2530,7 @@ declared subscription does: an `authoritative_bars` feed, the `gaps` and
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:1831`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:1836`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the

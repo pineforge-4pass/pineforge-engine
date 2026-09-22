@@ -268,9 +268,10 @@ void BacktestEngine::validate_close_trade_counters(const Trade* rows, size_t cou
 }
 
 
-// Reset all per-position state after the position is fully closed. Used by
-// every full-close path (execute_market_exit) and by partial-exit settlement
-// when the FIFO loop drained the position.
+// Reset all per-position state after the position is fully closed: the native
+// settlement commit calls it when a close leaves no surviving lot
+// (commit_prepared_native_settlement_stage, engine_execution.cpp), and
+// reset_run_state starts every run from it.
 void BacktestEngine::reset_position_state_to_flat() {
     position_side_ = PositionSide::FLAT;
     position_cycle_seq_ = 0;

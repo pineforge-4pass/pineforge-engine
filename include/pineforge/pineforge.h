@@ -764,61 +764,56 @@ PF_API int  strategy_last_run_status(pf_strategy_t s);
  *       caveat below applies.
  *    4. The range-end synthetic close row/trade is skipped (no
  *       `open_at_end` row); the final equity point keeps `open_profit`.
- *    5. Interior bars (every bar before the last) are unaffected.
- *  Dispatch-path scope: effects 1, 3, and 4 above are honoured on every
- *  dispatch path. Effect 2 (`session.islastbar` from the bucket calendar)
- *  is honoured only on `run_simple_bar_loop` (the input_tf == script_tf
- *  simple bar loop); the single-timeframe `run(bars, n)` overload never
- *  evaluates session predicates at all (pre-existing -- `session.ismarket`/
- *  `session.islastbar` stay at their reset-state `false` there regardless
- *  of this flag). On the non-magnifier aggregation path (input_tf <
- *  script_tf) effect 2 is UNDEFINED: the tail bar's `session.islastbar`
- *  reads the ordinary `in_session && barstate.islast` expression instead of
- *  the calendar lookahead (false there, since this flag also forces
- *  `barstate.islast` false). Callers must feed an input_tf == script_tf
- *  array until that gap closes, matching
- *  #strategy_set_probe_suppress_tail_logic's dispatch-path-scope caveat.
+ *    5. Interior bars (every bar before the last) are unaffected, except
+ *       effect 2 under aggregation (below).
+ *  Scope: the Pine source host's scheduler applies these where it publishes
+ *  a script bar to the generated script. Effects 1, 3 and 4 hold on every
+ *  path. Effect 2 is its session-predicate step, which runs for every script
+ *  bar of a run whose timeframe is known -- a timeframe-aware overload, or
+ *  `run(bars, n)` with at least two bars, whose timeframe it detects from
+ *  them; with fewer, `session.ismarket`/`session.islastbar` keep their
+ *  reset-state `false` whatever this flag says. The bucket-calendar
+ *  lookahead stands in for the next bar wherever the scheduler holds none:
+ *  with input_tf == script_tf that is the array's last bar alone, but under
+ *  aggregation (input_tf < script_tf) the scheduler holds no next script
+ *  bar at all, so the lookahead decides `session.islastbar` on every bar of
+ *  the run. Callers must feed an input_tf == script_tf array, matching
+ *  #strategy_set_probe_suppress_tail_logic's scope note.
+ *  `strategy_stream_begin` refuses a handle with this flag set.
  *  Default off (@p on == 0): every historical run stays byte-identical to
  *  before this flag existed. The mode belongs to the Pine source host; on
  *  a host that models no still-forming tail bar (a bare kernel host) the
  *  call is accepted and inert, as it always was there. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars);
-/** Live probe tail suppression (spec §3.2): the LAST bar of the array fed to
- *  every subsequent run() runs only the broker's pre-`on_bar` steps and
- *  returns, in this order: intraday-cap deferred close, advancing native
- *  source-series history (`_push_source_series`), settling resting
- *  stop/limit orders against the bar (native request matching), the
- *  max-intraday-loss path check (`evaluate_max_intraday_loss_over_path`),
- *  and updating per-trade extremes (`update_per_trade_extremes`).
- *  `on_bar` is never invoked for that bar, and nothing that ordinarily runs
- *  after it runs either -- no `invoke_chart_on_bar`, no
- *  `flush_same_bar_close`, no POOC second pass, no `process_margin_call`
- *  (and, under process_orders_on_close, the pre-script carried-position
- *  margin helpers), no `settle_dormant_bracket_reissues`, no
- *  post-liquidation sizing refresh. A margin call or intraday-cap close that
- *  would ordinarily fire against the forming bar therefore surfaces only at
- *  settlement (the next non-suppressed run), never against the
- *  still-forming probe bar itself.
- *  The run's last-bar fills are exactly the settled book's fills against
- *  the forming bar, and the post-run pending-order book is the book in
- *  force during that bar. This is persistent configuration, like
- *  #strategy_set_realtime_tail, and independent of it -- do not assume the
- *  two flags are coupled; set each explicitly.
- *  Dispatch-path scope (ABI v4 / live v1): this flag is honoured only on the
- *  standard `dispatch_bar` path -- the single-timeframe run loop and the
- *  input_tf == script_tf simple bar loop. It is a silent no-op under
- *  `calc_on_order_fills` (the COOF scheduler dispatches the last bar in full,
- *  `on_bar` included) and under the bar magnifier (`run_magnified_bar` never
- *  reaches `dispatch_bar`); both are gated features in v1 and a probe must
- *  not enable them. On the non-magnifier aggregation path
- *  (input_tf < script_tf) the semantics are UNDEFINED until the partial-
- *  bucket forming-bar flag lands: today the bar suppressed is whichever
- *  script bar is dispatched while walking the array's last input bar (a
- *  completed bucket, when that input bar opens a new one), and a trailing
- *  partial bucket is never dispatched at all. Callers must feed an
- *  input_tf == script_tf array until that flag exists.
- *  Clear this flag (on = 0) before `strategy_stream_begin`; the warmup
- *  replay is a run().
+/** Live probe tail suppression (spec §3.2): the LAST script bar of the array
+ *  fed to every subsequent run() is matched but not calculated. The kernel
+ *  matches that bar like any other, so resting stop/limit orders settle
+ *  against it; the Pine source host's scheduler then publishes it through
+ *  its suppressed-tail step instead of the generated script -- source
+ *  history and `bar_index` advance, the fills already matched on the bar
+ *  are settled, the report point is marked, `on_bar` is not invoked and no
+ *  range-end row is written. The host's own bar-close policy is not the
+ *  script and still runs on that bar -- its risk-state update and its
+ *  TradingView margin-call checkpoint -- so a margin call due against the
+ *  forming bar is booked against it.
+ *  Apart from what that policy books, the run's last-bar fills are exactly
+ *  the settled book's fills against the forming bar, and the post-run
+ *  pending-order book is the book in force during that bar. This is
+ *  persistent configuration, like #strategy_set_realtime_tail, and
+ *  independent of it -- do not assume the two flags are coupled; set each
+ *  explicitly.
+ *  Scope (ABI v4 / live v1): honoured on every batch path -- the
+ *  single-timeframe and the timeframe-aware overloads, with or without the
+ *  bar magnifier. Under aggregation (input_tf < script_tf) the suppressed
+ *  bar is the run's last COMPLETED script bar, and a trailing partial
+ *  bucket is never calculated at all. Under `calc_on_order_fills` only the
+ *  bar's close calculation is suppressed: a fill on the forming bar still
+ *  triggers the fill recalculation, which runs the script on it.
+ *  `calc_on_order_fills` and the bar magnifier stay gated in live v1 and a
+ *  probe must not enable them; callers must feed an input_tf == script_tf
+ *  array.
+ *  `strategy_stream_begin` refuses a handle with this flag set: clear it
+ *  (on = 0) first.
  *  Default off (@p on == 0): every historical run stays byte-identical to
  *  before this flag existed. Like #strategy_set_realtime_tail the mode
  *  belongs to the Pine source host; on a host that models no still-forming
