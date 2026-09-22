@@ -2554,7 +2554,7 @@ class Htf final : public pineforge::NativeStrategyHost {
 Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator and
 the Pine scheduler aggregate with (`TimeframeAggregator`
-`pine_scheduler_native.cpp:118`). What it does **not** give you is what a
+`pine_scheduler_native.cpp:146`). What it does **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
