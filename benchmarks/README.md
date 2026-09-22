@@ -60,7 +60,7 @@ Every number in this section traces to a committed file or a pinned commit. The 
   - With percent-of-equity sizing, PyneCore compounds P&L that TradingView never had. Slot `002`: quantity 536.418 against TradingView's 547.6178 on identical fills.
   - A position PyneCore already holds when the range opens adds one trade at the window's leading edge.
   - The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
-- **9 multi-timeframe scripts** reproduce only 7–85 % of TradingView's history through `request.security`: corpus `037`, `040` and `042`; closed `114`, `163`, `164`, `169`, `181` and `189`.
+- **9 multi-timeframe scripts** reproduce 0–85.5 % of TradingView's history through `request.security` (the rubric's coverage; `042` has no aligned trades): corpus `037`, `040` and `042`; closed `114`, `163`, `164`, `169`, `181` and `189`.
 - **3 grid bots** (`102`, `103`, `107`) drift on FIFO drains and grade moderate.
 - Slot `086` (a `str.match` regex filter) grades weak, and slot `135` has no aligned trades.
 - The remaining rows fail mixed gates.

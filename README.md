@@ -302,7 +302,7 @@ PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports.
 **PyneCore.** It has 64 graded non-excellent rows, and most come from the harness window and from `request.security`:
 
 - **29 rows** fail only on PnL (15) or only on trade count (14). In all of them, entries and exits match TradingView to the tick. PyneCore's broker trades from the feed's first bar, five months before TradingView's range opens. As a result, percent-of-equity sizing compounds P&L that TradingView never had, and a position already open at the range start adds one trade at the window's leading edge. The PyneCore runner has no counterpart of PineForge's TradingView-window order gate.
-- **9 multi-timeframe scripts** reproduce only 7–85 % of TradingView's history.
+- **9 multi-timeframe scripts** reproduce 0–85.5 % of TradingView's history; one has no aligned trades.
 - **3 grid bots** drift on FIFO drains, and a `str.match` regex filter grades weak.
 - The remaining rows fail mixed gates.
 

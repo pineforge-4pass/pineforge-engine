@@ -1,10 +1,11 @@
 """Paths for benchmark OHLCV + per-strategy fixtures.
 
-Open-source checkouts should use ``benchmarks/assets/`` — a **private** git
-submodule whose tree is ``data/`` (pinned OHLCV) and ``strategies/`` (per-strategy
-``.pine`` copies, ``tv_trades.csv``, engine trade lists, cloud-compiled Pyne,
-``_indicators/``). Those artefacts are TradingView-linked validation data and
-are not redistributed inside the public engine repo.
+Open-source checkouts use ``benchmarks/assets/``, a **public** git submodule
+(pineforge-benchmarks-assets, Apache-2.0) whose tree is ``data/`` (pinned OHLCV)
+and ``strategies/`` (the 100 public slots: ``.pine`` sources, ``tv_trades.csv``,
+engine trade lists, cloud-compiled Pyne, ``_indicators/``). Only the 101 closed
+slots are private: TradingView-scraped third-party scripts that maintainers
+extract from the evidence store into ``benchmarks/assets-closed/`` (gitignored).
 
 If ``benchmarks/assets/strategies`` is missing, we fall back to inline
 ``benchmarks/data`` and ``benchmarks/strategies`` for maintainer monorepos or

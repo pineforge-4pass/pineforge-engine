@@ -70,7 +70,7 @@ fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
 if ! compgen -G "${STRATEGIES_DIR}/[0-9]*-*/strategy.pine" >/dev/null; then
     fail "benchmark fixtures missing (expected ${STRATEGIES_DIR}/<NNN-slug>/strategy.pine).
 
-TV-linked strategy folders and OHLCV live in the private benchmarks/assets
+TV-linked strategy folders and OHLCV live in the public benchmarks/assets
 submodule (init: git submodule update --init benchmarks/assets).
 See CONTRIBUTING.md.
 
