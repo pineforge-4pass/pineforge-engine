@@ -501,6 +501,119 @@ void twin_rounded_money_and_whole_drop() {
     CHECK(plain.empty());
 }
 
+// MG-FX (R5 lane F7, M9). The account FX roll. A carried 1x long, 100 at 100
+// on 10000, crosses a 1 -> 1.001 step at bar 2's open. Bar 1 closes at 99,
+// bar 2 is O 100 H 101 L 97 C 99.
+//   TradingView (the adapter) revalues at the broker open: 100*100*1.001 =
+//   10010 against 10000, restore 10/100.1 = 0.0999.. -> 0.0999 lots, 4x =
+//   0.3996, executed AT bar 2's open (100) before any resting order sees it.
+//   The kernel's FxRoll point, admitted with the same slice rule, is the first
+//   driver point that converts at the new rate, measured at the remaining
+//   path's adverse mark and rested there:
+//   - on the run shape the adapter projects (a FeedTolerant batch) that is bar
+//     2's open, marked at its low: 10 / (97*1.001) -> 0.1029, 4x = 0.4116 @ 97;
+//   - on a strict calendar a calculation's coordinate is the next bar's open,
+//     so the roll is bar 1's closing segment, marked at its close:
+//     10 / (99*1.001) -> 0.1009, 4x = 0.4036, rested at 99 -- measured a bar
+//     before TradingView's and filled when bar 2's path, gapped up to 100,
+//     comes back down through 99.
+// A different instant or a different mark, never TradingView's row: the
+// measured reason the adapter refuses the roll point by kind and keeps its
+// broker-open checkpoint (pine_adapter.cpp margin_check_allowed).
+struct TvFxRollHost final : Host {
+    double qty_step = 0.0001;
+    std::int64_t step_ms = 0;
+    double step_rate = 1.0;
+    int bars = 0;
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        Host::on_native_bar(bar, context);
+        if (bars++ == 0) (void)put(*this, tx(100.0, "entry"));
+    }
+    bool margin_check_allowed(const NativeMarginCheckPoint& point) const override {
+        return point.kind == NativeMarginCheckKind::FxRoll;
+    }
+    // TradingView's slice (MG-F) on the kernel's own numbers at the roll.
+    std::optional<double> resolve_margin_call_units(
+            const NativeMarginCallView& view) const override {
+        const double fx = view.cursor.point.effective_time_ms >= step_ms ? step_rate : 1.0;
+        const double unit_margin = view.mark * 1.0 * fx * 1.0;
+        const double raw = (view.required - view.equity) / unit_margin;
+        if (!(raw > 1e-10) || !std::isfinite(raw)) return 0.0;
+        const double minimum = std::floor(raw / qty_step) * qty_step;
+        const double units = std::floor(4.0 * minimum / qty_step + 1e-6) * qty_step;
+        return units > 0.0 ? std::min(units, std::abs(view.position.signed_units)) : 0.0;
+    }
+    no::ExecutionTerms resolve_execution_terms(
+            const NativeExecutionTermsFacts& facts) const override {
+        if (!facts.definition
+            || facts.definition->origin != no::RequestOrigin::KernelLiquidation) {
+            return Host::resolve_execution_terms(facts);
+        }
+        const double fire = facts.trigger_level ? *facts.trigger_level : facts.raw_price;
+        return {fire, std::nullopt, no::OpeningShape::Transact};
+    }
+};
+
+void twin_fx_roll_broker_open() {
+    TvConfig config;
+    config.capital = 10000.0;
+    config.units = 100.0;
+    config.margin_pct = 100.0;
+    config.qty_step = 0.0001;
+    const std::vector<Bar> bars = {ohlc(0, 100.0, 100.0, 100.0, 100.0),
+                                   ohlc(1, 100.0, 100.0, 99.0, 99.0),
+                                   ohlc(2, 100.0, 101.0, 97.0, 99.0),
+                                   ohlc(3, 99.0, 99.0, 99.0, 99.0)};
+    const std::int64_t step_ms = bars[2].timestamp;
+    const std::int64_t stamps[] = {bars[0].timestamp, step_ms};
+    const double rates[] = {1.0, 1.001};
+
+    TvAdapterHost adapter(config);
+    REQUIRE(adapter.set_account_currency_fx_series(stamps, rates, 2));
+    adapter.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(adapter.last_error().empty());
+    const auto tv = adapter_slices(adapter);
+    REQUIRE(tv.size() == 1);
+    std::printf("  MG-FX  TradingView broker open %.17g @ %.17g\n", tv[0].units, tv[0].price);
+    CHECK(std::abs(tv[0].units - 0.3996) < 1e-12);
+    CHECK(tv[0].price == 100.0);
+    REQUIRE(adapter.row(0).exit_time == step_ms);
+
+    for (const bool tolerant : {true, false}) {
+        TvFxRollHost kernel;
+        kernel.step_ms = step_ms;
+        kernel.step_rate = rates[1];
+        auto spec = tv_spec(tolerant ? "MG-FX-tolerant" : "MG-FX-strict", config);
+        if (tolerant) {
+            // The shape PineExecutionAdapter::project() declares.
+            spec.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
+            spec.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
+        }
+        REQUIRE(kernel.configure_native(spec).status == NativeSetupStatus::Applied);
+        NativeFxCurve curve;
+        curve.effective_from_ms = {stamps[0], stamps[1]};
+        curve.account_per_quote = {rates[0], rates[1]};
+        REQUIRE(kernel.configure_native_fx_curve(curve).status == NativeSetupStatus::Applied);
+        kernel.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(kernel.last_error().empty());
+        const auto calls = liquidations(kernel);
+        REQUIRE(calls.size() == 1);
+        std::printf("         kernel FxRoll (%s) %.17g @ %.17g on bar %lld\n",
+                    tolerant ? "adapter's run shape" : "strict calendar",
+                    calls[0].closed_units, calls[0].resolved_price,
+                    static_cast<long long>(calls[0].cursor.point.interval_index));
+        if (tolerant) {
+            CHECK(std::abs(calls[0].closed_units - 0.4116) < 1e-12);
+            CHECK(calls[0].resolved_price == 97.0);
+            CHECK(calls[0].cursor.point.interval_index == 2);
+        } else {
+            CHECK(std::abs(calls[0].closed_units - 0.4036) < 1e-12);
+            CHECK(calls[0].resolved_price == 99.0);
+            CHECK(calls[0].cursor.point.interval_index == 2);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -509,6 +622,7 @@ int main() {
     test("twin-forced-price", twin_forced_execution_price);
     test("twin-cash-commission", twin_cash_commission_equity_and_level);
     test("twin-rounded-money", twin_rounded_money_and_whole_drop);
+    test("twin-fx-roll-broker-open", twin_fx_roll_broker_open);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

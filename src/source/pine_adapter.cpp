@@ -3262,55 +3262,16 @@ double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const n
     return std::isfinite(rate) && rate > 0.0 ? rate : 1.0;
 }
 
-void PineExecutionAdapter::submit_fx_margin_slice(
-        const Bar& bar, const NativeDecisionContext& context, double rate, bool execute_at_current) {
-    const auto position = require_host().physical_position();
-    const double held = std::abs(position.signed_units);
-    const double margin = position.signed_units > 0.0 ? config_.margin_long : config_.margin_short;
-    if (!source_margin_call_enabled_ || !(held > 0.0) || !finite_positive(margin) || margin != 100.0
-        || !finite_positive(bar.open) || !finite_positive(staged_.syminfo.pointvalue)) return;
-    const double required = held * bar.open * staged_.syminfo.pointvalue * rate;
-    const double equity = require_host().native_marked_equity(bar.open);
-    if (!(required > equity) || !std::isfinite(equity)) return;
-    const double raw_minimum = (required - equity)
-        / (bar.open * staged_.syminfo.pointvalue * rate);
-    if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return;
-    double minimum = raw_minimum;
-    if (staged_.quantity_grid) minimum = floor_quantity_grid(minimum, staged_.quantity_grid);
-    double units = 0.0;
-    if (minimum > 0.0) {
-        // The source broker floors the restore quantity before applying its
-        // fourfold liquidation multiplier, then floors the executable result.
-        units = 4.0 * minimum;
-        if (staged_.quantity_grid) units = floor_quantity_grid(units, staged_.quantity_grid);
-    } else if (staged_.quantity_grid && *staged_.quantity_grid <= 1.0
-               && raw_minimum > 1e-12 && raw_minimum < 1.0) {
-        // A positive deficit which floors below one lot is discontinuous in
-        // the legacy FX rollover path: it closes one whole contract (G2).
-        const double candidate = std::min(1.0, held);
-        const double gridded = floor_quantity_grid(candidate, staged_.quantity_grid);
-        const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
-        if (candidate >= held - 1e-12 || std::abs(gridded - candidate) <= guard)
-            units = candidate;
-    }
-    units = std::min(held, units);
-    if (!(units > 0.0) || !std::isfinite(units)) return;
-    native_order::Request request;
-    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
-    request.label = kMarginCallLabel;
-    request.comment = "Margin call";
-    PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::Margin;
-    snapshot.source_id = request.label;
-    snapshot.requested_qty = units;
-    snapshot.sizing = sizing_snapshot();
-    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
-                                            kMarginCallLabel);
-    if (accepted && execute_at_current) {
-        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
-    }
-}
-
+// TradingView revalues a carried position at the first broker open under a new
+// account FX rate (ab9714be pine_fills.cpp:830-1000, the TV-pinned 1x long
+// row; test_affordability_fx G, G2, NEW-S1): its money at the OPEN price, its
+// lot-floored 4x restore, executed at the open before any resting order sees
+// the bar -- exactly the open checkpoint submit_margin_call_slice takes, at the
+// position side's own margin (R5 lane F7: that formula was always per-side,
+// ab9714be's leveraged cells were only switched off). A survivor that is not a
+// 1x long is then checked over the rest of the bar by the kernel's liquidation
+// (on_applied re-schedules the path). The kernel's own FxRoll point is not
+// this checkpoint -- see margin_check_allowed.
 void PineExecutionAdapter::apply_fx_open_margin_slice(
         const Bar& bar, const NativeDecisionContext& context) {
     const double rate = active_staged_fx(context.sub_bar_open_ms);
@@ -3320,13 +3281,7 @@ void PineExecutionAdapter::apply_fx_open_margin_slice(
     const auto position = require_host().physical_position();
     if (position.signed_units == 0.0
         || position_open_script_bar_ >= context.script_bar_open_ms) return;
-    const double margin = position.signed_units > 0.0 ? config_.margin_long : config_.margin_short;
-    if (source_margin_call_enabled_ && finite_positive(margin) && margin != 100.0) {
-        throw std::runtime_error(
-            "timestamped account-currency FX broker-open rollover supports "
-            "only carried 1x full-margin positions");
-    }
-    submit_fx_margin_slice(bar, context, rate, true);
+    (void)submit_margin_call_slice(bar.open, context);
 }
 
 void PineExecutionAdapter::apply_fx_opening_margin_slice(
@@ -3347,16 +3302,15 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
     }
     const double rate = active_staged_fx(context.sub_bar_open_ms);
     if (!std::isfinite(opening_snapshot->sizing.fx) || opening_snapshot->sizing.fx == rate) return;
-    Bar opening;
-    opening.open = event.resolved_price;
-    opening.high = event.resolved_price;
-    opening.low = event.resolved_price;
-    opening.close = event.resolved_price;
-    opening.timestamp = context.sub_bar_open_ms;
-    // A31(b): the generic applied callback keeps the same current coordinate
-    // live, so this just-observed opening correction settles before the next
-    // candidate without a source-specific execution path.
-    submit_fx_margin_slice(opening, context, rate, true);
+    // The FX twin of on_applied's opening checkpoint (a full-margin opening
+    // whose rate moved between its signal and its fill): the same TradingView
+    // money and slice at the fill, settled at the same current coordinate
+    // before the next candidate (A31(b)).
+    const auto position = require_host().physical_position();
+    if ((position.signed_units > 0.0 ? config_.margin_long : config_.margin_short) != 100.0) {
+        return;
+    }
+    (void)submit_margin_call_slice(event.resolved_price, context, true);
 }
 
 void PineExecutionAdapter::schedule_preopen_margin_slice(
@@ -12411,11 +12365,14 @@ bool PineExecutionAdapter::source_margin_rounded_tie_veto() const {
 // orders in front of it -- and only carried here.
 bool PineExecutionAdapter::margin_check_allowed(
         const NativeMarginCheckPoint& point) const {
-    // The kernel's FX-roll point is not TradingView's: its account-currency
-    // rollover revaluation is the broker-open slice of
-    // apply_fx_open_margin_slice, taken in on_bar_open on the source's own
-    // sub-bar rate. Refused by kind, ahead of the ordinal test, because a
-    // roll can share its driver point with an armed BarOpen check.
+    // The kernel's FX-roll point is not TradingView's rollover: that is the
+    // broker-open checkpoint of apply_fx_open_margin_slice, measured AT the
+    // open and executed there. The roll point measures at the remaining
+    // path's adverse mark and rests the slice on it -- on a step bar O 100
+    // L 97 a carried 1x long books 0.4116 @ 97 there against TradingView's
+    // pinned 0.3996 @ 100 (test_native_margin_hooks_twin MG-FX, R5 lane F7).
+    // Refused by kind, ahead of the ordinal test, because a roll can share
+    // its driver point with an armed BarOpen check.
     if (point.kind == NativeMarginCheckKind::FxRoll) return false;
     // The kernel's BarOpen point and its post-fill AfterApplied re-arm are
     // both points TradingView checks at -- schedule_margin_call_path is

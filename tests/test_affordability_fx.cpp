@@ -149,10 +149,9 @@ private:
     double observed_qty_ = kNaN;
 };
 
-// Leveraged carried shapes do not yet have a TV-pinned broker-open
-// liquidation rule. They must reject before on_bar instead of silently
-// falling through to the end-of-bar adverse-price pass.  (1x short is
-// supported by cell A1; keep this probe for leveraged-only fail-closed.)
+// A one-unit carried position under either margin (cells G6). Until R5 lane
+// F7 a leveraged carried shape failed closed before on_bar; it now takes the
+// broker-open checkpoint like the 1x cells (the F7 rows below).
 class UnsupportedCarriedFxRolloverProbe : public pineforge::source::PineStrategyHost {
 public:
     UnsupportedCarriedFxRolloverProbe(bool is_long, double margin_pct)
@@ -176,6 +175,46 @@ public:
 private:
     bool is_long_;
     int on_bar_calls_ = 0;
+};
+
+// R5 lane F7 (M9): a carried position of any positive margin crossing a
+// timestamped FX step. `margin` is the position side's own ratio, the other
+// side is given `other_margin`; bars are chosen per case.
+class CarriedRollProbe : public pineforge::source::PineStrategyHost {
+public:
+    CarriedRollProbe(bool is_long, double margin, double other_margin, double capital,
+                     double qty, double qty_step)
+        : is_long_(is_long), qty_(qty) {
+        initial_capital_ = capital;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = qty;
+        commission_value_ = 0.0;
+        margin_long_ = is_long ? margin : other_margin;
+        margin_short_ = is_long ? other_margin : margin;
+        qty_step_ = qty_step;
+        process_orders_on_close_ = true;
+    }
+    void on_source_bar(const Bar& /*bar*/) override {
+        ++on_bar_calls_;
+        if (bar_index_ == 0) strategy_entry(is_long_ ? "L" : "S", is_long_, kNaN, kNaN, qty_);
+        if (bar_index_ == 2) {
+            trades_at_step_script_ = trade_count();
+            position_at_step_script_ = signed_position_size();
+        }
+    }
+    int on_bar_calls() const { return on_bar_calls_; }
+    int trades_at_step_script() const { return trades_at_step_script_; }
+    double position_at_step_script() const { return position_at_step_script_; }
+    double position() const { return signed_position_size(); }
+    int trades() const { return trade_count(); }
+    const Trade& trade(int i) const { return get_trade(i); }
+
+private:
+    bool is_long_;
+    double qty_;
+    int on_bar_calls_ = 0;
+    int trades_at_step_script_ = -1;
+    double position_at_step_script_ = kNaN;
 };
 
 // Cell A1 dual of CarriedFxRolloverOrderingProbe: carried 1x short under a
@@ -716,10 +755,10 @@ int main() {
         CHECK(std::abs(eng.observed_qty() - 2.5) < 1e-12);
     }
 
-    // G6. Leveraged carried-position rate changes still fail before the
-    // script body (cells L/R off).  1x short is now supported (cell A1) and
-    // must not throw.  A duplicate provider epoch with the same numeric rate
-    // is harmless and is consumed without inventing a broker event.
+    // G6. A carried-position rate change at either margin runs the script
+    // body (cells L/R on since R5 lane F7; 1x short since cell A1).  A
+    // duplicate provider epoch with the same numeric rate is harmless and is
+    // consumed without inventing a broker event.
     {
         std::vector<Bar> bars = {
             mk_bar(1000, 100.0), mk_bar(2000, 100.0),
@@ -739,15 +778,19 @@ int main() {
         CHECK(short_position.last_error().empty());
         CHECK(short_position.on_bar_calls() == 3);
 
-        // G6-lev-long: leveraged long remains fail-closed.
+        // G6-lev-long: a leveraged long now completes (R5 lane F7, M9).
+        // expectation corrected: last_error() contains "1x full-margin" and
+        // on_bar ran 2 times -> last_error() is empty and on_bar ran 3
+        // times, because the broker-open revaluation is TradingView's open
+        // checkpoint at any positive margin now; one unit at 50 % needs
+        // 50.05 against 10000 and takes no slice.
         UnsupportedCarriedFxRolloverProbe leveraged_long(
             /*is_long=*/true, /*margin_pct=*/50.0);
         CHECK(leveraged_long.set_account_currency_fx_series(
             timestamps, changed_rates, 2));
         leveraged_long.run(bars.data(), (int)bars.size());
-        CHECK(leveraged_long.last_error().find("1x full-margin")
-              != std::string::npos);
-        CHECK(leveraged_long.on_bar_calls() == 2);
+        CHECK(leveraged_long.last_error().empty());
+        CHECK(leveraged_long.on_bar_calls() == 3);
 
         UnsupportedCarriedFxRolloverProbe same_rate_short(
             /*is_long=*/false, /*margin_pct=*/100.0);
@@ -882,6 +925,122 @@ int main() {
         CHECK(!stale_epoch_trim);
         CHECK(eng.still_short());
         CHECK(eng.observed_qty() > 0.0);
+    }
+
+    // F7. The carried rollover at any positive margin (R5 lane F7, M9). The
+    // revaluation is TradingView's broker-open checkpoint: its money at the
+    // step bar's OPEN under the new rate and the side's own maintenance ratio
+    // (the adapter declares initial 0 for both sides, so the opening
+    // admission never enters), its lot-floored 4x restore, executed at the
+    // open before the step bar's script. A survivor that is not a 1x long is
+    // then checked over the rest of that bar by the kernel's own liquidation.
+    // Batch == stream: a stream refuses a setter-staged series before its
+    // first bar (FP6; the H rows), so the roll has no stream half through this
+    // host -- the kernel's declared curve rolls alike in both modes
+    // (tests/test_native_margin_fx_roll.cpp, stream twin).
+    {
+        const int64_t timestamps[] = {1000, 3000};
+        const double stepped[] = {1.0, 1.5};
+        const double constant[] = {1.0, 1.0};
+        const std::vector<Bar> flat = {mk_bar(1000, 100.0), mk_bar(2000, 100.0),
+                                       mk_bar(3000, 100.0), mk_bar(4000, 100.0)};
+        // Hand arithmetic, 15 units at 100 on 1000, 50 %:
+        //   unit margin = 100 * 1.5 * 0.5 = 75, required = 1125 > 1000,
+        //   restore = 125 / 75, slice = 4x (no lot grid), survivor 625 <= 1000.
+        const double restore = (15.0 * 75.0 - 1000.0) / 75.0;
+        const double slice = 4.0 * restore;
+        for (const bool is_long : {true, false}) {
+            CarriedRollProbe eng(is_long, 50.0, 100.0, 1000.0, 15.0, 0.0);
+            CHECK(eng.set_account_currency_fx_series(timestamps, stepped, 2));
+            eng.run(flat.data(), (int)flat.size());
+            std::printf("  F7 2x %s 1->1.5: err='%s' trades=%d pos=%.17g\n",
+                        is_long ? "long " : "short", eng.last_error().c_str(),
+                        eng.trades(), eng.position());
+            CHECK(eng.last_error().empty());
+            CHECK(eng.on_bar_calls() == 4);
+            CHECK(eng.trades_at_step_script() == 1);
+            CHECK(eng.trades() == 1);
+            if (eng.trades() == 1) {
+                CHECK(eng.trade(0).exit_id == std::string("__margin_call__"));
+                CHECK(eng.trade(0).qty == slice);
+                CHECK(eng.trade(0).exit_price == 100.0);
+                CHECK(eng.trade(0).exit_time == 3000);
+            }
+            CHECK(eng.position() == (is_long ? 15.0 - slice : -(15.0 - slice)));
+        }
+        // Per-side ratios: the side's own maintenance ratio decides. At 25 %
+        // the same book needs 562.5 <= 1000 and takes nothing, whichever
+        // side carries it and whatever the other side declares.
+        for (const bool is_long : {true, false}) {
+            CarriedRollProbe eng(is_long, 25.0, 50.0, 1000.0, 15.0, 0.0);
+            CHECK(eng.set_account_currency_fx_series(timestamps, stepped, 2));
+            eng.run(flat.data(), (int)flat.size());
+            CHECK(eng.last_error().empty());
+            CHECK(eng.on_bar_calls() == 4);
+            CHECK(eng.trades() == 0);
+            CHECK(eng.position() == (is_long ? 15.0 : -15.0));
+        }
+        // A constant curve never rolls: the 2x long keeps its whole book.
+        {
+            CarriedRollProbe eng(true, 50.0, 100.0, 1000.0, 15.0, 0.0);
+            CHECK(eng.set_account_currency_fx_series(timestamps, constant, 2));
+            eng.run(flat.data(), (int)flat.size());
+            CHECK(eng.last_error().empty());
+            CHECK(eng.trades() == 0);
+            CHECK(eng.position() == 15.0);
+        }
+        // The broker-open rule on a step bar that does not stay at its open
+        // (O 100 H 101 L 97 C 99): TradingView's pinned 1x row is taken AT
+        // the open -- 0.3996 @ 100, as on the flat G tape. The kernel's FxRoll
+        // point would measure at the path's adverse mark and book 0.4116 @ 97
+        // (tests/test_native_margin_hooks_twin.cpp, MG-FX), which is why the
+        // adapter keeps this checkpoint and refuses that point by kind.
+        const double pinned[] = {1.0, 1.001};
+        const std::vector<Bar> moving = {mk_bar(1000, 100.0), mk_bar(2000, 100.0),
+                                         Bar{100.0, 101.0, 97.0, 99.0, 1.0, 3000},
+                                         mk_bar(4000, 99.0)};
+        {
+            CarriedRollProbe eng(true, 100.0, 100.0, 10000.0, 100.0, 0.0001);
+            CHECK(eng.set_account_currency_fx_series(timestamps, pinned, 2));
+            eng.run(moving.data(), (int)moving.size());
+            CHECK(eng.last_error().empty());
+            CHECK(eng.trades() == 1);
+            if (eng.trades() == 1) {
+                CHECK(std::abs(eng.trade(0).qty - 0.3996) < 1e-12);
+                CHECK(eng.trade(0).exit_price == 100.0);
+                CHECK(eng.trade(0).exit_time == 3000);
+            }
+        }
+        // The 1x short on the same bar: the open slice, then the survivor's
+        // adverse-extreme check at the high -- the kernel's liquidation.
+        {
+            CarriedRollProbe eng(false, 100.0, 100.0, 10000.0, 100.0, 0.0001);
+            CHECK(eng.set_account_currency_fx_series(timestamps, pinned, 2));
+            eng.run(moving.data(), (int)moving.size());
+            std::printf("  F7 1x short moving bar: trades=%d", eng.trades());
+            for (int i = 0; i < eng.trades(); ++i) {
+                std::printf(" [%.17g @ %.17g t=%lld]", eng.trade(i).qty,
+                            eng.trade(i).exit_price, (long long)eng.trade(i).exit_time);
+            }
+            std::printf("\n");
+            CHECK(eng.last_error().empty());
+            CHECK(eng.trades() == 2);
+            if (eng.trades() == 2) {
+                CHECK(std::abs(eng.trade(0).qty - 0.3996) < 1e-12);
+                CHECK(eng.trade(0).exit_price == 100.0);
+                CHECK(std::abs(eng.trade(1).qty - 6.702) < 1e-12);
+                CHECK(eng.trade(1).exit_price == 101.0);
+                CHECK(eng.trade(1).exit_time == 3000);
+            }
+        }
+        // Stream: the leveraged book with a series is refused before any bar.
+        {
+            CarriedRollProbe eng(true, 50.0, 100.0, 1000.0, 15.0, 0.0);
+            CHECK(eng.set_account_currency_fx_series(timestamps, stepped, 2));
+            CHECK(!eng.stream_begin(flat.data(), (int)flat.size(), "1", "1"));
+            CHECK(eng.last_error().find("streaming") != std::string::npos);
+            CHECK(eng.on_bar_calls() == 0);
+        }
     }
 
     // H. Timestamped FX is currently authoritative only on ordinary

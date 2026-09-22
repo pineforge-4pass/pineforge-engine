@@ -745,15 +745,22 @@ int main() {
         CHECK(short_position.last_error().empty());
         CHECK(short_position.on_bar_calls() == 3);
 
-        // G6-lev-long: leveraged long remains fail-closed.
+        // G6-lev-long. The one pin of this oracle a later lane moved on
+        // purpose (R5 lane F7, M9; tests/test_affordability_fx.cpp F7 rows):
+        // expectation corrected: last_error() contains "1x full-margin" and
+        // on_bar ran 2 times -> last_error() is empty and on_bar ran 3
+        // times, because the ab9714be route failed closed on a leveraged
+        // carried roll (its leveraged cells were switched off) and the
+        // adapter now takes TradingView's broker-open checkpoint at any
+        // positive margin; this unit needs 50.05 against 10000 and takes no
+        // slice.
         UnsupportedCarriedFxRolloverProbe leveraged_long(
             /*is_long=*/true, /*margin_pct=*/50.0);
         CHECK(leveraged_long.set_account_currency_fx_series(
             timestamps, changed_rates, 2));
         leveraged_long.run(bars.data(), (int)bars.size());
-        CHECK(leveraged_long.last_error().find("1x full-margin")
-              != std::string::npos);
-        CHECK(leveraged_long.on_bar_calls() == 2);
+        CHECK(leveraged_long.last_error().empty());
+        CHECK(leveraged_long.on_bar_calls() == 3);
 
         UnsupportedCarriedFxRolloverProbe same_rate_short(
             /*is_long=*/false, /*margin_pct=*/100.0);
