@@ -3235,15 +3235,12 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         pending_bracket_legs_.end());
 }
 
+// The account FX in force at an instant is the kernel's lookup: the staged
+// scalar and series are the engine's own (staged_configuration copies them at
+// begin), validated positive and finite by their setters.
 double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const noexcept {
-    double rate = staged_.account_fx;
-    const std::size_t count = std::min(staged_.account_fx_effective_from_ms.size(),
-                                       staged_.account_fx_per_quote.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        if (staged_.account_fx_effective_from_ms[i] > timestamp_ms) break;
-        rate = staged_.account_fx_per_quote[i];
-    }
-    return std::isfinite(rate) && rate > 0.0 ? rate : 1.0;
+    const auto* pine = dynamic_cast<const PineStrategyHost*>(host_);
+    return pine ? pine->account_currency_fx_at(timestamp_ms) : staged_.account_fx;
 }
 
 // TradingView revalues a carried position at the first broker open under a new

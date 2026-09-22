@@ -1251,6 +1251,20 @@ void a_staged_fx_series_keeps_sized_where_the_rates_agree() {
                 stepped.core_sized_at_command[0], stepped.core_sized_at_command[1],
                 stepped.core_sized_at_command[2], stepped.rows()[0].qty,
                 stepped.rows()[1].qty, stepped.rows()[2].qty);
+
+    // (c) Both rates the comparison reads are the kernel's own lookup
+    //     (BacktestEngine::account_currency_fx_at over the engine's curve):
+    //     the adapter no longer walks the staged series itself.
+#if defined(PINEFORGE_R2_ADAPTER_FILE)
+    const std::string adapter = read_file(PINEFORGE_R2_ADAPTER_FILE);
+    REQUIRE(!adapter.empty());
+    const bool walks_series = adapter.find("account_fx_per_quote") != std::string::npos;
+    if (walks_series) std::printf("  adapter still walks account_fx_per_quote\n");
+    CHECK(!walks_series);
+#else
+    std::printf("  PINEFORGE_R2_ADAPTER_FILE undefined\n");
+    CHECK(false);
+#endif
 }
 
 void test(const char* name, void (*fn)()) {
