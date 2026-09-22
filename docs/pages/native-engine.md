@@ -599,7 +599,8 @@ segment, and discrete points, keep the ordinary birth gate above.
 `on_native_bar_open` fires at the modeled opening, before that point's matching
 pass (`native_execution_consumer.cpp:6302-6304`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = bar` (`native_execution_consumer.cpp:4176`) — so its
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6208`), the
+complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
 `current_partial_bar()` (`native_host.hpp:1022`; C:
@@ -1833,7 +1834,7 @@ host that marks its own equity keeps this default and owns the whole series.
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
 through `max_drawdown_percent()` (`engine.hpp:1471`), `max_runup_percent()`
 (`engine.hpp:940`) and `max_contracts_held_all/long/short()`
-(`engine.hpp:1794-1796`) — are a property of the RUN: what it drew down, what
+(`max_contracts_held_all` `engine.hpp:1952-1954`) — are a property of the RUN: what it drew down, what
 it ran up, the most it ever held. The kernel folds them
 (`update_equity_extremes`, `engine.hpp:1326`) at every script calculation
 under **every** report policy, so a `HostRecorded` host reads them truthfully
@@ -2587,7 +2588,7 @@ and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
 setter is a source mutation and **throws**, latching `Failed`
 (`UnsupportedSource`) through `guard_native_mutation`
-(`engine_aux_security.cpp:78`, `native_execution_consumer.cpp:1043-1059`).
+(`engine_aux_security.cpp:78`, `guard_native_mutation` `engine_consumer.cpp:42`).
 
 ## Batch OHLCV vs ticks vs quiet
 
@@ -2657,7 +2658,7 @@ These are existing refusals, not implied future features:
   confirmed bars carry those series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`native_c_api.h:37-38`) take
+symbol — `strategy_stream_begin` and its family (`native_c_api.h:37-39`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2531`) obeys the one legality
 rule its C++ spelling does.
