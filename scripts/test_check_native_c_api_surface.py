@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -162,6 +163,96 @@ class SurfaceGuardTests(unittest.TestCase):
         code, err = self.run_guard()
         self.assertEqual(code, 1)
         self.assertIn("is not followed by a member function declaration", err)
+
+
+
+class EnumTwinGuardTests(unittest.TestCase):
+    """R5 lane F4 (audit P4-b): every kernel enumeration a C word carries is
+    parsed against its C twin, so an enumerator appended to the kernel without
+    a C name fails -- the audit's R12 mutation compiled clean against the old
+    last-value static_assert."""
+
+    def setUp(self) -> None:
+        self._saved = {name: getattr(guard, name)
+                       for name in ("INCLUDE", "HOST", "C_API", "PUBLIC_C", "ENGINE")}
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        for name, value in self._saved.items():
+            self.addCleanup(setattr, guard, name, value)
+        self.include = Path(directory.name) / "pineforge"
+        shutil.copytree(guard.INCLUDE, self.include)
+        guard.INCLUDE = self.include
+        guard.HOST = self.include / "native_host.hpp"
+        guard.C_API = self.include / "native_c_api.h"
+        guard.PUBLIC_C = self.include / "pineforge.h"
+        guard.ENGINE = self.include / "engine.hpp"
+
+    def edit(self, name: str, old: str, new: str) -> None:
+        path = self.include / name
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count(old), 1, f"{old!r} is not unique in {name}")
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def run_guard(self) -> tuple[int, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = guard.main()
+        return code, err.getvalue()
+
+    def test_the_copied_tree_passes(self) -> None:
+        code, err = self.run_guard()
+        self.assertEqual(code, 0, err)
+
+    def test_an_appended_kernel_enumerator_without_a_c_name_fails(self) -> None:
+        # The audit's R12 mutation, verbatim: a kind appended after FxRoll.
+        self.edit("native_host.hpp", "    FxRoll = 3,\n};", "    FxRoll = 3,\n    Unnamed = 4,\n};")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("NativeMarginCheckKind::Unnamed (4) has no C name in "
+                      "pf_native_margin_check_kind_e", err)
+
+    def test_an_implicit_enumerator_appended_without_a_c_name_fails(self) -> None:
+        self.edit("native_order.hpp", "    TrailTrigger = 3,\n};", "    TrailTrigger = 3,\n    Later,\n};")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("ActivationKind::Later (4) has no C name in pf_native_activation_e", err)
+
+    def test_an_inserted_kernel_enumerator_fails(self) -> None:
+        # Inserted before the last: the C names now spell shifted values.
+        self.edit("native_host.hpp", "    Calculation = 2,\n    FxRoll = 3,",
+                  "    Calculation = 2,\n    Inserted = 3,\n    FxRoll = 4,")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("NativeMarginCheckKind::FxRoll (4) has no C name", err)
+
+    def test_a_c_name_for_no_kernel_value_fails(self) -> None:
+        self.edit("native_c_api.h", "    PF_NATIVE_ORIGIN_KERNEL_RISK        = 2  ",
+                  "    PF_NATIVE_ORIGIN_KERNEL_RISK        = 2, PF_NATIVE_ORIGIN_BOGUS = 9  ")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("PF_NATIVE_ORIGIN_BOGUS (9) names no enumerator of RequestOrigin", err)
+
+    def test_an_excluded_kernel_value_given_a_c_name_fails(self) -> None:
+        self.edit("native_c_api.h", "    PF_NATIVE_REPORT_KERNEL_RECORDED = 1  ",
+                  "    PF_NATIVE_REPORT_KERNEL_RECORDED = 1,\n    PF_NATIVE_REPORT_MARKS = 2  ")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("NativeReportPolicy::KernelRecordedAtHostMarks is excluded", err)
+
+    def test_an_unclassified_c_enumeration_fails(self) -> None:
+        self.edit("native_c_api.h", "/** @} */ /* end of pf_native_c_enums */",
+                  "typedef enum pf_native_bogus_e { PF_NATIVE_BOGUS_A = 0 } pf_native_bogus_t;\n"
+                  "/** @} */ /* end of pf_native_c_enums */")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("pf_native_bogus_e is neither twinned to a kernel enumeration nor "
+                      "ruled C-only", err)
+
+    def test_a_twin_whose_kernel_enumeration_is_gone_fails(self) -> None:
+        self.edit("native_order.hpp", "enum class RequestOrigin", "enum class RequestProvenance")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("no `enum class RequestOrigin` in native_order.hpp", err)
 
 
 if __name__ == "__main__":

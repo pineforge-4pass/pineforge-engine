@@ -24,6 +24,18 @@ is documented to call or override from its callbacks. Those are opt-in: a
 BASE-CLASS SEAMS list must name exactly the marked set, under the same row
 rules. A marker outside the class, or one that does not precede a member
 function, fails too, so a marker cannot quietly mark nothing.
+
+R5 lane F4 adds the enumerations (audit P4-b). Every `typedef enum` in the two
+C headers is classified here, once: either it is the C twin of a kernel
+`enum class` (ENUM_TWINS names the header and the enumeration), or it has no
+enumeration to mirror (C_ONLY says why -- a std::variant's alternative index, a
+bit mask, a bool, a C-only protocol). For a twin, the kernel enumeration is
+parsed out of its header and compared by VALUE: every kernel enumerator needs
+a C enumerator of the same value unless it is excluded by name with a reason,
+an excluded one must stay unspelled, and every C enumerator must name a kernel
+value. So a kernel enumerator appended without a C name fails here -- the
+static_asserts in src/native_c_host.cpp pin the names they list, and cannot see
+one that nobody listed -- and so does a C enumeration nobody classified.
 """
 from __future__ import annotations
 
@@ -32,16 +44,220 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HOST = ROOT / "include" / "pineforge" / "native_host.hpp"
-ENGINE = ROOT / "include" / "pineforge" / "engine.hpp"
-C_API = ROOT / "include" / "pineforge" / "native_c_api.h"
-PUBLIC_C = ROOT / "include" / "pineforge" / "pineforge.h"
+INCLUDE = ROOT / "include" / "pineforge"
+HOST = INCLUDE / "native_host.hpp"
+ENGINE = INCLUDE / "engine.hpp"
+C_API = INCLUDE / "native_c_api.h"
+PUBLIC_C = INCLUDE / "pineforge.h"
 
 # Members that are not part of the host's own surface: the copy/move deletions
 # the class spells out, and the friend declaration.
 _SKIP = frozenset({"NativeStrategyHost", "operator="})
 
 _ROW = re.compile(r"^\s*\*\s+\[(C|--)\]\s+(\w+)\s+(\S.*?)\s*$")
+
+# Every C enumeration that mirrors a kernel `enum class`: C tag -> (the header
+# under include/pineforge that declares the kernel enumeration, its name, the
+# kernel enumerators deliberately left without a C name -> why).
+ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
+    "pf_magnifier_distribution_e": ("magnifier.hpp", "MagnifierDistribution", {}),
+    "pf_close_cause_e": ("execution.hpp", "CloseCause", {}),
+    "pf_native_scope_claim_e": ("native_order.hpp", "ScopeClaim", {}),
+    "pf_native_side_e": ("native_order.hpp", "Side", {}),
+    "pf_native_size_time_e": ("native_order.hpp", "SizeTime", {}),
+    "pf_native_grid_policy_e": ("native_order.hpp", "ExecutionGridPolicy", {}),
+    "pf_native_anchor_rounding_e": ("native_order.hpp", "NativeAnchorRounding", {}),
+    "pf_native_arm_visibility_e": ("native_order.hpp", "NativeArmVisibility", {}),
+    "pf_native_group_effect_e": ("native_order.hpp", "GroupEffect", {}),
+    "pf_native_request_field_e": ("native_host.hpp", "NativeRequestField", {}),
+    "pf_native_price_rule_e": ("native_host.hpp", "NativeCurrentPriceRule", {}),
+    "pf_native_refusal_e": ("native_host.hpp", "NativeCurrentRefusal", {}),
+    "pf_native_lifecycle_e": ("native_host.hpp", "NativeLifecycleKind", {}),
+    "pf_native_risk_limit_e": ("native_order.hpp", "RiskLimitKind", {}),
+    "pf_native_risk_day_e": ("native_run_spec.hpp", "NativeRiskDay", {}),
+    "pf_native_risk_action_e": ("native_run_spec.hpp", "NativeRiskAction", {}),
+    "pf_native_fee_kind_e": ("native_run_spec.hpp", "NativeFeeKind", {}),
+    "pf_native_close_execution_e": ("native_run_spec.hpp", "NativeCloseExecution", {}),
+    "pf_native_open_directions_e": ("native_run_spec.hpp", "NativeOpenDirections", {}),
+    "pf_native_report_policy_e": ("native_run_spec.hpp", "NativeReportPolicy", {
+        "KernelRecordedAtHostMarks":
+            "its host names each report point from inside its own callbacks, and "
+            "the C callback table has no call that marks one (lane E22)",
+    }),
+    "pf_native_price_grid_e": ("native_run_spec.hpp", "NativePriceGrid", {}),
+    "pf_native_grid_rounding_e": ("native_run_spec.hpp", "NativeGridRounding", {}),
+    "pf_native_calc_trigger_e": ("native_run_spec.hpp", "NativeCalculationTrigger", {}),
+    "pf_native_open_bar_view_e": ("native_run_spec.hpp", "NativeOpenBarView", {}),
+    "pf_native_liquidation_sizing_e": ("native_run_spec.hpp", "NativeLiquidationSizing", {}),
+    "pf_native_series_source_e": ("native_run_spec.hpp", "NativeSeriesSource", {}),
+    "pf_native_size_price_e": ("native_order.hpp", "SizePrice", {}),
+    "pf_native_scope_basis_e": ("native_order.hpp", "ScopeBasis", {}),
+    "pf_native_liquidation_check_e": ("native_run_spec.hpp", "NativeLiquidationCheck", {}),
+    "pf_native_margin_equity_basis_e": ("native_run_spec.hpp", "NativeMarginEquityBasis", {}),
+    "pf_native_margin_level_base_e": ("native_run_spec.hpp", "NativeLiquidationLevelBase", {}),
+    "pf_native_sample_eligibility_e": ("native_run_spec.hpp", "SampleEligibility", {}),
+    "pf_native_slot_label_e": ("native_run_spec.hpp", "NativeSlotLabelPolicy", {}),
+    "pf_native_feed_tolerance_e": ("native_run_spec.hpp", "NativeFeedTolerance", {}),
+    "pf_native_path_order_e": ("native_run_spec.hpp", "NativePathOrder", {}),
+    "pf_native_abort_reporting_e": ("native_run_spec.hpp", "NativeAbortReporting", {}),
+    "pf_native_calc_reason_e": ("native_host.hpp", "NativeCalculationReason", {}),
+    "pf_native_margin_check_kind_e": ("native_host.hpp", "NativeMarginCheckKind", {}),
+    "pf_native_opened_lot_fill_point_e": ("engine.hpp", "OpenedLotFillPoint", {}),
+    "pf_native_price_provenance_e": ("market_driver.hpp", "NativePriceProvenance", {}),
+    "pf_native_path_phase_e": ("market_driver.hpp", "NativePathPhase", {}),
+    "pf_native_completion_kind_e": ("market_driver.hpp", "NativeCompletionKind", {}),
+    "pf_native_quote_kind_e": ("native_host.hpp", "NativeCurrentQuoteKind", {}),
+    "pf_native_terminal_reason_e": ("native_order.hpp", "AppliedTerminalReason", {}),
+    "pf_native_reject_reason_e": ("native_order.hpp", "RequestRejectReason", {}),
+    "pf_native_cancel_reason_e": ("native_order.hpp", "CancelReason", {}),
+    "pf_native_match_reject_e": ("native_order.hpp", "MatchRejectReason", {}),
+    "pf_native_activation_e": ("native_order.hpp", "ActivationKind", {}),
+    "pf_native_origin_e": ("native_order.hpp", "RequestOrigin", {}),
+    "pf_native_failure_code_e": ("native_host.hpp", "NativeFailureCode", {}),
+    "pf_native_failure_operation_e": ("native_host.hpp", "NativeFailureOperation", {}),
+    "pf_native_run_phase_e": ("native_host.hpp", "NativeRunPhase", {}),
+    "pf_native_completion_e": ("native_host.hpp", "NativeCompletion", {}),
+}
+
+# Every C enumeration with no kernel `enum class` to mirror, and why. A
+# variant's alternative index is pinned in src/native_c_host.cpp by
+# std::variant_size and translated by a std::visit that names every
+# alternative, so it cannot drift silently either.
+C_ONLY: dict[str, str] = {
+    "pf_execution_contract_e": "BacktestEngine::execution_contract() answers an int",
+    "pf_native_spec_optional_e": "bit mask of optional_mask; each bit gates one std::optional "
+                                 "field of NativeRunSpec",
+    "pf_fill_qty_partition_e": "the Pine source host's pending-order probe writes an int; "
+                               "no kernel enumeration exists",
+    "pf_native_intent_e": "alternative index of the std::variant native_order::OrderIntent",
+    "pf_native_reduction_e": "alternative index of the std::variant native_order::ReductionSize",
+    "pf_native_size_basis_e": "alternative index of the std::variant native_order::SizeBasis",
+    "pf_native_trigger_e": "alternative index of the std::variant native_order::Trigger",
+    "pf_native_anchor_e": "alternative index of the std::variant native_order::TriggerAnchor",
+    "pf_native_capacity_e": "alternative index of the std::variant native_order::Capacity",
+    "pf_native_owner_e": "alternative index of the std::variant native_order::Owner",
+    "pf_native_group_e": "alternative index of the std::variant native_order::Group",
+    "pf_native_execute_outcome_e": "the non-refusal alternatives of the std::variant "
+                                   "NativeCurrentExecutionResult",
+    "pf_native_event_kind_e": "the std::variant native_order::CommandEvent's alternatives plus "
+                              "the driver and account rows",
+    "pf_native_remaining_e": "alternative index of the std::variant "
+                             "native_order::RemainingProjection",
+    "pf_native_trigger_state_e": "alternative index of the std::variant native_order::TriggerState",
+    "pf_native_spec_ext_mask_e": "bit mask of the present blocks of pf_native_run_spec_ext_v1",
+    "pf_native_lookahead_e": "NativeTimeframeSubscription::lookahead is a bool",
+    "pf_native_gaps_e": "NativeTimeframeSubscription::gaps is a bool",
+    "pf_native_intrabar_kind_e": "alternative index of the std::variant IntrabarPath::value",
+    "pf_native_answer_e": "the C answering-hook protocol; a C++ hook answers a std::optional",
+}
+
+_C_ENUM = re.compile(r"typedef\s+enum\s+(\w+)\s*\{(.*?)\}\s*\w+\s*;", re.DOTALL)
+_ENUMERATOR = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+?))?\s*$", re.DOTALL)
+
+
+def _strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def _value(expr: str, known: dict[str, int]) -> int:
+    """An enumerator's value: an integer literal (decimal or hex, any u/l
+    suffix, optionally negated), a `1u << n` shift, or an earlier
+    enumerator's name."""
+    expr = expr.strip()
+    shift = re.fullmatch(r"(\d+)[uUlL]*\s*<<\s*(\d+)[uUlL]*", expr)
+    if shift:
+        return int(shift.group(1)) << int(shift.group(2))
+    number = re.fullmatch(r"(-?)\s*(0[xX][0-9a-fA-F]+|\d+)[uUlL]*", expr)
+    if number:
+        magnitude = int(number.group(2), 0)
+        return -magnitude if number.group(1) else magnitude
+    if expr in known:
+        return known[expr]
+    raise ValueError(f"cannot evaluate enumerator value {expr!r}")
+
+
+def _enumerators(body: str) -> list[tuple[str, int]]:
+    known: dict[str, int] = {}
+    out: list[tuple[str, int]] = []
+    following = 0
+    for item in _strip_comments(body).split(","):
+        if not item.strip():
+            continue
+        match = _ENUMERATOR.match(item)
+        if not match:
+            raise ValueError(f"cannot parse enumerator {item.strip()!r}")
+        name, expr = match.group(1), match.group(2)
+        value = _value(expr, known) if expr is not None else following
+        known[name] = value
+        out.append((name, value))
+        following = value + 1
+    return out
+
+
+def c_enumerations(*texts: str) -> dict[str, list[tuple[str, int]]]:
+    """Every `typedef enum <tag> { ... } <name>;` of the C headers, by tag."""
+    out: dict[str, list[tuple[str, int]]] = {}
+    for text in texts:
+        for match in _C_ENUM.finditer(_strip_comments(text)):
+            out[match.group(1)] = _enumerators(match.group(2))
+    return out
+
+
+def kernel_enumeration(text: str, name: str) -> list[tuple[str, int]] | None:
+    """The enumerators of `enum class <name>` in one header, or None."""
+    code = _strip_comments(text)
+    match = re.search(r"\benum\s+class\s+" + re.escape(name) + r"\b[^{;]*\{(.*?)\}\s*;",
+                      code, re.DOTALL)
+    return _enumerators(match.group(1)) if match else None
+
+
+def enum_twin_failures(c_texts: tuple[str, ...]) -> tuple[list[str], int, int]:
+    """(failures, twinned enumerations, kernel enumerators covered)."""
+    failures: list[str] = []
+    try:
+        c_enums = c_enumerations(*c_texts)
+    except ValueError as error:
+        return [f"a C enumeration does not parse: {error}"], 0, 0
+    for tag in sorted(set(c_enums) - set(ENUM_TWINS) - set(C_ONLY)):
+        failures.append(f"{tag} is neither twinned to a kernel enumeration nor ruled C-only")
+    for tag in sorted((set(ENUM_TWINS) | set(C_ONLY)) - set(c_enums)):
+        failures.append(f"{tag} is classified but no C header declares it")
+    for tag in sorted(set(ENUM_TWINS) & set(C_ONLY)):
+        failures.append(f"{tag} is classified twice")
+    covered = 0
+    for tag, (header, name, excluded) in sorted(ENUM_TWINS.items()):
+        if tag not in c_enums:
+            continue
+        path = INCLUDE / header
+        try:
+            kernel = kernel_enumeration(path.read_text(encoding="utf-8"), name)
+        except (OSError, ValueError) as error:
+            failures.append(f"{tag}: cannot read `enum class {name}` in {header}: {error}")
+            continue
+        if kernel is None:
+            failures.append(f"{tag}: no `enum class {name}` in {header}")
+            continue
+        c_values = {value: c_name for c_name, value in c_enums[tag]}
+        kernel_values = {value for _, value in kernel}
+        kernel_names = {kernel_name for kernel_name, _ in kernel}
+        for stale in sorted(set(excluded) - kernel_names):
+            failures.append(f"{tag}: the exclusion {name}::{stale} names no enumerator")
+        for kernel_name, value in kernel:
+            if kernel_name in excluded:
+                if value in c_values:
+                    failures.append(
+                        f"{name}::{kernel_name} is excluded ({excluded[kernel_name]}) but "
+                        f"{c_values[value]} spells its value {value}")
+                continue
+            covered += 1
+            if value not in c_values:
+                failures.append(f"{name}::{kernel_name} ({value}) has no C name in {tag}")
+        for c_name, value in c_enums[tag]:
+            if value not in kernel_values:
+                failures.append(f"{c_name} ({value}) names no enumerator of {name}")
+    return failures, len(set(ENUM_TWINS) & set(c_enums)), covered
+
 
 # The opt-in marker for a base-class seam, and the heading of its list.
 _SEAM_MARK = re.compile(r"^\s*//\s*@host-seam\b")
@@ -182,6 +398,9 @@ def main() -> int:
         failures.append(f"{_SEAMS_HEADING} rows naming members engine.hpp does not mark "
                         "@host-seam: " + ", ".join(stale_seams))
 
+    enum_failures, twinned, covered = enum_twin_failures((c_api_text, public_text))
+    failures.extend(enum_failures)
+
     # Every claimed spelling must name something the C headers declare.
     for name, detail in sorted({**spelled, **seam_spelled}.items()):
         tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", detail)
@@ -197,7 +416,9 @@ def main() -> int:
     print(f"check_native_c_api_surface: {len(members)} NativeStrategyHost members, "
           f"{len(spelled)} with a C spelling, {len(excluded)} excluded with a reason; "
           f"{len(seams)} marked BacktestEngine seams, {len(seam_spelled)} with a C spelling, "
-          f"{len(seam_excluded)} excluded with a reason")
+          f"{len(seam_excluded)} excluded with a reason; {twinned + len(C_ONLY)} C enumerations, "
+          f"{twinned} twinned to a kernel enumeration ({covered} enumerators, each with a C "
+          f"name), {len(C_ONLY)} C-only with a reason")
     return 0
 
 
