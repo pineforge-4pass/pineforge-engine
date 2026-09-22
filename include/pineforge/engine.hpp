@@ -1202,8 +1202,8 @@ protected:
 
     // --- Session predicate bar-state tracking ---
     // Tracks whether the previous bar was inside the regular session.
-    // Used to compute session.isfirstbar (in_session && !prev_in_session_)
-    // and session.islastbar (prev_in_session_ && !in_session).
+    // Read when session.isfirstbar is computed: a bar whose predecessor was
+    // out of session opens a session day (see the flags' one writer below).
     bool prev_in_session_ = false;
     // Current-bar session predicates. The host that dispatches the bar sets
     // them (the source adapter through scheduler_set_session_bar_state); the

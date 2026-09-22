@@ -1,5 +1,5 @@
 /*
- * test_session_islastbar_aggregation.cpp — R5 lane E25.
+ * test_session_islastbar_aggregation.cpp — R5 lanes E25 and E26.
  *
  * Lane E20 (its report, "(f) Findings" 2): since R4 slice C (73817c1d) every
  * in-session bar of an AGGREGATED run — input timeframe finer than the
@@ -37,13 +37,34 @@
  * too read every in-session bar as last. It reads the next script bar on the
  * calendar again, as ab9714be's stream and the batch live tail do (section 5).
  *
- * RECORDED, not fixed: TradingView draws the boundary at the session day, and
- * a day ends where the next bar belongs to another day even if it is in
- * session again. The registry's NYSE:F feeds hold regular hours only and a
- * 24x7 feed never leaves its session, so on them both paths still flag only
- * the run's final bar. Closing that changes the chart-timeframe path, which
- * this lane keeps byte-identical; the rows marked RESIDUAL pin exactly what
- * both paths miss, so the change that closes it has to move them on purpose.
+ * R5 lane E26 closes what E25 recorded. TradingView draws the boundary at the
+ * session DAY: a day ends where the next chart bar belongs to another session
+ * day, even when that bar is in session again. The registry's NYSE:F feeds
+ * hold regular hours only and a 24x7 feed never leaves its session, so "is
+ * the next bar out of session?" never fires between two days on them — both
+ * paths used to flag the run's edges alone (1 of 255 NYSE:F last bars, 0 of
+ * 255 first bars, 1 of 370 ETH last bars).
+ *
+ * The rule the three tapes give, bar for bar with no disagreement over their
+ * full windows (exec/E26-probes/derive.txt):
+ *
+ *   session.islastbar  = in session && (the next chart bar is out of session
+ *                                       || its session day differs)
+ *   session.isfirstbar = in session && (the previous chart bar was out of
+ *                                       session || its session day differs)
+ *
+ * The session day is the ordinal of timeframe.hpp
+ * (internal::session_trading_day_index): the exchange-timezone day that rolls
+ * at the symbol's day stamp — 09:30 ET on NYSE RTH, midnight on a 24x7
+ * symbol, 17:00 ET on a 1700-1700 forex session — not local midnight. Section
+ * 6 pins that difference on a session whose day rolls in the middle of the
+ * calendar day.
+ *
+ * The two rules are duals, so the engine reads the second off the first: a
+ * session's first bar is the bar after its predecessor's last one. Every path
+ * that computes "last" therefore agrees on "first" by construction, and the
+ * run's own edges keep their conventions — its first bar has no predecessor
+ * in session, and a batch run's final bar has no bar after it at all.
  */
 
 #include <pineforge/bar.hpp>
@@ -345,16 +366,21 @@ void test_tv_nyse_f() {
         // No bar TradingView leaves unflagged.
         CHECK(minus(engine_last, tv_last).empty());
         CHECK(minus(engine_first, tv_first).empty());
-        // RESIDUAL: the day boundaries a regular-hours feed hides. Only the
-        // run's edges are flagged — its final bar (no next bar) and its first
-        // (no prior bar); the half day's 12:45 and the other two days' 15:45 /
-        // 09:30 are missed on both paths.
-        CHECK((minus(tv_last, engine_last)
-               == std::set<std::int64_t>{utc_ms(2025, 7, 2, 19, 45),
-                                         utc_ms(2025, 7, 3, 16, 45)}));
-        CHECK((minus(tv_first, engine_first)
-               == std::set<std::int64_t>{utc_ms(2025, 7, 3, 13, 30),
-                                         utc_ms(2025, 7, 7, 13, 30)}));
+        // expectation corrected (lane E26): the residual E25 recorded here
+        // was the day boundary a regular-hours feed hides — 15:45 on 07-02
+        // and 12:45 on the 07-03 half day for islastbar, 09:30 on 07-03 and
+        // 07-07 for isfirstbar. The session-day rule flags them, so both
+        // paths now hold TradingView's set exactly, with nothing left over.
+        //   expectation corrected: minus(tv_last, engine_last) ==
+        //     {2025-07-02 15:45 ET, 2025-07-03 12:45 ET} -> {}, and
+        //   minus(tv_first, engine_first) ==
+        //     {2025-07-03 09:30 ET, 2025-07-07 09:30 ET} -> {},
+        //   because a session day ends where the next bar's session day
+        //   differs, not only where the next bar leaves the session.
+        CHECK(minus(tv_last, engine_last).empty());
+        CHECK(minus(tv_first, engine_first).empty());
+        CHECK(engine_last == tv_last);
+        CHECK(engine_first == tv_first);
     }
 }
 
@@ -381,12 +407,21 @@ void test_tv_eth_24x7() {
     const auto tv_last = tape_flags("e25-eth-islastbar", first, last);
     CHECK((tv_last == std::set<std::int64_t>{utc_ms(2025, 6, 10, 23, 45)}));
     for (const Run* run : {&chart, &agg}) {
-        // RESIDUAL: TradingView's 23:45 is missed, and the run's final bar,
-        // 00:45, is flagged only because no bar follows it (the legacy
-        // run-end convention both paths share).
-        CHECK(bits(run->seen, &Seen::islastbar) == "00000001");
+        // expectation corrected: "00000001" -> "00010001", because a 24x7
+        // symbol's session day ends at midnight and 23:45 is the last 15m bar
+        // of 2025-06-10 — TradingView's own flag. 00:45 stays flagged on top
+        // of it: it is this run's final bar, and no bar follows it (the
+        // run-end convention both paths share, outside the tape's window).
+        CHECK(bits(run->seen, &Seen::islastbar) == "00010001");
         CHECK((flagged(run->seen, &Seen::islastbar)
-               == std::set<std::int64_t>{utc_ms(2025, 6, 11, 0, 45)}));
+               == std::set<std::int64_t>{utc_ms(2025, 6, 10, 23, 45),
+                                         utc_ms(2025, 6, 11, 0, 45)}));
+        // Every bar TradingView flags in this window, the engine flags.
+        CHECK(minus(tv_last, flagged(run->seen, &Seen::islastbar)).empty());
+        // The session day also starts the run's 00:00 bar.
+        CHECK((flagged(run->seen, &Seen::isfirstbar)
+               == std::set<std::int64_t>{utc_ms(2025, 6, 10, 23, 0),
+                                         utc_ms(2025, 6, 11, 0, 0)}));
     }
 }
 
@@ -442,6 +477,52 @@ void test_stream_realtime() {
     }
 }
 
+// ── 6. the session day rolls at the symbol's day stamp, not at midnight ───
+
+// A 1700-1700 forex session never leaves the market, and its session day
+// rolls at 17:00 exchange time (timeframe.cpp session_day_stamp_offset_minutes
+// — the same stamp its daily bar opens on). Tuesday 16:30 .. 17:30 ET at 5m:
+// every bar is in session and no local midnight falls in the range, so a rule
+// reading "next bar out of session", and equally a rule splitting at local
+// midnight, flags nothing here but the run's final bar. The session-day rule
+// flags 16:55, the last bar before the roll, and calls 17:00 the next session
+// day's first bar.
+void test_overnight_session_day_roll() {
+    std::printf("test_overnight_session_day_roll\n");
+    const std::string forex = "1700-1700";
+    const auto five_minute = ladder(kTue0930Et + 420 * kMinute,
+                                    kTue0930Et + 480 * kMinute, 5 * kMinute);
+    const auto one_minute = ladder(kTue0930Et + 420 * kMinute,
+                                   kTue0930Et + 484 * kMinute, kMinute);
+    const Run chart = run_batch(five_minute, forex, kNewYork, "5", "5", false);
+    const Run agg = run_batch(one_minute, forex, kNewYork, "1", "5", false);
+    const Run agg_mag = run_batch(one_minute, forex, kNewYork, "1", "5", true);
+
+    CHECK(chart.error.empty());
+    CHECK(agg.error.empty());
+    CHECK(chart.seen.size() == 13);
+    //                                            16:55            17:30
+    CHECK(bits(chart.seen, &Seen::ismarket)   == "1111111111111");
+    CHECK(bits(chart.seen, &Seen::islastbar)  == "0000010000001");
+    CHECK(bits(chart.seen, &Seen::isfirstbar) == "1000001000000");
+    CHECK(same_bars(agg.seen, chart.seen));
+    CHECK(same_bars(agg_mag.seen, chart.seen));
+    if (bits(chart.seen, &Seen::islastbar) != "0000010000001"
+        || !same_bars(agg.seen, chart.seen) || !same_bars(agg_mag.seen, chart.seen)) {
+        show("chart 5 -> 5", chart);
+        show("aggregated 1 -> 5", agg);
+        show("aggregated 1 -> 5, magnifier", agg_mag);
+    }
+    if (chart.seen.size() != 13) return;
+    // The roll, spelled out: 16:55 is the last bar of one session day and
+    // 17:00 the first of the next, both in session, on the same local date.
+    CHECK(chart.seen[5].ts == kTue0930Et + 445 * kMinute);
+    CHECK(chart.seen[5].islastbar);
+    CHECK(chart.seen[6].ts == kTue0930Et + 450 * kMinute);
+    CHECK(chart.seen[6].isfirstbar);
+    CHECK(!chart.seen[6].islastbar);
+}
+
 }  // namespace
 
 int main() {
@@ -450,6 +531,7 @@ int main() {
     test_tv_nyse_f();
     test_tv_eth_24x7();
     test_stream_realtime();
+    test_overnight_session_day_roll();
 
     std::printf("\nsession_islastbar_aggregation: %d passed, %d failed\n",
                 tests_passed, tests_failed);
