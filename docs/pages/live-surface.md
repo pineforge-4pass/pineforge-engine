@@ -66,11 +66,16 @@ configuration**, not one-shot: it stays in effect until a caller passes
    peek at, so it asks whether the next bucket — this bar's timestamp plus
    one script-TF step — falls out of session, or belongs to another session
    day), pinned to agree with the `i+1` lookahead on every interior bar of
-   the 24x7 lanes. Historical bars read early closes correctly from the
-   session day alone, with no holiday calendar; a *forming* tail bar still
+   the 24x7 lanes. Since R5 lane F5 that is the kernel's answer, not the
+   host's: the tail bar reads `NativeDecisionContext::closes_session_day_open_ended`
+   (`market_driver.hpp:157`), the same fact as `closes_session_day` on every
+   bar except a batch's final one, which it reads off the calendar instead
+   of the run end. Historical bars read early closes correctly from the
+   session day alone, with no holiday calendar; a *forming* tail bar
    cannot, because the calendar step it takes is one the session string
-   declares as open. Non-24x7 tail bars therefore still need the v2
-   `SessionCalendar` for early closes.
+   declares as open. That is a ruled retention (ADR-0001, ruling
+   "Session-day facts at a bar with nothing held after it"): the remedy
+   is an early-close calendar, which the run spec does not carry.
 3. `bar_index` stays put; `last_bar_index` is frozen at the horizon bar
    (`horizon_bars - 1`), when `horizon_bars > 0`. `last_bar_time` is exact
    when the horizon bar is in the script-bar array, one script-TF step per
@@ -104,8 +109,9 @@ The one dispatch-path caveat that remains is not this flag's, and it is
 narrower than it was: every historical bar ends its session at the session
 day (R5 lane E26), so a non-24x7 tape's early closes are read from the tape
 itself. Only the forming tail bar is left — its calendar step cannot know a
-close the session string does not declare — so it still needs the v2
-`SessionCalendar`.
+close the session string does not declare — and that residue is ruled, not
+open (ADR-0001, ruling "Session-day facts at a bar with nothing held after
+it"): it needs an early-close calendar the run spec does not carry.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.
