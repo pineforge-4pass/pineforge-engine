@@ -102,7 +102,7 @@ order, deliberately:
    `examples/native/`, or a corpus probe. Register it: `TEST_SOURCES`
    tests/CMakeLists.txt:1 for a unit, or `PINEFORGE_NATIVE_EXAMPLES`
    examples/native/CMakeLists.txt:16 plus a `_pf_example_line_hello_kernel`
-   examples/native/CMakeLists.txt:100 for the row's own assertion.
+   examples/native/CMakeLists.txt:101 for the row's own assertion.
 2. **Run it and read the failure.** It must fail for the *right* reason — the
    behaviour is missing or wrong — not because the fixture is wrong or the
    symbol does not compile. Record what it said; a reviewer will ask.

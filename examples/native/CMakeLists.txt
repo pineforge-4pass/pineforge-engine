@@ -29,6 +29,7 @@ set(PINEFORGE_NATIVE_EXAMPLES
     native_open_lots_strategy
     native_fee_reserve_strategy
     native_fx_roll_strategy
+    native_broker_hash_strategy
 )
 
 # The same host written against the C API (R5 lane L13). It is a separate
@@ -118,6 +119,8 @@ if(PINEFORGE_BUILD_TESTS)
         "reserve 46 shares, none 47  commission 2935.9500 / 2999.7750  closed trades: 1 per run")
     set(_pf_example_line_native_fx_roll_strategy
         "FxRoll units=750 mark=212.90  no-step FxRoll points: 0, margin calls: 0  closed trades: 1")
+    set(_pf_example_line_native_broker_hash_strategy
+        "per-bar rows 24/24 batch, 24/24 stream  extension moved 24/24  batch vs stream shared 0/24 rows, 24/24 broker half  closed trades: 4")
     foreach(example IN LISTS PINEFORGE_NATIVE_EXAMPLES PINEFORGE_NATIVE_C_EXAMPLES)
         if(NOT DEFINED _pf_example_line_${example})
             message(FATAL_ERROR "examples/native: ${example} has no summary line for its "
