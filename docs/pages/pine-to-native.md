@@ -399,7 +399,7 @@ runs close the same trades for the same money.
 | `strategy.openprofit` | `open_profit` engine.hpp:1040 | `strategy_native_marked_equity_v1` native_c_api.h:1814 less the balance | `native_open_lots_strategy.cpp` | Takes the price to mark at, like every other native mark. |
 | `strategy.openprofit_percent` | derive from `open_profit` engine.hpp:1040 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the realized equity. |
 | `strategy.max_drawdown` | `max_drawdown_` engine.hpp:571 | `max_equity_drawdown` pineforge.h:260 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:62. |
-| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1593 | `max_equity_drawdown_pct` pineforge.h:260 | `native_sized_report_strategy.cpp` | Same rule. |
+| `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1596 | `max_equity_drawdown_pct` pineforge.h:260 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.max_runup` | `max_runup_` engine.hpp:572 | `max_equity_runup` pineforge.h:264 | `native_open_lots_strategy.cpp` | Same rule. |
 | `strategy.max_runup_percent` | `max_runup_percent` engine.hpp:989 | `max_equity_runup_pct` pineforge.h:264 | `native_sized_report_strategy.cpp` | Same rule. |
 | `strategy.avg_trade` | `avg_trade` engine.hpp:998 | `pf_trade_stats_t` pineforge.h:254 | `native_open_lots_strategy.cpp` | |
