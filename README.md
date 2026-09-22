@@ -430,7 +430,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **32 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **33 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
@@ -450,7 +450,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
 | `strategy_native_declare_subscriptions_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list |
-| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies) |
+| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies). The two specs' nine enum-valued words stay `uint32_t` and each has a C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e` |
 | `strategy_native_append_auxiliary_bars_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed |
 | `strategy_native_declare_opened_lot_entry_bar_mask_v1` | From inside `on_applied`, say where the fill that opened a lot sat on its entry bar (`pf_native_opened_lot_fill_point_e`: on the bar's path, or after it); the kernel derives the lot's entry-bar mask that `on_lot_excursion`'s facts carry back |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |

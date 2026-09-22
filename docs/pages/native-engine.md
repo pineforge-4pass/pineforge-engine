@@ -3410,6 +3410,31 @@ configures a host exactly once and fails it on a second attempt. The one
 field of `NativeRunSpec` it deliberately does not carry is `identity`, which
 the base spec owns.
 
+The nine enum-valued words of the two specs are `uint32_t` words holding a
+value of a C enumeration that names its kernel enumeration's values one for
+one, each integer pinned by a `static_assert` in `src/native_c_host.cpp`:
+
+| word | spec | C enumeration | values, the default first |
+|---|---|---|---|
+| `fee_kind` | base | `pf_native_fee_kind_e` | `PF_NATIVE_FEE_PERCENT`, `_CASH_PER_UNIT`, `_CASH_PER_EXECUTION` |
+| `close_execution` | base | `pf_native_close_execution_e` | `PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT`, `_AFTER_CALCULATION` |
+| `allowed_open_directions` | base | `pf_native_open_directions_e` | `PF_NATIVE_OPEN_DIRECTIONS_BOTH`; also `_NONE` (the zero word: a zero-filled spec admits no opening), `_LONG`, `_SHORT` |
+| `report_policy` | ext | `pf_native_report_policy_e` | `PF_NATIVE_REPORT_HOST_RECORDED`, `_KERNEL_RECORDED` |
+| `price_grid` | ext | `pf_native_price_grid_e` | `PF_NATIVE_PRICE_GRID_NONE`, `_QUANTIZE_FILLS`, `_QUANTIZE_FILLS_AND_TRIGGERS` |
+| `grid_rounding` | ext | `pf_native_grid_rounding_e` | `PF_NATIVE_GRID_ROUNDING_HALF_UP`, `_DIRECTIONAL` |
+| `calculation` | ext | `pf_native_calc_trigger_e` | `PF_NATIVE_CALC_TRIGGER_BAR_CLOSE`, `_BAR_CLOSE_AND_FILLS`, `_EVERY_MODELED_POINT` |
+| `open_bar_view` | ext | `pf_native_open_bar_view_e` | `PF_NATIVE_OPEN_BAR_VIEW_COMPLETE`, `_OPEN_ONLY` |
+| `margin_sizing` | ext | `pf_native_liquidation_sizing_e` | `PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM`, `_SHORTFALL_MULTIPLE`, `_FLATTEN` |
+
+A value outside its enumeration is `PF_NATIVE_E_TAG` from
+`strategy_configure_native_ext_v1`, and the handle stays unconfigured.
+`NativeReportPolicy::KernelRecordedAtHostMarks` has no C value: its host
+marks each report point from inside its own callbacks, and the callback table
+has no call that marks one, so its integer, 2, is refused like any other.
+`strategy_configure_native_v1` has no boundary check of its own for the three
+base-spec words: the kernel's validation judges them, and a bad one answers
+-1 and leaves the host failed.
+
 `pf_native_run_spec_ext_v1` now has **three** published lengths and the
 runtime accepts any of them: the layout this header first shipped
 (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), that plus the risk tail
