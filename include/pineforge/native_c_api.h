@@ -220,9 +220,14 @@
  * STABILITY
  * ─────────
  * Same guarantee as <pineforge/pineforge.h>: within a major version the
- * layouts below are append-only and the signatures never change. A later
- * revision appends fields and raises the version constant; the size prefix
- * keeps an old caller refused rather than silently misread.
+ * layouts below are append-only and the signatures never change. A field is
+ * appended one of two ways. A deliberately additive tail (HARDENING RULES
+ * above) keeps the version constant: the struct publishes every earlier
+ * layout's length as a `*_SIZE` constant and the runtime accepts each, so a
+ * caller compiled against an earlier layout keeps working unchanged, and a
+ * readout is written only as far as the length that caller sent. Any other
+ * layout change is a new revision that raises the version constant; there
+ * the size prefix keeps an old caller refused rather than silently misread.
  */
 
 #ifndef PINEFORGE_NATIVE_C_API_H
