@@ -456,7 +456,10 @@ struct IntrabarPath {
 /// inherits those rules (docs/pages/native-engine.md).
 ///
 /// `lookahead` is Pine's barmerge.lookahead_off (false, the default: the
-/// bucket is delivered when its last contributing input bar is accepted) or
+/// bucket is delivered on the input bar that completes it -- its own last
+/// contributing input bar when that bar closes it, or, for a bucket only a
+/// later input reveals as complete (NativeCompletionKind::LazyComplete), the
+/// next period's first input bar, which contributes nothing to it) or
 /// lookahead_on (true: the completed bucket's final values are delivered at
 /// its FIRST contributing input bar).
 ///

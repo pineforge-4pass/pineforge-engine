@@ -781,8 +781,10 @@ struct NativeTickContext {
 /// `completion` is Confirmed when the bucket completed on its own last
 /// contributing input bar and LazyComplete when the next period's first input
 /// closed it. `delivered_at_ms` is the timestamp of the input bar the delivery
-/// rides on: the bucket's last contributing bar under lookahead_off and its
-/// first under lookahead_on.
+/// rides on. Under lookahead_off that is the input that completed the bucket:
+/// its own last contributing bar when Confirmed, the next period's first input
+/// bar when LazyComplete. Under lookahead_on it is the bucket's first
+/// contributing bar.
 struct NativeTimeframeBarContext {
     std::size_t subscription = 0;
     native_calendar::NativeInterval interval{};

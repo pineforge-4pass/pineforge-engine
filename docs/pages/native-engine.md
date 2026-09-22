@@ -2097,8 +2097,11 @@ input is aggregated, matched or calculated — so `on_native_input` precedes it
 and the input's `on_native_bar` follows it.
 
 - `lookahead = false` (Pine's `barmerge.lookahead_off`): the bucket is
-  delivered when its **last** contributing input bar is accepted, never
-  earlier.
+  delivered on the input bar that completes it, never earlier — its **last**
+  contributing input bar when that bar closes it (`Confirmed`), or, for a
+  bucket only a later input reveals as complete (a session-clipped bucket, a
+  hole over its last slot), the next period's **first** input bar
+  (`LazyComplete`), which contributes nothing to it.
 - `lookahead = true` (`barmerge.lookahead_on`): the completed bucket's final
   OHLCV is delivered at its **first** contributing input bar, and
   `native_series_bar` answers with it from then on.

@@ -60,7 +60,7 @@ gain:
 - **Your own decision model.** `on_native_bar` is an ordinary C++ member
   function (native_host.hpp:871). Any data structure, any library, any
   precomputation — no Pine type system, no series-of-everything.
-- **Explicit setup.** One `NativeRunSpec` (native_run_spec.hpp:521) names the
+- **Explicit setup.** One `NativeRunSpec` (native_run_spec.hpp:524) names the
   clock, instrument, account, fees and caps. Nothing is inferred from the bars
   and nothing comes from a chart.
 - **Typed orders and typed outcomes.** A request is a value
@@ -329,7 +329,7 @@ liquidation level, and the ticket the forced close is booked under.
 | the host's own liquidation size | `resolve_margin_call_units` native_host.hpp:971 | `on_margin_call_units` native_c_api.h:1491 | `native_margin_strategy.cpp` |
 | the liquidation event | `MarginCallEvent` native_order.hpp:1148 delivered to `on_native_margin_call` native_host.hpp:977 | `on_margin_call` native_c_api.h:1439 | `native_margin_strategy.cpp` |
 
-The one-scalar `initial_margin_fraction` native_run_spec.hpp:565 predates the
+The one-scalar `initial_margin_fraction` native_run_spec.hpp:568 predates the
 model and remains the simple spelling; the two are mutually exclusive. It is
 ruled **adapter-policy** (ADR-0001's `initial_margin_fraction` row): the
 adapter answers TradingView's ten-significant-digit money admission itself with
@@ -470,7 +470,7 @@ run the two excursion fields fold `mark` alone.
 the `Trade` engine.hpp:164 rows this run booked, in booking order;
 `report_trade_count` engine.hpp:1921 and `get_report_trade` engine.hpp:1924
 span the same rows followed by the range-end rows
-`report_open_position_at_end` native_run_spec.hpp:582 adds. In C the report's
+`report_open_position_at_end` native_run_spec.hpp:585 adds. In C the report's
 `pf_report_t::trades` pineforge.h:370 carries the numeric fields, and the
 strings and the cause come from `strategy_closed_trade_entry_id`
 pineforge.h:1074, `strategy_closed_trade_exit_id` pineforge.h:1087,
@@ -576,7 +576,7 @@ class HelloKernel : public pineforge::NativeStrategyHost {
 };
 ```
 
-The host is a class; the run is one `NativeRunSpec` native_run_spec.hpp:521
+The host is a class; the run is one `NativeRunSpec` native_run_spec.hpp:524
 naming the clock, instrument, account and fees; `configure_native`
 native_host.hpp:1135 applies it and `run` engine.hpp:1809 drives the bars.
 
@@ -663,9 +663,9 @@ spec.fee_value = 0.001;                                     // 0.1 % -> a fracti
 spec.max_open_lots = 1;                                     // pyramiding = 1
 ```
 
-Nothing is inferred. `price_tick` native_run_spec.hpp:519 is the ladder the
+Nothing is inferred. `price_tick` native_run_spec.hpp:522 is the ladder the
 next three blocks all measure against, and `fee_value`
-native_run_spec.hpp:557 is a fraction, not a percent.
+native_run_spec.hpp:560 is a fraction, not a percent.
 
 ### 2. The price grid, the margin model and the risk limit
 
@@ -693,7 +693,7 @@ admission on that side — and it is legal only where that side's `maintenance_*
 is set. This strategy never shorts, so its short side simply keeps an ordinary
 requirement: `initial_short = 0.0` with no `maintenance_short` states nothing
 at all and `configure_native` refuses the whole spec with
-`MarginSideUndeclared` native_run_spec.hpp:711.
+`MarginSideUndeclared` native_run_spec.hpp:714.
 The grid is what makes a bracket level a *ladder*
 price: `native_price_grid_strategy.cpp` runs one strategy under all four
 answers and `native_margin_strategy.cpp` drives a real liquidation.
@@ -711,7 +711,7 @@ void on_native_run_begin() override {
 `native_series_bar(0)` native_host.hpp:1058 then answers the latest completed
 hourly bucket inside any callback — `request.security(…, "60", close)` is
 `native_series_bar(0)->close`. `native_htf_strategy.cpp` is the runnable
-version, including what `gaps` native_run_spec.hpp:485 changes.
+version, including what `gaps` native_run_spec.hpp:488 changes.
 
 ### 4. The entry: cash, with the fee reserved
 

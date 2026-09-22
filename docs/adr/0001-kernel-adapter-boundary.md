@@ -117,7 +117,7 @@ summary of it.
   | State reads | `physical_position()` (`native_host.hpp:1226`) / `native_marked_equity(mark)` (`native_host.hpp:1235`) / `native_open_lots(mark)` (`native_host.hpp:1231`), `trail_state(handle)` (`native_host.hpp:1039`), and the rest of the query surface in `docs/pages/native-engine.md`, "Reading the run back" |
   | Lookahead hazard | the `Bar` given to `on_native_bar_open` is the *complete* script bar; `current_partial_bar()` (`native_host.hpp:1020`) is the lookahead-free bar so far, and `NativeOpenBarView::OpenOnly` (`native_run_spec.hpp:108`) masks that one callback |
 - **The run spec is generic, and no longer narrow.** `NativeRunSpec`
-  (`native_run_spec.hpp:521`) owns instrument and clock facts, fees
+  (`native_run_spec.hpp:524`) owns instrument and clock facts, fees
   (`NativeFeeKind` `native_run_spec.hpp:19`), a scalar account FX, close timing, the quantity
   grid, direction and size caps, the intrabar path — and, each opt-in and each folded into the
   continuation identity only when set: the instrument price grid (`NativePriceGrid`
@@ -126,9 +126,9 @@ summary of it.
   `native_run_spec.hpp:309`), the report policy (`NativeReportPolicy`
   `native_run_spec.hpp:60`), calculation timing (`NativeCalculationTrigger`
   `native_run_spec.hpp:93`) and the open-bar view, declared higher-timeframe series
-  (`NativeTimeframeSubscription` `native_run_spec.hpp:481`) and the auxiliary finer feed
-  (`NativeAuxiliaryFeed` `native_run_spec.hpp:510`). `initial_margin_fraction`
-  (`native_run_spec.hpp:565`) remains the one-scalar admission-only spelling and is mutually
+  (`NativeTimeframeSubscription` `native_run_spec.hpp:484`) and the auxiliary finer feed
+  (`NativeAuxiliaryFeed` `native_run_spec.hpp:513`). `initial_margin_fraction`
+  (`native_run_spec.hpp:568`) remains the one-scalar admission-only spelling and is mutually
   exclusive with `margin`. Percent and cash sizing are a *request* value, not a spec one
   (`Sized` `native_order.hpp:164`). What the spec still owns none of is source strategy policy:
   the field comments say so, and `scripts/check_adapter_spec_shadowing.py` holds the adapter to
