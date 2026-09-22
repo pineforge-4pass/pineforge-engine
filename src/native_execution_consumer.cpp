@@ -2712,41 +2712,16 @@ double NativeExecutionConsumer::margin_check_fx(
     return engine.account_currency_fx_at(cursor.point.effective_time_ms);
 }
 
-// BacktestEngine::marked_equity() (engine_execution.cpp) at an explicit rate
-// rather than at the engine's presented clock: realized balance plus the
-// marked physical lots minus their remaining paid entry costs. Term for term
-// the engine's own arithmetic, and pinned against that accessor wherever the
-// two clocks agree (tests/test_native_margin_fx_clock.cpp).
-double NativeExecutionConsumer::marked_equity_at(const BacktestEngine& engine,
-                                                 double price, double fx) const {
-    if (!std::isfinite(price) || !std::isfinite(fx)
-        || (engine.position_side_ != PositionSide::FLAT
-            && engine.position_side_ != PositionSide::LONG
-            && engine.position_side_ != PositionSide::SHORT)
-        || (engine.position_side_ == PositionSide::FLAT) != engine.pyramid_entries_.empty()) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-    double equity = engine.initial_capital_ + engine.net_profit_sum_;
-    const double direction = engine.position_side_ == PositionSide::SHORT ? -1.0 : 1.0;
-    for (const auto& lot : engine.pyramid_entries_) {
-        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        equity += direction * (price - lot.price) * lot.qty * engine.syminfo_.pointvalue
-            * fx - engine.open_entry_commission(lot);
-    }
-    return equity;
-}
-
 // The equity one maintenance test is made against. The default IS the
-// account's marked equity, which has already been reduced by the open
-// entries' commission; MarkedEquityBeforeOpenCommission adds that term back,
-// for a broker that does not charge a still-open entry's fee against the
-// margin equity. Neither spelling books anything: this is one term of one
-// comparison.
+// account's marked equity -- BacktestEngine::marked_equity_at at the check
+// point's own rate, the engine's one implementation of it -- which has already
+// been reduced by the open entries' commission; MarkedEquityBeforeOpenCommission
+// adds that term back, for a broker that does not charge a still-open entry's
+// fee against the margin equity. Neither spelling books anything: this is one
+// term of one comparison.
 double NativeExecutionConsumer::margin_equity(const BacktestEngine& engine,
                                               double mark, double fx) const {
-    const double equity = marked_equity_at(engine, mark, fx);
+    const double equity = engine.marked_equity_at(mark, fx);
     const auto* margin = margin_model();
     if (!margin || !std::isfinite(equity)
         || margin->basis != NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission) {

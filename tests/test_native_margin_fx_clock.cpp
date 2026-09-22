@@ -23,7 +23,9 @@
  *
  * R5 lane E21 holds the opening gate to the same rule (section 8): its
  * placement site, run when a Sized{SizeTime::AtAcceptance} is accepted, read
- * the presented clock while its freeze converted at the acceptance point.
+ * the presented clock while its freeze converted at the acceptance point. It
+ * also folds the rate-explicit equity into the engine's own accessor, and
+ * section 9 reads the kernel's sources to hold it to one implementation.
  *
  * No Pine twin lives here on purpose: the TU reaches no source header, so the
  * kernel-only build (PINEFORGE_BUILD_SOURCE_LAYER=OFF) runs every row.
@@ -37,7 +39,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -314,7 +318,9 @@ void every_kind_converts_at_its_own_cursor() {
             // Wherever the presented clock's rate IS the cursor's, the
             // rate-explicit equity is BacktestEngine::marked_equity()'s own
             // number, bit for bit: the rule only ever moves a point whose two
-            // clocks disagree.
+            // clocks disagree. Since E21 both sides are the one
+            // implementation, BacktestEngine::marked_equity_at, so this holds
+            // by construction; section 9 fails if a second spelling returns.
             if (host.rate_at(host.view_presented_ms[i]) == fx) {
                 CHECK(view.equity == host.accessor_equity[i]);
             }
@@ -373,7 +379,9 @@ void a_run_without_a_curve_is_untouched() {
         // BacktestEngine::marked_equity(), bit for bit, wherever the cursor's
         // rate and the presented clock's agree — which is every instant of a
         // run that declares no curve. (The model's basis is the default
-        // MarkedEquity, so margin_equity() adds nothing on top.)
+        // MarkedEquity, so margin_equity() adds nothing on top.) Since E21
+        // both are BacktestEngine::marked_equity_at, so the identity holds by
+        // construction; section 9 is the row that bites on a second spelling.
         REQUIRE(host.accessor_equity.size() == host.views.size());
         for (std::size_t i = 0; i < host.views.size(); ++i) {
             CHECK(host.views[i].equity == host.accessor_equity[i]);
@@ -805,6 +813,145 @@ void the_stream_gate_decides_what_the_batch_decides() {
     }
 }
 
+// ── 9. One marked equity, one implementation (R5 lane E21) ──────────────
+// BacktestEngine::marked_equity_at(price, fx) is the kernel's only spelling
+// of the account's marked equity: marked_equity(price) is that function at
+// the presented clock's rate, and the margin model's equity is that function
+// at its check point's rate. With one implementation, the bit-for-bit pins in
+// sections 3 and 5 compare a function with itself wherever the two rates
+// agree, so they can no longer see a second implementation drifting. This
+// row can: it reads the kernel's own sources (comments stripped) and fails
+// if the arithmetic is spelled anywhere else again.
+std::string read_text(const std::string& path) {
+    std::ifstream input(path);
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+// Code only: comments blanked, string and character literals kept, so a
+// sentence naming a function is never read as the function.
+std::string code_of(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        const char next = i + 1 < text.size() ? text[i + 1] : '\0';
+        if (c == '/' && next == '/') {
+            while (i < text.size() && text[i] != '\n') ++i;
+            out.push_back('\n');
+        } else if (c == '/' && next == '*') {
+            i += 2;
+            while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/')) ++i;
+            ++i;
+            out.push_back(' ');
+        } else if (c == '"' || c == '\'') {
+            out.push_back(c);
+            for (++i; i < text.size() && text[i] != c; ++i) {
+                out.push_back(text[i]);
+                if (text[i] == '\\' && i + 1 < text.size()) out.push_back(text[++i]);
+            }
+            if (i < text.size()) out.push_back(c);
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+std::string squeezed(const std::string& text) {
+    std::string out;
+    for (const char c : text) {
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') out.push_back(c);
+    }
+    return out;
+}
+
+std::size_t occurrences(const std::string& text, const std::string& needle) {
+    std::size_t count = 0;
+    for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) {
+        ++count;
+    }
+    return count;
+}
+
+// The body of the one definition whose head starts with `head`, braces
+// matched; nullopt when there is no such definition or more than one.
+std::optional<std::string> body_of(const std::string& code, const std::string& head) {
+    const auto at = code.find(head);
+    if (at == std::string::npos || code.find(head, at + 1) != std::string::npos) {
+        return std::nullopt;
+    }
+    const auto open = code.find('{', at);
+    if (open == std::string::npos || code.find(';', at) < open) return std::nullopt;
+    int depth = 0;
+    for (auto i = open; i < code.size(); ++i) {
+        if (code[i] == '{') ++depth;
+        if (code[i] == '}' && --depth == 0) return code.substr(open + 1, i - open - 1);
+    }
+    return std::nullopt;
+}
+
+bool ends_with(const std::string& text, const std::string& tail) {
+    return text.size() >= tail.size()
+        && text.compare(text.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+void one_marked_equity_implementation() {
+#ifdef PINEFORGE_E21_KERNEL_FILES
+    std::vector<std::string> paths;
+    const std::string joined = PINEFORGE_E21_KERNEL_FILES;
+    for (std::size_t start = 0; start <= joined.size();) {
+        const auto bar = joined.find('|', start);
+        const auto piece = joined.substr(start, bar == std::string::npos ? std::string::npos
+                                                                         : bar - start);
+        if (!piece.empty()) paths.push_back(piece);
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+    // A vacuous pass would be worse than a failure.
+    REQUIRE(paths.size() >= 40);
+    std::size_t definitions = 0;       // out-of-line `X::marked_equity_at(` heads
+    std::size_t twins = 0;             // any rate-explicit spelling on a non-engine owner
+    std::size_t declarations = 0;      // engine.hpp's one member declaration
+    std::string engine_execution, consumer;
+    for (const auto& path : paths) {
+        const std::string code = code_of(read_text(path));
+        REQUIRE(!code.empty());
+        const std::string flat = squeezed(code);
+        definitions += occurrences(code, "::marked_equity_at(");
+        twins += occurrences(flat, "marked_equity_at(constBacktestEngine&");
+        twins += occurrences(flat, "NativeExecutionConsumer::marked_equity_at");
+        if (ends_with(path, "/include/pineforge/engine.hpp")) {
+            declarations += occurrences(flat, "doublemarked_equity_at(doubleprice,doublefx)const;");
+        }
+        if (ends_with(path, "/src/engine_execution.cpp")) engine_execution = code;
+        if (ends_with(path, "/src/native_execution_consumer.cpp")) consumer = code;
+    }
+    REQUIRE(!engine_execution.empty());
+    REQUIRE(!consumer.empty());
+    CHECK(definitions == 1);
+    CHECK(occurrences(engine_execution, "BacktestEngine::marked_equity_at(") == 1);
+    CHECK(twins == 0);
+    CHECK(declarations == 1);
+
+    // The accessor is the one implementation at the presented clock's rate,
+    // and nothing else.
+    const auto accessor = body_of(engine_execution,
+                                  "double BacktestEngine::marked_equity(double price) const");
+    REQUIRE(accessor.has_value());
+    CHECK(squeezed(*accessor) == "returnmarked_equity_at(price,active_account_currency_fx());");
+
+    // The margin model's equity is the same function at its check point's rate.
+    const auto margin = body_of(consumer, "double NativeExecutionConsumer::margin_equity(");
+    REQUIRE(margin.has_value());
+    CHECK(occurrences(squeezed(*margin), "engine.marked_equity_at(mark,fx)") == 1);
+#else
+    std::printf("  PINEFORGE_E21_KERNEL_FILES is undefined\n");
+    CHECK(false);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -829,6 +976,7 @@ int main() {
     test("a gate without a curve is untouched", a_gate_without_a_curve_is_untouched);
     test("the stream gate decides what the batch decides",
          the_stream_gate_decides_what_the_batch_decides);
+    test("one marked equity, one implementation", one_marked_equity_implementation);
     std::printf("E3 margin FX clock: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

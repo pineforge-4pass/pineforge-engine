@@ -1010,7 +1010,11 @@ std::vector<double> BacktestEngine::quote_execution_commissions(
 }
 
 double BacktestEngine::marked_equity(double price) const {
-    if (!std::isfinite(price)
+    return marked_equity_at(price, active_account_currency_fx());
+}
+
+double BacktestEngine::marked_equity_at(double price, double fx) const {
+    if (!std::isfinite(price) || !std::isfinite(fx)
         || (position_side_ != PositionSide::FLAT && position_side_ != PositionSide::LONG
             && position_side_ != PositionSide::SHORT)
         || (position_side_ == PositionSide::FLAT) != pyramid_entries_.empty())
@@ -1021,7 +1025,7 @@ double BacktestEngine::marked_equity(double price) const {
         if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price))
             return std::numeric_limits<double>::quiet_NaN();
         equity += direction * (price - lot.price) * lot.qty * syminfo_.pointvalue
-            * active_account_currency_fx() - open_entry_commission(lot);
+            * fx - open_entry_commission(lot);
     }
     return equity;
 }

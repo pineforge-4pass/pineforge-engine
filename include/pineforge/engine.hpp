@@ -692,7 +692,10 @@ protected:
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
     double marked_equity(double price) const;
-
+    // The same value at an explicit account-currency rate, and its only
+    // implementation: marked_equity(price) is this at the presented clock's
+    // rate, a margin check point calls it at its own cursor's rate.
+    double marked_equity_at(double price, double fx) const;
 
     // --- Fill rounding helpers ---
     // Nearest-tick rounding: TradingView's exact double-precision function

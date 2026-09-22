@@ -542,8 +542,6 @@ private:
     // whenever the walk has moved past the point being checked.
     double margin_check_fx(const BacktestEngine& engine,
                            const native_order::MatchCursor& cursor) const noexcept;
-    // BacktestEngine::marked_equity() at an explicit rate.
-    double marked_equity_at(const BacktestEngine& engine, double price, double fx) const;
     // Solve equity(P) == maintenance requirement(P) for the live book, at the
     // check point's own rate.
     std::optional<double> liquidation_level(const BacktestEngine& engine, double fx) const;

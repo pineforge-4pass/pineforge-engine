@@ -1463,6 +1463,19 @@ if(TARGET test_offset_trail_quantized_arm)
         PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
 endif()
 
+# R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
+# is the one implementation of the marked equity. Kernel files only, so the
+# kernel-only profile runs the row too.
+file(GLOB PINEFORGE_E21_KERNEL_FILES CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/src/*.cpp"
+     "${PROJECT_SOURCE_DIR}/src/*.hpp"
+     "${PROJECT_SOURCE_DIR}/include/pineforge/*.hpp")
+string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES}")
+if(TARGET test_native_margin_fx_clock)
+    target_compile_definitions(test_native_margin_fx_clock PRIVATE
+        PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
+endif()
+
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 
