@@ -451,6 +451,19 @@ private:
                                  const NativeCoordinate& base);
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
+    // Session-day facts (NativeDecisionContext, R5 lane F5) of the script bar
+    // opening at `label`. When the script_ bucket is that bar, its input
+    // indices place it in the run, and inside pump_batch its held neighbours
+    // are the pumped inputs around it; everything else reads its neighbours
+    // off the calendar, one script width away.
+    void present_session_day(NativeDecisionContext& context, int64_t label) const;
+    struct SessionPoint {
+        bool in_session = false;
+        std::optional<int64_t> ordinal;
+    };
+    SessionPoint session_point(int64_t ms) const;
+    std::optional<int64_t> pumped_script_label(int index) const;
+    int64_t script_width_ms() const noexcept;
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
     // Report truth at the kernel's own cadence, one per script calculation.
     // Reporting-only throughout: these mark equity and synthesize report
@@ -754,6 +767,19 @@ private:
     const Bar* begin_bars_ = nullptr;
     int begin_n_ = 0;
     bool begin_is_stream_ = false;
+    // The input array pump_batch is consuming, borrowed for that call alone:
+    // the bars a script bar's session-day facts read before and after it
+    // (present_session_day). Input, not state -- like input_next_ms_ below.
+    const Bar* pump_bars_ = nullptr;
+    int pump_n_ = 0;
+    // The last script bar present_session_day read off the pumped array: its
+    // final input's index and its label, which is the next bar's "before".
+    mutable int pumped_last_index_ = -1;
+    mutable int64_t pumped_last_label_ = 0;
+    // The session day the facts were last read on: a memo over the run's
+    // calendar, rebuilt whenever calendar_ is, so one session day is resolved
+    // once rather than once per bar. Derived, never folded.
+    mutable std::optional<native_calendar::NativeSessionDay> session_day_memo_;
     Bar forming_{};
     bool has_forming_ = false;
     double last_price_ = 0.0;

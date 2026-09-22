@@ -376,6 +376,37 @@ std::optional<int64_t> session_month_ordinal(const SessionCalendar& calendar, in
 std::optional<int64_t> period_key(const SessionCalendar& calendar, const Timeframe& tf, int64_t ms);
 
 // ---------------------------------------------------------------------------
+// Session day as a value
+// ---------------------------------------------------------------------------
+//
+// The session day an instant falls in, resolved once: the cycle
+// [origin_ms, next_origin_ms) that holds it, the session-day ordinal every
+// instant of that cycle keys to, and the cycle's in-session spans in epoch ms
+// ([first, second), ascending and disjoint; none on a masked or empty day).
+// For every instant t the day holds(), in_session(calendar, t) is
+// in_session_at(t) and session_day_ordinal(calendar, t) is `ordinal`, so a
+// caller asking about many instants of one day resolves the day once rather
+// than once per instant. For the queried instant itself both answers hold
+// even when holds() is false (a clock-change fold the cycles do not tile).
+
+struct NativeSessionDay {
+    int64_t origin_ms = 0;
+    int64_t next_origin_ms = 0;
+    int64_t ordinal = 0;
+    std::vector<std::pair<int64_t, int64_t>> spans;
+
+    bool holds(int64_t ms) const noexcept { return origin_ms <= ms && ms < next_origin_ms; }
+    bool in_session_at(int64_t ms) const noexcept {
+        for (const auto& span : spans) {
+            if (span.first <= ms && ms < span.second) return true;
+        }
+        return false;
+    }
+};
+
+std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar, int64_t ms);
+
+// ---------------------------------------------------------------------------
 // Interval
 // ---------------------------------------------------------------------------
 //

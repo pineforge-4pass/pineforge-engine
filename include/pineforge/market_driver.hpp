@@ -122,6 +122,39 @@ struct NativeDecisionContext {
     int sub_index = 0;
     int sub_count = 1;
     bool is_terminal_sub_bar = true;
+    // Session-day facts of the script bar under delivery, read off the run's
+    // own calendar (NativeRunSpec::session / ::timezone) and session day
+    // (native_calendar::session_day_ordinal: the cycle that rolls at the first
+    // window's start, keyed to its trading date — an overnight session is one
+    // day across local midnight). Every callback of the bar carries the same
+    // four: its open, its sub-bars and ticks, its calculation, and every fill
+    // and recalculation on it.
+    //   in_session         the script bar's label is in session.
+    //   opens_session_day  in session, and the bar before it is not, or is on
+    //                      another session day.
+    //   closes_session_day in session, and the bar after it is not, or is on
+    //                      another session day.
+    // "The bar before / after" is the one the run holds — the batch input or
+    // stream warmup being consumed — and otherwise the calendar's slot one
+    // script width away. At the run's own edges nothing is held: its first bar
+    // opens its session day, and a batch's final bar closes it, because a
+    // batch is complete input; a stream reads on, because it continues.
+    //   closes_session_day_open_ended
+    //                      closes_session_day for a run whose input goes on
+    //                      past it: a batch's final bar, which nothing held
+    //                      follows, is judged by the calendar one script width
+    //                      on, exactly as a stream's bar is, instead of by the
+    //                      run's end. Every other bar reads closes_session_day.
+    //                      It is what a host that recomputes a batch whose
+    //                      last input is still forming reads for that bar.
+    // A bar at or above the session-day grain (D, W, M) holds whole session
+    // days: all four are true. Derived per point from the calendar, the label
+    // and the run's input, they are presentation, not state, and fold into no
+    // digest. They sit in what was this struct's padding, so no member moved.
+    bool in_session = false;
+    bool opens_session_day = false;
+    bool closes_session_day = false;
+    bool closes_session_day_open_ended = false;
     int64_t sub_bar_open_ms = 0;
     int64_t script_bar_open_ms = 0;
     NativeDriverStatistics driver_statistics{};

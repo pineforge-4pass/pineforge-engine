@@ -1564,6 +1564,11 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.i(callback_context_.sub_bar_open_ms);
     f.i(callback_context_.script_bar_open_ms);
     hash_driver_statistics(f, callback_context_.driver_statistics);
+    // The four session-day facts are not folded, here or in the frames and
+    // notifications below: each is a function of the label and calendar this
+    // digest already folds and of the run's input around the bar (R5 lane F5,
+    // present_session_day), so folding them would move every established
+    // continuation value for nothing it does not already identify.
     f.b(consuming_request_);
     f.b(draining_notifications_);
     f.b(current_frame_.has_value());
@@ -1882,6 +1887,7 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
+    session_day_memo_.reset();
     // L9: a CalendarDayInTimezone risk day keys on the plain civil date of the
     // spec's scheduling timezone, which is the trading date of an all-day
     // session there. Built once per run, and only for the basis that needs it.
@@ -2018,6 +2024,7 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
+    session_day_memo_.reset();
     pairing_ = candidate.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
                                               : native_calendar::compatibility(input_tf_, script_tf_);
     // Direct native FX setup is per-ready-spec as before. C/C++ staged ingress
@@ -4367,6 +4374,11 @@ NativeCurrentPointView NativeExecutionConsumer::execution_anchor(
     out.decision.is_terminal_sub_bar = callback_context_.is_terminal_sub_bar;
     out.decision.sub_bar_open_ms = callback_context_.sub_bar_open_ms;
     out.decision.script_bar_open_ms = callback_context_.script_bar_open_ms;
+    out.decision.in_session = callback_context_.in_session;
+    out.decision.opens_session_day = callback_context_.opens_session_day;
+    out.decision.closes_session_day = callback_context_.closes_session_day;
+    out.decision.closes_session_day_open_ended =
+        callback_context_.closes_session_day_open_ended;
     out.price = resolved;
     out.quote_kind = NativeCurrentQuoteKind::ExecutionAnchor;
     return out;
@@ -6483,6 +6495,130 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     finish_callback(engine, coordinate.ordinal);
 }
 
+// Session-day facts (R5 lane F5). A generic reading of the run's own
+// calendar, with no platform rule in it: the in-session test and the session
+// day are native_calendar's (in_session, session_day_ordinal), asked of the
+// script bar's label and of its neighbours. A neighbour is the bar the run
+// HOLDS on that side when it holds one -- the pumped batch input or stream
+// warmup -- because the input, not the schedule, says where a trading day
+// actually stopped (an early close the session string does not declare, a
+// holiday). With nothing held, the neighbour is the calendar's slot one script
+// width away, except at the run's own edges: its first bar opens its session
+// day, and a batch's final bar closes it, because a batch is complete input.
+// A stream's bars read on, because the stream continues. "Opens" reads the bar
+// before exactly as "closes" reads the bar after, so every path that holds a
+// bar agrees on the pair by construction.
+void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context,
+                                                  int64_t label) const {
+    context.in_session = false;
+    context.opens_session_day = false;
+    context.closes_session_day = false;
+    context.closes_session_day_open_ended = false;
+    if (script_tf_.is_calendar()) {
+        // A D/W/M bar holds whole session days: it is each one's first and
+        // last bar at once, whatever time of day its label reads.
+        context.in_session = true;
+        context.opens_session_day = true;
+        context.closes_session_day = true;
+        context.closes_session_day_open_ended = true;
+        return;
+    }
+    const SessionPoint here = session_point(label);
+    if (!here.in_session) return;
+    context.in_session = true;
+    // In session on this bar's own session day.
+    const auto same_day = [&](int64_t other) {
+        const SessionPoint there = session_point(other);
+        return there.in_session && there.ordinal && here.ordinal
+            && *there.ordinal == *here.ordinal;
+    };
+    const int64_t width = script_width_ms();
+    std::optional<int64_t> step_before;
+    std::optional<int64_t> step_after;
+    if (width > 0) {
+        if (label >= std::numeric_limits<int64_t>::min() + width) step_before = label - width;
+        if (label <= std::numeric_limits<int64_t>::max() - width) step_after = label + width;
+    }
+    // The bucket this bar's inputs went into, when any have: its first and
+    // last input indices place it in the run. A stream whose warmup ended
+    // inside a script bar seals that bar in realtime, and it is still the
+    // run's first; a print's forming bar has one once a slot has closed.
+    const bool has_bucket = script_.has_data && script_.key == label;
+    const bool held = has_bucket && pump_bars_ != nullptr;
+
+    std::optional<int64_t> before;
+    const bool run_start = has_bucket && script_.first_index <= 0;
+    if (held && !run_start) {
+        before = pumped_last_index_ == script_.first_index - 1
+            ? std::optional<int64_t>(pumped_last_label_)
+            : pumped_script_label(script_.first_index - 1);
+    }
+    if (!run_start && !before) before = step_before;
+    context.opens_session_day = run_start || !before || !same_day(*before);
+
+    std::optional<int64_t> after;
+    bool run_end = false;
+    if (held) {
+        if (script_.last_index + 1 < pump_n_) {
+            after = pumped_script_label(script_.last_index + 1);
+        } else {
+            const auto* running = std::get_if<NativeRunning>(&state_);
+            run_end = running && running->phase == NativeRunPhase::Batch;
+        }
+        pumped_last_index_ = script_.last_index;
+        pumped_last_label_ = label;
+    }
+    if (after) {
+        context.closes_session_day = !same_day(*after);
+        context.closes_session_day_open_ended = context.closes_session_day;
+    } else {
+        // Nothing held after the bar: the calendar's next slot, which is also
+        // the open-ended reading of a batch's final bar.
+        const bool scheduled = step_after && !same_day(*step_after);
+        context.closes_session_day = run_end || scheduled;
+        context.closes_session_day_open_ended = scheduled;
+    }
+}
+
+// (in session, session-day ordinal) of one instant, through the memo of the
+// session day last read: consecutive bars share a day, so a day is resolved
+// once. A day the calendar cannot key is no session at all, exactly as
+// native_calendar::in_session answers it.
+NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point(int64_t ms) const {
+    try {
+        if (!session_day_memo_ || !session_day_memo_->holds(ms)) {
+            auto day = native_calendar::session_day_at(calendar_, ms);
+            if (!day) return {};
+            if (!day->holds(ms)) return {day->in_session_at(ms), day->ordinal};
+            session_day_memo_ = std::move(day);
+        }
+        return {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
+    } catch (...) {
+        return {};
+    }
+}
+
+// The script bar an input of the pumped array belongs to, labelled exactly as
+// consume_confirmed_input keys it: the script interval of the input's own slot.
+std::optional<int64_t> NativeExecutionConsumer::pumped_script_label(int index) const {
+    if (pump_bars_ == nullptr || index < 0 || index >= pump_n_) return std::nullopt;
+    const auto input = input_interval_at(pump_bars_[index].timestamp);
+    if (!input) return std::nullopt;
+    const auto script = script_interval_at(input->open_ms);
+    if (!script) return std::nullopt;
+    return script->open_ms;
+}
+
+// One script bar's width on a fixed (second / minute) timeframe, 0 otherwise.
+int64_t NativeExecutionConsumer::script_width_ms() const noexcept {
+    if (!script_tf_.valid() || !script_tf_.is_fixed()) return 0;
+    const int64_t unit = script_tf_.unit() == native_calendar::TimeframeUnit::Second
+        ? 1000 : 60'000;
+    const int64_t count = script_tf_.count();
+    if (count <= 0 || count > std::numeric_limits<int64_t>::max() / unit) return 0;
+    return count * unit;
+}
+
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
                                                        const NativeCoordinate& base) {
     const auto* spec = spec_ptr();
@@ -6504,6 +6640,7 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     driver_statistics_.sub_bars_per_script_bar = 1;
     driver_statistics_.samples_per_sub_bar = 0;
     callback_context_.driver_statistics = driver_statistics_;
+    present_session_day(callback_context_, base.open_ms);
     auto emit_discrete = [&](double price, int64_t time, NativePriceProvenance provenance,
                              NativePathPhase phase, bool matching) {
         NativeDriverPoint point;
@@ -6662,6 +6799,7 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     driver_statistics_.sub_bars_per_script_bar = static_cast<int>(sub_bars.size());
     driver_statistics_.samples_per_sub_bar = 0;
     callback_context_.driver_statistics = driver_statistics_;
+    present_session_day(callback_context_, base.open_ms);
     const bool direct_sub_bar_corners = lower && sub_bars.size() > 1;
     const bool distribution_samples = synthesized || lower->sample_eligibility
         == IntrabarPath::SampleEligibility::DistributionSamples;
@@ -6955,6 +7093,7 @@ void NativeExecutionConsumer::deliver_aggregate_calculation(
     callback_context_.is_terminal_sub_bar = true;
     callback_context_.sub_bar_open_ms = base.open_ms;
     callback_context_.script_bar_open_ms = base.open_ms;
+    present_session_day(callback_context_, base.open_ms);
     const int64_t close_time = calculation_time(base);
     NativeCoordinate calc = base;
     calc.ordinal = take_ordinal(engine);
@@ -7940,6 +8079,21 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
 }
 
 void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars, int n) {
+    // Every script bar this pump seals reads the bars around it off this
+    // array (present_session_day); the view ends with the call.
+    struct PumpView {
+        NativeExecutionConsumer& consumer;
+        PumpView(NativeExecutionConsumer& owner, const Bar* input, int count) : consumer(owner) {
+            consumer.pump_bars_ = input;
+            consumer.pump_n_ = count;
+            consumer.pumped_last_index_ = -1;
+        }
+        ~PumpView() {
+            consumer.pump_bars_ = nullptr;
+            consumer.pump_n_ = 0;
+            consumer.pumped_last_index_ = -1;
+        }
+    } view(*this, bars, n);
     for (int i = 0; i < n; ++i) {
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
         if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
@@ -8425,6 +8579,7 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     tick_context.decision.is_terminal_sub_bar = true;
     tick_context.decision.sub_bar_open_ms = tick.timestamp;
     tick_context.decision.driver_statistics = driver_statistics_;
+    present_session_day(tick_context.decision, tick_context.decision.script_bar_open_ms);
     tick_context.sequence = tick.sequence;
     const Bar tick_bar{tick.price, tick.price, tick.price, tick.price,
                        tick.quantity, tick.timestamp};

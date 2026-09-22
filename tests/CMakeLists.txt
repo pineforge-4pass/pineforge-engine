@@ -849,6 +849,11 @@ list(APPEND TEST_SOURCES test_pooc_fill_stamp_aggregation)
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
+# R5 F5: session-day facts on the native decision context, read by a bare
+# host from the kernel alone: the E25/E26 TradingView tapes, the audit's
+# overnight Tokyo session, streams and a fill recalculation. Source-free, so
+# it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_session_day_facts)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1517,6 +1522,13 @@ endif()
 if(TARGET test_pooc_fill_stamp_aggregation)
     target_compile_definitions(test_pooc_fill_stamp_aggregation PRIVATE
         PINEFORGE_E27_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# R5 F5 replays the same tapes through a bare host; kernel-only, so this row
+# exists in every profile.
+if(TARGET test_native_session_day_facts)
+    target_compile_definitions(test_native_session_day_facts PRIVATE
+        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.

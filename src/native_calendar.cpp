@@ -1460,6 +1460,21 @@ std::optional<int64_t> session_day_ordinal(const SessionCalendar& calendar, int6
                            static_cast<unsigned>(day->trading_date.day));
 }
 
+std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar, int64_t ms) {
+    if (!calendar.valid()) return std::nullopt;
+    auto day = session_day_containing(calendar, ms);
+    if (!day) return std::nullopt;
+    NativeSessionDay out;
+    out.origin_ms = day->origin_ms;
+    out.next_origin_ms = day->next_origin_ms;
+    out.ordinal = days_from_civil(day->trading_date.year,
+                                  static_cast<unsigned>(day->trading_date.month),
+                                  static_cast<unsigned>(day->trading_date.day));
+    out.spans.reserve(day->spans.size());
+    for (const EpochSpan& span : day->spans) out.spans.emplace_back(span.start_ms, span.end_ms);
+    return out;
+}
+
 std::optional<int64_t> session_week_ordinal(const SessionCalendar& calendar, int64_t ms) {
     if (!calendar.valid()) return std::nullopt;
     auto day = session_day_containing(calendar, ms);
