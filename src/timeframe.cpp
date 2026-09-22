@@ -735,6 +735,16 @@ static long session_period_key(int64_t ms, const std::string& tz,
     return static_cast<long>(session_period_first_day(day_idx, session, period));
 }
 
+// The PF_SEC_TRACE diagnostic switch (stderr traces of the calendar
+// aggregator's boundary and completion decisions), read from the environment
+// once per process, on first use. Both readers run on the per-bar path of
+// every calendar bucket, and the switch is a process-start setting, so no
+// call re-reads the environment.
+static bool security_trace_enabled() {
+    static const bool enabled = std::getenv("PF_SEC_TRACE") != nullptr;
+    return enabled;
+}
+
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {
     return crosses_boundary(prev_ms, curr_ms, period, "UTC", "");
 }
@@ -748,7 +758,7 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
     struct tm prev_tm, curr_tm;
     const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
     const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
-    if (getenv("PF_SEC_TRACE") && curr_ms - prev_ms <= 3600000
+    if (security_trace_enabled() && curr_ms - prev_ms <= 3600000
         && (curr_ms - prev_ms != 0)) {
         std::fprintf(stderr,
             "[xsb] prev=%lld clock=%lld | curr=%lld clock=%lld\n",
@@ -1159,7 +1169,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   int64_t next_input_ms,
                                   int64_t calling_close_ms) {
     AggregatedBar result;
-    const bool pf_tr = getenv("PF_SEC_TRACE") != nullptr;
+    const bool pf_tr = security_trace_enabled();
     if (pf_tr) {
         std::fprintf(stderr,
             "[calmode] ts=%lld first=%lld subs=%d emitted=%d tz='%s' sess='%s'\n",
