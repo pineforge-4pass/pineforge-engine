@@ -174,7 +174,24 @@ bool calc_timing_on(const NativeRunSpec& spec) noexcept {
         || spec.open_bar_view != NativeOpenBarView::Complete;
 }
 
-void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
+// `cached`, when given, carries the three bar-array digests this fold takes,
+// already taken of this same spec (NativeExecutionConsumer::spec_bar_digests).
+// The three local digests below answer them instead of re-walking the arrays,
+// so the fold itself is written, and folds, exactly as without a cache.
+void hash_spec(Fnv& f, const NativeRunSpec& spec,
+               const NativeExecutionConsumer::SpecBarDigests* cached = nullptr) noexcept {
+    const auto native_intrabar_path_digest = [cached](const IntrabarPath& path) noexcept {
+        return cached ? cached->intrabar : pineforge::native_intrabar_path_digest(path);
+    };
+    const auto native_timeframe_subscriptions_digest =
+        [cached](const std::vector<NativeTimeframeSubscription>& series) noexcept {
+            return cached ? cached->subscriptions
+                          : pineforge::native_timeframe_subscriptions_digest(series);
+        };
+    const auto native_auxiliary_feed_digest =
+        [cached](const NativeAuxiliaryFeed& feed) noexcept {
+            return cached ? cached->auxiliary : pineforge::native_auxiliary_feed_digest(feed);
+        };
     f.s(spec.identity.session_key); f.u(spec.identity.run_number - f.run_base);
     f.s(spec.input_tf); f.s(spec.script_tf);
     f.b(spec.timeframe_undetected);
@@ -1489,6 +1506,23 @@ bool NativeExecutionConsumer::stage_account_currency_fx_series(
     }
 }
 
+// The spec's bar arrays are fixed from the configure that stages them to the
+// next one, except where a run-begin declaration rewrites the series or the
+// feed; each of those clears the cache, so the digests are always this spec's.
+const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar_digests(
+        const NativeRunSpec& spec) const noexcept {
+    if (!spec_bar_digests_) {
+        SpecBarDigests digests;
+        digests.intrabar = native_intrabar_path_digest(spec.intrabar);
+        if (!spec.subscriptions.empty())
+            digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
+        if (spec.auxiliary_feed)
+            digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
+        spec_bar_digests_ = digests;
+    }
+    return *spec_bar_digests_;
+}
+
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     Fnv f;
     f.run_base = requests_.identity().run_number;
@@ -1586,7 +1620,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         f.u(auxiliary_appended_digest_);
     }
     if (const auto* spec = spec_ptr()) {
-        hash_spec(f, *spec);
+        hash_spec(f, *spec, &spec_bar_digests(*spec));
         // L5: the recalculation cadence is durable decision state only for a
         // spec that opted into it. Folding it conditionally keeps a default
         // run's continuation identity byte-identical to the pre-lane tree.
@@ -1990,6 +2024,7 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     // persists across a completed/aborted handle and is reapplied by the next
     // provider begin, so it must survive that provider's configure call.
     if (!staged_ingress_fx_) staged_fx_curve_.reset();
+    spec_bar_digests_.reset();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
     engine.last_error_.clear();
@@ -7277,6 +7312,7 @@ NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
         running->spec.auxiliary_feed);
     if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
+    spec_bar_digests_.reset();
     result.status = NativeSetupStatus::Applied;
     return result;
 }
@@ -7301,6 +7337,7 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
         running->spec.timeframe_undetected, declared);
     if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
+    spec_bar_digests_.reset();
     result.status = NativeSetupStatus::Applied;
     return result;
 }

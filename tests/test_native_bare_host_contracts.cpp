@@ -8,8 +8,10 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/native_toolkit.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <functional>
 #include <optional>
@@ -510,6 +512,75 @@ void owned_excursion_is_recorded_verbatim() {
     }
 }
 
+// ─── item 2, first half: a per-point continuation read is linear in the feed
+// Item 2 below reads the continuation at every report point. The continuation
+// folds the spec's digest of its lower-timeframe path, of its declared series'
+// bars and of its auxiliary feed, and each of those walked its whole bar array
+// on every read, so a host reading the continuation once per bar with a
+// lower-timeframe path paid a cost quadratic in the bar count (5 000 script
+// bars over 25 000 path bars: 6.3 s recording on, 0.08 s off). The digests are
+// now taken once per staged spec. The witness is the price of the reads, in
+// process CPU time and best of three as tests/test_native_continuation_digest_tail.cpp
+// measures: 2 000 bars read every bar must cost under three times the same run
+// read once (about 1.3x once the digests are cached, about 40x while every read
+// re-walked 10 000 path bars), and the value, which may not move: every-bar
+// reads and a single read end on one digest.
+struct LowerPathReader final : NativeStrategyHost {
+    bool read_each_bar = false;
+    std::uint64_t last_read = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (read_each_bar) last_read = native_continuation_hash();
+    }
+};
+
+struct ReadCost {
+    double seconds = 0.0;
+    std::uint64_t digest = 0;
+};
+
+ReadCost lower_path_read_cost(int script_bars, bool read_each_bar) {
+    std::vector<Bar> bars;
+    IntrabarPath::lower_tf path;
+    path.tf = "1";
+    for (int i = 0; i < script_bars; ++i) {
+        const double p = 100.0 + (i % 17) * 0.25;
+        const std::int64_t open = kT0 + i * 5 * kMinute;
+        bars.push_back(Bar{p, p + 1.0, p - 1.0, p + 0.5, 5.0, open});
+        for (int m = 0; m < 5; ++m) {
+            const double q = p + 0.1 * m;
+            path.bars.push_back(Bar{q, q + 0.2, q - 0.2, q, 1.0, open + m * kMinute});
+        }
+    }
+    NativeRunSpec s = base_spec("f3-lower-path-reads");
+    s.input_tf = "5";
+    s.script_tf = "5";
+    s.intrabar.value = path;
+    ReadCost best;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        LowerPathReader host;
+        host.read_each_bar = read_each_bar;
+        CHECK(host.configure_native(s).status == NativeSetupStatus::Applied);
+        const std::clock_t start = std::clock();
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        const double seconds = static_cast<double>(std::clock() - start) / CLOCKS_PER_SEC;
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        if (attempt == 0 || seconds < best.seconds) best.seconds = seconds;
+        best.digest = host.native_continuation_hash();
+        if (read_each_bar) CHECK(host.last_read != 0);
+    }
+    return best;
+}
+
+void continuation_read_is_linear_in_the_feed() {
+    const ReadCost every_bar = lower_path_read_cost(2000, true);
+    const ReadCost once = lower_path_read_cost(2000, false);
+    const double ratio = every_bar.seconds / std::max(once.seconds, 1e-6);
+    std::printf("  2000 bars over a lower-timeframe path: continuation read every bar %.4f s,"
+                " read once %.4f s, ratio %.2f\n", every_bar.seconds, once.seconds, ratio);
+    CHECK(ratio < 3.0);
+    CHECK(every_bar.digest == once.digest);
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -539,6 +610,7 @@ int main() {
     magnifier_flag_follows_the_spec();
     armed_close_records_bracket();
     owned_excursion_is_recorded_verbatim();
+    continuation_read_is_linear_in_the_feed();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

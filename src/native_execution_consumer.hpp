@@ -17,6 +17,14 @@ inline namespace engine_script_run_v18 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
+    // The digests the spec fold takes of the run spec's three bar arrays
+    // (intrabar path, declared series, auxiliary feed). See spec_bar_digests_.
+    struct SpecBarDigests {
+        std::uint64_t intrabar = 0;
+        std::uint64_t subscriptions = 0;
+        std::uint64_t auxiliary = 0;
+    };
+
     bool is_native() const noexcept override { return true; }
     void refuse_source_mutation(const char* operation) override;
     bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
@@ -785,6 +793,12 @@ private:
     std::size_t cohort_target_cache_size_ = 0;
     // Derived calendar lookup cache, cleared at staged ingress (L10c).
     mutable IntervalCache interval_cache_{};
+    // R5 lane F3: the spec's bar-array digests, taken once per staged spec.
+    // A pure cache of values the continuation already folds -- configure and
+    // the two run-begin declarations that rewrite an array clear it -- so a
+    // continuation read at every report point is not linear in the feed.
+    mutable std::optional<SpecBarDigests> spec_bar_digests_;
+    const SpecBarDigests& spec_bar_digests(const NativeRunSpec& spec) const noexcept;
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
     mutable AppendDigest account_digest_{};
