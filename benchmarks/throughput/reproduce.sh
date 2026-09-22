@@ -31,8 +31,9 @@ else
     cmake -B "$ENGINE_ROOT/build" -S "$ENGINE_ROOT" \
         -DCMAKE_BUILD_TYPE=Release \
         -DPINEFORGE_BUILD_TESTS=ON \
-        -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON
-    cmake --build "$ENGINE_ROOT/build" --target bench_strategies -j4
+        -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON \
+        -DPINEFORGE_BUILD_SPEED_BENCH=ON
+    cmake --build "$ENGINE_ROOT/build" --target bench_strategies pineforge_bench -j4
 
     # 2. Run Google Benchmarks and export results to JSON
     echo ""

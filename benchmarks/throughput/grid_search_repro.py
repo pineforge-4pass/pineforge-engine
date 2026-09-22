@@ -152,9 +152,13 @@ def check_abi(lib):
             f"pineforge ABI mismatch: library reports {abi}, harness expects "
             f"{EXPECTED_PF_ABI}; rebuild.")
 
+# The swept bench slot: the public analogue of the retired 19-scalping-wunder-bots
+# (an EMA-cross scalper with tick-denominated take-profit / stop-loss exits).
+SLUG = "021-composite-scalping-integration-01"
+
 def main():
     repo_root = Path(__file__).parent.parent.parent.resolve()
-    dylib_path = repo_root / "benchmarks/assets/strategies/19-scalping-wunder-bots/strategy.dylib"
+    dylib_path = repo_root / "benchmarks/assets/strategies" / SLUG / "strategy.dylib"
     csv_path = repo_root / "benchmarks/assets/data/ETHUSDT_15.csv"
 
     if not dylib_path.exists():
@@ -211,26 +215,27 @@ def main():
     bars_array = (pf_bar_t * n)(*bars_list)
     print(f"Loaded {n} bars successfully.")
 
-    # Grid Search Parameters
-    fast_ma_range = [7, 9, 11]
-    slow_ma_range = [19, 21, 23]
-    risk_reward_range = [1.5, 2.0, 2.5]
+    # Grid Search Parameters (around the script's defaults 5 / 13 / 15; the
+    # "Stop loss (ticks)" input keeps its default of 7)
+    fast_ema_range = [3, 5, 7]
+    slow_ema_range = [11, 13, 15]
+    take_profit_range = [10, 15, 20]
 
     best_profit = -float("inf")
     best_params = None
 
-    print(f"Starting parameter sweep on 19-scalping-wunder-bots strategy across {len(fast_ma_range)*len(slow_ma_range)*len(risk_reward_range)} combinations...")
+    print(f"Starting parameter sweep on {SLUG} strategy across {len(fast_ema_range)*len(slow_ema_range)*len(take_profit_range)} combinations...")
 
-    for fast_ma, slow_ma, rr in itertools.product(fast_ma_range, slow_ma_range, risk_reward_range):
+    for fast, slow, tp in itertools.product(fast_ema_range, slow_ema_range, take_profit_range):
         s = lib.strategy_create(None)
         if not s:
             print("Failed to create strategy instance!")
             continue
 
         # Set inputs
-        lib.strategy_set_input(s, b"Fast MA Length", str(fast_ma).encode())
-        lib.strategy_set_input(s, b"Slow MA Length", str(slow_ma).encode())
-        lib.strategy_set_input(s, b"Risk:Reward Ratio", f"{rr:.1f}".encode())
+        lib.strategy_set_input(s, b"Fast EMA", str(fast).encode())
+        lib.strategy_set_input(s, b"Slow EMA", str(slow).encode())
+        lib.strategy_set_input(s, b"Take profit (ticks)", str(tp).encode())
 
         report = pf_report_t()
         lib.run_backtest(s, bars_array, n, ctypes.byref(report))
@@ -238,18 +243,18 @@ def main():
         profit = report.net_profit
         trades = report.total_trades
 
-        print(f"Params: Fast_MA={fast_ma}, Slow_MA={slow_ma}, R:R={rr:.1f} | Net Profit = {profit:.2f} | Trades = {trades}")
+        print(f"Params: Fast_EMA={fast}, Slow_EMA={slow}, TP_ticks={tp} | Net Profit = {profit:.2f} | Trades = {trades}")
 
         if profit > best_profit:
             best_profit = profit
-            best_params = (fast_ma, slow_ma, rr)
+            best_params = (fast, slow, tp)
 
         lib.report_free(ctypes.byref(report))
         lib.strategy_free(s)
 
     print("\n=== OPTIMIZATION COMPLETE ===")
     print(f"Best Profit: {best_profit:.2f}")
-    print(f"Best Parameters: Fast MA = {best_params[0]}, Slow MA = {best_params[1]}, Risk:Reward = {best_params[2]:.1f}")
+    print(f"Best Parameters: Fast EMA = {best_params[0]}, Slow EMA = {best_params[1]}, Take profit (ticks) = {best_params[2]}")
 
 if __name__ == "__main__":
     main()

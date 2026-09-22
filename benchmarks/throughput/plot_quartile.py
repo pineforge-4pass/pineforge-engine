@@ -159,7 +159,7 @@ def main():
     plt.text(q3, 0.73, f"Q3\n{q3:.2f}", ha='center', fontweight='bold', color="#1f6feb")
     plt.text(max_v, 1.25, f"Max\n{max_v:.2f}", ha='center', fontweight='bold', color="#1f6feb")
 
-    plt.title("PineForge Strategy Backtest Throughput Distribution (N=100)", fontsize=14, fontweight='bold', pad=20)
+    plt.title(f"PineForge Strategy Backtest Throughput Distribution (N={len(data)})", fontsize=14, fontweight='bold', pad=20)
     plt.xlabel("Backtest Throughput (Millions of Bars per Second - M/s)", fontsize=12, labelpad=10)
     plt.yticks([], []) # Hide standard y-axis numbers
     plt.ylim(0.5, 1.6)

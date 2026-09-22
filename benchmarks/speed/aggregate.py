@@ -10,6 +10,8 @@ Inputs:
   --pinets      JSON from speed/time_pinets.mjs   {canonical: {median_ms, p95_ms, n}} (optional)
   --vectorbt    JSON from speed/time_vectorbt.py  {strategy: {median_ms, p95_ms, n}} (optional)
   --loads       TSV from run_all.sh's quiet_gate: label, UTC time, 1-min load, busy procs (optional)
+  --provenance  Markdown appended verbatim as the report's closing ``## Provenance``
+                section (who measured, when, and every deviation) (optional)
 
 Output: benchmarks/results/speed.md (``--out`` to write elsewhere).
 
@@ -163,6 +165,10 @@ def main() -> None:
     ap.add_argument("--feed", type=Path, default=DATA / "ETHUSDT_15.csv")
     ap.add_argument("--pynecore-workers", type=int, default=8,
                     help="concurrent PyneCore timing workers used (time_pynecore.py --workers)")
+    ap.add_argument("--engine-label", default=None,
+                    help="PineForge engine label (default: the build's PINEFORGE_VERSION_FULL)")
+    ap.add_argument("--provenance", type=Path, default=None,
+                    help="Markdown appended as the closing '## Provenance' section")
     ap.add_argument("--out", type=Path, default=RESULTS / "speed.md")
     args = ap.parse_args()
 
@@ -192,7 +198,8 @@ def main() -> None:
     pc_times = [v["median_ms"] for v in pc.values()]
     pc_p95s = [v["p95_ms"] for v in pc.values()]
     vbt_times = [v["median_ms"] for v in vbt.values()]
-    pf_label = (f"PineForge engine {engine_version()}" if pf else f"PineForge: {args.pending}")
+    pf_label = (f"PineForge engine {args.engine_label or engine_version()}" if pf
+                else f"PineForge: {args.pending}")
 
     lines: list[str] = [
         "# Per-strategy speed table",
@@ -306,6 +313,8 @@ def main() -> None:
     if pinets_canonical:
         lines.append(f"- **PineTS canonical indicator:** {pinets_canonical['median_ms']:.1f} ms median")
     lines.append("")
+    if args.provenance is not None:
+        lines += ["## Provenance", "", args.provenance.read_text().strip(), ""]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(lines) + "\n")
