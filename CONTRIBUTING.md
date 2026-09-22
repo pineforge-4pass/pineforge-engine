@@ -82,7 +82,10 @@ ctest --test-dir build --output-on-failure
 ```
 
 You need CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12),
-Python 3 and Eigen 3.3+ (fetched automatically if absent).
+Python 3 and Eigen 3.3+ (fetched automatically if absent). On Debian/Ubuntu also
+install `tzdata-legacy` (`sudo apt-get install -y tzdata-legacy`): noble split
+the backward zone links out of `tzdata`, and `test_native_calendar` resolves
+`US/Eastern`, `Japan` and `GB`.
 
 > **The stale-test-binary trap.** `cmake --build build --target pineforge`
 > rebuilds only the static library. Test executables are separate targets that

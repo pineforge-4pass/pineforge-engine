@@ -86,11 +86,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # tzdata-legacy carries the backward links test_native_calendar resolves
+      # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
+      # image happens to have it, so the row stays green on a bare runner too.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -158,7 +161,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
       - name: Restore ccache
         uses: actions/cache@v4
@@ -206,7 +209,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev libcurl4-openssl-dev ccache
 
       - name: Restore ccache
         uses: actions/cache@v4
