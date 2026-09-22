@@ -36,7 +36,8 @@
  *   resolve_anchored_level stay C++-only; see the exclusion list below.
  * ✗ hash_host_extension is not exposed: the callback table carries no hash
  *   hook, so a C host's broker-state hash is the kernel's own fold. The
- *   per-bar rows need no new symbol: `report_policy` = KernelRecorded with
+ *   per-bar rows need no new symbol: `report_policy` =
+ *   PF_NATIVE_REPORT_KERNEL_RECORDED with
  *   strategy_set_broker_state_hash_recording on fills
  *   pf_report_t::broker_state_hash, one row per script bar.
  * ✗ WaitForApplied::first_match and WaitForApplied::scope are not exposed:
@@ -117,7 +118,12 @@
  *                                          for the null array it screens itself); carrying
  *                                          NativeAuxiliaryAppendError and the bar index it stopped on
  *                                          needs an out-parameter this version's signature does not have
- *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1
+ *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1 --
+ *                                          the two specs' enum-valued words are pf_native_fee_kind_e,
+ *                                          pf_native_close_execution_e, pf_native_open_directions_e,
+ *                                          pf_native_report_policy_e, pf_native_price_grid_e,
+ *                                          pf_native_grid_rounding_e, pf_native_calc_trigger_e,
+ *                                          pf_native_open_bar_view_e and pf_native_liquidation_sizing_e words
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1
  *   [C]  submit                            strategy_native_submit_v1
@@ -546,6 +552,117 @@ typedef enum pf_native_trigger_state_e {
     PF_NATIVE_TRIGGER_STATE_TRAIL_TRACK       = 7,
     PF_NATIVE_TRIGGER_STATE_TRAIL_ACTIVE      = 8
 } pf_native_trigger_state_t;
+
+/** What one execution costs — `NativeFeeKind`, the `fee_kind` word of
+ *  #pf_native_run_spec_v1, charged at its `fee_value`. */
+typedef enum pf_native_fee_kind_e {
+    PF_NATIVE_FEE_PERCENT            = 0, /**< `fee_value` percent of |units| × price ×
+                                           *   point value × account FX (the default). */
+    PF_NATIVE_FEE_CASH_PER_UNIT      = 1, /**< `fee_value` account currency per unit. */
+    PF_NATIVE_FEE_CASH_PER_EXECUTION = 2  /**< `fee_value` account currency per execution. */
+} pf_native_fee_kind_t;
+
+/** When a request born at a script calculation may first match —
+ *  `NativeCloseExecution`, the `close_execution` word of
+ *  #pf_native_run_spec_v1. */
+typedef enum pf_native_close_execution_e {
+    PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT = 0, /**< A later eligible point — the
+                                                        *   next modeled opening, an
+                                                        *   observed print or a carried
+                                                        *   open — never the bar's
+                                                        *   presented prices (the
+                                                        *   default). */
+    PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION   = 1  /**< Also a modeled close point
+                                                        *   right after that
+                                                        *   calculation. */
+} pf_native_close_execution_t;
+
+/** Which opening directions the run admits — `NativeOpenDirections`, the
+ *  `allowed_open_directions` word of #pf_native_run_spec_v1; BOTH is
+ *  LONG | SHORT. A refused opening is a match rejection of the whole
+ *  transaction, and a pure reduction stays legal under NONE. Zero is NOT the
+ *  kernel's default here, unlike every other word these enumerations type: a
+ *  zero-filled spec admits no opening at all. */
+typedef enum pf_native_open_directions_e {
+    PF_NATIVE_OPEN_DIRECTIONS_NONE  = 0,
+    PF_NATIVE_OPEN_DIRECTIONS_LONG  = 1,
+    PF_NATIVE_OPEN_DIRECTIONS_SHORT = 2,
+    PF_NATIVE_OPEN_DIRECTIONS_BOTH  = 3  /**< The kernel's default. */
+} pf_native_open_directions_t;
+
+/** Who records the per-script-bar report series — `NativeReportPolicy`, the
+ *  `report_policy` word of #pf_native_run_spec_ext_v1. The kernel's third
+ *  policy, `KernelRecordedAtHostMarks`, has no C value: under it the host
+ *  names each report point itself, from inside its own callbacks, and the
+ *  callback table carries no call that marks one — a C host could only
+ *  declare a series nobody records. Its integer, 2, is PF_NATIVE_E_TAG like
+ *  any other word outside this enumeration. */
+typedef enum pf_native_report_policy_e {
+    PF_NATIVE_REPORT_HOST_RECORDED   = 0, /**< The host's; the kernel appends no point
+                                           *   (the default). */
+    PF_NATIVE_REPORT_KERNEL_RECORDED = 1  /**< One equity point per script calculation;
+                                           *   `report_open_position_at_end` applies. */
+} pf_native_report_policy_t;
+
+/** A generic instrument price grid — `NativePriceGrid`, the `price_grid`
+ *  word of #pf_native_run_spec_ext_v1. Both quantizing values need
+ *  `price_tick > 0`. */
+typedef enum pf_native_price_grid_e {
+    PF_NATIVE_PRICE_GRID_NONE                        = 0, /**< Every price booked as the
+                                                           *   path presents it (the
+                                                           *   default). */
+    PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS              = 1, /**< Each fill booked on the
+                                                           *   tick ladder. */
+    PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS = 2  /**< And each resting trigger
+                                                           *   tested against the
+                                                           *   quantized path. */
+} pf_native_price_grid_t;
+
+/** How a quantizing grid rounds — `NativeGridRounding`, the `grid_rounding`
+ *  word of #pf_native_run_spec_ext_v1, read beside `price_grid`. */
+typedef enum pf_native_grid_rounding_e {
+    PF_NATIVE_GRID_ROUNDING_HALF_UP     = 0, /**< The nearest tick, ties away from zero
+                                              *   (the default). */
+    PF_NATIVE_GRID_ROUNDING_DIRECTIONAL = 1  /**< Toward the region the order needs: a
+                                              *   buy limit down and a sell limit up, a
+                                              *   stop the other way, a market fill to
+                                              *   its adverse side. */
+} pf_native_grid_rounding_t;
+
+/** When the kernel asks the host to calculate — `NativeCalculationTrigger`,
+ *  the `calculation` word of #pf_native_run_spec_ext_v1. Each value is a
+ *  strict superset of the one before it. */
+typedef enum pf_native_calc_trigger_e {
+    PF_NATIVE_CALC_TRIGGER_BAR_CLOSE           = 0, /**< Once per script bar, at its close
+                                                     *   (the default). */
+    PF_NATIVE_CALC_TRIGGER_BAR_CLOSE_AND_FILLS = 1, /**< And at each applied execution's
+                                                     *   cursor, bounded by
+                                                     *   `max_recalculations_per_point`. */
+    PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT = 2  /**< And at every modeled point and
+                                                     *   every observed print. */
+} pf_native_calc_trigger_t;
+
+/** What #pf_native_callbacks_v1::on_bar_open is handed — `NativeOpenBarView`,
+ *  the `open_bar_view` word of #pf_native_run_spec_ext_v1. Neither value
+ *  changes a match, a fill or any other callback. */
+typedef enum pf_native_open_bar_view_e {
+    PF_NATIVE_OPEN_BAR_VIEW_COMPLETE  = 0, /**< The whole script bar (the default). */
+    PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY = 1  /**< Its lookahead masked: H = L = C = open,
+                                            *   volume 0. */
+} pf_native_open_bar_view_t;
+
+/** Which units a kernel-issued liquidation reduces —
+ *  `NativeLiquidationSizing`, the `margin_sizing` word of
+ *  #pf_native_run_spec_ext_v1. Clamped to the position held;
+ *  #pf_native_callbacks_v1::on_margin_call_units has the last word. */
+typedef enum pf_native_liquidation_sizing_e {
+    PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM    = 0, /**< The fewest units that restore
+                                                          *   the requirement at the sizing
+                                                          *   mark (the default). */
+    PF_NATIVE_LIQUIDATION_SIZING_SHORTFALL_MULTIPLE = 1, /**< That restore times
+                                                          *   `margin_shortfall_multiple`. */
+    PF_NATIVE_LIQUIDATION_SIZING_FLATTEN            = 2  /**< The whole position. */
+} pf_native_liquidation_sizing_t;
 
 /** Which extension blocks of #pf_native_run_spec_ext_v1 are meaningful. */
 typedef enum pf_native_spec_ext_mask_e {
@@ -1277,18 +1394,18 @@ typedef struct pf_native_run_spec_ext_v1 {
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
     uint32_t present_mask;   /**< #pf_native_spec_ext_mask_t bits. */
 
-    uint32_t report_policy;               /**< NativeReportPolicy. */
-    uint32_t report_open_position_at_end; /**< 0/1; KernelRecorded only. */
+    uint32_t report_policy;               /**< #pf_native_report_policy_t. */
+    uint32_t report_open_position_at_end; /**< 0/1; #PF_NATIVE_REPORT_KERNEL_RECORDED only. */
 
-    uint32_t price_grid;      /**< NativePriceGrid. */
-    uint32_t grid_rounding;   /**< NativeGridRounding. */
+    uint32_t price_grid;      /**< #pf_native_price_grid_t. */
+    uint32_t grid_rounding;   /**< #pf_native_grid_rounding_t. */
 
-    uint32_t calculation;                  /**< NativeCalculationTrigger. */
+    uint32_t calculation;                  /**< #pf_native_calc_trigger_t. */
     uint32_t max_recalculations_per_point;  /**< Fill-cascade bound; 0 is legal. */
 
-    uint32_t open_bar_view;   /**< NativeOpenBarView. */
+    uint32_t open_bar_view;   /**< #pf_native_open_bar_view_t. */
 
-    uint32_t margin_sizing;   /**< NativeLiquidationSizing. */
+    uint32_t margin_sizing;   /**< #pf_native_liquidation_sizing_t. */
     uint32_t margin_check;    /**< #pf_native_liquidation_check_t. */
     uint32_t margin_has_maintenance_long;
     uint32_t margin_has_maintenance_short;
@@ -1426,8 +1543,9 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  `on_applied` alone.
  *
  *  `on_bar` is also the recalculation hook: with a calculation trigger above
- *  BarClose the kernel calls it again at each fill cursor or modeled point,
- *  which is exactly what the C++ `on_native_recalculate` default does. */
+ *  #PF_NATIVE_CALC_TRIGGER_BAR_CLOSE the kernel calls it again at each fill
+ *  cursor or modeled point, which is exactly what the C++
+ *  `on_native_recalculate` default does. */
 typedef struct pf_native_callbacks_v1 {
     uint32_t struct_size;  /**< sizeof(pf_native_callbacks_v1). */
     uint32_t version;      /**< PF_NATIVE_API_VERSION. */
