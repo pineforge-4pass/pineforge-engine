@@ -377,7 +377,7 @@ static_assert(PF_NATIVE_WORKING_V1_ARM_SIZE
                   == PF_NATIVE_WORKING_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_working_v1 arm-presence tail moved");
 /* The relation tail is written too, so the arm length must be exactly what an
- * arm-layout caller's sizeof was, and the tail its eight fields. */
+ * arm-layout caller's sizeof was, and the tail its nine fields. */
 static_assert(PF_NATIVE_WORKING_V1_ARM_SIZE % alignof(pf_native_working_v1) == 0u
                   && sizeof(pf_native_working_v1)
                          == PF_NATIVE_WORKING_V1_ARM_SIZE + 6u * sizeof(std::uint32_t)

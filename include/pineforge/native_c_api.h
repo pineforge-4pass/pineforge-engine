@@ -1222,7 +1222,7 @@ typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_RISK_ACTION                 = 60,
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME    = 61,
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS         = 62,
-    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63 
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63
 } pf_native_spec_field_t;
 
 /** Why an append was refused — `NativeAuxiliaryAppendError`: the `error`
@@ -1381,7 +1381,7 @@ typedef struct pf_native_decision_v1 {
     int64_t  next_input_session_day_ordinal;      /**< The session day of
                                                    *   `script_interval_next_input_open_ms`. */
     uint8_t  has_script_interval;                 /**< 1 when the point has a script
-                                                   *   interval; the six fields above
+                                                   *   interval; the seven fields above
                                                    *   are 0 otherwise. */
     uint8_t  has_session_day;                     /**< 1 when the calendar keyed
                                                    *   `session_day_ordinal`. */
