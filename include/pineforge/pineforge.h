@@ -383,9 +383,9 @@ typedef struct pf_trace_entry_s {
  *  The struct itself is caller-owned (typically stack). The embedded
  *  arrays (`trades`, `security_diag`, `trace`, `trace_names`,
  *  `equity_curve`, `broker_state_hash`) are heap-allocated by the
- *  runtime; the caller must invoke #report_free exactly once on each
- *  filled report. `trace_names` string pointers remain owned by the
- *  strategy handle until #strategy_free. */
+ *  runtime; the caller frees each filled report exactly once, with #report_free
+ *  or, on the kernel archive, #strategy_native_report_free_v1. `trace_names`
+ *  strings stay owned by the strategy handle until #strategy_free. */
 
 typedef struct pf_report_s {
     /* Trades */
@@ -445,9 +445,11 @@ typedef struct pf_report_s {
      * #strategy_set_broker_state_hash_recording is on; freed by
      * #report_free. NULL / 0-length when recording was off (default) or no
      * script bars were dispatched. When populated, len ==
-     * script_bars_processed and the last element equals
-     * #strategy_broker_state_hash's value at the end of the run.
-     * ABI v4. */
+     * script_bars_processed. For a compiled Pine strategy the last element
+     * equals #strategy_broker_state_hash's value at the end of the run; a bare
+     * native host's value is read after the run's teardown, not latched at its
+     * last script point, so it differs [F3 will change: the kernel latches it
+     * for every host, so the two agree]. ABI v4. */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
 } pf_report_t;
@@ -786,7 +788,9 @@ PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms);
 PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar);
 
 /** Snapshot the cumulative warmup + realtime report. The embedded arrays are
- *  caller-owned after return and must be released with #report_free. */
+ *  caller-owned after return and must be released with #report_free, or with
+ *  #strategy_native_report_free_v1 by a host that links the kernel archive,
+ *  which has no #report_free. */
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
 
 /** @} */ /* end of pf_streaming */

@@ -557,8 +557,8 @@ struct NativeRunSpec {
     NativePriceGrid price_grid = NativePriceGrid::None;
     NativeGridRounding grid_rounding = NativeGridRounding::HalfUp;
     NativeFeeKind fee_kind = NativeFeeKind::Percent;
-    double fee_value = 0.0;     // Percent/100 of absolute account notional, or
-                               // account-currency cash per unit/execution.
+    double fee_value = 0.0;     // A percent for Percent (0.1 charges 0.1 % of the
+                               // absolute account notional), else cash per unit/execution.
     std::optional<double> quantity_grid; // Positive; admission only, no resize.
     NativeCloseExecution close_execution = NativeCloseExecution::NextEligiblePoint;
     NativeAbortReporting abort_reporting = NativeAbortReporting::Error;

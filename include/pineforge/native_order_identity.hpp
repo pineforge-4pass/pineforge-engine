@@ -12,7 +12,7 @@ namespace pineforge::native_order {
 inline namespace native_order_v1 {
 
 // Stable native-v1 identity leaf. Request/core/event values live in
-// native_order_v4; do not duplicate these types there.
+// native_order.hpp's value epoch (native_order_v6); do not duplicate them there.
 
 class SessionKey {
 public:

@@ -1337,8 +1337,8 @@ typedef enum pf_native_anchored_trigger_e {
 /** Where the kernel is, presented to every callback.
  *
  *  A read-only snapshot of `NativeDecisionContext` plus the current quote:
- *  `price` is the execution point's price where one exists and NaN where the
- *  callback has no execution point (the bar's own close calculation).
+ *  `price` is `current_execution_point()`'s price (the bar's own close at its
+ *  close calculation) and NaN only where that answers nullopt.
  *
  *  It has TWO published layouts, and the runtime PRESENTS the one the
  *  caller's callback table was published with: a table sent at the current
@@ -2481,8 +2481,8 @@ PF_API int strategy_native_api_version(void);
  *
  *  The table is copied; the caller's struct need not outlive the call. The
  *  returned handle is a `pf_strategy_t` the existing runtime symbols accept:
- *  #strategy_configure_native_v1, the whole `strategy_stream_*` family, the
- *  read-only accessors and #report_free all take it unchanged.
+ *  #strategy_configure_native_v1, the whole `strategy_stream_*` family and the
+ *  read-only accessors all take it unchanged.
  *
  *  @return The handle, or NULL for a NULL/mis-sized table or on allocation
  *  failure. Release it with #strategy_native_host_free — never
@@ -2497,7 +2497,7 @@ PF_API void strategy_native_host_free(pf_strategy_t s);
  *
  *  The specification must already be Ready (#strategy_configure_native_v1).
  *  @p out may be NULL to skip reporting; otherwise its arrays are
- *  heap-allocated and released by #report_free.
+ *  heap-allocated and released by #strategy_native_report_free_v1.
  *  @return PF_NATIVE_OK when the run reached Completed, PF_NATIVE_E_RUN_FAILED
  *  when it did not (read #strategy_native_state_v1 for the code). */
 PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
@@ -2712,11 +2712,15 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out);
  *  spec after the callback returns, so the run's continuation identity folds
  *  what actually ran. @p n may be 0 (with @p rows NULL), which declares no
  *  series at all.
- *  @return PF_NATIVE_OK when the list was staged; PF_NATIVE_E_STATE anywhere
- *  but inside `on_run_begin` and for a list this run's input timeframe would
- *  refuse — the same validation #strategy_configure_native_ext_v1 applies —
- *  in which case nothing is staged and nothing changes.
- *  #strategy_native_declare_subscriptions_ext_v1 names which. */
+ *  @return PF_NATIVE_OK when the list was staged. Each row is read first:
+ *  PF_NATIVE_E_STRUCT for its `struct_size`, PF_NATIVE_E_ARGUMENT for a NULL
+ *  `tf` or bad authoritative bars (and for a negative @p n or NULL @p rows),
+ *  PF_NATIVE_E_TAG for a `lookahead` / `gaps` word outside its enumeration;
+ *  then PF_NATIVE_E_STATE anywhere but inside `on_run_begin` and for a list this
+ *  run's input timeframe would refuse — the same validation
+ *  #strategy_configure_native_ext_v1 applies. A refusal stages nothing.
+ *  #strategy_native_declare_subscriptions_ext_v1 also names which validation
+ *  refused the list. */
 PF_API int strategy_native_declare_subscriptions_v1(pf_strategy_t s,
                                                     const pf_native_subscription_v1* rows,
                                                     int n);
@@ -2913,9 +2917,10 @@ PF_API int strategy_native_cohort_remove_v1(pf_strategy_t s, uint64_t cohort,
  *  attempt, so this call takes both halves and applies them together.
  *  @p base is the same #pf_native_run_spec_v1 the other entry point takes.
  *
- *  Refuses without mutation — the handle stays usable — for an
- *  already-configured handle, a mis-sized struct, an unknown enumerator, or a
- *  specification the kernel's own validation rejects.
+ *  Refuses without mutation, the handle staying usable, for an already-configured
+ *  handle, a mis-sized struct or an unknown enumerator. A specification the
+ *  kernel's own validation rejects answers PF_NATIVE_E_ARGUMENT and, exactly as
+ *  `configure_native` does, leaves the host Failed (InvalidSpecification).
  *  @return PF_NATIVE_OK, or a negative status. */
 PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
                                             const pf_native_run_spec_v1* base,

@@ -773,18 +773,18 @@ struct NativeTickContext {
 /// input bar it is delivered on.
 ///
 /// `subscription` indexes NativeRunSpec::subscriptions. `interval` is the
-/// calendar span of the bucket's FIRST contributing input bar, read through the
-/// run's own session calendar; it is left zeroed when that lookup has no answer.
-/// For a series built from the auxiliary feed (NativeSeriesSource::AuxiliaryFeed)
-/// "contributing bar" reads "contributing FEED bar" here, while `delivered_at_ms`
-/// stays the accepted input bar the delivery rides on.
+/// bucket's own calendar interval: its period at the subscription's timeframe,
+/// located by its first contributing bar through the run's session calendar,
+/// and left zeroed when that lookup has no answer. For a series built from the
+/// auxiliary feed (NativeSeriesSource::AuxiliaryFeed) a contributing bar is a
+/// FEED bar, while `delivered_at_ms` stays the accepted input it rides on.
 /// `completion` is Confirmed when the bucket completed on its own last
-/// contributing input bar and LazyComplete when the next period's first input
-/// closed it. `delivered_at_ms` is the timestamp of the input bar the delivery
-/// rides on. Under lookahead_off that is the input that completed the bucket:
-/// its own last contributing bar when Confirmed, the next period's first input
-/// bar when LazyComplete. Under lookahead_on it is the bucket's first
-/// contributing bar.
+/// contributing input bar, a bucket the session close clips included, and
+/// LazyComplete when the next period's first input closed it (a feed hole over
+/// its last slot). `delivered_at_ms` is the input bar the delivery rides on:
+/// under lookahead_off the input that completed the bucket (its own last
+/// contributing bar when Confirmed, the next period's first input bar when
+/// LazyComplete); under lookahead_on the bucket's first contributing bar.
 struct NativeTimeframeBarContext {
     std::size_t subscription = 0;
     native_calendar::NativeInterval interval{};

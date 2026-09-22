@@ -329,7 +329,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   COVERAGE block carries one line per public member of `NativeStrategyHost` with either its C
   spelling or the reason it has none, and `scripts/check_native_c_api_surface.py` proves the
   block is exactly that class's public surface. `strategy_create` / `run_backtest` stay
-  codegen-emitted (`include/pineforge/pineforge.h:581`), which is why a C host frees its report
+  codegen-emitted (`include/pineforge/pineforge.h:583`), which is why a C host frees its report
   with `strategy_native_report_free_v1`.
 - **The examples are a gated target with executed assertions.** Fifteen Pine-free hosts ship
   under `examples/native/` — thirteen C++ and two C — each including only

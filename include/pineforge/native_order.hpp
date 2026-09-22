@@ -325,9 +325,9 @@ struct Absolute {};
 /// with `offset` signed (adverse is negative) and spelled in price ticks when
 /// `ticks` is set, then rounded by `rounding`. Legal on Limit and Stop prices and
 /// on a Trail arm threshold, and only under a WaitForApplied owner, which is the
-/// one relation that arms. The anchored field carries the placeholder 0.0 until
-/// then, and the ArmedEvent carries the materialized definition — from then on the
-/// request reads as the absolute level it now is.
+/// one relation that arms. Until then the anchored field is left unwritten (0.0
+/// for a Limit or Stop price, an absent or 0.0 Trail::arm_price), and the ArmedEvent
+/// carries the materialized definition: from then on the request reads as that level.
 struct FromOwnerFill {
     double offset = 0.0;
     bool ticks = false;
@@ -796,12 +796,12 @@ struct CancelResult {
     uint64_t event_ordinal = 0;
 };
 
-/// Why a CANDIDATE was refused — a decision taken at a matching point, with the
-/// request still live unless the reason is terminal. OpeningDirection, MaxAbsUnits,
-/// MaxOpenLots, InitialMargin and RiskLimit are the run's admission gates;
-/// TermsUnresolved is a host-sized or basis-sized quantity that could not be
-/// resolved; NoOppositeExposure and InvalidTerms are shapes the answered terms
-/// cannot take.
+/// Why a CANDIDATE was refused at a matching point. Every refusal is terminal:
+/// the MatchRejectedEvent ends the request, and a host that still wants it
+/// submits again. OpeningDirection, MaxAbsUnits, MaxOpenLots, InitialMargin and
+/// RiskLimit are the run's admission gates; TermsUnresolved is a host-sized or
+/// basis-sized quantity that could not be resolved; NoOppositeExposure and
+/// InvalidTerms are shapes the answered terms cannot take.
 enum class MatchRejectReason : std::uint8_t {
     NonpositivePrice = 0,
     OpeningDirection = 1,
@@ -1009,8 +1009,8 @@ struct TermsResolvedEvent {
 };
 
 /// A candidate the run refused, with its MatchRejectReason and the cursor it was
-/// refused at. It carries an event ordinal but no execution identity, and the
-/// request stays live unless the reason is terminal.
+/// refused at. It carries an event ordinal but no execution identity, and it is
+/// the request's last event: every match refusal erases the live request.
 struct MatchRejectedEvent {
     uint64_t ordinal = 0;
     MatchRejectReason reason = MatchRejectReason::OpeningDirection;
