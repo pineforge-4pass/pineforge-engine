@@ -30,6 +30,13 @@
 #                         QUIET_WAIT_S, default 14400); unset = record the load and go on.
 #                         Loads land in _workdir/speed_loads.tsv and speed.md's header.
 #
+# Exit status: every engine run first removes the slot's previous trade list,
+# so a failed run never leaves one behind for compare.py to grade. PineForge is
+# the engine under test: a run error, or a strategy library missing beside a
+# generated.cpp, stops the script with status 1 before any report is written.
+# PyneCore and vectorbt failures are results: compare.py grades them n/a with
+# the error, and they do not change the status.
+#
 # Maintainer-local closed slots (benchmarks/assets-closed/strategies, never
 # public) join every loop when that directory exists; without it the run is the
 # public assets alone.
@@ -142,11 +149,19 @@ slot_dirs() {
     return 0
 }
 
-# One parity run per slot; a failure leaves <slot>/_<engine>_error.log (its
-# stderr) for compare.py to report, a success removes it.
+# One parity run per slot. It removes the slot's previous trade list first; a
+# failure leaves <slot>/_<engine>_error.log (its stderr) and no trade list, and
+# compare.py reports the slot n/a with that error. A success removes the log.
 run_pineforge_one() {
     local s="$1" extra=()
-    [[ -f "$s/strategy.dylib" || -f "$s/strategy.so" ]] || return 0
+    rm -f "$s/pineforge_trades.csv"
+    # No generated.cpp: a codegen transpile error, which compare.py grades n/a.
+    [[ -f "$s/generated.cpp" ]] || { rm -f "$s/_pineforge_error.log"; return 0; }
+    if [[ ! -f "$s/strategy.dylib" && ! -f "$s/strategy.so" ]]; then
+        echo "no strategy library (strategy.dylib / strategy.so): build the bench_strategies target" \
+            > "$s/_pineforge_error.log"
+        return 0
+    fi
     # Per-slot run flags the graded TV run needs (e.g. --allow-trading-before-window).
     [[ -f "$s/run_strategy.args" ]] && read -r -a extra < "$s/run_strategy.args"
     if python3 "${ROOT_DIR}/scripts/run_strategy.py" "$s" \
@@ -154,12 +169,17 @@ run_pineforge_one() {
             --output "$s/pineforge_trades.csv" ${extra[@]+"${extra[@]}"} \
             >/dev/null 2>"$s/_pineforge_error.log"; then
         rm -f "$s/_pineforge_error.log"
+    else
+        rm -f "$s/pineforge_trades.csv"
     fi
 }
 run_pynecore_one() {
     local s="$1"
+    rm -f "$s/pynecore_trades.csv"
     if python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>"$s/_pynecore_error.log"; then
         rm -f "$s/_pynecore_error.log"
+    else
+        rm -f "$s/pynecore_trades.csv"
     fi
 }
 export -f run_pineforge_one run_pynecore_one
@@ -174,7 +194,7 @@ if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
     slot_dirs | xargs -P "${JOBS:-1}" -I{} bash -c 'run_pineforge_one "$1"' _ {}
     failed=$(slot_dirs | while read -r s; do [[ -f "$s/_pineforge_error.log" ]] && basename "$s"; done || true)
     if [[ -n "${failed}" ]]; then
-        warn "PineForge regen failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
+        fail "PineForge failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies, no report written (each slot's _pineforge_error.log has the error): $(tr '\n' ' ' <<<"${failed}")"
     fi
 fi
 
@@ -200,6 +220,9 @@ fi
 
 if [[ "${SKIP_VECTORBT:-0}" != "1" ]]; then
     log "writing vectorbt trades for the slots that ship strategy_vbt.py"
+    # time_vectorbt.py rewrites every public port's trade list; a port that
+    # fails to load or run is left without one.
+    rm -f "${STRATEGIES_DIR}"/[0-9]*-*/vectorbt_trades.csv
     (cd "${BENCH_DIR}" && uv run python speed/time_vectorbt.py --write-trades >/dev/null)
 fi
 

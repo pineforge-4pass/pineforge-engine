@@ -129,6 +129,8 @@ PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are t
 - `SLOTS` narrows the loops to slot ranges, for example `1-50,120`.
 - `QUIET_LOAD_MAX` holds each timing batch until the host is quiet. Each batch's load is recorded in `_workdir/speed_loads.tsv` and in `speed.md`.
 
+Every engine run removes the slot's previous trade list first, so a failed run leaves an `_<engine>_error.log` and no trade list, never an earlier run's. A PineForge failure on any slot (a run error, or a `generated.cpp` without its built strategy library) stops `run_all.sh` with exit status 1 before any report is written. PyneCore and vectorbt failures are results: the reports grade those slots n/a with the error.
+
 ## What gets reproduced
 
 The harness writes these reports to [`results/`](results/):
