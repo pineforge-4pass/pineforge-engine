@@ -1614,13 +1614,21 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // share a continuation identity with an otherwise identical run.
     hash_cohorts(f, requests_);
     sync_history_digest();
-    if (driver_digest_.count != driver_log_.size()) {
-        driver_digest_.reset();
-        for (const auto& point : driver_log_) fold_driver_digest(point);
+    // Both logs are append-only for the life of a run -- begin_ready is the
+    // only thing that clears them, and it resets these digests and rebinds
+    // the run identity in the same breath -- and each fold chains on the one
+    // before it. A digest that is behind therefore needs its TAIL folded,
+    // exactly as the command history's does; re-deriving the whole log at
+    // every query is the same chain at quadratic cost, which a host that
+    // reads the continuation once per bar pays in full (lane E24 measured
+    // 4x the bars costing 16x the CPU under broker-state-hash recording).
+    if (driver_digest_.count > driver_log_.size()) driver_digest_.reset();
+    for (std::size_t index = driver_digest_.count; index < driver_log_.size(); ++index) {
+        fold_driver_digest(driver_log_[index]);
     }
-    if (account_digest_.count != account_log_.size()) {
-        account_digest_.reset();
-        for (const auto& row : account_log_) fold_account_digest(row);
+    if (account_digest_.count > account_log_.size()) account_digest_.reset();
+    for (std::size_t index = account_digest_.count; index < account_log_.size(); ++index) {
+        fold_account_digest(account_log_[index]);
     }
     f.u(history_digest_.count);
     f.u(history_digest_.h);

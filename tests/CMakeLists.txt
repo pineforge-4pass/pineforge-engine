@@ -832,6 +832,10 @@ list(APPEND TEST_SOURCES test_native_tail_override_seam)
 # replayed through the Pine adapter, with the kernel's record of the arm.
 list(APPEND TEST_SOURCES test_offset_trail_quantized_arm)
 
+# R5 E24: the continuation digest folds an append-only log's tail, so a host
+# that reads the continuation once per bar stays linear in the bar count.
+list(APPEND TEST_SOURCES test_native_continuation_digest_tail)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is

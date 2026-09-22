@@ -105,7 +105,9 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # E12, E13 and E15 add no row: every one of their witnesses is a scenario
 # inside a TU that already existed.
 # 200 registered, 199 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 199
+# 200 run = those 199 plus gap lane E24's test_native_continuation_digest_tail
+# (source-free: it drives NativeStrategyHost only), so 201 register.
+KERNEL_MIN_TESTS = 200
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -134,7 +136,9 @@ KERNEL_MIN_TESTS = 199
 #   +1 E5  test_offset_trail_quantized_arm
 #   +1 E9  test_trail_activation_tick_reach
 # No release row skips, so 566 registered is 566 run.
-RELEASE_MIN_TESTS = 566
+# 567 = those 566 plus gap lane E24's test_native_continuation_digest_tail,
+# which registers in every profile the tests build.
+RELEASE_MIN_TESTS = 567
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
