@@ -5899,9 +5899,16 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         }
         const auto anchor = current_frame_->point;
         const double resolved = current_price(engine, *live, command.price_rule);
+        // The execution settles at its own cursor, and consume_matched_request
+        // presents that instant to everything it runs -- the terms, the
+        // inspection, the admission and the settlement all convert there. The
+        // clock the calling frame presents is the host's, and a host command
+        // hands it back unchanged (R5 lane F3), as submit and replace do.
+        const std::int64_t presented_clock = engine.current_bar_.timestamp;
         auto outcome = consume_matched_request(engine, command.target, evaluation,
             anchor.price, resolved, anchor,
             native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
+        engine.current_bar_.timestamp = presented_clock;
         if (failed() || !outcome) throw std::runtime_error("native current execution failed");
         consuming_request_ = false;
         return std::move(*outcome);

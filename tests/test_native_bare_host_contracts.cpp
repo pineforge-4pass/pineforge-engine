@@ -9,6 +9,7 @@
 #include <pineforge/native_toolkit.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -684,6 +685,98 @@ void last_row_is_the_final_scalar() {
     }
 }
 
+// ─── item 5: a host command does not move the host's presented clock ───────
+// E21/E21b made "the bar clock is never written" by a host command true for
+// submit, replace and the placement gate. execute_current still wrote it:
+// consume_matched_request stamps the presented clock with the execution
+// cursor so its resolver, inspection and settlement convert at that instant,
+// and nothing put it back. In a bar-open frame the cursor is the decision floor
+// (the bar's close), so the command moved the host's clock by a bar, and with
+// an FX step in between it moved the account rate and marked_equity the host
+// reads inside the same callback (AUDIT3 probe_e21_preopen: +2 -> +3 min,
+// marked_equity(110) 1150 -> 1375). Fails at the base. The execution itself
+// still converts at its cursor: the new lot's fee is taken at the stepped rate
+// before and after.
+struct PreOpenCommand final : NativeStrategyHost {
+    int bars = 0;
+    int opens = 0;
+    std::int64_t clock_before = 0;
+    std::int64_t clock_after = 0;
+    double fx_before = 0.0;
+    double fx_after = 0.0;
+    double equity_before = 0.0;
+    double equity_after = 0.0;
+    std::int64_t executed_at = 0;
+    bool executed = false;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (bars++ == 0) (void)submit({no::Transact{15.0}, "entry", ""});
+    }
+    void on_native_bar_open(const Bar& bar, const NativeDecisionContext&) override {
+        if (opens++ != 2) return;
+        clock_before = current_bar_.timestamp;
+        fx_before = active_account_currency_fx();
+        equity_before = marked_equity(bar.open);
+        const auto placed = submit({no::Transact{1.0}, "mkt", ""});
+        if (!placed.handle) return;
+        NativeCurrentExecution command;
+        command.target = *placed.handle;
+        const auto result = execute_current(command);
+        if (const auto* applied = std::get_if<no::ExecutionAppliedEvent>(&result)) {
+            executed = true;
+            executed_at = applied->cursor.point.effective_time_ms;
+        }
+        clock_after = current_bar_.timestamp;
+        fx_after = active_account_currency_fx();
+        equity_after = marked_equity(bar.open);
+    }
+};
+
+void host_command_keeps_the_presented_clock() {
+    std::vector<Bar> bars;
+    for (int i = 0; i < 5; ++i) {
+        const double p = i < 2 ? 100.0 : 110.0;
+        bars.push_back(Bar{p, p, p, p, 1.0, kT0 + i * kMinute});
+    }
+    NativeRunSpec s = base_spec("f3-presented-clock");
+    s.initial_capital = 1000.0;
+    s.fee_kind = NativeFeeKind::Percent;
+    s.fee_value = 0.1;
+    PreOpenCommand host;
+    CHECK(host.configure_native(s).status == NativeSetupStatus::Applied);
+    CHECK(host.configure_native_fx_curve(NativeFxCurve{{kT0 + 3 * kMinute}, {2.5}}).status
+          == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.executed);
+    std::printf("  bar-open command: clock %+lld -> %+lld min, fx %.2f -> %.2f,"
+                " marked_equity(110) %.6f -> %.6f, executed at %+lld min\n",
+                static_cast<long long>((host.clock_before - kT0) / kMinute),
+                static_cast<long long>((host.clock_after - kT0) / kMinute),
+                host.fx_before, host.fx_after, host.equity_before, host.equity_after,
+                static_cast<long long>((host.executed_at - kT0) / kMinute));
+    // The bar-open frame of bar 2 presents +2 min; the command executes at the
+    // decision floor, +3 min, where the rate has stepped to 2.5.
+    CHECK(host.clock_before == kT0 + 2 * kMinute);
+    CHECK(host.executed_at == kT0 + 3 * kMinute);
+    CHECK(host.fx_before == 1.0);
+    // 1000 of capital, 15 units bought at 100 for a 1.5 fee, marked at 110.
+    CHECK(std::abs(host.equity_before - 1148.5) < 1e-9);
+    CHECK(host.clock_after == host.clock_before);
+    CHECK(host.fx_after == host.fx_before);
+    // The execution converted at its own cursor: the 1-unit lot's 0.1 % fee on
+    // 110 is taken at the stepped rate, 0.11 x 2.5. Marked at the presented
+    // clock, the equity moved by exactly that fee (the new unit is flat at 110).
+    bool found = false;
+    for (const NativeOpenLot& lot : host.native_open_lots(110.0)) {
+        if (lot.entry_label != "mkt") continue;
+        found = true;
+        CHECK(lot.entry_time_ms == kT0 + 3 * kMinute);
+        CHECK(std::abs(lot.entry_commission - 0.275) < 1e-12);
+        CHECK(std::abs(host.equity_after - (host.equity_before - lot.entry_commission)) < 1e-9);
+    }
+    CHECK(found);
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -715,6 +808,7 @@ int main() {
     owned_excursion_is_recorded_verbatim();
     continuation_read_is_linear_in_the_feed();
     last_row_is_the_final_scalar();
+    host_command_keeps_the_presented_clock();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }
