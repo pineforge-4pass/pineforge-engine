@@ -886,6 +886,106 @@ untouched; no epoch moves.
 
 ---
 
+### 3.8 Audit lane F9 — recording and continuation costs (E24's STOP bucket)
+
+Per-bar recording (`set_broker_state_hash_recording(true)`, §1.8 RP9) appends
+one `broker_state_hash()` per script bar, and every row is a whole fold: the
+kernel's broker state, then the host's extension. Lane E24 made the
+continuation's own logs fold by their tail and left a STOP bucket; both final
+audits (Opus F9, Codex A3-8) carried it forward. Each cost it holds is
+measured here on `fd785928` (process CPU, best of 3 to 5, host load 7 to 26)
+and ruled. None of them touches a run with recording off: that path folds the
+scalar once per run, and its values are what they were.
+
+| # | cost | measured on `fd785928` | ruling |
+|---|---|---|---|
+| **A** | the Pine adapter's recording fold: O(retained history) per row | ×3.92 to ×4.02 per doubling — 9.26 s at 800 bars of order-and-cancel, 19.5 s at 2,688 bars of re-issue — against at most 0.015 s with recording off | **open**: blocked on storage and a write barrier outside lane F9's files; no epoch needed; value witness pinned |
+
+**A. The adapter's recording fold.** `PineExecutionAdapter::hash_state`
+pine_state_hash.cpp:236 folds, at every row, every placement snapshot the run
+has accepted (`placement_keys` pine_state_hash.cpp:278-281) — one per accepted
+request, cleared only by `reset_for_run` pine_adapter.cpp:1310 — and reflects
+the whole admission journal (`admission_journal` pine_state_hash.cpp:561).
+`PineScheduler::hash_state` pine_state_hash.cpp:564 re-folds the consumed
+source prefix too (`consumed` pine_state_hash.cpp:568-574). Measured with
+recording on and off, in two shapes:
+
+- the audit's order-and-cancel probe (one `strategy_order` accepted and
+  cancelled per bar): 200 / 400 / 800 bars = 0.588 / 2.305 / 9.262 s (×3.92,
+  ×4.02), against 0.0014 / 0.0012 / 0.0023 s off;
+- the runtime-budget replay's own strategy (`ReissueReplay`
+  test_l4g_runtime_budget.cpp:73, an exit re-issued every bar) on its 672-bar
+  tape repeated 1, 2 and 4 times: 1.247 / 4.929 / 19.497 s (×3.95, ×3.96),
+  against 0.0044 / 0.0078 / 0.0151 s off. At the gated 43,008 bars that is
+  about 80 minutes, against 0.21 s.
+
+A `sample` call tree of each run splits the adapter fold: the placement
+snapshots are 55 % of it on the order-and-cancel shape and 97 % on the
+re-issue shape, the journal reflection the other 45 % and 1 %, the scheduler
+prefix under 2 %. Most of a snapshot's bytes are field paths the reflection
+builds as strings, one per field (`Reflect::field` market_admission.cpp:190-193).
+
+Why it is not fixed in this lane. The fold can be made incremental without
+moving a single value, but not from inside lane F9's files:
+
+1. **No epoch is needed.** The sink is FNV-1a 64 (`BrokerStateHashSink`
+   engine.hpp:340), and FNV-1a over a fixed byte segment S is an affine map
+   with a low-byte-indexed offset, T_S(h) = p^|S|·h + C_S[h mod 256]
+   (mod 2^64); two such maps compose in 256 steps. A row folded once can be
+   applied in O(1) to whatever state the fold arrives with, byte for byte.
+   Lane F9's probe checked the identity 30,000 times against the sink's own
+   byte chain, with no mismatch.
+2. **The transforms need a home.** A row's transform, or a composed
+   segment's, has to outlive the call. The fold is const; the sink is created
+   per call (engine_state_hash.cpp:31); and none of `PlacementTable`
+   pine_adapter.hpp:315, `admission::Journal` market_admission.hpp:188 or
+   `PineScheduler` has a member it could keep one in. Adding one is a header
+   change in `include/pineforge/source/`, outside this lane.
+3. **A cache must know which rows changed, and nothing records it.**
+   `PlacementTable` hands out mutable rows — the non-const `find`
+   pine_adapter.hpp:398, the non-const `at` pine_adapter.hpp:407 and its
+   iterators — and the adapter rewrites retained rows in place through them,
+   not only rows still working. Lane F9's probe hashed every row callback to
+   callback: the order-and-cancel shape rewrites none, the re-issue shape
+   1,339 rows each one callback old, an OCA re-price and a trail attach rows
+   two callbacks old, and an entry that filled at bar 1 is rewritten at bar 61
+   when its first exit is attached (`has_full_entry_bracket`
+   pine_adapter.cpp:7155). Full-table scans rewrite rows as well
+   (`suspend_brackets_for_reversal` pine_adapter.cpp:1020,
+   `revive_brackets_after_margin` pine_adapter.cpp:1172,
+   `preserved_by_close_all` pine_adapter.cpp:9859), and
+   `admission::Journal::retain` market_admission.hpp:205 drops events from
+   the middle of the journal. So "a row stops changing once its request is
+   done" is false, and a cache resting on it would move a value.
+
+What the lane that fixes it needs: a per-row revision (or a `mutate()`
+accessor) that `PlacementTable` bumps whenever it hands out a mutable row,
+with the adapter's read-only lookups and scans moved to the const accessors so
+that they stop bumping it; a home for the composed transforms beside it; the
+same for the journal (an append composes, `retain` and `reset` rebuild) and
+for the scheduler's consumed prefix. That is at least
+`include/pineforge/source/pine_adapter.hpp`, `market_admission.hpp`,
+`pine_scheduler.hpp` and `src/source/pine_adapter.cpp`, plus a scaling row
+that fails the reproduced ×3.9 to ×4.0 per doubling and passes at ×2.3 or
+less. The alternative — fold one cached digest per row instead of the row's
+bytes — is simpler and moves every Pine hash, so it is an epoch decision
+(`pineforge-source-adapter/v3` to v4), not a neutral change.
+
+**The witness, pinned now.** `tests/test_adapter_recording_hash_witness.cpp`
+records every row, a read after every command and the final scalar of six
+scenarios — submit, replace, cancel, OCA, re-issue with a late bracket, trail —
+on a fresh host, on the same host run twice (a reset answers the fresh values)
+and with recording off (the same state at every read): 360 checks, harvested on
+`fd785928`. Its projection folds a fixed execution hash, as
+`tests/test_adapter_report_relower.cpp` does, so the pins do not depend on the
+installed tzdata. Three stale-fold mutations fail it at the first point that
+moves: never re-folding `has_full_entry_bracket` (first at the re-issue
+scenario's row 8, the bar its late bracket attaches), freezing the cancel
+receipts of older rows (first at each cancel or re-price), and a
+consumed-prefix cache that stops at 16 bars (row 16 in all six scenarios).
+
+---
+
 ## 4. Risks and open questions
 
 ### 4.1 Entanglements: a generic feature tangled with a TV quirk
