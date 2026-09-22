@@ -312,6 +312,9 @@ void source::PineStrategyHost::on_native_run_begin() {
     source_bar_index_ = -1;
     source_last_bar_index_ = -1;
     source_callback_count_ = 0;
+    session_ismarket_ = false;
+    session_isfirstbar_ = false;
+    session_islastbar_ = false;
     source_prepare_failed_ = false;
     try {
         scheduler_.run_begin(*this);
@@ -1668,69 +1671,33 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
 }
 
 void source::PineStrategyHost::scheduler_update_session_state(
-        const Bar& bar, std::optional<std::int64_t> next_script_open_ms) {
-    const bool in_session = chart_bar_ismarket(bar.timestamp);
-    // With no retained next bar, the live tail's forming bar and every bar of
-    // a STREAM read the next script bar on the calendar, one bar width on
-    // (ab9714be pine_stream.cpp:458-469); only a batch run's final bar, which
-    // nothing follows, reads "last" from having no bar after it.
+        const Bar&, std::optional<std::int64_t>) {
+    // The three session flags are the kernel's session-day facts of this
+    // script bar, selected before the source callback reads them (R5 lane F5).
+    // The rule lane E26 established here -- TradingView ends a session at the
+    // session DAY, the flag belonging to the last chart bar whose successor
+    // is out of session or on another session day, isfirstbar its dual; the
+    // `lab tv` tapes in tests/fixtures/session_islastbar give it bar for bar
+    // -- is the kernel's generic reading of the run's calendar and input now
+    // (NativeDecisionContext, market_driver.hpp), so this host computes none
+    // of it and every driving path reads the same facts by construction.
     //
-    // A stream's last WARMUP bar is such a bar too: the replay ends there but
-    // the run does not — the realtime ticks continue from it — so it reads the
-    // calendar like the realtime bars after it instead of the run end (lane
-    // E25 finding 3; TradingView's tapes flag the last bar of the session DAY,
-    // never the bar a chart is drawn up to).
-    const auto lifecycle = native_state();
-    const bool run_continues_after_bar = realtime_tail_ || stream_warmup_mode_
-        || (lifecycle.kind == NativeLifecycleKind::Running
-            && lifecycle.phase == NativeRunPhase::Realtime);
-    std::optional<std::int64_t> next_open = next_script_open_ms;
-    if (in_session && !next_open && run_continues_after_bar
-        && script_tf_seconds_ > 0
-        && bar.timestamp <= std::numeric_limits<std::int64_t>::max()
-             - static_cast<std::int64_t>(script_tf_seconds_) * 1000) {
-        next_open = bar.timestamp + static_cast<std::int64_t>(script_tf_seconds_) * 1000;
-    }
-    // TradingView ends a session at the session DAY: the flag belongs to the
-    // last chart bar whose successor belongs to another session day, and not
-    // only to one whose successor leaves the session (lane E26; the three
-    // `lab tv` tapes in tests/fixtures/session_islastbar reproduce this rule
-    // bar for bar over their full windows, 255 + 255 + 370 flags, and a
-    // regular-hours or 24x7 feed shows no other boundary at all). The ordinal
-    // is the one every other session anchor runs on — the exchange-timezone
-    // day that rolls at the symbol's day stamp, 09:30 ET on NYSE RTH,
-    // midnight on a 24x7 symbol, 17:00 ET on a 1700-1700 forex session. It is
-    // read through internal::session_trading_day_index, the UNMERGED session
-    // clock: a native daily bar may fuse two holiday sessions, but each of
-    // them still ends an intraday session on the chart.
-    bool next_in_session = false;
-    bool next_ends_the_session_day = true;
-    if (in_session && next_open) {
-        next_in_session = chart_bar_ismarket(*next_open);
-        if (next_in_session) {
-            const std::string& tz = syminfo_.timezone;
-            const std::string& session = syminfo_.session;
-            next_ends_the_session_day =
-                internal::session_trading_day_index(*next_open, tz, session)
-                != internal::session_trading_day_index(bar.timestamp, tz, session);
-        }
-    } else if (in_session && run_continues_after_bar) {
-        // No timeframe width to step by: the run continues inside the session.
-        next_in_session = true;
-        next_ends_the_session_day = false;
-    }
-    // The two flags are duals, so "first" is read off the previous bar's
-    // "last": a session's first bar is the bar after its predecessor's last
-    // one, which makes every path that computes one agree on the other by
-    // construction. session_islastbar_ still holds the previous bar's answer
-    // here — scheduler_set_session_bar_state below is the only writer, and it
-    // has not run for this bar yet. The run's own edges keep their
-    // conventions: its first bar has no in-session predecessor, and a batch
-    // run's final bar has no successor to ask.
-    const bool is_last = in_session && (!next_in_session || next_ends_the_session_day);
-    const bool is_first = in_session && (!prev_in_session_ || session_islastbar_);
-    scheduler_set_session_bar_state(in_session, is_first, is_last);
-    prev_in_session_ = in_session;
+    // What stays is Pine's own live-probe protocol (set_realtime_tail): its
+    // batch's final bar is the still-forming realtime bar, so that bar closes
+    // its session day where the calendar does, not by the batch's run-end
+    // convention -- the kernel's open-ended reading, which equals the ordinary
+    // one on every other bar.
+    //
+    // The retained-input lookahead the scheduler still passes is unused: under
+    // calc_on_order_fills it read two bars ahead on a bar a fill recalculation
+    // had already published (tests/test_session_day_facts_adapter.cpp).
+    const auto point = current_execution_point();
+    if (!point) return;
+    const NativeDecisionContext& facts = point->decision;
+    session_ismarket_ = facts.in_session;
+    session_isfirstbar_ = facts.opens_session_day;
+    session_islastbar_ = realtime_tail_ ? facts.closes_session_day_open_ended
+                                        : facts.closes_session_day;
 }
 
 void source::PineStrategyHost::scheduler_publish_source_bar(
@@ -1844,23 +1811,6 @@ void source::PineStrategyHost::scheduler_record_broker_hash() {
     last_script_continuation_hash_ = execution_consumer().continuation_hash();
     last_script_continuation_valid_ = true;
     broker_state_hashes_.push_back(broker_state_hash());
-}
-
-void source::PineStrategyHost::scheduler_set_session_bar_state(
-        bool in_session, bool intraday_is_first_bar, bool intraday_is_last_bar) {
-    // ab9714be pine_scheduler.cpp:1661-1675: the one writer of the three
-    // session flags; scheduler_update_session_state hands it the session-day
-    // lookahead's two answers.  These generated Pine facts are sourced by the
-    // scheduler immediately before the source callback; they are not generic
-    // native-calendar policy.
-    session_ismarket_ = in_session;
-    if (tf_is_daily_or_higher(script_tf_)) {
-        session_isfirstbar_ = in_session;
-        session_islastbar_ = in_session;
-        return;
-    }
-    session_isfirstbar_ = intraday_is_first_bar;
-    session_islastbar_ = intraday_is_last_bar;
 }
 
 execution::AccountEffectProjection source::PineStrategyHost::adapter_project_flatten(

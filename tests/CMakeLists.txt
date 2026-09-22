@@ -855,6 +855,11 @@ list(APPEND TEST_SOURCES test_native_bare_host_contracts)
 # it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_session_day_facts)
 
+# R5 F5: the Pine adapter selects those facts instead of computing its own:
+# the same tapes flag for flag through the adapter, its live-probe tail
+# policy, and the close flags of a calc_on_order_fills run. Source-bound.
+list(APPEND TEST_SOURCES test_session_day_facts_adapter)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is
@@ -1528,6 +1533,10 @@ endif()
 # exists in every profile.
 if(TARGET test_native_session_day_facts)
     target_compile_definitions(test_native_session_day_facts PRIVATE
+        PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+if(TARGET test_session_day_facts_adapter)
+    target_compile_definitions(test_session_day_facts_adapter PRIVATE
         PINEFORGE_F5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
 endif()
 

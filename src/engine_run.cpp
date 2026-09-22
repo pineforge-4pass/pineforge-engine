@@ -127,7 +127,7 @@ void BacktestEngine::reset_run_state() {
     position_close_obligation_ = {};
     broker_fill_event_seq_ = 0;
 
-    // Per-bar cursor + session-predicate state.
+    // Per-bar cursor state.
     bar_index_ = 0;
     prev_bar_timestamp_ = 0;
     // The chart's native daily partition is rebuilt per run by the
@@ -137,10 +137,6 @@ void BacktestEngine::reset_run_state() {
     account_currency_fx_broker_epoch_initialized_ = false;
     account_currency_fx_broker_epoch_ = 0;
     account_currency_fx_broker_rate_ = account_currency_fx_;
-    prev_in_session_ = false;
-    session_ismarket_ = false;
-    session_isfirstbar_ = false;
-    session_islastbar_ = false;
 
     // A normal run starts a new lifecycle. stream_warmup_mode_ is deliberately
     // preserved: stream_begin sets it before delegating to run() so historical
@@ -172,11 +168,6 @@ void BacktestEngine::reset_run_state() {
     }
     trace_names_.clear();
     trace_name_index_.clear();
-}
-
-bool BacktestEngine::chart_bar_ismarket(int64_t bar_ms) const {
-    return pineforge::session_in_market(syminfo_.session, syminfo_.timezone,
-                                            bar_ms, script_tf_);
 }
 
 // --- Input injection helpers ---

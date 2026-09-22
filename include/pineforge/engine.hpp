@@ -1078,23 +1078,9 @@ protected:
     uint64_t broker_fill_event_seq_ = 0;
     // @broker-state end
 
-    // --- Session predicate bar-state tracking ---
-    // Tracks whether the previous bar was inside the regular session.
-    // Read when session.isfirstbar is computed: a bar whose predecessor was
-    // out of session opens a session day (see the flags' one writer below).
-    bool prev_in_session_ = false;
-    // Current-bar session predicates. The host that dispatches the bar sets
-    // them (the source adapter through scheduler_set_session_bar_state); the
-    // kernel only clears them, in reset_run_state().
-    bool session_ismarket_ = false;
-    bool session_isfirstbar_ = false;
-    bool session_islastbar_ = false;
-
-    // session.ismarket of the CHART bar stamped bar_ms on the symbol's
-    // session clock — the chart-timeframe-aware rule of session_time.hpp:
-    // every bar of a daily-or-higher chart is the regular-session bar,
-    // intraday bars keep the time-of-day test.
-    bool chart_bar_ismarket(int64_t bar_ms) const;
+    // Session-day facts are the native decision context's
+    // (NativeDecisionContext::in_session and its neighbours, market_driver.hpp);
+    // a host that keeps flags of its own stores them itself.
 
     // --- Timeframe state ---
     std::string input_tf_;

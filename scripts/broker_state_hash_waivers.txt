@@ -36,6 +36,9 @@ security_first_chart_bar_ms_ # Source-host feed-start metadata used while prepar
 security_next_input_ms_ # Security-feed cursor; source scheduler's durable deferred-boundary state is hashed independently.
 security_range_start_ms_ # Source-host request.security configuration; active evaluator buckets/series own their continuation folds.
 security_range_start_na_warmup_ # Source-host request.security configuration flag; resulting source language/evaluator state is hashed.
+session_isfirstbar_ # Source-host copy of the kernel's session-day facts (PineStrategyHost since R5 F5, formerly an unfolded BacktestEngine member): rewritten before every source callback from NativeDecisionContext, whose facts derive from the calendar, label and input the native continuation already folds; no matching, admission or settlement branch reads it.
+session_islastbar_ # Source-host copy of the kernel's session-day facts (PineStrategyHost since R5 F5, formerly an unfolded BacktestEngine member): rewritten before every source callback from NativeDecisionContext, whose facts derive from the calendar, label and input the native continuation already folds; no matching, admission or settlement branch reads it.
+session_ismarket_ # Source-host copy of the kernel's session-day facts (PineStrategyHost since R5 F5, formerly an unfolded BacktestEngine member): rewritten before every source callback from NativeDecisionContext, whose facts derive from the calendar, label and input the native continuation already folds; no matching, admission or settlement branch reads it.
 slippage_ # Legacy configuration carrier; each executable request snapshots projected slippage terms before matching.
 syminfo_ # Metadata transport; provider copies symbol/session/timezone facts into the immutable native run specification.
 syminfo_metadata_ # Staged metadata map; it is consumed at begin and does not evolve as broker state during a run.
