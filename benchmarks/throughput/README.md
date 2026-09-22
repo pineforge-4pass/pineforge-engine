@@ -6,9 +6,9 @@ This directory contains the tools, scripts, and instructions to reproduce the hi
 
 ## 📊 Reproduction Results
 
-### Throughput Distribution (N=100)
+### Throughput Distribution (N=201)
 
-Below is the boxplot chart showing the distribution of backtest throughput across all 100 strategies. The individual data points (jittered orange circles) correspond to the throughput of each compiled C++ strategy running on 41,307 bars of ETHUSDT.
+Below is the boxplot chart showing the distribution of backtest throughput across the 201 bench slots (the 100 public corpus probes and the maintainers' 101 closed scripts). The individual data points (jittered orange circles) correspond to the throughput of each compiled C++ strategy running on the 53,929-bar ETHUSDT 15m feed.
 
 ![PineForge Throughput Quartiles](throughput_quartiles.png)
 
@@ -16,23 +16,25 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 | Quartile Metric | Throughput (Millions of Bars per Second - M/s) | Equiv. Execution Time (per 10k bars) |
 | :--- | :---: | :---: |
-| **Minimum** | 1.001 M/s | 9.99 ms |
-| **Q1 (25th Percentile)** | 11.629 M/s | 0.86 ms |
-| **Median (50th Percentile)** | **17.048 M/s** | **0.59 ms** |
-| **Q3 (75th Percentile)** | 24.974 M/s | 0.40 ms |
-| **Maximum** | 45.301 M/s | 0.22 ms |
+| **Minimum** | 0.089 M/s | 112.78 ms |
+| **Q1 (25th Percentile)** | 0.431 M/s | 23.21 ms |
+| **Median (50th Percentile)** | **0.614 M/s** | **16.29 ms** |
+| **Q3 (75th Percentile)** | 0.750 M/s | 13.34 ms |
+| **Maximum** | 0.928 M/s | 10.78 ms |
 
-*Note: Benchmarks include the realistic execution cost of a cold `dlopen` of the strategy shared library per run.*
+*Note: the metric is GBench's `<slug>/throughput/no_magnifier` hot loop. Each strategy's shared library is `dlopen`ed once, outside the timed region. Each of the 20 timed iterations runs `strategy_create` plus `run_backtest` over the whole feed with the bar magnifier off, and the table reports the mean.*
 
-*Last measured 2026-05-29 on Apple Silicon (16 cores), median-of-5 quiet runs (single-shot run-to-run variance is high because each run pays a cold `dlopen`; numbers above are from a representative low-load run). The median rose from a prior 12.69 M/s after the per-bar heap-allocation-churn reduction in the engine fill/run/security hot paths.*
+*Last measured 2026-09-22 on an Apple M4 Max (16 cores) with engine `main` `e9ad37dd`. This is the median of five quiet runs: the five run medians were 0.604, 0.615, 0.606, 0.620 and 0.614 M/s, and the table and chart come from the run with the median result (run 5). Every run started at a 1-minute load below 6 with no build or test process running; the loads are in [`../results/speed.md`](../results/speed.md). A public checkout only has the 100 public slots, whose median in the same run is 0.686 M/s.*
+
+*The median fell from 17.05 M/s, measured 2026-05-29 on 100 strategies and a 41,307-bar feed. A same-host check against the engine of the 2026-06-11 speed table shows the current engine's per-bar cost is 12–20× higher on the probes both populations share (see [`../results/speed.md`](../results/speed.md), Provenance).*
 
 ### 🛠️ FFI Grid Search Optimization Result
 
-Using `grid_search_repro.py`, a multi-parameter grid search was executed in-memory via Python ctypes FFI on the compiled C++ shared library for `19-scalping-wunder-bots` across 27 parameter combinations (Fast MA, Slow MA, Risk-to-Reward ratio):
+`grid_search_repro.py` runs a multi-parameter grid search in memory, through Python ctypes FFI, on the compiled C++ shared library for `021-composite-scalping-integration-01`: an EMA-cross scalper with take-profit and stop-loss exits in ticks, and the public analogue of the retired `19-scalping-wunder-bots`. The sweep covers 27 combinations: Fast EMA 3/5/7 × Slow EMA 11/13/15 × take profit 10/15/20 ticks, with the stop loss held at its default of 7 ticks.
 
-- **Optimal Configuration:** Fast MA = 11, Slow MA = 23, Risk:Reward = 2.5
-- **Maximum Net Profit:** **790.02 USDT**
-- **Trade Count:** exactly 520 trades executed over 53,929 bars of 15m ETHUSDT
+- **Best configuration:** Fast EMA = 3, Slow EMA = 15, take profit = 20 ticks
+- **Net profit:** **−103.16 USDT**. The probe is a mechanism test, not a profitable strategy: every combination loses. The sweep demonstrates the FFI loop, not an edge.
+- **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT
 
 ---
 
@@ -40,7 +42,7 @@ Using `grid_search_repro.py`, a multi-parameter grid search was executed in-memo
 
 1. **`reproduce.sh`**: The end-to-end automation bash script.
 2. **`plot_quartile.py`**: Python script using NumPy and Matplotlib to parse benchmark JSON, calculate exact throughput quartiles, and generate the boxplot chart (`throughput_quartiles.png`).
-3. **`grid_search_repro.py`**: Multi-parameter grid search optimizer script using ctypes FFI to sweep parameters on the compiled `19-scalping-wunder-bots` library.
+3. **`grid_search_repro.py`**: Multi-parameter grid search optimizer script using ctypes FFI to sweep parameters on the compiled `021-composite-scalping-integration-01` library.
 
 ---
 
@@ -64,20 +66,20 @@ chmod +x reproduce.sh
 ```
 
 This script will:
-1. Recompile the backtest engine and all 100 benchmark strategies in **Release mode**.
+1. Recompile the backtest engine and every bench strategy in **Release mode**: the 100 public slots, plus the 101 closed slots when the maintainers' `benchmarks/assets-closed/` root is present.
 2. Run Google Benchmark suites across all strategies for dynamic throughput measurement, exporting results to `benchmark_results.json`.
 3. Compute the exact distribution quartiles (Min, Q1, Median, Q3, Max) and save them.
 4. Render the distribution boxplot chart to `throughput_quartiles.png`.
-5. Run the in-memory parameter sweep grid search on `19-scalping-wunder-bots` and output the optimized parameters.
+5. Run the in-memory parameter sweep grid search on `021-composite-scalping-integration-01` and output the optimized parameters.
 
 ---
 
 ## 🔍 Auditing & Verifying Results (For Sceptics)
 
-If you doubt the validity of these extraordinary figures (such as the median FFI throughput of 17.05 Million Bars/sec), you can audit the results step-by-step:
+You can audit these figures (such as the median hot-loop throughput of 0.61 million bars per second) step by step:
 
 ### A. Run a Single Strategy Individually
-Instead of running all 100, you can compile and benchmark a single strategy of your choice (e.g. `01-sma-cross`) using Google Benchmark directly to eliminate any script wrapper bias:
+Instead of running every slot, you can compile and benchmark a single strategy of your choice (e.g. `001-analyzer-anvil-percent-costs-01`) using Google Benchmark directly to eliminate any script wrapper bias:
 
 ```bash
 # From the project root:
@@ -85,11 +87,11 @@ cmake -B build -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON
 cmake --build build --target pineforge_bench -j4
 
 # Execute only the chosen strategy benchmark:
-./build/bin/pineforge_bench --benchmark_filter="01-sma-cross"
+./build/bin/pineforge_bench --benchmark_filter="001-analyzer-anvil-percent-costs-01"
 ```
 
 ### B. Audit the Generated C++ Strategy Code
-Every strategy's Pine Script v6 is compiled to native, modern C++17. You can inspect the fully generated C++ files inside each strategy directory (e.g., `benchmarks/assets/strategies/01-sma-cross/generated.cpp`) to verify that they are:
+Every strategy's Pine Script v6 is compiled to native, modern C++17. You can inspect the fully generated C++ files inside each strategy directory (e.g., `benchmarks/assets/strategies/001-analyzer-anvil-percent-costs-01/generated.cpp`) to verify that they are:
 1. Performing genuine, complex math and indicators (no mock shortcuts).
 2. Leveraging in-memory sliding window lookups instead of slow databases.
 3. Accessing trades and executing orders in `O(1)` time complexity.
