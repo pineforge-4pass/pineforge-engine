@@ -37,10 +37,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # tzdata-legacy carries the backward links test_native_calendar resolves
+      # (US/Eastern, Japan, GB); noble split them out of tzdata, and this job
+      # runs the calendar row too.
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev libsqlite3-dev libssl-dev zlib1g-dev ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
       - name: Restore ccache
         uses: actions/cache@v4

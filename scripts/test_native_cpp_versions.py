@@ -579,7 +579,7 @@ class NativeVersions(unittest.TestCase):
             "")
         self.reject(
             FILES[6],
-            'kNativeConsumerSemanticVersion = "native-consumer/v7"',
+            'kNativeConsumerSemanticVersion = "native-consumer/v8"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
     def test_terms_ownership_and_alias_shapes_are_exact(self):

@@ -640,8 +640,8 @@ def check_texts(files):
     require_namespace_functions(
         driver, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v5")
-    if 'kNativeConsumerSemanticVersion = "native-consumer/v7"' not in driver_text:
-        raise ValueError("consumer semantic marker must be native-consumer/v7")
+    if 'kNativeConsumerSemanticVersion = "native-consumer/v8"' not in driver_text:
+        raise ValueError("consumer semantic marker must be native-consumer/v8")
     provenance = body(driver, r'enum\s+class\s+NativePriceProvenance\s*:[^{]+\{', 'price provenance')
     expected_provenance = [('Confirmed', '0'), ('ObservedPrint', '1'), ('ModeledOHLCOpen', '2'),
         ('ModeledOHLCClose', '3'), ('CarriedOpen', '4'), ('AfterCalculationClose', '5'),

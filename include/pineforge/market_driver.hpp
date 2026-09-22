@@ -13,7 +13,7 @@ inline namespace native_driver_v5 {
 
 // Semantic versions hashed into native continuation identity.
 inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v5";
-inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v7";
+inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v8";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
 /// Where a driver point's price came from. Confirmed is a confirmed input bar's
