@@ -4284,6 +4284,858 @@ static void check_working_arm_presence(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── The run specifications' enum-valued words (lane E22) ───────────
+ *
+ * Nine words of the two run specifications hold a value of a C enumeration
+ * named after the kernel rule it selects: the base spec's `fee_kind`
+ * (pf_native_fee_kind_t), `close_execution` (pf_native_close_execution_t) and
+ * `allowed_open_directions` (pf_native_open_directions_t), and the
+ * extension's `report_policy` (pf_native_report_policy_t), `price_grid`
+ * (pf_native_price_grid_t), `grid_rounding` (pf_native_grid_rounding_t),
+ * `calculation` (pf_native_calc_trigger_t), `open_bar_view`
+ * (pf_native_open_bar_view_t) and `margin_sizing`
+ * (pf_native_liquidation_sizing_t). They are the same uint32_t words at the
+ * same offsets, accepted and refused exactly as before. One scenario per word
+ * runs every value and reads, from C alone, the rule that value selects; one
+ * past the end of each enumeration is PF_NATIVE_E_TAG on a fresh handle,
+ * which stays Unconfigured and then configures with the word restored. */
+
+#define WORD_FEE        1.0   /* fee_value under every fee kind */
+#define WORD_UNITS      2.0   /* the fee scenario's position */
+#define WORD_CAPITAL    300.0 /* the sizing scenario's account */
+#define WORD_MAINTENANCE 0.5  /* its maintenance fraction */
+#define WORD_HELD       4.0   /* its position */
+#define WORD_MULTIPLE   2.5   /* its shortfall multiple */
+
+typedef struct word_step {
+    int      calculation;   /* 1-based: the step runs in that close calculation */
+    uint32_t intent;
+    double   value;
+} word_step;
+
+typedef struct word_state {
+    pf_strategy_t    host;
+    const word_step* steps;
+    int              n_steps;
+    int              calculations;
+    int              failures;
+    int              fills;
+    int              first_fill_interval;  /* the decision's script interval, first fill */
+    int              long_openings;
+    int              short_openings;
+    int              bar_opens;
+    int              complete_opens;    /* on_bar_open was handed the whole script bar */
+    int              open_only_opens;   /* on_bar_open was handed H = L = C = open, no volume */
+    int              recalculations[4]; /* on_recalculate calls, by pf_native_calc_reason_t */
+    int              answered;          /* the requirement hook answered its one breach */
+    int              inspected;
+    int              liquidation_rows;
+    uint32_t         liquidation_intent;
+    double           liquidation_units;
+} word_state;
+
+static pf_native_run_spec_ext_v1 word_ext(uint32_t present_mask) {
+    pf_native_run_spec_ext_v1 ext;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = present_mask;
+    return ext;
+}
+
+static uint32_t word_lifecycle(pf_strategy_t host) {
+    pf_native_state_v1 lifecycle;
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &lifecycle), PF_NATIVE_OK, "word state read");
+    return lifecycle.lifecycle;
+}
+
+/* `word` points into `spec` or `ext`. One past the end of its enumeration is
+ * the tag error; the refused configure leaves the handle Unconfigured, and the
+ * same handle then configures with the word restored.
+ *
+ * A base-spec word is also read by strategy_configure_native_v1, which has
+ * no boundary refusal of its own: the word reaches the kernel's validation,
+ * which rejects the spec and, as it does for every spec it rejects, fails
+ * the host. That entry point answers its one failure, -1, on a fresh handle
+ * that is then Failed -- pinned here so the asymmetry cannot move quietly. */
+static int configure_past_refusal(pf_strategy_t host, pf_native_run_spec_v1* spec,
+                                  pf_native_run_spec_ext_v1* ext, uint32_t* word,
+                                  uint32_t past_end, int base_word, const char* what) {
+    const uint32_t kept = *word;
+    *word = past_end;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, spec, ext), PF_NATIVE_E_TAG, what);
+    CHECK_EQ_INT(word_lifecycle(host), PF_NATIVE_LIFECYCLE_UNCONFIGURED,
+                 "a refused word configured or failed the host");
+    if (base_word) {
+        pf_native_callbacks_v1 table = blank_callbacks(NULL);
+        pf_strategy_t fresh = strategy_native_host_create_v1(&table);
+        CHECK(fresh != NULL, "word-refusal host create failed");
+        if (fresh) {
+            CHECK_EQ_INT(strategy_configure_native_v1(fresh, spec), -1, what);
+            CHECK_EQ_INT(word_lifecycle(fresh), PF_NATIVE_LIFECYCLE_FAILED,
+                         "configure_native_v1 did not fail the host its kernel refused");
+            strategy_native_host_free(fresh);
+        }
+    }
+    *word = kept;
+    return strategy_configure_native_ext_v1(host, spec, ext);
+}
+
+static void word_run_steps(word_state* state) {
+    pf_native_request_v1 request;
+    int i;
+    ++state->calculations;
+    for (i = 0; i < state->n_steps; ++i) {
+        if (state->steps[i].calculation != state->calculations) continue;
+        request = blank_request();
+        request.intent = state->steps[i].intent;
+        request.intent_value = state->steps[i].value;
+        request.label = "word-step";
+        LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL)
+                          == PF_NATIVE_OK, "a word-scenario command was refused");
+    }
+}
+
+static int word_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    (void)bar;
+    (void)at;
+    word_run_steps((word_state*)user);
+    return 0;
+}
+
+static int word_on_applied(void* user, const pf_native_applied_v1* applied,
+                           const pf_native_decision_v1* at) {
+    word_state* state = (word_state*)user;
+    if (state->fills++ == 0) state->first_fill_interval = at->interval_index;
+    if (applied->opened_units > 0.0) ++state->long_openings;
+    if (applied->opened_units < 0.0) ++state->short_openings;
+    return 0;
+}
+
+/* A fresh host driven by `steps` from on_bar, with on_applied recording. */
+static pf_strategy_t word_host(word_state* state, const word_step* steps, int n_steps) {
+    pf_native_callbacks_v1 table;
+    memset(state, 0, sizeof(*state));
+    state->steps = steps;
+    state->n_steps = n_steps;
+    state->first_fill_interval = -1;
+    table = blank_callbacks(state);
+    table.on_bar = word_on_bar;
+    table.on_applied = word_on_applied;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "word host create failed");
+    return state->host;
+}
+
+/* A base-spec word is read by both entry points that take the base spec:
+ * `entry` 0 is strategy_configure_native_v1 (0 on success, like PF_NATIVE_OK),
+ * 1 is strategy_configure_native_ext_v1 with no extension block. The first
+ * value's ext run also carries the refusal. */
+static int configure_base_word(word_state* state, pf_native_run_spec_v1* spec, uint32_t* word,
+                               uint32_t past_end, int entry, int first, const char* what) {
+    pf_native_run_spec_ext_v1 ext = word_ext(0u);
+    if (entry == 0) return strategy_configure_native_v1(state->host, spec);
+    if (first) return configure_past_refusal(state->host, spec, &ext, word, past_end, 1, what);
+    return strategy_configure_native_ext_v1(state->host, spec, &ext);
+}
+
+/* --- fee_kind: what one execution costs --- */
+
+static const word_step fee_steps[] = {
+    {3, PF_NATIVE_INTENT_TRANSACT, WORD_UNITS},   /* fills at the fourth open, 103 */
+    {6, PF_NATIVE_INTENT_FLATTEN, 0.0}};          /* fills at the seventh open, 106 */
+
+static void check_fee_kind_word(void) {
+    static const pf_native_fee_kind_t kinds[] = {
+        PF_NATIVE_FEE_PERCENT, PF_NATIVE_FEE_CASH_PER_UNIT, PF_NATIVE_FEE_CASH_PER_EXECUTION};
+    const double entry_price = 103.0;
+    const double exit_price = 106.0;
+    word_state state;
+    pf_report_t report;
+    int k;
+    int entry;
+
+    for (k = 0; k < 3; ++k) {
+        for (entry = 0; entry < 2; ++entry) {
+            pf_native_run_spec_v1 spec = twin_spec();
+            double want = 0.0;
+            spec.session_key = "native-c-api-word-fee-kind";
+            spec.fee_kind = kinds[k];
+            spec.fee_value = WORD_FEE;
+            if (!word_host(&state, fee_steps, 2)) return;
+            CHECK_EQ_INT(configure_base_word(&state, &spec, &spec.fee_kind,
+                                             PF_NATIVE_FEE_CASH_PER_EXECUTION + 1u, entry, k == 0,
+                                             "a fee kind past pf_native_fee_kind_e was accepted"),
+                         PF_NATIVE_OK, "a typed fee kind was refused");
+            memset(&report, 0, sizeof(report));
+            CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, &report),
+                         PF_NATIVE_OK, "the fee-kind run did not complete");
+            CHECK_EQ_INT(state.failures, 0, "in-callback fee-kind rows failed");
+            switch (kinds[k]) {
+            case PF_NATIVE_FEE_PERCENT:
+                /* abs(units) x price x point_value x account_fx x fee / 100, per execution */
+                want = WORD_UNITS * entry_price * WORD_FEE / 100.0
+                       + WORD_UNITS * exit_price * WORD_FEE / 100.0;
+                break;
+            case PF_NATIVE_FEE_CASH_PER_UNIT:
+                want = 2.0 * WORD_UNITS * WORD_FEE;
+                break;
+            case PF_NATIVE_FEE_CASH_PER_EXECUTION:
+                want = 2.0 * WORD_FEE;
+                break;
+            }
+            CHECK_EQ_INT(report.total_trades, 1, "the fee-kind run closed another trade count");
+            if (report.total_trades == 1) {
+                CHECK(report.trades[0].entry_price == entry_price
+                          && report.trades[0].exit_price == exit_price
+                          && report.trades[0].qty == WORD_UNITS,
+                      "the fee-kind trade is not the scripted one");
+                if (fabs(report.trades[0].commission - want) > 1e-9) {
+                    fprintf(stderr, "  fee kind %u, entry %d: commission %.12g, want %.12g\n",
+                            (unsigned)kinds[k], entry, report.trades[0].commission, want);
+                }
+                CHECK(fabs(report.trades[0].commission - want) <= 1e-9,
+                      "a fee kind charged another rule's commission");
+            }
+            strategy_native_report_free_v1(&report);
+            strategy_native_host_free(state.host);
+        }
+    }
+}
+
+/* --- close_execution: where a close-calculation order may first match --- */
+
+static const word_step close_steps[] = {{3, PF_NATIVE_INTENT_TRANSACT, 1.0}};
+
+static void check_close_execution_word(void) {
+    static const pf_native_close_execution_t rules[] = {
+        PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT,
+        PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION};
+    word_state state;
+    int k;
+    int entry;
+
+    for (k = 0; k < 2; ++k) {
+        for (entry = 0; entry < 2; ++entry) {
+            pf_native_run_spec_v1 spec = twin_spec();
+            /* The order is born in the third close calculation, script bar 2:
+             * NEXT_ELIGIBLE_POINT waits for bar 3's open, AFTER_CALCULATION
+             * matches at bar 2's own modeled close. */
+            const int want = rules[k] == PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION ? 2 : 3;
+            spec.session_key = "native-c-api-word-close-execution";
+            spec.close_execution = rules[k];
+            if (!word_host(&state, close_steps, 1)) return;
+            CHECK_EQ_INT(configure_base_word(&state, &spec, &spec.close_execution,
+                                             PF_NATIVE_CLOSE_EXECUTION_AFTER_CALCULATION + 1u,
+                                             entry, k == 0,
+                                             "a close execution past its enumeration was accepted"),
+                         PF_NATIVE_OK, "a typed close execution was refused");
+            CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, NULL),
+                         PF_NATIVE_OK, "the close-execution run did not complete");
+            CHECK_EQ_INT(state.failures, 0, "in-callback close-execution rows failed");
+            CHECK_EQ_INT(state.fills, 1, "the close-execution run filled another count");
+            CHECK_EQ_INT(state.first_fill_interval, want,
+                         "a close-calculation order matched where another rule would");
+            strategy_native_host_free(state.host);
+        }
+    }
+}
+
+/* --- allowed_open_directions: which openings the run admits --- */
+
+static const word_step direction_steps[] = {
+    {3, PF_NATIVE_INTENT_TRANSACT, 1.0},    /* a long opening */
+    {6, PF_NATIVE_INTENT_FLATTEN, 0.0},
+    {9, PF_NATIVE_INTENT_TRANSACT, -1.0},   /* a short opening */
+    {12, PF_NATIVE_INTENT_FLATTEN, 0.0}};
+
+static int count_events(pf_strategy_t host, uint32_t kind) {
+    static pf_native_event_v1 events[256];
+    int written;
+    int count = 0;
+    int i;
+    memset(events, 0, sizeof(events));
+    written = strategy_native_events_v1(host, 0, events, 256);
+    for (i = 0; i < written; ++i) {
+        if (events[i].kind == kind) ++count;
+    }
+    return count;
+}
+
+static void check_open_directions_word(void) {
+    static const pf_native_open_directions_t admitted[] = {
+        PF_NATIVE_OPEN_DIRECTIONS_NONE, PF_NATIVE_OPEN_DIRECTIONS_LONG,
+        PF_NATIVE_OPEN_DIRECTIONS_SHORT, PF_NATIVE_OPEN_DIRECTIONS_BOTH};
+    word_state state;
+    int k;
+    int entry;
+
+    for (k = 0; k < 4; ++k) {
+        for (entry = 0; entry < 2; ++entry) {
+            pf_native_run_spec_v1 spec = twin_spec();
+            const int want_long = admitted[k] == PF_NATIVE_OPEN_DIRECTIONS_LONG
+                                  || admitted[k] == PF_NATIVE_OPEN_DIRECTIONS_BOTH;
+            const int want_short = admitted[k] == PF_NATIVE_OPEN_DIRECTIONS_SHORT
+                                   || admitted[k] == PF_NATIVE_OPEN_DIRECTIONS_BOTH;
+            spec.session_key = "native-c-api-word-open-directions";
+            spec.allowed_open_directions = admitted[k];
+            if (!word_host(&state, direction_steps, 4)) return;
+            CHECK_EQ_INT(configure_base_word(&state, &spec, &spec.allowed_open_directions,
+                                             PF_NATIVE_OPEN_DIRECTIONS_BOTH + 1u, entry, k == 0,
+                                             "an opening mask past its enumeration was accepted"),
+                         PF_NATIVE_OK, "a typed opening mask was refused");
+            CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, NULL),
+                         PF_NATIVE_OK, "the open-directions run did not complete");
+            CHECK_EQ_INT(state.failures, 0, "in-callback open-directions rows failed");
+            CHECK_EQ_INT(state.long_openings, want_long, "a long opening met another rule");
+            CHECK_EQ_INT(state.short_openings, want_short, "a short opening met another rule");
+            /* A refused opening is a match rejection, not a silent drop. */
+            CHECK_EQ_INT(count_events(state.host, PF_NATIVE_EVENT_MATCH_REJECTED) > 0,
+                         !(want_long && want_short),
+                         "an opening was match-rejected against its direction mask");
+            strategy_native_host_free(state.host);
+        }
+    }
+}
+
+/* --- report_policy: who records the per-bar report series --- */
+
+static void check_report_policy_word(void) {
+    static const pf_native_report_policy_t policies[] = {
+        PF_NATIVE_REPORT_HOST_RECORDED, PF_NATIVE_REPORT_KERNEL_RECORDED};
+    word_state state;
+    pf_report_t report;
+    int rc;
+    int k;
+
+    for (k = 0; k < 2; ++k) {
+        pf_native_run_spec_v1 spec = twin_spec();
+        pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_REPORT);
+        spec.session_key = "native-c-api-word-report-policy";
+        ext.report_policy = policies[k];
+        if (!word_host(&state, fee_steps, 2)) return;
+        if (k == 0) {
+            /* One past the end is also the kernel's third policy,
+             * KernelRecordedAtHostMarks, which has no C name: its host marks
+             * the report points, and no C callback can mark one. */
+            rc = configure_past_refusal(state.host, &spec, &ext, &ext.report_policy,
+                                        PF_NATIVE_REPORT_KERNEL_RECORDED + 1u, 0,
+                                        "a report policy past its enumeration was accepted");
+        } else {
+            rc = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+        }
+        CHECK_EQ_INT(rc, PF_NATIVE_OK, "a typed report policy was refused");
+        memset(&report, 0, sizeof(report));
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, &report),
+                     PF_NATIVE_OK, "the report-policy run did not complete");
+        CHECK_EQ_INT(state.failures, 0, "in-callback report-policy rows failed");
+        CHECK_EQ_INT(report.script_bars_processed, TWIN_BARS,
+                     "the report-policy run calculated another bar count");
+        /* HOST_RECORDED leaves the series to the host, which records nothing
+         * here; KERNEL_RECORDED marks one point per script calculation. */
+        CHECK_EQ_INT(report.equity_curve_len,
+                     policies[k] == PF_NATIVE_REPORT_KERNEL_RECORDED ? TWIN_BARS : 0,
+                     "a report policy recorded another rule's series");
+        strategy_native_report_free_v1(&report);
+        strategy_native_host_free(state.host);
+    }
+}
+
+/* --- price_grid / grid_rounding: the instrument tick ladder --- */
+
+#define GRID_BARS  6
+#define GRID_FILLS 5
+#define GRID_MS    (15LL * 60LL * 1000LL)
+
+/* examples/native/native_price_grid_c.c's tape: a 0.25 ladder under a feed
+ * whose every print is sub-tick. */
+static const pf_bar_t grid_bars[GRID_BARS] = {
+    {100.00, 100.20,  99.90, 100.10, 10.0, 0 * GRID_MS},
+    {100.10, 100.30, 100.05, 100.20, 10.0, 1 * GRID_MS},
+    {100.20, 100.80, 100.15, 100.70, 10.0, 2 * GRID_MS},
+    { 99.40,  99.45,  99.20,  99.30, 10.0, 3 * GRID_MS},
+    { 99.45,  99.65,  99.35,  99.60, 10.0, 4 * GRID_MS},
+    { 99.60,  99.62,  99.30,  99.40, 10.0, 5 * GRID_MS}};
+
+typedef struct grid_state {
+    pf_strategy_t host;
+    int           calculations;
+    int           failures;
+} grid_state;
+
+static void grid_submit(grid_state* state, uint32_t intent, double value, uint32_t trigger,
+                        double price) {
+    pf_native_request_v1 request = blank_request();
+    request.intent = intent;
+    request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+    request.intent_value = value;
+    request.trigger = trigger;
+    request.p1 = price;
+    request.label = "grid-word";
+    LCHECK(state, strategy_native_submit_v1(state->host, &request, NULL, NULL) == PF_NATIVE_OK,
+           "a grid-word command was refused");
+}
+
+static int grid_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    grid_state* state = (grid_state*)user;
+    double units = 0.0;
+    (void)bar;
+    (void)at;
+    ++state->calculations;
+    if (state->calculations == 1) {
+        /* entry: the market fill at bar 1's open 100.10 */
+        grid_submit(state, PF_NATIVE_INTENT_TRANSACT, 2.0, PF_NATIVE_TRIGGER_MARKET, 0.0);
+    } else if (state->calculations == 2) {
+        /* a limit at the ladder price 100.75, and a stop at 99.50 that the
+         * open 99.40 gaps through */
+        grid_submit(state, PF_NATIVE_INTENT_REDUCE, 1.0, PF_NATIVE_TRIGGER_LIMIT, 100.75);
+        grid_submit(state, PF_NATIVE_INTENT_REDUCE, 1.0, PF_NATIVE_TRIGGER_STOP, 99.50);
+    } else if (state->calculations == 4) {
+        /* a stop at 99.75 only the quantized path reaches: the raw high is 99.65 */
+        grid_submit(state, PF_NATIVE_INTENT_TRANSACT, 1.0, PF_NATIVE_TRIGGER_STOP, 99.75);
+    } else if (state->calculations == 5) {
+        if (strategy_native_position_v1(state->host, &units, NULL, NULL) == PF_NATIVE_OK
+            && units > 0.0) {
+            grid_submit(state, PF_NATIVE_INTENT_FLATTEN, 0.0, PF_NATIVE_TRIGGER_MARKET, 0.0);
+        }
+    }
+    return 0;
+}
+
+/* Runs the tape under one grid and one rounding. `refuse` 1 refuses a price
+ * grid, 2 a grid rounding, one past its enumeration first, on the same
+ * handle; 0 refuses nothing. Answers the fill count, and the first fills' raw
+ * and booked prices in `raw` / `booked`. */
+static int run_grid_tape(pf_native_price_grid_t grid, pf_native_grid_rounding_t rounding,
+                         int refuse, double* raw, double* booked) {
+    static pf_native_event_v1 events[128];
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_PRICE_GRID);
+    pf_native_callbacks_v1 table;
+    grid_state state;
+    int written;
+    int fills = 0;
+    int rc;
+    int i;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = grid_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "grid-word host create failed");
+    if (!state.host) return -1;
+    spec.session_key = "native-c-api-word-price-grid";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    spec.price_tick = 0.25;
+    ext.price_grid = grid;
+    ext.grid_rounding = rounding;
+    if (refuse == 1) {
+        rc = configure_past_refusal(state.host, &spec, &ext, &ext.price_grid,
+                                    PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS + 1u, 0,
+                                    "a price grid past its enumeration was accepted");
+    } else if (refuse == 2) {
+        rc = configure_past_refusal(state.host, &spec, &ext, &ext.grid_rounding,
+                                    PF_NATIVE_GRID_ROUNDING_DIRECTIONAL + 1u, 0,
+                                    "a grid rounding past its enumeration was accepted");
+    } else {
+        rc = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+    }
+    CHECK_EQ_INT(rc, PF_NATIVE_OK, "a typed price grid or grid rounding was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, grid_bars, GRID_BARS, NULL), PF_NATIVE_OK,
+                 "the grid-word run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback grid-word rows failed");
+    memset(events, 0, sizeof(events));
+    written = strategy_native_events_v1(state.host, 0, events, 128);
+    for (i = 0; i < written; ++i) {
+        if (events[i].kind != PF_NATIVE_EVENT_APPLIED) continue;
+        if (fills < GRID_FILLS) {
+            raw[fills] = events[i].raw_price;
+            booked[fills] = events[i].resolved_price;
+        }
+        ++fills;
+    }
+    strategy_native_host_free(state.host);
+    return fills;
+}
+
+static int grid_fills_are(int fills, const double* raw, const double* booked, int want_fills,
+                          const double* want_raw, const double* want_booked) {
+    int i;
+    if (fills != want_fills) return 0;
+    for (i = 0; i < fills; ++i) {
+        if (raw[i] != want_raw[i] || booked[i] != want_booked[i]) return 0;
+    }
+    return 1;
+}
+
+static void check_price_grid_word(void) {
+    /* The hand-computed fills of examples/native/native_price_grid_c.c, all
+     * under HALF_UP: the market entry at 100.10, the limit at the ladder
+     * price 100.75 (a fixed point), the stop gapped through at 99.40, then --
+     * on the quantized path only -- the stop at 99.75 and its exit at 99.60. */
+    static const pf_native_price_grid_t grids[] = {
+        PF_NATIVE_PRICE_GRID_NONE, PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS,
+        PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS};
+    static const int want_fills[] = {3, 3, 5};
+    static const double want_raw[3][GRID_FILLS] = {
+        {100.10, 100.75, 99.40}, {100.10, 100.75, 99.40}, {100.10, 100.75, 99.40, 99.75, 99.60}};
+    static const double want_booked[3][GRID_FILLS] = {
+        {100.10, 100.75, 99.40}, {100.00, 100.75, 99.50}, {100.00, 100.75, 99.50, 99.75, 99.50}};
+    double raw[GRID_FILLS];
+    double booked[GRID_FILLS];
+    int fills;
+    int k;
+
+    for (k = 0; k < 3; ++k) {
+        memset(raw, 0, sizeof(raw));
+        memset(booked, 0, sizeof(booked));
+        fills = run_grid_tape(grids[k], PF_NATIVE_GRID_ROUNDING_HALF_UP, k == 0 ? 1 : 0, raw,
+                              booked);
+        if (!grid_fills_are(fills, raw, booked, want_fills[k], want_raw[k], want_booked[k])) {
+            fprintf(stderr, "  price grid %u: %d fills, first booked %.2f\n", (unsigned)grids[k],
+                    fills, booked[0]);
+        }
+        CHECK(grid_fills_are(fills, raw, booked, want_fills[k], want_raw[k], want_booked[k]),
+              "a price grid booked or triggered by another rule");
+    }
+}
+
+static void check_grid_rounding_word(void) {
+    /* QUANTIZE_FILLS under both roundings: the market buy at 100.10 books the
+     * nearest tick or the adverse buy tick, the gapped sell stop at 99.40 the
+     * nearest or the adverse sell tick; the ladder limit is a fixed point. */
+    static const pf_native_grid_rounding_t roundings[] = {
+        PF_NATIVE_GRID_ROUNDING_HALF_UP, PF_NATIVE_GRID_ROUNDING_DIRECTIONAL};
+    static const double want_raw[GRID_FILLS] = {100.10, 100.75, 99.40};
+    static const double want_booked[2][GRID_FILLS] = {
+        {100.00, 100.75, 99.50}, {100.25, 100.75, 99.25}};
+    double raw[GRID_FILLS];
+    double booked[GRID_FILLS];
+    int fills;
+    int k;
+
+    for (k = 0; k < 2; ++k) {
+        memset(raw, 0, sizeof(raw));
+        memset(booked, 0, sizeof(booked));
+        fills = run_grid_tape(PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS, roundings[k], k == 0 ? 2 : 0,
+                              raw, booked);
+        if (!grid_fills_are(fills, raw, booked, 3, want_raw, want_booked[k])) {
+            fprintf(stderr, "  grid rounding %u: %d fills, first booked %.2f\n",
+                    (unsigned)roundings[k], fills, booked[0]);
+        }
+        CHECK(grid_fills_are(fills, raw, booked, 3, want_raw, want_booked[k]),
+              "a grid rounding booked by another rule");
+    }
+}
+
+/* --- calculation: when the kernel asks the host to calculate --- */
+
+static const word_step calc_steps[] = {{4, PF_NATIVE_INTENT_TRANSACT, 1.0}};
+
+static int word_on_recalculate(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at,
+                               uint32_t reason, const pf_native_applied_v1* cause) {
+    word_state* state = (word_state*)user;
+    (void)bar;
+    (void)at;
+    (void)cause;
+    LCHECK(state, reason <= PF_NATIVE_CALC_SUB_BAR, "a recalculation carried an unknown reason");
+    if (reason <= PF_NATIVE_CALC_SUB_BAR) ++state->recalculations[reason];
+    if (reason == PF_NATIVE_CALC_BAR_CLOSE) word_run_steps(state);
+    return 0;
+}
+
+static void check_calc_trigger_word(void) {
+    static const pf_native_calc_trigger_t triggers[] = {
+        PF_NATIVE_CALC_TRIGGER_BAR_CLOSE, PF_NATIVE_CALC_TRIGGER_BAR_CLOSE_AND_FILLS,
+        PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT};
+    word_state state;
+    pf_native_callbacks_v1 table;
+    uint64_t driven;
+    int rc;
+    int k;
+
+    for (k = 0; k < 3; ++k) {
+        pf_native_run_spec_v1 spec = twin_spec();
+        pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_CALCULATION);
+        memset(&state, 0, sizeof(state));
+        state.steps = calc_steps;
+        state.n_steps = 1;
+        table = blank_callbacks(&state);
+        table.on_recalculate = word_on_recalculate;
+        table.on_applied = word_on_applied;
+        state.host = strategy_native_host_create_v1(&table);
+        CHECK(state.host != NULL, "calculation-word host create failed");
+        if (!state.host) return;
+        spec.session_key = "native-c-api-word-calculation";
+        ext.calculation = triggers[k];
+        ext.max_recalculations_per_point = 4u;
+        if (k == 0) {
+            rc = configure_past_refusal(state.host, &spec, &ext, &ext.calculation,
+                                        PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT + 1u, 0,
+                                        "a calculation trigger past its enumeration was accepted");
+        } else {
+            rc = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+        }
+        CHECK_EQ_INT(rc, PF_NATIVE_OK, "a typed calculation trigger was refused");
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, NULL),
+                     PF_NATIVE_OK, "the calculation-word run did not complete");
+        CHECK_EQ_INT(state.failures, 0, "in-callback calculation-word rows failed");
+        CHECK_EQ_INT(state.fills, 1, "the calculation-word entry did not fill once");
+        driven = 0;
+        CHECK_EQ_INT(strategy_native_recalculations_v1(state.host, &driven, NULL), PF_NATIVE_OK,
+                     "calculation-word recalculation counters");
+        /* Every trigger keeps the close calculation; each one above BAR_CLOSE
+         * adds the fill's recalculation, and EVERY_MODELED_POINT the modeled
+         * points'. BAR_CLOSE drives no recalculation at all. */
+        CHECK_EQ_INT(state.recalculations[PF_NATIVE_CALC_BAR_CLOSE], TWIN_BARS,
+                     "a calculation trigger lost the close calculation");
+        CHECK_EQ_INT(state.recalculations[PF_NATIVE_CALC_ORDER_FILL] > 0,
+                     triggers[k] != PF_NATIVE_CALC_TRIGGER_BAR_CLOSE,
+                     "a fill was recalculated against its calculation trigger");
+        CHECK_EQ_INT(state.recalculations[PF_NATIVE_CALC_TICK] > 0,
+                     triggers[k] == PF_NATIVE_CALC_TRIGGER_EVERY_MODELED_POINT,
+                     "a modeled point was recalculated against its calculation trigger");
+        CHECK_EQ_INT(driven > 0, triggers[k] != PF_NATIVE_CALC_TRIGGER_BAR_CLOSE,
+                     "the driven recalculation count contradicts the calculation trigger");
+        strategy_native_host_free(state.host);
+    }
+}
+
+/* --- open_bar_view: what on_bar_open is handed --- */
+
+static int word_on_bar_open(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    word_state* state = (word_state*)user;
+    const pf_bar_t* feed = pf_twin_bars(NULL);
+    const int64_t i = bar->timestamp / 300000;
+    (void)at;
+    ++state->bar_opens;
+    LCHECK(state, i >= 0 && i < TWIN_BARS && bar->timestamp % 300000 == 0,
+           "on_bar_open was handed a bar outside the feed");
+    if (i < 0 || i >= TWIN_BARS) return 0;
+    if (bar->open == feed[i].open && bar->high == feed[i].high && bar->low == feed[i].low
+        && bar->close == feed[i].close && bar->volume == feed[i].volume) {
+        ++state->complete_opens;
+    }
+    if (bar->open == feed[i].open && bar->high == feed[i].open && bar->low == feed[i].open
+        && bar->close == feed[i].open && bar->volume == 0.0) {
+        ++state->open_only_opens;
+    }
+    return 0;
+}
+
+static void check_open_bar_view_word(void) {
+    static const pf_native_open_bar_view_t views[] = {
+        PF_NATIVE_OPEN_BAR_VIEW_COMPLETE, PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY};
+    word_state state;
+    pf_native_callbacks_v1 table;
+    int rc;
+    int k;
+
+    for (k = 0; k < 2; ++k) {
+        pf_native_run_spec_v1 spec = twin_spec();
+        pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_OPEN_BAR_VIEW);
+        memset(&state, 0, sizeof(state));
+        table = blank_callbacks(&state);
+        table.on_bar_open = word_on_bar_open;
+        state.host = strategy_native_host_create_v1(&table);
+        CHECK(state.host != NULL, "open-bar-view host create failed");
+        if (!state.host) return;
+        spec.session_key = "native-c-api-word-open-bar-view";
+        ext.open_bar_view = views[k];
+        if (k == 0) {
+            rc = configure_past_refusal(state.host, &spec, &ext, &ext.open_bar_view,
+                                        PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY + 1u, 0,
+                                        "an open-bar view past its enumeration was accepted");
+        } else {
+            rc = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+        }
+        CHECK_EQ_INT(rc, PF_NATIVE_OK, "a typed open-bar view was refused");
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, NULL),
+                     PF_NATIVE_OK, "the open-bar-view run did not complete");
+        CHECK_EQ_INT(state.failures, 0, "in-callback open-bar-view rows failed");
+        CHECK_EQ_INT(state.bar_opens, TWIN_BARS, "on_bar_open ran another bar count");
+        /* COMPLETE hands over the whole script bar; OPEN_ONLY masks its
+         * lookahead: H = L = C = open and no volume. The twin feed's bars are
+         * never flat, so no bar can satisfy both. */
+        CHECK_EQ_INT(state.complete_opens,
+                     views[k] == PF_NATIVE_OPEN_BAR_VIEW_COMPLETE ? TWIN_BARS : 0,
+                     "an open-bar view handed over another view's bar");
+        CHECK_EQ_INT(state.open_only_opens,
+                     views[k] == PF_NATIVE_OPEN_BAR_VIEW_OPEN_ONLY ? TWIN_BARS : 0,
+                     "an open-bar view handed over another view's bar");
+        strategy_native_host_free(state.host);
+    }
+}
+
+/* --- margin_sizing: how many units a kernel liquidation reduces --- */
+
+static const word_step sizing_steps[] = {{3, PF_NATIVE_INTENT_TRANSACT, WORD_HELD}};
+
+/* Four units bought at 103 on a 300 account at 0.5 maintenance: the book's
+ * liquidation level solves to 56, a real level far under a rising feed, so
+ * every check point consults the requirement hook -- a level that does not
+ * solve rests nothing and asks nothing -- while the kernel's own numbers
+ * never breach. The one breach is the host's: at the first bar-open check of
+ * the held book it answers a requirement exactly one unit's margin above the
+ * equity, so the restore is one unit whatever the mark. */
+static int sizing_on_requirement(void* user, const pf_native_margin_view_v1* view,
+                                 pf_native_margin_decision_v1* out) {
+    word_state* state = (word_state*)user;
+    if (state->answered || view->kind != PF_NATIVE_MARGIN_CHECK_BAR_OPEN
+        || !(view->signed_units > 0.0)) {
+        return PF_NATIVE_ANSWER_DEFAULT;
+    }
+    state->answered = 1;
+    out->equity = view->equity;
+    out->required = view->equity + view->mark * 1.0 * 1.0 * WORD_MAINTENANCE;
+    out->force_breach = 0u;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int sizing_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    word_state* state = (word_state*)user;
+    pf_native_working_v1 working;
+    int len;
+    int i;
+    word_run_steps(state);
+    (void)bar;
+    (void)at;
+    if (!state->answered || state->inspected) return 0;
+    /* The breach rested a kernel-originated reduction at the solved level
+     * below a rising feed: it is still on the book here. */
+    state->inspected = 1;
+    len = strategy_native_working_len_v1(state->host);
+    for (i = 0; i < len; ++i) {
+        memset(&working, 0, sizeof(working));
+        working.struct_size = (uint32_t)sizeof(working);
+        if (strategy_native_working_get_v1(state->host, i, &working) != PF_NATIVE_OK) continue;
+        if (working.origin != 1u) continue;
+        ++state->liquidation_rows;
+        state->liquidation_intent = working.intent;
+        state->liquidation_units = working.intent_value;
+    }
+    return 0;
+}
+
+static void check_liquidation_sizing_word(void) {
+    static const pf_native_liquidation_sizing_t sizings[] = {
+        PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM,
+        PF_NATIVE_LIQUIDATION_SIZING_SHORTFALL_MULTIPLE, PF_NATIVE_LIQUIDATION_SIZING_FLATTEN};
+    /* RESTORE_MINIMUM reduces the one-unit restore, SHORTFALL_MULTIPLE that
+     * restore times the multiple; FLATTEN takes the whole book, which the
+     * kernel spells as a Flatten request with no scalar of its own. */
+    static const uint32_t want_intent[] = {
+        PF_NATIVE_INTENT_REDUCE, PF_NATIVE_INTENT_REDUCE, PF_NATIVE_INTENT_FLATTEN};
+    static const double want_units[] = {1.0, WORD_MULTIPLE, 0.0};
+    word_state state;
+    pf_native_callbacks_v1 table;
+    int rc;
+    int k;
+
+    for (k = 0; k < 3; ++k) {
+        pf_native_run_spec_v1 spec = twin_spec();
+        pf_native_run_spec_ext_v1 ext = word_ext(PF_NATIVE_SPEC_EXT_MARGIN);
+        memset(&state, 0, sizeof(state));
+        state.steps = sizing_steps;
+        state.n_steps = 1;
+        table = blank_callbacks(&state);
+        table.on_bar = sizing_on_bar;
+        table.on_margin_requirement = sizing_on_requirement;
+        state.host = strategy_native_host_create_v1(&table);
+        CHECK(state.host != NULL, "sizing-word host create failed");
+        if (!state.host) return;
+        spec.session_key = "native-c-api-word-margin-sizing";
+        spec.initial_capital = WORD_CAPITAL;
+        ext.margin_has_maintenance_long = 1u;
+        ext.margin_maintenance_long = WORD_MAINTENANCE;
+        ext.margin_has_maintenance_short = 1u;
+        ext.margin_maintenance_short = WORD_MAINTENANCE;
+        ext.margin_sizing = sizings[k];
+        ext.margin_shortfall_multiple = WORD_MULTIPLE;
+        ext.margin_check = PF_NATIVE_LIQUIDATION_PATH_ADVERSE_EXTREME;
+        if (k == 0) {
+            rc = configure_past_refusal(state.host, &spec, &ext, &ext.margin_sizing,
+                                        PF_NATIVE_LIQUIDATION_SIZING_FLATTEN + 1u, 0,
+                                        "a liquidation sizing past its enumeration was accepted");
+        } else {
+            rc = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+        }
+        CHECK_EQ_INT(rc, PF_NATIVE_OK, "a typed liquidation sizing was refused");
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, pf_twin_bars(NULL), TWIN_BARS, NULL),
+                     PF_NATIVE_OK, "the sizing-word run did not complete");
+        CHECK_EQ_INT(state.failures, 0, "in-callback sizing-word rows failed");
+        CHECK(state.answered, "the sizing-word breach was never answered");
+        CHECK_EQ_INT(state.liquidation_rows, 1,
+                     "the sizing-word breach rested no kernel liquidation");
+        if (state.liquidation_intent != want_intent[k]
+            || fabs(state.liquidation_units - want_units[k]) > 1e-9) {
+            fprintf(stderr, "  liquidation sizing %u: intent %u, %.12g units; want %u, %.12g\n",
+                    (unsigned)sizings[k], (unsigned)state.liquidation_intent,
+                    state.liquidation_units, (unsigned)want_intent[k], want_units[k]);
+        }
+        CHECK(state.liquidation_intent == want_intent[k]
+                  && fabs(state.liquidation_units - want_units[k]) <= 1e-9,
+              "a liquidation sizing reduced another rule's units");
+        strategy_native_host_free(state.host);
+    }
+}
+
+/* --- the nine words' layout --- */
+
+static void check_spec_word_layout(void) {
+    pf_native_run_spec_v1 spec;
+    pf_native_run_spec_ext_v1 ext;
+    memset(&spec, 0, sizeof(spec));
+    memset(&ext, 0, sizeof(ext));
+    /* Typing the words moved nothing: each is still one uint32_t word. Zero
+     * is the kernel default of eight of them; allowed_open_directions is the
+     * exception, so a zero-filled base spec admits no opening. */
+    CHECK(sizeof(spec.fee_kind) == sizeof(uint32_t)
+              && sizeof(spec.close_execution) == sizeof(uint32_t)
+              && sizeof(spec.allowed_open_directions) == sizeof(uint32_t)
+              && sizeof(ext.report_policy) == sizeof(uint32_t)
+              && sizeof(ext.price_grid) == sizeof(uint32_t)
+              && sizeof(ext.grid_rounding) == sizeof(uint32_t)
+              && sizeof(ext.calculation) == sizeof(uint32_t)
+              && sizeof(ext.open_bar_view) == sizeof(uint32_t)
+              && sizeof(ext.margin_sizing) == sizeof(uint32_t),
+          "a typed run-spec word is not one uint32_t word");
+    CHECK(spec.fee_kind == PF_NATIVE_FEE_PERCENT
+              && spec.close_execution == PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT
+              && spec.allowed_open_directions == PF_NATIVE_OPEN_DIRECTIONS_NONE
+              && ext.report_policy == PF_NATIVE_REPORT_HOST_RECORDED
+              && ext.price_grid == PF_NATIVE_PRICE_GRID_NONE
+              && ext.grid_rounding == PF_NATIVE_GRID_ROUNDING_HALF_UP
+              && ext.calculation == PF_NATIVE_CALC_TRIGGER_BAR_CLOSE
+              && ext.open_bar_view == PF_NATIVE_OPEN_BAR_VIEW_COMPLETE
+              && ext.margin_sizing == PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM,
+          "a zero-filled run-spec word is not its enumeration's zero");
+    /* On LP64, every CI host's data model, the offsets and sizes measured on
+     * e9ad37dd, before the enumerations existed. */
+    if (sizeof(void*) == 8) {
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_v1, fee_kind), 156, "fee_kind moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_v1, close_execution), 172,
+                     "close_execution moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_v1, allowed_open_directions), 176,
+                     "allowed_open_directions moved");
+        CHECK_EQ_INT(sizeof(pf_native_run_spec_v1), 216, "pf_native_run_spec_v1 resized");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, report_policy), 12,
+                     "report_policy moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, price_grid), 20, "price_grid moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, grid_rounding), 24,
+                     "grid_rounding moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, calculation), 28, "calculation moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, open_bar_view), 36,
+                     "open_bar_view moved");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, margin_sizing), 40,
+                     "margin_sizing moved");
+        CHECK_EQ_INT(sizeof(pf_native_run_spec_ext_v1), 304, "pf_native_run_spec_ext_v1 resized");
+    }
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -4311,5 +5163,15 @@ int pf_native_c_api_checks(void) {
     check_fx_roll_margin_point();
     check_subscription_delivery_words();
     check_working_arm_presence();
+    check_spec_word_layout();
+    check_fee_kind_word();
+    check_close_execution_word();
+    check_open_directions_word();
+    check_report_policy_word();
+    check_price_grid_word();
+    check_grid_rounding_word();
+    check_calc_trigger_word();
+    check_open_bar_view_word();
+    check_liquidation_sizing_word();
     return failures;
 }
