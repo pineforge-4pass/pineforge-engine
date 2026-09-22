@@ -27,62 +27,6 @@
 namespace pineforge {
 using namespace internal;
 
-namespace {
-// A callback owns its origin, not an engine clone. Nesting and exceptions restore
-// the previous owner; copying an engine cannot inherit a live callback token.
-thread_local const BacktestEngine* birth_context_owner = nullptr;
-thread_local std::optional<OrderBirth> birth_context;
-class ScopedBirthContext {
-public:
-    ScopedBirthContext(const BacktestEngine* owner, const OrderBirth& birth)
-        : previous_owner_(birth_context_owner), previous_(birth_context) {
-        birth_context_owner = owner; birth_context = birth;
-    }
-    ~ScopedBirthContext() {
-        birth_context_owner = previous_owner_; birth_context = previous_;
-    }
-private:
-    const BacktestEngine* previous_owner_;
-    std::optional<OrderBirth> previous_;
-};
-[[noreturn]] void reject_chart_bar(int index, const char* rule) {
-    throw std::invalid_argument("chart bar[" + std::to_string(index) + "]." + rule);
-}
-
-// Structural admission only: no price-domain, grid, calendar or financial
-// arithmetic policy. Scan the entire supplied array before any run mutation.
-// Each public run() calls this once; run_tf_impl receives validated input.
-void validate_chart_bars(const Bar* bars, int n) {
-    if (n < 0) throw std::invalid_argument("chart bar count must be non-negative");
-    if (n > 0 && bars == nullptr)
-        throw std::invalid_argument("chart bars must be non-null for a nonempty array");
-    for (int i = 0; i < n; ++i) {
-        const Bar& bar = bars[i];
-        if (!std::isfinite(bar.open)) reject_chart_bar(i, "open must be finite");
-        if (!std::isfinite(bar.high)) reject_chart_bar(i, "high must be finite");
-        if (!std::isfinite(bar.low)) reject_chart_bar(i, "low must be finite");
-        if (!std::isfinite(bar.close)) reject_chart_bar(i, "close must be finite");
-        if (bar.low > std::min(bar.open, bar.close))
-            reject_chart_bar(i, "low must not exceed open or close");
-        if (bar.high < std::max(bar.open, bar.close))
-            reject_chart_bar(i, "high must not be below open or close");
-        // NaN is unavailable activity, distinct from a known zero total.
-        if (!std::isnan(bar.volume) && (!std::isfinite(bar.volume) || bar.volume < 0))
-            reject_chart_bar(i, "volume must be non-negative finite or NaN (unavailable)");
-        if (i > 0) {
-            const int64_t previous = bars[i - 1].timestamp;
-            if (bar.timestamp <= previous)
-                reject_chart_bar(i, "timestamp must be strictly increasing");
-            // With increasing signed values, a difference can overflow only
-            // when the previous timestamp is negative. This addition is safe;
-            // do not subtract the timestamps before checking representability.
-            if (previous < 0 && bar.timestamp > std::numeric_limits<int64_t>::max() + previous)
-                reject_chart_bar(i, "timestamp delta exceeds int64 range");
-        }
-    }
-}
-}  // namespace
-
 bool BacktestEngine::set_account_currency_fx_series(
         const int64_t* timestamps_ms, const double* rates, int n) {
     guard_native_mutation("set_account_currency_fx_series");
@@ -279,12 +223,5 @@ std::string BacktestEngine::get_input_string(const std::string& key, const std::
     if (it != inputs_.end()) return it->second;
     return default_val;
 }
-
-
-
-
-
-// --- Full run() overload with SymInfo, StrategyOverrides, and input injection ---
-
 
 }  // namespace pineforge
