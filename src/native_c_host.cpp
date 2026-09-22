@@ -1156,6 +1156,32 @@ pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied) {
     return out;
 }
 
+/* The whole MarginCallEvent: every margin fact of the liquidation fill. */
+pf_native_margin_call_v1 margin_call_economics(const no::MarginCallEvent& call) {
+    pf_native_margin_call_v1 out;
+    std::memset(&out, 0, sizeof(out));
+    out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+    out.version = PF_NATIVE_API_VERSION;
+    out.ordinal = call.ordinal;
+    out.incarnation = call.handle().incarnation;
+    out.applied_ordinal = call.applied.ordinal;
+    out.side = c_word(call.side);
+    out.mark = call.mark;
+    out.equity = call.equity;
+    out.required = call.required;
+    out.liquidation_price = call.liquidation_price;
+    out.units = call.units;
+    out.position_before = call.position_before;
+    out.position_after = call.position_after;
+    out.cursor_ordinal = call.cursor.point.ordinal;
+    out.cursor_effective_time_ms = call.cursor.point.effective_time_ms;
+    out.cursor_t = call.cursor.t;
+    out.cursor_interval_index = call.cursor.point.interval_index;
+    out.cursor_provenance = c_byte(c_word(call.cursor.point.provenance));
+    out.cursor_path_phase = c_byte(c_word(call.cursor.point.path_phase));
+    return out;
+}
+
 void CCallbackHost::on_native_applied(const no::ExecutionAppliedEvent& applied,
                                       const pineforge::NativeDecisionContext& ctx) {
     if (!table_.on_applied) return;
@@ -2709,6 +2735,28 @@ PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v
         out->peak_equity = state.peak_equity;
         out->day_open_equity = state.day_open_equity;
         return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
+                                          pf_native_margin_call_v1* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        if (out->struct_size != sizeof(pf_native_margin_call_v1)) return PF_NATIVE_E_STRUCT;
+        if (ordinal == 0u) return PF_NATIVE_ABSENT;
+        /* The history is ordered by ordinal, so the call is the first row at
+         * or past it, or it is not there at all. */
+        for (const auto& event : host->native_events(ordinal - 1u)) {
+            if (event.ordinal > ordinal) break;
+            if (event.kind != pineforge::NativeEventKind::Command || !event.command) continue;
+            const auto* call = std::get_if<no::MarginCallEvent>(&*event.command);
+            if (!call || call->ordinal != ordinal) continue;
+            *out = margin_call_economics(*call);
+            return PF_NATIVE_OK;
+        }
+        return PF_NATIVE_ABSENT;
     });
 }
 

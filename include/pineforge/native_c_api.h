@@ -18,6 +18,8 @@
  *   book lot by lot, marked at a price — strategy.opentrades.* for a C host)
  *   and the event history
  * ✓ Read the run's lifecycle state and its typed failure
+ * ✓ Read a margin call's whole economics — equity, requirement and the
+ *   position on either side of it — by its event ordinal
  * ✓ Read a closed row's own identifiers — its entry and exit ticket, its exit
  *   comment and its close cause — with the pineforge.h accessors, which take
  *   any handle this header produces
@@ -65,7 +67,9 @@
  *   [C]  on_native_recalculate             pf_native_callbacks_v1::on_recalculate
  *   [C]  on_native_sub_bar                 pf_native_callbacks_v1::on_sub_bar
  *   [C]  on_native_applied                 pf_native_callbacks_v1::on_applied
- *   [C]  on_native_margin_call             pf_native_callbacks_v1::on_margin_call
+ *   [C]  on_native_margin_call             pf_native_callbacks_v1::on_margin_call -- the call's whole
+ *                                          MarginCallEvent is strategy_native_margin_call_v1, by the
+ *                                          ordinal the hook is handed
  *   [C]  resolve_execution_terms           pf_native_callbacks_v1::on_close_units -- the UNITS half only; the
  *                                          price and the opening shape stay the kernel's
  *   [--] validate_execution_precommit      its view is an ExecutionPlan, an AccountEffectProjection and a
@@ -1130,7 +1134,8 @@ typedef struct pf_native_applied_v1 {
  *   - MARGIN_CALL: `reason` is the #pf_native_side_t of the liquidated
  *     position, `price` = mark, `closed_units` = liquidated units,
  *     `opened_units` = the signed position after it, `raw_price` = the
- *     re-solved liquidation price.
+ *     re-solved liquidation price. The call's equity, requirement and the
+ *     position before it are #strategy_native_margin_call_v1's.
  *   - ACTIVATED: `reason` is a #pf_native_activation_t, `price` the reached
  *     price.
  *   - DRIVER_POINT: cursor fields and `raw_price`.
@@ -1427,6 +1432,43 @@ typedef struct pf_native_risk_state_v1 {
     double   peak_equity;      /**< Running peak of the marked equity. */
     double   day_open_equity;  /**< Equity the current day opened at. */
 } pf_native_risk_state_v1;
+
+/** One kernel-issued liquidation that filled, whole — the C spelling of
+ *  `native_order::MarginCallEvent`, copied out by
+ *  #strategy_native_margin_call_v1.
+ *
+ *  It carries the margin facts of that fill, so a host reconstructs the
+ *  outcome without recomputing the account: `mark` is the booked resolved
+ *  price, `equity` and `required` are the marked equity and the maintenance
+ *  requirement of the SURVIVING book at that price, `liquidation_price` is
+ *  the level re-solved for what is left, and `position_before` /
+ *  `position_after` are the signed book on either side of the reduction.
+ *  `applied_ordinal` names the #PF_NATIVE_EVENT_APPLIED row that booked it;
+ *  the cursor is the point it filled at. The #PF_NATIVE_EVENT_MARGIN_CALL row
+ *  of the same `ordinal` carries a subset of these facts. */
+typedef struct pf_native_margin_call_v1 {
+    uint32_t struct_size;       /**< sizeof(pf_native_margin_call_v1). */
+    uint32_t version;           /**< PF_NATIVE_API_VERSION. */
+    uint64_t ordinal;           /**< The call's event ordinal. */
+    uint64_t incarnation;       /**< The kernel's liquidation request. */
+    uint64_t applied_ordinal;   /**< The applied execution that booked it. */
+    uint32_t side;              /**< #pf_native_side_t of the liquidated position. */
+    uint32_t reserved0;         /**< Always 0. */
+    double   mark;              /**< The booked resolved price. */
+    double   equity;            /**< Marked equity of the surviving book at `mark`. */
+    double   required;          /**< Maintenance requirement of the surviving book at `mark`. */
+    double   liquidation_price; /**< The level re-solved for what is left. */
+    double   units;             /**< Units liquidated. */
+    double   position_before;   /**< Signed book before the reduction. */
+    double   position_after;    /**< Signed book after it. */
+    uint64_t cursor_ordinal;
+    int64_t  cursor_effective_time_ms;
+    double   cursor_t;
+    int32_t  cursor_interval_index;
+    uint8_t  cursor_provenance; /**< #pf_native_price_provenance_t. */
+    uint8_t  cursor_path_phase; /**< #pf_native_path_phase_t. */
+    uint8_t  reserved1[2];      /**< Always 0. */
+} pf_native_margin_call_v1;
 
 /** One order request. Translated field by field into `native_order::Request`;
  *  it is never cast. Zero-initialise it, set `struct_size` and `version`, then
@@ -2154,6 +2196,25 @@ PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out);
 /** The run's generic risk ledger — `native_risk_state()`. Every field is its
  *  zero for a run that declares no risk block. */
 PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v1* out);
+
+/** The whole economics of one margin call — what a C++ host's
+ *  `on_native_margin_call` receives as `MarginCallEvent`.
+ *
+ *  @p ordinal is the call's event ordinal: the `ordinal` of the
+ *  #pf_native_event_v1 #pf_native_callbacks_v1::on_margin_call is handed, or
+ *  of a #PF_NATIVE_EVENT_MARGIN_CALL row #strategy_native_events_v1 returns.
+ *  Legal inside `on_margin_call` and anywhere the event history is;
+ *  observation only.
+ *
+ *  @p out is an in/out size prefix: set `out->struct_size` to
+ *  `sizeof(pf_native_margin_call_v1)` before the call.
+ *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT when no
+ *  margin call of this run has that ordinal (@p out untouched),
+ *  PF_NATIVE_E_STRUCT for a mis-sized row, or another negative status.
+ *
+ *  Exercised by the fx-roll scenario of `tests/test_native_c_api.c`. */
+PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
+                                          pf_native_margin_call_v1* out);
 
 /** The run's continuation identity — `native_continuation_hash()`. Two runs
  *  driven the same way that folded the same declarations and the same inputs

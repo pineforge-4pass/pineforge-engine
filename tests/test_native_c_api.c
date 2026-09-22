@@ -3707,6 +3707,13 @@ typedef struct fx_roll_state {
     int margin_calls;
     double called_units;
     int64_t call_time_ms;     /* the cursor the call was made at */
+    /* R5 lane F4: the call's whole economics, read back by its ordinal from
+     * inside on_margin_call. */
+    uint64_t call_ordinal;
+    uint64_t call_incarnation;
+    int economics_rc;
+    pf_native_margin_call_v1 economics;
+    double position_in_call;
 } fx_roll_state;
 
 static int fx_roll_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
@@ -3766,6 +3773,14 @@ static int fx_roll_on_margin_call(void* user, const pf_native_event_v1* call) {
     ++state->margin_calls;
     state->called_units = call->closed_units;
     state->call_time_ms = call->effective_time_ms;
+    state->call_ordinal = call->ordinal;
+    state->call_incarnation = call->incarnation;
+    memset(&state->economics, 0, sizeof(state->economics));
+    state->economics.struct_size = (uint32_t)sizeof(state->economics);
+    state->economics.version = PF_NATIVE_API_VERSION;
+    state->economics_rc =
+        strategy_native_margin_call_v1(state->host, call->ordinal, &state->economics);
+    strategy_native_position_v1(state->host, &state->position_in_call, NULL, NULL);
     return 0;
 }
 
@@ -3849,6 +3864,70 @@ static void check_fx_roll_margin_point(void) {
           "no applied check point was offered");
     CHECK(state.call_time_ms == (int64_t)FX_ROLL_STEP_MS,
           "the margin call was not made at the roll's own instant");
+
+    /* R5 lane F4: the call's economics, as MarginCallEvent carries them to a
+     * C++ host. The kernel sold the 2-unit restore at the next opening print,
+     * 100, out of the long 10: the surviving 8 are marked at 100 against
+     * equity 1000 -- nothing moved but the rate -- and require
+     * 8 * 100 * 2.5 * 0.5 = 1000, which is exactly the minimum restored. */
+    CHECK_EQ_INT(state.economics_rc, PF_NATIVE_OK,
+                 "the margin call's economics were not readable inside on_margin_call");
+    CHECK(state.economics.ordinal == state.call_ordinal
+              && state.economics.incarnation == state.call_incarnation,
+          "the economics named another margin call");
+    CHECK(state.economics.applied_ordinal != 0u
+              && state.economics.applied_ordinal <= state.call_ordinal,
+          "the economics named no applied execution before the call");
+    CHECK_EQ_INT(state.economics.side, PF_NATIVE_SIDE_LONG, "the liquidated side is not long");
+    CHECK(fabs(state.economics.mark - FX_ROLL_MARK) < 1e-9, "the call was booked at another mark");
+    CHECK(fabs(state.economics.units - FX_ROLL_SLICE) < 1e-9, "the call liquidated another size");
+    CHECK(fabs(state.economics.position_before - FX_ROLL_UNITS) < 1e-9,
+          "the position before the call is not the long 10");
+    CHECK(fabs(state.economics.position_after - (FX_ROLL_UNITS - FX_ROLL_SLICE)) < 1e-9
+              && fabs(state.position_in_call - state.economics.position_after) < 1e-9,
+          "the position after the call is not what the book holds");
+    CHECK(fabs(state.economics.equity - FX_ROLL_CAPITAL) < 1e-9,
+          "the surviving book's equity is not the untouched capital");
+    CHECK(fabs(state.economics.required
+               - (FX_ROLL_UNITS - FX_ROLL_SLICE) * FX_ROLL_MARK * FX_ROLL_RATE
+                     * FX_ROLL_MAINTENANCE) < 1e-9,
+          "the surviving book's requirement is not the hand-derived 1000");
+    CHECK(state.economics.cursor_effective_time_ms == state.call_time_ms,
+          "the economics carry another cursor than the call row");
+    CHECK(state.economics.cursor_provenance == PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN
+              && state.economics.cursor_path_phase == PF_NATIVE_PATH_PHASE_OPEN,
+          "the call was not taken at the next opening print");
+    {
+        /* The same row after the run, from the event history's ordinal; an
+         * ordinal that is no margin call is the documented empty; a
+         * mis-sized struct is refused and written nothing. */
+        pf_native_margin_call_v1 after;
+        pf_native_margin_call_v1 untouched;
+        pf_native_margin_call_v1 reference;
+        memset(&after, 0, sizeof(after));
+        after.struct_size = (uint32_t)sizeof(after);
+        CHECK_EQ_INT(strategy_native_margin_call_v1(state.host, state.call_ordinal, &after),
+                     PF_NATIVE_OK, "the margin call was not readable after the run");
+        CHECK(memcmp(&after, &state.economics, sizeof(after)) == 0,
+              "the economics read after the run differ from the in-call read");
+        memset(&untouched, 0x5a, sizeof(untouched));
+        untouched.struct_size = (uint32_t)sizeof(untouched);
+        reference = untouched;
+        CHECK_EQ_INT(strategy_native_margin_call_v1(state.host, state.call_ordinal + 1000u,
+                                                    &untouched),
+                     PF_NATIVE_ABSENT, "an ordinal that is no margin call answered one");
+        CHECK(memcmp(&untouched, &reference, sizeof(untouched)) == 0,
+              "the empty answer wrote the row");
+        CHECK_EQ_INT(strategy_native_margin_call_v1(state.host, 0u, &untouched),
+                     PF_NATIVE_ABSENT, "ordinal 0 answered a margin call");
+        untouched.struct_size = (uint32_t)sizeof(untouched) - 8u;
+        CHECK_EQ_INT(strategy_native_margin_call_v1(state.host, state.call_ordinal, &untouched),
+                     PF_NATIVE_E_STRUCT, "a mis-sized economics row was accepted");
+        CHECK_EQ_INT(strategy_native_margin_call_v1(state.host, state.call_ordinal, NULL),
+                     PF_NATIVE_E_ARGUMENT, "a NULL economics row was accepted");
+        CHECK_EQ_INT(strategy_native_margin_call_v1(NULL, state.call_ordinal, &after),
+                     PF_NATIVE_E_HANDLE, "a NULL handle answered a margin call");
+    }
 
     /* And the closed row it books carries the ticket this run declared. */
     CHECK(report.trades_len > 0, "the fx-roll run booked no closed row");
