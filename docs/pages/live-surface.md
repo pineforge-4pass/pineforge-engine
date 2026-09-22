@@ -63,11 +63,14 @@ configuration**, not one-shot: it stays in effect until a caller passes
 
 1. `barstate.islast` is false for that bar.
 2. `session.islastbar` is derived from the bucket calendar (no next bar to
-   peek at, so it evaluates whether the next bucket — this bar's timestamp
-   plus one script-TF step — falls out of session), pinned to agree with
-   the `i+1` lookahead on every interior bar of the 24x7 lanes. Non-24x7
-   lanes need the v2 `SessionCalendar` for early closes;
-   `session.islastbar`/`isfirstbar` scripts stay blocked until then.
+   peek at, so it asks whether the next bucket — this bar's timestamp plus
+   one script-TF step — falls out of session, or belongs to another session
+   day), pinned to agree with the `i+1` lookahead on every interior bar of
+   the 24x7 lanes. Historical bars read early closes correctly from the
+   session day alone, with no holiday calendar; a *forming* tail bar still
+   cannot, because the calendar step it takes is one the session string
+   declares as open. Non-24x7 tail bars therefore still need the v2
+   `SessionCalendar` for early closes.
 3. `bar_index` stays put; `last_bar_index` is frozen at the horizon bar
    (`horizon_bars - 1`), when `horizon_bars > 0`. `last_bar_time` is exact
    when the horizon bar is in the script-bar array, one script-TF step per
@@ -97,10 +100,12 @@ at the session close — so the calendar lookahead answers "last" while
 
 Read the tail bar's `session.islastbar` column: `1` is the calendar
 lookahead's answer, and the legacy expression could only have produced `0`.
-The one dispatch-path caveat that remains is not this flag's: a
-non-24x7 tape still needs the v2 `SessionCalendar` for early closes, so
-`session.islastbar`/`isfirstbar` scripts stay blocked until then, with or
-without the realtime tail.
+The one dispatch-path caveat that remains is not this flag's, and it is
+narrower than it was: every historical bar ends its session at the session
+day (R5 lane E26), so a non-24x7 tape's early closes are read from the tape
+itself. Only the forming tail bar is left — its calendar step cannot know a
+close the session string does not declare — so it still needs the v2
+`SessionCalendar`.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.

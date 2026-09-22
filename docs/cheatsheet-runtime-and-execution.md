@@ -377,9 +377,12 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
 - The **simple `run(bars,n)`** entry point does NOT set session predicates
   (`session.ismarket/isfirstbar/islastbar` stay false) — use the TF-aware
   overload if the script uses sessions.
-- `session.islastbar` is always `false` under the magnifier; in simple mode it's
-  computed by **next-bar lookahead** — a live feed has no `i+1`, infer from the
-  session string instead.
+- `session.islastbar` is the last bar of a session **day**: in-session, and its
+  next chart bar is out of session or belongs to another session day
+  (`session.isfirstbar` is the dual). It is read by **next-bar lookahead** on
+  every path — chart timeframe, aggregated, magnified (R5 lanes E25/E26; it
+  used to be permanently `false` under the magnifier) — and from the bucket
+  calendar where there is no next bar to peek at (the live tail, a stream).
 
 ## 3.4 Timeframe aggregation (input_tf < script_tf)
 

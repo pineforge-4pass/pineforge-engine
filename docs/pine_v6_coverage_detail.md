@@ -160,9 +160,9 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on engine; per-bar lookahead in `engine_run.cpp`; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
+| `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on engine, written by `scheduler_set_session_bar_state` (`src/source/pine_strategy_host.cpp`); the first bar of a session DAY — its predecessor was out of session or belonged to another session day; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
 | `session.isfirstbar_regular` | var | ✅ Runtime | Aliased to `session.isfirstbar` — engine has single session string, cannot distinguish RTH vs ETH (documented limitation) | Sprint A |
-| `session.islastbar` | var | ✅ Runtime | `session_islastbar_` on engine; per-bar lookahead; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
+| `session.islastbar` | var | ✅ Runtime | `session_islastbar_` on engine, same writer; the last bar of a session DAY — a one-bar lookahead whose successor is out of session or belongs to another session day, as TradingView's tapes flag it (`tests/fixtures/session_islastbar`); on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
 | `session.islastbar_regular` | var | ✅ Runtime | Aliased to `session.islastbar` | Sprint A |
 | `session.ismarket` | var | ✅ Runtime | `pine_session_ismarket(session, tz, bar_ms, chart_tf)` in `session_time.hpp` (via `BacktestEngine::pine_session_ismarket`); always true on a 1D+ chart, as TradingView documents | Sprint A |
 | `session.ispostmarket` | var | ✅ Runtime | `pine_session_ispostmarket(...)` — standard ETH window `RTH_close-2000` local; always false on a 1D+ chart | Sprint A |
