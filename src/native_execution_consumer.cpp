@@ -8013,7 +8013,22 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                     present_refusal(engine, "native confirmed bar timestamp overflows");
                     return false;
                 }
-                expected_label = last_accepted_input_->open_ms + unit_ms * count;
+                const int64_t step = unit_ms * count;
+                expected_label = last_accepted_input_->open_ms + step;
+                // A raw label partition has no calendar successor, so its
+                // grid steps over the slots the calendar declares closed, as
+                // next_input_open_ms skips declared closed time: the night
+                // after an RTH 15:45 is skipped to Tue 09:30, while a missing
+                // in-session slot is still the gap refused below.
+                while (expected_label < bar.timestamp
+                       && !native_calendar::in_session(calendar_, expected_label)) {
+                    if (expected_label > std::numeric_limits<int64_t>::max() - step) {
+                        processing_input_ = false;
+                        present_refusal(engine, "native confirmed bar timestamp overflows");
+                        return false;
+                    }
+                    expected_label += step;
+                }
             }
             if (bar.timestamp != expected_label) {
                 processing_input_ = false;

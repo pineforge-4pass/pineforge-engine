@@ -1,4 +1,5 @@
-// Kernel correctness at session boundaries (R5 lane F14; AUDIT3-opus2 H1).
+// Kernel correctness at session boundaries (R5 lane F14; AUDIT3-opus2 H1 and
+// H13).
 //
 // A session that declares a BREAK -- two windows on one session day,
 // "0000-0230,0330-0600", or the acid test's lunch break
@@ -34,6 +35,20 @@
 // later input is needed to reveal the bucket complete -- the one case
 // LazyComplete names ("the next period's first input closed it"). A stream's
 // live pump, which knows no next input at all, delivers it on the same bar.
+//
+// H13. A confirmed-bar stream crosses a CLOSED session the same way under
+// both slot-label policies: engine.hpp promises "Closed-session gaps may be
+// skipped", and Canonical labels always did. FeedTolerant labels at an equal
+// input/script pairing are a raw label partition with no calendar successor,
+// and their expected next label was the previous label plus one input step
+// -- so Mon 15:45 -> Tue 09:30 on an RTH stream was refused as "native stream
+// has an in-session gap" although every slot between lies in the declared
+// closed night (AUDIT3-opus2 waveE stream_gap, the RTH 15 -> 15 case).
+// Witness 5: the RTH stream, warmed up to Mon 15:00, takes 15:15 .. 15:45 and
+// Tue 09:30 .. 10:30 under Canonical and FeedTolerant alike; a missing
+// IN-session slot is still refused under both, and the refusal leaves the
+// stream where it stood; FeedTolerant still keeps a provider's off-session
+// label (Mon 16:00) and then skips the night after it.
 //
 // Source-free: this TU links the generic kernel alone and runs in the
 // kernel-only profile.
@@ -494,6 +509,91 @@ void test_acid_tape() {
     }
 }
 
+// ---- 5. a chart-timeframe stream across a closed session (H13) -------------
+
+// America/New_York wall clock on Mon 2026-04-06 + `day` (EDT, UTC-4).
+std::int64_t et(int day, int hour, int minute) {
+    constexpr std::int64_t kMonday = 20549;  // days_from_civil(2026, 4, 6)
+    return ((kMonday + day) * 1440 + hour * 60 + minute) * kMinute + 4 * kHour;
+}
+
+Bar rth_bar(std::int64_t ts) { return Bar{10.0, 11.0, 9.0, 10.0, 1.0, ts}; }
+
+class CountingHost final : public NativeStrategyHost {
+public:
+    int bars = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++bars; }
+};
+
+const char* policy_name(NativeSlotLabelPolicy policy) {
+    return policy == NativeSlotLabelPolicy::Canonical ? "Canonical" : "FeedTolerant";
+}
+
+// Warm up an RTH 15 -> 15 stream on Mon 09:30 .. 15:00 (23 bars).
+bool begin_rth_stream(CountingHost& host, NativeSlotLabelPolicy policy) {
+    NativeRunSpec spec = session_spec("f14-stream-gap", "0930-1600", "15", "America/New_York");
+    spec.type = "stock";
+    spec.slot_label_policy = policy;
+    if (host.configure_native(spec).status != NativeSetupStatus::Applied) return false;
+    std::vector<Bar> warmup;
+    for (std::int64_t ts = et(0, 9, 30); ts <= et(0, 15, 0); ts += 15 * kMinute) {
+        warmup.push_back(rth_bar(ts));
+    }
+    return host.stream_begin(warmup.data(), static_cast<int>(warmup.size()), "15", "15");
+}
+
+bool push(CountingHost& host, std::int64_t ts) {
+    const bool pushed = host.stream_push_bar(rth_bar(ts));
+    if (!pushed) {
+        std::printf("    push %s refused: '%s'\n", hhmm(ts, 4 * kHour).c_str(),
+                    host.last_error().c_str());
+    }
+    return pushed;
+}
+
+void test_stream_across_a_closed_session() {
+    for (NativeSlotLabelPolicy policy :
+         {NativeSlotLabelPolicy::Canonical, NativeSlotLabelPolicy::FeedTolerant}) {
+        const std::string label = std::string("stream RTH 15 -> 15, ") + policy_name(policy);
+        scenario = label.c_str();
+        CountingHost host;
+        CHECK(begin_rth_stream(host, policy));
+        for (std::int64_t ts : {et(0, 15, 15), et(0, 15, 30), et(0, 15, 45), et(1, 9, 30),
+                                et(1, 9, 45), et(1, 10, 0), et(1, 10, 15), et(1, 10, 30)}) {
+            CHECK(push(host, ts));
+        }
+        CHECK(host.bars == 31);
+        CHECK(host.stream_end(false));
+
+        const std::string gap_label = label + ", in-session gap";
+        scenario = gap_label.c_str();
+        CountingHost gapped;
+        CHECK(begin_rth_stream(gapped, policy));
+        for (std::int64_t ts : {et(0, 15, 15), et(0, 15, 30), et(0, 15, 45), et(1, 9, 30)}) {
+            CHECK(push(gapped, ts));
+        }
+        const int before = gapped.bars;
+        // Tue 09:45 never arrived: 10:00 is refused, and nothing ran for it.
+        CHECK(!gapped.stream_push_bar(rth_bar(et(1, 10, 0))));
+        CHECK(gapped.last_error() == "native stream has an in-session gap");
+        CHECK(gapped.bars == before);
+        CHECK(push(gapped, et(1, 9, 45)));
+        CHECK(gapped.bars == before + 1);
+        CHECK(gapped.stream_end(false));
+    }
+    // FeedTolerant preserves a provider's off-session label -- a Mon 16:00
+    // bar right after 15:45 -- and the night after it is still skipped.
+    scenario = "stream RTH 15 -> 15, FeedTolerant, off-session label";
+    CountingHost host;
+    CHECK(begin_rth_stream(host, NativeSlotLabelPolicy::FeedTolerant));
+    for (std::int64_t ts : {et(0, 15, 15), et(0, 15, 30), et(0, 15, 45), et(0, 16, 0),
+                            et(1, 9, 30)}) {
+        CHECK(push(host, ts));
+    }
+    CHECK(host.bars == 28);
+    CHECK(host.stream_end(false));
+}
+
 }  // namespace
 
 int main() {
@@ -501,6 +601,7 @@ int main() {
     test_daily_bucket_is_the_whole_day();
     test_subscription_across_a_break();
     test_acid_tape();
+    test_stream_across_a_closed_session();
     std::printf("native session boundaries: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
