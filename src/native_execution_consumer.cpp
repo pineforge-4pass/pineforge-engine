@@ -1885,8 +1885,12 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
                                                      const NativeRunSpec& spec) {
     NativeSetupResult result;
     const NativeRunSpec* prior_spec = nullptr;
+    // A refusal for the host's phase judges no field: it is WrongPhase at
+    // None, the same word configure_native_fx_curve answers for its phase.
+    const NativeRunSpecValidation wrong_phase{NativeRunSpecError::WrongPhase,
+                                              NativeRunSpecField::None};
     if (failed() && !recoverable_abort()) {
-        result.validation.error = NativeRunSpecError::CalendarFailure;
+        result.validation = wrong_phase;
         render(engine, "native host already failed");
         return result;
     }
@@ -1902,11 +1906,13 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     if (std::holds_alternative<NativeRunning>(state_)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
         render(engine, "configure refused while running");
+        result.validation = wrong_phase;
         return result;
     }
     if (std::holds_alternative<NativeReady>(state_)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
         render(engine, "configure refused while ready; use a fresh host");
+        result.validation = wrong_phase;
         return result;
     }
     NativeRunSpec candidate = spec;
