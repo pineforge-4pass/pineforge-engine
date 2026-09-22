@@ -1367,7 +1367,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:12413-12434`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:12319-12343`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1647,7 +1647,7 @@ in `src/source/pine_path_resolve.cpp` — has no declaration, no shipped body
 and no test-only copy left; the re-lowerings took its last production caller
 and the header that preserved its body for the trail suites was retired with
 it. `src/source/pine_path_resolve.cpp` still holds
-`internal::entry_stop_first_touch` (`pine_path_resolve.cpp:41`), the one
+`internal::entry_stop_first_touch` (`pine_path_resolve.cpp:36`), the one
 function of that file a live caller reaches.
 
 Those rows are now a matcher-side projection. `tests/trail_exit_product_probe.hpp`
