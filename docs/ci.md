@@ -379,7 +379,14 @@ manual dispatch), never on a pull request.
 `scripts/check_doc_anchors.py` checks every `file:line` citation the pages
 make: the file must resolve, the line must exist, and when a backticked symbol
 precedes the citation in the same table cell or sentence, that symbol must be
-on the cited line. Anchors rot on every header edit — a single campaign left
+on the cited line or inside the cited range — not on the line after it. A
+qualified symbol (`GroupEffect::Reduce`) must also sit inside the braces of the
+scope it names when the cited file declares that scope. In the ruling tables of
+ADR-0001 and of the design record (its inventory, coupling and native-only
+sections) every citation must carry a claim: a symbol, or a backticked code
+fragment the gate finds verbatim in the cited lines; a bare citation there is
+`NOCLAIM`, because a claimless citation that drifts onto unrelated code still
+passes a line check. Anchors rot on every header edit — a single campaign left
 474 of 992 wrong — so the gate is the only durable repair. `--list` dumps every
 anchor with its verdict; `--fix` re-anchors in place, and it changes **line
 numbers and nothing else**: it moves a citation only when the claimed symbol

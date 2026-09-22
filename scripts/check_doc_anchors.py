@@ -80,10 +80,35 @@ are the migration table's left column, spellings TradingView owns and the tree
 never declares.  Only the *nearest* preceding span is consulted - falling back
 to an earlier one would invent a claim the page did not make.
 
+A continuation list (```sym` x.cpp:10, `:20`, `:30```) shares the claim that
+heads it: when a continuation's nearest span is itself only an anchor (the
+list's previous citation), the continuation takes its head anchor's claim.
+
 Two elision conventions the pages already use are honoured rather than read
 literally: a trailing ``*`` (``closed_trade_*``) matches any identifier with
 that prefix, and a leading ``_`` (``… / _exit_id / _close_cause``, short for
 ``strategy_closed_trade_exit_id``) matches any identifier with that suffix.
+
+A qualified span claims its scope as well: ``NativeRiskLimits::max_fills_per_day``
+says the field is a member of ``NativeRiskLimits``, so where the cited file
+declares ``NativeRiskLimits`` with braces (``struct`` / ``class`` / ``union`` /
+``enum`` / ``namespace``) the occurrence must sit inside that brace scope.
+``GroupEffect::Reduce`` cited at ``struct Reduce {`` names the wrong ``Reduce``
+even though the word is on the line.  A qualifier the file declares no scope
+for (a namespace alias, a type declared elsewhere) is not checked.
+
+Ruling tables
+-------------
+ADR-0001's ruling sections and the design record's inventory, coupling and
+native-only ruling sections (``RULING_SECTIONS``) are tables of *rulings*, and a
+ruling's citation is the evidence for it.  An anchor in one of their table rows
+must therefore carry a claim the gate can verify: a symbol, as everywhere, or -
+only here - a backticked code fragment (``engine.current_bar_ = bar``,
+``"pineforge-broker-state/v18"``), which must appear verbatim, whitespace
+aside, in the cited window.  A row anchor with neither is ``NOCLAIM``: without a
+claim, a citation that drifts onto unrelated code still passes, which is how
+design rows CT4 and RP5 and ADR rows 492, 493 and 563 came to point at
+unrelated lines while this gate said OK.
 
 Verdicts
 --------
@@ -91,10 +116,16 @@ Verdicts
               in the cited window or no symbol was claimed.
 ``NOFILE``    the path resolves nowhere.
 ``NOLINE``    the line (or range end) is past EOF, or the range is inverted.
-``SYMMISS``   the claimed symbol does not appear in the cited window.
+``SYMMISS``   the claimed symbol (or fragment) does not appear in the cited window.
+``SCOPE``     the symbol is in the window, but outside the brace scope of the
+              qualifier its span names.
+``NOCLAIM``   a ruling-table anchor carries no claim at all.
 
-The cited window is ``[first, last + 1]`` - one line of slack after the range,
-for a declaration whose name wraps onto the following line.
+The cited window is exactly ``[first, last]``.  Until lane F2 it was
+``[first, last + 1]`` - a line of slack for a declaration whose name wraps -
+and seventy anchors passed only through that slack, about nine of them on a
+different field or member; a citation whose symbol is on the next line now
+names the next line.
 
 ``--fix``
 ---------
@@ -105,7 +136,8 @@ citing ``SYM`` at a line means where the code says ``SYM``, not a paragraph of
 prose about it; if the symbol appears only in comments, the raw lines are used
 instead.  Two mechanical rules then apply, in order:
 
-1. the symbol occurs on exactly one line ``S``;
+1. the symbol occurs on exactly one line ``S`` (inside the qualifier's scope,
+   when the span names one the file declares);
 2. or exactly one occurrence declares a type: ``struct``/``class``/``enum``/
    ``enum class``/``union``/``namespace``/``using SYM =``.  A ``struct SYM``
    line *is* the declaration of ``SYM``; picking it is reading, not guessing.
@@ -118,7 +150,8 @@ exactly one contiguous run of the cited span's length becomes that run.
 Anything else (no symbol claimed, symbol absent, symbol on several equally
 plausible lines, unresolvable file) is left alone and reported with every
 candidate line: choosing among them is an editorial judgement, not a
-mechanical one, and belongs to whoever rewrites the sentence.
+mechanical one, and belongs to whoever rewrites the sentence.  A ``NOCLAIM``
+anchor is never fixed: its missing claim is an edit to the sentence.
 
 Exit status
 -----------
@@ -164,6 +197,25 @@ SEARCH_DIRS = (
 
 CXX_SUFFIXES = {'.cpp', '.hpp', '.h', '.c'}
 
+#: The ruling sections, by page: an anchor in a table row under one of these
+#: headings (at any depth below it) must carry a claim.  Matched against the
+#: heading text with its ``{#id}`` removed, as a prefix.
+RULING_SECTIONS = {
+    'docs/adr/0001-kernel-adapter-boundary.md': (
+        'Residual TradingView-named surface',
+        'Deprecated public spellings',
+        'Kernel capabilities the Pine adapter does not declare',
+        'TradingView-calibrated kernel mechanisms',
+    ),
+    'docs/design/native-feature-parity.md': (
+        '1. Inventory',
+        '2.ii Coupling extraction',
+        '3.6 Kernel features the Pine adapter never declares',
+        '3.7 Audit lane Q6',
+    ),
+}
+HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*(?:\{#[^}]*\})?\s*$')
+
 SOURCE_SUFFIXES = ('cpp', 'hpp', 'h', 'c', 'py', 'md', 'txt', 'cmake', 'sh', 'yml', 'yaml', 'json')
 
 _PATH = (r'(?:[A-Za-z0-9_][A-Za-z0-9_+.-]*/)*[A-Za-z0-9_][A-Za-z0-9_+.-]*'
@@ -173,6 +225,8 @@ CONT_RE = re.compile(r'(?<=[ `(]):(?P<a>\d+)(?:-(?P<b>\d+))?(?!\d)')
 FENCE_RE = re.compile(r'^\s*(```|~~~)', re.MULTILINE)
 SPAN_RE = re.compile(r'`([^`\n]+)`')
 SCOPE_BREAKS = ('|', '\n\n', '. ', '; ', '\n- ', '\n* ', '\n> ', ':\n')
+#: A backticked span that is nothing but an anchor: a citation, never a claim.
+ANCHOR_ONLY_RE = re.compile(r'^\s*(?:' + _PATH + r')?:\d+(?:-\d+)?\s*$')
 
 
 class Anchor:
@@ -186,9 +240,13 @@ class Anchor:
         self.path, self.first, self.last = path, first, last
         self.digits = digits          # (offset, length) of the ``line`` or ``a-b`` text
         self.symbol, self.span, self.mode = symbol, span, mode
+        self.qualifier = qualifier_of(span) if symbol and span else None
+        self.ruling = False           # set by collect(): a row of a ruling table
+        self.fragment: str | None = None  # a ruling row's code-fragment claim
         self.verdict = 'OK'
         self.detail = ''
         self.suggestion: str | None = None
+        self._fix = None
 
     @property
     def text(self) -> str:
@@ -248,7 +306,10 @@ def symbol_of(span: str) -> tuple[str | None, str]:
     if not text:
         return None, 'word'
     parts = re.split(r'::|\.', text)
-    if len(parts) > 1 and parts[0] in PINE_ROOTS:
+    # A Pine spelling is dotted (`ta.ema`, `strategy.risk.x`); a C++ qualified
+    # name is not one (`ta::ATR` is pineforge::ta::ATR), except under `std::`.
+    root = re.split(r'::|\.', text, maxsplit=1)[0]
+    if len(parts) > 1 and (root == 'std' or ('.' in text and root in PINE_ROOTS)):
         return None, 'word'
     last = parts[-1]
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', last):
@@ -256,6 +317,45 @@ def symbol_of(span: str) -> tuple[str | None, str]:
     if mode == 'word' and last.startswith('_'):
         mode = 'suffix'
     return last, mode
+
+
+def qualifier_of(span: str) -> str | None:
+    """The scope a qualified span claims: ``NativeRiskLimits`` of
+    ``NativeRiskLimits::max_fills_per_day``, ``Domain`` of
+    ``exit_legs::Domain::Coof``; None for an unqualified span."""
+    text = span.strip()
+    for cut in '({<[':
+        index = text.find(cut)
+        if index > 0:
+            text = text[:index]
+    parts = [part for part in text.strip().rstrip('&;,:* ').split('::') if part]
+    if len(parts) < 2 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', parts[-2]):
+        return None
+    return parts[-2]
+
+
+ANCHOR_SPAN_RE = re.compile(r'^\s*(?:' + _PATH + r')?:\d+(?:-\d+)?\s*$')
+
+
+def fragment_of(span: str | None) -> str | None:
+    """A ruling row's code fragment claim, or None when the span is no claim.
+
+    A path, a bare ``:line`` continuation and a span with no identifier
+    character claim nothing; anything else a ruling row puts in backticks
+    before an anchor is a fragment of the cited code."""
+    if not span:
+        return None
+    text = ' '.join(span.split())
+    if not re.search(r'[A-Za-z_]', text) or ANCHOR_SPAN_RE.match(text):
+        return None
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(\))?', text) \
+            and text.split('.')[0] in PINE_ROOTS:
+        return None                                   # a Pine spelling: the table's other column
+    if '/' in text and not re.search(r'[=*+<>"]', text):
+        return None                                   # a path, not code
+    if re.search(r'\.(?:' + '|'.join(SOURCE_SUFFIXES) + r')\b', text) and ' ' not in text:
+        return None
+    return text
 
 
 def matcher(symbol: str, mode: str) -> re.Pattern[str]:
@@ -340,12 +440,52 @@ def collect(page: Path, text: str) -> list[Anchor]:
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
         symbol, span, mode = claimed_symbol(text, match.start())
+        if span is not None and ANCHOR_ONLY_RE.match(span):
+            # "`sym` x.cpp:1730, `:1755`, `:7695`": the nearest span is the
+            # list's previous citation, not a claim; the list shares its head's.
+            symbol, span, mode = prior[-1].symbol, prior[-1].span, prior[-1].mode
         found.append(Anchor(page, match.start(), match.end(), line,
                             prior[-1].path, first, last,
                             (match.start() + 1, match.end() - match.start() - 1),
                             symbol, span, mode))
     found.sort(key=lambda a: a.start)
+    ruling_lines = ruling_table_lines(page, text)
+    for anchor in found:
+        if anchor.doc_line in ruling_lines:
+            anchor.ruling = True
+            if anchor.symbol is None:
+                anchor.fragment = fragment_of(anchor.span)
     return found
+
+
+def ruling_table_lines(page: Path, text: str) -> set[int]:
+    """1-based doc lines that are table rows inside one of the page's ruling sections."""
+    prefixes = ()
+    for rel, names in RULING_SECTIONS.items():
+        if page.as_posix().endswith(rel):
+            prefixes = names
+    if not prefixes:
+        return set()
+    out: set[int] = set()
+    stack: list[tuple[int, str]] = []
+    fenced = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        heading = HEADING_RE.match(line)
+        if heading:
+            level = len(heading.group(1))
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading.group(2).strip()))
+            continue
+        if line.lstrip().startswith('|') and any(
+                title.startswith(prefix) for _, title in stack for prefix in prefixes):
+            out.add(number)
+    return out
 
 
 class Tree:
@@ -383,6 +523,33 @@ class Tree:
             raw = self.lines(path)
             self._code[path] = strip_comments(raw) if path.suffix in CXX_SUFFIXES else raw
         return self._code[path]
+
+    def scopes(self, path: Path, name: str) -> list[tuple[int, int]]:
+        """Brace scopes (first line, last line) of every braced declaration of
+        ``name`` in a C/C++ file; empty when the file declares none."""
+        if path.suffix not in CXX_SUFFIXES:
+            return []
+        code = self.code_lines(path)
+        decl = re.compile(r'\b(?:struct|class|union|namespace|enum(?:\s+class|\s+struct)?)\s+'
+                          + re.escape(name) + r'\b(?![^;{]*;)')
+        out: list[tuple[int, int]] = []
+        for index, line in enumerate(code):
+            if not decl.search(line):
+                continue
+            depth, opened = 0, False
+            for end in range(index, len(code)):
+                segment = code[end] if end != index else code[end][decl.search(line).start():]
+                for char in segment:
+                    if char == '{':
+                        depth, opened = depth + 1, True
+                    elif char == '}':
+                        depth -= 1
+                if opened and depth <= 0:
+                    out.append((index + 1, end + 1))
+                    break
+                if not opened and ';' in segment:
+                    break                              # a forward declaration
+        return out
 
 
 def strip_comments(lines: list[str]) -> list[str]:
@@ -446,20 +613,42 @@ def judge(anchor: Anchor, tree: Tree) -> None:
         anchor.verdict = 'NOLINE'
         anchor.detail = f'{path.relative_to(tree.root)} has {len(lines)} lines'
     if anchor.symbol is None:
+        if anchor.fragment is not None:
+            judge_fragment(anchor, tree, path)
+        elif anchor.ruling and anchor.verdict == 'OK':
+            anchor.verdict = 'NOCLAIM'
+            anchor.detail = ('a ruling-table anchor names nothing to verify: put the symbol '
+                             '(or the code fragment) it cites in backticks before it')
         return                                     # no claim to check beyond existence
-    raw_hits = occurrences(lines, anchor.symbol, anchor.mode)
+    all_hits = occurrences(lines, anchor.symbol, anchor.mode)
+    scopes = tree.scopes(path, anchor.qualifier) if anchor.qualifier else []
+
+    def scoped(numbers: list[int]) -> list[int]:
+        return [n for n in numbers if any(a <= n <= b for a, b in scopes)] if scopes else numbers
+
+    raw_hits = scoped(all_hits) or all_hits
     if anchor.verdict == 'OK':
-        window = range(anchor.first, min(anchor.last + 1, len(lines)) + 1)
-        if any(n in window for n in raw_hits):
+        window = range(anchor.first, anchor.last + 1)
+        if any(n in window for n in scoped(all_hits)):
             return
-        anchor.verdict = 'SYMMISS'
-        anchor.detail = f'`{anchor.symbol}` is not in lines {anchor.first}-{anchor.last + 1}'
+        stray = [n for n in all_hits if n in window]
+        if scopes and stray:
+            anchor.verdict = 'SCOPE'
+            shown = ', '.join(f'{a}-{b}' for a, b in scopes)
+            anchor.detail = (f'`{anchor.symbol}` at line {stray[0]} is outside '
+                             f'`{anchor.qualifier}` (lines {shown})')
+        else:
+            anchor.verdict = 'SYMMISS'
+            anchor.detail = f'`{anchor.symbol}` is not in lines {anchor.first}-{anchor.last}'
     if not raw_hits:
         anchor.suggestion = f'{anchor.path}:NONE  (`{anchor.symbol}` is nowhere in the file)'
         return
-    # Where should it point?  Code occurrences only, when the symbol has any.
+    # Where should it point?  Code occurrences only, when the symbol has any,
+    # and only inside the qualifier's scope when the span names one.
     code = tree.code_lines(path)
-    hits = occurrences(code, anchor.symbol, anchor.mode) or raw_hits
+    hits = occurrences(code, anchor.symbol, anchor.mode) or occurrences(lines, anchor.symbol,
+                                                                         anchor.mode)
+    hits = scoped(hits) or hits
 
     def aim(target: int) -> None:
         end = target + anchor.length - 1
@@ -486,6 +675,34 @@ def judge(anchor: Anchor, tree: Tree) -> None:
     shown = ', '.join(str(n) for n in hits[:6]) + (', ...' if len(hits) > 6 else '')
     anchor.suggestion = (f'{anchor.path}:{nearest}?  (ambiguous: `{anchor.symbol}` '
                          f'on {len(hits)} lines: {shown}; not fixed)')
+
+
+def judge_fragment(anchor: Anchor, tree: Tree, path: Path) -> None:
+    """A ruling row's code fragment must appear, whitespace aside, in the window."""
+    lines = tree.lines(path)
+    if anchor.verdict != 'OK':
+        return
+    needle = ' '.join(anchor.fragment.split())
+
+    def holds(first: int, last: int) -> bool:
+        return needle in ' '.join(' '.join(lines[first - 1:last]).split())
+
+    if holds(anchor.first, anchor.last):
+        return
+    anchor.verdict = 'SYMMISS'
+    anchor.detail = f'`{needle}` is not in lines {anchor.first}-{anchor.last}'
+    hits = [n for n in range(1, len(lines) + 1) if holds(n, n)]
+    if len(hits) == 1:
+        end = hits[0] + anchor.length - 1
+        if end <= len(lines):
+            anchor._fix = (hits[0], end)
+            anchor.suggestion = (f'{anchor.path}:{hits[0]}'
+                                 + (f'-{end}' if anchor.length > 1 else ''))
+            return
+    shown = ', '.join(str(n) for n in hits[:6]) + (', ...' if len(hits) > 6 else '')
+    anchor.suggestion = (f'{anchor.path}:NONE  (the fragment is on no single line)' if not hits
+                         else f'{anchor.path}:{hits[0]}?  (ambiguous: on {len(hits)} lines: '
+                              f'{shown}; not fixed)')
 
 
 def pages(root: Path, selected: list[str]) -> list[Path]:
@@ -529,7 +746,6 @@ def main(argv: list[str] | None = None) -> int:
         text = page.read_text()
         anchors = collect(page, text)
         for anchor in anchors:
-            anchor._fix = None
             judge(anchor, tree)
         bad = [a for a in anchors if a.bad]
         if args.fix:
@@ -551,7 +767,9 @@ def main(argv: list[str] | None = None) -> int:
         bad_all.extend(bad)
         if args.list_all:
             for anchor in anchors:
-                claim = f'`{anchor.symbol}`' if anchor.symbol else '(no symbol)'
+                claim = (f'`{anchor.symbol}`' if anchor.symbol
+                         else f'`{anchor.fragment}` (fragment)' if anchor.fragment
+                         else '(no symbol)')
                 print(f'{rel}:{anchor.doc_line}  {anchor.verdict:<8} {anchor.text:<52} '
                       f'{claim:<34} {anchor.suggestion or ""}')
 

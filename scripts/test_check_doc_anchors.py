@@ -16,6 +16,13 @@ spellings in the migration table's left column, the ``closed_trade_*`` and
 
 ``--fix`` is pinned on both sides: it re-anchors a uniquely-locatable symbol
 and it refuses an ambiguous one, leaving the page byte-identical.
+
+Lane F2's precision rules are pinned the same way (``Precision``): a symbol
+only on the line after the citation fails; a qualified ``A::B`` outside ``A``'s
+braces fails, and ``--fix`` moves it inside; a ruling-table anchor with no claim
+fails, and a code fragment there is verified verbatim; a continuation list
+shares the claim of the anchor that heads it, and a continuation takes the
+path of the last *full* anchor before it, never of another continuation.
 """
 from __future__ import annotations
 
@@ -47,6 +54,12 @@ class NativeStrategyHost {
     virtual void on_native_bar(const Bar&) {}
     virtual void on_native_applied(const Event&) {}
 };
+
+struct Reduce {
+    int units = 0;
+};
+
+enum class GroupEffect { Cancel, Reduce };
 
 inline int resolve_terms(int units) { return units; }
 
@@ -127,7 +140,10 @@ class MustFail(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 1, out)
             self.assertIn('NOLINE', out)
-            self.assertIn('has 24 lines', out)
+            # expectation corrected: 'has 24 lines' -> 'has 30 lines', because the
+            # fixture header gained `struct Reduce` and `enum class GroupEffect`
+            # for lane F2's scope cases.
+            self.assertIn('has 30 lines', out)
 
     def test_inverted_range(self) -> None:
         with tree('See `NativeRunSpec` native_host.hpp:9-5.\n') as t:
@@ -153,26 +169,15 @@ class MustFail(unittest.TestCase):
 class MustPass(unittest.TestCase):
     """The pages' own conventions are not defects."""
 
-    def test_a_continuation_takes_the_last_full_anchor_s_path(self) -> None:
-        # Before lane F2 the second `:3` took native_host.hpp's path from the
-        # earlier continuation `:18` and was judged against the wrong file.
-        body = ('`on_native_bar` native_host.hpp:18 (`:18`), `drive` '
-                'src/native_host_driver.cpp:3 (`:3`).\n')
-        with tree(body) as t:
-            code, out = t.run('--list')
-            self.assertEqual(code, 0, out)
-            self.assertIn('src/native_host_driver.cpp:3', out)
-            self.assertNotIn('native_host.hpp:3 ', out)
-
     def test_correct_anchor(self) -> None:
         with tree('See `NativeRunSpec` native_host.hpp:5.\n') as t:
             code, out = t.run()
             self.assertEqual(code, 0, out)
             self.assertIn('every documentation anchor resolves', out)
 
-    def test_one_line_of_slack_for_a_wrapped_declaration(self) -> None:
-        with tree('See `initial_capital` native_host.hpp:5.\n') as t:
-            self.assertEqual(t.run()[0], 0)             # declared on line 6
+    def test_the_symbol_on_the_cited_line(self) -> None:
+        with tree('See `initial_capital` native_host.hpp:6.\n') as t:
+            self.assertEqual(t.run()[0], 0)
 
     def test_fenced_code_is_not_a_citation(self) -> None:
         body = 'Text.\n\n```\nnative_host.hpp:9999: error: nope\n```\n'
@@ -212,6 +217,128 @@ class MustPass(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 1, out)
             self.assertIn('NOFILE', out)
+
+
+ADR = 'docs/adr/0001-kernel-adapter-boundary.md'
+RULING = ('# ADR\n\n## Kernel capabilities the Pine adapter does not declare (rulings)\n\n'
+          '| field | ruling |\n|---|---|\n')
+PROSE = '# ADR\n\n## How the kernel works\n\n'
+
+
+class RulingTree(Tree):
+    """The same tree with the page written as ADR-0001, where ruling tables live."""
+
+    def __init__(self, page_body: str) -> None:
+        super().__init__('placeholder\n')
+        self.page.unlink()
+        self.page = self.root / ADR
+        self.page.parent.mkdir(parents=True, exist_ok=True)
+        self.page.write_text(page_body)
+
+
+@contextlib.contextmanager
+def ruling(body: str):
+    made = RulingTree(body)
+    try:
+        yield made
+    finally:
+        made.close()
+
+
+class Precision(unittest.TestCase):
+    """Lane F2: the anchor names its symbol, in its scope, and a ruling names a claim."""
+
+    def test_a_symbol_only_on_the_next_line_fails(self) -> None:
+        # expectation corrected: passed (one line of slack after the window) ->
+        # fails, because lane F2 made the window exactly the cited line or range:
+        # 70 anchors passed only through that slack, about nine on another field.
+        with tree('See `initial_capital` native_host.hpp:5.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('SYMMISS', out)
+            self.assertIn('lines 5-5', out)
+
+    def test_a_qualified_symbol_outside_its_scope_fails(self) -> None:
+        # `Reduce` is on line 22 as `struct Reduce {`; GroupEffect::Reduce is on 26.
+        with tree('The effect `GroupEffect::Reduce` native_host.hpp:22.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('SCOPE', out)
+            self.assertIn('outside `GroupEffect`', out)
+            self.assertIn('native_host.hpp:26', out)          # the suggestion, in scope
+
+    def test_fix_moves_a_qualified_symbol_into_its_scope(self) -> None:
+        with tree('The effect `GroupEffect::Reduce` native_host.hpp:22.\n') as t:
+            self.assertEqual(t.run('--fix')[0], 0)
+            self.assertEqual(t.page.read_text(),
+                             'The effect `GroupEffect::Reduce` native_host.hpp:26.\n')
+
+    def test_a_qualified_symbol_inside_its_scope_passes(self) -> None:
+        with tree('The field `NativeRunSpec::initial_capital` native_host.hpp:6.\n') as t:
+            self.assertEqual(t.run()[0], 0)
+
+    def test_a_qualifier_the_file_does_not_declare_is_not_checked(self) -> None:
+        with tree('The callback `no::on_native_bar` native_host.hpp:18.\n') as t:
+            self.assertEqual(t.run()[0], 0)
+
+    def test_a_cpp_namespace_is_not_a_pine_spelling(self) -> None:
+        self.assertEqual(guard.symbol_of('ta::ATR'), ('ATR', 'word'))
+        self.assertEqual(guard.symbol_of('ta.atr'), (None, 'word'))
+
+    def test_a_ruling_anchor_without_a_claim_fails(self) -> None:
+        with ruling(RULING + '| `x` | native only (native_host.hpp:6) |\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('NOCLAIM', out)
+
+    def test_a_ruling_anchor_with_a_symbol_passes(self) -> None:
+        with ruling(RULING + '| `x` | native only (`initial_capital` native_host.hpp:6) |\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_a_ruling_fragment_is_verified_verbatim(self) -> None:
+        good = RULING + '| `x` | the default (`int max_open_lots = 0` native_host.hpp:7) |\n'
+        bad = RULING + '| `x` | the default (`int max_open_lots = 1` native_host.hpp:7) |\n'
+        with ruling(good) as t:
+            self.assertEqual(t.run()[0], 0)
+        with ruling(bad) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('SYMMISS', out)
+
+    def test_a_prose_anchor_without_a_claim_is_only_line_checked(self) -> None:
+        with ruling(PROSE + 'The spec lives at native_host.hpp:6.\n') as t:
+            self.assertEqual(t.run()[0], 0)
+
+    def test_a_pine_spelling_is_no_claim_in_a_ruling_row(self) -> None:
+        with ruling(RULING + '| `x` | `strategy.risk.max_position_size` (native_host.hpp:6) |\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('NOCLAIM', out)
+
+    def test_a_continuation_list_shares_its_head_claim(self) -> None:
+        good = 'Both `NativeStrategyHost` native_host.hpp:16, `:17`, `:18` hold it.\n'
+        bad = 'Both `NativeStrategyHost` native_host.hpp:16, `:17`, `:20` hold it.\n'
+        with tree(good) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)                  # :17 has no NativeStrategyHost
+        body = 'Both `resolve_terms` native_host.hpp:14, `:28` agree.\n'
+        with tree(body) as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+        with tree(bad) as t:
+            self.assertEqual(t.run()[0], 1)
+
+    def test_a_continuation_takes_the_last_full_anchor_s_path(self) -> None:
+        # Before lane F2 the second `:3` took native_host.hpp's path from the
+        # earlier continuation `:18` and was judged against the wrong file.
+        body = ('`on_native_bar` native_host.hpp:18 (`:18`), `drive` '
+                'src/native_host_driver.cpp:3 (`:3`).\n')
+        with tree(body) as t:
+            code, out = t.run('--list')
+            self.assertEqual(code, 0, out)
+            self.assertIn('src/native_host_driver.cpp:3', out)
+            self.assertNotIn('native_host.hpp:3 ', out)
 
 
 class Fixing(unittest.TestCase):
@@ -303,6 +430,7 @@ class Grammar(unittest.TestCase):
             'src/engine_run.cpp': (None, 'word'),
             'strategy.risk.max_drawdown': (None, 'word'),
             'std::optional<double>': (None, 'word'),
+            'ta::ATR': ('ATR', 'word'),
             '-DPINEFORGE_BUILD_TESTS=ON': (None, 'word'),
         }
         for span, expected in cases.items():
