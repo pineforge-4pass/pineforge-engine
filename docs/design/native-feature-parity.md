@@ -720,7 +720,7 @@ both lanes and is not in the tree; its counts above are N13's, not re-run here.
 
 **What landed for the ruling.** Until P6 no example exercised the grid (the
 second audit's §5: "lanes with no example: price grid"), and the C spelling
-(`PF_NATIVE_SPEC_EXT_PRICE_GRID`, translated at native_c_host.cpp:1419-1423)
+(`PF_NATIVE_SPEC_EXT_PRICE_GRID`, translated at native_c_host.cpp:1657-1661)
 had no executed consumer anywhere in the repository — no C test and no C
 example set the bit. `examples/native/native_price_grid_strategy.cpp` runs one
 strategy over one sub-tick tape (a 0.25 ladder under a composite feed) in the
