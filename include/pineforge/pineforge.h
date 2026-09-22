@@ -80,6 +80,17 @@
   #define PF_DEPRECATED(msg)
 #endif
 
+/* An anonymous union member: C11 and C++ have them, and so does every
+ * compiler this runtime builds with, but strict C99 does not -- a C99
+ * consumer compiling with -pedantic-errors would reject the declaration.
+ * GCC and Clang mark it __extension__, which exempts exactly that one
+ * declaration from -pedantic and nothing else in the consumer. */
+#if defined(__GNUC__) || defined(__clang__)
+  #define PF_ANONYMOUS_UNION __extension__ union
+#else
+  #define PF_ANONYMOUS_UNION union
+#endif
+
 /** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
  *  whenever a caller-visible struct grows. Consumers MUST verify
  *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest.
@@ -282,13 +293,13 @@ typedef struct pf_equity_stats_s {
      *  Uses sample (N-1) stddev. NaN with <2 monthly returns or zero deviation.
      *
      *  `sharpe_tv` is the historical spelling of this same field. Both names
-     *  are one `double` at one offset (a C11 anonymous union of two members of
-     *  the same type), so the struct's size and every field offset are
-     *  unchanged and a caller compiled against either spelling reads the same
-     *  storage. The old spelling is DEPRECATED and is removed at the next
+     *  are one `double` at one offset (an anonymous union of two members of
+     *  the same type, #PF_ANONYMOUS_UNION so a strict C99 consumer compiles
+     *  it too), so the struct's size and every field offset are unchanged and
+     *  a caller compiled against either spelling reads the same storage. The old spelling is DEPRECATED and is removed at the next
      *  #PF_ABI_VERSION; see ADR-0001 "Deprecated public spellings". The
      *  serialized report key stays `sharpe_tv` (report-schema name). */
-    union {
+    PF_ANONYMOUS_UNION {
         double sharpe_monthly;
         PF_DEPRECATED("sharpe_tv is the historical spelling of sharpe_monthly; "
                       "removed at PF_ABI_VERSION 5")
@@ -300,7 +311,7 @@ typedef struct pf_equity_stats_s {
      *
      *  `sortino_tv` is the historical spelling of this same field, on the same
      *  terms as sharpe_monthly / sharpe_tv above. */
-    union {
+    PF_ANONYMOUS_UNION {
         double sortino_monthly;
         PF_DEPRECATED("sortino_tv is the historical spelling of sortino_monthly; "
                       "removed at PF_ABI_VERSION 5")

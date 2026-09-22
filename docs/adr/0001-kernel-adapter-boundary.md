@@ -459,9 +459,14 @@ comment saying it is the historical spelling of `sharpe_monthly` / `sortino_mont
 **Portability note for the C alias.** An anonymous union is C11. This project already compiles C at
 C11 (`CMAKE_C_STANDARD 11`, and the native C examples document `cc -std=c11`), and C++ has had
 anonymous unions since C++98, so every consumer in this repository is covered. A consumer compiling
-the public header as strict C99 gets a warning (`-Wc11-extensions`), not an error. The rejected
-alternative was `#define sharpe_tv sharpe_monthly`: a macro leaks into every translation unit that
-includes the header and would rewrite an unrelated consumer's own `sharpe_tv`.
+the public header as strict C99 compiles it too, `-pedantic-errors` included: the union is spelled
+`PF_ANONYMOUS_UNION`, which GCC and Clang expand to `__extension__ union` — an exemption for that one
+declaration and nothing else of the consumer's. (The first version of this note promised such a
+consumer "a warning, not an error"; under `-pedantic-errors` it was an error, which R5 lane F4 fixed.)
+The CTest row `test_native_c_api_c99` compiles both public C headers at `-std=c99 -pedantic-errors`
+with extensions off and executes the alias both ways. The rejected alternative was
+`#define sharpe_tv sharpe_monthly`: a macro leaks into every translation unit that includes the header
+and would rewrite an unrelated consumer's own `sharpe_tv`.
 
 ## Kernel capabilities the Pine adapter does not declare (the rulings the feature gate holds)
 

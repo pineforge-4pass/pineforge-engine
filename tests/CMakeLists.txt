@@ -1585,6 +1585,22 @@ endif()
 pineforge_add_twin_test(test_native_c_api test_native_c_api)
 pineforge_add_twin_test(test_native_c_api_frozen_header test_native_c_api_frozen_header)
 
+# R5 lane F4: the public C headers as a strict C99 consumer compiles them --
+# ADR-0001's P2c portability note. The one C11 construct they hold, the
+# anonymous union behind sharpe_tv / sortino_tv, is PF_ANONYMOUS_UNION; with
+# extensions off and -pedantic-errors, any other C11-only construct in
+# <pineforge/pineforge.h> or <pineforge/native_c_api.h> is a build failure.
+# The row executes the alias and one native C run.
+add_executable(test_native_c_api_c99 test_native_c_api_c99.c)
+set_target_properties(test_native_c_api_c99 PROPERTIES
+    C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
+target_link_libraries(test_native_c_api_c99 PRIVATE pineforge)
+target_compile_options(test_native_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_native_c_api_c99 PRIVATE ${_pf_cov_test_flags})
+endif()
+pineforge_add_twin_test(test_native_c_api_c99 test_native_c_api_c99)
+
 add_test(NAME test_market_admission_schema COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/check_market_admission_schema.py)
 add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABLE}
