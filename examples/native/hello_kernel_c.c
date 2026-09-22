@@ -81,10 +81,10 @@ static pf_native_run_spec_v1 make_spec(void) {
     spec.point_value = 1.0;
     spec.account_fx = 1.0;
     spec.price_tick = 0.01;
-    spec.fee_kind = 0;                /* Percent */
+    spec.fee_kind = PF_NATIVE_FEE_PERCENT;
     spec.fee_value = 0.0;
-    spec.close_execution = 0;         /* NextEligiblePoint */
-    spec.allowed_open_directions = 3; /* Both */
+    spec.close_execution = PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT;
+    spec.allowed_open_directions = PF_NATIVE_OPEN_DIRECTIONS_BOTH;
     return spec;
 }
 

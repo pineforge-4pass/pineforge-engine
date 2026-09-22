@@ -102,30 +102,29 @@ static pf_native_run_spec_v1 make_spec(const char* key, double tick) {
     spec.point_value = 1.0;
     spec.account_fx = 1.0;
     spec.price_tick = tick;
-    spec.fee_kind = 0;                /* Percent */
+    spec.fee_kind = PF_NATIVE_FEE_PERCENT;
     spec.fee_value = 0.0;
-    spec.close_execution = 0;         /* NextEligiblePoint */
-    spec.allowed_open_directions = 3; /* Both */
+    spec.close_execution = PF_NATIVE_CLOSE_EXECUTION_NEXT_ELIGIBLE_POINT;
+    spec.allowed_open_directions = PF_NATIVE_OPEN_DIRECTIONS_BOTH;
     return spec;
 }
 
-/* price_grid: 0 None, 1 QuantizeFills, 2 QuantizeFillsAndTriggers.
- * grid_rounding: 0 HalfUp, 1 Directional. */
-static pf_native_run_spec_ext_v1 make_ext(uint32_t grid, uint32_t rounding) {
+static pf_native_run_spec_ext_v1 make_ext(pf_native_price_grid_t grid,
+                                          pf_native_grid_rounding_t rounding) {
     pf_native_run_spec_ext_v1 ext;
     memset(&ext, 0, sizeof(ext));
     ext.struct_size = (uint32_t)sizeof(ext);
     ext.version = PF_NATIVE_API_VERSION;
     ext.present_mask = PF_NATIVE_SPEC_EXT_PRICE_GRID;
-    ext.price_grid = grid;
-    ext.grid_rounding = rounding;
+    ext.price_grid = (uint32_t)grid;
+    ext.grid_rounding = (uint32_t)rounding;
     return ext;
 }
 
 struct mode {
-    const char* name;
-    uint32_t    grid;
-    uint32_t    rounding;
+    const char*               name;
+    pf_native_price_grid_t    grid;
+    pf_native_grid_rounding_t rounding;
     int         fills;
     double      raw[kMaxFills];     /* the modeled price of the path, never rounded */
     double      booked[kMaxFills];  /* hand-computed from the rounding rule */
@@ -139,13 +138,16 @@ struct mode {
  * that only the quantized path reaches (raw high 99.65, nearest tick 99.75),
  * and its market exit at the open 99.60 (nearest 99.50). */
 static const struct mode kModes[] = {
-    {"None", 0u, 0u, 3,
+    {"None", PF_NATIVE_PRICE_GRID_NONE, PF_NATIVE_GRID_ROUNDING_HALF_UP, 3,
      {100.10, 100.75, 99.40}, {100.10, 100.75, 99.40}, 2},
-    {"QuantizeFills/HalfUp", 1u, 0u, 3,
+    {"QuantizeFills/HalfUp", PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS,
+     PF_NATIVE_GRID_ROUNDING_HALF_UP, 3,
      {100.10, 100.75, 99.40}, {100.00, 100.75, 99.50}, 2},
-    {"QuantizeFills/Directional", 1u, 1u, 3,
+    {"QuantizeFills/Directional", PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS,
+     PF_NATIVE_GRID_ROUNDING_DIRECTIONAL, 3,
      {100.10, 100.75, 99.40}, {100.25, 100.75, 99.25}, 2},
-    {"QuantizeFillsAndTriggers/HalfUp", 2u, 0u, 5,
+    {"QuantizeFillsAndTriggers/HalfUp", PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS_AND_TRIGGERS,
+     PF_NATIVE_GRID_ROUNDING_HALF_UP, 5,
      {100.10, 100.75, 99.40, 99.75, 99.60}, {100.00, 100.75, 99.50, 99.75, 99.50}, 3}
 };
 enum { kModeCount = 4 };
@@ -201,7 +203,7 @@ static int run_mode(const struct mode* mode) {
             ok = 0;
         }
         /* Under a grid every booked price is a ladder price. */
-        if (mode->grid != 0u
+        if (mode->grid != PF_NATIVE_PRICE_GRID_NONE
             && events[i].resolved_price != round(events[i].resolved_price / 0.25) * 0.25) {
             ok = 0;
         }
@@ -226,7 +228,8 @@ static int grid_without_a_ladder_is_refused(void) {
     struct host_state state;
     pf_native_callbacks_v1 callbacks;
     pf_native_run_spec_v1 spec = make_spec("no-ladder", 0.0);
-    pf_native_run_spec_ext_v1 ext = make_ext(1u, 0u);
+    pf_native_run_spec_ext_v1 ext =
+        make_ext(PF_NATIVE_PRICE_GRID_QUANTIZE_FILLS, PF_NATIVE_GRID_ROUNDING_HALF_UP);
     int rc;
 
     memset(&state, 0, sizeof(state));
