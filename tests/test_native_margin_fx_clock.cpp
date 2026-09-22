@@ -952,6 +952,80 @@ void one_marked_equity_implementation() {
 #endif
 }
 
+// ── 10. The settlement inspection takes its rate (R5 lane E21) ──────────
+// Two of the placement gate's three FX-bearing terms are the engine's pure
+// settlement inspection: the resulting notional and the quoted charges. So
+// the inspection takes the rate from its caller
+// (BacktestEngine::inspect_native_settlement_scoped_at) and reads no clock;
+// inspect_native_settlement_scoped() is that inspection at the presented
+// clock's rate, bit for bit. Percent fee 1 %, LONG 5 at 100 held, a
+// 14.5-unit opening inspected from the entry's applied callback, whose clock
+// (T+2m) stands on the curve's 3.0 while its point (T+1m) stood on 1.0:
+//   at 1.0 : notional 19.5 * 100 * 1.0 = 1950, ticket 100 * 14.5 * 1.0 * 1 % = 14.5
+//   at 3.0 : notional 5850, ticket 43.5 -- the clock's own inspection
+struct InspectHost final : Host {
+    int bars = 0;
+    bool inspected = false;
+    std::int64_t presented_ms = 0;
+    std::int64_t presented_after_ms = 0;
+    ex::SettlementInspection at_point{};
+    ex::SettlementInspection at_clock_rate{};
+    ex::SettlementInspection at_clock{};
+
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        Host::on_native_bar(bar, context);
+        if (bars++ == 0) (void)put(*this, tx(5.0, "entry"));
+    }
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const NativeDecisionContext& context) override {
+        Host::on_native_applied(event, context);
+        if (inspected) return;
+        inspected = true;
+        presented_ms = current_bar_.timestamp;
+        ex::Fill fill{};
+        fill.price = 100.0;
+        const order_action::Transact opening{14.5};
+        at_point = inspect_native_settlement_scoped_at(
+            opening, fill, ex::Book{}, account_currency_fx_at(context.coordinate.effective_time_ms));
+        at_clock_rate = inspect_native_settlement_scoped_at(
+            opening, fill, ex::Book{}, active_account_currency_fx());
+        at_clock = inspect_native_settlement_scoped(opening, fill, ex::Book{});
+        presented_after_ms = current_bar_.timestamp;
+    }
+};
+
+void the_inspection_converts_at_the_rate_it_is_given() {
+    const std::vector<Bar> bars = {calm(0), calm(1), calm(2), calm(3)};
+    const NativeFxCurve curve{{T + 2 * kMinute}, {3.0}};
+    auto spec = clock_spec("fx-inspect-rate");
+    spec.fee_kind = NativeFeeKind::Percent;
+    spec.fee_value = 1.0;
+
+    InspectHost host;
+    run_bars(host, spec, curve, bars);
+    REQUIRE(host.inspected);
+    CHECK(host.presented_ms == T + 2 * kMinute);
+    CHECK(host.at_point.status == ex::Status::Applied);
+    CHECK(host.at_point.would_open);
+    near(host.at_point.resulting_abs_units, 19.5);
+    near(host.at_point.resulting_abs_notional, 1950.0);
+    near(host.at_point.current_ticket, 14.5);
+    near(host.at_clock_rate.resulting_abs_notional, 5850.0);
+    near(host.at_clock_rate.current_ticket, 43.5);
+    // The clock's own inspection IS the rate-explicit one at the clock's rate.
+    CHECK(host.at_clock.status == host.at_clock_rate.status);
+    CHECK(host.at_clock.closed_units == host.at_clock_rate.closed_units);
+    CHECK(host.at_clock.opened_units == host.at_clock_rate.opened_units);
+    CHECK(host.at_clock.resulting_abs_units == host.at_clock_rate.resulting_abs_units);
+    CHECK(host.at_clock.resulting_lot_count == host.at_clock_rate.resulting_lot_count);
+    CHECK(host.at_clock.resulting_abs_notional == host.at_clock_rate.resulting_abs_notional);
+    CHECK(host.at_clock.current_ticket == host.at_clock_rate.current_ticket);
+    CHECK(host.at_clock.would_open == host.at_clock_rate.would_open);
+    CHECK(host.at_clock.incoming_short == host.at_clock_rate.incoming_short);
+    // Asking for a rate moves no clock.
+    CHECK(host.presented_after_ms == host.presented_ms);
+}
+
 }  // namespace
 
 int main() {
@@ -977,6 +1051,8 @@ int main() {
     test("the stream gate decides what the batch decides",
          the_stream_gate_decides_what_the_batch_decides);
     test("one marked equity, one implementation", one_marked_equity_implementation);
+    test("the inspection converts at the rate it is given",
+         the_inspection_converts_at_the_rate_it_is_given);
     std::printf("E3 margin FX clock: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -156,6 +156,9 @@ struct BacktestEngine::NativeSettlementStage {
     double ticket = 0.0;
     double after_qty = 0.0;
     double after_price = 0.0;
+    // The account-currency rate this stage's quoted charges and inspected
+    // notional convert at, handed in by whoever staged it.
+    double fx = 0.0;
     std::vector<std::size_t> closing_indices;
     std::vector<double> closing_quantities;
     std::vector<double> current_costs;
@@ -237,9 +240,10 @@ void BacktestEngine::stage_native_settlement(
         const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected,
-        const execution::LifecycleEffects* lifecycle) const {
+        const execution::LifecycleEffects* lifecycle, double fx) const {
     using execution::Status;
     stage = NativeSettlementStage{};
+    stage.fx = fx;
     auto fail = [&](Status status) {
         stage.phase = NativeSettlementStage::Phase::Invalid;
         stage.status = status;
@@ -337,9 +341,10 @@ void BacktestEngine::stage_native_settlement(
         NativeSettlementStage& stage,
         const execution::ReverseTo& reversal,
         const execution::Fill& fill,
-        const execution::LifecycleEffects* lifecycle) const {
+        const execution::LifecycleEffects* lifecycle, double fx) const {
     using execution::Status;
     stage = NativeSettlementStage{};
+    stage.fx = fx;
     auto fail = [&](Status status) {
         stage.phase = NativeSettlementStage::Phase::Invalid;
         stage.status = status;
@@ -398,7 +403,7 @@ void BacktestEngine::finish_native_settlement_stage(
         stage.status = status;
     };
     stage.current_costs = quote_execution_commissions(
-        stage.closing_quantities, stage.opening, fill);
+        stage.closing_quantities, stage.opening, fill, stage.fx);
     stage.ticket = 0.0;
     for (double cost : stage.current_costs) {
         if (!std::isfinite(cost)) {
@@ -443,14 +448,14 @@ void BacktestEngine::finish_native_settlement_stage(
 execution::SettlementInspection BacktestEngine::inspect_native_reversal_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill) const {
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, nullptr);
+    stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     return inspect_native_settlement_stage(stage, fill);
 }
 
 execution::AccountEffectProjection BacktestEngine::project_native_reversal_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill) const {
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, nullptr);
+    stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     return project_native_settlement_stage(stage, fill);
 }
 
@@ -459,7 +464,7 @@ execution::Result BacktestEngine::settle_native_reversal_at_v1(
         const execution::PhysicalExecutionContext& context) {
     const execution::LifecycleEffects lifecycle;
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, &lifecycle);
+    stage_native_settlement(stage, reversal, fill, &lifecycle, active_account_currency_fx());
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
@@ -479,7 +484,7 @@ execution::Result BacktestEngine::settle_reversal_with_lifecycle_v1(
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, &lifecycle);
+    stage_native_settlement(stage, reversal, fill, &lifecycle, active_account_currency_fx());
     return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
@@ -494,8 +499,8 @@ execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }
     NativeSettlementStage stage;
-    stage_native_settlement(
-        stage, action, fill, execution::Book{}, &selection, &lifecycle);
+    stage_native_settlement(stage, action, fill, execution::Book{}, &selection, &lifecycle,
+                            active_account_currency_fx());
     return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
@@ -553,8 +558,8 @@ execution::Result BacktestEngine::settle_with_membership(
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) {
     NativeSettlementStage stage;
-    stage_native_settlement(
-        stage, action, fill, book_or_opening, selected, &lifecycle);
+    stage_native_settlement(stage, action, fill, book_or_opening, selected, &lifecycle,
+                            active_account_currency_fx());
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
@@ -647,7 +652,8 @@ execution::Status BacktestEngine::preview_native_settlement_commit(
         execution::CloseScope scope, const execution::SelectedOpeningSet* selected,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const {
     NativeSettlementStage stage;
-    stage_native_settlement(stage, action, fill, scope, selected, nullptr);
+    stage_native_settlement(stage, action, fill, scope, selected, nullptr,
+                            active_account_currency_fx());
     NativeSettlementRows rows;
     const auto readiness = prepare_native_settlement_commit(stage, fill, context, rows);
     account = project_native_settlement_stage(stage, fill);
@@ -664,7 +670,7 @@ execution::Status BacktestEngine::preview_native_settlement_commit(
         const execution::PhysicalExecutionContext& context,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const {
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, nullptr);
+    stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     NativeSettlementRows rows;
     const auto readiness = prepare_native_settlement_commit(stage, fill, context, rows);
     account = project_native_settlement_stage(stage, fill);
@@ -757,22 +763,28 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement(
 execution::SettlementInspection BacktestEngine::inspect_native_settlement_scoped(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope scope) const {
-    return inspect_with_membership(action, fill, scope, nullptr);
+    return inspect_with_membership(action, fill, scope, nullptr, active_account_currency_fx());
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_settlement_scoped_at(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope scope, double fx) const {
+    return inspect_with_membership(action, fill, scope, nullptr, fx);
 }
 
 execution::SettlementInspection BacktestEngine::inspect_native_settlement_selected(
         const execution::Action& action, const execution::Fill& fill,
         const execution::SelectedOpeningSet& selection) const {
-    return inspect_with_membership(action, fill, execution::Book{}, &selection);
+    return inspect_with_membership(action, fill, execution::Book{}, &selection,
+                                   active_account_currency_fx());
 }
 
 execution::SettlementInspection BacktestEngine::inspect_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
-        const execution::SelectedOpeningSet* selected) const {
+        const execution::SelectedOpeningSet* selected, double fx) const {
     NativeSettlementStage stage;
-    stage_native_settlement(
-        stage, action, fill, book_or_opening, selected, nullptr);
+    stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr, fx);
     return inspect_native_settlement_stage(stage, fill);
 }
 
@@ -784,7 +796,7 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement_stage(
         out.status = stage.status;
         return out;
     }
-    const double fx = active_account_currency_fx();
+    const double fx = stage.fx;
     out.status = Status::Applied;
     out.closed_units = stage.closed;
     out.opened_units = stage.incoming == PositionSide::SHORT
@@ -826,8 +838,8 @@ execution::AccountEffectProjection BacktestEngine::project_with_membership(
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) const {
     NativeSettlementStage stage;
-    stage_native_settlement(
-        stage, action, fill, book_or_opening, selected, nullptr);
+    stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr,
+                            active_account_currency_fx());
     return project_native_settlement_stage(stage, fill);
 }
 
@@ -960,7 +972,7 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
 
 std::vector<double> BacktestEngine::quote_execution_commissions(
         const std::vector<double>& closed_units, double opening_units,
-        const execution::Fill& fill) const {
+        const execution::Fill& fill, double fx) const {
     // Unit/notional schedules are quoted at each physical allocation. A flat
     // ticket charge is shared across the entire execution, including a flip's
     // opening remainder. Row count must not multiply a per-order fee.
@@ -971,7 +983,7 @@ std::vector<double> BacktestEngine::quote_execution_commissions(
         // behavior unchanged for all legacy Pine paths.
         if (commission_type_ == CommissionType::PERCENT) {
             return std::abs(fill.price) * quantity * syminfo_.pointvalue
-                * active_account_currency_fx() * (commission_value_ / 100.0);
+                * fx * (commission_value_ / 100.0);
         }
         return calc_commission(fill.price, quantity);
     };

@@ -635,6 +635,12 @@ protected:
     execution::SettlementInspection inspect_native_settlement_scoped(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope scope) const;
+    // The same inspection at an explicit account-currency rate: the resulting
+    // notional and the quoted charges convert at `fx` and no clock is read.
+    // inspect_native_settlement_scoped() is this at the presented clock's rate.
+    execution::SettlementInspection inspect_native_settlement_scoped_at(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope scope, double fx) const;
     execution::Result settle_native_execution_scoped_at(
         const execution::Action& action, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context,
@@ -1625,7 +1631,7 @@ protected:
         const execution::Action& action,
         const execution::Fill& fill,
         execution::CloseScope book_or_opening,
-        const execution::SelectedOpeningSet* selected) const;
+        const execution::SelectedOpeningSet* selected, double fx) const;
     execution::Result settle_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
@@ -1687,12 +1693,12 @@ protected:
         const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected,
-        const execution::LifecycleEffects* lifecycle) const;
+        const execution::LifecycleEffects* lifecycle, double fx) const;
     void stage_native_settlement(
         NativeSettlementStage& stage,
         const execution::ReverseTo& reversal,
         const execution::Fill& fill,
-        const execution::LifecycleEffects* lifecycle) const;
+        const execution::LifecycleEffects* lifecycle, double fx) const;
     enum class PositionReductionCause {
         SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal
         BRACKET_EXIT,   // a strategy.exit bracket leg fill
@@ -1711,12 +1717,13 @@ protected:
 
     void record_close_trade(Trade trade);
     void validate_close_trade_counters(const Trade* rows, size_t count) const;
-    // Quote one resolved execution's current charges. Entry costs on the
+    // Quote one resolved execution's current charges, a percent schedule at
+    // the account-currency rate `fx` its stage converts at. Entry costs on the
     // closed rows are historical allocations. Returns close shares in FIFO
     // order followed by the opening share (zero when there is no opening).
     std::vector<double> quote_execution_commissions(
         const std::vector<double>& closed_units, double opening_units,
-        const execution::Fill& fill) const;
+        const execution::Fill& fill, double fx) const;
     // The arithmetic of emit_close_trade without its bookkeeping: the Trade
     // row a close of ``close_qty`` of ``pe`` at ``fill_price`` on the
     // current bar would record (pnl, pnl_pct, commission, excursions, bar
