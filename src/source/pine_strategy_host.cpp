@@ -1652,14 +1652,7 @@ void source::PineStrategyHost::scheduler_update_session_state(
     } else if (in_session && realtime_tail_) {
         next_in_session = true;
     }
-    session_ismarket_ = in_session;
-    if (tf_is_daily_or_higher(script_tf_)) {
-        session_isfirstbar_ = in_session;
-        session_islastbar_ = in_session;
-    } else {
-        session_isfirstbar_ = in_session && !prev_in_session_;
-        session_islastbar_ = in_session && !next_in_session;
-    }
+    scheduler_set_session_bar_state(in_session, in_session && !next_in_session);
     prev_in_session_ = in_session;
 }
 
@@ -1778,9 +1771,11 @@ void source::PineStrategyHost::scheduler_record_broker_hash() {
 
 void source::PineStrategyHost::scheduler_set_session_bar_state(
         bool in_session, bool intraday_is_last_bar) {
-    // ab9714be pine_scheduler.cpp:1661-1675.  These generated Pine facts are
-    // sourced by the scheduler immediately before the source callback; they
-    // are not generic native-calendar policy.
+    // ab9714be pine_scheduler.cpp:1661-1675: the one writer of the three
+    // session flags; scheduler_update_session_state hands it the lookahead's
+    // answer.  These generated Pine facts are sourced by the scheduler
+    // immediately before the source callback; they are not generic
+    // native-calendar policy.
     session_ismarket_ = in_session;
     if (tf_is_daily_or_higher(script_tf_)) {
         session_isfirstbar_ = in_session;
