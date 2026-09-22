@@ -104,7 +104,8 @@ if(PINEFORGE_BUILD_TESTS)
         "batch closed trades: [1-9][0-9]*  stream closed trades: [1-9]")
     set(_pf_example_line_native_selected_strategy
         "host-sized applied: 1 units=2  selected-close applied: 1  closed trades: [1-9]")
-    set(_pf_example_line_native_bracket_strategy "closed trades: [1-9]")
+    set(_pf_example_line_native_bracket_strategy
+        "armed tp=103.25 sl=98 trail=101.75  working 1 -> 3  oca cancels: 2  closed trades: 1")
     set(_pf_example_line_native_sized_report_strategy "closed trades: [1-9]")
     set(_pf_example_line_native_margin_strategy "closed trades: [1-9]")
     set(_pf_example_line_native_calc_on_fills_strategy "closed trades: [1-9]")

@@ -1,14 +1,27 @@
-// Pine-free native example: a market entry with two anchored bracket legs on
-// an instrument price grid (R5 lane L7b).
+// Pine-free native example: a market entry with three anchored bracket legs
+// -- take-profit, stop-loss and a trail -- on an instrument price grid (R5
+// lane L7b).
 //
 // The legs are placed BEFORE the entry has a price. Each carries a
 // FromOwnerFill anchor spelled in ticks; when the entry's fill arms them the
 // kernel materializes the level as fill + offset, snapped onto the run's tick
 // ladder with NativeAnchorRounding::Directional (a sell limit up, a sell stop
-// down), offers it once to resolve_anchored_level, and writes the installed
-// level into the ArmedEvent. PendingUntilArmed keeps the legs out of the
-// working enumeration until that arm, exactly like a broker that shows no
-// working child before the parent fills.
+// down, and a trail's arm threshold up, like the limit it is reached as),
+// offers it once to resolve_anchored_level, and writes the installed level
+// into the ArmedEvent. PendingUntilArmed keeps the legs out of the working
+// enumeration until that arm, exactly like a broker that shows no working
+// child before the parent fills.
+//
+// The entry fills at 100.10, off the 0.25 ladder, so every level is snapped:
+//
+//   take-profit   100.10 + 12 ticks (3.00) = 103.10 -> up    -> 103.25
+//   stop-loss     100.10 -  8 ticks (2.00) =  98.10 -> down  ->  98.00
+//   trail arm     100.10 +  6 ticks (1.50) = 101.60 -> up    -> 101.75
+//
+// The working enumeration goes from 1 row (the entry) to 3 (the three armed
+// legs) at the fill. The legs share one OCA group, so when the take-profit
+// fills at 103.25 the kernel cancels the stop-loss and the trail with
+// CancelReason::Group. The example asserts each of those facts.
 //
 //   c++ -std=c++17 native_bracket_strategy.cpp -lpineforge -o native_bracket
 //
@@ -17,6 +30,7 @@
 #include <pineforge/native_toolkit.hpp>
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <optional>
@@ -107,6 +121,16 @@ void report_legs(const tk::BracketReceipt& legs) {
 }
 
 class BracketExample : public pineforge::NativeStrategyHost {
+public:
+    // Read back by main(). resolve_anchored_level is const, so the levels it
+    // is offered are recorded in mutable members.
+    std::size_t working_before_fill = 0;
+    std::size_t working_after_fill = 0;
+    mutable std::optional<double> offered_take_profit;
+    mutable std::optional<double> offered_stop_loss;
+    mutable std::optional<double> offered_trail_arm;
+
+private:
     int bars_ = 0;
     no::RequestHandle entry_;
     tk::BracketReceipt legs_;
@@ -197,11 +221,20 @@ class BracketExample : public pineforge::NativeStrategyHost {
         no::Request stop_loss{no::Reduce{no::OwnerOpenedUnits{}}, "stop-loss", "bracket"};
         stop_loss.trigger = no::Stop{0.0};
         stop_loss.anchor = no::FromOwnerFill{-8.0, /*ticks=*/true};
+        // The trail rides 4 ticks behind its best once the price has reached
+        // its arm threshold. The threshold is the anchored level, so arm_price
+        // stays absent: the fill supplies it.
+        no::Trail ride;
+        ride.ticks = no::TrailTicks{4.0};
+        no::Request trail{no::Reduce{no::OwnerOpenedUnits{}}, "trail", "bracket"};
+        trail.trigger = ride;
+        trail.anchor = no::FromOwnerFill{+6.0, /*ticks=*/true};
 
         tk::BracketSpec bracket;
         bracket.parent = entry_;
         bracket.take_profit = take_profit;
         bracket.stop_loss = stop_loss;
+        bracket.trail = trail;
         bracket.anchor_rounding = no::NativeAnchorRounding::Directional;
         bracket.visibility = no::NativeArmVisibility::PendingUntilArmed;
         legs_ = tk::submit_bracket(*this, bracket);
@@ -217,15 +250,19 @@ class BracketExample : public pineforge::NativeStrategyHost {
         assert(legs_.outcome(tk::BracketLeg::StopLoss).state == tk::BracketLegState::Accepted);
         assert(legs_.outcome(tk::BracketLeg::TakeProfit).handle() == legs_.take_profit);
         assert(!legs_.outcome(tk::BracketLeg::TakeProfit).reason().has_value());
-        // This bracket asks for no trailing leg, and the receipt says that
-        // rather than leaving an empty handle to be read as a refusal.
-        assert(legs_.outcome(tk::BracketLeg::Trail).state == tk::BracketLegState::NotRequested);
-        assert(!legs_.outcome(tk::BracketLeg::Trail).result.has_value());
-        assert(!legs_.trail.has_value());
+        // expectation corrected: trail NotRequested -> Accepted, because the
+        // bracket now asks for its trailing leg (R5 lane F12: the example
+        // arms a take-profit, a stop-loss AND a trail). A leg the spec leaves
+        // unset still reads NotRequested, with no result, never a refusal.
+        assert(legs_.outcome(tk::BracketLeg::Trail).state == tk::BracketLegState::Accepted);
+        assert(legs_.outcome(tk::BracketLeg::Trail).result.has_value());
+        assert(legs_.trail.has_value() && legs_.outcome(tk::BracketLeg::Trail).handle() == legs_.trail);
 
         // Before the fill the legs are live but not working orders: only the
         // entry is enumerated.
-        std::cout << "working before the fill: " << native_working_requests().size() << '\n';
+        working_before_fill = native_working_requests().size();
+        std::cout << "working before the fill: " << working_before_fill << '\n';
+        assert(working_before_fill == 1);
     }
 
     // The one policy point: the kernel level is offered once per leg. This
@@ -233,9 +270,18 @@ class BracketExample : public pineforge::NativeStrategyHost {
     // return the level it wants installed instead.
     std::optional<double> resolve_anchored_level(
             const pineforge::NativeAnchoredLevelView& view) const override {
+        const char* trigger = "stop";
+        if (view.trigger == pineforge::NativeAnchoredTrigger::Limit) {
+            trigger = "limit";
+            offered_take_profit = view.kernel_level;
+        } else if (view.trigger == pineforge::NativeAnchoredTrigger::TrailArm) {
+            trigger = "trail arm";
+            offered_trail_arm = view.kernel_level;
+        } else {
+            offered_stop_loss = view.kernel_level;
+        }
         std::printf("arm: %s leg of owner %llu, fill %.4f, offset %+.4f, kernel level %.4f\n",
-                    view.trigger == pineforge::NativeAnchoredTrigger::Limit ? "limit" : "stop",
-                    static_cast<unsigned long long>(view.owner.incarnation),
+                    trigger, static_cast<unsigned long long>(view.owner.incarnation),
                     view.owner_fill_price, view.offset, view.kernel_level);
         return std::nullopt;
     }
@@ -243,8 +289,11 @@ class BracketExample : public pineforge::NativeStrategyHost {
     void on_native_applied(const no::ExecutionAppliedEvent& event,
                            const pineforge::NativeDecisionContext&) override {
         if (event.definition && event.definition->handle == entry_) {
-            // The fill armed both legs: from here on they are working orders.
-            std::cout << "working after the fill: " << native_working_requests().size() << '\n';
+            // The fill armed all three legs: from here on they are working
+            // orders, and the entry itself is done.
+            working_after_fill = native_working_requests().size();
+            std::cout << "working after the fill: " << working_after_fill << '\n';
+            assert(working_after_fill == 3);
         }
     }
 };
@@ -274,8 +323,10 @@ pineforge::NativeRunSpec make_spec() {
 
 // open, high, low, close, volume, timestamp (Unix milliseconds). The entry
 // fills at 100.10 (off the ladder); the legs arm at 103.25 (100.10 + 3.00
-// rounded up onto the ladder) and 98.00 (100.10 - 2.00 rounded down), and the
-// rise in the third bar takes the profit.
+// rounded up onto the ladder), 98.00 (100.10 - 2.00 rounded down) and, for
+// the trail, 101.75 (100.10 + 1.50 rounded up), and the rise in the third bar
+// takes the profit: its path dips to 100.80 first, then climbs through the
+// trail's arm threshold to the take-profit's 103.25.
 const pineforge::Bar kBars[] = {
     {100.00, 100.50,  99.75, 100.10, 4.0, 0},
     {100.10, 101.00, 100.00, 100.90, 4.0, 300000},
@@ -300,20 +351,70 @@ int main() {
         return 1;
     }
 
-    // The ArmedEvent carries the materialized level: read it back.
+    // The ArmedEvent carries the materialized level: read it back, and the
+    // cancellations the take-profit's fill caused.
+    std::optional<double> take_profit_level;
+    std::optional<double> stop_loss_level;
+    std::optional<double> trail_arm_level;
+    int group_cancels = 0;
     for (const auto& event : host.native_events(0)) {
         if (!event.command) continue;
+        if (const auto* cancelled = std::get_if<no::CancelledEvent>(&*event.command)) {
+            // The one-cancels-all group: whichever leg fills first ends its
+            // siblings, and the event names the group as the reason.
+            const std::string& label = cancelled->request().label;
+            if (label == "stop-loss" || label == "trail") {
+                std::cout << "cancelled " << label << " (reason "
+                          << (cancelled->reason == no::CancelReason::Group ? "Group" : "other")
+                          << ")\n";
+                assert(cancelled->reason == no::CancelReason::Group);
+                ++group_cancels;
+            }
+            continue;
+        }
         const auto* armed = std::get_if<no::ArmedEvent>(&*event.command);
         if (!armed || !armed->definition) continue;
         const auto& request = armed->definition->request;
         if (const auto* limit = std::get_if<no::Limit>(&request.trigger)) {
             std::cout << "armed " << request.label << " at " << limit->price << '\n';
+            take_profit_level = limit->price;
         } else if (const auto* stop = std::get_if<no::Stop>(&request.trigger)) {
             std::cout << "armed " << request.label << " at " << stop->price << '\n';
+            stop_loss_level = stop->price;
+        } else if (const auto* trail = std::get_if<no::Trail>(&request.trigger)) {
+            // The anchored arm threshold is written into the armed definition;
+            // the tick-spelled ride is resolved into a price distance.
+            std::cout << "armed " << request.label << " at "
+                      << trail->arm_price.value_or(-1.0) << ", riding " << trail->offset
+                      << " behind its best\n";
+            trail_arm_level = trail->arm_price;
+            assert(trail->offset == 1.0);
         }
     }
 
-    std::cout << "closed trades: " << host.trade_count() << '\n';
+    // Every level is the one the hook was offered, and every one sits on the
+    // 0.25 ladder, snapped toward the region its leg needs.
+    const auto on_ladder = [](double level) {
+        const double ticks = level / 0.25;
+        return ticks == std::floor(ticks);
+    };
+    assert(take_profit_level == 103.25 && host.offered_take_profit == take_profit_level);
+    assert(stop_loss_level == 98.00 && host.offered_stop_loss == stop_loss_level);
+    assert(trail_arm_level == 101.75 && host.offered_trail_arm == trail_arm_level);
+    assert(on_ladder(*take_profit_level) && on_ladder(*stop_loss_level)
+           && on_ladder(*trail_arm_level));
+    // Working rows went 1 -> 3 at the fill, and the take-profit's fill
+    // cancelled both of its siblings.
+    assert(host.working_before_fill == 1 && host.working_after_fill == 3);
+    assert(group_cancels == 2);
+    assert(host.trade_count() == 1 && host.get_trade(0).exit_id == "take-profit"
+           && host.get_trade(0).exit_price == 103.25);
+
+    // The summary line, printed only once every check above has passed.
+    std::cout << "armed tp=" << *take_profit_level << " sl=" << *stop_loss_level
+              << " trail=" << *trail_arm_level << "  working " << host.working_before_fill
+              << " -> " << host.working_after_fill << "  oca cancels: " << group_cancels
+              << "  closed trades: " << host.trade_count() << '\n';
     for (int i = 0; i < host.trade_count(); ++i) {
         const auto& trade = host.get_trade(i);
         std::cout << "  " << (trade.is_long ? "long " : "short")
