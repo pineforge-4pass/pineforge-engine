@@ -23,12 +23,14 @@
 //      stop is 100.50 instead of 100.499, and the next bar's low of exactly
 //      100.50 books it.
 //
-// Each is pinned three ways: the control (no seed) keeps its behaviour AND
-// the continuation digest the kernel produced before the field existed, the
+// Each is pinned three ways: the control (no seed) keeps its behaviour, the
 // seeded run books the exit, and the same pair runs through the streaming
 // ingress. A buy trail mirrors the min side, a price-grid row pins that the
 // seed is put on the ladder like an observed print, and the acceptance rows
-// pin the level's own validity.
+// pin the level's own validity. That an ABSENT seed folds nothing into the
+// continuation identity is pinned by properties of this host's own digests
+// (an_absent_seed_folds_nothing below), never by a digest literal -- see the
+// note where the two literals used to be.
 //
 // Fail-before: compiled against the previous header closure (this lane's base
 // 9f0ea24c) this unit stops at
@@ -63,6 +65,9 @@ struct Case {
     double entry_units = 1.0;          // signed: the lot the trail closes
     std::optional<double> arm_price;
     std::optional<double> best_seed;
+    // false leaves Trail::best_seed default-constructed: the request never
+    // writes the field at all, the spelling every pre-E14 caller has.
+    bool assign_seed = true;
     int submit_calculation = 1;        // 1-based calculation the trail is sent on
     double offset = 0.5;
     NativePriceGrid grid = NativePriceGrid::None;
@@ -77,7 +82,7 @@ void drive(Host& host, const Case& c) {
             no::Trail trail;
             trail.offset = c.offset;
             trail.arm_price = c.arm_price;
-            trail.best_seed = c.best_seed;
+            if (c.assign_seed) trail.best_seed = c.best_seed;
             leg.trigger = trail;
             put(h, leg);
         }
@@ -162,11 +167,28 @@ Case case_b() {
     return c;
 }
 
-// The digests the kernel produced for both controls BEFORE the field existed
-// (exec/E14-probes/fail_before.cpp on this lane's base 9f0ea24c). An absent
-// seed folds nothing, so these must not move.
-constexpr std::uint64_t kControlContinuationA = 7148617029230866814ULL;
-constexpr std::uint64_t kControlContinuationB = 1059492877796320724ULL;
+// The two controls used to carry the digests the kernel produced for them
+// BEFORE the field existed (exec/E14-probes/fail_before.cpp on this lane's
+// base 9f0ea24c): 7148617029230866814 and 1059492877796320724. Both were
+// measured on Darwin, and NO continuation digest is portable, so as literals
+// they pinned one host.
+//
+// native_continuation_hash() folds the run's timezone identity, and that
+// identity carries the host's own zoneinfo ROOT PATH and the tz resource
+// paths under it -- tzdir_canonical() resolves /var/db/timezone/zoneinfo on
+// Darwin (which realpaths through the installed tzdata release, e.g.
+// .../tz/2026c.1.0/zoneinfo) and /usr/share/zoneinfo, or $TZDIR, under glibc.
+// So the same engine over the same bars, booking the same trades, answers a
+// different continuation value on each host; moving the root alone on ONE
+// host moves every digest below while every row, price and position stays
+// put. The digests are still printed, because they are the measurement.
+//
+// expectation corrected: kControlContinuationA/B == the control digest ->
+// same-host properties of the absent seed (an_absent_seed_folds_nothing),
+// because a continuation digest folds a host path and cannot be a literal.
+// The pre-field values above stay as the lane's recorded fail-before, which
+// is what carries "absent hashes exactly as before" for the host that
+// measured them.
 
 void a_already_armed_at_submission() {
     Case control = case_a();
@@ -174,7 +196,6 @@ void a_already_armed_at_submission() {
     report("A control", without);
     CHECK(without.rows == 0);
     CHECK(without.position == 1.0);
-    CHECK(without.continuation == kControlContinuationA);
 
     Case seeded = case_a();
     seeded.best_seed = 101.00;
@@ -185,7 +206,7 @@ void a_already_armed_at_submission() {
     if (with.rows == 1) near(with.exit_price, 100.50);
     // A seed IS request state: the same run under the same session key must
     // not answer the digest the unseeded one does.
-    CHECK(with.continuation != kControlContinuationA);
+    CHECK(with.continuation != without.continuation);
 }
 
 void b_armed_on_a_crossing() {
@@ -194,7 +215,6 @@ void b_armed_on_a_crossing() {
     report("B control", without);
     CHECK(without.rows == 0);
     CHECK(without.position == 1.0);
-    CHECK(without.continuation == kControlContinuationB);
 
     Case seeded = case_b();
     seeded.best_seed = 101.00;
@@ -203,7 +223,45 @@ void b_armed_on_a_crossing() {
     CHECK(with.rows == 1);
     CHECK(with.position == 0.0);
     if (with.rows == 1) near(with.exit_price, 100.50);
-    CHECK(with.continuation != kControlContinuationB);
+    CHECK(with.continuation != without.continuation);
+}
+
+// ── an absent seed folds nothing ────────────────────────────────────────
+// hash_trigger folds the seed under `if (trail->best_seed)`, so absent means
+// no bytes at all. What that is observable as, without a pre-field binary and
+// without a digest literal: the two spellings of absent answer one digest,
+// the digest is a property of the run and not of the process, and a seed that
+// the run's own behaviour ignores still moves it -- so the field enters the
+// fold on its own, which is exactly what the removed literals pinned.
+void an_absent_seed_folds_nothing() {
+    Case never_written = case_a();
+    never_written.assign_seed = false;
+    const auto untouched = run_batch("e14-a-control", never_written);
+    report("A seed never written", untouched);
+    CHECK(untouched.rows == 0);
+    CHECK(untouched.position == 1.0);
+
+    const auto nullopt_written = run_batch("e14-a-control", case_a());
+    report("A seed = nullopt", nullopt_written);
+    CHECK(nullopt_written.rows == untouched.rows);
+    CHECK(nullopt_written.position == untouched.position);
+    CHECK(nullopt_written.continuation == untouched.continuation);
+
+    // The digest belongs to the run: the same case again, same session key,
+    // answers the same value.
+    CHECK(run_batch("e14-a-control", case_a()).continuation == untouched.continuation);
+
+    // A seed under the arm print is inert -- the ride starts at the
+    // favourable one of seed and print, so case A's best stays the print and
+    // nothing books -- and the digest must move all the same.
+    Case inert = case_a();
+    inert.best_seed = 1.00;
+    const auto seeded_inert = run_batch("e14-a-control", inert);
+    report("A seeded 1.00 (inert)", seeded_inert);
+    CHECK(seeded_inert.rows == untouched.rows);
+    CHECK(seeded_inert.position == untouched.position);
+    CHECK(seeded_inert.exit_price == untouched.exit_price);
+    CHECK(seeded_inert.continuation != untouched.continuation);
 }
 
 // Streaming is the same kernel under a different drive, so both halves must
@@ -341,6 +399,7 @@ void a_seed_is_a_price_level() {
 int main() {
     test("A already armed at submission", a_already_armed_at_submission);
     test("B armed on a crossing", b_armed_on_a_crossing);
+    test("an absent seed folds nothing", an_absent_seed_folds_nothing);
     test("streamed pair", streamed_pair);
     test("buy trail mirrors the min", buy_trail_mirrors_the_min);
     test("the seed goes on the ladder", the_seed_goes_on_the_ladder);
