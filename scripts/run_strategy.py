@@ -64,11 +64,13 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # The corpus ships a single committed feed (full-history 1m, Git LFS);
-# the 15m chart feeds are derived from it locally. ensure_derived() is
-# called from main() — importing this module stays side-effect free for
-# consumers that only want the ABI mirrors.
+# the 15m chart feeds are derived from it locally. main() calls
+# ensure_derived() only for a run that reads a derived feed
+# (_reads_derived_feed): importing this module stays side-effect free for
+# consumers that only want the ABI mirrors, and a run on its own feed
+# (every benchmark slot) needs no corpus checkout.
 from derive_corpus_feeds import (  # noqa: E402
-    DERIVED_15M, DERIVED_15M_WINDOW, ensure_derived)
+    DERIVED_15M, DERIVED_15M_WINDOW, DERIVED_DIR, ensure_derived)
 REFERENCE_OHLCV = DERIVED_15M_WINDOW
 WARMUP_OHLCV = DERIVED_15M
 DEFAULT_OHLCV = WARMUP_OHLCV
@@ -1271,6 +1273,32 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     if native_security_feeds:
         kwargs["native_security_feeds"] = native_security_feeds
     return ohlcv_path, kwargs
+
+
+def _reads_derived_feed(params, strategy_dir: Path, ohlcv: Path,
+                        emit_window_ohlcv: Path | None) -> bool:
+    """Whether a run reads a feed under corpus/data/derived/, the files
+    ensure_derived() materializes from the corpus 1m feed: its chart feed
+    (inputs.json ``ohlcv_csv``, else ``ohlcv``), an auxiliary or native
+    request.security feed, or ``emit_window_ohlcv`` -- each path resolved
+    as inputs_run_kwargs resolves it."""
+    if not isinstance(params, dict):
+        params = {}
+
+    def at(value) -> Path:
+        text = str(value)
+        return Path(text) if text.startswith("/") else strategy_dir / text
+
+    feeds = [at(params["ohlcv_csv"]) if "ohlcv_csv" in params else ohlcv]
+    if params.get("aux_security_ohlcv_csv"):
+        feeds.append(at(params["aux_security_ohlcv_csv"]))
+    native_feeds = params.get("native_security_feeds")
+    if isinstance(native_feeds, dict):
+        feeds += [at(path) for path in native_feeds.values() if path]
+    if emit_window_ohlcv is not None:
+        feeds.append(emit_window_ohlcv)
+    derived = DERIVED_DIR.resolve()
+    return any(derived in feed.resolve().parents for feed in feeds)
 
 
 class Strategy:
@@ -3040,8 +3068,6 @@ def main() -> int:
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
     args = ap.parse_args()
 
-    ensure_derived()
-
     strategy_dir = args.strategy_dir.resolve()
     out_path = (args.output.resolve() if args.output
                 else strategy_dir / "engine_trades.csv")
@@ -3057,6 +3083,8 @@ def main() -> int:
     if inputs_path.exists():
         with inputs_path.open(encoding="utf-8") as f:
             params = json.load(f)
+    if _reads_derived_feed(params, strategy_dir, args.ohlcv, args.emit_window_ohlcv):
+        ensure_derived()
     # Per-probe inputs.json metadata (ohlcv_csv / chart_timezone /
     # input_tf / script_tf / ohlcv_start_ms / runtime_overrides) is
     # resolved by the shared helper — see inputs_run_kwargs docstring.
@@ -3080,6 +3108,7 @@ def main() -> int:
         tv_span = _load_tv_entry_span(strategy_dir, params)
         tv_window_used = tv_span is not None
         if tv_span is None:
+            ensure_derived()
             emit_window = report_window = _load_window_ms(REFERENCE_OHLCV)
     # The measurement ENDS where TradingView's range ends
     # (_apply_range_end_regime): the feed is bounded at the bars opening at
