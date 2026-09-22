@@ -16,6 +16,19 @@ and NOT the local (with the local proven to be in the debug info the strip
 removes, so the case cannot pass by the compiler having dropped it); machine
 code that `strings` prints as `C0"TV"` is not a name; and a host with no
 stripping tool fails CLOSED at exit 2 instead of reading the debug info.
+
+R5 lane F6 (AUDIT3-opus2 H11, AUDIT3-opus kres §1.1) widens what the gate
+reads, and these cases are its must-fail half: the audits' blind-spot probes
+(`security_lower_tf_probe`, `calc_on_every_tick`, `strategy_entry`,
+`syminfo_mintick_probe_fn`, `ta_ema_probe_fn`, the `__close__` sentinel,
+`barstate.islast`, `session.ismarket`, `gaps_on`, `lookahead_on`) are caught
+as text, as symbols and compiled into a `-g` archive; Pine's parameter words
+are residue; the generic look-alikes the kernel really spells
+(`strategy_native_*`, `pf_native_lookahead_e`, `ta_misc`, `request_is_buy`,
+`session_in_premarket`) are not; a mangled symbol is judged by its demangled
+name and a Mach-O underscore is not a second name; and the kernel profile's
+INSTALLED headers are read too -- code identifiers and string literals,
+never comments -- over exactly the header set the CMake install rule ships.
 """
 from __future__ import annotations
 
@@ -59,15 +72,15 @@ def find_cxx() -> str | None:
     return None
 
 
-def build_probe_archive(directory: Path) -> Path:
-    """`-g` archive of PROBE_SOURCE, or a skip when the host cannot build one."""
+def build_probe_archive(directory: Path, text: str = PROBE_SOURCE) -> Path:
+    """`-g` archive of `text` (PROBE_SOURCE), or a skip when the host cannot build one."""
     compiler = find_cxx()
     if compiler is None:
         raise unittest.SkipTest("no C++ compiler on PATH (pass --cxx)")
     if shutil.which("ar") is None:
         raise unittest.SkipTest("ar is not on PATH")
     source = directory / "residual_probe.cpp"
-    source.write_text(PROBE_SOURCE)
+    source.write_text(text)
     obj = directory / "residual_probe.o"
     archive = directory / "libresidual_probe.a"
     for argv in ([compiler, "-g", "-O0", "-c", str(source), "-o", str(obj)],
@@ -78,24 +91,55 @@ def build_probe_archive(directory: Path) -> Path:
     return archive
 
 # Lines a real archive carries that the vocabulary must NOT flag.
+# (expectation corrected: `_strategy_set_syminfo_type` and
+# `BacktestEngine::set_syminfo_metadata(...)` were noise -> they are ruled
+# vocabulary, because lane F6 reads `syminfo`; they moved to
+# RULED_SYMINFO_STRINGS / RULED_SYMINFO_NM below.)
 NOISE_STRINGS = [
     "__TEXT", "__cstring", "pending_order_mirror.cpp.o/", "engine_run.cpp.o/",
     "_ZN9pineforge2ta18ema_na_warmup_flagEv",
     "__ZZN9pineforge2ta18ema_na_warmup_flagEvE4flag$tlv$init",
-    "_strategy_set_syminfo_type", "_strategy_pending_order_layout",
+    "_strategy_pending_order_layout",
     "[pineforge] WARNING: session template unknown",
     "delta.x", "data.exchange", "splinelike", "actv_", "cooperative",
 ]
 NOISE_NM = [
     "T pineforge::ta::ema_na_warmup_flag()",
     "s pineforge::ta::ema_na_warmup_flag()::flag",
-    "T pineforge::engine_script_run_v18::BacktestEngine::set_syminfo_metadata("
-    "std::__1::basic_string<char> const&, double)",
     "T pineforge::engine_script_run_v18::NativeStrategyHost::on_native_margin_call("
     "pineforge::native_order::native_order_v6::MarginCallEvent const&)",
-    "T _strategy_set_syminfo_type",
     "libpineforge_kernel.a(pending_order_mirror.cpp.o):",
 ]
+# The frozen C ABI's symbol-info ingress, which lane F6's `syminfo` word now
+# reads, and which ADR-0001 rules by name (Mach-O and ELF spellings both).
+RULED_SYMINFO_STRINGS = ["_strategy_set_syminfo_type", "strategy_set_syminfo_type"]
+RULED_SYMINFO_NM = [
+    "T pineforge::engine_script_run_v18::BacktestEngine::set_syminfo_metadata("
+    "std::__1::basic_string<char> const&, double)",
+    "T _strategy_set_syminfo_type",
+]
+
+# Names and texts the kernel really spells that share a word with Pine but
+# are the kernel's own vocabulary: the gate must stay silent on every one.
+GENERIC_LOOK_ALIKES = [
+    "_strategy_native_cancel_v1", "strategy_closed_trade_exit_id",
+    "_strategy_request_abort", "pf_native_request_v1", "request_is_buy",
+    "ta_misc", "ta_moving_averages", "ta_bar_index", "pf_native_lookahead_e",
+    "PF_NATIVE_LOOKAHEAD_AT_COMPLETION", "PF_NATIVE_GAPS_CLEAR", "pf_native_gaps_e",
+    "session_in_premarket", "session_day_index", "chart_bar_ismarket",
+    "__GLOBAL__sub_I_timezone.cpp", "l_switch.table.strategy_native_cancel_v1",
+    "session.hpp", "include/pineforge/session_time.hpp",
+]
+
+# AUDIT3-opus2's r2kernel/inject2/blind_probe.c, verbatim: Pine vocabulary
+# the gate's fixed pattern list did not contain until lane F6.
+BLIND_PROBE_SOURCE = """
+extern "C" const char *pf_blind_text(void) { return "security_lower_tf_probe calc_on_every_tick strategy_entry"; }
+extern "C" int syminfo_mintick_probe_fn(int x) { return x + 2; }
+extern "C" int ta_ema_probe_fn(int x) { return x + 3; }
+"""
+BLIND_PROBE_NAMES = ("security_lower_tf_probe", "calc_on_every_tick", "strategy_entry",
+                     "syminfo_mintick_probe_fn", "ta_ema_probe_fn")
 
 
 def table_archive() -> tuple[list[str], list[str]]:
@@ -107,7 +151,11 @@ def table_archive() -> tuple[list[str], list[str]]:
 class RuledTableTests(unittest.TestCase):
     def test_the_adr_table_rules_every_family_the_audit_named(self) -> None:
         names = RULED.identifiers
-        self.assertEqual(sum(1 for n in names if n.startswith("pine_")), 17)
+        # (expectation corrected: every `pine_*` ruled name 17 -> the 17 of
+        # the frozen POD, counted by their prefixes, because lane F6's header
+        # scan rules the generated-code `pine_*` forwarders beside them.)
+        self.assertEqual(sum(1 for n in names if n.startswith(
+            ("pine_exit_activation_", "pine_frozen_market_instruction_", "pine_birth_reach"))), 17)
         self.assertEqual(sum(1 for n in names if "coof" in n), 7)
         self.assertEqual(sum(1 for n in names if "pooc" in n), 3)
         self.assertEqual(
@@ -134,9 +182,13 @@ class EvaluatorTests(unittest.TestCase):
     def test_the_table_alone_passes(self) -> None:
         findings, summary = self.evaluate(*table_archive())
         self.assertEqual(findings, [], [str(f) for f in findings])
+        # (expectation corrected: the names IDENTIFIER_PATTERNS match -> those
+        # plus the `__name__` labels, because lane F6's sentinel vocabulary
+        # reads `__kernel_liquidation__` / `__kernel_risk__` too.)
         self.assertEqual(summary["ruledIdentifiersPresent"],
                          sum(1 for n in RULED.identifiers
-                             if any(p.search(n) for _, p in guard.IDENTIFIER_PATTERNS)))
+                             if any(p.search(n) for _, p in guard.IDENTIFIER_PATTERNS)
+                             or guard.SENTINEL[1].match(n)))
         self.assertEqual(summary["phraseHits"], 3)
 
     def test_a_name_outside_the_table_fails(self) -> None:
@@ -188,6 +240,21 @@ class EvaluatorTests(unittest.TestCase):
         findings, summary = self.evaluate(list(NOISE_STRINGS), list(NOISE_NM))
         self.assertEqual([f for f in findings if f.kind == "unruled"], [])
         self.assertEqual(summary["hits"], 0)
+
+    def test_the_syminfo_ingress_is_ruled_vocabulary(self) -> None:
+        strings, nm = table_archive()
+        findings, summary = self.evaluate(strings + RULED_SYMINFO_STRINGS,
+                                          nm + RULED_SYMINFO_NM)
+        self.assertEqual([f for f in findings if f.kind == "unruled"], [])
+        _, before = self.evaluate(*table_archive())
+        self.assertEqual(summary["identifierHits"] - before["identifierHits"], 4)
+
+    def test_generic_look_alikes_are_not_residue(self) -> None:
+        findings, summary = self.evaluate(list(GENERIC_LOOK_ALIKES),
+                                          ["T " + name for name in GENERIC_LOOK_ALIKES])
+        self.assertEqual(findings and [str(f) for f in findings if f.kind == "unruled"], [])
+        self.assertEqual(summary["hits"], 0, [str(f) for f in findings])
+
 
     def test_binary_fragments_are_not_identifiers(self) -> None:
         """Machine code `strings` prints is never a name, but a name still is.
@@ -241,6 +308,155 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
 
 
+class AuditBlindSpotTests(unittest.TestCase):
+    """The probes the third audit's two reviewers passed through the gate."""
+
+    def evaluate(self, strings: list[str], nm: list[str]):
+        return guard.evaluate(strings, nm, RULED)
+
+    def unruled(self, strings: list[str], nm: list[str]) -> set[str]:
+        findings, _ = self.evaluate(strings, nm)
+        return {f.token for f in findings if f.kind == "unruled"}
+
+    def test_opus2_blind_probes_are_caught_as_text_and_as_symbols(self) -> None:
+        strings, nm = table_archive()
+        # blind_probe.c's literal and its two C symbols, Mach-O and ELF.
+        for decoration in ("_", ""):
+            with self.subTest(decoration=decoration or "elf"):
+                hits = self.unruled(
+                    strings + ["security_lower_tf_probe calc_on_every_tick strategy_entry"],
+                    nm + ["T " + decoration + "syminfo_mintick_probe_fn",
+                          "T " + decoration + "ta_ema_probe_fn"])
+                self.assertEqual(hits, set(BLIND_PROBE_NAMES))
+
+    def test_opus_probes_are_caught(self) -> None:
+        for line, token in (("__close__", "__close__"),
+                            ("__margin_probe__", "__margin_probe__"),
+                            ("barstate.islast is not a kernel flag", "barstate"),
+                            ("gaps_on", "gaps_on"), ("LOOKAHEAD_ON", "LOOKAHEAD_ON"),
+                            ("request_security_probe", "request_security_probe"),
+                            ("session_ismarket_probe", "session_ismarket_probe")):
+            with self.subTest(line=line):
+                strings, nm = table_archive()
+                self.assertIn(token, self.unruled(strings + [line], nm))
+        strings, nm = table_archive()
+        findings, _ = self.evaluate(strings + ["session.ismarket requires a session"], nm)
+        self.assertEqual([f.kind for f in findings], ["unruled"])
+
+    def test_pine_parameter_words_are_residue(self) -> None:
+        for word in ("over_pyramiding_probe", "default_qty_type", "calc_on_every_tick",
+                     "use_bar_magnifier", "backtest_fill_limits_assumption",
+                     "close_entries_rule", "fill_orders_on_standard_ohlc", "max_bars_back",
+                     "calc_bars_count", "dynamic_requests", "syminfo_probe",
+                     "strategy_position_entry_name", "strategy_closedtrades_probe",
+                     "ta_highestbars_probe", "barstate_isconfirmed_probe"):
+            with self.subTest(word=word):
+                strings, nm = table_archive()
+                self.assertEqual(self.unruled(strings + [word], nm), {word})
+
+    def test_a_mangled_symbol_is_judged_by_its_demangled_name(self) -> None:
+        """`strings` reads the symbol table's mangled spelling, `nm -C` the
+        demangled one; one symbol must be one finding, under its own name."""
+        strings, nm = table_archive()
+        findings, _ = self.evaluate(
+            strings + ["__ZN9pineforge2ta14pine_ema_probeEv", "_ZN9pineforge2ta14pine_ema_probeEv"],
+            nm + ["T pineforge::ta::pine_ema_probe()"])
+        self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", "pine_ema_probe")])
+
+    def test_sanitizer_metadata_is_not_surface(self) -> None:
+        """An AddressSanitizer archive names locals in its stack-frame
+        descriptions and every `__func__` array in its global descriptors;
+        neither is a residual surface, and a real residue beside them is
+        still caught."""
+        strings, nm = table_archive()
+        metadata = ["3 32 8 6 s.addr 64 8 12 session.addr 96 16 11 ref.tmp:701",
+                    "2 32 8 15 pyramiding.addr 48 8 10 syminfo.addr:88",
+                    "__func__._ZN5Eigen8internal14aligned_mallocEm"]
+        findings, summary = self.evaluate(strings + metadata, nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        self.assertEqual(self.unruled(strings + metadata + ["session.islastbar probe"], nm),
+                         {"session.islastbar probe"})
+        self.assertEqual(self.unruled(strings + ["session.start must precede its end"], nm),
+                         set())
+
+    def test_a_macho_underscore_is_not_a_second_name(self) -> None:
+        """Mach-O prefixes every C symbol with `_`, ELF does not: the ruled
+        `tv_carry_qty` covers `_tv_carry_qty` and is present through it."""
+        strings, nm = table_archive()
+        strings.remove("tv_carry_qty")
+        findings, summary = self.evaluate(strings + ["_tv_carry_qty"], nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        _, reference = self.evaluate(*table_archive())
+        self.assertEqual(summary["ruledIdentifiersPresent"],
+                         reference["ruledIdentifiersPresent"])
+
+
+class HeaderSurfaceTests(unittest.TestCase):
+    """The kernel profile's installed headers are residual surface too."""
+
+    def write_tree(self, root: Path, files: dict[str, str]) -> Path:
+        for relative, text in files.items():
+            path = root / "pineforge" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return root
+
+    def header_findings(self, files: dict[str, str]) -> set[str]:
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-headers-") as directory:
+            root = self.write_tree(Path(directory), files)
+            headers = guard.kernel_profile_headers(root)
+            lines = guard.read_headers(root, headers)
+        strings, nm = table_archive()
+        findings, _ = guard.evaluate(strings, nm, RULED, header_lines=lines)
+        return {f.token for f in findings if f.kind == "unruled"}
+
+    def test_the_header_set_is_the_kernel_install_rule(self) -> None:
+        excluded = guard.kernel_install_exclusions(guard.CMAKE_LISTS.read_text(encoding="utf-8"))
+        self.assertEqual(excluded, frozenset({"source", "compat"}))
+        headers = {h.relative_to(guard.ROOT / "include").as_posix()
+                   for h in guard.kernel_profile_headers(guard.ROOT / "include")}
+        self.assertIn("pineforge/engine.hpp", headers)
+        self.assertIn("pineforge/pineforge.h", headers)
+        self.assertIn("pineforge/map.hpp", headers)
+        self.assertFalse([h for h in headers
+                          if h.startswith(("pineforge/source/", "pineforge/compat/"))])
+
+    def test_a_missing_install_rule_is_an_infrastructure_error(self) -> None:
+        with self.assertRaises(guard.InfrastructureError):
+            guard.kernel_install_exclusions("install(TARGETS pineforge)\n")
+
+    def test_a_pine_named_declaration_fails_and_a_comment_does_not(self) -> None:
+        hits = self.header_findings({"probe.hpp": (
+            "#pragma once\n"
+            "// pine_comment_only strategy_entry_in_a_comment\n"
+            "/* tradingview_block_comment */\n"
+            "inline int strategy_entry_probe() { return 0; }  // syminfo_trailing\n")})
+        self.assertEqual(hits, {"strategy_entry_probe"})
+
+    def test_a_literal_is_read_and_a_compiler_keyword_is_not_a_sentinel(self) -> None:
+        hits = self.header_findings({"probe.hpp": (
+            "__attribute__((unused)) static const char* kProbe = \"__close_probe__\";\n"
+            "static const char* kText = \"session.ismarket needs a session\";\n"
+            "#if defined(__clang__)\n#endif\n")})
+        self.assertEqual(hits, {"__close_probe__", "session.ismarket needs a session"})
+
+    def test_a_header_the_kernel_profile_does_not_install_is_not_surface(self) -> None:
+        hits = self.header_findings({"source/adapter.hpp": "int pine_probe_in_source();\n",
+                                     "compat/pine/rule.hpp": "int pine_probe_in_compat();\n"})
+        self.assertEqual(hits, set())
+
+    def test_the_installed_headers_carry_no_unruled_name(self) -> None:
+        """What the kernel profile installs, read from this tree: every name
+        the vocabulary matches has its row (stale rows need the archive and
+        are the built-archive case's business)."""
+        headers = guard.kernel_profile_headers(guard.ROOT / "include")
+        lines = guard.read_headers(guard.ROOT / "include", headers)
+        findings, summary = guard.evaluate([], [], RULED, header_lines=lines)
+        unruled = [str(f) for f in findings if f.kind == "unruled"]
+        self.assertEqual(unruled, [])
+        self.assertGreater(summary["headerHits"], 0)
+
+
 class ArchiveSurfaceTests(unittest.TestCase):
     """What the gate reads out of a real `-g` archive, and what it must not."""
 
@@ -265,6 +481,16 @@ class ArchiveSurfaceTests(unittest.TestCase):
                          "a block-scope local is not linkable surface")
         self.assertFalse([h for h in hits if "pine_probe_symbol" not in h
                           and "tv_probe_literal" not in h], hits)
+
+    def test_the_audit_blind_probe_archive_fails(self) -> None:
+        """opus2's inject2 method: the blind probe compiled into an archive
+        (here `-g`, so the strip is exercised too) answers all five names."""
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-probe-") as directory:
+            work = Path(directory)
+            archive = build_probe_archive(work, BLIND_PROBE_SOURCE)
+            hits = self.probe_hits(archive, work)
+        for name in BLIND_PROBE_NAMES:
+            self.assertTrue([h for h in hits if h.lstrip("_") == name], (name, hits))
 
     def test_the_local_is_in_the_debug_info_the_strip_removes(self) -> None:
         """Fail-before for the case above: the local IS in the `-g` archive.
