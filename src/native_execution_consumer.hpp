@@ -123,9 +123,11 @@ public:
     // NativeStrategyHost::declare_auxiliary_feed_result: replace the staged
     // feed from inside on_native_run_begin, before the kernel registers.
     NativeSetupResult declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> declared);
-    // NativeStrategyHost::append_auxiliary_bars: a realtime stream's later
-    // bars of the declared feed, queued for the next accepted input.
-    bool append_auxiliary_bars(BacktestEngine& engine, const Bar* bars, std::size_t n);
+    // NativeStrategyHost::append_auxiliary_bars_result: a realtime stream's
+    // later bars of the declared feed, queued for the next accepted input.
+    // The bool spelling on the host is this answer's status.
+    NativeAuxiliaryAppendResult append_auxiliary_bars(BacktestEngine& engine, const Bar* bars,
+                                                      std::size_t n);
     // L5 calculation timing readbacks. The partial bar is the lookahead-free
     // bar so far at the current cursor; the two counters are observation of
     // the recalculation cadence, never matching state.

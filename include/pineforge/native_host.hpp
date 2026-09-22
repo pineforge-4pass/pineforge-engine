@@ -395,6 +395,52 @@ struct NativeFxCurveSetupResult {
     NativeFxCurveValidation validation{};
 };
 
+/// Why append_auxiliary_bars refused. Every enumerator is one of the causes
+/// that call's contract already names, and none of them is a run-spec field, so
+/// this is its own word list rather than a NativeRunSpecError: the appended
+/// bars are a live input, not a staged value. HostFailed and Reentrant are the
+/// two legality refusals every public stream input shares — a host that has
+/// already latched its durable failure, and a call made from inside a callback
+/// or an in-flight input, which is itself the Contract failure that latches
+/// one. The rest change nothing and do not fail the host.
+enum class NativeAuxiliaryAppendError : std::uint8_t {
+    None = 0,
+    /// The host had already failed; nothing was read.
+    HostFailed = 1,
+    /// Called from inside a callback or an in-flight input. This call LATCHES
+    /// NativeFailureCode::Contract — it is the one refusal here that does.
+    Reentrant = 2,
+    /// The run is not on its realtime leg (a batch, or a stream still in
+    /// warmup). There is no live feed to append to.
+    NotRealtime = 3,
+    /// The run declared no auxiliary feed, in its spec or at begin.
+    NoAuxiliaryFeed = 4,
+    /// A null array with a non-zero count. A null array of zero bars is
+    /// accepted and is a no-op.
+    InvalidBarArray = 5,
+    /// `index` is a bar native_bar_structurally_valid refuses.
+    InvalidBar = 6,
+    /// `index` is a bar that is not strictly after its predecessor — the one
+    /// before it in this call, or the feed's last bar for index 0.
+    UnorderedBars = 7,
+    /// The first bar opened inside an input period the run has already
+    /// accepted. Its slice is closed, and folding it late would build a series
+    /// no batch of the same bars could.
+    InputPeriodAlreadyAccepted = 8,
+    /// Growing the appended-bar store threw. This one DOES fail the host.
+    AllocationFailure = 9,
+};
+
+/// What append_auxiliary_bars_result answers: the status, the refusal by name,
+/// and which bar OF THIS CALL it stopped on. `index` is 0 for every refusal
+/// that is not about one bar, and for an Applied append. A refusal appends
+/// nothing — there is no partial append.
+struct NativeAuxiliaryAppendResult {
+    NativeSetupStatus status = NativeSetupStatus::Failed;
+    NativeAuxiliaryAppendError error = NativeAuxiliaryAppendError::None;
+    std::size_t index = 0;
+};
+
 /// Which price a current execution settles at: the active callback's quote as
 /// presented, or that quote on the instrument's nearest tick. Configured
 /// directional slippage applies once either way.
@@ -1070,7 +1116,16 @@ public:
     /// already accepted (its slice is closed; no batch could build that
     /// series). Calling it from inside a callback is the contract failure
     /// every reentrant stream input is.
+    ///
+    /// "By name" is what append_auxiliary_bars_result below answers; this
+    /// spelling is its `status == NativeSetupStatus::Applied` and carries none
+    /// of the names.
     bool append_auxiliary_bars(const Bar* bars, std::size_t n);
+    /// The same call, answering NativeAuxiliaryAppendError and the bar of this
+    /// call it stopped on. Same commands, same appended bars, same latched
+    /// Contract failure for a reentrant call; last_error() stays the
+    /// presentation text beside it.
+    NativeAuxiliaryAppendResult append_auxiliary_bars_result(const Bar* bars, std::size_t n);
 
     /// The only setup call. Copies the candidate spec, normalizes it and stages it
     /// atomically: Unconfigured or a Completed run with a larger run number becomes

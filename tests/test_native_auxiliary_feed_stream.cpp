@@ -174,6 +174,13 @@ void test_append_refusals() {
                   .status == NativeSetupStatus::Applied);
         CHECK(!host.append_auxiliary_bars(feed.data() + 30, 15));
         CHECK(host.last_error() == "native append_auxiliary_bars requires realtime");
+        // The presentation text is not a value. The typed answer names the
+        // same refusal, and the bool is its status (R5 gap lane E18,
+        // E12 finding 5).
+        const auto refusal = host.append_auxiliary_bars_result(feed.data() + 30, 15);
+        CHECK(refusal.status == NativeSetupStatus::Failed);
+        CHECK(refusal.error == NativeAuxiliaryAppendError::NotRealtime);
+        CHECK(refusal.index == 0);
     }
     // No declared feed.
     {
@@ -184,6 +191,9 @@ void test_append_refusals() {
         CHECK(!host.append_auxiliary_bars(feed.data() + 30, 15));
         CHECK(host.last_error()
               == "native append_auxiliary_bars requires a declared auxiliary feed");
+        const auto refusal = host.append_auxiliary_bars_result(feed.data() + 30, 15);
+        CHECK(refusal.status == NativeSetupStatus::Failed);
+        CHECK(refusal.error == NativeAuxiliaryAppendError::NoAuxiliaryFeed);
         CHECK(host.stream_push_bar(inputs[2]));
         CHECK(host.stream_end(false));
     }
@@ -197,12 +207,27 @@ void test_append_refusals() {
 
     // An empty append is nothing, and says so.
     CHECK(host.append_auxiliary_bars(nullptr, 0));
+    {
+        const auto nothing = host.append_auxiliary_bars_result(nullptr, 0);
+        CHECK(nothing.status == NativeSetupStatus::Applied);
+        CHECK(nothing.error == NativeAuxiliaryAppendError::None);
+    }
     CHECK(!host.append_auxiliary_bars(nullptr, 3));
     CHECK(host.last_error() == "native auxiliary bar array is invalid");
+    {
+        const auto refusal = host.append_auxiliary_bars_result(nullptr, 3);
+        CHECK(refusal.error == NativeAuxiliaryAppendError::InvalidBarArray);
+        CHECK(refusal.index == 0);
+    }
 
     // Inside an input period already accepted: minute 29 again, and minute 12.
     CHECK(!host.append_auxiliary_bars(feed.data() + 29, 1));
     CHECK(host.last_error() == "native auxiliary bars must be strictly increasing");
+    {
+        const auto refusal = host.append_auxiliary_bars_result(feed.data() + 29, 1);
+        CHECK(refusal.error == NativeAuxiliaryAppendError::UnorderedBars);
+        CHECK(refusal.index == 0);
+    }
     {
         // A host that never declared the warmup's last minutes cannot add
         // them afterwards: their slice is closed.
@@ -214,6 +239,11 @@ void test_append_refusals() {
         CHECK(!late.append_auxiliary_bars(feed.data() + 25, 5));
         CHECK(late.last_error()
               == "native auxiliary bar opened inside an input period that was already accepted");
+        {
+            const auto refusal = late.append_auxiliary_bars_result(feed.data() + 25, 5);
+            CHECK(refusal.error == NativeAuxiliaryAppendError::InputPeriodAlreadyAccepted);
+            CHECK(refusal.index == 0);
+        }
         CHECK(late.native_state().kind == NativeLifecycleKind::Running);
         CHECK(late.stream_end(false));
     }
@@ -222,16 +252,41 @@ void test_append_refusals() {
     std::swap(unordered[3], unordered[4]);
     CHECK(!host.append_auxiliary_bars(unordered.data(), unordered.size()));
     CHECK(host.last_error() == "native auxiliary bars must be strictly increasing");
+    {
+        // Which bar of THIS call: the one that did not follow its predecessor.
+        const auto refusal =
+            host.append_auxiliary_bars_result(unordered.data(), unordered.size());
+        CHECK(refusal.error == NativeAuxiliaryAppendError::UnorderedBars);
+        CHECK(refusal.index == 4);
+    }
 
     std::vector<Bar> broken = slice(feed, 30, 45);
     broken[6].low = broken[6].high + 1.0;
     CHECK(!host.append_auxiliary_bars(broken.data(), broken.size()));
     CHECK(host.last_error() == "native auxiliary bar has invalid OHLCV");
+    {
+        const auto refusal = host.append_auxiliary_bars_result(broken.data(), broken.size());
+        CHECK(refusal.error == NativeAuxiliaryAppendError::InvalidBar);
+        CHECK(refusal.index == 6);
+    }
 
     // None of that failed the host or reached the series: the good append and
     // the input it rides on deliver exactly the three buckets a batch would.
     CHECK(host.native_state().kind == NativeLifecycleKind::Running);
     CHECK(host.deliveries.size() == delivered);
+    // The good append that follows every refusal is Applied and names nothing.
+    {
+        FeedHost accepted;
+        if (!begin_stream(accepted, feed_spec("native-aux-refuse-ok", slice(feed, 0, 30), "5"),
+                          inputs, 2)) {
+            return;
+        }
+        const auto applied = accepted.append_auxiliary_bars_result(feed.data() + 30, 15);
+        CHECK(applied.status == NativeSetupStatus::Applied);
+        CHECK(applied.error == NativeAuxiliaryAppendError::None);
+        CHECK(applied.index == 0);
+        CHECK(accepted.stream_end(false));
+    }
     if (!push_live(host, feed, inputs, 2)) return;
     CHECK(host.deliveries.size() == delivered + 3);
     for (std::size_t k = 6; k < host.deliveries.size(); ++k) {
@@ -249,9 +304,12 @@ class ReentrantHost final : public FeedHost {
 public:
     std::vector<Bar> more;
     bool answer = true;
+    NativeAuxiliaryAppendResult reentrant_result;
     void on_native_input(const Bar& bar, const NativeInputContext& context) override {
         FeedHost::on_native_input(bar, context);
-        if (context.input_index == 2) answer = append_auxiliary_bars(more.data(), more.size());
+        if (context.input_index != 2) return;
+        reentrant_result = append_auxiliary_bars_result(more.data(), more.size());
+        answer = reentrant_result.status == NativeSetupStatus::Applied;
     }
 };
 
@@ -271,6 +329,12 @@ void test_append_from_a_callback_fails_the_run() {
     CHECK(!host.answer);
     CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
     CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+    // The two refusals the bool folded together: the call that CAUSED the
+    // contract failure, and every call on the host it left failed.
+    CHECK(host.reentrant_result.error == NativeAuxiliaryAppendError::Reentrant);
+    const auto after = host.append_auxiliary_bars_result(host.more.data(), host.more.size());
+    CHECK(after.status == NativeSetupStatus::Failed);
+    CHECK(after.error == NativeAuxiliaryAppendError::HostFailed);
 }
 
 // ---- 6. appended bars are hashed ------------------------------------------

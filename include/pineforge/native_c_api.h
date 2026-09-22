@@ -112,6 +112,11 @@
  *   [--] declare_auxiliary_feed_result      the typed answer of the call above, which has no C caller for
  *                                          the same reason
  *   [C]  append_auxiliary_bars             strategy_native_append_auxiliary_bars_v1
+ *   [--] append_auxiliary_bars_result      the typed answer of the call above. That symbol reports the
+ *                                          same refusals as PF_NATIVE_E_STATE (and PF_NATIVE_E_ARGUMENT
+ *                                          for the null array it screens itself); carrying
+ *                                          NativeAuxiliaryAppendError and the bar index it stopped on
+ *                                          needs an out-parameter this version's signature does not have
  *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1

@@ -7219,44 +7219,62 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
 // input's period belonged to that input's slice, and folding it now would
 // build a series no batch of the same bars could, so it is refused by name --
 // as is every other malformed append -- without failing the host.
-bool NativeExecutionConsumer::append_auxiliary_bars(BacktestEngine& engine, const Bar* bars,
-                                                    std::size_t n) {
-    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
+NativeAuxiliaryAppendResult NativeExecutionConsumer::append_auxiliary_bars(
+        BacktestEngine& engine, const Bar* bars, std::size_t n) {
+    // Each `refused` below carries the SAME name the presentation text has
+    // always rendered; the text stays exactly where it was.
+    const auto refused = [](NativeAuxiliaryAppendError error,
+                            std::size_t index = 0) noexcept {
+        NativeAuxiliaryAppendResult result;
+        result.error = error;
+        result.index = index;
+        return result;
+    };
+    // The two legality refusals admit_public_stream_input folds into one bool:
+    // a host that was ALREADY failed on entry, and a reentrant call, which is
+    // the Contract failure this very call latches.
+    const bool entered_failed = failed();
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) {
+        return refused(entered_failed ? NativeAuxiliaryAppendError::HostFailed
+                                      : NativeAuxiliaryAppendError::Reentrant);
+    }
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     const auto* running = std::get_if<NativeRunning>(&state_);
     if (!running || running->phase != NativeRunPhase::Realtime) {
         present_refusal(engine, "native append_auxiliary_bars requires realtime");
-        return false;
+        return refused(NativeAuxiliaryAppendError::NotRealtime);
     }
     if (!auxiliary_tf_ || !running->spec.auxiliary_feed) {
         present_refusal(engine, "native append_auxiliary_bars requires a declared auxiliary feed");
-        return false;
+        return refused(NativeAuxiliaryAppendError::NoAuxiliaryFeed);
     }
-    if (n == 0) return true;
+    NativeAuxiliaryAppendResult applied;
+    applied.status = NativeSetupStatus::Applied;
+    if (n == 0) return applied;
     if (bars == nullptr) {
         present_refusal(engine, "native auxiliary bar array is invalid");
-        return false;
+        return refused(NativeAuxiliaryAppendError::InvalidBarArray);
     }
     const std::size_t held = auxiliary_bar_count();
     for (std::size_t i = 0; i < n; ++i) {
         if (!native_bar_structurally_valid(bars[i])) {
             present_refusal(engine, "native auxiliary bar has invalid OHLCV");
-            return false;
+            return refused(NativeAuxiliaryAppendError::InvalidBar, i);
         }
         const bool ordered = i > 0 ? bars[i].timestamp > bars[i - 1].timestamp
                                    : held == 0
                                        || bars[i].timestamp > auxiliary_bar(held - 1).timestamp;
         if (!ordered) {
             present_refusal(engine, "native auxiliary bars must be strictly increasing");
-            return false;
+            return refused(NativeAuxiliaryAppendError::UnorderedBars, i);
         }
     }
     if (last_accepted_input_
         && bars[0].timestamp < last_accepted_input_->next_period_open_ms) {
         present_refusal(engine,
             "native auxiliary bar opened inside an input period that was already accepted");
-        return false;
+        return refused(NativeAuxiliaryAppendError::InputPeriodAlreadyAccepted);
     }
     try {
         auxiliary_appended_.insert(auxiliary_appended_.end(), bars, bars + n);
@@ -7264,7 +7282,7 @@ bool NativeExecutionConsumer::append_auxiliary_bars(BacktestEngine& engine, cons
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Input});
         render(engine, "native auxiliary feed allocation failed");
-        return false;
+        return refused(NativeAuxiliaryAppendError::AllocationFailure);
     }
     for (std::size_t i = 0; i < n; ++i) {
         const Bar& bar = bars[i];
@@ -7279,7 +7297,7 @@ bool NativeExecutionConsumer::append_auxiliary_bars(BacktestEngine& engine, cons
         fold(&bar.low, sizeof bar.low); fold(&bar.close, sizeof bar.close);
         fold(&bar.volume, sizeof bar.volume); fold(&bar.timestamp, sizeof bar.timestamp);
     }
-    return true;
+    return applied;
 }
 
 std::size_t NativeExecutionConsumer::auxiliary_bar_count() const noexcept {
@@ -8920,8 +8938,14 @@ bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFee
     return declare_auxiliary_feed_result(std::move(feed)).status == NativeSetupStatus::Applied;
 }
 
-bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
+NativeAuxiliaryAppendResult NativeStrategyHost::append_auxiliary_bars_result(const Bar* bars,
+                                                                             std::size_t n) {
     return as_native_consumer(execution_consumer()).append_auxiliary_bars(*this, bars, n);
+}
+
+// The established spelling, kept exactly.
+bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
+    return append_auxiliary_bars_result(bars, n).status == NativeSetupStatus::Applied;
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {

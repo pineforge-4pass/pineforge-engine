@@ -29,7 +29,7 @@ claim here is read off the code, and three checkers hold the parts of it that ca
 Three layers, two of them meant to be optional:
 
 1. **Generic kernel — Pine-agnostic (the reusable core).** The public host is
-   `pineforge::NativeStrategyHost` (`native_host.hpp:778`), an abstract subclass of
+   `pineforge::NativeStrategyHost` (`native_host.hpp:824`), an abstract subclass of
    `BacktestEngine`. Kernel translation units are named, not inferred: they are the
    thirty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:113`) — the `engine_*`,
    `native_*`, `ta_*`, `market_driver`, `magnifier`, `math`, `matrix`, `session_time`,
@@ -64,7 +64,7 @@ this runtime **on** the kernel; it did **not** move it to codegen.
 
 ## How the kernel works (driving it without Pine)
 
-Subclass `NativeStrategyHost`: a **zero-argument** host (`native_host.hpp:778`) carrying the
+Subclass `NativeStrategyHost`: a **zero-argument** host (`native_host.hpp:824`) carrying the
 callbacks, the answering hooks and the request API. The `CapAttachment` constructor belongs
 to the adapter class `PineStrategyHost` (`pine_strategy_host.hpp:241`), not here. The whole
 surface, field by field, is `docs/pages/native-engine.md`; this section is the boundary's
@@ -72,18 +72,18 @@ summary of it.
 
 - **Lifecycle.** `Unconfigured → Ready → Running → Completed | Failed` (`native_host.hpp:20-26`);
   phases `Batch | Warmup | Realtime` (`native_host.hpp:28-32`) — one path runs the batch, then
-  continues live. Configure with `configure_native(spec)` (`native_host.hpp:1080`), then feed.
+  continues live. Configure with `configure_native(spec)` (`native_host.hpp:1135`), then feed.
 - **Callbacks are not close-only.** `on_native_bar` is the pure-virtual script-bar calculation
-  (`native_host.hpp:825`); also `on_native_input` (`native_host.hpp:808`), `on_native_tick`
-  (`native_host.hpp:811`), `on_native_timeframe_bar` (`native_host.hpp:818`),
+  (`native_host.hpp:871`); also `on_native_input` (`native_host.hpp:854`), `on_native_tick`
+  (`native_host.hpp:857`), `on_native_timeframe_bar` (`native_host.hpp:864`),
   `on_native_bar_open` — at the modeled opening, before its matching pass
-  (`native_host.hpp:821`, `on_native_bar_open` `native_execution_consumer.cpp:6145-6147`) —
-  `on_native_recalculate` for every calculation of the run (`native_host.hpp:844`),
-  `on_native_sub_bar` (`native_host.hpp:859`) and post-fill
-  `on_native_applied` (`native_host.hpp:869`). `on_bar` is `final` (`native_host.hpp:790`).
+  (`native_host.hpp:867`, `on_native_bar_open` `native_execution_consumer.cpp:6145-6147`) —
+  `on_native_recalculate` for every calculation of the run (`native_host.hpp:890`),
+  `on_native_sub_bar` (`native_host.hpp:905`) and post-fill
+  `on_native_applied` (`native_host.hpp:915`). `on_bar` is `final` (`native_host.hpp:836`).
 - **Requests.** `submit` / `replace` / `cancel` / `submit_market` / `replace_market`
-  (`native_host.hpp:1113-1118`), plus `cancel_all` (`native_host.hpp:1146`) and `cancel_where`
-  (`native_host.hpp:1151`). A request carries one of five triggers — Market, Limit (with a
+  (`native_host.hpp:1168-1173`), plus `cancel_all` (`native_host.hpp:1201`) and `cancel_where`
+  (`native_host.hpp:1206`). A request carries one of five triggers — Market, Limit (with a
   generic market-if-touched `fill_through`, `native_order.hpp:239-242`), Stop, StopLimit, Trail
   (`Trigger` `native_order.hpp:296`); one of **six** intents — `Flatten`, `Reduce`, `Transact`,
   `ReverseTo`, `HostSized` and the kernel-resolved `Sized` (`OrderIntent`
@@ -96,12 +96,12 @@ summary of it.
   fills with slippage, fees, admission and settlement. Sizing has **two** routes: `Sized`
   (`native_order.hpp:164`) is resolved by the kernel from a cash or equity-fraction basis, so a
   bare host needs no override at all, while `HostSized` hands the units to the host — and an
-  unresolved `HostSized` whose `resolve_execution_terms` (`native_host.hpp:878`) returns no
+  unresolved `HostSized` whose `resolve_execution_terms` (`native_host.hpp:924`) returns no
   units is a `TermsUnresolved` rejection
   (`TermsUnresolved` `native_execution_consumer.cpp:4375`).
-- **Observing executions.** Implement `on_native_applied` (`native_host.hpp:869`) — notifications
+- **Observing executions.** Implement `on_native_applied` (`native_host.hpp:915`) — notifications
   drain FIFO after the outer callback returns — and/or poll `native_events(after_ordinal)`
-  (`native_host.hpp:1205`). Do *not* implement
+  (`native_host.hpp:1260`). Do *not* implement
   `NativeExecutionConsumer`: it is the kernel's internal matcher, declared `final`
   (`src/native_execution_consumer.hpp:17`) and bound by the host.
 - **The rest of the host surface**, all on `NativeStrategyHost`:
@@ -110,12 +110,12 @@ summary of it.
   |---|---|
   | Run state | `native_state()` → `NativeStateView` — kind, phase, `NativeCompletion` BatchComplete / StreamEnded, failure, high water (`native_host.hpp:50`, `:211-219`, `:34-37`) |
   | Failure model | `NativeFailureCode` (`native_host.hpp:63-77`); `Failed` is latched, nothing resumes. A throwing callback latches `CallbackException` (`CallbackException` `native_execution_consumer.cpp:4348`) |
-  | Cohorts | `cohort_open` (`native_host.hpp:1161`) / `cohort_add` (`:1164`) / `cohort_remove` (`:1167`) — the handle a `BindCohort` owner names |
-  | Mid-callback execution | `current_execution_point` (`native_host.hpp:988`), `inspect_current_execution` (`native_host.hpp:1000`) / `execute_current` (`native_host.hpp:1005`) |
-  | Margin seams | four, not one: the run spec's own `margin` model (`NativeMarginModel` `native_run_spec.hpp:239`) with its three hooks — `resolve_margin_requirement` (`native_host.hpp:906`), `margin_check_allowed` (`native_host.hpp:918`), `resolve_margin_call_units` (`native_host.hpp:925`) — and `validate_execution_precommit` (`native_host.hpp:890`), whose `AdmitWithHostMargin` verdict hands the opening check to the host |
-  | Risk seam | `NativeRiskLimits` (`native_run_spec.hpp:309`) with `native_risk_state()` (`native_host.hpp:1202`); the breach appends a `NativeRiskEvent` to the command history |
-  | State reads | `physical_position()` (`native_host.hpp:1171`) / `native_marked_equity(mark)` (`native_host.hpp:1180`) / `native_open_lots(mark)` (`native_host.hpp:1176`), `trail_state(handle)` (`native_host.hpp:993`), and the rest of the query surface in `docs/pages/native-engine.md`, "Reading the run back" |
-  | Lookahead hazard | the `Bar` given to `on_native_bar_open` is the *complete* script bar; `current_partial_bar()` (`native_host.hpp:974`) is the lookahead-free bar so far, and `NativeOpenBarView::OpenOnly` (`native_run_spec.hpp:108`) masks that one callback |
+  | Cohorts | `cohort_open` (`native_host.hpp:1216`) / `cohort_add` (`:1219`) / `cohort_remove` (`:1222`) — the handle a `BindCohort` owner names |
+  | Mid-callback execution | `current_execution_point` (`native_host.hpp:1034`), `inspect_current_execution` (`native_host.hpp:1046`) / `execute_current` (`native_host.hpp:1051`) |
+  | Margin seams | four, not one: the run spec's own `margin` model (`NativeMarginModel` `native_run_spec.hpp:239`) with its three hooks — `resolve_margin_requirement` (`native_host.hpp:952`), `margin_check_allowed` (`native_host.hpp:964`), `resolve_margin_call_units` (`native_host.hpp:971`) — and `validate_execution_precommit` (`native_host.hpp:936`), whose `AdmitWithHostMargin` verdict hands the opening check to the host |
+  | Risk seam | `NativeRiskLimits` (`native_run_spec.hpp:309`) with `native_risk_state()` (`native_host.hpp:1257`); the breach appends a `NativeRiskEvent` to the command history |
+  | State reads | `physical_position()` (`native_host.hpp:1226`) / `native_marked_equity(mark)` (`native_host.hpp:1235`) / `native_open_lots(mark)` (`native_host.hpp:1231`), `trail_state(handle)` (`native_host.hpp:1039`), and the rest of the query surface in `docs/pages/native-engine.md`, "Reading the run back" |
+  | Lookahead hazard | the `Bar` given to `on_native_bar_open` is the *complete* script bar; `current_partial_bar()` (`native_host.hpp:1020`) is the lookahead-free bar so far, and `NativeOpenBarView::OpenOnly` (`native_run_spec.hpp:108`) masks that one callback |
 - **The run spec is generic, and no longer narrow.** `NativeRunSpec`
   (`native_run_spec.hpp:521`) owns instrument and clock facts, fees
   (`NativeFeeKind` `native_run_spec.hpp:19`), a scalar account FX, close timing, the quantity
@@ -142,9 +142,9 @@ summary of it.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
   run's own symbol: `NativeRunSpec::subscriptions`, or `declare_timeframe_subscriptions`
-  (`native_host.hpp:1029`) from inside `on_native_run_begin`, with
-  `on_native_timeframe_bar` (`native_host.hpp:818`) and `native_series_bar`
-  (`native_host.hpp:1012`) reading them back, and `NativeAuxiliaryFeed` +
+  (`native_host.hpp:1075`) from inside `on_native_run_begin`, with
+  `on_native_timeframe_bar` (`native_host.hpp:864`) and `native_series_bar`
+  (`native_host.hpp:1058`) reading them back, and `NativeAuxiliaryFeed` +
   `NativeSeriesSource::AuxiliaryFeed` for a series finer than the input. The kernel owns the
   aggregation, the `lookahead`/`gaps` delivery rules and the lazy-seal chronology; TradingView's
   `request.security` *semantics* are not in it. `prepare_native_security_feeds` stays protected
@@ -154,7 +154,7 @@ summary of it.
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:78`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
-  `configure_native_fx_curve` (`native_host.hpp:1086`).
+  `configure_native_fx_curve` (`native_host.hpp:1141`).
 - **Reporting.** `fill_report` (`engine.hpp:1944`, `src/engine_report.cpp:40`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
@@ -167,7 +167,7 @@ summary of it.
   `compute_equity_stats` answers its all-NaN value with no error (`src/engine_metrics.cpp:153`,
   consumed at `src/engine_report.cpp:119-139`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
-  (`native_host.hpp:1223`) returns the consumer's event/continuation hash.
+  (`native_host.hpp:1278`) returns the consumer's event/continuation hash.
   `broker_state_hash()` (`engine.hpp:2127`)
   folds that hash with position and lot state under the pinned domain
   `pineforge-broker-state/v18` (`engine_state_hash.cpp:32`); it is the one exported to C
@@ -258,7 +258,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `engine_aux_security.cpp:5-12`, for instance, pulls only `engine_internal.hpp`, `ta.hpp` and std
   headers. No kernel signature names an adapter type either: the rich begin
   bridge takes the host overrides as a plain `const void*` (`engine.hpp`, `execution_consumer.hpp`)
-  and forwards it as `overrides_opaque` (`native_host.hpp:693`), which the kernel never dereferences; the
+  and forwards it as `overrides_opaque` (`native_host.hpp:739`), which the kernel never dereferences; the
   source host casts it back (`pine_strategy_host.cpp`). `check_native_include_independence.py`
   therefore whitelists no source symbol at all.
 - **The four rules earlier drafts named — one survives as code, and it is hashed.** The
@@ -295,9 +295,9 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `src/c_abi.cpp` implements the **57** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **33** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
-  callback table (`strategy_native_host_create_v1` `native_c_api.h:1538`), runs a batch
-  (`strategy_native_run_v1` `native_c_api.h:1551`), and **submits, replaces, cancels and
-  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:1578`), `_replace_v1`
+  callback table (`strategy_native_host_create_v1` `native_c_api.h:1543`), runs a batch
+  (`strategy_native_run_v1` `native_c_api.h:1556`), and **submits, replaces, cancels and
+  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:1583`), `_replace_v1`
   (`:1449`), `_cancel_v1` (`:1456`), `_cancel_all_v1` (`:1460`), `_cancel_where_v1` (`:1481`),
   `_execute_current_v1` (`:1502`) — under the kernel's own legality rule. Streaming needs no new
   symbol: the whole `strategy_stream_*` family takes that handle unchanged. The header's
@@ -552,7 +552,7 @@ consults before believing one.
 | `ta::STDEV` `include/pineforge/ta.hpp:421-428` | the population (biased) standard deviation | biased vs sample is a textbook choice, and the kernel states which | a per-instance switch is the *right* answer where two conventions genuinely compete, which is why `ta::EmaSeeding` exists and this one does not need it | `tests/test_ta_indicators_extras.cpp` |
 | `float_band_eq` `include/pineforge/ta_compare_band.hpp:38` | a relative-epsilon float comparison for indicator equality | an epsilon band is needed by any float comparison; the width is the calibration | a band-width field on a comparison the indicators share | `tests/test_dmi_parity.cpp`, `tests/test_ta_osc_edge.cpp` |
 | the two delivery rules `src/native_execution_consumer.cpp:7262`, `:7347` | deliver a completed bucket at its **first** contributing bar (lookahead), and **clear** the series on a bar it publishes nothing on (gaps) | both are delivery rules over a bucket the aggregator already closed; neither reads a platform. They are spec fields: `NativeTimeframeSubscription::lookahead` / `::gaps` | already spelled, and both default to the rule that moves no identity | `tests/test_native_htf_subscriptions.cpp` |
-| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:1229`, `::gaps` `:1233` | the C spelling of those two rules | the doxygen names `barmerge.lookahead_off` / `gaps_on` so a migrating reader finds the field — that is a *pointer to the reader's vocabulary*, which is what a migration surface is for, not a justification | — | `tests/test_native_c_api.c` |
+| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:1234`, `::gaps` `:1238` | the C spelling of those two rules | the doxygen names `barmerge.lookahead_off` / `gaps_on` so a migrating reader finds the field — that is a *pointer to the reader's vocabulary*, which is what a migration surface is for, not a justification | — | `tests/test_native_c_api.c` |
 | the authoritative-feed partition `src/engine_aux_security.cpp` | a feed is the venue's own bars of one timeframe; its stamps are the period partition | already ruled: design §2.ii row s, and the residual table's own row | the policy knob is installing the feed or not | `tests/test_native_htf_subscriptions.cpp`, `tests/test_native_security_feed.cpp` |
 | `session_template_knows_early_close` `src/engine_security.cpp` | the instrument-class classification | already ruled: design §2.ii row t; `SymInfo::type`'s vocabulary is fixed by the frozen C ABI | — | `tests/test_native_wm_buckets.cpp` |
 | `skip_entry_bar_high` / `skip_entry_bar_low` `include/pineforge/engine.hpp:145` | the intrabar-fill excursion mask: the part of a bar traversed before a priced entry filled is not that trade's excursion | the mask is generic — an excursion is measured from the fill — but **the kernel's own default is to sample the whole bar**, and only the adapter raises the flags | already spelled the generic way: `owns_lot_excursions()` + `closed_lot_excursion` hand the whole measurement to a host | `tests/test_l11a_host_excursion.cpp` |
@@ -585,7 +585,7 @@ rather than as violations; the R5 follow-up wave closed both:
 1. TradingView/Pine parity for *new* work goes only in `src/source/` / `src/compat/pine/` or in
    codegen — never add a new Pine-specific rule to the kernel.
 2. The kernel changes only for a *generic* capability with a recorded ruling (e.g. per-lot
-   excursion ownership, `owns_lot_excursions` `native_host.hpp:953`; the market-if-touched
+   excursion ownership, `owns_lot_excursions` `native_host.hpp:999`; the market-if-touched
    `fill_through` flag, `native_order.hpp:239-242`). **The test is not whether the word
    "TradingView" appears — a calibrated number has to say what calibrated it. The test is this
    pair, and both halves must pass:**
