@@ -837,9 +837,12 @@ std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noex
 /// as the consumer seeds it for the run this spec describes. The folded
 /// generation distance is therefore zero and the digest is a property of the
 /// spec value alone. It is NOT a continuation hash and never comparable with
-/// one: a raw continuation hash also folds the resolved timezone resources
-/// (zoneinfo root and zone file paths), which differ per machine, so only this
-/// digest is portable enough to pin as a constant.
+/// one: a raw continuation hash also folds the resolved timezone identity,
+/// which since R5 lane E23 is the zone's content rather than its paths — the
+/// same value on every machine carrying the same tzdata release, a different
+/// one after a tzdata update that rewrites the zone's rules. Only this digest
+/// is independent of the installed zone data, so only this one is pinnable as
+/// a source constant.
 std::uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept;
 
 /// Exact FNV-1a content digest for the generic margin model. It includes every

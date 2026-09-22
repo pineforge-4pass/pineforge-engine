@@ -218,8 +218,19 @@ struct TimezoneIdentityDescriptor {
     TimezoneSourceKind kind = TimezoneSourceKind::Utc;
     std::string input;
     std::string effective_definition;
+    // Where this machine keeps the zone data, and which files under it were
+    // read. DIAGNOSTICS: both are absolute paths of the host that resolved
+    // the zone, so no digest folds either member (R5 lane E23).
     std::string zoneinfo_root;
     std::vector<std::string> resource_paths;
+    // The CONTENT of `resource_paths`, as one value: FNV-1a 64 over the
+    // resource count, then each file's byte length and its bytes, in the
+    // order listed. This is the zone fact a run's identity folds, so two
+    // machines carrying the same tzdata release agree on it whatever their
+    // zoneinfo root is called, while a tzdata update that rewrites the zone's
+    // rules moves it. Set by `timezone_identity_descriptor`, which returns
+    // nullopt when a named resource cannot be read back.
+    std::uint64_t resource_digest = 0;
     bool valid() const noexcept;
 };
 

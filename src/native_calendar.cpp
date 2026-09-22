@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
@@ -843,6 +844,68 @@ std::string tzdir_canonical() {
 #endif
 }
 
+// R5 lane E23. The content of the zone resources a descriptor names, as one
+// value: FNV-1a 64 over the resource count, then each file's byte length and
+// its bytes, in the descriptor's own order. Length-prefixed, so two files
+// cannot concatenate into a third's digest, and seeded with the same offset
+// basis the consumer's continuation accumulator uses. Byte order is the
+// machine's, exactly as every other member of that fold.
+//
+// This is what a run's identity folds for its timezone. A path is not an
+// input of the run; the rules the run actually read are. nullopt = a named
+// resource could not be read back or is larger than any zone file, which is a
+// backing fact that could not be established: the caller refuses the
+// descriptor rather than hashing a hole.
+constexpr std::uint64_t kTzFnvOffsetBasis = 1469598103934665603ULL;
+constexpr std::uint64_t kTzFnvPrime = 1099511628211ULL;
+constexpr std::size_t kTzResourceByteCap = 1u << 20;
+
+void tz_fnv_bytes(std::uint64_t& h, const void* p, std::size_t n) {
+    const auto* c = static_cast<const unsigned char*>(p);
+    for (std::size_t i = 0; i < n; ++i) {
+        h ^= c[i];
+        h *= kTzFnvPrime;
+    }
+}
+
+void tz_fnv_u64(std::uint64_t& h, std::uint64_t v) { tz_fnv_bytes(h, &v, sizeof v); }
+
+std::optional<std::uint64_t> tz_resource_digest(const std::vector<std::string>& paths) {
+    std::uint64_t h = kTzFnvOffsetBasis;
+    tz_fnv_u64(h, static_cast<std::uint64_t>(paths.size()));
+    for (const std::string& path : paths) {
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return std::nullopt;
+        std::string bytes;
+        char buffer[4096];
+        bool failed = false;
+        for (;;) {
+            const ssize_t n = ::read(fd, buffer, sizeof buffer);
+            if (n == 0) break;
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                failed = true;
+                break;
+            }
+            try {
+                bytes.append(buffer, static_cast<std::size_t>(n));
+            } catch (...) {
+                failed = true;
+                break;
+            }
+            if (bytes.size() > kTzResourceByteCap) {
+                failed = true;
+                break;
+            }
+        }
+        ::close(fd);
+        if (failed) return std::nullopt;
+        tz_fnv_u64(h, static_cast<std::uint64_t>(bytes.size()));
+        tz_fnv_bytes(h, bytes.data(), bytes.size());
+    }
+    return h;
+}
+
 std::optional<std::string> tz_file_actual_path(std::string_view name) {
     if (!tz_iana_name_chars(name)) return std::nullopt;
     const std::string dir = tzdir_canonical();
@@ -1111,6 +1174,11 @@ timezone_identity_descriptor(std::string_view timezone) {
         tz_util::normalize_timezone_for_posix(std::string(timezone.begin(), timezone.end()));
 
     auto finish = [&]() -> std::optional<TimezoneIdentityDescriptor> {
+        // The resources are digested where they are still known to be
+        // readable: identity time. Nothing downstream opens a file.
+        auto digest = tz_resource_digest(d.resource_paths);
+        if (!digest) return std::nullopt;
+        d.resource_digest = *digest;
         if (!d.valid()) return std::nullopt;
         return d;
     };

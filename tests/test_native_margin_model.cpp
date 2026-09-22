@@ -28,10 +28,10 @@ namespace {
 constexpr const char* kLiquidationLabel = "__kernel_liquidation__";
 
 // ── Portable spec-fold pins ─────────────────────────────────────────────
-// A raw native_continuation_hash() constant is NOT portable: the consumer
-// folds the run's resolved timezone identity — the zoneinfo root and the zone
-// file paths of the machine that ran it — so the same run hashes differently
-// here and on each CI runner. native_run_spec_digest() is exactly the
+// A raw native_continuation_hash() constant is NOT pinnable: the consumer
+// folds the run's resolved timezone identity, which since R5 lane E23 is the
+// zone's CONTENT rather than the host's paths — the same value on every host,
+// but a different one after a tzdata release that rewrites the zone's rules. native_run_spec_digest() is exactly the
 // consumer's run-spec fold and nothing else, so it is the same number
 // everywhere. Both constants are observed on THIS tree for the margin-free
 // specs of scenarios 1+10 and guard the fold's field list and order; the

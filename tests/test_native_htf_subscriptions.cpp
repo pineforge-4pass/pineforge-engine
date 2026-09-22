@@ -722,9 +722,11 @@ void test_finer_than_input_is_refused() {
 // ---- 6. a spec without subscriptions keeps its continuation identity -------
 
 // The portable pin of that identity. A raw native_continuation_hash() constant
-// is not portable — the consumer folds the resolved timezone identity, whose
-// zoneinfo root and zone file paths belong to the machine that ran it, so the
-// same run hashes differently here and on each CI runner.
+// is still not pinnable — the consumer folds the resolved timezone identity,
+// and since R5 lane E23 that identity is the zone's CONTENT rather than the
+// host's paths: the same run now answers the same value on every host, but a
+// tzdata release that rewrites the zone's rules still moves it, so a literal
+// would pin one release.
 // native_run_spec_digest() is exactly the consumer's run-spec fold and nothing
 // else, so it is the same number everywhere. Observed on this tree for
 // base_spec("15", "15", "native-htf-neutral"); it guards the fold's field list

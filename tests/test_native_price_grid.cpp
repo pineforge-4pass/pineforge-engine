@@ -117,10 +117,11 @@ std::uint64_t empty_run_hash(const NativeRunSpec& s) {
 }
 
 // The continuation-hash column this row carried is gone: a raw
-// native_continuation_hash() constant folds the machine's resolved timezone
-// resources (zoneinfo root and zone file paths) and so can never be portable —
-// it passed locally and failed on both of PR #260's CI runners (macOS and
-// ubuntu), which is what retired it. The default path's identity is now
+// native_continuation_hash() constant folds the run's resolved timezone
+// identity — it passed locally and failed on both of PR #260's CI runners
+// (macOS and ubuntu), which is what retired it. R5 lane E23 made that identity
+// the zone's CONTENT rather than the host's paths, so those runners would
+// agree today; a literal would still pin the installed tzdata release. The default path's identity is now
 // witnessed by the fills below plus, in L8-1 and L8-6, in-process hash equality
 // against the same spec with the grid spelled out at its defaults, and the spec
 // fold itself is pinned through native_run_spec_digest.
@@ -370,8 +371,8 @@ void hash_folds_only_when_set() {
     scenario = "L8-6 the grid folds into the spec hash only when set";
     // Pinned on this tree, not on clean main: native_run_spec_digest is exactly
     // the consumer's run-spec fold and nothing else, so unlike a raw
-    // continuation hash (which folds this machine's zoneinfo root and zone file
-    // paths) it is the same number on every machine. The constant guards the
+    // continuation hash (which folds the installed zone data's content) it is
+    // the same number on every machine. The constant guards the
     // fold's field list and order; the neutrality claim is the equalities.
     constexpr std::uint64_t kSpecDigest = 3103595961916934085ULL;
     CHECK(native_run_spec_digest(spec("g-empty")) == kSpecDigest);
@@ -428,7 +429,7 @@ struct Fnv1a {
 };
 
 // The trade rows and counts of a run, machine-independent: no timing, no
-// padding, no continuation hash (which folds this machine's zoneinfo paths).
+// padding, no continuation hash (which folds the installed zone data).
 std::uint64_t report_digest(const BacktestEngine& engine) {
     ReportC c{};
     engine.fill_report(&c);

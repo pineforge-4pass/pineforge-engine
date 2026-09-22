@@ -173,15 +173,22 @@ Case case_b() {
 // measured on Darwin, and NO continuation digest is portable, so as literals
 // they pinned one host.
 //
-// native_continuation_hash() folds the run's timezone identity, and that
-// identity carries the host's own zoneinfo ROOT PATH and the tz resource
-// paths under it -- tzdir_canonical() resolves /var/db/timezone/zoneinfo on
-// Darwin (which realpaths through the installed tzdata release, e.g.
-// .../tz/2026c.1.0/zoneinfo) and /usr/share/zoneinfo, or $TZDIR, under glibc.
-// So the same engine over the same bars, booking the same trades, answers a
-// different continuation value on each host; moving the root alone on ONE
-// host moves every digest below while every row, price and position stays
-// put. The digests are still printed, because they are the measurement.
+// native_continuation_hash() folds the run's timezone identity, and when this
+// lane landed that identity carried the host's own zoneinfo ROOT PATH and the
+// tz resource paths under it -- tzdir_canonical() resolves
+// /var/db/timezone/zoneinfo on Darwin (which realpaths through the installed
+// tzdata release, e.g. .../tz/2026c.1.0/zoneinfo) and /usr/share/zoneinfo, or
+// $TZDIR, under glibc. So the same engine over the same bars, booking the same
+// trades, answered a different continuation value on each host, and moving the
+// root alone on ONE host moved every digest below while every row, price and
+// position stayed put.
+//
+// R5 lane E23 removed the paths from that fold: the identity is now the zone's
+// kind, its effective definition and a digest of the zone file bytes actually
+// read (tests/test_native_continuation_portable.cpp). The digests below are
+// therefore the same on every host carrying the same tzdata release -- but a
+// tzdata release that rewrites the zone's rules still moves them, so they stay
+// printed measurements rather than literals.
 //
 // expectation corrected: kControlContinuationA/B == the control digest ->
 // same-host properties of the absent seed (an_absent_seed_folds_nothing),

@@ -31,10 +31,10 @@ namespace {
 constexpr const char* kRiskLabel = "__kernel_risk__";
 
 // ── Portable pins ───────────────────────────────────────────────────────
-// A raw native_continuation_hash() constant is NOT portable: the consumer
-// folds the run's resolved timezone identity — the zoneinfo root and zone file
-// paths of the machine that ran it — so the same run hashes differently here
-// and on each CI runner. These two are machine-independent: the run-spec fold
+// A raw native_continuation_hash() constant is NOT pinnable: the consumer
+// folds the run's resolved timezone identity, which since R5 lane E23 is the
+// zone's CONTENT rather than the host's paths — the same value on every host,
+// but a different one after a tzdata release that rewrites the zone's rules. These two are machine-independent: the run-spec fold
 // itself, and a digest over the finished report. Both are observed for the
 // risk-free spec of scenario 1. Both are observed BEFORE this lane, on a clean
 // build of engine main (b0cec54, this tree's parent commit), by a scratch probe

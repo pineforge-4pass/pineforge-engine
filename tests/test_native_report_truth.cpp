@@ -29,10 +29,10 @@ namespace {
 constexpr std::uint64_t kMainHostRecordedReportDigest = 11554093071070742013ull;
 
 // The portable spec-fold pin. A raw native_continuation_hash() constant is NOT
-// portable: the consumer folds the resolved timezone identity — the zoneinfo
-// root and the zone file paths of the machine that ran it — so the same run
-// hashes differently on this tree, on CI's macOS runner and on CI's ubuntu
-// runner. native_run_spec_digest() is exactly the consumer's spec fold and
+// pinnable: the consumer folds the resolved timezone identity, which since R5
+// lane E23 is the zone's CONTENT rather than the host's paths — the same value
+// on this tree, on CI's macOS runner and on CI's ubuntu runner, but a different
+// one after a tzdata release that rewrites the zone's rules. native_run_spec_digest() is exactly the consumer's spec fold and
 // nothing else, so it is a machine-independent value a test may pin. This one
 // is observed on THIS tree for report_spec("l2-report-truth"); it guards the
 // spec fold's field list and order against a future change. The neutrality

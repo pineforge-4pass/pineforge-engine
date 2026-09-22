@@ -45,9 +45,10 @@ using namespace l5_fixture;
 // The cadence folds into the run-spec fold only once the trigger or the
 // open-bar view is non-default, so a BarClose spec folds exactly the pre-L5
 // fields. That is pinned as native_run_spec_digest() and not as a continuation
-// hash: the continuation identity also folds the machine's resolved timezone
-// resources (zoneinfo root and zone file paths), so a raw constant passes here
-// and fails on CI. Observed on THIS tree for base_spec("native-calc-timing");
+// hash: the continuation identity also folds the run's resolved timezone
+// identity, which since R5 lane E23 is the zone's CONTENT rather than the
+// host's paths — portable across hosts, but a raw constant would still pin the
+// installed tzdata release. Observed on THIS tree for base_spec("native-calc-timing");
 // it guards the fold's field list and order, while the neutrality claim is the
 // equalities in test_bar_close_default — including the callback log, the book
 // and the recalculation counters, which are the pre-L5 contract itself.

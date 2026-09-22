@@ -48,9 +48,10 @@ using namespace r4_test;
 namespace {
 
 // A per-bar broker-state hash folds the consumer's continuation, and that
-// folds this machine's resolved zoneinfo root and zone file paths
-// (native_execution_consumer.cpp hash_tz_identity), so a raw sequence is not
-// a portable pin. The probe below overrides the projection to fold one fixed
+// folds the run's resolved timezone identity (native_execution_consumer.cpp
+// hash_tz_identity) — the zone's own content since R5 lane E23, so a raw
+// sequence is portable across hosts but still moves with the installed tzdata
+// release, which is not a pin this row wants. The probe below overrides the projection to fold one fixed
 // execution hash instead: what remains is the generic broker state and the
 // source extension — position, lots, realized sums, the equity extremes the
 // recording order moves, and the closed rows — all of which are portable.

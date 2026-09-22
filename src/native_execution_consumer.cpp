@@ -1082,6 +1082,14 @@ void hash_account_row(Fnv& f, const NativeAccountObservation& row) noexcept {
     f.d(row.signed_units);
 }
 
+// R5 lane E23: the digest names the run's INPUTS, and where a zone file lives
+// on this machine is not one of them. What the run read is: the kind of source
+// the zone is, the definition it resolved to, and the CONTENT of the resources
+// the resolver opened (`resource_digest`, folded at identity time). The
+// descriptor keeps `zoneinfo_root` and `resource_paths` as diagnostics and
+// this fold ignores both, so one run digests the same value on every host
+// carrying the same tzdata release -- while a tzdata update that rewrites the
+// zone's rules still moves it, because then the run read different rules.
 void hash_tz_identity(
         Fnv& f, const std::optional<native_calendar::TimezoneIdentityDescriptor>& id) noexcept {
     f.b(id.has_value());
@@ -1090,9 +1098,7 @@ void hash_tz_identity(
     f.u(static_cast<uint64_t>(id->kind));
     f.s(id->input);
     f.s(id->effective_definition);
-    f.s(id->zoneinfo_root);
-    f.u(id->resource_paths.size());
-    for (const auto& path : id->resource_paths) f.s(path);
+    f.u(id->resource_digest);
 }
 
 CommissionType fee_to_commission(NativeFeeKind kind) {

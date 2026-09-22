@@ -463,9 +463,10 @@ void test_series_bar_across_the_boundary() {
 
 // The portable pin of that identity. Neither native_continuation_hash() nor
 // stream_state_hash() — which folds broker_state_hash(), and so the
-// continuation — can be pinned as a constant: both carry the machine's
-// resolved timezone resources (zoneinfo root and zone file paths), so the same
-// stream hashes differently here and on each CI runner.
+// continuation — can be pinned as a constant: both carry the run's resolved
+// timezone identity, which since R5 lane E23 is the zone's CONTENT rather than
+// the host's paths — the same value on every host, but a different one after a
+// tzdata release that rewrites the zone's rules.
 // native_run_spec_digest() is exactly the consumer's run-spec fold and nothing
 // else, so it is the same number everywhere. Observed on THIS tree for
 // base_spec("15", "15", "native-htf-stream-neutral"); it guards the fold's

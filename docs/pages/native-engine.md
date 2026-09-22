@@ -123,15 +123,20 @@ allocation-free `context`). Cause/recipient/cursor facts use
 A foreign run is dropped, not relabeled. Failure copy/move does not allocate.
 See `NativeFailureCode` / `NativeFailureOperation` in `native_host.hpp`.
 
-`native_continuation_hash()` is a **local** identity: it folds the resolved
-timezone identity of the run, whose `zoneinfo_root` and zone file paths are
-absolute paths on the machine that ran it (`/usr/share/zoneinfo` on a glibc
-host, a tzdata-versioned path such as
-`/private/var/db/timezone/tz/2026c.1.0/zoneinfo` on macOS), so the same spec
-over the same bars hashes differently on two machines even for `"UTC"`. Compare
-it between runs in one process — to prove that stating a field at its default
-changes nothing, or that opting in moves the identity — and never pin it as a
-constant. For a portable constant use `native_run_spec_digest(spec)`
+`native_continuation_hash()` folds the resolved timezone identity of the run by
+its **content**: the source kind, the effective definition and
+`TimezoneIdentityDescriptor::resource_digest`, an FNV-1a 64 over the bytes of
+the zone files the resolver actually read. `zoneinfo_root` and `resource_paths`
+stay on the descriptor as diagnostics and are not folded, so the same spec over
+the same bars answers the same value on a glibc host reading
+`/usr/share/zoneinfo` and on macOS reading
+`/private/var/db/timezone/tz/2026c.1.0/zoneinfo` (R5 lane E23; before it the
+paths were folded and no two hosts agreed). What still moves it is a tzdata
+release that rewrites the zone's rules — the run then really did read different
+rules — so it is an identity to compare, not a source constant: compare it
+between runs — to prove that stating a field at its default changes nothing, or
+that opting in moves the identity — and pin a constant only where the installed
+zone data cannot enter it. For that use `native_run_spec_digest(spec)`
 (`native_run_spec.hpp`): exactly the fields the consumer folds into the
 continuation identity for a run spec and nothing else, seeded as the consumer
 seeds them, so two specs with equal digests drive identical continuation
@@ -585,11 +590,11 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:4900-4904`). Requests accepted before the
+`native_execution_consumer.cpp:4906-4910`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:6145-6147`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:6151-6153`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = bar` (`native_execution_consumer.cpp:4187`) — so its
 high, low and close are the finished bar's, not what is known at the open. A
@@ -1807,7 +1812,7 @@ always had — `set_broker_state_hash_recording(true)`
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:6703`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:6709`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed

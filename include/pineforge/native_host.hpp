@@ -1269,11 +1269,13 @@ public:
     /// pf_native_state_v1::consumed_high_water.
     uint64_t native_consumed_high_water() const;
     /// The consumer's continuation identity: what a stream resumes against. It folds
-    /// the run's resolved timezone identity, whose zone file paths are absolute paths
-    /// on the machine that ran it, so the same spec over the same bars hashes
-    /// differently on two hosts even for "UTC". Compare it between runs in ONE
-    /// process; never pin it as a constant. For a portable constant use
-    /// native_run_spec_digest(spec). C spelling:
+    /// the run's resolved timezone identity by its content — the kind, the effective
+    /// definition and a digest of the zone resources actually read — and not by where
+    /// they live, so two hosts carrying the same tzdata release answer the same value
+    /// for the same spec over the same bars (R5 lane E23). A tzdata update that
+    /// rewrites the zone's rules moves it, which is why it is still not a source
+    /// constant: pin `native_run_spec_digest(spec)` for that, and compare continuation
+    /// values between runs. C spelling:
     /// strategy_native_continuation_hash_v1.
     uint64_t native_continuation_hash() const;
 
