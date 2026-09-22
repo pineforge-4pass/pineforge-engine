@@ -291,7 +291,9 @@ extern "C" {
 /** @} */
 
 /** `NativeFailureCode::CallbackException` — the code latched when a C callback
- *  returns non-zero. Mirrors the C++ enumerator; pinned by a static_assert. */
+ *  returns non-zero. The historical spelling of
+ *  #PF_NATIVE_FAILURE_CALLBACK_EXCEPTION, kept for the callers written
+ *  against it; pinned by a static_assert. */
 #define PF_NATIVE_FAILURE_CALLBACK 5
 
 /** @defgroup pf_native_c_enums Translated enumerations
@@ -870,6 +872,186 @@ typedef enum pf_native_opened_lot_fill_point_e {
     PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH = 1
 } pf_native_opened_lot_fill_point_t;
 
+/* ── The readout words ─────────────────────────────────────────────
+ * Every enumeration below names a word the runtime WRITES for a C host: a
+ * field of a struct it fills or presents, an event's reason, a callback
+ * argument or an out-parameter. The fields stay the integer words they were
+ * published as, so no layout moves; each value is written by an exhaustive
+ * translation of its kernel enumeration, and a kernel value no enumeration
+ * here names cannot build (src/native_c_host.cpp). */
+
+/** Where a point's price came from — `NativePriceProvenance`: the
+ *  `provenance` word of #pf_native_decision_v1 and #pf_native_event_v1 and
+ *  #pf_native_margin_view_v1::cursor_provenance. */
+typedef enum pf_native_price_provenance_e {
+    PF_NATIVE_PROVENANCE_CONFIRMED               = 0, /**< A confirmed input bar's own label,
+                                                       *   or a point on its modeled path. */
+    PF_NATIVE_PROVENANCE_OBSERVED_PRINT          = 1, /**< A realtime print. */
+    PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN       = 2, /**< A modeled path's opening point. */
+    PF_NATIVE_PROVENANCE_MODELED_OHLC_CLOSE      = 3, /**< A modeled path's closing point. */
+    PF_NATIVE_PROVENANCE_CARRIED_OPEN            = 4, /**< A quiet tradable interval's carried
+                                                       *   last price. */
+    PF_NATIVE_PROVENANCE_AFTER_CALCULATION_CLOSE = 5, /**< The close point right after a
+                                                       *   calculation. */
+    PF_NATIVE_PROVENANCE_PARTIAL_FINALIZED       = 6, /**< A partially finalized observed slot. */
+    PF_NATIVE_PROVENANCE_CALCULATION             = 7, /**< The script calculation point itself. */
+    PF_NATIVE_PROVENANCE_CURRENT_EXECUTION       = 8  /**< A synchronous
+                                                       *   #strategy_native_execute_current_v1. */
+} pf_native_price_provenance_t;
+
+/** Which leg of a modeled OHLC walk a point sits on — `NativePathPhase`: the
+ *  `path_phase` word of #pf_native_decision_v1 and #pf_native_event_v1 and
+ *  #pf_native_margin_view_v1::cursor_path_phase. NONE is a discrete point (a
+ *  calculation, an observed print); the other four are the waypoints, in the
+ *  order the run's path order resolves. */
+typedef enum pf_native_path_phase_e {
+    PF_NATIVE_PATH_PHASE_NONE  = 0,
+    PF_NATIVE_PATH_PHASE_OPEN  = 1,
+    PF_NATIVE_PATH_PHASE_HIGH  = 2,
+    PF_NATIVE_PATH_PHASE_LOW   = 3,
+    PF_NATIVE_PATH_PHASE_CLOSE = 4
+} pf_native_path_phase_t;
+
+/** How a script interval or a higher-timeframe bucket was closed —
+ *  `NativeCompletionKind`: #pf_native_decision_v1::completion and the
+ *  `completion` argument of #pf_native_callbacks_v1::on_timeframe_bar. */
+typedef enum pf_native_completion_kind_e {
+    PF_NATIVE_COMPLETION_KIND_CONFIRMED         = 0, /**< Its own last contributing bar. */
+    PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE     = 1, /**< The NEXT interval's first input: a
+                                                      *   session-clipped bar, or a hole over
+                                                      *   the last slot. */
+    PF_NATIVE_COMPLETION_KIND_SESSION_SHORTENED = 2, /**< The session close clipped it. */
+    PF_NATIVE_COMPLETION_KIND_PARTIAL_FINALIZED = 3  /**< A stream end finalized a forming
+                                                      *   observed slot. */
+} pf_native_completion_kind_t;
+
+/** Which quote #pf_native_decision_v1::price is — `NativeCurrentQuoteKind`:
+ *  the callback's own market decision point, or the execution it is anchored
+ *  to (inside `on_applied`). */
+typedef enum pf_native_quote_kind_e {
+    PF_NATIVE_QUOTE_MARKET_DECISION  = 0,
+    PF_NATIVE_QUOTE_EXECUTION_ANCHOR = 1
+} pf_native_quote_kind_t;
+
+/** Why an applied execution finished its request —
+ *  `native_order::AppliedTerminalReason`: #pf_native_applied_v1::terminal_reason
+ *  and the `reason` of a terminal #PF_NATIVE_EVENT_APPLIED row. */
+typedef enum pf_native_terminal_reason_e {
+    PF_NATIVE_TERMINAL_WORKING_UNITS_SATISFIED = 0,
+    PF_NATIVE_TERMINAL_FLATTENED               = 1,
+    PF_NATIVE_TERMINAL_TARGET_EXHAUSTED        = 2
+} pf_native_terminal_reason_t;
+
+/** Why the kernel refused a request — `native_order::RequestRejectReason`:
+ *  the `reject` out-parameter of #strategy_native_submit_v1 and
+ *  #strategy_native_replace_ext_v1, and the `reason` of a
+ *  #PF_NATIVE_EVENT_REJECTED or #PF_NATIVE_EVENT_REPLACE_REJECTED row. */
+typedef enum pf_native_reject_reason_e {
+    PF_NATIVE_REJECT_INVALID_QUANTITY       = 0,
+    PF_NATIVE_REJECT_OFF_GRID               = 1,
+    PF_NATIVE_REJECT_INVALID_TRIGGER        = 2,
+    PF_NATIVE_REJECT_INVALID_CAPACITY       = 3,
+    PF_NATIVE_REJECT_INVALID_OWNER          = 4,
+    PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS = 5,
+    PF_NATIVE_REJECT_INVALID_GROUP          = 6,
+    PF_NATIVE_REJECT_PLACEMENT_ADMISSION    = 7  /**< A SIZED request resolved at acceptance
+                                                  *   that the run's opening admission
+                                                  *   refuses at the sizing price. */
+} pf_native_reject_reason_t;
+
+/** Why a live request left the book unfilled — `native_order::CancelReason`:
+ *  the `reason` of a #PF_NATIVE_EVENT_CANCELLED row. */
+typedef enum pf_native_cancel_reason_e {
+    PF_NATIVE_CANCEL_USER                 = 0, /**< The host's own cancel. */
+    PF_NATIVE_CANCEL_GROUP                = 1, /**< A group sibling's fill withdrew it. */
+    PF_NATIVE_CANCEL_OWNER_GONE           = 2, /**< Its owner left the book first. */
+    PF_NATIVE_CANCEL_UNSUPPORTED_RELATION = 3,
+    PF_NATIVE_CANCEL_SUPERSEDED           = 4  /**< A kernel-originated request the kernel
+                                                *   itself withdrew: its level or units
+                                                *   moved, or the breach is over. */
+} pf_native_cancel_reason_t;
+
+/** Why a matching candidate was refused — `native_order::MatchRejectReason`:
+ *  the `reason` of a #PF_NATIVE_EVENT_MATCH_REJECTED row. */
+typedef enum pf_native_match_reject_e {
+    PF_NATIVE_MATCH_REJECT_NONPOSITIVE_PRICE     = 0,
+    PF_NATIVE_MATCH_REJECT_OPENING_DIRECTION     = 1, /**< `allowed_open_directions`. */
+    PF_NATIVE_MATCH_REJECT_MAX_ABS_UNITS         = 2,
+    PF_NATIVE_MATCH_REJECT_MAX_OPEN_LOTS         = 3,
+    PF_NATIVE_MATCH_REJECT_INITIAL_MARGIN        = 4,
+    PF_NATIVE_MATCH_REJECT_TERMS_UNRESOLVED      = 5,
+    PF_NATIVE_MATCH_REJECT_INVALID_TERMS         = 6,
+    PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE  = 7,
+    PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT        = 8,
+    PF_NATIVE_MATCH_REJECT_RISK_LIMIT            = 9  /**< An opening refused while a risk
+                                                       *   limit blocks. */
+} pf_native_match_reject_t;
+
+/** Which trigger a price reached — `native_order::ActivationKind`: the
+ *  `reason` of a #PF_NATIVE_EVENT_ACTIVATED row. */
+typedef enum pf_native_activation_e {
+    PF_NATIVE_ACTIVATION_STOP          = 0,
+    PF_NATIVE_ACTIVATION_STOP_LIMIT    = 1,
+    PF_NATIVE_ACTIVATION_TRAIL_ARM     = 2,
+    PF_NATIVE_ACTIVATION_TRAIL_TRIGGER = 3
+} pf_native_activation_t;
+
+/** Who issued a live request — `native_order::RequestOrigin`:
+ *  #pf_native_working_v1::origin. */
+typedef enum pf_native_origin_e {
+    PF_NATIVE_ORIGIN_HOST               = 0,
+    PF_NATIVE_ORIGIN_KERNEL_LIQUIDATION = 1, /**< The run's margin model. */
+    PF_NATIVE_ORIGIN_KERNEL_RISK        = 2  /**< The run's risk limits. */
+} pf_native_origin_t;
+
+/** A run's durable first failure — `NativeFailureCode`:
+ *  #pf_native_state_v1::failure_code. #PF_NATIVE_FAILURE_CALLBACK is the
+ *  historical spelling of #PF_NATIVE_FAILURE_CALLBACK_EXCEPTION. */
+typedef enum pf_native_failure_code_e {
+    PF_NATIVE_FAILURE_NONE                  = 0,
+    PF_NATIVE_FAILURE_INVALID_SPECIFICATION = 1,  /**< A spec refused at configure. */
+    PF_NATIVE_FAILURE_CONTRACT              = 2,  /**< A lifecycle misuse. */
+    PF_NATIVE_FAILURE_PREFLIGHT             = 3,  /**< A bar array the driver refused. */
+    PF_NATIVE_FAILURE_UNSUPPORTED_SOURCE    = 4,
+    PF_NATIVE_FAILURE_CALLBACK_EXCEPTION    = 5,  /**< A callback returned non-zero. */
+    PF_NATIVE_FAILURE_SETTLEMENT_FAILURE    = 6,
+    PF_NATIVE_FAILURE_ALLOCATION            = 7,
+    PF_NATIVE_FAILURE_COUNTER_EXHAUSTED     = 8,
+    PF_NATIVE_FAILURE_ABORTED               = 9,  /**< A cooperative abort. */
+    PF_NATIVE_FAILURE_PROJECTION_MISMATCH   = 10,
+    PF_NATIVE_FAILURE_CALENDAR              = 11,
+    PF_NATIVE_FAILURE_UNEXPECTED            = 12
+} pf_native_failure_code_t;
+
+/** Which operation was in flight when the failure latched —
+ *  `NativeFailureOperation`: #pf_native_state_v1::failure_operation. */
+typedef enum pf_native_failure_operation_e {
+    PF_NATIVE_OPERATION_NONE       = 0,
+    PF_NATIVE_OPERATION_CONFIGURE  = 1,
+    PF_NATIVE_OPERATION_BEGIN      = 2,
+    PF_NATIVE_OPERATION_COMMAND    = 3,
+    PF_NATIVE_OPERATION_INPUT      = 4,
+    PF_NATIVE_OPERATION_CALLBACK   = 5,
+    PF_NATIVE_OPERATION_SETTLEMENT = 6,
+    PF_NATIVE_OPERATION_MUTATION   = 7,
+    PF_NATIVE_OPERATION_STREAM     = 8
+} pf_native_failure_operation_t;
+
+/** Which driving a Running run is in — `NativeRunPhase`:
+ *  #pf_native_state_v1::phase. */
+typedef enum pf_native_run_phase_e {
+    PF_NATIVE_PHASE_BATCH    = 0,
+    PF_NATIVE_PHASE_WARMUP   = 1, /**< A stream's warmup replay. */
+    PF_NATIVE_PHASE_REALTIME = 2  /**< A stream's realtime leg. */
+} pf_native_run_phase_t;
+
+/** How a Completed run ended — `NativeCompletion`:
+ *  #pf_native_state_v1::completion. */
+typedef enum pf_native_completion_e {
+    PF_NATIVE_COMPLETION_BATCH_COMPLETE = 0,
+    PF_NATIVE_COMPLETION_STREAM_ENDED   = 1
+} pf_native_completion_t;
+
 /** @} */ /* end of pf_native_c_enums */
 
 /** @defgroup pf_native_c_types Transport types
@@ -893,10 +1075,10 @@ typedef struct pf_native_decision_v1 {
     int64_t  sub_bar_open_ms;    /**< Open of the sub-bar under delivery. */
     int64_t  decision_floor_ms;  /**< Lower bound a new request may be matched at. */
     double   price;              /**< Current quote, NaN outside an execution point. */
-    uint8_t  provenance;         /**< NativePriceProvenance. */
-    uint8_t  path_phase;         /**< NativePathPhase. */
-    uint8_t  completion;         /**< NativeCompletionKind. */
-    uint8_t  quote_kind;         /**< NativeCurrentQuoteKind; 0 when price is NaN. */
+    uint8_t  provenance;         /**< #pf_native_price_provenance_t. */
+    uint8_t  path_phase;         /**< #pf_native_path_phase_t. */
+    uint8_t  completion;         /**< #pf_native_completion_kind_t. */
+    uint8_t  quote_kind;         /**< #pf_native_quote_kind_t; 0 when price is NaN. */
 } pf_native_decision_v1;
 
 /** One applied execution, presented to `on_applied`. */
@@ -915,7 +1097,8 @@ typedef struct pf_native_applied_v1 {
     int64_t  cycle_before;  /**< Position cycle before the fill. */
     int64_t  cycle_after;   /**< Position cycle after the fill. */
     uint8_t  terminal;      /**< 1 when the request is finished. */
-    uint8_t  terminal_reason;     /**< AppliedTerminalReason, valid when `has_terminal_reason`. */
+    uint8_t  terminal_reason;     /**< #pf_native_terminal_reason_t, valid when
+                                   *   `has_terminal_reason`. */
     uint8_t  has_terminal_reason; /**< 1 when `terminal_reason` is meaningful. */
     uint8_t  reserved0;
 } pf_native_applied_v1;
@@ -923,16 +1106,33 @@ typedef struct pf_native_applied_v1 {
 /** One recorded event, read back by #strategy_native_events_v1.
  *
  *  `kind` tags the union: every field below is documented per kind and is
- *  zero where that kind has no such fact.
- *   - ACCEPTED / ARMED / CLOSE_BOUND / QUANTITY_BOUND: `incarnation`.
- *   - REJECTED / REPLACE_REJECTED: `reason` is a RequestRejectReason.
+ *  zero where that kind has no such fact. `reason` is read by the kind's own
+ *  enumeration, and is 0 for a kind that names none.
+ *   - ACCEPTED / ARMED: `incarnation`.
+ *   - REJECTED: `reason` is a #pf_native_reject_reason_t.
+ *   - REPLACE_REJECTED: `incarnation` is the target, `reason` a
+ *     #pf_native_reject_reason_t.
  *   - REPLACED: `incarnation` is the predecessor, `successor` the new handle.
- *   - CANCELLED: `reason` is a CancelReason.
- *   - MATCH_REJECTED: `reason` is a MatchRejectReason, cursor fields set.
- *   - APPLIED: every price/unit/cycle field, `terminal`, cursor fields.
- *   - MARGIN_CALL: `price` = mark, `closed_units` = liquidated units,
- *     `raw_price` = the re-solved liquidation price.
- *   - ACTIVATED: `reason` is an ActivationKind, `price` the reached price.
+ *   - CANCELLED: `reason` is a #pf_native_cancel_reason_t.
+ *   - NOT_WORKING / INVALID_HANDLE: `incarnation` is the target.
+ *   - NO_EFFECT: `incarnation`, cursor fields.
+ *   - MATCH_REJECTED: `reason` is a #pf_native_match_reject_t, cursor fields.
+ *   - APPLIED: every price/unit/cycle field, `terminal`, cursor fields; when
+ *     `terminal` is 1, `reason` is the #pf_native_terminal_reason_t that
+ *     finished the request.
+ *   - CLOSE_BOUND: `reason` is the #pf_native_side_t of the book the close
+ *     bound to, `cycle_after` its cycle, cursor fields.
+ *   - RESERVATION_REDUCED / DEFERRED_GROUP: `incarnation` is the recipient,
+ *     `reason` its #pf_native_group_effect_t, `closed_units` the deduction
+ *     (applied, or deferred).
+ *   - QUANTITY_BOUND: `incarnation`, `opened_units` = the source units.
+ *   - TERMS_RESOLVED: `raw_price`, `resolved_price` (= `price`), cursor fields.
+ *   - MARGIN_CALL: `reason` is the #pf_native_side_t of the liquidated
+ *     position, `price` = mark, `closed_units` = liquidated units,
+ *     `opened_units` = the signed position after it, `raw_price` = the
+ *     re-solved liquidation price.
+ *   - ACTIVATED: `reason` is a #pf_native_activation_t, `price` the reached
+ *     price.
  *   - DRIVER_POINT: cursor fields and `raw_price`.
  *   - ACCOUNT: `price` = marked equity, `raw_price` = realized balance,
  *     `opened_units` = signed position units.
@@ -962,8 +1162,8 @@ typedef struct pf_native_event_v1 {
     int64_t  cycle_after;
     int64_t  effective_time_ms; /**< Cursor effective time, 0 when the kind has no cursor. */
     int32_t  interval_index;    /**< Cursor interval index. */
-    uint8_t  provenance;        /**< Cursor NativePriceProvenance. */
-    uint8_t  path_phase;        /**< Cursor NativePathPhase. */
+    uint8_t  provenance;        /**< Cursor #pf_native_price_provenance_t. */
+    uint8_t  path_phase;        /**< Cursor #pf_native_path_phase_t. */
     uint8_t  terminal;          /**< APPLIED only. */
     uint8_t  reserved0[3];
 } pf_native_event_v1;
@@ -1001,7 +1201,7 @@ typedef struct pf_native_working_v1 {
     uint32_t group_effect;    /**< #pf_native_group_effect_t, 0 when no group. */
     uint32_t remaining_kind;  /**< #pf_native_remaining_t. */
     uint32_t trigger_state;   /**< #pf_native_trigger_state_t. */
-    uint32_t origin;          /**< RequestOrigin: 0 host, 1 kernel liquidation, 2 kernel risk. */
+    uint32_t origin;          /**< #pf_native_origin_t. */
     uint32_t reserved0;
     double   intent_value;    /**< The intent's own scalar, 0 when it has none. */
     double   p1;              /**< Trigger level 1 (limit / stop / trail offset). */
@@ -1080,15 +1280,17 @@ typedef struct pf_native_state_v1 {
     uint32_t struct_size;      /**< sizeof(pf_native_state_v1). */
     uint32_t version;          /**< PF_NATIVE_API_VERSION. */
     uint32_t lifecycle;        /**< #pf_native_lifecycle_t. */
-    uint32_t failure_code;     /**< NativeFailureCode; PF_NATIVE_FAILURE_CALLBACK for a
-                                *   callback that returned non-zero. */
-    uint32_t failure_operation; /**< NativeFailureOperation. */
-    uint32_t failure_discriminator;
+    uint32_t failure_code;     /**< #pf_native_failure_code_t;
+                                *   PF_NATIVE_FAILURE_CALLBACK_EXCEPTION for a callback
+                                *   that returned non-zero. */
+    uint32_t failure_operation; /**< #pf_native_failure_operation_t. */
+    uint32_t failure_discriminator; /**< Reserved beside the code: the kernel records no
+                                     *   discriminator on this surface, so it reads 0. */
     uint64_t failure_ordinal;  /**< The point the failure was latched at, 0 when absent. */
     uint64_t consumed_high_water;
     int64_t  decision_floor_ms;
-    uint32_t phase;            /**< NativeRunPhase while Running. */
-    uint32_t completion;       /**< NativeCompletion once Completed. */
+    uint32_t phase;            /**< #pf_native_run_phase_t while Running. */
+    uint32_t completion;       /**< #pf_native_completion_t once Completed. */
 } pf_native_state_v1;
 
 /** The trail projection of #strategy_native_trail_state_v1 — the C spelling
@@ -1136,8 +1338,8 @@ typedef struct pf_native_margin_view_v1 {
     int64_t  cursor_effective_time_ms;
     double   cursor_t;
     int32_t  cursor_interval_index;
-    uint8_t  cursor_provenance; /**< NativePriceProvenance. */
-    uint8_t  cursor_path_phase; /**< NativePathPhase. */
+    uint8_t  cursor_provenance; /**< #pf_native_price_provenance_t. */
+    uint8_t  cursor_path_phase; /**< #pf_native_path_phase_t. */
     uint8_t  reserved0[2];
 } pf_native_margin_view_v1;
 
@@ -1558,6 +1760,10 @@ typedef struct pf_native_callbacks_v1 {
     int (*on_tick)(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at);
     int (*on_applied)(void* user, const pf_native_applied_v1* applied,
                       const pf_native_decision_v1* at);
+    /** One completed bucket of a declared series. `completion` is a
+     *  #pf_native_completion_kind_t: CONFIRMED when the bucket's own last
+     *  contributing bar closed it, LAZY_COMPLETE when the next period's first
+     *  input did. */
     int (*on_timeframe_bar)(void* user, const pf_bar_t* bar, uint32_t subscription,
                             uint32_t completion, int64_t delivered_at_ms);
     int (*on_margin_call)(void* user, const pf_native_event_v1* margin_call);
@@ -1699,7 +1905,8 @@ PF_API void strategy_native_report_free_v1(pf_report_t* report);
  *  @param request      Borrowed for the call only; the kernel copies what it
  *                      keeps.
  *  @param incarnation  Optional; receives the accepted request's handle.
- *  @param reject       Optional; receives a RequestRejectReason on rejection.
+ *  @param reject       Optional; receives a #pf_native_reject_reason_t on
+ *                      rejection.
  *  @return PF_NATIVE_OK when accepted, PF_NATIVE_E_REJECTED when the kernel
  *  rejected it, PF_NATIVE_E_STATE when commands are not legal here.
  *
@@ -1751,8 +1958,8 @@ PF_API int strategy_native_replace_v1(pf_strategy_t s, uint64_t incarnation,
  *  @param request     Borrowed for the call only.
  *  @param successor   Optional; receives the successor's handle. Untouched
  *                     unless the replace is accepted.
- *  @param reject      Optional; receives a RequestRejectReason, and only on
- *                     PF_NATIVE_E_REJECTED. Untouched otherwise — including
+ *  @param reject      Optional; receives a #pf_native_reject_reason_t, and only
+ *                     on PF_NATIVE_E_REJECTED. Untouched otherwise — including
  *                     for NOT_WORKING and INVALID_TARGET, which are the
  *                     target's verdict and not the request's.
  *  @return PF_NATIVE_OK, PF_NATIVE_E_REJECTED, PF_NATIVE_E_NOT_WORKING,

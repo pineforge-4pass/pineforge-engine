@@ -5158,6 +5158,881 @@ static void check_spec_word_layout(void) {
     }
 }
 
+/* ── Every enumerated readout word, read back by its C name (lane F4) ──
+ *
+ * Lane E22 typed the words a C host WRITES. The words the runtime writes
+ * BACK stayed bare integers a C host could decode only from the C++ headers:
+ * a decision point's provenance, path phase, completion and quote kind; an
+ * applied fill's terminal reason; the reason of every event kind; a working
+ * row's origin; the run state's failure, operation, phase and completion; the
+ * margin view's cursor words; a delivered bucket's completion; and the
+ * `reject` out-parameters of submit and replace. Each now has a C enumeration
+ * pinned enumerator by enumerator to its kernel one (src/native_c_host.cpp)
+ * and is written through an exhaustive translation.
+ *
+ * The runs below produce the values each word can reach on a bare host and
+ * read every one back BY NAME. The classifiers are switches over the C names,
+ * so a value the header does not spell counts as `unnamed` and fails, and a
+ * reachable value that never arrives fails its own row. */
+
+#define WORD_BIT(v) ((v) < 32u ? (1u << (v)) : 0u)
+
+static int provenance_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_PROVENANCE_CONFIRMED:
+    case PF_NATIVE_PROVENANCE_OBSERVED_PRINT:
+    case PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN:
+    case PF_NATIVE_PROVENANCE_MODELED_OHLC_CLOSE:
+    case PF_NATIVE_PROVENANCE_CARRIED_OPEN:
+    case PF_NATIVE_PROVENANCE_AFTER_CALCULATION_CLOSE:
+    case PF_NATIVE_PROVENANCE_PARTIAL_FINALIZED:
+    case PF_NATIVE_PROVENANCE_CALCULATION:
+    case PF_NATIVE_PROVENANCE_CURRENT_EXECUTION:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int path_phase_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_PATH_PHASE_NONE:
+    case PF_NATIVE_PATH_PHASE_OPEN:
+    case PF_NATIVE_PATH_PHASE_HIGH:
+    case PF_NATIVE_PATH_PHASE_LOW:
+    case PF_NATIVE_PATH_PHASE_CLOSE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int completion_kind_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_COMPLETION_KIND_CONFIRMED:
+    case PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE:
+    case PF_NATIVE_COMPLETION_KIND_SESSION_SHORTENED:
+    case PF_NATIVE_COMPLETION_KIND_PARTIAL_FINALIZED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int quote_kind_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_QUOTE_MARKET_DECISION:
+    case PF_NATIVE_QUOTE_EXECUTION_ANCHOR:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int terminal_reason_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_TERMINAL_WORKING_UNITS_SATISFIED:
+    case PF_NATIVE_TERMINAL_FLATTENED:
+    case PF_NATIVE_TERMINAL_TARGET_EXHAUSTED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int reject_reason_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_REJECT_INVALID_QUANTITY:
+    case PF_NATIVE_REJECT_OFF_GRID:
+    case PF_NATIVE_REJECT_INVALID_TRIGGER:
+    case PF_NATIVE_REJECT_INVALID_CAPACITY:
+    case PF_NATIVE_REJECT_INVALID_OWNER:
+    case PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS:
+    case PF_NATIVE_REJECT_INVALID_GROUP:
+    case PF_NATIVE_REJECT_PLACEMENT_ADMISSION:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int cancel_reason_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_CANCEL_USER:
+    case PF_NATIVE_CANCEL_GROUP:
+    case PF_NATIVE_CANCEL_OWNER_GONE:
+    case PF_NATIVE_CANCEL_UNSUPPORTED_RELATION:
+    case PF_NATIVE_CANCEL_SUPERSEDED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int match_reject_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_MATCH_REJECT_NONPOSITIVE_PRICE:
+    case PF_NATIVE_MATCH_REJECT_OPENING_DIRECTION:
+    case PF_NATIVE_MATCH_REJECT_MAX_ABS_UNITS:
+    case PF_NATIVE_MATCH_REJECT_MAX_OPEN_LOTS:
+    case PF_NATIVE_MATCH_REJECT_INITIAL_MARGIN:
+    case PF_NATIVE_MATCH_REJECT_TERMS_UNRESOLVED:
+    case PF_NATIVE_MATCH_REJECT_INVALID_TERMS:
+    case PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE:
+    case PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT:
+    case PF_NATIVE_MATCH_REJECT_RISK_LIMIT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int activation_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_ACTIVATION_STOP:
+    case PF_NATIVE_ACTIVATION_STOP_LIMIT:
+    case PF_NATIVE_ACTIVATION_TRAIL_ARM:
+    case PF_NATIVE_ACTIVATION_TRAIL_TRIGGER:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int origin_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_ORIGIN_HOST:
+    case PF_NATIVE_ORIGIN_KERNEL_LIQUIDATION:
+    case PF_NATIVE_ORIGIN_KERNEL_RISK:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int failure_code_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_FAILURE_NONE:
+    case PF_NATIVE_FAILURE_INVALID_SPECIFICATION:
+    case PF_NATIVE_FAILURE_CONTRACT:
+    case PF_NATIVE_FAILURE_PREFLIGHT:
+    case PF_NATIVE_FAILURE_UNSUPPORTED_SOURCE:
+    case PF_NATIVE_FAILURE_CALLBACK_EXCEPTION:
+    case PF_NATIVE_FAILURE_SETTLEMENT_FAILURE:
+    case PF_NATIVE_FAILURE_ALLOCATION:
+    case PF_NATIVE_FAILURE_COUNTER_EXHAUSTED:
+    case PF_NATIVE_FAILURE_ABORTED:
+    case PF_NATIVE_FAILURE_PROJECTION_MISMATCH:
+    case PF_NATIVE_FAILURE_CALENDAR:
+    case PF_NATIVE_FAILURE_UNEXPECTED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int failure_operation_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_OPERATION_NONE:
+    case PF_NATIVE_OPERATION_CONFIGURE:
+    case PF_NATIVE_OPERATION_BEGIN:
+    case PF_NATIVE_OPERATION_COMMAND:
+    case PF_NATIVE_OPERATION_INPUT:
+    case PF_NATIVE_OPERATION_CALLBACK:
+    case PF_NATIVE_OPERATION_SETTLEMENT:
+    case PF_NATIVE_OPERATION_MUTATION:
+    case PF_NATIVE_OPERATION_STREAM:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int run_phase_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_PHASE_BATCH:
+    case PF_NATIVE_PHASE_WARMUP:
+    case PF_NATIVE_PHASE_REALTIME:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int completion_named(uint32_t w) {
+    switch (w) {
+    case PF_NATIVE_COMPLETION_BATCH_COMPLETE:
+    case PF_NATIVE_COMPLETION_STREAM_ENDED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* The per-kind `reason` of an event row, by its kind's own enumeration. */
+static int event_reason_named(const pf_native_event_v1* row) {
+    switch (row->kind) {
+    case PF_NATIVE_EVENT_REJECTED:
+    case PF_NATIVE_EVENT_REPLACE_REJECTED:
+        return reject_reason_named(row->reason);
+    case PF_NATIVE_EVENT_CANCELLED:
+        return cancel_reason_named(row->reason);
+    case PF_NATIVE_EVENT_MATCH_REJECTED:
+        return match_reject_named(row->reason);
+    case PF_NATIVE_EVENT_ACTIVATED:
+        return activation_named(row->reason);
+    case PF_NATIVE_EVENT_APPLIED:
+        return terminal_reason_named(row->reason);
+    case PF_NATIVE_EVENT_CLOSE_BOUND:
+    case PF_NATIVE_EVENT_MARGIN_CALL:
+        return row->reason == PF_NATIVE_SIDE_LONG || row->reason == PF_NATIVE_SIDE_SHORT;
+    case PF_NATIVE_EVENT_RESERVATION_REDUCED:
+    case PF_NATIVE_EVENT_DEFERRED_GROUP:
+        return row->reason == PF_NATIVE_GROUP_CANCEL || row->reason == PF_NATIVE_GROUP_REDUCE;
+    case PF_NATIVE_EVENT_RISK:
+        return row->reason <= PF_NATIVE_RISK_MAX_FILLS_PER_DAY;
+    default:
+        /* Every other kind carries no reason: the documented zero. */
+        return row->reason == 0u;
+    }
+}
+
+typedef struct words_state {
+    pf_strategy_t host;
+    int           failures;
+    int           calculations;
+    int           unnamed;          /* a word that names no C enumerator */
+    uint32_t      open_provenance, open_phase, open_completion, open_quote;
+    uint32_t      calc_provenance, calc_phase, calc_completion, calc_quote;
+    uint32_t      applied_provenance, applied_phase, applied_quote;
+    uint32_t      terminal_reasons; /* pf_native_applied_v1::terminal_reason seen */
+    uint32_t      rejects;          /* the submit/replace `reject` words seen */
+    uint32_t      running_phases;   /* pf_native_state_v1::phase while Running */
+    uint32_t      origins;          /* pf_native_working_v1::origin seen */
+    uint64_t      parent, child, resting, tp, sl;
+} words_state;
+
+static void words_decision(words_state* state, const pf_native_decision_v1* at,
+                           uint32_t* provenance, uint32_t* phase, uint32_t* completion,
+                           uint32_t* quote) {
+    if (!provenance_named(at->provenance) || !path_phase_named(at->path_phase)
+        || !completion_kind_named(at->completion) || !quote_kind_named(at->quote_kind)) {
+        ++state->unnamed;
+    }
+    *provenance |= WORD_BIT(at->provenance);
+    *phase |= WORD_BIT(at->path_phase);
+    if (completion) *completion |= WORD_BIT(at->completion);
+    *quote |= WORD_BIT(at->quote_kind);
+}
+
+static void words_state_phase(words_state* state) {
+    pf_native_state_v1 run;
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    if (strategy_native_state_v1(state->host, &run) != PF_NATIVE_OK) {
+        ++state->failures;
+        return;
+    }
+    if (!run_phase_named(run.phase) || run.lifecycle != PF_NATIVE_LIFECYCLE_RUNNING) {
+        ++state->unnamed;
+    }
+    state->running_phases |= WORD_BIT(run.phase);
+}
+
+static uint64_t words_submit(words_state* state, pf_native_request_v1* request,
+                             uint32_t want_reject) {
+    uint64_t handle = 0;
+    uint32_t reject = 0xffffffffu;
+    const int rc = strategy_native_submit_v1(state->host, request, &handle, &reject);
+    if (want_reject == 0xffffffffu) {
+        LCHECK(state, rc == PF_NATIVE_OK, "a readout-words request was refused");
+        return handle;
+    }
+    LCHECK(state, rc == PF_NATIVE_E_REJECTED, "a refused request was not E_REJECTED");
+    if (!reject_reason_named(reject)) ++state->unnamed;
+    state->rejects |= WORD_BIT(reject);
+    LCHECK(state, reject == want_reject, "a refused request named another reason");
+    return 0;
+}
+
+static pf_native_request_v1 words_order(uint32_t trigger, double units, double p1) {
+    pf_native_request_v1 request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = units;
+    request.trigger = trigger;
+    request.p1 = p1;
+    request.label = "readout-words";
+    return request;
+}
+
+/* Bar i of the twin feed opens at 100 + i, reaches 102 + i and 99 + i, and
+ * closes at 101 + i; the open is nearer the low, so the modeled path walks
+ * open, low, high, close. */
+static int words_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    words_state* state = (words_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    words_decision(state, at, &state->calc_provenance, &state->calc_phase,
+                   &state->calc_completion, &state->calc_quote);
+    words_state_phase(state);
+    ++state->calculations;
+    if (state->calculations == 1) {
+        /* Every request refusal the kernel names, each by its own word. */
+        request = words_order(PF_NATIVE_TRIGGER_MARKET, 0.0, 0.0);
+        words_submit(state, &request, PF_NATIVE_REJECT_INVALID_QUANTITY);
+        request = words_order(PF_NATIVE_TRIGGER_MARKET, 1.5, 0.0);  /* grid 1.0 */
+        words_submit(state, &request, PF_NATIVE_REJECT_OFF_GRID);
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, -1.0);
+        words_submit(state, &request, PF_NATIVE_REJECT_INVALID_TRIGGER);
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, 50.0);
+        request.capacity = PF_NATIVE_CAPACITY_POINT_BUDGET;
+        request.capacity_units = 0.0;
+        words_submit(state, &request, PF_NATIVE_REJECT_INVALID_CAPACITY);
+        {
+            uint64_t nobody = 4242u;
+            request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, 50.0);
+            request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+            request.owner_n = 1u;
+            request.owner_incarnations = &nobody;
+            words_submit(state, &request, PF_NATIVE_REJECT_INVALID_OWNER);
+        }
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_SIZED;
+        request.side = PF_NATIVE_SIDE_LONG;
+        request.size_basis = PF_NATIVE_SIZE_BASIS_EQUITY_FRACTION;
+        request.intent_value = 1.25;
+        words_submit(state, &request, PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS);
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, 50.0);
+        request.group_kind = PF_NATIVE_GROUP_MEMBER;
+        request.group_id = 0u;
+        words_submit(state, &request, PF_NATIVE_REJECT_INVALID_GROUP);
+        /* Sized at acceptance to ~99 units against max_abs_units 50. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_SIZED;
+        request.side = PF_NATIVE_SIDE_LONG;
+        request.size_basis = PF_NATIVE_SIZE_BASIS_CASH;
+        request.size_time = PF_NATIVE_SIZE_AT_ACCEPTANCE;
+        request.intent_value = 10000.0;
+        words_submit(state, &request, PF_NATIVE_REJECT_PLACEMENT_ADMISSION);
+
+        /* The entry: filled at bar 1's open. */
+        request = words_order(PF_NATIVE_TRIGGER_MARKET, 2.0, 0.0);
+        words_submit(state, &request, 0xffffffffu);
+        /* A parent that never fills, and a child waiting on it: cancelling
+         * the parent withdraws the child as OWNER_GONE. */
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, 50.0);
+        state->parent = words_submit(state, &request, 0xffffffffu);
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.p1 = 200.0;
+        request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+        request.owner_n = 1u;
+        request.owner_incarnations = &state->parent;
+        state->child = words_submit(state, &request, 0xffffffffu);
+        /* A resting bid the host cancels itself: USER. */
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, 51.0);
+        state->resting = words_submit(state, &request, 0xffffffffu);
+    } else if (state->calculations == 2) {
+        /* Long 2. A one-cancels-other pair -- one group, two cohorts, since a
+         * fill acts on the group's OTHER cohorts: the take-profit fills on
+         * bar 5's way up, and its sibling stop leaves the book as GROUP. */
+        request = words_order(PF_NATIVE_TRIGGER_LIMIT, -1.0, 106.5);
+        request.group_kind = PF_NATIVE_GROUP_MEMBER;
+        request.group_id = 7u;
+        request.group_cohort = 1;
+        request.group_effect = PF_NATIVE_GROUP_CANCEL;
+        state->tp = words_submit(state, &request, 0xffffffffu);
+        request = words_order(PF_NATIVE_TRIGGER_STOP, -1.0, 90.0);
+        request.group_kind = PF_NATIVE_GROUP_MEMBER;
+        request.group_id = 7u;
+        request.group_cohort = 2;
+        request.group_effect = PF_NATIVE_GROUP_CANCEL;
+        state->sl = words_submit(state, &request, 0xffffffffu);
+        /* A buy stop that bar 2 reaches on its way up: ACTIVATED STOP. */
+        request = words_order(PF_NATIVE_TRIGGER_STOP, 1.0, 103.5);
+        words_submit(state, &request, 0xffffffffu);
+        /* A stop-limit bar 3 activates at 104.5: ACTIVATED STOP_LIMIT. */
+        request = words_order(PF_NATIVE_TRIGGER_STOP_LIMIT, 1.0, 104.5);
+        request.p2 = 104.8;
+        words_submit(state, &request, 0xffffffffu);
+        /* A trail armed at 104 on bar 3's rise, riding a 1.0 offset from
+         * its 105 high to 104: ACTIVATED TRAIL_ARM, then TRAIL_TRIGGER. */
+        request = words_order(PF_NATIVE_TRIGGER_TRAIL, -1.0, 1.0);
+        request.p2 = 104.0;
+        request.trail_has_arm_price = 1;
+        words_submit(state, &request, 0xffffffffu);
+        /* The replace refusal carries its reason the same way. */
+        {
+            uint64_t successor = 0;
+            uint32_t reject = 0xffffffffu;
+            request = words_order(PF_NATIVE_TRIGGER_LIMIT, 1.0, -3.0);
+            LCHECK(state, strategy_native_replace_ext_v1(state->host, state->resting, &request,
+                                                         &successor, &reject)
+                              == PF_NATIVE_E_REJECTED,
+                   "a replace with a negative level was not rejected");
+            if (!reject_reason_named(reject)) ++state->unnamed;
+            state->rejects |= WORD_BIT(reject);
+            LCHECK(state, reject == PF_NATIVE_REJECT_INVALID_TRIGGER,
+                   "the replace refusal named another reason");
+        }
+        {
+            const int rows = strategy_native_working_len_v1(state->host);
+            int i;
+            for (i = 0; i < rows; ++i) {
+                pf_native_working_v1 row;
+                memset(&row, 0, sizeof(row));
+                row.struct_size = (uint32_t)sizeof(row);
+                if (strategy_native_working_get_v1(state->host, i, &row) != PF_NATIVE_OK) {
+                    ++state->failures;
+                    continue;
+                }
+                if (!origin_named(row.origin)) ++state->unnamed;
+                state->origins |= WORD_BIT(row.origin);
+            }
+        }
+        LCHECK(state, strategy_native_cancel_v1(state->host, state->parent) == PF_NATIVE_OK,
+               "the parent was not cancelled");
+        LCHECK(state, strategy_native_cancel_v1(state->host, state->resting) == PF_NATIVE_OK,
+               "the resting bid was not cancelled");
+    } else if (state->calculations == 8) {
+        /* Flatten what is left: its applied row is terminal FLATTENED. */
+        request = blank_request();
+        request.intent = PF_NATIVE_INTENT_FLATTEN;
+        request.trigger = PF_NATIVE_TRIGGER_MARKET;
+        request.label = "readout-words-flatten";
+        words_submit(state, &request, 0xffffffffu);
+    }
+    return 0;
+}
+
+static int words_on_bar_open(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    words_state* state = (words_state*)user;
+    (void)bar;
+    words_decision(state, at, &state->open_provenance, &state->open_phase,
+                   &state->open_completion, &state->open_quote);
+    /* Bar 4's open: a market bought and executed at this very point. */
+    if (at->interval_index == 4) {
+        pf_native_request_v1 request = words_order(PF_NATIVE_TRIGGER_MARKET, 1.0, 0.0);
+        uint64_t handle = words_submit(state, &request, 0xffffffffu);
+        uint32_t refusal = 0xffffffffu;
+        LCHECK(state, strategy_native_execute_current_v1(state->host, handle,
+                                                         PF_NATIVE_PRICE_AS_PRESENTED, &refusal)
+                          == PF_NATIVE_EXECUTED_APPLIED,
+               "the current execution was not applied");
+    }
+    return 0;
+}
+
+static int words_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    words_state* state = (words_state*)user;
+    words_decision(state, at, &state->applied_provenance, &state->applied_phase, NULL,
+                   &state->applied_quote);
+    if (applied->has_terminal_reason) {
+        if (!terminal_reason_named(applied->terminal_reason)) ++state->unnamed;
+        state->terminal_reasons |= WORD_BIT(applied->terminal_reason);
+    }
+    return 0;
+}
+
+/* A run the directions and the unit cap refuse at the MATCH, not at the
+ * command: a short opening when only longs may open, and an opening past
+ * max_abs_units. */
+static int words_match_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    words_state* state = (words_state*)user;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (state->calculations++ != 0) return 0;
+    request = words_order(PF_NATIVE_TRIGGER_MARKET, -1.0, 0.0);
+    words_submit(state, &request, 0xffffffffu);
+    request = words_order(PF_NATIVE_TRIGGER_MARKET, 60.0, 0.0);
+    words_submit(state, &request, 0xffffffffu);
+    return 0;
+}
+
+static void words_events(pf_strategy_t host, words_state* state, uint32_t* kinds_seen,
+                         uint32_t* cancels, uint32_t* matches, uint32_t* activations,
+                         uint32_t* terminals, uint32_t* rejects, uint32_t* provenances,
+                         uint32_t* phases) {
+    static pf_native_event_v1 page[64];
+    uint64_t cursor = 0;
+    for (;;) {
+        int i;
+        const int written = strategy_native_events_v1(host, cursor, page, 64);
+        if (written <= 0) break;
+        for (i = 0; i < written; ++i) {
+            const pf_native_event_v1* row = &page[i];
+            if (!event_reason_named(row)) ++state->unnamed;
+            if (!provenance_named(row->provenance) || !path_phase_named(row->path_phase)) {
+                ++state->unnamed;
+            }
+            *kinds_seen |= WORD_BIT(row->kind);
+            *provenances |= WORD_BIT(row->provenance);
+            *phases |= WORD_BIT(row->path_phase);
+            if (row->kind == PF_NATIVE_EVENT_CANCELLED) *cancels |= WORD_BIT(row->reason);
+            if (row->kind == PF_NATIVE_EVENT_MATCH_REJECTED) *matches |= WORD_BIT(row->reason);
+            if (row->kind == PF_NATIVE_EVENT_ACTIVATED) *activations |= WORD_BIT(row->reason);
+            if (row->kind == PF_NATIVE_EVENT_APPLIED && row->terminal) {
+                *terminals |= WORD_BIT(row->reason);
+            }
+            if (row->kind == PF_NATIVE_EVENT_REJECTED
+                || row->kind == PF_NATIVE_EVENT_REPLACE_REJECTED) {
+                *rejects |= WORD_BIT(row->reason);
+            }
+        }
+        cursor = page[written - 1].ordinal;
+    }
+}
+
+static void check_readout_words_batch(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 run;
+    words_state state;
+    const pf_bar_t* bars;
+    uint32_t kinds = 0, cancels = 0, matches = 0, activations = 0, terminals = 0;
+    uint32_t event_rejects = 0, provenances = 0, phases = 0;
+    int n = 0;
+
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = words_on_bar;
+    table.on_bar_open = words_on_bar_open;
+    table.on_applied = words_on_applied;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "readout-words host create failed");
+    if (!state.host) return;
+    spec.session_key = "native-c-api-readout-words";
+    spec.optional_mask = PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID
+                       | PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS;
+    spec.quantity_grid = 1.0;
+    spec.max_abs_units = 50.0;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0,
+                 "the readout-words spec was refused");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 12, NULL), PF_NATIVE_OK,
+                 "the readout-words run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback readout-words rows failed");
+
+    /* The decision words, by the point each callback is handed. */
+    CHECK(state.open_provenance == WORD_BIT(PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN),
+          "the bar-open point is not the modeled open");
+    CHECK(state.open_phase == WORD_BIT(PF_NATIVE_PATH_PHASE_OPEN),
+          "the bar-open point is not on the open leg");
+    CHECK(state.open_quote == WORD_BIT(PF_NATIVE_QUOTE_MARKET_DECISION),
+          "the bar-open quote is not the market decision");
+    CHECK(state.calc_provenance == WORD_BIT(PF_NATIVE_PROVENANCE_CALCULATION),
+          "the close calculation is not the calculation point");
+    CHECK(state.calc_phase == WORD_BIT(PF_NATIVE_PATH_PHASE_NONE),
+          "the close calculation sits on a path leg");
+    CHECK(state.calc_completion == WORD_BIT(PF_NATIVE_COMPLETION_KIND_CONFIRMED)
+              && state.open_completion == WORD_BIT(PF_NATIVE_COMPLETION_KIND_CONFIRMED),
+          "a plain batch interval was not closed by its own bar");
+    CHECK((state.applied_quote & WORD_BIT(PF_NATIVE_QUOTE_EXECUTION_ANCHOR)) != 0u,
+          "an applied fill was not handed its execution anchor");
+    CHECK((state.applied_provenance & WORD_BIT(PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN)) != 0u,
+          "the entry's open fill is not on the modeled open");
+    CHECK((state.applied_phase & WORD_BIT(PF_NATIVE_PATH_PHASE_HIGH)) != 0u,
+          "no fill was taken on the high leg");
+    CHECK(state.running_phases == WORD_BIT(PF_NATIVE_PHASE_BATCH),
+          "a batch calculation ran in another phase");
+    CHECK((state.origins & WORD_BIT(PF_NATIVE_ORIGIN_HOST)) != 0u,
+          "a host request is not of HOST origin");
+    CHECK((state.terminal_reasons & WORD_BIT(PF_NATIVE_TERMINAL_WORKING_UNITS_SATISFIED)) != 0u,
+          "no fill satisfied its working units");
+    CHECK((state.terminal_reasons & WORD_BIT(PF_NATIVE_TERMINAL_FLATTENED)) != 0u,
+          "the flatten did not end FLATTENED");
+    CHECK(state.rejects == (WORD_BIT(PF_NATIVE_REJECT_INVALID_QUANTITY)
+                            | WORD_BIT(PF_NATIVE_REJECT_OFF_GRID)
+                            | WORD_BIT(PF_NATIVE_REJECT_INVALID_TRIGGER)
+                            | WORD_BIT(PF_NATIVE_REJECT_INVALID_CAPACITY)
+                            | WORD_BIT(PF_NATIVE_REJECT_INVALID_OWNER)
+                            | WORD_BIT(PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS)
+                            | WORD_BIT(PF_NATIVE_REJECT_INVALID_GROUP)
+                            | WORD_BIT(PF_NATIVE_REJECT_PLACEMENT_ADMISSION)),
+          "a request refusal word is missing");
+
+    /* The same words in the recorded history, with every event reason. */
+    words_events(state.host, &state, &kinds, &cancels, &matches, &activations, &terminals,
+                 &event_rejects, &provenances, &phases);
+    CHECK(event_rejects == state.rejects, "the history's refusals are not the out-parameters'");
+    CHECK(cancels == (WORD_BIT(PF_NATIVE_CANCEL_USER) | WORD_BIT(PF_NATIVE_CANCEL_GROUP)
+                      | WORD_BIT(PF_NATIVE_CANCEL_OWNER_GONE)),
+          "a cancel reason is missing");
+    CHECK(activations == (WORD_BIT(PF_NATIVE_ACTIVATION_STOP)
+                          | WORD_BIT(PF_NATIVE_ACTIVATION_STOP_LIMIT)
+                          | WORD_BIT(PF_NATIVE_ACTIVATION_TRAIL_ARM)
+                          | WORD_BIT(PF_NATIVE_ACTIVATION_TRAIL_TRIGGER)),
+          "an activation kind is missing");
+    CHECK((terminals & WORD_BIT(PF_NATIVE_TERMINAL_FLATTENED)) != 0u,
+          "the history's flatten is not FLATTENED");
+    CHECK((provenances & WORD_BIT(PF_NATIVE_PROVENANCE_CURRENT_EXECUTION)) != 0u,
+          "the current execution's fill is not recorded at a CURRENT_EXECUTION cursor");
+    CHECK((phases & WORD_BIT(PF_NATIVE_PATH_PHASE_LOW)) != 0u,
+          "no driver point was recorded on the low leg");
+    CHECK_EQ_INT(state.unnamed, 0, "a readout word names no C enumerator");
+
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &run), PF_NATIVE_OK, "completed-state read");
+    CHECK_EQ_INT(run.lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the batch did not complete");
+    CHECK_EQ_INT(run.completion, PF_NATIVE_COMPLETION_BATCH_COMPLETE,
+                 "a batch completion is not BATCH_COMPLETE");
+    CHECK_EQ_INT(run.failure_code, PF_NATIVE_FAILURE_NONE, "a completed run carries a failure");
+    CHECK_EQ_INT(run.failure_operation, PF_NATIVE_OPERATION_NONE,
+                 "a completed run names a failing operation");
+    CHECK_EQ_INT(run.failure_discriminator, 0, "the kernel recorded a failure discriminator");
+    strategy_native_host_free(state.host);
+
+    /* The two match refusals. */
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = words_match_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "match-words host create failed");
+    if (!state.host) return;
+    spec = twin_spec();
+    spec.session_key = "native-c-api-readout-match";
+    spec.optional_mask = PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS;
+    spec.max_abs_units = 50.0;
+    spec.allowed_open_directions = PF_NATIVE_OPEN_DIRECTIONS_LONG;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0,
+                 "the match-words spec was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 4, NULL), PF_NATIVE_OK,
+                 "the match-words run did not complete");
+    CHECK_EQ_INT(state.failures, 0, "in-callback match-words rows failed");
+    kinds = cancels = matches = activations = terminals = event_rejects = provenances = 0;
+    phases = 0;
+    words_events(state.host, &state, &kinds, &cancels, &matches, &activations, &terminals,
+                 &event_rejects, &provenances, &phases);
+    CHECK(matches == (WORD_BIT(PF_NATIVE_MATCH_REJECT_OPENING_DIRECTION)
+                      | WORD_BIT(PF_NATIVE_MATCH_REJECT_MAX_ABS_UNITS)),
+          "a match refusal word is missing");
+    CHECK_EQ_INT(state.unnamed, 0, "a match-run word names no C enumerator");
+    strategy_native_host_free(state.host);
+}
+
+/* The lifecycle words: a stream's warmup and realtime phases, its
+ * STREAM_ENDED completion, an observed print's provenance, and the two
+ * failure words a bare host reaches most often. */
+typedef struct words_stream_state {
+    pf_strategy_t host;
+    int           failures;
+    int           unnamed;
+    uint32_t      phases;
+    uint32_t      tick_provenance;
+    uint32_t      tick_phase;
+} words_stream_state;
+
+static void words_stream_phase(words_stream_state* state) {
+    pf_native_state_v1 run;
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    if (strategy_native_state_v1(state->host, &run) != PF_NATIVE_OK) {
+        ++state->failures;
+        return;
+    }
+    if (!run_phase_named(run.phase)) ++state->unnamed;
+    state->phases |= WORD_BIT(run.phase);
+}
+
+static int words_stream_on_bar(void* user, const pf_bar_t* bar,
+                               const pf_native_decision_v1* at) {
+    words_stream_state* state = (words_stream_state*)user;
+    (void)bar;
+    (void)at;
+    words_stream_phase(state);
+    return 0;
+}
+
+static int words_stream_on_tick(void* user, const pf_bar_t* bar,
+                                const pf_native_decision_v1* at) {
+    words_stream_state* state = (words_stream_state*)user;
+    (void)bar;
+    words_stream_phase(state);
+    if (!provenance_named(at->provenance) || !path_phase_named(at->path_phase)) {
+        ++state->unnamed;
+    }
+    state->tick_provenance |= WORD_BIT(at->provenance);
+    state->tick_phase |= WORD_BIT(at->path_phase);
+    return 0;
+}
+
+static void check_readout_words_lifecycle(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_native_state_v1 run;
+    words_stream_state state;
+    pf_trade_tick_t tick;
+    const pf_bar_t* bars;
+    int calls = 0;
+    int n = 0;
+    pf_strategy_t host;
+
+    bars = pf_twin_bars(&n);
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = words_stream_on_bar;
+    table.on_tick = words_stream_on_tick;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "stream-words host create failed");
+    if (!state.host) return;
+    spec.session_key = "native-c-api-readout-stream";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0,
+                 "the stream-words spec was refused");
+    CHECK_EQ_INT(strategy_stream_begin(state.host, bars, 4, "5", "5"), 0,
+                 "the stream-words warmup did not begin");
+    /* Two prints, one in each of the next two input periods: the second
+     * completes the first period on the realtime leg, and the stream's end
+     * finalizes the second. */
+    memset(&tick, 0, sizeof(tick));
+    tick.timestamp = bars[4].timestamp + 1000;
+    tick.price = bars[4].open;
+    tick.quantity = 1.0;
+    CHECK_EQ_INT(strategy_stream_push_tick(state.host, &tick), 0, "a live print was refused");
+    tick.timestamp = bars[5].timestamp + 1000;
+    tick.price = bars[5].open;
+    CHECK_EQ_INT(strategy_stream_push_tick(state.host, &tick), 0,
+                 "a second live print was refused");
+    CHECK_EQ_INT(strategy_stream_end(state.host, 1), 0, "the stream did not end");
+    CHECK_EQ_INT(state.failures, 0, "in-callback stream-words rows failed");
+    CHECK(state.phases == (WORD_BIT(PF_NATIVE_PHASE_WARMUP) | WORD_BIT(PF_NATIVE_PHASE_REALTIME)),
+          "a stream calculation ran in another phase");
+    CHECK(state.tick_provenance == WORD_BIT(PF_NATIVE_PROVENANCE_OBSERVED_PRINT),
+          "a live print is not an observed print");
+    CHECK(state.tick_phase == WORD_BIT(PF_NATIVE_PATH_PHASE_NONE),
+          "a live print sits on a modeled leg");
+    CHECK_EQ_INT(state.unnamed, 0, "a stream word names no C enumerator");
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &run), PF_NATIVE_OK, "ended-state read");
+    CHECK_EQ_INT(run.lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the stream did not complete");
+    CHECK_EQ_INT(run.completion, PF_NATIVE_COMPLETION_STREAM_ENDED,
+                 "an ended stream is not STREAM_ENDED");
+    strategy_native_host_free(state.host);
+
+    /* A callback that refuses fails the run inside the callback operation. */
+    table = blank_callbacks(&calls);
+    table.on_bar = refusing_on_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "refusing-words host create failed");
+    if (!host) return;
+    spec = twin_spec();
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "refusing-words configure");
+    CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_E_RUN_FAILED,
+                 "the refusing callback did not fail the run");
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &run), PF_NATIVE_OK, "refused-state read");
+    CHECK(failure_code_named(run.failure_code) && failure_operation_named(run.failure_operation),
+          "a callback failure's words name no C enumerator");
+    CHECK_EQ_INT(run.failure_code, PF_NATIVE_FAILURE_CALLBACK_EXCEPTION,
+                 "a refusing callback is not CALLBACK_EXCEPTION");
+    CHECK_EQ_INT(PF_NATIVE_FAILURE_CALLBACK, PF_NATIVE_FAILURE_CALLBACK_EXCEPTION,
+                 "the historical callback macro left its enumerator");
+    CHECK_EQ_INT(run.failure_operation, PF_NATIVE_OPERATION_CALLBACK,
+                 "a refusing callback failed another operation");
+    strategy_native_host_free(host);
+
+    /* A base-spec word the kernel refuses fails the host at configure --
+     * the v1 entry point's documented behaviour (E22 finding 1). */
+    table = blank_callbacks(NULL);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "invalid-spec host create failed");
+    if (!host) return;
+    spec = twin_spec();
+    spec.fee_kind = 9u;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), -1,
+                 "an unknown fee kind configured a v1 host");
+    memset(&run, 0, sizeof(run));
+    run.struct_size = (uint32_t)sizeof(run);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &run), PF_NATIVE_OK, "invalid-spec state read");
+    CHECK_EQ_INT(run.lifecycle, PF_NATIVE_LIFECYCLE_FAILED, "the refused spec left the host");
+    CHECK_EQ_INT(run.failure_code, PF_NATIVE_FAILURE_INVALID_SPECIFICATION,
+                 "a refused spec is not INVALID_SPECIFICATION");
+    CHECK_EQ_INT(run.failure_operation, PF_NATIVE_OPERATION_CONFIGURE,
+                 "a refused spec failed another operation");
+    strategy_native_host_free(host);
+}
+
+/* A delivered bucket's completion: a "15" series over a "5" feed whose
+ * second bucket is missing its last input, so the next bucket's first input
+ * closes it LAZY_COMPLETE, while the first and third close CONFIRMED on their
+ * own last bar. */
+typedef struct words_bucket_state {
+    int      unnamed;
+    uint32_t completions;
+    int      delivered;
+} words_bucket_state;
+
+static int words_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
+                                  uint32_t completion, int64_t delivered_at_ms) {
+    words_bucket_state* state = (words_bucket_state*)user;
+    (void)bar;
+    (void)subscription;
+    (void)delivered_at_ms;
+    if (!completion_kind_named(completion)) ++state->unnamed;
+    state->completions |= WORD_BIT(completion);
+    ++state->delivered;
+    return 0;
+}
+
+static void check_readout_words_buckets(void) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_subscription_v1 row;
+    pf_native_callbacks_v1 table;
+    words_bucket_state state;
+    pf_bar_t bars[8];
+    const pf_bar_t* twin;
+    pf_strategy_t host;
+    int n = 0;
+    int i;
+
+    twin = pf_twin_bars(&n);
+    /* 00:00 00:05 00:10 | 00:15 00:20 (00:25 missing) | 00:30 00:35 00:40 */
+    for (i = 0; i < 8; ++i) {
+        bars[i] = twin[i < 5 ? i : i + 1];
+    }
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_timeframe_bar = words_on_timeframe_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "bucket-words host create failed");
+    if (!host) return;
+    memset(&row, 0, sizeof(row));
+    row.struct_size = (uint32_t)sizeof(row);
+    row.tf = "15";
+    row.lookahead = PF_NATIVE_LOOKAHEAD_AT_COMPLETION;
+    row.gaps = PF_NATIVE_GAPS_HOLD;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS;
+    ext.subscriptions = &row;
+    ext.subscriptions_n = 1u;
+    spec.session_key = "native-c-api-readout-buckets";
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
+                 "the bucket-words spec was refused");
+    CHECK_EQ_INT(strategy_native_run_v1(host, bars, 8, NULL), PF_NATIVE_OK,
+                 "the bucket-words run did not complete");
+    CHECK(state.delivered >= 2, "the bucket-words run delivered too few buckets");
+    CHECK(state.completions == (WORD_BIT(PF_NATIVE_COMPLETION_KIND_CONFIRMED)
+                                | WORD_BIT(PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE)),
+          "a bucket completion word is missing");
+    CHECK_EQ_INT(state.unnamed, 0, "a bucket completion names no C enumerator");
+    strategy_native_host_free(host);
+}
+
+static void check_readout_words(void) {
+    check_readout_words_batch();
+    check_readout_words_lifecycle();
+    check_readout_words_buckets();
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -5195,5 +6070,6 @@ int pf_native_c_api_checks(void) {
     check_calc_trigger_word();
     check_open_bar_view_word();
     check_liquidation_sizing_word();
+    check_readout_words();
     return failures;
 }

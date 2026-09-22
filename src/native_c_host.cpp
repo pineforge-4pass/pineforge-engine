@@ -47,6 +47,16 @@
 #include <variant>
 #include <vector>
 
+/* Every switch over an enumeration in this file is exhaustive BY BUILD: a
+ * kernel enumerator a translation below does not name is an error, not a
+ * warning, under every GCC/Clang profile (no profile builds with -Werror).
+ * The translations are what make an enumerator the kernel adds reach a C host
+ * only once the C header names it. Popped at the end of the file. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch"
+#endif
+
 namespace {
 
 using pineforge::Bar;
@@ -312,10 +322,10 @@ static_assert(static_cast<int>(pineforge::NativeCalculationReason::SubBar)
                   == PF_NATIVE_CALC_SUB_BAR, "NativeCalculationReason drifted");
 static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
                   == PF_NATIVE_MARGIN_CHECK_CALCULATION, "NativeMarginCheckKind drifted");
-/* margin_view_pod() casts the kind straight through, so the LAST enumerator is
- * the one that has to be pinned: a kind added above without its C name would
- * reach a C host as a number with no spelling, which is exactly how FxRoll
- * shipped in N6. */
+/* margin_view_pod() writes the kind through c_word() below, whose switch
+ * fails the build for a kind the C header does not name -- which is how FxRoll
+ * shipped in N6, as a number with no spelling. This pin and the ones beside
+ * c_word() make each name its kernel value. */
 static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
                   == PF_NATIVE_MARGIN_CHECK_FX_ROLL, "NativeMarginCheckKind drifted");
 /* The hook tail is append-only: the base layout must still end exactly where
@@ -335,6 +345,417 @@ static_assert(PF_NATIVE_WORKING_V1_BASE_SIZE
 static_assert(sizeof(pf_native_working_v1)
                   == PF_NATIVE_WORKING_V1_BASE_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_working_v1 arm-presence tail moved");
+
+/* ── The readout words, pinned enumerator by enumerator ─────────────
+ * Every word the runtime WRITES for a C host is named in the C header, and
+ * each C name is its kernel enumerator's own integer. c_word() below writes
+ * them through an exhaustive switch; these pins are what make that integer
+ * name the same thing on both sides. Every enumerator is pinned, not only
+ * the last: an enumerator appended without a C name fails c_word()'s switch
+ * (and scripts/check_native_c_api_surface.py), one inserted before an
+ * existing name fails here. */
+#define PF_PIN_WORD(kernel, c_name)                                                  \
+    static_assert(static_cast<long long>(kernel) == static_cast<long long>(c_name), \
+                  #c_name " drifted from " #kernel)
+
+PF_PIN_WORD(pineforge::NativePriceProvenance::Confirmed, PF_NATIVE_PROVENANCE_CONFIRMED);
+PF_PIN_WORD(pineforge::NativePriceProvenance::ObservedPrint, PF_NATIVE_PROVENANCE_OBSERVED_PRINT);
+PF_PIN_WORD(pineforge::NativePriceProvenance::ModeledOHLCOpen,
+            PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN);
+PF_PIN_WORD(pineforge::NativePriceProvenance::ModeledOHLCClose,
+            PF_NATIVE_PROVENANCE_MODELED_OHLC_CLOSE);
+PF_PIN_WORD(pineforge::NativePriceProvenance::CarriedOpen, PF_NATIVE_PROVENANCE_CARRIED_OPEN);
+PF_PIN_WORD(pineforge::NativePriceProvenance::AfterCalculationClose,
+            PF_NATIVE_PROVENANCE_AFTER_CALCULATION_CLOSE);
+PF_PIN_WORD(pineforge::NativePriceProvenance::PartialFinalized,
+            PF_NATIVE_PROVENANCE_PARTIAL_FINALIZED);
+PF_PIN_WORD(pineforge::NativePriceProvenance::Calculation, PF_NATIVE_PROVENANCE_CALCULATION);
+PF_PIN_WORD(pineforge::NativePriceProvenance::CurrentExecution,
+            PF_NATIVE_PROVENANCE_CURRENT_EXECUTION);
+PF_PIN_WORD(pineforge::NativePathPhase::None, PF_NATIVE_PATH_PHASE_NONE);
+PF_PIN_WORD(pineforge::NativePathPhase::Open, PF_NATIVE_PATH_PHASE_OPEN);
+PF_PIN_WORD(pineforge::NativePathPhase::High, PF_NATIVE_PATH_PHASE_HIGH);
+PF_PIN_WORD(pineforge::NativePathPhase::Low, PF_NATIVE_PATH_PHASE_LOW);
+PF_PIN_WORD(pineforge::NativePathPhase::Close, PF_NATIVE_PATH_PHASE_CLOSE);
+PF_PIN_WORD(pineforge::NativeCompletionKind::Confirmed, PF_NATIVE_COMPLETION_KIND_CONFIRMED);
+PF_PIN_WORD(pineforge::NativeCompletionKind::LazyComplete, PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE);
+PF_PIN_WORD(pineforge::NativeCompletionKind::SessionShortened,
+            PF_NATIVE_COMPLETION_KIND_SESSION_SHORTENED);
+PF_PIN_WORD(pineforge::NativeCompletionKind::PartialFinalized,
+            PF_NATIVE_COMPLETION_KIND_PARTIAL_FINALIZED);
+PF_PIN_WORD(pineforge::NativeCurrentQuoteKind::MarketDecision, PF_NATIVE_QUOTE_MARKET_DECISION);
+PF_PIN_WORD(pineforge::NativeCurrentQuoteKind::ExecutionAnchor, PF_NATIVE_QUOTE_EXECUTION_ANCHOR);
+PF_PIN_WORD(no::AppliedTerminalReason::WorkingUnitsSatisfied,
+            PF_NATIVE_TERMINAL_WORKING_UNITS_SATISFIED);
+PF_PIN_WORD(no::AppliedTerminalReason::Flattened, PF_NATIVE_TERMINAL_FLATTENED);
+PF_PIN_WORD(no::AppliedTerminalReason::TargetExhausted, PF_NATIVE_TERMINAL_TARGET_EXHAUSTED);
+PF_PIN_WORD(no::RequestRejectReason::InvalidQuantity, PF_NATIVE_REJECT_INVALID_QUANTITY);
+PF_PIN_WORD(no::RequestRejectReason::OffGrid, PF_NATIVE_REJECT_OFF_GRID);
+PF_PIN_WORD(no::RequestRejectReason::InvalidTrigger, PF_NATIVE_REJECT_INVALID_TRIGGER);
+PF_PIN_WORD(no::RequestRejectReason::InvalidCapacity, PF_NATIVE_REJECT_INVALID_CAPACITY);
+PF_PIN_WORD(no::RequestRejectReason::InvalidOwner, PF_NATIVE_REJECT_INVALID_OWNER);
+PF_PIN_WORD(no::RequestRejectReason::InvalidQuantityBasis,
+            PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS);
+PF_PIN_WORD(no::RequestRejectReason::InvalidGroup, PF_NATIVE_REJECT_INVALID_GROUP);
+PF_PIN_WORD(no::RequestRejectReason::PlacementAdmission, PF_NATIVE_REJECT_PLACEMENT_ADMISSION);
+PF_PIN_WORD(no::CancelReason::User, PF_NATIVE_CANCEL_USER);
+PF_PIN_WORD(no::CancelReason::Group, PF_NATIVE_CANCEL_GROUP);
+PF_PIN_WORD(no::CancelReason::OwnerGone, PF_NATIVE_CANCEL_OWNER_GONE);
+PF_PIN_WORD(no::CancelReason::UnsupportedRelation, PF_NATIVE_CANCEL_UNSUPPORTED_RELATION);
+PF_PIN_WORD(no::CancelReason::Superseded, PF_NATIVE_CANCEL_SUPERSEDED);
+PF_PIN_WORD(no::MatchRejectReason::NonpositivePrice, PF_NATIVE_MATCH_REJECT_NONPOSITIVE_PRICE);
+PF_PIN_WORD(no::MatchRejectReason::OpeningDirection, PF_NATIVE_MATCH_REJECT_OPENING_DIRECTION);
+PF_PIN_WORD(no::MatchRejectReason::MaxAbsUnits, PF_NATIVE_MATCH_REJECT_MAX_ABS_UNITS);
+PF_PIN_WORD(no::MatchRejectReason::MaxOpenLots, PF_NATIVE_MATCH_REJECT_MAX_OPEN_LOTS);
+PF_PIN_WORD(no::MatchRejectReason::InitialMargin, PF_NATIVE_MATCH_REJECT_INITIAL_MARGIN);
+PF_PIN_WORD(no::MatchRejectReason::TermsUnresolved, PF_NATIVE_MATCH_REJECT_TERMS_UNRESOLVED);
+PF_PIN_WORD(no::MatchRejectReason::InvalidTerms, PF_NATIVE_MATCH_REJECT_INVALID_TERMS);
+PF_PIN_WORD(no::MatchRejectReason::NoOppositeExposure,
+            PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE);
+PF_PIN_WORD(no::MatchRejectReason::HostPrecommit, PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT);
+PF_PIN_WORD(no::MatchRejectReason::RiskLimit, PF_NATIVE_MATCH_REJECT_RISK_LIMIT);
+PF_PIN_WORD(no::ActivationKind::Stop, PF_NATIVE_ACTIVATION_STOP);
+PF_PIN_WORD(no::ActivationKind::StopLimit, PF_NATIVE_ACTIVATION_STOP_LIMIT);
+PF_PIN_WORD(no::ActivationKind::TrailArm, PF_NATIVE_ACTIVATION_TRAIL_ARM);
+PF_PIN_WORD(no::ActivationKind::TrailTrigger, PF_NATIVE_ACTIVATION_TRAIL_TRIGGER);
+PF_PIN_WORD(no::RequestOrigin::Host, PF_NATIVE_ORIGIN_HOST);
+PF_PIN_WORD(no::RequestOrigin::KernelLiquidation, PF_NATIVE_ORIGIN_KERNEL_LIQUIDATION);
+PF_PIN_WORD(no::RequestOrigin::KernelRisk, PF_NATIVE_ORIGIN_KERNEL_RISK);
+PF_PIN_WORD(pineforge::NativeFailureCode::None, PF_NATIVE_FAILURE_NONE);
+PF_PIN_WORD(pineforge::NativeFailureCode::InvalidSpecification,
+            PF_NATIVE_FAILURE_INVALID_SPECIFICATION);
+PF_PIN_WORD(pineforge::NativeFailureCode::Contract, PF_NATIVE_FAILURE_CONTRACT);
+PF_PIN_WORD(pineforge::NativeFailureCode::Preflight, PF_NATIVE_FAILURE_PREFLIGHT);
+PF_PIN_WORD(pineforge::NativeFailureCode::UnsupportedSource, PF_NATIVE_FAILURE_UNSUPPORTED_SOURCE);
+PF_PIN_WORD(pineforge::NativeFailureCode::CallbackException,
+            PF_NATIVE_FAILURE_CALLBACK_EXCEPTION);
+PF_PIN_WORD(pineforge::NativeFailureCode::SettlementFailure,
+            PF_NATIVE_FAILURE_SETTLEMENT_FAILURE);
+PF_PIN_WORD(pineforge::NativeFailureCode::Allocation, PF_NATIVE_FAILURE_ALLOCATION);
+PF_PIN_WORD(pineforge::NativeFailureCode::CounterExhausted, PF_NATIVE_FAILURE_COUNTER_EXHAUSTED);
+PF_PIN_WORD(pineforge::NativeFailureCode::Aborted, PF_NATIVE_FAILURE_ABORTED);
+PF_PIN_WORD(pineforge::NativeFailureCode::ProjectionMismatch,
+            PF_NATIVE_FAILURE_PROJECTION_MISMATCH);
+PF_PIN_WORD(pineforge::NativeFailureCode::Calendar, PF_NATIVE_FAILURE_CALENDAR);
+PF_PIN_WORD(pineforge::NativeFailureCode::Unexpected, PF_NATIVE_FAILURE_UNEXPECTED);
+PF_PIN_WORD(pineforge::NativeFailureOperation::None, PF_NATIVE_OPERATION_NONE);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Configure, PF_NATIVE_OPERATION_CONFIGURE);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Begin, PF_NATIVE_OPERATION_BEGIN);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Command, PF_NATIVE_OPERATION_COMMAND);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Input, PF_NATIVE_OPERATION_INPUT);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Callback, PF_NATIVE_OPERATION_CALLBACK);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Settlement, PF_NATIVE_OPERATION_SETTLEMENT);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Mutation, PF_NATIVE_OPERATION_MUTATION);
+PF_PIN_WORD(pineforge::NativeFailureOperation::Stream, PF_NATIVE_OPERATION_STREAM);
+PF_PIN_WORD(pineforge::NativeRunPhase::Batch, PF_NATIVE_PHASE_BATCH);
+PF_PIN_WORD(pineforge::NativeRunPhase::Warmup, PF_NATIVE_PHASE_WARMUP);
+PF_PIN_WORD(pineforge::NativeRunPhase::Realtime, PF_NATIVE_PHASE_REALTIME);
+PF_PIN_WORD(pineforge::NativeCompletion::BatchComplete, PF_NATIVE_COMPLETION_BATCH_COMPLETE);
+PF_PIN_WORD(pineforge::NativeCompletion::StreamEnded, PF_NATIVE_COMPLETION_STREAM_ENDED);
+/* The readout words that were named before this lane, pinned whole now. */
+PF_PIN_WORD(pineforge::NativeLifecycleKind::Unconfigured, PF_NATIVE_LIFECYCLE_UNCONFIGURED);
+PF_PIN_WORD(pineforge::NativeLifecycleKind::Ready, PF_NATIVE_LIFECYCLE_READY);
+PF_PIN_WORD(pineforge::NativeLifecycleKind::Running, PF_NATIVE_LIFECYCLE_RUNNING);
+PF_PIN_WORD(pineforge::NativeLifecycleKind::Completed, PF_NATIVE_LIFECYCLE_COMPLETED);
+PF_PIN_WORD(pineforge::NativeMarginCheckKind::BarOpen, PF_NATIVE_MARGIN_CHECK_BAR_OPEN);
+PF_PIN_WORD(pineforge::NativeMarginCheckKind::AfterApplied, PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED);
+PF_PIN_WORD(pineforge::NativeCalculationReason::BarClose, PF_NATIVE_CALC_BAR_CLOSE);
+PF_PIN_WORD(pineforge::NativeCalculationReason::OrderFill, PF_NATIVE_CALC_ORDER_FILL);
+PF_PIN_WORD(pineforge::NativeCalculationReason::Tick, PF_NATIVE_CALC_TICK);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::NoExecutionContext,
+            PF_NATIVE_REFUSAL_NO_EXECUTION_CONTEXT);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::Reentrant, PF_NATIVE_REFUSAL_REENTRANT);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::InvalidHandle, PF_NATIVE_REFUSAL_INVALID_HANDLE);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::NotWorking, PF_NATIVE_REFUSAL_NOT_WORKING);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::NotAcceptedInCallback,
+            PF_NATIVE_REFUSAL_NOT_ACCEPTED_IN_CALLBACK);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::UnsupportedRequest,
+            PF_NATIVE_REFUSAL_UNSUPPORTED_REQUEST);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::UnreadyOwner, PF_NATIVE_REFUSAL_UNREADY_OWNER);
+PF_PIN_WORD(pineforge::NativeCurrentRefusal::InvalidSelection,
+            PF_NATIVE_REFUSAL_INVALID_SELECTION);
+PF_PIN_WORD(no::Side::Long, PF_NATIVE_SIDE_LONG);
+PF_PIN_WORD(no::GroupEffect::Cancel, PF_NATIVE_GROUP_CANCEL);
+PF_PIN_WORD(no::RiskLimitKind::MaxDrawdown, PF_NATIVE_RISK_MAX_DRAWDOWN);
+PF_PIN_WORD(no::RiskLimitKind::MaxIntradayLoss, PF_NATIVE_RISK_MAX_INTRADAY_LOSS);
+PF_PIN_WORD(no::RiskLimitKind::MaxConsecutiveLossDays, PF_NATIVE_RISK_MAX_CONSECUTIVE_LOSS_DAYS);
+/* pineforge.h's words: the close cause strategy_closed_trade_close_cause
+ * answers, and the optional-field bits of the v1 base spec. */
+PF_PIN_WORD(pineforge::execution::CloseCause::Unspecified, PF_CLOSE_CAUSE_UNSPECIFIED);
+PF_PIN_WORD(pineforge::execution::CloseCause::Script, PF_CLOSE_CAUSE_SCRIPT);
+PF_PIN_WORD(pineforge::execution::CloseCause::Bracket, PF_CLOSE_CAUSE_BRACKET);
+PF_PIN_WORD(pineforge::execution::CloseCause::Liquidation, PF_CLOSE_CAUSE_LIQUIDATION);
+PF_PIN_WORD(pineforge::execution::CloseCause::RiskLimit, PF_CLOSE_CAUSE_RISK_LIMIT);
+PF_PIN_WORD(pineforge::execution::CloseCause::FillCap, PF_CLOSE_CAUSE_FILL_CAP);
+PF_PIN_WORD(pineforge::execution::CloseCause::RangeEnd, PF_CLOSE_CAUSE_RANGE_END);
+static_assert((PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID | PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS
+               | PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION
+               | PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS)
+                  == 0xfu,
+              "the v1 base spec's optional-field bits moved");
+
+/* The C++ -> C direction of the same words: one exhaustive switch per kernel
+ * enumeration, with no default. The file-wide -Werror=switch above makes an
+ * enumerator the C header does not name a build failure here. */
+constexpr std::uint32_t c_word(pineforge::NativePriceProvenance value) noexcept {
+    using V = pineforge::NativePriceProvenance;
+    switch (value) {
+    case V::Confirmed: return PF_NATIVE_PROVENANCE_CONFIRMED;
+    case V::ObservedPrint: return PF_NATIVE_PROVENANCE_OBSERVED_PRINT;
+    case V::ModeledOHLCOpen: return PF_NATIVE_PROVENANCE_MODELED_OHLC_OPEN;
+    case V::ModeledOHLCClose: return PF_NATIVE_PROVENANCE_MODELED_OHLC_CLOSE;
+    case V::CarriedOpen: return PF_NATIVE_PROVENANCE_CARRIED_OPEN;
+    case V::AfterCalculationClose: return PF_NATIVE_PROVENANCE_AFTER_CALCULATION_CLOSE;
+    case V::PartialFinalized: return PF_NATIVE_PROVENANCE_PARTIAL_FINALIZED;
+    case V::Calculation: return PF_NATIVE_PROVENANCE_CALCULATION;
+    case V::CurrentExecution: return PF_NATIVE_PROVENANCE_CURRENT_EXECUTION;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativePathPhase value) noexcept {
+    using V = pineforge::NativePathPhase;
+    switch (value) {
+    case V::None: return PF_NATIVE_PATH_PHASE_NONE;
+    case V::Open: return PF_NATIVE_PATH_PHASE_OPEN;
+    case V::High: return PF_NATIVE_PATH_PHASE_HIGH;
+    case V::Low: return PF_NATIVE_PATH_PHASE_LOW;
+    case V::Close: return PF_NATIVE_PATH_PHASE_CLOSE;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCompletionKind value) noexcept {
+    using V = pineforge::NativeCompletionKind;
+    switch (value) {
+    case V::Confirmed: return PF_NATIVE_COMPLETION_KIND_CONFIRMED;
+    case V::LazyComplete: return PF_NATIVE_COMPLETION_KIND_LAZY_COMPLETE;
+    case V::SessionShortened: return PF_NATIVE_COMPLETION_KIND_SESSION_SHORTENED;
+    case V::PartialFinalized: return PF_NATIVE_COMPLETION_KIND_PARTIAL_FINALIZED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCurrentQuoteKind value) noexcept {
+    using V = pineforge::NativeCurrentQuoteKind;
+    switch (value) {
+    case V::MarketDecision: return PF_NATIVE_QUOTE_MARKET_DECISION;
+    case V::ExecutionAnchor: return PF_NATIVE_QUOTE_EXECUTION_ANCHOR;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::AppliedTerminalReason value) noexcept {
+    using V = no::AppliedTerminalReason;
+    switch (value) {
+    case V::WorkingUnitsSatisfied: return PF_NATIVE_TERMINAL_WORKING_UNITS_SATISFIED;
+    case V::Flattened: return PF_NATIVE_TERMINAL_FLATTENED;
+    case V::TargetExhausted: return PF_NATIVE_TERMINAL_TARGET_EXHAUSTED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::RequestRejectReason value) noexcept {
+    using V = no::RequestRejectReason;
+    switch (value) {
+    case V::InvalidQuantity: return PF_NATIVE_REJECT_INVALID_QUANTITY;
+    case V::OffGrid: return PF_NATIVE_REJECT_OFF_GRID;
+    case V::InvalidTrigger: return PF_NATIVE_REJECT_INVALID_TRIGGER;
+    case V::InvalidCapacity: return PF_NATIVE_REJECT_INVALID_CAPACITY;
+    case V::InvalidOwner: return PF_NATIVE_REJECT_INVALID_OWNER;
+    case V::InvalidQuantityBasis: return PF_NATIVE_REJECT_INVALID_QUANTITY_BASIS;
+    case V::InvalidGroup: return PF_NATIVE_REJECT_INVALID_GROUP;
+    case V::PlacementAdmission: return PF_NATIVE_REJECT_PLACEMENT_ADMISSION;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::CancelReason value) noexcept {
+    using V = no::CancelReason;
+    switch (value) {
+    case V::User: return PF_NATIVE_CANCEL_USER;
+    case V::Group: return PF_NATIVE_CANCEL_GROUP;
+    case V::OwnerGone: return PF_NATIVE_CANCEL_OWNER_GONE;
+    case V::UnsupportedRelation: return PF_NATIVE_CANCEL_UNSUPPORTED_RELATION;
+    case V::Superseded: return PF_NATIVE_CANCEL_SUPERSEDED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::MatchRejectReason value) noexcept {
+    using V = no::MatchRejectReason;
+    switch (value) {
+    case V::NonpositivePrice: return PF_NATIVE_MATCH_REJECT_NONPOSITIVE_PRICE;
+    case V::OpeningDirection: return PF_NATIVE_MATCH_REJECT_OPENING_DIRECTION;
+    case V::MaxAbsUnits: return PF_NATIVE_MATCH_REJECT_MAX_ABS_UNITS;
+    case V::MaxOpenLots: return PF_NATIVE_MATCH_REJECT_MAX_OPEN_LOTS;
+    case V::InitialMargin: return PF_NATIVE_MATCH_REJECT_INITIAL_MARGIN;
+    case V::TermsUnresolved: return PF_NATIVE_MATCH_REJECT_TERMS_UNRESOLVED;
+    case V::InvalidTerms: return PF_NATIVE_MATCH_REJECT_INVALID_TERMS;
+    case V::NoOppositeExposure: return PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE;
+    case V::HostPrecommit: return PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT;
+    case V::RiskLimit: return PF_NATIVE_MATCH_REJECT_RISK_LIMIT;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::ActivationKind value) noexcept {
+    using V = no::ActivationKind;
+    switch (value) {
+    case V::Stop: return PF_NATIVE_ACTIVATION_STOP;
+    case V::StopLimit: return PF_NATIVE_ACTIVATION_STOP_LIMIT;
+    case V::TrailArm: return PF_NATIVE_ACTIVATION_TRAIL_ARM;
+    case V::TrailTrigger: return PF_NATIVE_ACTIVATION_TRAIL_TRIGGER;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::RequestOrigin value) noexcept {
+    using V = no::RequestOrigin;
+    switch (value) {
+    case V::Host: return PF_NATIVE_ORIGIN_HOST;
+    case V::KernelLiquidation: return PF_NATIVE_ORIGIN_KERNEL_LIQUIDATION;
+    case V::KernelRisk: return PF_NATIVE_ORIGIN_KERNEL_RISK;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeFailureCode value) noexcept {
+    using V = pineforge::NativeFailureCode;
+    switch (value) {
+    case V::None: return PF_NATIVE_FAILURE_NONE;
+    case V::InvalidSpecification: return PF_NATIVE_FAILURE_INVALID_SPECIFICATION;
+    case V::Contract: return PF_NATIVE_FAILURE_CONTRACT;
+    case V::Preflight: return PF_NATIVE_FAILURE_PREFLIGHT;
+    case V::UnsupportedSource: return PF_NATIVE_FAILURE_UNSUPPORTED_SOURCE;
+    case V::CallbackException: return PF_NATIVE_FAILURE_CALLBACK_EXCEPTION;
+    case V::SettlementFailure: return PF_NATIVE_FAILURE_SETTLEMENT_FAILURE;
+    case V::Allocation: return PF_NATIVE_FAILURE_ALLOCATION;
+    case V::CounterExhausted: return PF_NATIVE_FAILURE_COUNTER_EXHAUSTED;
+    case V::Aborted: return PF_NATIVE_FAILURE_ABORTED;
+    case V::ProjectionMismatch: return PF_NATIVE_FAILURE_PROJECTION_MISMATCH;
+    case V::Calendar: return PF_NATIVE_FAILURE_CALENDAR;
+    case V::Unexpected: return PF_NATIVE_FAILURE_UNEXPECTED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeFailureOperation value) noexcept {
+    using V = pineforge::NativeFailureOperation;
+    switch (value) {
+    case V::None: return PF_NATIVE_OPERATION_NONE;
+    case V::Configure: return PF_NATIVE_OPERATION_CONFIGURE;
+    case V::Begin: return PF_NATIVE_OPERATION_BEGIN;
+    case V::Command: return PF_NATIVE_OPERATION_COMMAND;
+    case V::Input: return PF_NATIVE_OPERATION_INPUT;
+    case V::Callback: return PF_NATIVE_OPERATION_CALLBACK;
+    case V::Settlement: return PF_NATIVE_OPERATION_SETTLEMENT;
+    case V::Mutation: return PF_NATIVE_OPERATION_MUTATION;
+    case V::Stream: return PF_NATIVE_OPERATION_STREAM;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeRunPhase value) noexcept {
+    using V = pineforge::NativeRunPhase;
+    switch (value) {
+    case V::Batch: return PF_NATIVE_PHASE_BATCH;
+    case V::Warmup: return PF_NATIVE_PHASE_WARMUP;
+    case V::Realtime: return PF_NATIVE_PHASE_REALTIME;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCompletion value) noexcept {
+    using V = pineforge::NativeCompletion;
+    switch (value) {
+    case V::BatchComplete: return PF_NATIVE_COMPLETION_BATCH_COMPLETE;
+    case V::StreamEnded: return PF_NATIVE_COMPLETION_STREAM_ENDED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeLifecycleKind value) noexcept {
+    using V = pineforge::NativeLifecycleKind;
+    switch (value) {
+    case V::Unconfigured: return PF_NATIVE_LIFECYCLE_UNCONFIGURED;
+    case V::Ready: return PF_NATIVE_LIFECYCLE_READY;
+    case V::Running: return PF_NATIVE_LIFECYCLE_RUNNING;
+    case V::Completed: return PF_NATIVE_LIFECYCLE_COMPLETED;
+    case V::Failed: return PF_NATIVE_LIFECYCLE_FAILED;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeMarginCheckKind value) noexcept {
+    using V = pineforge::NativeMarginCheckKind;
+    switch (value) {
+    case V::BarOpen: return PF_NATIVE_MARGIN_CHECK_BAR_OPEN;
+    case V::AfterApplied: return PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED;
+    case V::Calculation: return PF_NATIVE_MARGIN_CHECK_CALCULATION;
+    case V::FxRoll: return PF_NATIVE_MARGIN_CHECK_FX_ROLL;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCalculationReason value) noexcept {
+    using V = pineforge::NativeCalculationReason;
+    switch (value) {
+    case V::BarClose: return PF_NATIVE_CALC_BAR_CLOSE;
+    case V::OrderFill: return PF_NATIVE_CALC_ORDER_FILL;
+    case V::Tick: return PF_NATIVE_CALC_TICK;
+    case V::SubBar: return PF_NATIVE_CALC_SUB_BAR;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(pineforge::NativeCurrentRefusal value) noexcept {
+    using V = pineforge::NativeCurrentRefusal;
+    switch (value) {
+    case V::NoExecutionContext: return PF_NATIVE_REFUSAL_NO_EXECUTION_CONTEXT;
+    case V::Reentrant: return PF_NATIVE_REFUSAL_REENTRANT;
+    case V::InvalidHandle: return PF_NATIVE_REFUSAL_INVALID_HANDLE;
+    case V::NotWorking: return PF_NATIVE_REFUSAL_NOT_WORKING;
+    case V::NotAcceptedInCallback: return PF_NATIVE_REFUSAL_NOT_ACCEPTED_IN_CALLBACK;
+    case V::UnsupportedRequest: return PF_NATIVE_REFUSAL_UNSUPPORTED_REQUEST;
+    case V::UnreadyOwner: return PF_NATIVE_REFUSAL_UNREADY_OWNER;
+    case V::InvalidSelection: return PF_NATIVE_REFUSAL_INVALID_SELECTION;
+    case V::ConfigurationMismatch: return PF_NATIVE_REFUSAL_CONFIGURATION_MISMATCH;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::Side value) noexcept {
+    switch (value) {
+    case no::Side::Long: return PF_NATIVE_SIDE_LONG;
+    case no::Side::Short: return PF_NATIVE_SIDE_SHORT;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::GroupEffect value) noexcept {
+    switch (value) {
+    case no::GroupEffect::Cancel: return PF_NATIVE_GROUP_CANCEL;
+    case no::GroupEffect::Reduce: return PF_NATIVE_GROUP_REDUCE;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+constexpr std::uint32_t c_word(no::RiskLimitKind value) noexcept {
+    using V = no::RiskLimitKind;
+    switch (value) {
+    case V::MaxDrawdown: return PF_NATIVE_RISK_MAX_DRAWDOWN;
+    case V::MaxIntradayLoss: return PF_NATIVE_RISK_MAX_INTRADAY_LOSS;
+    case V::MaxConsecutiveLossDays: return PF_NATIVE_RISK_MAX_CONSECUTIVE_LOSS_DAYS;
+    case V::MaxFillsPerDay: return PF_NATIVE_RISK_MAX_FILLS_PER_DAY;
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+/* The narrow words of the decision, event and margin-view PODs. */
+constexpr std::uint8_t c_byte(std::uint32_t word) noexcept {
+    return static_cast<std::uint8_t>(word);
+}
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
@@ -449,7 +870,7 @@ private:
         if (!table_.on_timeframe_bar) return;
         if (table_.on_timeframe_bar(table_.user, as_c_bar(bar),
                                     static_cast<std::uint32_t>(ctx.subscription),
-                                    static_cast<std::uint32_t>(ctx.completion),
+                                    c_word(ctx.completion),
                                     ctx.delivered_at_ms) != 0) {
             throw CallbackFailure("on_timeframe_bar");
         }
@@ -474,7 +895,7 @@ private:
             cause_ptr = &cause_pod;
         }
         if (table_.on_recalculate(table_.user, as_c_bar(bar), &at,
-                                  static_cast<std::uint32_t>(reason), cause_ptr) != 0) {
+                                  c_word(reason), cause_ptr) != 0) {
             throw CallbackFailure("on_recalculate");
         }
     }
@@ -610,7 +1031,7 @@ private:
         std::memset(&out, 0, sizeof(out));
         out.struct_size = static_cast<std::uint32_t>(sizeof(out));
         out.version = PF_NATIVE_API_VERSION;
-        out.kind = static_cast<std::uint32_t>(kind);
+        out.kind = c_word(kind);
         out.liquidation_resting = liquidation_resting ? 1u : 0u;
         out.signed_units = position.signed_units;
         out.average_price = position.average_price;
@@ -622,8 +1043,8 @@ private:
         out.cursor_effective_time_ms = cursor.point.effective_time_ms;
         out.cursor_t = cursor.t;
         out.cursor_interval_index = cursor.point.interval_index;
-        out.cursor_provenance = static_cast<std::uint8_t>(cursor.point.provenance);
-        out.cursor_path_phase = static_cast<std::uint8_t>(cursor.point.path_phase);
+        out.cursor_provenance = c_byte(c_word(cursor.point.provenance));
+        out.cursor_path_phase = c_byte(c_word(cursor.point.path_phase));
         return out;
     }
 
@@ -650,13 +1071,13 @@ pf_native_decision_v1 CCallbackHost::decision(
     out.script_bar_open_ms = ctx.script_bar_open_ms;
     out.sub_bar_open_ms = ctx.sub_bar_open_ms;
     out.decision_floor_ms = ctx.decision_floor_ms;
-    out.provenance = static_cast<std::uint8_t>(ctx.coordinate.provenance);
-    out.path_phase = static_cast<std::uint8_t>(ctx.coordinate.path_phase);
-    out.completion = static_cast<std::uint8_t>(ctx.coordinate.completion);
+    out.provenance = c_byte(c_word(ctx.coordinate.provenance));
+    out.path_phase = c_byte(c_word(ctx.coordinate.path_phase));
+    out.completion = c_byte(c_word(ctx.coordinate.completion));
     out.price = kNaN;
     if (const auto point = current_execution_point()) {
         out.price = point->price;
-        out.quote_kind = static_cast<std::uint8_t>(point->quote_kind);
+        out.quote_kind = c_byte(c_word(point->quote_kind));
     }
     return out;
 }
@@ -666,8 +1087,8 @@ pf_native_decision_v1 CCallbackHost::decision(
 void fill_cursor(pf_native_event_v1& out, const no::MatchCursor& cursor) {
     out.effective_time_ms = cursor.point.effective_time_ms;
     out.interval_index = cursor.point.interval_index;
-    out.provenance = static_cast<std::uint8_t>(cursor.point.provenance);
-    out.path_phase = static_cast<std::uint8_t>(cursor.point.path_phase);
+    out.provenance = c_byte(c_word(cursor.point.provenance));
+    out.path_phase = c_byte(c_word(cursor.point.path_phase));
 }
 
 pf_native_event_v1 blank_event(std::uint32_t kind, std::uint64_t ordinal) {
@@ -691,9 +1112,7 @@ pf_native_event_v1 applied_event_pod(const no::ExecutionAppliedEvent& applied) {
     out.cycle_before = applied.cycle_before;
     out.cycle_after = applied.cycle_after;
     out.terminal = applied.terminal ? 1 : 0;
-    if (applied.terminal_reason) {
-        out.reason = static_cast<std::uint32_t>(*applied.terminal_reason);
-    }
+    if (applied.terminal_reason) out.reason = c_word(*applied.terminal_reason);
     fill_cursor(out, applied.cursor);
     return out;
 }
@@ -701,7 +1120,7 @@ pf_native_event_v1 applied_event_pod(const no::ExecutionAppliedEvent& applied) {
 pf_native_event_v1 margin_call_pod(const no::MarginCallEvent& call) {
     pf_native_event_v1 out = blank_event(PF_NATIVE_EVENT_MARGIN_CALL, call.ordinal);
     out.incarnation = call.handle().incarnation;
-    out.reason = static_cast<std::uint32_t>(call.side);
+    out.reason = c_word(call.side);
     out.price = call.mark;
     out.resolved_price = call.mark;
     out.raw_price = call.liquidation_price;
@@ -732,7 +1151,7 @@ pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied) {
     out.terminal = applied.terminal ? 1 : 0;
     if (applied.terminal_reason) {
         out.has_terminal_reason = 1;
-        out.terminal_reason = static_cast<std::uint8_t>(*applied.terminal_reason);
+        out.terminal_reason = c_byte(c_word(*applied.terminal_reason));
     }
     return out;
 }
@@ -764,8 +1183,8 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
         out.price = event.driver->raw_price;
         out.effective_time_ms = event.driver->coordinate.effective_time_ms;
         out.interval_index = event.driver->coordinate.interval_index;
-        out.provenance = static_cast<std::uint8_t>(event.driver->coordinate.provenance);
-        out.path_phase = static_cast<std::uint8_t>(event.driver->coordinate.path_phase);
+        out.provenance = c_byte(c_word(event.driver->coordinate.provenance));
+        out.path_phase = c_byte(c_word(event.driver->coordinate.path_phase));
         return true;
     }
     case pineforge::NativeEventKind::Account: {
@@ -789,7 +1208,7 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
             out.incarnation = payload.handle().incarnation;
         } else if constexpr (std::is_same_v<T, no::RejectedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_REJECTED, ordinal);
-            out.reason = static_cast<std::uint32_t>(payload.reason);
+            out.reason = c_word(payload.reason);
         } else if constexpr (std::is_same_v<T, no::ReplacedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_REPLACED, ordinal);
             out.incarnation = payload.predecessor().incarnation;
@@ -797,11 +1216,11 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
         } else if constexpr (std::is_same_v<T, no::ReplaceRejectedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_REPLACE_REJECTED, ordinal);
             out.incarnation = payload.target().incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.reason);
+            out.reason = c_word(payload.reason);
         } else if constexpr (std::is_same_v<T, no::CancelledEvent>) {
             out = blank_event(PF_NATIVE_EVENT_CANCELLED, ordinal);
             out.incarnation = payload.handle().incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.reason);
+            out.reason = c_word(payload.reason);
         } else if constexpr (std::is_same_v<T, no::NotWorkingEvent>) {
             out = blank_event(PF_NATIVE_EVENT_NOT_WORKING, ordinal);
             out.incarnation = payload.target.incarnation;
@@ -815,32 +1234,32 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
         } else if constexpr (std::is_same_v<T, no::MatchRejectedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_MATCH_REJECTED, ordinal);
             out.incarnation = payload.handle().incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.reason);
+            out.reason = c_word(payload.reason);
             fill_cursor(out, payload.cursor);
         } else if constexpr (std::is_same_v<T, no::ExecutionAppliedEvent>) {
             out = applied_event_pod(payload);
         } else if constexpr (std::is_same_v<T, no::CloseBoundEvent>) {
             out = blank_event(PF_NATIVE_EVENT_CLOSE_BOUND, ordinal);
             out.incarnation = payload.definition->handle.incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.side);
+            out.reason = c_word(payload.side);
             out.cycle_after = payload.cycle;
             fill_cursor(out, payload.cursor);
         } else if constexpr (std::is_same_v<T, no::ActivatedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_ACTIVATED, ordinal);
             out.incarnation = payload.definition->handle.incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.kind);
+            out.reason = c_word(payload.kind);
             out.price = payload.reached_price;
             out.raw_price = payload.reached_price;
             fill_cursor(out, payload.cursor);
         } else if constexpr (std::is_same_v<T, no::ReservationReducedEvent>) {
             out = blank_event(PF_NATIVE_EVENT_RESERVATION_REDUCED, ordinal);
             out.incarnation = payload.recipient.incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.effect);
+            out.reason = c_word(payload.effect);
             out.closed_units = payload.actual_deduction;
         } else if constexpr (std::is_same_v<T, no::DeferredGroupAdjustmentEvent>) {
             out = blank_event(PF_NATIVE_EVENT_DEFERRED_GROUP, ordinal);
             out.incarnation = payload.recipient.incarnation;
-            out.reason = static_cast<std::uint32_t>(payload.effect);
+            out.reason = c_word(payload.effect);
             out.closed_units = payload.deferred_delta;
         } else if constexpr (std::is_same_v<T, no::QuantityBoundEvent>) {
             out = blank_event(PF_NATIVE_EVENT_QUANTITY_BOUND, ordinal);
@@ -864,7 +1283,7 @@ bool translate_event(const pineforge::NativeMarketEvent& event, pf_native_event_
              * already in the unit the breach was measured in — a percent
              * limit was resolved against its basis equity in the kernel. */
             out = blank_event(PF_NATIVE_EVENT_RISK, ordinal);
-            out.reason = static_cast<std::uint32_t>(payload.kind);
+            out.reason = c_word(payload.kind);
             out.price = payload.observed;
             out.raw_price = payload.limit;
             out.cycle_before = payload.day_ordinal;
@@ -1246,7 +1665,7 @@ void fill_open_lot(const pineforge::NativeOpenLot& lot, pf_native_open_lot_v1& o
     out.ordinal = static_cast<std::uint64_t>(lot.ordinal);
     out.entry_incarnation = lot.entry_incarnation;
     out.cycle = lot.cycle;
-    out.side = static_cast<std::uint32_t>(lot.side);
+    out.side = c_word(lot.side);
     out.entry_bar_index = lot.entry_bar_index;
     out.entry_time_ms = lot.entry_time_ms;
     out.entry_price = lot.entry_price;
@@ -1280,14 +1699,14 @@ void fill_working(const pineforge::NativeWorkingRequest& live, pf_native_working
     if (const auto* member = std::get_if<no::Member>(&definition.request.group)) {
         out.group_id = member->group;
         out.group_cohort = member->cohort;
-        out.group_effect = static_cast<std::uint32_t>(member->effect);
+        out.group_effect = c_word(member->effect);
     }
     out.remaining_kind = static_cast<std::uint32_t>(live.remaining.index());
     if (const auto* units = std::get_if<no::RemainingProjectionUnits>(&live.remaining)) {
         out.remaining_units = units->q;
     }
     out.trigger_state = static_cast<std::uint32_t>(live.trigger_state.index());
-    out.origin = static_cast<std::uint32_t>(definition.origin);
+    out.origin = c_word(definition.origin);
     out.acceptance_ordinal = definition.birth.acceptance_ordinal;
     out.decision_time_lower_bound = definition.birth.decision_time_lower_bound;
     out.label = definition.request.label.c_str();
@@ -1468,7 +1887,10 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
         || !in.volumetype || !in.timezone || !in.session || !in.chart_timezone) {
         return PF_NATIVE_E_ARGUMENT;
     }
-    if (in.optional_mask & ~0xfu) return PF_NATIVE_E_TAG;
+    constexpr std::uint32_t kOptional =
+        PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID | PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS
+        | PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION | PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS;
+    if (in.optional_mask & ~kOptional) return PF_NATIVE_E_TAG;
     out.identity.session_key = in.session_key;
     out.identity.run_number = in.run_number;
     out.input_tf = in.input_tf;
@@ -1494,10 +1916,18 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
     if (!translate_word(in.allowed_open_directions, out.allowed_open_directions)) {
         return PF_NATIVE_E_TAG;
     }
-    if (in.optional_mask & 1u) out.quantity_grid = in.quantity_grid;
-    if (in.optional_mask & 2u) out.max_abs_units = in.max_abs_units;
-    if (in.optional_mask & 4u) out.initial_margin_fraction = in.initial_margin_fraction;
-    if (in.optional_mask & 8u) out.max_open_lots = in.max_open_lots;
+    if (in.optional_mask & PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID) {
+        out.quantity_grid = in.quantity_grid;
+    }
+    if (in.optional_mask & PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS) {
+        out.max_abs_units = in.max_abs_units;
+    }
+    if (in.optional_mask & PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION) {
+        out.initial_margin_fraction = in.initial_margin_fraction;
+    }
+    if (in.optional_mask & PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS) {
+        out.max_open_lots = in.max_open_lots;
+    }
     return PF_NATIVE_OK;
 }
 
@@ -1891,7 +2321,7 @@ PF_API int strategy_native_submit_v1(pf_strategy_t s, const pf_native_request_v1
             if (incarnation && result.handle) *incarnation = result.handle->incarnation;
             return PF_NATIVE_OK;
         }
-        if (reject && result.reason) *reject = static_cast<std::uint32_t>(*result.reason);
+        if (reject && result.reason) *reject = c_word(*result.reason);
         return PF_NATIVE_E_REJECTED;
     });
 }
@@ -1915,7 +2345,7 @@ PF_API int strategy_native_replace_ext_v1(pf_strategy_t s, uint64_t incarnation,
         case no::ReplaceStatus::ReplaceRejected:
             /* The one verdict that carries a reason, written exactly as
              * strategy_native_submit_v1 writes a refused submit's. */
-            if (reject && result.reason) *reject = static_cast<std::uint32_t>(*result.reason);
+            if (reject && result.reason) *reject = c_word(*result.reason);
             return PF_NATIVE_E_REJECTED;
         case no::ReplaceStatus::NotWorking:
             return PF_NATIVE_E_NOT_WORKING;
@@ -2003,7 +2433,7 @@ PF_API int strategy_native_execute_current_v1(pf_strategy_t s, uint64_t incarnat
         return std::visit([&](const auto& outcome) -> int {
             using T = std::decay_t<decltype(outcome)>;
             if constexpr (std::is_same_v<T, pineforge::NativeCurrentRefusal>) {
-                if (refusal) *refusal = static_cast<std::uint32_t>(outcome);
+                if (refusal) *refusal = c_word(outcome);
                 return PF_NATIVE_E_REFUSED;
             } else if constexpr (std::is_same_v<T, no::ExecutionAppliedEvent>) {
                 return PF_NATIVE_EXECUTED_APPLIED;
@@ -2137,15 +2567,15 @@ PF_API int strategy_native_state_v1(pf_strategy_t s, pf_native_state_v1* out) {
         std::memset(out, 0, sizeof(*out));
         out->struct_size = struct_size;
         out->version = PF_NATIVE_API_VERSION;
-        out->lifecycle = static_cast<std::uint32_t>(state.kind);
-        out->failure_code = static_cast<std::uint32_t>(state.failure.code);
-        out->failure_operation = static_cast<std::uint32_t>(state.failure.operation);
+        out->lifecycle = c_word(state.kind);
+        out->failure_code = c_word(state.failure.code);
+        out->failure_operation = c_word(state.failure.operation);
         out->failure_discriminator = state.failure.discriminator;
         out->failure_ordinal = state.failure.ordinal;
         out->consumed_high_water = state.consumed_high_water;
         out->decision_floor_ms = state.decision_floor_ms;
-        out->phase = static_cast<std::uint32_t>(state.phase);
-        out->completion = static_cast<std::uint32_t>(state.completion);
+        out->phase = c_word(state.phase);
+        out->completion = c_word(state.completion);
         return PF_NATIVE_OK;
     });
 }
@@ -2270,7 +2700,7 @@ PF_API int strategy_native_risk_state_v1(pf_strategy_t s, pf_native_risk_state_v
         out->blocked = state.blocked ? 1u : 0u;
         if (state.reason) {
             out->has_reason = 1u;
-            out->reason = static_cast<std::uint32_t>(*state.reason);
+            out->reason = c_word(*state.reason);
         }
         out->has_day = state.has_day ? 1u : 0u;
         out->consecutive_loss_days = state.consecutive_loss_days;
@@ -2415,3 +2845,7 @@ PF_API int strategy_native_declare_opened_lot_entry_bar_mask_v1(pf_strategy_t s,
 }
 
 }  /* extern "C" */
+
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif

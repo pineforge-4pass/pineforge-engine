@@ -458,14 +458,41 @@ typedef void* pf_strategy_t;
  *  definitions.
  */
 
-/** Native execution contract query. Returns 1 Legacy, 2 NativeMarketV1, -1 invalid.
- *  Absence of this symbol on a known ABI4/stream-v1 library means legacy. */
+/** What #strategy_execution_contract answers for a valid handle. */
+typedef enum pf_execution_contract_e {
+    PF_EXECUTION_CONTRACT_LEGACY           = 1, /**< The retired legacy execution path. */
+    PF_EXECUTION_CONTRACT_NATIVE_MARKET_V1 = 2  /**< The native market kernel; every
+                                                 *   handle this runtime creates. */
+} pf_execution_contract_t;
+
+/** Native execution contract query: a #pf_execution_contract_t, or -1 for a
+ *  NULL handle. Absence of this symbol on a known ABI4/stream-v1 library
+ *  means legacy. */
 PF_API int strategy_execution_contract(pf_strategy_t s);
+
+/** The bits of #pf_native_run_spec_v1::optional_mask: each names the one
+ *  optional field it makes meaningful. A bit outside this set is refused. */
+typedef enum pf_native_spec_optional_e {
+    PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID           = 1u << 0, /**< `quantity_grid`. */
+    PF_NATIVE_SPEC_OPTIONAL_MAX_ABS_UNITS           = 1u << 1, /**< `max_abs_units`. */
+    PF_NATIVE_SPEC_OPTIONAL_INITIAL_MARGIN_FRACTION = 1u << 2, /**< `initial_margin_fraction`. */
+    PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS           = 1u << 3  /**< `max_open_lots`. */
+} pf_native_spec_optional_t;
 
 /** Versioned native run specification. All string pointers are non-null.
  *  session may be empty (all-day literal). session_key, timeframes, timezone
- *  and tickerid are nonempty. optional_mask bits: 0 quantity_grid, 1
- *  max_abs_units, 2 initial_margin_fraction, 3 max_open_lots. */
+ *  and tickerid are nonempty. `optional_mask` carries
+ *  #pf_native_spec_optional_t bits.
+ *
+ *  Its three enum-valued words are named in <pineforge/native_c_api.h>:
+ *  `fee_kind` is a #pf_native_fee_kind_t, `close_execution` a
+ *  #pf_native_close_execution_t and `allowed_open_directions` a
+ *  #pf_native_open_directions_t (zero-filled, that word admits no opening at
+ *  all). #strategy_configure_native_v1 hands a word outside its enumeration
+ *  to the kernel's own validation, which refuses the spec: it answers -1 and
+ *  the host is Failed. #strategy_configure_native_ext_v1 refuses the same
+ *  word with PF_NATIVE_E_TAG before the kernel sees it, and the host stays
+ *  usable. */
 typedef struct pf_native_run_spec_v1 {
     uint32_t struct_size;
     const char *session_key; uint64_t run_number;
@@ -845,7 +872,10 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on);
  *      shape.
  *    - `2` LOW_FIRST: force `O -> L -> H -> C` regardless of the bar's own
  *      shape.
- *  Any other @p mode is clamped to AUTO.
+ *  The values are #pf_native_path_order_t's (<pineforge/native_c_api.h>):
+ *  #PF_NATIVE_PATH_ORDER_AUTO, #PF_NATIVE_PATH_ORDER_HIGH_FIRST and
+ *  #PF_NATIVE_PATH_ORDER_LOW_FIRST. Any other @p mode is clamped to AUTO:
+ *  this setter answers nothing, so it cannot refuse one.
  *  A live probe runs the SAME forming bar under BOTH forced orders and emits
  *  only the fills that agree between the two -- a fill that depends on which
  *  leg TradingView's own (unobservable, still-forming) bar will resolve to
@@ -972,6 +1002,18 @@ PF_API int strategy_pending_order_get(pf_strategy_t s, int index, void* out, siz
  *  its struct from this table rather than from a hand-typed copy, so the
  *  mirror can grow (append-only) without breaking it. */
 PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count);
+/** Which sizing rule #strategy_pending_order_fill_qty's quantity came from,
+ *  written to its `partition` out-parameter; each value is documented there.
+ *  The value set is the Pine source host's pending-order sizing, the only
+ *  host that answers a probe. */
+typedef enum pf_fill_qty_partition_e {
+    PF_FILL_QTY_PARTITION_EXIT                   = -1, /**< An exit: no partition. */
+    PF_FILL_QTY_PARTITION_EXPLICIT               = 0,
+    PF_FILL_QTY_PARTITION_FROZEN_PLACEMENT       = 1,
+    PF_FILL_QTY_PARTITION_DEFAULT_STOP_PLACEMENT = 2,
+    PF_FILL_QTY_PARTITION_AT_FILL                = 3
+} pf_fill_qty_partition_t;
+
 /** Engine-computed fill quantity of the @p index-th resting order (ABI v4
  *  live-runtime surface, task 8, spec 3.6): the contracts the entry kernel
  *  would OPEN if that order filled at @p fill_price, sized by the engine's
@@ -979,7 +1021,7 @@ PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count);
  *  slipped the way the kernel slips it (`native_matching::apply_slippage`
  *  then the directional grid snap; an entry with a
  *  limit leg takes the unslipped limit-or-better route). @p partition
- *  receives which sizing rule produced the value:
+ *  receives which sizing rule produced the value, a #pf_fill_qty_partition_t:
  *    - `0` EXPLICIT -- a script-supplied qty: for `strategy.entry` the
  *      lot-floored contracts (`apply_qty_step`) of a fixed qty, or the
  *      explicit percent/cash budget sized at the fill for a per-call
@@ -1027,7 +1069,7 @@ PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count);
  *  entry firing from FLAT whose placement side is the opposite of the
  *  requested side) -- read `tv_carry_qty` / `created_position_side` from
  *  the mirror. Returns 0 on success; 1 -- with @p qty NaN, @p close_only 0,
- *  @p partition -1 -- when the order is an EXIT (its fill quantity is
+ *  @p partition -1 (#PF_FILL_QTY_PARTITION_EXIT) -- when the order is an EXIT (its fill quantity is
  *  decided against the live position at the fill, not by a partition); -1
  *  with nothing written when @p s is NULL, @p index is out of range, or any
  *  out-pointer is NULL. Read-only: no historical run changes because a
@@ -1097,7 +1139,22 @@ PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_ind
 PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id. */
 PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade_index);
-/** Task 9: why the @p trade_index-th REPORT-row closed trade exited.
+/** Why a closed report row exited — `execution::CloseCause`, the value
+ *  #strategy_closed_trade_close_cause answers for a valid row. The names are
+ *  the kernel's; the descriptive labels in that function's documentation are
+ *  the same numbers. */
+typedef enum pf_close_cause_e {
+    PF_CLOSE_CAUSE_UNSPECIFIED = 0, /**< No cause recorded (UNKNOWN). */
+    PF_CLOSE_CAUSE_SCRIPT      = 1, /**< A market close or a reversal. */
+    PF_CLOSE_CAUSE_BRACKET     = 2, /**< A bracket leg. */
+    PF_CLOSE_CAUSE_LIQUIDATION = 3, /**< A margin-call liquidation slice (MARGIN_CALL). */
+    PF_CLOSE_CAUSE_RISK_LIMIT  = 4, /**< A risk-limit flatten (INTRADAY_LOSS_CAP). */
+    PF_CLOSE_CAUSE_FILL_CAP    = 5, /**< A filled-order cap (INTRADAY_FILL_CAP). */
+    PF_CLOSE_CAUSE_RANGE_END   = 6  /**< The range-end close of a position still open. */
+} pf_close_cause_t;
+
+/** Task 9: why the @p trade_index-th REPORT-row closed trade exited, a
+ *  #pf_close_cause_t.
  *  Values:
  *    - `0` UNKNOWN -- reserved for the documented "no cause" value on a
  *      VALID trade. Every in-range row currently falls through the
