@@ -1482,6 +1482,8 @@ string(REPLACE ";" "|" PINEFORGE_E21_KERNEL_JOINED "${PINEFORGE_E21_KERNEL_FILES
 if(TARGET test_native_margin_fx_clock)
     target_compile_definitions(test_native_margin_fx_clock PRIVATE
         PINEFORGE_E21_KERNEL_FILES="${PINEFORGE_E21_KERNEL_JOINED}")
+endif()
+
 # R5 E25 reads its TradingView tapes from the fixture tree; source-bound too.
 if(TARGET test_session_islastbar_aggregation)
     target_compile_definitions(test_session_islastbar_aggregation PRIVATE

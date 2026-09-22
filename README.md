@@ -430,7 +430,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **33 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **34 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
