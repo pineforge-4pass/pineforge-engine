@@ -69,6 +69,7 @@ NATIVE_EXAMPLES = (
     ("native-auxiliary-feed", "examples/native/native_auxiliary_feed_strategy.cpp"),
     ("native-open-lots", "examples/native/native_open_lots_strategy.cpp"),
     ("native-fee-reserve", "examples/native/native_fee_reserve_strategy.cpp"),
+    ("native-fx-roll", "examples/native/native_fx_roll_strategy.cpp"),
 )
 NATIVE_EXAMPLES_DIRECTORY = "examples/native"
 C_SOURCE_SUFFIXES = (".c",)
