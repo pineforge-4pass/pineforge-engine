@@ -42,6 +42,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -71,6 +72,7 @@ struct FeedBar {
 #include "fixtures/session_islastbar/bars.inc"
 
 constexpr std::int64_t kMinute = 60'000;
+const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 const std::string kRth = "0930-1600";
 const std::string kNewYork = "America/New_York";
@@ -119,6 +121,14 @@ struct Row {
     std::string entry_id;
     std::string exit_id;
 };
+
+bool operator==(const Row& a, const Row& b) {
+    return a.is_long == b.is_long && a.entry_ms == b.entry_ms && a.exit_ms == b.exit_ms
+        && a.entry_price == b.entry_price && a.exit_price == b.exit_price && a.qty == b.qty
+        && a.pnl == b.pnl && a.runup == b.runup && a.drawdown == b.drawdown
+        && a.entry_bar == b.entry_bar && a.exit_bar == b.exit_bar
+        && a.entry_id == b.entry_id && a.exit_id == b.exit_id;
+}
 
 struct Run {
     std::vector<Row> closed;
@@ -344,11 +354,196 @@ void test_next_open_fills() {
     }
 }
 
+// ── 3. process_orders_on_close fills ──────────────────────────────────────
+
+// The reviewer's pooc_probe.cpp: the same script with process_orders_on_close
+// on, so every fill is at a bar's close and TradingView dates it at that
+// bar's open (the e25-f-islastbar tape, lane E27).
+//
+// ab9714be, pooc_probe_ab9714be.out, identical on all three paths:
+//   entry 07-02 19:45Z @11.77 bar 25   exit 07-03 13:30Z @11.94 bar 26
+//   entry 07-03 16:45Z @11.79 bar 39   exit 07-07 13:30Z @11.68 bar 40
+//   open  07-07 19:45Z @11.60 bar 65
+// Before this lane the plain aggregated run dated every fill one bucket late
+// and on input bars (entry 07-02 20:00Z bar 375 ...), the magnified one one
+// bucket late (entry 07-02 20:00Z bar 25 ...).
+void test_pooc_fills() {
+    std::printf("test_pooc_fills\n");
+    for (const Path path : kPaths) {
+        NextBarHost host(/*pooc=*/true);
+        run_path(host, path);
+        const Run run = host.read();
+        CHECK(run.error.empty());
+        CHECK(run.closed.size() == 2);
+        CHECK(run.open_count == 1);
+        if (run.closed.size() != 2 || run.open_count != 1) {
+            show(path_name(path), run);
+            continue;
+        }
+        const bool first = row_is(run.closed[0], utc_ms(2025, 7, 2, 19, 45), 11.77, 25,
+                                  utc_ms(2025, 7, 3, 13, 30), 11.94, 26);
+        const bool second = row_is(run.closed[1], utc_ms(2025, 7, 3, 16, 45), 11.79, 39,
+                                   utc_ms(2025, 7, 7, 13, 30), 11.68, 40);
+        const bool open = run.open_entry_ms == utc_ms(2025, 7, 7, 19, 45)
+            && near(run.open_entry_price, 11.60) && run.open_entry_bar == 65;
+        CHECK(first);
+        CHECK(second);
+        CHECK(open);
+        if (!first || !second || !open) show(path_name(path), run);
+    }
+}
+
+// ── 4. a plain aggregated chart is the chart ──────────────────────────────
+
+// Beyond the three probes: a script that places priced entries with same-bar
+// brackets, a limit short, a market entry with a priced from_entry leg and a
+// market pyramid add under it, and a periodic close_all, under every
+// combination of process_orders_on_close, calc_on_order_fills and slippage.
+// The chart a script sees does not depend on the timeframe its bars were fed
+// at, so the plain aggregated run must book the chart run's rows exactly:
+// the same fills, prices, P&L, excursions, ids — and, since this lane, the
+// same instants and chart-bar indices. Before this lane every field but those
+// two already agreed; the re-stamp must not move any of the others (the
+// entry-bar masks, the slippage mask, the KI-62 same-bar add cover and the
+// calc_on_order_fills extreme sample all compare a lot's entry bar with the
+// current one).
+class BracketsHost final : public ProbeHost {
+public:
+    BracketsHost(bool pooc, bool coof, int slippage, int pyramiding)
+        : ProbeHost(pooc, coof, slippage, pyramiding, /*commission_percent=*/0.01) {}
+    void on_source_bar(const Bar& bar) override {
+        ++callbacks_;
+        const int k = bar_index_;
+        const double units = physical_position().signed_units;
+        if (k % 7 == 3 && units == 0.0) {
+            strategy_entry("PL", true, kNaN, bar.high - 0.02);
+            strategy_exit("PX", "PL", bar.close + 0.06, bar.close - 0.06);
+        }
+        if (k % 9 == 4 && units == 0.0) {
+            strategy_entry("PS", false, bar.close + 0.02);
+            strategy_exit("SX", "PS", bar.close - 0.05, bar.close + 0.07);
+        }
+        if (k % 13 == 6 && units == 0.0) {
+            strategy_entry("ML", true);
+            strategy_exit("MX", "ML", bar.close + 0.08, bar.close - 0.08);
+        }
+        if (k % 13 == 7 && units > 0.0) strategy_entry("ML", true);
+        if (k % 17 == 16 && units != 0.0) strategy_close_all();
+    }
+};
+
+void test_aggregated_equals_chart() {
+    std::printf("test_aggregated_equals_chart\n");
+    struct Variant { bool pooc; bool coof; int slippage; int pyramiding; };
+    const Variant variants[] = {
+        {false, false, 0, 1}, {true, false, 0, 1}, {false, true, 0, 1}, {true, true, 0, 1},
+        {false, false, 2, 3}, {true, false, 2, 3}, {false, true, 2, 3}, {true, true, 2, 3},
+    };
+    for (const Variant& v : variants) {
+        BracketsHost chart_host(v.pooc, v.coof, v.slippage, v.pyramiding);
+        run_path(chart_host, Path::Chart);
+        BracketsHost agg_host(v.pooc, v.coof, v.slippage, v.pyramiding);
+        run_path(agg_host, Path::Aggregated);
+        const Run chart = chart_host.read();
+        const Run agg = agg_host.read();
+        CHECK(chart.error.empty());
+        CHECK(agg.error.empty());
+        CHECK(chart.closed.size() >= 12);
+        CHECK(agg.callbacks == chart.callbacks);
+        CHECK(agg.net_profit == chart.net_profit);
+        CHECK(agg.closed.size() == chart.closed.size());
+        CHECK(agg.open_count == chart.open_count);
+        bool rows_equal = agg.closed.size() == chart.closed.size();
+        for (std::size_t i = 0; rows_equal && i < agg.closed.size(); ++i)
+            rows_equal = agg.closed[i] == chart.closed[i];
+        CHECK(rows_equal);
+        if (!rows_equal) {
+            std::printf("    pooc=%d coof=%d slippage=%d pyramiding=%d\n", v.pooc, v.coof,
+                        v.slippage, v.pyramiding);
+            for (std::size_t i = 0; i < agg.closed.size() && i < chart.closed.size(); ++i) {
+                if (agg.closed[i] == chart.closed[i]) continue;
+                const Row& a = agg.closed[i];
+                const Row& c = chart.closed[i];
+                std::printf("      [%zu] chart %lld..%lld bar %d..%d ru %.4f dd %.4f\n"
+                            "          agg   %lld..%lld bar %d..%d ru %.4f dd %.4f\n",
+                            i, static_cast<long long>(c.entry_ms),
+                            static_cast<long long>(c.exit_ms), c.entry_bar, c.exit_bar,
+                            c.runup, c.drawdown, static_cast<long long>(a.entry_ms),
+                            static_cast<long long>(a.exit_ms), a.entry_bar, a.exit_bar,
+                            a.runup, a.drawdown);
+            }
+        }
+    }
+}
+
+// The KI-62 cover (ab9714be pine_fills.cpp:7026-7033), which the brackets
+// script above never reaches: a same-id MARKET add opened on the bar a priced
+// from_entry leg fills is still open behind the leg's FIFO reduction, and the
+// owner covers it at the leg's price as a second fill of the same order. The
+// adapter finds those adds by comparing each lot's entry bar with the fill's
+// bar, so the plain aggregated chart must state both on the chart bar. The
+// shape of test_l10as_priced_exit_fill's EUR/USD add-on case on NYSE:F: two
+// units at the bar-36 open, a two-unit add at the bar-43 open, and two
+// one-unit legs whose re-issued stop (11.72) bar 43 crosses after its open
+// (11.755, low 11.695).
+class AddOnHost final : public ProbeHost {
+public:
+    AddOnHost() : ProbeHost(/*pooc=*/false, /*coof=*/false, /*slippage=*/0, /*pyramiding=*/2) {}
+    void on_source_bar(const Bar& bar) override {
+        ++callbacks_;
+        const int i = bar_index_;
+        if (i != 35 && i != 42) return;
+        const double stop = i == 35 ? bar.close - 5.0 : 11.72;
+        strategy_entry("Long", true, kNaN, kNaN, 2.0);
+        strategy_exit("LongT1", "Long", bar.close + 5.0, stop, kNaN, kNaN, kNaN, 100.0,
+                      "T1 Exit", 1.0);
+        strategy_exit("LongT2", "Long", bar.close + 5.0, stop, kNaN, kNaN, kNaN, 100.0,
+                      "T2 Exit", 1.0);
+    }
+};
+
+void test_same_bar_add_cover() {
+    std::printf("test_same_bar_add_cover\n");
+    AddOnHost chart_host;
+    run_path(chart_host, Path::Chart);
+    AddOnHost agg_host;
+    run_path(agg_host, Path::Aggregated);
+    const Run chart = chart_host.read();
+    const Run agg = agg_host.read();
+    CHECK(chart.error.empty());
+    CHECK(agg.error.empty());
+    // The control: the carried lot's first unit, the cover of the whole add,
+    // then the carried lot's last unit, all at the stop on bar 43.
+    CHECK(chart.closed.size() == 3);
+    CHECK(chart.open_count == 0);
+    if (chart.closed.size() == 3) {
+        const double qty[] = {1.0, 2.0, 1.0};
+        const int entry_bar[] = {36, 43, 36};
+        for (std::size_t k = 0; k < 3; ++k) {
+            CHECK(chart.closed[k].qty == qty[k]);
+            CHECK(chart.closed[k].entry_bar == entry_bar[k]);
+            CHECK(chart.closed[k].exit_bar == 43);
+            CHECK(near(chart.closed[k].exit_price, 11.72));
+        }
+    } else {
+        show(path_name(Path::Chart), chart);
+    }
+    bool rows_equal = agg.closed.size() == chart.closed.size();
+    for (std::size_t i = 0; rows_equal && i < agg.closed.size(); ++i)
+        rows_equal = agg.closed[i] == chart.closed[i];
+    CHECK(rows_equal);
+    CHECK(agg.open_count == chart.open_count);
+    if (!rows_equal) show(path_name(Path::Aggregated), agg);
+}
+
 }  // namespace
 
 int main() {
     test_held_bars();
     test_next_open_fills();
+    test_pooc_fills();
+    test_aggregated_equals_chart();
+    test_same_bar_add_cover();
 
     std::printf("\naggregated_path_regressions: %d passed, %d failed\n", tests_passed,
                 tests_failed);

@@ -39,17 +39,15 @@
  *   The aggregated path must partition (it is what buckets 1m into 15m), so it
  *   gets a real interval and a real close.
  *
- * RESIDUAL, not fixed. The brief for this lane expected the stamp to be Pine
- * delivery timing inside src/source/ and said to stop and report if it came
- * from the kernel's fill point. It does. What is left to the owner is which of
- * two changes to make, and both are rulings, not a worker's call: re-stamp the
- * booked row from the adapter (PineStrategyHost::on_native_applied already does
- * exactly this for entry_bar_index / exit_bar_index, but only when the bar
- * magnifier is on — it writes hashed kernel state after the kernel booked it),
- * or change what instant the kernel attributes to a calculation point (which is
- * also the instant its FX lookup, its decision floor and its ordering read).
- * The rows below pin what is true today, so whichever change is ruled has to
- * move them on purpose.
+ * Lane E27 pinned this as a RESIDUAL: the brief for that lane expected the
+ * stamp to be Pine delivery timing inside src/source/ and said to stop and
+ * report if it came from the kernel's fill point, which it does. The owner
+ * then chose between re-stamping the booked row from the adapter and changing
+ * what instant the kernel attributes to a calculation point (which is also the
+ * instant its FX lookup, its decision floor and its ordering read). Ruling
+ * (lane F1, ADR-0001 rule 2): the adapter re-dates the rows it presents, in
+ * PineStrategyHost::on_native_applied, at the chart bar's open; the kernel's
+ * instant stays. Rows 4 and 5 moved on purpose (expectation corrected).
  *
  * SECOND RESIDUAL, a separate finding of the same mechanism: on the PLAIN
  * aggregated path the trade rows carried the INPUT bar index, not the chart
@@ -374,13 +372,10 @@ void test_aggregated_books_the_same_fills() {
 
 // ── 4. the stamp, on the aggregated path ──────────────────────────────────
 
-// RESIDUAL. Every POOC fill of the aggregated run is dated one script bar on,
-// at the bucket's close, plain and magnified. The fail-before of this lane's
-// witness, with `== chart.closed[i].entry_ms` where the shift stands below:
+// Every POOC fill of the aggregated run is dated at the chart bar's open, as
+// the chart path and the tape date it, plain and magnified. Lane E27 pinned
+// the aggregated run one script bar late, at the bucket's close:
 //
-//   FAIL  agg.closed[i].entry_ms == chart.closed[i].entry_ms
-//   FAIL  agg.closed[i].exit_ms  == chart.closed[i].exit_ms
-//   FAIL  agg.open_entry_ms      == chart.open_entry_ms
 //     aggregated 1 -> 15       closed=2 open=1 err=''
 //       entry 1751486400000 @11.77 bar 375   exit 1751550300000 @11.94 bar 390
 //       entry 1751562000000 @11.79 bar 585   exit 1751895900000 @11.68 bar 600
@@ -396,27 +391,34 @@ void test_aggregated_stamp() {
         const Run agg = run_batch(feed(kFord1m), kRth, kNewYork, "1", "15", magnifier,
                                   ford_entry_bars());
         if (agg.closed.size() != chart.closed.size()) continue;
+        // expectation corrected (lane F1): chart + kFifteen -> the chart's own
+        // stamp, because the adapter now dates a close-point fill on an
+        // aggregated chart at the chart bar's open (on_native_applied), where
+        // the kernel's calculation instant is the bucket's close.
         for (std::size_t i = 0; i < agg.closed.size(); ++i) {
-            CHECK(agg.closed[i].entry_ms == chart.closed[i].entry_ms + kFifteen);
-            CHECK(agg.closed[i].exit_ms == chart.closed[i].exit_ms + kFifteen);
+            CHECK(agg.closed[i].entry_ms == chart.closed[i].entry_ms);
+            CHECK(agg.closed[i].exit_ms == chart.closed[i].exit_ms);
         }
-        CHECK(agg.open_entry_ms == chart.open_entry_ms + kFifteen);
-        if (agg.closed[0].entry_ms != chart.closed[0].entry_ms + kFifteen)
+        CHECK(agg.open_entry_ms == chart.open_entry_ms);
+        if (agg.closed[0].entry_ms != chart.closed[0].entry_ms)
             show(magnifier ? "aggregated 1 -> 15 mg" : "aggregated 1 -> 15", agg);
     }
     // Absolute, so the pin does not move with the control: the first fill is
-    // dated 2025-07-02 20:00 UTC where TradingView dates it 19:45.
+    // dated 2025-07-02 19:45 UTC, as TradingView dates it.
+    // expectation corrected (lane F1): 2025-07-02 20:00 -> 19:45 and
+    // 2025-07-03 13:45 -> 13:30 UTC, because the rows are dated at the chart
+    // bar's open, not at the bucket's close.
     const Run plain = run_batch(feed(kFord1m), kRth, kNewYork, "1", "15", false,
                                 ford_entry_bars());
     if (plain.closed.empty()) return;
-    CHECK(plain.closed[0].entry_ms == utc_ms(2025, 7, 2, 20, 0));
-    CHECK(plain.closed[0].exit_ms == utc_ms(2025, 7, 3, 13, 45));
+    CHECK(plain.closed[0].entry_ms == utc_ms(2025, 7, 2, 19, 45));
+    CHECK(plain.closed[0].exit_ms == utc_ms(2025, 7, 3, 13, 30));
 }
 
 // ── 5. the same shift without a tape ──────────────────────────────────────
 
 // Flat synthetic bars, 1m under a 5m script against 5m under a 5m script, so
-// the shift is a property of the aggregation route and not of one feed.
+// the stamp is a property of the aggregation route and not of one feed.
 void test_synthetic_five_minute() {
     std::printf("test_synthetic_five_minute\n");
     const std::int64_t entry_bar = kTue0930Et + 20 * kMinute;
@@ -436,9 +438,11 @@ void test_synthetic_five_minute() {
     CHECK(chart.closed[0].entry_ms == entry_bar);
     CHECK(chart.closed[0].exit_ms == entry_bar + kFive);
     CHECK(agg.closed[0].entry_price == chart.closed[0].entry_price);
-    // RESIDUAL, as in row 4: one script bar late, here five minutes.
-    CHECK(agg.closed[0].entry_ms == chart.closed[0].entry_ms + kFive);
-    CHECK(agg.closed[0].exit_ms == chart.closed[0].exit_ms + kFive);
+    // expectation corrected (lane F1): chart + kFive -> the chart's own stamp,
+    // because the aggregated row is dated at the chart bar's open, as in row 4
+    // (it was one script bar late, five minutes here).
+    CHECK(agg.closed[0].entry_ms == chart.closed[0].entry_ms);
+    CHECK(agg.closed[0].exit_ms == chart.closed[0].exit_ms);
 }
 
 // ── 6. the trade row's bar index, on the aggregated path ──────────────────
