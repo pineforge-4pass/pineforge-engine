@@ -581,6 +581,109 @@ void continuation_read_is_linear_in_the_feed() {
     CHECK(every_bar.digest == once.digest);
 }
 
+// ─── item 2: the last per-bar hash IS the run's final broker-state hash ─────
+// pf_report_t::broker_state_hash: "When populated, len ==
+// script_bars_processed and the last element equals
+// #strategy_broker_state_hash's value at the end of the run" (pineforge.h),
+// whether or not recording was on (strategy_broker_state_hash). A row folds
+// the continuation at its report point; the scalar folded the continuation
+// AFTER the run -- once the consumer had torn the run down into Completed --
+// so the two differed for every bare host (AUDIT3: 7/7 configurations). Only
+// the Pine adapter latched the continuation at its report points. Fails at
+// the base in all eight runs below (seven batch shapes and a stream).
+struct HashProbe : NativeStrategyHost {
+    int bars = 0;
+    int flat_at = 3;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++bars;
+        if (bars == 1) (void)submit({no::Transact{1.0}, "e", ""});
+        if (bars == flat_at) (void)submit({no::Flatten{}, "x", ""});
+    }
+};
+
+struct HashShape {
+    bool open_at_end_row = false;
+    bool keep_open = false;
+    bool fills = false;
+    bool grid = false;
+    bool stream = false;
+};
+
+struct HashRun {
+    std::vector<std::uint64_t> rows;
+    std::uint64_t scalar = 0;
+    std::int64_t script_bars = 0;
+};
+
+HashRun run_hash_shape(const HashShape& shape, bool record) {
+    HashProbe host;
+    if (shape.keep_open) host.flat_at = 999;
+    NativeRunSpec s = base_spec("f3-hash");
+    s.input_tf = "5";
+    s.script_tf = "5";
+    s.report_policy = NativeReportPolicy::KernelRecorded;
+    s.report_open_position_at_end = shape.open_at_end_row;
+    if (shape.fills) s.calculation = NativeCalculationTrigger::BarCloseAndFills;
+    if (shape.grid) s.price_grid = NativePriceGrid::QuantizeFills;
+    HashRun out;
+    CHECK(host.configure_native(s).status == NativeSetupStatus::Applied);
+    host.set_broker_state_hash_recording(record);
+    std::vector<Bar> bars;
+    for (int i = 0; i < 5; ++i)
+        bars.push_back(Bar{100.0 + i, 101.0 + i, 99.0 + i, 100.5 + i, 1.0, kT0 + i * 5 * kMinute});
+    if (shape.stream) {
+        CHECK(host.stream_begin(bars.data(), 2, "5", "5"));
+        for (int i = 2; i < 5; ++i) CHECK(host.stream_push_bar(bars[i]));
+        CHECK(host.stream_end());
+    } else {
+        host.run(bars.data(), static_cast<int>(bars.size()));
+    }
+    CHECK(host.last_error().empty());
+    ReportC report{};
+    host.fill_report(&report);
+    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+        out.rows.push_back(report.broker_state_hash[i]);
+    out.script_bars = report.script_bars_processed;
+    BacktestEngine::free_report(&report);
+    out.scalar = host.broker_state_hash();
+    return out;
+}
+
+void last_row_is_the_final_scalar() {
+    const HashShape shapes[] = {
+        {false, false, false, false, false},
+        {false, true, false, false, false},
+        {true, false, false, false, false},
+        {true, true, false, false, false},
+        {false, false, true, false, false},
+        {false, false, false, true, false},
+        {false, true, true, true, false},
+        {false, false, false, false, true},
+    };
+    for (const HashShape& shape : shapes) {
+        const HashRun recorded = run_hash_shape(shape, true);
+        CHECK(recorded.script_bars == 5);
+        CHECK(recorded.rows.size() == 5);
+        if (!recorded.rows.empty()) {
+            const bool equal = recorded.rows.back() == recorded.scalar;
+            if (!equal) {
+                std::fprintf(stderr,
+                    "  shape open_at_end_row=%d keep_open=%d fills=%d grid=%d stream=%d:"
+                    " last=%016llx scalar=%016llx\n",
+                    shape.open_at_end_row, shape.keep_open, shape.fills, shape.grid,
+                    shape.stream, static_cast<unsigned long long>(recorded.rows.back()),
+                    static_cast<unsigned long long>(recorded.scalar));
+            }
+            CHECK(equal);
+        }
+        // Recording is reporting: the same run with the switch off ends on
+        // the same scalar and records no row.
+        const HashRun unrecorded = run_hash_shape(shape, false);
+        CHECK(unrecorded.rows.empty());
+        CHECK(unrecorded.scalar == recorded.scalar);
+    }
+}
+
 // ─── item 8: the adapter's `__close__` id prefix is not kernel code ─────────
 // A strategy.close order id is the source adapter's own spelling. The kernel
 // carried a copy of that prefix (`internal::kClosePrefix`) with no reader left
@@ -611,6 +714,7 @@ int main() {
     armed_close_records_bracket();
     owned_excursion_is_recorded_verbatim();
     continuation_read_is_linear_in_the_feed();
+    last_row_is_the_final_scalar();
     std::printf("test_native_bare_host_contracts: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

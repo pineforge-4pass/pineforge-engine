@@ -1282,6 +1282,14 @@ public:
     uint64_t native_continuation_hash() const;
 
     friend class NativeExecutionConsumer;
+
+protected:
+    // broker_state_hash() folds the continuation the kernel latched at the
+    // run's last script report point (NativeReportPolicy::KernelRecorded), so a
+    // finished run answers its last per-bar row's value, recording on or off.
+    // Before the first point, and under a policy whose host owns the report
+    // cadence, it folds the live continuation.
+    std::uint64_t broker_state_hash_projection() const override;
 };
 
 }  // inline namespace engine_script_run_v18

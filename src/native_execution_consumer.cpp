@@ -6828,6 +6828,12 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 // state and the row is never read back. Under HostRecorded the report is the
 // host's; under KernelRecordedAtHostMarks the marking host appends its own
 // row, after the continuation snapshot only it can name.
+//
+// R5 lane F3: the kernel takes that snapshot for the policy it records, at
+// every point and whatever the switch says (NativeStrategyHost::
+// broker_state_hash_projection folds it), so the run's final broker_state_hash()
+// is the last point's fingerprint -- the last row, when there are rows -- and
+// not the continuation of the torn-down run. The row folds this same value.
 void NativeExecutionConsumer::record_script_report_point(
         BacktestEngine& engine, int64_t script_open_ms) const {
     const auto* spec = spec_ptr();
@@ -6836,6 +6842,8 @@ void NativeExecutionConsumer::record_script_report_point(
         engine.update_equity_extremes();
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
     engine.record_equity_point(script_open_ms);
+    engine.last_script_continuation_hash_ = continuation_hash();
+    engine.last_script_continuation_valid_ = true;
     if (engine.broker_state_hash_recording_) {
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());
     }
@@ -9300,6 +9308,17 @@ uint64_t NativeStrategyHost::native_consumed_high_water() const {
 uint64_t NativeStrategyHost::native_continuation_hash() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .continuation_hash();
+}
+
+// R5 lane F3: the latch record_script_report_point takes at every
+// kernel-recorded report point. Batch teardown moves the consumer into
+// Completed after the last point, which would otherwise make the final scalar
+// a different fold than the last recorded row.
+std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
+    const std::uint64_t execution = last_script_continuation_valid_
+        ? last_script_continuation_hash_
+        : execution_consumer().continuation_hash();
+    return broker_state_hash_from_execution_hash(execution);
 }
 
 }  // inline namespace engine_script_run_v18
