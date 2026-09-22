@@ -901,6 +901,7 @@ scalar once per run, and its values are what they were.
 |---|---|---|---|
 | **A** | the Pine adapter's recording fold: O(retained history) per row | ×3.92 to ×4.02 per doubling — 9.26 s at 800 bars of order-and-cancel, 19.5 s at 2,688 bars of re-issue — against at most 0.015 s with recording off | **open**: blocked on storage and a write barrier outside lane F9's files; no epoch needed; value witness pinned |
 | **B** | the kernel recorder's closed-row walk: O(closed rows) per row | ×2.61 rising to ×3.64 per doubling with trades (0.80 s at 24,000 bars and 1,200 closed rows) against ×1.94 to ×2.08 without | **ruled**: retained, cost documented |
+| **C** | the terminal continuation capture (E24 STOP1) | 0.048 to 0.052 s, 23 to 24 % of the 43,008-bar gated replay | **decided**: kept eager |
 
 **A. The adapter's recording fold.** `PineExecutionAdapter::hash_state`
 pine_state_hash.cpp:236 folds, at every row, every placement snapshot the run
@@ -1013,6 +1014,30 @@ But `trades_` engine.hpp:538 is a protected member any host can write, so a
 lane that takes the consumer-side digest has to make that contract explicit.
 Folding `(count, digest)` in place of the rows is simpler and moves every
 broker hash: an epoch decision (`pineforge-broker-state/v18`).
+
+**C. The terminal continuation capture (E24 STOP1).** A Pine run's scalar
+`broker_state_hash()` folds the continuation as it stood at the run's last
+script point, not after the run's teardown, so that it is one value with
+recording on or off (`broker_state_hash_projection`
+pine_strategy_host.cpp:147-155). `capture_script_continuation_hash`
+pine_strategy_host.cpp:327-333 takes that snapshot at the last batch bar
+(`last_batch` pine_strategy_host.cpp:423-433), and taking it is one full
+continuation fold per run. Measured on the gated replay — `ReissueReplay` on
+43,008 bars, `run()` process CPU, best of 5, three rounds — it is 0.2116 /
+0.2137 / 0.2141 s with the capture and 0.1632 / 0.1614 / 0.1652 s with it
+suppressed (a probe build only): 0.048 to 0.052 s, 23 to 24 % of the replay.
+E24 put it at about a third; the Opus final audit at 22.0 %. Suppressing it is
+not neutral: the final scalar moves from 235509512418453834 to
+14899872126237769279 (at 2,688 bars from 9192851617711936750 to
+1972323229210109824), because the fallback folds the continuation after the
+terminal point.
+
+**Decision: the capture stays eager.** Deferring it byte-identically needs a
+captured continuation *view* — the consumer's state at the terminal script
+point, kept until someone asks — which is a kernel design of its own; any
+other deferral moves the scalar and is an epoch question. The capture is one
+linear fold per run, inside the runtime budget (8.4 to 8.7× against 15× in
+the final audits), so neither is worth taking now.
 
 ---
 
