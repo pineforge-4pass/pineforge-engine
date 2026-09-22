@@ -153,7 +153,7 @@
  *                                          pf_native_request_v1 is the Sized basis; its sizing block is
  *                                          read, nothing is submitted
  *
- * Two asymmetries this list does not reach, recorded here because a C host
+ * Three asymmetries this list does not reach, recorded here because a C host
  * will look for them.
  *
  * pf_native_working_v1 has two trigger numbers, p1 and p2 -- plus, in its own
@@ -178,6 +178,16 @@
  * reads back the ticket its own margin model declared
  * (pf_native_run_spec_ext_v1::margin_liquidation_label) without a new symbol.
  * Executed by the fx-roll scenario of tests/test_native_c_api.c.
+ *
+ * pf_native_decision_v1 carries three of NativeDecisionContext's four
+ * session-day facts (in_session, opens_session_day, closes_session_day, in
+ * the struct's former tail padding) and not the fourth,
+ * closes_session_day_open_ended. That one differs from closes_session_day on a
+ * batch's final bar alone, for a host that recomputes a batch whose last input
+ * is still forming; a C host's live edge is the strategy_stream_* ingress,
+ * whose bars already read the calendar there, and a fifth byte would grow the
+ * struct past the size the frozen v1 caller checks. Executed by the
+ * session-day scenario of tests/test_native_c_api.c.
  *
  * BASE-CLASS SEAMS
  * ────────────────
@@ -1338,14 +1348,37 @@ typedef enum pf_native_anchored_trigger_e {
  *  compiled — and nothing past it is filled. So an older caller's exact-size
  *  check keeps holding, and a caller reads a field only below `struct_size`.
  *
+ *  The four session-day bytes after `quote_kind` (R5 lane F5) sit in what
+ *  was the base layout's tail padding: its size and every offset before them
+ *  are the ones a caller compiled against the first layout reads, so that
+ *  caller keeps working unchanged, and a table of either length is handed
+ *  them. `session_facts` is 1 when the runtime wrote the three after it, and
+ *  0 from a runtime that predates them. Each is 0 or 1, and every callback of
+ *  one script bar carries the same values:
+ *   - `in_session`: the script bar's label is in session on the run's own
+ *     calendar (`session` / `timezone`);
+ *   - `opens_session_day`: in session, and the bar before it is not, or is
+ *     on another session day;
+ *   - `closes_session_day`: in session, and the bar after it is not, or is on
+ *     another session day.
+ *  The session day is the run calendar's (it rolls at the first window's
+ *  start and is keyed to its trading date, so an overnight session is one day
+ *  across local midnight). The bar before / after is the one the run holds --
+ *  the batch input or stream warmup -- and otherwise the calendar's slot one
+ *  script width away; a run's first bar opens its day and a batch's final bar
+ *  closes it. A D/W/M bar holds whole days: all three are 1. The C++ context's
+ *  fourth fact, `closes_session_day_open_ended`, has no byte here: it differs
+ *  only on a batch's final bar, for a host that recomputes a batch whose last
+ *  input is still forming, and a C host's live edge is a stream, whose
+ *  `closes_session_day` already reads the calendar.
+ *
  *  The session tail is the script interval under delivery and the session
  *  day of its open and of the NEXT input's open, on the run's own calendar
- *  (its `session` and `timezone`). Those two days decide the session-day
- *  flags a C++ host derives from `NativeDecisionContext::script_interval`
- *  and `native_calendar::session_day_ordinal`: a script bar is the last of
- *  its session day when `next_input_session_day_ordinal` differs from
- *  `session_day_ordinal`, and the first when the bar before it was the
- *  last. */
+ *  (its `session` and `timezone`): the calendar facts under the session-day
+ *  bytes above, for a host that applies a rule of its own. On the calendar
+ *  alone, a script bar is the last of its session day when
+ *  `next_input_session_day_ordinal` differs from `session_day_ordinal`, and
+ *  the first when the bar before it was the last. */
 typedef struct pf_native_decision_v1 {
     uint32_t struct_size;        /**< sizeof(pf_native_decision_v1). */
     uint32_t version;            /**< PF_NATIVE_API_VERSION. */
@@ -1363,6 +1396,10 @@ typedef struct pf_native_decision_v1 {
     uint8_t  path_phase;         /**< #pf_native_path_phase_t. */
     uint8_t  completion;         /**< #pf_native_completion_kind_t. */
     uint8_t  quote_kind;         /**< #pf_native_quote_kind_t; 0 when price is NaN. */
+    uint8_t  session_facts;      /**< 1 when the three bytes below are written. */
+    uint8_t  in_session;         /**< The script bar is in session. */
+    uint8_t  opens_session_day;  /**< It opens its session day. */
+    uint8_t  closes_session_day; /**< It closes its session day. */
 
     /* ── The additive session tail (R5 lane F4). Presented only to a callback
      * table of the current layout; see the struct note. ── */

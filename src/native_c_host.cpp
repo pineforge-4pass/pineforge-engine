@@ -1643,6 +1643,10 @@ pf_native_decision_v1 CCallbackHost::decision(
     out.provenance = c_byte(c_word(ctx.coordinate.provenance));
     out.path_phase = c_byte(c_word(ctx.coordinate.path_phase));
     out.completion = c_byte(c_word(ctx.coordinate.completion));
+    out.session_facts = 1;
+    out.in_session = ctx.in_session ? 1 : 0;
+    out.opens_session_day = ctx.opens_session_day ? 1 : 0;
+    out.closes_session_day = ctx.closes_session_day ? 1 : 0;
     out.price = kNaN;
     if (const auto point = current_execution_point()) {
         out.price = point->price;

@@ -7692,6 +7692,142 @@ static void check_working_relation_tail(void) {
     strategy_native_host_free(state.host);
 }
 
+/* ── Session-day facts (R5 lane F5) ─────────────────────────────── */
+
+/* The audit's acid shape through the C API: a Tokyo session 22:30-05:00 that
+ * crosses local midnight, three session days of 26 fifteen-minute bars. The
+ * decision's session-day bytes carry the kernel's facts: every bar in session,
+ * the days opening at bars 0, 26, 52 and closing at 25, 51, 77, in a batch and
+ * in a stream that warms up on day one alike. The four bytes live in what was
+ * the struct's tail padding, so its size and every earlier offset are those
+ * the frozen v1 caller compiled against; `session_facts` says this runtime
+ * wrote the three after it. */
+
+#define SESSION_NIGHTS 3
+#define SESSION_BARS_PER_NIGHT 26
+#define SESSION_BARS (SESSION_NIGHTS * SESSION_BARS_PER_NIGHT)
+
+typedef struct session_state {
+    int     calculations;
+    int     struct_mismatch;
+    uint8_t facts[SESSION_BARS];
+    uint8_t in[SESSION_BARS];
+    uint8_t opens[SESSION_BARS];
+    uint8_t closes[SESSION_BARS];
+} session_state;
+
+static pf_bar_t session_bars[SESSION_BARS];
+
+static void session_fill(void) {
+    /* 2026-07-06 22:30 JST == 13:30Z. */
+    const int64_t first = 1783344600000LL;
+    int night;
+    int i;
+    for (night = 0; night < SESSION_NIGHTS; ++night) {
+        for (i = 0; i < SESSION_BARS_PER_NIGHT; ++i) {
+            pf_bar_t* bar = &session_bars[night * SESSION_BARS_PER_NIGHT + i];
+            const double open = 200.0 + (double)i;
+            bar->open = open;
+            bar->high = open + 1.0;
+            bar->low = open - 1.0;
+            bar->close = open + 0.5;
+            bar->volume = 10.0;
+            bar->timestamp = first + (int64_t)night * 86400000LL + (int64_t)i * 900000LL;
+        }
+    }
+}
+
+static int session_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    session_state* state = (session_state*)user;
+    (void)bar;
+    if (at->struct_size != sizeof(pf_native_decision_v1)) state->struct_mismatch = 1;
+    if (state->calculations < SESSION_BARS) {
+        state->facts[state->calculations] = at->session_facts;
+        state->in[state->calculations] = at->in_session;
+        state->opens[state->calculations] = at->opens_session_day;
+        state->closes[state->calculations] = at->closes_session_day;
+    }
+    ++state->calculations;
+    return 0;
+}
+
+static pf_strategy_t session_host(session_state* state) {
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_callbacks_v1 table;
+    pf_strategy_t host;
+    spec.session_key = "native-c-api-session-day";
+    spec.input_tf = "15";
+    spec.script_tf = "15";
+    spec.timezone = "Asia/Tokyo";
+    spec.session = "2230-0500";
+    memset(state, 0, sizeof(*state));
+    table = blank_callbacks(state);
+    table.on_bar = session_on_bar;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "session-day host create failed");
+    if (!host) return NULL;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0,
+                 "the Tokyo session spec was refused");
+    return host;
+}
+
+static void check_session_day_marks(const session_state* state, const char* driving) {
+    int i;
+    CHECK_EQ_INT(state->calculations, SESSION_BARS, driving);
+    CHECK(!state->struct_mismatch, "a decision arrived at a size this caller did not compile");
+    for (i = 0; i < SESSION_BARS && i < state->calculations; ++i) {
+        const int position = i % SESSION_BARS_PER_NIGHT;
+        CHECK_EQ_INT(state->facts[i], 1, "the runtime did not write the session-day bytes");
+        CHECK_EQ_INT(state->in[i], 1, "a Tokyo session bar read out of session");
+        CHECK_EQ_INT(state->opens[i], position == 0 ? 1 : 0,
+                     "opens_session_day is not the night's first bar");
+        CHECK_EQ_INT(state->closes[i], position == SESSION_BARS_PER_NIGHT - 1 ? 1 : 0,
+                     "closes_session_day is not the night's last bar");
+    }
+}
+
+static void check_session_day_tail(void) {
+    session_state state;
+    pf_report_t report;
+    pf_strategy_t host;
+    int i;
+
+    /* The bytes fill the former tail padding: nothing before them moved. */
+    CHECK_EQ_INT(offsetof(pf_native_decision_v1, quote_kind) + 1,
+                 offsetof(pf_native_decision_v1, session_facts),
+                 "the session-day bytes do not follow quote_kind");
+    CHECK_EQ_INT(offsetof(pf_native_decision_v1, closes_session_day) + 1,
+                 sizeof(pf_native_decision_v1),
+                 "the session-day bytes grew the decision");
+    if (sizeof(void*) == 8) {
+        CHECK_EQ_INT(sizeof(pf_native_decision_v1), 80, "pf_native_decision_v1 resized");
+    }
+
+    session_fill();
+    host = session_host(&state);
+    if (host) {
+        memset(&report, 0, sizeof(report));
+        CHECK_EQ_INT(strategy_native_run_v1(host, session_bars, SESSION_BARS, &report),
+                     PF_NATIVE_OK, "the Tokyo session batch did not complete");
+        strategy_native_report_free_v1(&report);
+        check_session_day_marks(&state, "batch calculations");
+        strategy_native_host_free(host);
+    }
+
+    host = session_host(&state);
+    if (host) {
+        CHECK_EQ_INT(strategy_stream_begin(host, session_bars, SESSION_BARS_PER_NIGHT, "15", "15"),
+                     0, "the Tokyo session stream did not begin");
+        for (i = SESSION_BARS_PER_NIGHT; i < SESSION_BARS; ++i) {
+            CHECK_EQ_INT(strategy_stream_push_bar(host, &session_bars[i]), 0,
+                         "a Tokyo session realtime bar was refused");
+        }
+        CHECK_EQ_INT(strategy_stream_end(host, 0), 0, "the Tokyo session stream did not end");
+        check_session_day_marks(&state, "stream calculations");
+        strategy_native_host_free(host);
+    }
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
     check_struct_and_tag_refusals();
@@ -7736,5 +7872,6 @@ int pf_native_c_api_checks(void) {
     check_policy_hooks();
     check_decision_session_facts();
     check_working_relation_tail();
+    check_session_day_tail();
     return failures;
 }
