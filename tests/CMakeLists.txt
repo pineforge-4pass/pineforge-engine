@@ -1682,12 +1682,39 @@ add_test(NAME test_native_feature_rulings_mutations COMMAND ${Python3_EXECUTABLE
     ${PROJECT_SOURCE_DIR}/scripts/test_native_feature_rulings.py)
 
 # R5 L14-A: the documentation anchor gate's own must-fail suite. Only the
-# self-test is a row: the gate itself runs in ci_preflight, where it stays
-# advisory until the page-rewriting lanes L14-B / L14-C clear today's drift.
+# self-test is a row: the gate itself is a binding ci_preflight stage.
 add_test(NAME test_doc_anchors COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_anchors.py)
 add_test(NAME test_doc_lint COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_lint.py)
+
+# R5 F2: the worked migration of docs/pages/pine-to-native.md, executed. The
+# extractor copies the page's six C++ blocks out verbatim at build time and
+# fails the build when the page stops holding them; the TU compiles them
+# against PineForge::kernel, runs them, and checks the page's own claims with
+# the expected values computed from the page's Pine block. Its TU reaches no
+# source-layer header, so it is a row in every profile, the kernel one too.
+set(_pf_p2n_page ${PROJECT_SOURCE_DIR}/docs/pages/pine-to-native.md)
+set(_pf_p2n_out ${CMAKE_CURRENT_BINARY_DIR}/pine_to_native_worked)
+set(_pf_p2n_generated
+    ${_pf_p2n_out}/pine_to_native_worked_page.hpp
+    ${_pf_p2n_out}/pine_to_native_worked_spec.inc
+    ${_pf_p2n_out}/pine_to_native_worked_members.inc)
+add_custom_command(
+    OUTPUT ${_pf_p2n_generated}
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/extract_pine_to_native_worked.py
+            --page ${_pf_p2n_page} --out-dir ${_pf_p2n_out}
+    DEPENDS ${_pf_p2n_page} ${CMAKE_CURRENT_SOURCE_DIR}/extract_pine_to_native_worked.py
+    COMMENT "Extracting the worked migration from docs/pages/pine-to-native.md"
+    VERBATIM)
+add_executable(test_pine_to_native_worked test_pine_to_native_worked.cpp ${_pf_p2n_generated})
+target_include_directories(test_pine_to_native_worked PRIVATE ${_pf_p2n_out})
+target_link_libraries(test_pine_to_native_worked PRIVATE PineForge::kernel)
+target_compile_options(test_pine_to_native_worked PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_pine_to_native_worked PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_pine_to_native_worked COMMAND test_pine_to_native_worked)
 
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"

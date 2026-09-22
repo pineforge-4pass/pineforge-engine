@@ -664,13 +664,15 @@ spec.initial_capital = 10000.0;
 spec.point_value = 1.0;  spec.account_fx = 1.0;
 spec.price_tick = 0.25;                                     // the instrument's ladder
 spec.fee_kind = pineforge::NativeFeeKind::Percent;
-spec.fee_value = 0.001;                                     // 0.1 % -> a fraction
+spec.fee_value = 0.1;                                       // commission_value = 0.1 -> 0.1 %
 spec.max_open_lots = 1;                                     // pyramiding = 1
 ```
 
-Nothing is inferred. `price_tick` native_run_spec.hpp:522 is the ladder the
+Nothing is inferred. `price_tick` native_run_spec.hpp:553 is the ladder the
 next three blocks all measure against, and `fee_value`
-native_run_spec.hpp:560 is a fraction, not a percent.
+native_run_spec.hpp:560 is a **percent**, spelled exactly as Pine's
+`commission_value` is: `0.1` charges 0.1 % of each execution's notional. A
+fraction there (`0.001`) would charge a hundred times too little.
 
 ### 2. The price grid, the margin model and the risk limit
 
@@ -680,7 +682,7 @@ spec.grid_rounding = pineforge::NativeGridRounding::HalfUp;
 
 pineforge::NativeMarginModel margin;
 margin.initial_long = 0.20;                 // margin_long = 20 % -> a fraction
-margin.initial_short = 0.0;                 // no short side in this strategy
+margin.initial_short = 0.20;                // margin_short = 20 %; the side is never used
 margin.maintenance_long = 0.15;             // what Pine cannot say
 margin.sizing = pineforge::NativeLiquidationSizing::Flatten;
 margin.liquidation_label = "margin-call";
@@ -695,9 +697,10 @@ spec.risk = risk;
 A side may waive the opening requirement or the liquidation, but not both.
 `initial_* == 0.0` is the **maintenance-only** spelling — the host owns opening
 admission on that side — and it is legal only where that side's `maintenance_*`
-is set. This strategy never shorts, so its short side simply keeps an ordinary
-requirement: `initial_short = 0.0` with no `maintenance_short` states nothing
-at all and `configure_native` refuses the whole spec with
+is set. This strategy never shorts, so its short side simply keeps the ordinary
+requirement `margin_short = 20` declares, `initial_short = 0.20`. Writing
+`initial_short = 0.0` there with no `maintenance_short` would state nothing at
+all, and `configure_native` would refuse the whole spec with
 `MarginSideUndeclared` native_run_spec.hpp:714.
 The grid is what makes a bracket level a *ladder*
 price: `native_price_grid_strategy.cpp` runs one strategy under all four
@@ -728,8 +731,8 @@ sized.time  = pineforge::native_order::SizeTime::AtAcceptance;
 sized.price = pineforge::native_order::SizePrice::SignalOnTick;
 sized.reserve_percent_fee = true;           // divide the cash by (1 + fee)
 const auto entry = submit({sized, "long", ""});
-// SubmitResult::handle native_order.hpp:651 is an optional: empty on a
-// rejection, which the reject reason beside it names.
+// SubmitResult::handle is an optional: empty on a rejection, which the
+// reject reason beside it names.
 ```
 
 `reserve_percent_fee` native_order.hpp:179 is the thing Pine has no spelling
@@ -737,7 +740,8 @@ for: without it, a cash-sized entry that spends the whole 2500 cannot also pay
 its commission. `SizePrice::SignalOnTick` native_order.hpp:146 sizes against
 the decision price on the instrument's own ladder, which is what a trader means
 by "2500 at the current price". `native_sized_report_strategy.cpp` is the
-runnable version.
+runnable version of cash sizing; the fee reserve runs in this section's own
+row, below.
 
 ### 5. The bracket, anchored and trailing in ticks
 
@@ -759,18 +763,19 @@ stop_loss.trigger = no::Stop{0.0};
 stop_loss.anchor  = no::FromOwnerFill{-20.0, true, no::NativeAnchorRounding::Directional};
 
 no::Request trail{no::Reduce{no::OwnerOpenedUnits{}}, "trail", ""};
-// An anchored trail moves its ARM threshold, so arm_price must be present and
-// hold the placeholder 0.0 — `std::nullopt` here is RequestRejectReason::InvalidTrigger
-// native_order.hpp:633, exactly as a nonzero level on an anchored limit is.
-trail.trigger = no::Trail{0.0, 0.0, no::TrailTicks{8.0}};
+// An anchored trail's ARM threshold comes from the owner's fill, so arm_price
+// is left absent: that is the anchored spelling. The 0.0 placeholder means the
+// same; any other level is refused (InvalidTrigger), as on an anchored limit.
+trail.trigger = no::Trail{0.0, std::nullopt, no::TrailTicks{8.0}};
 trail.anchor  = no::FromOwnerFill{+30.0, true, no::NativeAnchorRounding::Directional};
 trail.owner   = owner;  trail.group = oca;
 
 submit(take_profit);  submit(stop_loss);  submit(trail);
 ```
 
-Three legs placed before the entry has a price. The trigger levels are zero on
-purpose: `FromOwnerFill` native_order.hpp:331 supplies them at the arm as
+Three legs placed before the entry has a price. The trigger levels are left
+unwritten on purpose — `0.0` for the limit and the stop, an absent `arm_price`
+for the trail: `FromOwnerFill` native_order.hpp:331 supplies them at the arm as
 `fill ± ticks * price_tick`, snapped per `NativeAnchorRounding::Directional`
 native_order.hpp:312. Pine's `trail_points = 30` is the *arm* distance (the
 anchor) and `trail_offset = 8` the *ride* distance (`TrailTicks`
@@ -789,6 +794,22 @@ void on_native_bar(const pineforge::Bar& bar,
 }
 ```
 
+### Run it
+
+The six blocks are the port, not a sketch of it. The CTest row
+`test_pine_to_native_worked` copies them out of this page by script
+(`tests/extract_pine_to_native_worked.py`), compiles them against
+`PineForge::kernel` with only a class skeleton, a `main` and a bar tape around
+them (`tests/test_pine_to_native_worked.cpp`), and runs them on sixteen
+15-minute bars whose first hourly close is 100. `configure_native` answers
+`Applied` and no request is refused. The first close above the hourly close,
+101, buys `2500 / (101 × (1 + 0.1 / 100))` = 24.7277 units at the next open,
+101; the take-profit leg closes them at 111, forty ticks up, with `exit_id`
+`tp`, and one-cancels-all withdraws its two siblings; the row's commission is
+0.1 % of both notionals, 5.2423. The row computes every one of those numbers
+from the Pine block at the top of this section, so a block that stops
+configuring, or stops charging what the Pine declares, fails it.
+
 ### What a Pine author gets wrong the first time
 
 1. **Nothing is implicit.** Pine gets the symbol, session, timezone, tick size
@@ -803,15 +824,19 @@ void on_native_bar(const pineforge::Bar& bar,
 3. **`strategy.entry` reverses, `Transact` does not.** If the Pine strategy
    relies on an entry flipping a short into a long, spell it `ReverseTo`
    native_order.hpp:60.
-4. **Percents are fractions.** `margin_long = 20` is `0.20`,
-   `commission_value = 0.1` is `0.001`, and `EquityFraction{0.10}`
-   native_order.hpp:97 is ten percent. The one exception is
-   `NativeLossLimit::percent` native_run_spec.hpp:260, which is out of 100
-   because it is a threshold, not a multiplier.
-5. **The report is opt-in.** `trade_count` engine.hpp:1762 and `get_trade`
-   engine.hpp:1763 are always complete; the equity curve, its metrics and the
-   position-size peaks arrive only with `NativeReportPolicy::KernelRecorded`
-   native_run_spec.hpp:62.
+4. **Most percents become fractions — two stay out of 100.** `margin_long = 20`
+   is `0.20` and `EquityFraction{0.10}` native_order.hpp:97 is ten percent.
+   The two exceptions keep Pine's own unit: `fee_value` native_run_spec.hpp:560
+   under `NativeFeeKind::Percent`, so `commission_value = 0.1` is
+   `fee_value = 0.1`, and a `NativeLossLimit` whose `percent`
+   native_run_spec.hpp:260 is set, so `20.0` is twenty percent.
+5. **The equity curve is opt-in; the rest of the report is not.** `trade_count`
+   engine.hpp:1762 and `get_trade` engine.hpp:1763 are always complete, and so
+   are the equity extremes and the position-size peaks, which every report
+   policy folds. Only the recorded equity **series**, and the
+   `pf_equity_stats_t` figures walked out of it, arrive with
+   `NativeReportPolicy::KernelRecorded` native_run_spec.hpp:62 alone — the
+   rule of [Position, account and report](@ref pine_to_native_map_report).
 
 ## Building and exporting {#pine_to_native_building}
 
