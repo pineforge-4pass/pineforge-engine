@@ -574,7 +574,7 @@ trial after L8b; row PG (§1.7) holds the counts. In summary:
 | blocker | what it is | state |
 |---|---|---|
 | B1 | under `QuantizeFillsAndTriggers` the matcher reported a cursor print inside the quantized region but short of the raw level, and the core's raw re-validation aborted the run ("native working-request preparation failed": nine zero-offset-trail tapes, six `process_orders_on_close` panels) | **closed generically by L8b**: the tick-quantized print is the reached price, and the core re-validates on the same ladder (`native_order::ActivationGrid`); 0 aborts under the N13 re-run |
-| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5; the placement close included: lane E9) are tested on the quantized bar, and a one-shot books the tick that bar reaches, its resting half-tick level rounded away from the position (lane E9); the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause. The one part of the row that WAS closable is closed (lane E14): where the running best STARTS is not a quantization at all but a level the leg names, so `Trail::best_seed` carries it generically and the kernel no longer begins a ride half a tick short of the activation |
+| B2 | TradingView's tick quantization is a property of the ORDER KIND — stop and limit legs and a trail's activation (one-shot or trailing: lane E5; the placement close included: lane E9) are tested on the quantized bar, and a one-shot books the tick that bar reaches, its resting half-tick level rounded away from the position (lane E9); the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors on the raw path — while `price_grid` is a property of the RUN and the matcher hands one threshold to every trigger | **open, and not closable**: still moves 30 pinned checks in 4 units (`test_coof_market_limit_recross_l4c` 24, `test_stop_tick_rounding_l4d` 3, `test_adapter_grid_relower` 2, `test_zero_offset_trail_rides_l4c` 1) with no adapter-side remedy; 12 more checks in 3 units have an adapter-side cause. The one part of the row that WAS closable is closed (lane E14): where the running best STARTS is not a quantization at all but a level the leg names, so `Trail::best_seed` carries it generically and the kernel no longer begins a ride half a tick short of the activation. Lane E16 closes a second part, on the other side of the row: the trail stop's ULP — `best - offset` landing one binary64 ULP off the ladder point a tick count names, which is what made the grid fire `test_adapter_grid_relower`'s TrailUlp row a bar before the raw path did — was never the per-kind rule but a level the kernel spelled wrong on both paths. A stop a whole number of ticks from a best on the run's declared ladder now IS that ladder point, both paths agree on that row, and the trail stop and running best still ride the raw path. The 2 moved checks this row counts in `test_adapter_grid_relower` are that mechanism; the re-lowering trial itself was not re-run. |
 
 The corpus cannot arbitrate: all 312 probes run a 0.01 tick on an on-grid
 feed, and under the trial 5 of them differ, in the engine-only
@@ -657,6 +657,40 @@ the sibling stop an explicit-zero trail rests beside its `Trail`: a `Stop` is
 reached by a touch and a zero-distance ride needs a move strictly past the
 best, and a print landing ON the carried best separates them in the booked
 price's last bits.
+
+**The trail stop's own ULP (lane E16, closing E14's finding).** E14's tape
+left one trade of `e14-f-long-shallow-next` pinned as a recorded divergence:
+its stop is `11.44 - 5 ticks`, whose binary64 value `11.389999999999998792`
+lies one ULP UNDER the ladder point `11.390000000000000568`, so the bar's low
+of exactly 11.39 did not reach it, TradingView booked the exit and the engine
+ran to the timeout. Lane R7 had measured the same ULP from the other side —
+`best - offset` lands one ULP off its ladder point on about 14% of (best,
+offset) pairs on a two-decimal feed, which is why `test_adapter_grid_relower`'s
+TrailUlp row exits a bar later on the raw path than under the grid — and read
+it as B2's per-kind rule. It is neither. A stop that stands a whole number of
+ticks from a running best that is itself a ladder point IS the ladder point
+that many ticks away; the subtraction simply could not name it, because both
+ends are decimal numbers the host measured on its own ladder and only the
+ladder index is exact between them. The kernel derives it there now
+(`native_matching::ladder_trail_stop`, with the run's declared tick reaching
+the core as `ActivationGrid::ladder_tick` so the activation's re-validation
+cannot refuse a hit the matcher booked), and it passes rule 2 as amended.
+Mechanism: a stop `ticks` ticks behind a best is a ladder distance at every
+venue with a tick ladder, read from the run's own `price_tick` — data, no
+platform. Knob: the run had already decided it, by declaring the ladder and
+spelling the distance on it, so a "raw or ladder" switch would put a
+hash-visible choice on the surface for an answer already given. Nothing is
+rounded ONTO the ladder — a sub-tick best, a fractional-tick offset and a run
+with no declared tick keep the raw subtraction bit for bit, so the trail stop
+and the running best still ride the raw path and row TR2's "a tick-spelled
+trail and its price-spelled equal behave identically bar for bar" still holds
+(the rule reads the resolved distance, not the spelling) — and it is the level
+that moves, never the comparison. The kernel-only witness is
+`tests/test_native_trail_stop_ladder.cpp` (batch and stream, the sell case and
+its buy mirror, three off-ladder rows pinned bit for bit); the tape row is
+`e14-f-long-shallow-next` 7/7 and TrailUlp exits on TradingView's bar. The
+corpus is byte-identical 312/312 — measured, not assumed: the on-grid 0.01
+feed does print exactly on a ladder stop, but no probe's trade moved.
 
 **Why B2 is not closed in the kernel (route (a) rejected).** The only kernel
 change that would let `project()` declare the grid is a per-order-kind

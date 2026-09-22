@@ -348,11 +348,14 @@ never sets it, so Pine-compatible runs are unchanged.
   best, stop-limit entries and the calc_on_order_fills cursors against the raw path
   (engine.hpp, design-stop-tick-rounding and design-trail-activation-tick-bar)
   — whereas the run spec's grid is one rule for every trigger the matcher
-  tests. The measured divergence is the trail stop: `best - offset` lands one
-  ULP under a ladder point on about 14% of (best, offset) pairs on a
-  two-decimal feed, and the grid then fires it a tick early where TradingView
-  holds (tests/test_adapter_grid_relower.cpp). A per-kind grid mask would
-  spell that inconsistency into the kernel and is not generic.
+  tests. A per-kind grid mask would spell that inconsistency into the kernel
+  and is not generic. What was measured as this row's divergence — the trail
+  stop, where `best - offset` lands one ULP under a ladder point on about 14%
+  of (best, offset) pairs on a two-decimal feed, so the grid fired it a bar
+  before the raw path did — was not the per-kind rule at all but a level the
+  kernel spelled wrong on both paths, and R5 lane E16 closed it: see *A trail
+  stop a whole number of ticks away* below. The two paths now agree on that
+  row (tests/test_adapter_grid_relower.cpp section 5).
 - **The reached rule.** Under `QuantizeFillsAndTriggers` the
   tick-quantized print **is** the reached price. The matcher's verdict is
   authoritative, and the core re-validates every activation — stop,
@@ -867,6 +870,23 @@ ladder like an observed print when the run declares a price grid. The
 activation event still reports the print the arm happened at. The request
 digest folds the seed only when it is present, so no established hash moves;
 its C spelling is `pf_native_request_v1::trail_best_seed`.
+
+**A trail stop a whole number of ticks away is the ladder point it names**
+(R5 lane E16). The stop rides `offset` behind the running best, and a
+tick-spelled offset is resolved as `ticks * price_tick` — exact arithmetic on
+inexact numbers, so the level could land one binary64 ULP off the point the
+count names: `11.44 - 5 * 0.01` is `11.389999999999998792` against the ladder
+point `11.390000000000000568`, and a print that IS 11.39 then did not reach a
+stop the run put five ticks under 11.44. When the run declares a price tick,
+the best is itself a ladder point and the offset is a whole number of ticks,
+the level is now derived by index arithmetic and spelled so no ULP hides it
+from the side the stop is reached from (`native_matching::ladder_trail_stop`,
+`ActivationGrid::ladder_tick`). Nothing is rounded ONTO the ladder: a
+sub-tick best, a fractional-tick offset and a run with no declared tick keep
+the raw subtraction bit for bit, the stop and the running best stay on the
+raw path, and it is the level that moves, never the comparison. The core
+re-validates an activation through the same geometry, so a level it disagreed
+with the matcher on can no longer refuse a hit the matcher booked.
 
 Re-pricing a trail normally restarts it. `replace(handle, request,
 ReplaceOptions{/*retain_trigger_state=*/true})` instead carries the
