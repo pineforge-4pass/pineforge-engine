@@ -10,10 +10,11 @@
  * is what the adapter has resolved exits on since the R5 re-lowerings.  What
  * is left is the one function a live caller still reaches:
  * `entry_stop_first_touch`, the direction-aware first-touch position a
- * TradingView stop ENTRY fires at (pine_adapter.cpp).  The generic helpers it
- * calls (`bar_path_uses_high_first`, `fill_bar_path_points_ordered`) stay in
- * the kernel TU and are reached through the same engine_internal.hpp
- * declarations as before.
+ * TradingView stop ENTRY fires at (pine_adapter.cpp), walked in the leg order
+ * its caller asked the kernel for (R5 lane F7 removed the overload that read
+ * the sampler's thread-local override instead).  The generic helper it calls
+ * (`fill_bar_path_points_ordered`) stays in the kernel TU and is reached
+ * through the same engine_internal.hpp declaration as before.
  */
 
 #include "../engine_internal.hpp"
@@ -38,12 +39,6 @@ using compat::pine::trail_points_to_ticks;
 // open-equals-stop case both legs return 0 simultaneously and the dual-stop
 // arbitration breaks the tie in favour of the long leg — this matches TV's
 // broker emulator on probe 83.
-bool entry_stop_first_touch(const Bar& bar, double stop_level,
-                                   bool is_long, double* out_pos) {
-    return entry_stop_first_touch(bar, bar_path_uses_high_first(bar),
-                                  stop_level, is_long, out_pos);
-}
-
 bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
                             bool is_long, double* out_pos) {
     if (std::isnan(stop_level) || out_pos == nullptr) return false;

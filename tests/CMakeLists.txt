@@ -1493,6 +1493,13 @@ if(TARGET test_adapter_sizing_relower)
         PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
 endif()
 
+# R5 F7 (M25): the path-order witness reads the two source files it pins.
+if(TARGET test_e19_excursion_path_order)
+    target_compile_definitions(test_e19_excursion_path_order PRIVATE
+        PINEFORGE_F7_ADAPTER_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_adapter.cpp"
+        PINEFORGE_F7_PATH_RESOLVE_FILE="${PROJECT_SOURCE_DIR}/src/source/pine_path_resolve.cpp")
+endif()
+
 # R5 E5 reads its TradingView tapes from the fixture tree; source-bound too.
 if(TARGET test_offset_trail_quantized_arm)
     target_compile_definitions(test_offset_trail_quantized_arm PRIVATE

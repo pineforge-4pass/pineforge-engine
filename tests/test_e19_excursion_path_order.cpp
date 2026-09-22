@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace pineforge;
@@ -215,6 +216,62 @@ int main() {
         CHECK(near(owned.favorable, 0.00));
         CHECK(near(owned.adverse, 10.00));
     }
+
+    // 5. R5 lane F7 (audit M25): the source layer ASKS the kernel for the leg
+    //    order instead of keeping copies of the rule. Rows 1-4 pin that the
+    //    forced orders reach the adapter; this pins where the answer comes
+    //    from: pine_adapter.cpp restates the open-proximity comparison
+    //    nowhere (its one `<=` spelling is the flat dual-stop observer's own
+    //    tie rule, kept and counted), names no private path-order helper, and
+    //    pine_path_resolve.cpp no longer carries the overload that read the
+    //    sampler's thread-local override.
+#if defined(PINEFORGE_F7_ADAPTER_FILE) && defined(PINEFORGE_F7_PATH_RESOLVE_FILE)
+    {
+        const auto read = [](const char* path) {
+            std::string out;
+            if (std::FILE* in = std::fopen(path, "rb")) {
+                char buffer[4096];
+                std::size_t got = 0;
+                while ((got = std::fread(buffer, 1, sizeof buffer, in)) > 0) out.append(buffer, got);
+                std::fclose(in);
+            }
+            std::string collapsed;
+            bool space = false;
+            for (const char c : out) {
+                if (c == ' ' || c == '\n' || c == '\t' || c == '\r') { space = true; continue; }
+                if (space && !collapsed.empty()) collapsed.push_back(' ');
+                space = false;
+                collapsed.push_back(c);
+            }
+            return collapsed;
+        };
+        const auto count = [](const std::string& text, const char* needle) {
+            int n = 0;
+            for (auto at = text.find(needle); at != std::string::npos;
+                 at = text.find(needle, at + 1)) {
+                ++n;
+            }
+            return n;
+        };
+        const std::string adapter = read(PINEFORGE_F7_ADAPTER_FILE);
+        const std::string resolve = read(PINEFORGE_F7_PATH_RESOLVE_FILE);
+        CHECK(!adapter.empty() && !resolve.empty());
+        const int restated = count(adapter, ".open) < std::abs(");
+        const int observer_tie = count(adapter, ".open) <= std::abs(");
+        const int helper = count(adapter, "source_path_high_first(");
+        const int override_reader = count(resolve, "bar_path_uses_high_first(");
+        std::printf("source-layer path order: restated=%d observer-tie=%d helper=%d "
+                    "override-reader=%d (want 0 1 0 0)\n",
+                    restated, observer_tie, helper, override_reader);
+        CHECK(restated == 0);
+        CHECK(observer_tie == 1);
+        CHECK(helper == 0);
+        CHECK(override_reader == 0);
+    }
+#else
+    std::printf("PINEFORGE_F7_ADAPTER_FILE / PINEFORGE_F7_PATH_RESOLVE_FILE undefined\n");
+    CHECK(false);
+#endif
 
     std::printf("test_e19_excursion_path_order: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

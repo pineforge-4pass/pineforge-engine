@@ -7,6 +7,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
 
@@ -156,16 +157,9 @@ bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double ope
                             : open <= snapshot.exit_levels.stop;
 }
 
-bool source_path_high_first(const Bar& bar, NativePathOrder order) noexcept {
-    if (order == NativePathOrder::HighFirst) return true;
-    if (order == NativePathOrder::LowFirst) return false;
-    return std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
-}
-
 double next_source_path_waypoint(const Bar& bar, NativePathPhase phase,
-                                 double current, NativePathOrder order,
+                                 double current, bool high_first,
                                  double tick = 0.0, int slippage = 0) noexcept {
-    const bool high_first = source_path_high_first(bar, order);
     const double tol = (slippage > 0 && tick > 0.0) ? (slippage + 0.5) * tick : 1e-6;
     const auto at = [tol](double left, double right) {
         return std::abs(left - right) <= tol;
@@ -604,12 +598,7 @@ OrderBirth PineExecutionAdapter::capture_order_birth() const {
     const int count = magnified ? std::max(1, point->decision.sub_count) : 4;
     int index = magnified ? point->decision.sub_index : 0;
     if (!magnified) {
-        bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
-            < std::abs(coof_script_bar_.open - coof_script_bar_.low);
-        if (const auto state = require_host().native_state(); state.spec) {
-            if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
-            else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
-        }
+        const bool high_first = source_path_uses_high_first(coof_script_bar_);
         switch (point->decision.coordinate.path_phase) {
         case NativePathPhase::Open: index = 0; break;
         case NativePathPhase::High: index = high_first ? 1 : 2; break;
@@ -662,12 +651,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     const auto point = require_host().current_execution_point();
     const Bar activation_bar = coof_script_bar_valid_ ? coof_script_bar_
                                                        : policy_script_bar_;
-    bool path_high_first = std::abs(activation_bar.high - activation_bar.open)
-        < std::abs(activation_bar.open - activation_bar.low);
-    if (const auto state = require_host().native_state(); state.spec) {
-        if (state.spec->path_order == NativePathOrder::HighFirst) path_high_first = true;
-        else if (state.spec->path_order == NativePathOrder::LowFirst) path_high_first = false;
-    }
+    const bool path_high_first = source_path_uses_high_first(activation_bar);
     int historical_point = 0;
     double waypoint = activation_bar.open;
     if (point) {
@@ -4064,8 +4048,14 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
         && coof_fill_on_path_point();
 }
 
+// The leg order the kernel walks `bar` in -- the run's declared
+// NativeRunSpec::path_order, the open-proximity rule under Auto
+// (NativeExecutionConsumer::path_high_first, which E19's excursion seam
+// already reads). The source layer asks rather than keeping a copy of the rule.
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
-    return source_path_high_first(bar, path_order_);
+    auto* pine = dynamic_cast<PineStrategyHost*>(host_);
+    return pine != nullptr
+        && as_native_consumer(pine->execution_consumer()).path_high_first(bar);
 }
 
 bool PineExecutionAdapter::coof_current_fill_was_forced_waypoint() const noexcept {
@@ -4690,14 +4680,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && coof_native_state.spec->intrabar.lower();
     bool coof_market_next_open = false;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && !priced) {
-        bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
-            < std::abs(coof_script_bar_.open - coof_script_bar_.low);
-        if (coof_native_state.spec) {
-            if (coof_native_state.spec->path_order == NativePathOrder::HighFirst)
-                high_first = true;
-            else if (coof_native_state.spec->path_order == NativePathOrder::LowFirst)
-                high_first = false;
-        }
+        const bool high_first = source_path_uses_high_first(coof_script_bar_);
         const NativePathPhase second = high_first
             ? NativePathPhase::Low : NativePathPhase::High;
         const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
@@ -6458,12 +6441,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const auto state = require_host().native_state();
         const bool lower_path = state.spec && state.spec->intrabar.lower();
         if (!lower_path) {
-            bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
-                < std::abs(coof_script_bar_.open - coof_script_bar_.low);
-            if (state.spec) {
-                if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
-                else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
-            }
+            const bool high_first = source_path_uses_high_first(coof_script_bar_);
             const NativePathPhase second = high_first
                 ? NativePathPhase::Low : NativePathPhase::High;
             const double endpoint = high_first
@@ -6637,11 +6615,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)) {
         const auto point = require_host().current_execution_point();
-        const auto native = require_host().native_state();
         const double current_quote = point ? point->price : kNaN;
         const double next_waypoint = next_source_path_waypoint(
             coof_script_bar_, coof_context_.coordinate.path_phase, current_quote,
-            native.spec ? native.spec->path_order : NativePathOrder::Auto,
+            source_path_uses_high_first(coof_script_bar_),
             staged_.syminfo.mintick, config_.slippage);
         const bool buy = require_host().physical_position().signed_units < 0.0;
         const double next_fill = nearest_tick(
@@ -7306,7 +7283,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 const auto phase = coof_context_.coordinate.path_phase;
                 const double endpoint = next_source_path_waypoint(
                     coof_script_bar_, phase, point->price,
-                    native.spec ? native.spec->path_order : NativePathOrder::Auto,
+                    source_path_uses_high_first(coof_script_bar_),
                     staged_.syminfo.mintick, config_.slippage);
 
                 const bool closing_long = physical.signed_units > 0.0;
@@ -10153,9 +10130,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             if (adverse_gap)
                 return directional_tick(open, tick, facts.is_buy);
         }
-        const bool high_first = source_path_high_first(
-            policy_script_bar_, host_state.spec
-                ? host_state.spec->path_order : NativePathOrder::Auto);
+        const bool high_first = source_path_uses_high_first(policy_script_bar_);
         const bool favorable_first = long_side ? high_first : !high_first;
         const double open_print = source_bar_fill_tick(open, tick);
         // A placement close that reached the activation only on its tick
@@ -13807,10 +13782,7 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
     if (config_.calc_on_order_fills || stream_mode_)
         return;
     if (require_host().physical_position().signed_units != 0.0) return;
-    const auto native = require_host().native_state();
-    const NativePathOrder path_order = native.spec ? native.spec->path_order
-                                                   : NativePathOrder::Auto;
-    const bool high_first = source_path_high_first(bar, path_order);
+    const bool high_first = source_path_uses_high_first(bar);
     // ab9714be pine_fills.cpp:3687-3860 is not gated on process_orders_on_close.
     // Under POOC the fill point of a marketable order is the bar close
     // (pine_fills.cpp:7964-7965), not the open.
