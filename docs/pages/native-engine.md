@@ -1122,7 +1122,14 @@ replace the single scalar for that run: an opening is refused with
 `MatchRejectReason::InitialMargin` when
 `resulting_abs_notional × initial_<side> > marked_equity − ticket`. A host
 that answers `AdmitWithHostMargin` from `validate_execution_precommit` still
-takes that one check over, exactly as before.
+takes that one check over, exactly as before. The comparison's FX-bearing
+terms — the notional, the marked equity and a percent-fee ticket — convert at
+the rate of the gate's own point, as every check point below does: the
+candidate gate's matching cursor, and for the placement gate the acceptance
+point a `Sized{SizeTime::AtAcceptance}` froze its units at, never the later bar
+clock an applied callback drained at its bar's calculation is presented. The
+freeze takes its equity basis at that same point
+(`tests/test_native_margin_fx_clock.cpp`, section 8).
 
 **Opening admission and liquidation are two separate broker functions, and a
 side may declare either without the other.** `initial_<side> == 0.0` is the
@@ -2981,7 +2988,8 @@ An `AtAcceptance` quantity is also an admission input at placement, not only at
 the candidate: when the request is accepted the kernel runs the run's own
 opening admission — `allowed_open_directions`, `max_abs_units`,
 `max_open_lots` and the initial-margin gate — against the frozen quantity at
-the sizing price. A quantity the run cannot admit is
+the sizing price, converting at the acceptance point's rate, the one the
+quantity was frozen at. A quantity the run cannot admit is
 `RequestRejectReason::PlacementAdmission` at submit, so no request is ever
 created for it. `AtMatch` has no placement quantity and keeps the candidate
 gate it always had. A host that owns its own margin rule declares no kernel
