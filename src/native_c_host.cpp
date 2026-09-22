@@ -2363,6 +2363,12 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
             rc != PF_NATIVE_OK) {
             return rc;
         }
+        /* The kernel FAILS a host whose specification its validation
+         * refuses, so the same validation runs here first: a rejected
+         * specification is refused before the kernel sees it and the handle
+         * stays usable. configure_native judges the same value again and
+         * cannot disagree. */
+        if (!pineforge::validate_native_run_spec(spec)) return PF_NATIVE_E_ARGUMENT;
         return host->configure_native(spec).status == pineforge::NativeSetupStatus::Applied
             ? PF_NATIVE_OK
             : PF_NATIVE_E_ARGUMENT;

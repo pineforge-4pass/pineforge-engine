@@ -690,6 +690,19 @@ static void check_spec_extension(void) {
     CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_TAG,
                  "an unknown block is judged before the missing tail");
 
+    /* R5 lane F3: a specification the kernel's own validation rejects is
+     * refused before the kernel configures anything, so it too leaves the
+     * handle usable, as the entry point's contract says. */
+    {
+        pf_native_run_spec_v1 invalid = spec;
+        invalid.initial_capital = 0.0;
+        memset(&ext, 0, sizeof(ext));
+        ext.struct_size = (uint32_t)sizeof(ext);
+        ext.version = PF_NATIVE_API_VERSION;
+        CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &invalid, &ext),
+                     PF_NATIVE_E_ARGUMENT, "a spec the kernel's validation rejects was not refused");
+    }
+
     /* None of those refusals may have touched the handle. */
     memset(&state, 0, sizeof(state));
     state.struct_size = (uint32_t)sizeof(state);
