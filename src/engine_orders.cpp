@@ -84,14 +84,15 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                  * close_qty * pv * active_account_currency_fx();
     pnl -= entry_commission + exit_commission;
-    // TV "Net P&L %" convention (arbitrated 2026-06-12 vs TV export,
-    // trade #258 short: 102.44 USD on 2276.66 entry => 4.50%): NET pnl
-    // as a percent of entry cost (entry_price * qty * pointvalue, same
-    // account_currency_fx_ conversion as pnl above so the ratio is
-    // currency-invariant). Long/no-commission degenerates to the old
-    // (exit/entry-1) form; shorts diverge on large moves ((entry/exit-1)
-    // was wrong). Computed AFTER the commission subtraction above — order
-    // matters.
+    // Percent P&L is the NET pnl (after both commissions, so computed AFTER
+    // the subtraction above -- order matters) over the entry cost,
+    // entry_price * qty * pointvalue at the same account-currency rate, so
+    // the ratio is currency-invariant and a short's percent is its own
+    // return on cost ((entry/exit - 1) was wrong on large moves; a long
+    // without commission reduces to the (exit/entry - 1) form). ADR-0001
+    // Section B rules this settlement convention; its calibration record is
+    // a TradingView export (2026-06-12, trade #258 short: 102.44 USD on a
+    // 2276.66 entry is 4.50%).
     const double entry_cost = pe.price * close_qty * pv
                               * active_account_currency_fx();
     double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
@@ -111,17 +112,16 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     trade.entry_incarnation = pe.entry_incarnation;
     trade.entry_comment = pe.entry_comment;
     trade.commission = entry_commission + exit_commission;
-    // Excursions: TV's per-trade excursion includes the exit fill itself —
-    // a stop-out's adverse excursion is at least the loss at the SL fill and
-    // a take-profit's favorable excursion includes the move to the TP fill.
-    // The per-bar sampler (NativeExecutionConsumer::apply_excursion) cannot see this: exit
-    // fills happen inside request matching and the pyramid entry is
-    // removed before the next sample, so same-bar entry+exit trades would
-    // otherwise report 0/0. Fold the fill price in here. The carried
-    // per-entry extreme is scaled to the closed slice (close_qty/pe.qty) so
-    // a partial close reports the slice's USD excursion, matching TV's
-    // per-trade-record qty. Both fields stay >= 0 (Pine accessor convention);
-    // the TV-export sign flip happens only in the CSV writer.
+    // Excursions: a closing row's excursion includes its own exit fill -- a
+    // stop-out's adverse excursion is at least the loss at the stop fill and
+    // a take-profit's favorable excursion includes the move to the limit
+    // fill. The per-lot sampler (NativeExecutionConsumer::apply_excursion)
+    // cannot see it: the exit fills inside request matching and the lot
+    // leaves the book before the next sample, so a same-bar entry and exit
+    // would otherwise report 0/0. Fold the fill price in here. The carried
+    // per-lot extreme is scaled to the closed slice (close_qty/pe.qty), so a
+    // partial close reports its own slice. Both fields stay >= 0
+    // (magnitudes); a signed export is its writer's business.
     const double slice = (pe.qty > 0.0) ? (close_qty / pe.qty) : 1.0;
     const double fill_fav = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                       * close_qty;
@@ -163,15 +163,17 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         runup = std::max(runup, peak_fav);
     }
     }
-    // TV reports excursions on the NET OPEN-PROFIT basis: the entry-leg
-    // commission is deducted from the favorable/adverse extremes (verified
-    // numerically on pyramid-cash-fractional-commission-01 — TV's exported
-    // excursions differ from the gross price excursion by exactly
-    // qty * cash_per_contract on every trade, both columns). Favorable is
-    // floored at 0 (TV never exports a negative favorable excursion —
-    // confirmed across all 757k corpus rows); adverse grows by the entry
-    // commission (open profit at the entry tick is already -commission).
-    // Both fields remain >= 0 here (Pine positive-drawdown convention).
+    // Excursions are reported on the NET open-profit basis: open profit at
+    // the entry tick is already -commission, so the entry-leg commission
+    // shrinks the favorable extreme, floored at 0, and grows the adverse
+    // one. It applies on both paths above, a host-owned excursion included
+    // (whether a host's own magnitudes should bypass it is an open question
+    // of the host-excursion contract). ADR-0001 Section B rules this
+    // settlement convention; its calibration record is TradingView's export
+    // of pyramid-cash-fractional-commission-01 (every trade differs from the
+    // gross excursion by exactly qty * cash_per_contract, both columns) and
+    // the corpus's 757k rows (none exports a negative favorable excursion).
+    // Both fields remain >= 0 here.
     // runup/drawdown are quote-currency (price-diff × qty); convert to
     // account currency via account_currency_fx_ (default 1.0, no-op) before
     // combining with entry_commission, which is already account-currency
@@ -224,7 +226,7 @@ void BacktestEngine::record_close_trade(Trade trade) {
     net_profit_roundoff_value_ = net_profit_sum_;
     if (trade_pnl > 0) { gross_profit_sum_ += trade_pnl; win_trades_count_++; }
     else if (trade_pnl < 0) { gross_loss_sum_ += trade_pnl; loss_trades_count_++; }
-    else { ++eventrades_count_; }  // strategy.eventrades: exact zero P&L (TV uses == 0)
+    else { ++eventrades_count_; }  // strategy.eventrades: P&L exactly zero (== 0, no epsilon)
 }
 
 void BacktestEngine::validate_close_trade_counters(const Trade* rows, size_t count) const {

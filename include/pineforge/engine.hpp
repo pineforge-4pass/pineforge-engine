@@ -311,9 +311,10 @@ struct SymInfo {
     // Per-instrument quantity step (syminfo.* "qty_step" — the smallest
     // tradable lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). 0 = disabled
     // (the engine default), so no quantity quantization is applied — corpus
-    // instruments leave this 0 and are byte-identical. Only the forced-
-    // liquidation (margin call) path floors its computed lot to this step to
-    // mirror TradingView, which nibbles the position in exact lot multiples.
+    // instruments leave this 0 and are byte-identical. A host that sizes in
+    // lots declares it as the run spec's quantity_grid, where admission
+    // requires on-grid units and the kernel's own liquidation floors an
+    // off-grid slice onto it (kernel_submit_liquidation).
     double qty_step = 0.0;
 };
 
@@ -438,13 +439,13 @@ protected:
     // that sizes in lots declares the step as the run spec's quantity_grid
     // (the source host projects this field there).
     double qty_step_ = 0.0;
-    // Account-currency FX multiplier for every quote->account money path. When a
-    // strategy declares ``currency=currency.XXX`` differing from the symbol's
-    // quote currency (e.g. currency.INR on a USDT-quoted perp), TradingView
-    // denominates equity in the account currency but the position notional in
-    // the quote currency, converting the latter via the account-currency FX
-    // rate before the ``required_margin <= equity`` check. The engine otherwise
-    // assumes account == quote (FX 1.0). Injected via the syminfo metadata
+    // Account-currency FX multiplier for every quote->account money path:
+    // equity is denominated in the account currency and a position's notional
+    // in the quote currency, so commission, P&L and the margin comparison
+    // convert the notional at this rate (a Pine ``currency=currency.XXX``
+    // that differs from the symbol's quote currency, e.g. currency.INR on a
+    // USDT-quoted perp, is how the adapter comes to set it). The engine
+    // otherwise assumes account == quote (FX 1.0). Injected via the syminfo metadata
     // channel (key "account_currency_fx"); defaults to 1.0 so every corpus
     // strategy (which never sets it) is byte-identical. A timestamped provider
     // may override it as bars advance; the configured scalar remains the
@@ -700,12 +701,15 @@ protected:
     double marked_equity_at(double price, double fx) const;
 
     // --- Fill rounding helpers ---
-    // Nearest-tick rounding: TradingView's exact double-precision function
-    // floor(price / mintick + 0.5) * mintick, with NO epsilon.
+    // Nearest-tick rounding, floor(price / mintick + 0.5) * mintick with NO
+    // epsilon: a tie goes where the binary quotient puts it, never to a
+    // decimal half-up rule (ADR-0001 Section B, `round_to_mintick`; the
+    // instrument's ladder is its declared tick).
     //
-    // finding-446: TV's own NASDAQ:AAPL and OANDA:EURUSD series carry
-    // sub-tick prints (x.xx5 and a few 4-dp values). Every TV fill taken at
-    // one of those RAW BAR PRICES is exactly this function of it: 24,582 /
+    // Calibration record (finding-446): TradingView's NASDAQ:AAPL and
+    // OANDA:EURUSD series carry sub-tick prints (x.xx5 and a few 4-dp
+    // values), and every fill taken at one of those RAW BAR PRICES is
+    // exactly this function of it: 24,582 /
     // 24,582 half-cent AAPL closes (22,122 rounded up, 2,460 rounded DOWN
     // because the binary quotient lands just under the midpoint —
     // 228.765 / 0.01 = 22876.499999999996 -> 228.76, while
@@ -723,16 +727,13 @@ protected:
         return std::floor(price / syminfo_mintick_ + 0.5) * syminfo_mintick_;
     }
 
-    // A fill taken AT A RAW BAR PRICE — a market order at the bar close
-    // (process_orders_on_close) or at the next open, a resting stop/limit
-    // the open gapped through, a stop-limit whose limit is already
-    // marketable at an OHLC path point, a margin-call slice at the open or
-    // adverse extreme, a strategy.close at the close / COOF bar-point
-    // cursor — books the raw print rounded to the NEAREST tick and only then
-    // carries slippage ticks. The FEED is never quantized (indicators consume
-    // the raw sub-tick values); only the fill and the broker's default-sizing
-    // snapshot (calc_qty / frozen_sizing_price, same nearest-tick form) are
-    // on-tick. The directional snap
+    // A fill taken AT A RAW BAR PRICE — a market fill at a bar point (the
+    // close, or the next open), a resting stop/limit the open gapped
+    // through, a stop-limit whose limit is already marketable at an OHLC
+    // path point, a liquidation slice at the open or adverse extreme — books
+    // the raw print rounded to the NEAREST tick and only then carries
+    // slippage ticks. The FEED is never quantized (indicators consume the raw
+    // sub-tick values); only the fill is on-tick. The directional snap
     // (native_matching::grid_round_directional, src/native_matching.hpp) is
     // reserved for COMPUTED stop / limit LEVELS that fall between ticks;
     // applying it to a raw bar price was the finding-432/446 defect (sells
@@ -743,41 +744,30 @@ protected:
         return round_to_mintick(raw_bar_price);
     }
 
-    // design-stop-tick-rounding (round 6): the broker emulator TESTS a
-    // resting stop / limit against the bar's OHLC quantized to the tick
-    // (nearest, the finding-446 formula), while the order LEVEL stays raw;
-    // the fill keeps its existing directional / limit-or-better snap.
+    // The nearest-tick grid point of a price (the finding-446 formula),
+    // materialized as k / (1/mintick) when 1/mintick is integral (every
+    // decimal tick) — the double a decimal literal on that tick parses to,
+    // so an on-grid level compares EQUAL to a quantized price bit-for-bit
+    // (14.04 vs k*0.01 = 14.040000000000001 would not). Non-decimal ticks
+    // fall back to k*mintick.
     //
-    // Pinned on NYSE:F 1D (mintick 0.01, sub-penny prints; lab tv tapes
-    // scratchpad/r6/pins/stopround-*, 2026-09-04):
-    //   long sell-stops 13.74624 / 13.7451 / 13.7449 / 13.745 all SKIP
-    //     2026-02-02 (low 13.745 -> 13.75) and fill 02-03 @13.74, while
-    //     13.3449 fills 01-26 (low 13.3448 -> 13.34) @13.34 — neither a raw
-    //     compare (02-02 would fill) nor a floored/ceiled level (01-26
-    //     would not) explains both; only the quantized low does;
-    //   short buy-stops 14.0349 / 14.03505 / 14.0352 all fill 02-03 (high
-    //     14.0351 -> 14.04) @14.04; 13.225 skips 12-09 (high 13.2202 ->
-    //     13.22): the high rounds to NEAREST, not up;
-    //   sell-stop 13.776 over the 02-20 open 13.775 (-> 13.78) fills at the
-    //     level 13.77, not at the open: the open is quantized too;
-    //   the same bars/levels reproduce for strategy.exit(limit=),
-    //     strategy.entry(stop=) / (limit=) and strategy.order(stop=), long
-    //     and short (stopround-xl-*, -es-*, -el-*, -eo-*);
-    //   stopround-ohlc-0/1 encode Pine's own low/high in the trade qty:
-    //     13.745, 13.3448, 14.0351 — the RAW prints, identical to the feed,
-    //     so the quantization lives in the broker, not the data.
-    // The trail leg is NOT covered (stopround-xt-L-trail: trail_points 20 /
-    // trail_offset 3 over the 14.035 high exits at the next open, the raw-
-    // extreme behaviour the engine already has), so the trail keeps walking
-    // the raw path; stop-limit entries, the process_orders_on_close close
-    // compares and the calc_on_order_fills cursors were not pinned either
-    // and stay raw.
-    //
-    // The grid point is materialized as k / (1/mintick) when 1/mintick is
-    // integral (every decimal tick), which is the double a Pine literal on
-    // that tick parses to — so an on-grid level compares EQUAL to a
-    // quantized bar price bit-for-bit (14.04 vs k*0.01 = 14.040000000000001
-    // would not). Non-decimal ticks fall back to k*mintick.
+    // No production code calls it. Testing a resting stop / limit against
+    // the bar quantized to the tick is TradingView's per-order-kind rule,
+    // and the Pine adapter owns it (its tick rules in
+    // src/source/pine_adapter.cpp; ADR-0001's `price_grid` native-only
+    // ruling), while a native host declares its ladder through the run
+    // spec's price grid. It stays because the twin-parity-frozen
+    // test_stop_tick_rounding_l4d pins it. Calibration record
+    // (design-stop-tick-rounding, round 6; NYSE:F 1D `lab tv` tapes
+    // stopround-*, 2026-09-04): sell-stops 13.74624 / 13.7451 / 13.7449 /
+    // 13.745 skip 02-02 (low 13.745 -> 13.75) and fill 02-03 @13.74 while
+    // 13.3449 fills 01-26 (low 13.3448 -> 13.34); buy-stops fill on the high
+    // rounded to NEAREST (14.0351 -> 14.04; 13.225 skips a 13.2202 high); the
+    // open is quantized too (13.776 over a 13.775 open fills at 13.77); the
+    // exit-limit, entry-stop / -limit and order-stop tapes reproduce, and
+    // stopround-ohlc-0/1 show the prints themselves are raw, so the
+    // quantization is the broker's. Trail legs, stop-limit entries and the
+    // after-close / fill-recalculation cursors were not pinned and stay raw.
     double tick_grid_price(double price) const {
         if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
         const double k = std::floor(price / syminfo_mintick_ + 0.5);
@@ -788,37 +778,29 @@ protected:
         }
         return k * syminfo_mintick_;
     }
-    // round 8 family T (NYSE:F@15, pinned by 40 `lab tv` sensor tapes on
-    // NYSE:F / CME_MINI:ES1! / OANDA:EURUSD 15m, scratchpad famT/pins,
-    // 2026-09-05): TradingView stores a resting stop / limit LEVEL on the
-    // symbol's PRICE GRID (multiples of 1 / pricescale, pricescale =
-    // 10^decimals of the tick) whenever the level sits within
-    // 0.01 / pricescale^2 of a grid price — the residue a level computed
-    // as avg_price +/- k * mintick carries (9.99 + 0.05 =
-    // 10.040000000000001, 11.86 - 0.05 = 11.809999999999999) and anything
-    // up to 1e-6 on a 2-decimal symbol (10.040001 IS 10.04; 10.0400012 is
-    // not and takes the directional snap: a sell limit at 10.0400012 fills
-    // at 10.05). ES1! (tick 0.25, pricescale 100) has the same 1e-6 band
-    // (5513.7500005 IS 5513.75, 5513.750001 is not); EURUSD (pricescale
-    // 1e5) snaps only within 1e-12 (1.135560000001 IS 1.13556,
-    // 1.135560000002 is not). The engine used to compare the RAW level
-    // against the tick-quantized bar, so a bar whose quantized extreme
-    // EQUALS the level (h 10.04, or h 10.035 -> 10.04, vs
-    // 10.040000000000001) did not fill and the exit landed bars later at
-    // the same snapped price — 148 of the 179 exit-time mismatches on the
-    // F@15 lane (masayanfx-scalping 102, latibonit 17, jos-protrader 8,
-    // vasudevshenoy 6, lukeborgerding, drakkhon, rhyme17, hariss369,
-    // colasbreugnon, fast-scalper, JOAT aureate). Applied where a level is
-    // stored on a request record (strategy.entry / exit / order, and the
-    // profit / loss tick conversion), so every trigger test, gap test,
-    // marketable-at-placement test and fill snap reads the grid value —
-    // materialized as k / pricescale, the double the decimal literal
-    // parses to, bit-for-bit equal to tick_grid_price's output. A level
-    // outside the band is returned untouched (the directional fill snap
-    // and the exact trigger compare keep TV's sub-tick behaviour, round 6).
-    // A binary tick (1/128 = 0.0078125) resolves to a 7-decimal grid whose
-    // band is 1e-16: effectively untouched; a tick with no short decimal
-    // expansion has no grid and is untouched.
+    // A level on the instrument's PRICE GRID: multiples of 1 / pricescale,
+    // pricescale = 10^(the tick's decimals). A level within
+    // kLevelGridBandPoints / pricescale^2 of a grid price IS that grid
+    // price, materialized as k / pricescale — the double the decimal literal
+    // parses to, bit-for-bit equal to tick_grid_price's output — which
+    // absorbs the residue a level computed as avg_price +/- k * mintick
+    // carries (9.99 + 0.05 = 10.040000000000001); a level outside the band
+    // is returned untouched. A binary tick (1/128 = 0.0078125) resolves to a
+    // 7-decimal grid whose band is 1e-16: effectively untouched; a tick with
+    // no short decimal expansion has no grid and is untouched.
+    //
+    // No production code calls it. Storing a resting level on the grid is
+    // TradingView's rule, and the Pine adapter owns it (its own copy,
+    // source_level_on_price_grid, src/source/pine_adapter.cpp; ADR-0001's
+    // `price_grid` native-only ruling). It stays because the
+    // twin-parity-frozen test_level_grid_snap_l4d pins it. Calibration
+    // record (round 8 family T, 40 `lab tv` sensor tapes on NYSE:F /
+    // CME_MINI:ES1! / OANDA:EURUSD 15m, 2026-09-05): the band is 1e-6 on a
+    // 2-decimal symbol (10.040001 IS 10.04; a sell limit at 10.0400012 is not
+    // and fills at 10.05), the same on ES1! (tick 0.25, pricescale 100) and
+    // 1e-12 on EURUSD (pricescale 1e5); comparing the raw level against the
+    // tick-quantized bar instead cost 148 of the 179 exit-time mismatches of
+    // the F@15 lane.
     static constexpr double kLevelGridBandPoints = 0.01;  // x 1/pricescale
     int price_grid_decimals() const {
         if (syminfo_mintick_ <= 0.0) return -1;
@@ -892,58 +874,45 @@ protected:
         pe.entry_commission_account = calc_commission(pe.price, pe.qty);
     }
 
-    // --- Position sizing helper ---
-    // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
-    // currency (equity, and a strategy.cash default_qty_value are both
-    // account-currency-native — see build_close_trade_with_costs /
-    // current_equity()),
-    // then convert it into a quantity of the instrument, whose price is in
-    // QUOTE currency. Divide the account-currency cash by account_currency_fx_
-    // first (the inverse of the instrument->account multiply used for
-    // commission/PnL/margin) so the division by fill_price stays dimensionally
-    // consistent; default 1.0 leaves the corpus untouched.
-    // Floor an order quantity to the instrument's tradable lot increment
-    // (qty_step_). TradingView applies this to EVERY order it sends to the
-    // exchange, not just forced liquidations — verified row-for-row: a
-    // computed DCA/safety-order quantity (e.g. baseOrderSize/close) is
-    // floored, not rounded, before it ever contributes to cost basis or a
-    // fill (the source adapter applies the same rule to liquidation lots).
-    // qty_step_ == 0 (corpus default) leaves qty
-    // untouched. A quotient that is only binary64 residue below an integer is
-    // treated as that integer, using the same 1e-6-of-a-step tolerance as
-    // percent-derived exits below. This keeps an on-grid request such as
-    // 1 / 0.00001 from losing a whole lot because the quotient materializes as
-    // 99999.999999..., while a genuinely off-grid request still floors. When
-    // quantization would be a no-op, preserve the original double so the
-    // tolerance never increases a requested quantity. Unlike the liquidation
-    // path, a regular entry legitimately CAN floor to zero (an under-funded
-    // order is simply not placed), so there is no "never stall"
-    // floor-to-one-step fallback here.
+    // --- Lot-increment floors ---
+    // Floor a quantity to the instrument's lot increment (qty_step_). A
+    // quotient that is only binary64 residue below an integer is treated as
+    // that integer (a 1e-6-of-a-step tolerance), so an on-grid request such
+    // as 1 / 0.00001 does not lose a whole lot because the quotient
+    // materializes as 99999.999999..., while a genuinely off-grid request
+    // still floors. When the floor would be a no-op the original double is
+    // returned, so the tolerance never increases a requested quantity;
+    // qty_step_ == 0 (the corpus default) leaves every quantity untouched,
+    // and a quantity may floor to zero (no floor-to-one-step fallback).
+    //
+    // No production code calls either floor: the Pine adapter sizes and
+    // floors its own lots (src/source/pine_adapter.cpp, measured by
+    // test_adapter_sizing_relower), and a native host sizes with Sized /
+    // native_sized_units over the run spec's quantity_grid. They stay
+    // because twin-parity-frozen suites pin them
+    // (test_qty_step_epsilon_floor_l4b, the frozen-size oracle rows).
+    // Calibration record: the floor-not-round rule was verified row-for-row
+    // on TradingView's DCA / safety-order quantities (baseOrderSize/close).
     double apply_qty_step(double qty) const {
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
         double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
         return floored < qty ? floored : qty;
     }
 
-    // Percent-derived strategy.exit lots are floored to the same lot
-    // increment (TV evidence, BINANCE:ETHUSDT.P qty_step 0.0001: a
-    // qty_percent=50/50 short bracket over a 5.4103 position fills
-    // 2.7051 + 2.7051, leaving a 0.0001 dust short OPEN until the next
-    // reversal/close/margin-call — 39 of stockhunter2025-btcusd-4h-ema-
-    // swing-strategy's 56 unmatched TV trades were exactly such dust
-    // rows). Unlike apply_qty_step this floor is epsilon-tolerant: 50%
-    // of an on-grid position is often exactly on-grid in real numbers
-    // but lands one ulp below the grid ratio in doubles (2.7051/0.0001
-    // = 27050.999999…), and a plain floor would knock such a leg a FULL
-    // step down, inventing dust TV does not have. The tolerance (1e-6 of
-    // a step) sits far above double representation error at realistic
-    // qty/step magnitudes yet far below any genuine sub-step remainder.
-    // When the floor is a no-op (qty already on-grid) the ORIGINAL double
-    // is returned unchanged: reconstructing it as floor(...)*step lands
-    // one ulp away (0.3 -> 0.30000000000000004) and that representation
-    // jitter leaks into printed PnL at the 1e-6 digit for strategies whose
-    // percent legs were already exact (officialjackofalltrades' 30%-of-1
-    // legs) — a pure artifact this fix must not introduce.
+    // The same floor for a percent-derived exit leg: 50% of an on-grid
+    // position is often exactly on-grid in real numbers but lands one ulp
+    // below the grid ratio in doubles (2.7051/0.0001 = 27050.999999…), and a
+    // plain floor would knock such a leg a FULL step down; the tolerance
+    // (1e-6 of a step) sits far above double representation error at
+    // realistic qty/step magnitudes yet far below any genuine sub-step
+    // remainder. When the floor is a no-op the ORIGINAL double is returned:
+    // reconstructing it as floor(...)*step lands one ulp away (0.3 ->
+    // 0.30000000000000004), jitter that would leak into printed P&L.
+    // Calibration record: TradingView's BINANCE:ETHUSDT.P (qty_step 0.0001)
+    // fills a qty_percent=50/50 short bracket over 5.4103 as 2.7051 + 2.7051
+    // and leaves a 0.0001 dust short open (39 of
+    // stockhunter2025-btcusd-4h-ema-swing-strategy's 56 unmatched trades were
+    // such rows); officialjackofalltrades' exact 30%-of-1 legs pin the no-op.
     double apply_exit_qty_step(double qty) const {
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
         double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
@@ -1033,19 +1002,14 @@ protected:
     int count_losstrades() const { return loss_trades_count_; }
 
     // --- Time/date extraction from bar timestamp ---
-    // Pine's bare ``hour`` / ``minute`` / ``dayofweek`` (the variable form,
-    // not the 1-arg function form) returns the wall-clock for the **exchange
-    // timezone** of the symbol (per TV reference docs). For crypto symbols
-    // like ETH-USDT the exchange TZ is UTC, which matches the engine's
-    // storage TZ — so the cheap ``gmtime_r`` path is correct for the
-    // overwhelming majority of strategies in the corpus.
-    //
-    // The 1-arg function form ``hour(time)`` is handled separately by the
-    // codegen (see codegen/visit_call.py) and DOES honour
-    // ``syminfo_.timezone`` (set via ``strategy_set_chart_timezone``) since
-    // TV's reference says the function form defaults its tz arg to
-    // ``syminfo.timezone``, which TV harnesses commonly set to the chart's
-    // display TZ for cross-exchange / multi-zone work.
+    // The current bar's time components in UTC, the engine's storage
+    // timezone. Generated code reads them for Pine's bare ``hour`` /
+    // ``minute`` / ``dayofweek`` (the variable form), which the language
+    // defines on the symbol's exchange timezone -- UTC for the crypto symbols
+    // that are most of the corpus, so the cheap ``gmtime_r`` path is exact
+    // there. The 1-arg function form ``hour(time)`` is the codegen's own
+    // (codegen/visit_call.py) and honours ``syminfo_.timezone`` (set via
+    // ``strategy_set_chart_timezone``).
     struct BarTime {
         int year, month, dayofmonth, hour, minute, second, dayofweek, weekofyear;
     };
@@ -1077,18 +1041,7 @@ protected:
         return bt;
     }
 
-    // Chart-timezone-aware decomposition for the existing loss-day clocks
-    // and the continuous/unconfigured-session order-counter fallback. The
-    // order counter on an explicitly timed session instead consumes
-    // source-layer intraday-cap risk-day policy, which follows the symbol's trading day.
-    //
-    // Falls back to plain ``_decompose_bar_time()`` (UTC) when no chart
-    // timezone has been set, preserving the legacy fast path for
-    // engine consumers that don't call ``set_chart_timezone``.
-    //
-    // Defined out-of-line in src/engine_risk.cpp so we can use the
-    // private ``ScopedTimezone`` helper without leaking its header into
-    // the public engine.hpp surface.
+    // The components of _decompose_bar_time(), one accessor each (UTC).
     int _bar_hour() const { return _decompose_bar_time().hour; }
     int _bar_minute() const { return _decompose_bar_time().minute; }
     int _bar_second() const { return _decompose_bar_time().second; }
@@ -1529,9 +1482,6 @@ protected:
         return (initial_capital_ > 0.0) ? (max_drawdown_ / initial_capital_) * 100.0 : 0.0;
     }
 
-    // Internal sizing helper; protected (alongside calc_qty) so the sizing-guard
-    // test can exercise the fill_price<=0 / NaN rejection path directly. See
-    // tests/test_adversarial_ohlcv.cpp.
 protected:
     execution::Result settle_with_context_scoped(
         const execution::Action& action, const execution::Fill& fill,
