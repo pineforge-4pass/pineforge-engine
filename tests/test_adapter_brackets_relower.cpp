@@ -1526,6 +1526,78 @@ void compare_all() {
 
 }  // namespace
 
+namespace {
+
+// R5 lane F7 (audit M27): why strategy.cancel / strategy.cancel_all keep the
+// adapter's per-handle loops instead of the kernel's bulk cancels. TradingView
+// cancels in the SOURCE book: a command written earlier in the same script
+// call is still in the adapter's same-bar batch, not in the kernel's book, and
+// a live strategy.close would carry the kernel label "__close__<id>" anyway.
+// The kernel's cancel_where(id, Label) / cancel_all() at the same point see
+// none of it -- measured here, one book each way.
+class CancelProbe final : public pineforge::source::PineStrategyHost {
+public:
+    explicit CancelProbe(int mode) : mode_(mode) {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 10000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.process_orders_on_close = false;
+        configure_pine_strategy(config);
+    }
+    std::size_t kernel_cancelled = 0;
+    void on_source_bar(const Bar&) override {
+        if (bar_index_ == 0) strategy_entry("L", true);
+        if (bar_index_ != 2) return;
+        if (mode_ < 2) {
+            strategy_close("L");
+            if (mode_ == 0) strategy_cancel("L");
+            else kernel_cancelled = cancel_where("L", NativeRequestField::Label);
+        } else {
+            strategy_entry("S", false);
+            if (mode_ == 2) strategy_cancel_all();
+            else kernel_cancelled = cancel_all();
+        }
+    }
+    double position() const { return signed_position_size(); }
+
+private:
+    int mode_;
+};
+
+void the_source_cancels_are_not_kernel_bulk_cancels() {
+    scenario = "M27 cancels";
+    std::vector<Bar> bars;
+    for (int i = 0; i < 5; ++i) bars.push_back(mk(i, 100.0, 100.0, 100.0, 100.0));
+    double position[4] = {0.0, 0.0, 0.0, 0.0};
+    int trades[4] = {0, 0, 0, 0};
+    std::size_t kernel[4] = {0, 0, 0, 0};
+    for (int mode = 0; mode < 4; ++mode) {
+        CancelProbe probe(mode);
+        probe.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false);
+        CHECK(probe.last_error().empty());
+        position[mode] = probe.position();
+        trades[mode] = probe.trade_count();
+        kernel[mode] = probe.kernel_cancelled;
+    }
+    std::printf("  [M27] strategy.cancel: pos=%g trades=%d | kernel cancel_where(Label): "
+                "cancelled=%zu pos=%g trades=%d\n", position[0], trades[0], kernel[1],
+                position[1], trades[1]);
+    std::printf("  [M27] strategy.cancel_all: pos=%g trades=%d | kernel cancel_all: "
+                "cancelled=%zu pos=%g trades=%d\n", position[2], trades[2], kernel[3],
+                position[3], trades[3]);
+    // strategy.cancel("L") withdraws the same-call close; the kernel's by-label
+    // cancel finds nothing, and the close flattens at the next open.
+    CHECK(position[0] == 1.0 && trades[0] == 0);
+    CHECK(kernel[1] == 0 && position[1] == 0.0 && trades[1] == 1);
+    // strategy.cancel_all() withdraws the same-call reversal; the kernel's
+    // cancel_all finds nothing, and the reversal lands.
+    CHECK(position[2] == 1.0 && trades[2] == 0);
+    CHECK(kernel[3] == 0 && position[3] == -1.0 && trades[3] == 1);
+}
+
+}  // namespace
+
 int main() {
 #if defined(PINEFORGE_R4D_HARVEST)
     r4d::harvest();
@@ -1543,6 +1615,7 @@ int main() {
     for (const Expected& pinned : kScenarios) compare(pinned);
     adapter_projects_the_tick_the_kernel_resolves_against();
     r4d::compare_all();
+    the_source_cancels_are_not_kernel_bulk_cancels();
     std::printf("adapter bracket/trail re-lowering: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;
