@@ -1,0 +1,16 @@
+{
+  "title": "E25 ETHUSDT.P session.islastbar",
+  "slug": "e25-eth-islastbar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-22T08:22:20.094Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-20",
+    "to": "2026-04-25"
+  },
+  "pine_sha256": "7ad947795f1c6b5443c8a929892dbb64ae9c8ac3bcb4442cc652937cf6a13949",
+  "tv_trades_sha256": "1440256ac61c051805c99e2e1183c23c514052faab36638c68d44f0babfe80fa",
+  "tv_trades_rows": 740
+}

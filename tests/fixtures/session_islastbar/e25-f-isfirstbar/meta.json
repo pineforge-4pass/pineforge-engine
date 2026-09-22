@@ -1,0 +1,16 @@
+{
+  "title": "E25 NYSE:F session.isfirstbar",
+  "slug": "e25-f-isfirstbar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-22T08:22:14.417Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-10",
+    "to": "2026-04-17"
+  },
+  "pine_sha256": "48b15ca0ee8d24a3b59d1f47047893e2d03337c3b5d46f8cd2dc6acaa0e42027",
+  "tv_trades_sha256": "760b5bff91888c12f8b2c54658dd9a869054f5d36ff0c38ae1289446902f3f1c",
+  "tv_trades_rows": 510
+}

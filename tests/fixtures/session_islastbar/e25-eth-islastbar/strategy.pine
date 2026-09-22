@@ -1,0 +1,14 @@
+// E25 probe (R5 lane E25): which chart bars does TradingView flag session.islastbar on?
+// BINANCE:ETHUSDT.P 15m, a 24x7 session (UTC). process_orders_on_close:
+// the entry fills at the CLOSE of the flagged bar, so every trade's entry time IS a
+// flagged bar; the position is closed at the close of the next bar.
+//@version=6
+strategy("E25 ETHUSDT.P session.islastbar", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=true, margin_long=100, margin_short=100)
+
+if strategy.position_size > 0
+    strategy.close("L", comment="next")
+if session.islastbar
+    strategy.entry("L", strategy.long, comment="last")
