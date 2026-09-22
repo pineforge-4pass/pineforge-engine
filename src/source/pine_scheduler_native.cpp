@@ -35,6 +35,25 @@ std::optional<std::int64_t> next_aggregated_script_open(
     return bucket(next->timestamp);
 }
 
+// session.islastbar looks one script bar ahead: on the chart timeframe to the
+// next retained bar, aggregated to the next bucket the retained input holds,
+// so both paths read the same chart alike. (ab9714be pine_scheduler.cpp:
+// 1865-1869 read the aggregated flag as in_session && barstate.islast.)
+// `script_index` is the chart index of the bar being published.
+std::optional<std::int64_t> next_script_open(
+        const std::vector<Bar>& inputs, const NativeRunSpec& spec, int script_index,
+        std::int64_t script_open_ms) {
+    const int ratio = tf_ratio(spec.input_tf, spec.script_tf);
+    if (ratio == 1 && script_index + 1 < static_cast<int>(inputs.size()))
+        return inputs[static_cast<std::size_t>(script_index + 1)].timestamp;
+    if ((ratio > 1 || ratio == -1) && tf_is_intraday(spec.script_tf)) {
+        return next_aggregated_script_open(inputs, script_open_ms,
+                                           tf_to_seconds(spec.script_tf), spec.timezone,
+                                           spec.session);
+    }
+    return std::nullopt;
+}
+
 // A chart whose script bar aggregates several input bars, as run_begin's
 // needs_aggregation reads it: the kernel's interval index is then the INPUT bar
 // a script bucket opens on, where the host's lots carry the chart bar.
@@ -529,25 +548,17 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
             !language_.coof_checkpoint_contains_current_bar_;
     }
     publish_series(script_bar, host);
-    // session.islastbar looks one script bar ahead: on the chart timeframe to
-    // the next retained bar, aggregated to the next bucket the retained input
-    // holds, so both paths read the same chart alike. (ab9714be
-    // pine_scheduler.cpp:1865-1869 read the aggregated flag as
-    // in_session && barstate.islast.)
-    std::optional<std::int64_t> next_script_open_ms;
+    // The session flags belong to the script bar, not to a callback: a
+    // calc_on_order_fills recalculation that already published this bar set
+    // them (recalculate below) and its close reads the same answer. Asked
+    // again, the dual would read this bar as its own predecessor, and the
+    // lookahead would start from a count the recalculation already advanced
+    // (lane F1).
     if (const auto state = host.native_state(); state.spec
-        && !state.spec->timeframe_undetected) {
-        const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
-        if (ratio == 1
-            && source_bar_count_ + 1 < static_cast<int>(retained_.bars.size())) {
-            next_script_open_ms = retained_.bars[
-                static_cast<std::size_t>(source_bar_count_ + 1)].timestamp;
-        } else if ((ratio > 1 || ratio == -1) && tf_is_intraday(state.spec->script_tf)) {
-            next_script_open_ms = next_aggregated_script_open(
-                retained_.bars, script_bar.timestamp, tf_to_seconds(state.spec->script_tf),
-                state.spec->timezone, state.spec->session);
-        }
-        host.scheduler_update_session_state(script_bar, next_script_open_ms);
+        && !state.spec->timeframe_undetected && !had_coof_recalc) {
+        host.scheduler_update_session_state(
+            script_bar, next_script_open(retained_.bars, *state.spec, source_bar_count_,
+                                         script_bar.timestamp));
     }
     const bool suppress_probe_tail = host.probe_suppress_tail_logic()
         && expected_source_bars_ > 0
@@ -651,6 +662,18 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     language_.history_slot_is_new_ =
         !language_.coof_checkpoint_contains_current_bar_;
     publish_series(callback_bar, host);
+    // A fill recalculation runs the script ON the bar the fill is on, so it
+    // reads that bar's session flags, as ab9714be's loop set them before any
+    // of the bar's fills. The first publication of the bar asks; the close
+    // callback and later recalculations of the bar read the same answer
+    // (lane F1).
+    if (const auto state = host.native_state(); state.spec
+        && !state.spec->timeframe_undetected
+        && last_published_script_open_ms_ != context.script_bar_open_ms) {
+        host.scheduler_update_session_state(
+            callback_bar, next_script_open(retained_.bars, *state.spec, source_bar_count_,
+                                           callback_bar.timestamp));
+    }
     NativeDecisionContext coof_context = context;
     if (at_open) coof_context.coordinate.path_phase = NativePathPhase::Open;
     else if (open_point && bar_known) coof_context.coordinate.path_phase = first_extreme;

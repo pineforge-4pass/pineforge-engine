@@ -72,6 +72,9 @@ struct FeedBar {
 #include "fixtures/session_islastbar/bars.inc"
 
 constexpr std::int64_t kMinute = 60'000;
+constexpr std::int64_t kDay = 1440 * kMinute;
+// 2026-04-07 (Tuesday, EDT) 09:30 America/New_York.
+constexpr std::int64_t kTue0930Et = 1775568600000LL;
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 const std::string kRth = "0930-1600";
@@ -536,6 +539,219 @@ void test_same_bar_add_cover() {
     if (!rows_equal) show(path_name(Path::Aggregated), agg);
 }
 
+// ── 5. session flags under calc_on_order_fills ────────────────────────────
+
+// The reviewer's coof_session.cpp: a market order placed on a session day's
+// last bar fills at the next session day's first bar open, and the
+// calc_on_order_fills recalculation runs the script ON that bar — where
+// session.isfirstbar holds and session.islastbar does not. Chart-timeframe
+// bars, 09:30 .. 15:45 ET (or .. 16:45 with post-market bars) on Tuesday
+// 2026-04-07 and Wednesday 2026-04-08.
+struct Seen {
+    std::int64_t ts = 0;
+    int bar = 0;
+    bool ismarket = false;
+    bool isfirstbar = false;
+    bool islastbar = false;
+    int open_entries = 0;
+};
+
+bool operator==(const Seen& a, const Seen& b) {
+    return a.ts == b.ts && a.bar == b.bar && a.ismarket == b.ismarket
+        && a.isfirstbar == b.isfirstbar && a.islastbar == b.islastbar;
+}
+
+class SessionFlagsHost final : public source::PineStrategyHost {
+public:
+    SessionFlagsHost(bool coof, int entry_minute_et) : entry_minute_et_(entry_minute_et) {
+        set_syminfo_session(kRth);
+        set_syminfo_timezone(kNewYork);
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1;
+        config.pyramiding = 10;
+        config.calc_on_order_fills = coof;
+        configure_pine_strategy(config);
+        syminfo_mintick_ = 0.01;
+    }
+    void on_source_bar(const Bar&) override {
+        seen.push_back({current_bar_.timestamp, bar_index_, session_ismarket_,
+                        session_isfirstbar_, session_islastbar_, position_entry_count_});
+        const int et = static_cast<int>(
+            ((current_bar_.timestamp / kMinute - 240) % 1440 + 1440) % 1440);
+        if (et == entry_minute_et_ && !entered_) {
+            strategy_entry("L", true);
+            entered_ = true;
+        }
+    }
+    std::vector<Seen> seen;
+
+private:
+    int entry_minute_et_;
+    bool entered_ = false;
+};
+
+Bar session_bar(std::int64_t ts, double px) {
+    Bar b{};
+    b.timestamp = ts;
+    b.open = px; b.high = px + 0.2; b.low = px - 0.2; b.close = px + 0.1;
+    b.volume = 1;
+    return b;
+}
+
+// Two session days of 15m chart bars from 09:30 ET; `per_day` = 26 ends at
+// 15:45, 30 adds the out-of-session 16:00 .. 16:45 bars.
+std::vector<Bar> two_days(int per_day) {
+    std::vector<Bar> bars;
+    double px = 100.0;
+    for (const std::int64_t day : {kTue0930Et, kTue0930Et + kDay}) {
+        for (int k = 0; k < per_day; ++k) {
+            bars.push_back(session_bar(day + k * 15 * kMinute, px));
+            px += 0.05;
+        }
+    }
+    return bars;
+}
+
+std::vector<Seen> run_flags(bool coof, int per_day, int entry_minute_et, std::string* error) {
+    SessionFlagsHost host(coof, entry_minute_et);
+    const auto bars = two_days(per_day);
+    host.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    *error = host.last_error();
+    return host.seen;
+}
+
+std::string flags_text(const std::vector<Seen>& seen, std::int64_t from, std::int64_t to) {
+    std::string text;
+    for (const Seen& s : seen) {
+        if (s.ts < from || s.ts > to) continue;
+        const int et = static_cast<int>(((s.ts / kMinute - 240) % 1440 + 1440) % 1440);
+        char cell[64];
+        std::snprintf(cell, sizeof cell, " %02d:%02d[bi%d m%d f%d l%d pos%d]", et / 60, et % 60,
+                      s.bar, s.ismarket, s.isfirstbar, s.islastbar, s.open_entries);
+        text += cell;
+    }
+    return text;
+}
+
+// Every callback of one bar reads the same flags, and collapsing the
+// recalculation into its bar gives the calc_on_order_fills-off run back:
+// ab9714be's shape (coof_session_ab9714be.out), where both callbacks of the
+// fill bar agree and the COOF run reads the COOF-off run's flags bar for bar.
+bool one_answer_per_bar(const std::vector<Seen>& coof_on, const std::vector<Seen>& coof_off) {
+    std::vector<Seen> collapsed;
+    for (const Seen& s : coof_on) {
+        if (!collapsed.empty() && collapsed.back().bar == s.bar) {
+            if (!(collapsed.back() == s)) return false;
+            continue;
+        }
+        collapsed.push_back(s);
+    }
+    if (collapsed.size() != coof_off.size()) return false;
+    for (std::size_t i = 0; i < collapsed.size(); ++i)
+        if (!(collapsed[i] == coof_off[i])) return false;
+    return true;
+}
+
+const Seen* callback(const std::vector<Seen>& seen, std::int64_t ts, int nth) {
+    for (const Seen& s : seen) {
+        if (s.ts != ts) continue;
+        if (nth-- == 0) return &s;
+    }
+    return nullptr;
+}
+
+// The order placed at Tuesday's 15:45 fills at Wednesday's 09:30 open. The
+// recalculation on that fill runs on the Wednesday 09:30 bar: isfirstbar,
+// not islastbar. Before this lane it read Tuesday 15:45's flags:
+//   COOF on  ... 15:45[bi25 f0 l1 pos0] 09:30[bi26 f0 l1 pos1] 09:30[bi26 f1 l0 pos1]
+void test_coof_session_flags() {
+    std::printf("test_coof_session_flags\n");
+    std::string off_error, on_error;
+    const auto off = run_flags(false, 26, 15 * 60 + 45, &off_error);
+    const auto on = run_flags(true, 26, 15 * 60 + 45, &on_error);
+    CHECK(off_error.empty());
+    CHECK(on_error.empty());
+    const std::int64_t wed0930 = kTue0930Et + kDay;
+    const std::int64_t tue1545 = kTue0930Et + 375 * kMinute;
+    // The control, E26's session-day flags without a recalculation.
+    CHECK(off.size() == 52);
+    CHECK(flags_text(off, tue1545, wed0930)
+          == " 15:45[bi25 m1 f0 l1 pos0] 09:30[bi26 m1 f1 l0 pos1]");
+    // The recalculation is the first of Wednesday 09:30's two callbacks.
+    CHECK(on.size() == 53);
+    const Seen* recalc = callback(on, wed0930, 0);
+    const Seen* close = callback(on, wed0930, 1);
+    CHECK(recalc != nullptr && close != nullptr);
+    if (recalc && close) {
+        CHECK(recalc->open_entries == 1);
+        CHECK(recalc->ismarket && recalc->isfirstbar && !recalc->islastbar);
+        CHECK(close->ismarket && close->isfirstbar && !close->islastbar);
+    }
+    CHECK(one_answer_per_bar(on, off));
+    if (!one_answer_per_bar(on, off)) {
+        std::printf("    COOF off%s\n", flags_text(off, tue1545, wed0930).c_str());
+        std::printf("    COOF on %s\n", flags_text(on, tue1545, wed0930).c_str());
+    }
+}
+
+// The same with out-of-session bars after the close: the order placed at
+// 15:45 fills at 16:00 ET, out of session, where no session flag holds.
+// Before this lane the recalculation read 15:45's islastbar:
+//   COOF on  ... 15:45[bi25 f0 l1 pos0] 16:00[bi26 f0 l1 pos1] 16:00[bi26 f0 l0 pos1]
+void test_coof_session_flags_post_market() {
+    std::printf("test_coof_session_flags_post_market\n");
+    std::string off_error, on_error;
+    const auto off = run_flags(false, 30, 15 * 60 + 45, &off_error);
+    const auto on = run_flags(true, 30, 15 * 60 + 45, &on_error);
+    CHECK(off_error.empty());
+    CHECK(on_error.empty());
+    const std::int64_t tue1545 = kTue0930Et + 375 * kMinute;
+    const std::int64_t tue1600 = kTue0930Et + 390 * kMinute;
+    CHECK(flags_text(off, tue1545, tue1600)
+          == " 15:45[bi25 m1 f0 l1 pos0] 16:00[bi26 m0 f0 l0 pos1]");
+    const Seen* recalc = callback(on, tue1600, 0);
+    CHECK(recalc != nullptr);
+    if (recalc) {
+        CHECK(recalc->open_entries == 1);
+        CHECK(!recalc->ismarket && !recalc->isfirstbar && !recalc->islastbar);
+    }
+    CHECK(one_answer_per_bar(on, off));
+    if (!one_answer_per_bar(on, off)) {
+        std::printf("    COOF off%s\n", flags_text(off, tue1545, tue1600).c_str());
+        std::printf("    COOF on %s\n", flags_text(on, tue1545, tue1600).c_str());
+    }
+}
+
+// The order placed at 15:15 fills at 15:30, the bar BEFORE the session's last.
+// The recalculation counts the 15:30 bar before its close callback, and the
+// close callback used to read its session lookahead off that count: one
+// retained bar too far, Wednesday's 09:30, a different session day. Before
+// this lane (chart-timeframe path):
+//   COOF on  15:30[bi24 f0 l0 pos1] 15:30[bi24 f0 l1 pos1] 15:45[bi25 f1 l1 pos1]
+// — 15:30 read as the session's last bar and 15:45 as its first.
+void test_coof_fill_before_the_last_bar() {
+    std::printf("test_coof_fill_before_the_last_bar\n");
+    std::string off_error, on_error;
+    const auto off = run_flags(false, 26, 15 * 60 + 15, &off_error);
+    const auto on = run_flags(true, 26, 15 * 60 + 15, &on_error);
+    CHECK(off_error.empty());
+    CHECK(on_error.empty());
+    const std::int64_t tue1530 = kTue0930Et + 360 * kMinute;
+    const std::int64_t wed0930 = kTue0930Et + kDay;
+    CHECK(flags_text(off, tue1530, wed0930)
+          == " 15:30[bi24 m1 f0 l0 pos1] 15:45[bi25 m1 f0 l1 pos1] 09:30[bi26 m1 f1 l0 pos1]");
+    CHECK(flags_text(on, tue1530, wed0930)
+          == " 15:30[bi24 m1 f0 l0 pos1] 15:30[bi24 m1 f0 l0 pos1] 15:45[bi25 m1 f0 l1 pos1]"
+             " 09:30[bi26 m1 f1 l0 pos1]");
+    CHECK(one_answer_per_bar(on, off));
+    if (!one_answer_per_bar(on, off)) {
+        std::printf("    COOF off%s\n", flags_text(off, tue1530, wed0930).c_str());
+        std::printf("    COOF on %s\n", flags_text(on, tue1530, wed0930).c_str());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -544,6 +760,9 @@ int main() {
     test_pooc_fills();
     test_aggregated_equals_chart();
     test_same_bar_add_cover();
+    test_coof_session_flags();
+    test_coof_session_flags_post_market();
+    test_coof_fill_before_the_last_bar();
 
     std::printf("\naggregated_path_regressions: %d passed, %d failed\n", tests_passed,
                 tests_failed);

@@ -523,6 +523,104 @@ void test_overnight_session_day_roll() {
     CHECK(!chart.seen[6].islastbar);
 }
 
+// ── 7. a calc_on_order_fills recalculation reads its bar's flags ─────────
+
+// With calc_on_order_fills a fill runs the script again ON the bar it fills
+// on, before that bar's close. Lane F1 (the final audit's coof_session
+// probes): the recalculation read the PREVIOUS bar's flags, because the
+// scheduler set them only in the close callback, and on the chart timeframe
+// the close then looked one retained bar too far ahead, since the
+// recalculation had already counted the bar. The TradingView days of section
+// 3, with a market order at 12:15, 12:45, 15:15 and 15:45 ET: each fills at
+// the next bar's open — the bar before a session's last (15:30, and 12:30 on
+// the half day), the next session day's first (09:30), or a bar mid-session
+// — and its recalculation runs there. Every callback of a bar must read that
+// bar's flags, and those are the calc_on_order_fills-off run's, TradingView's,
+// on all three paths.
+class CoofSessionHost final : public source::PineStrategyHost {
+public:
+    CoofSessionHost() {
+        set_syminfo_session(kRth);
+        set_syminfo_timezone(kNewYork);
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1;
+        config.pyramiding = 100;
+        config.calc_on_order_fills = true;
+        configure_pine_strategy(config);
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_source_bar(const Bar&) override {
+        seen.push_back({current_bar_.timestamp, session_ismarket_,
+                        session_isfirstbar_, session_islastbar_});
+        bars.push_back(bar_index_);
+        const int et = static_cast<int>(
+            ((current_bar_.timestamp / kMinute - 240) % 1440 + 1440) % 1440);
+        const bool order_bar = et == 15 * 60 + 15 || et == 15 * 60 + 45
+            || et == 12 * 60 + 15 || et == 12 * 60 + 45;
+        if (order_bar && bar_index_ != last_order_bar_) {
+            strategy_entry("L", true);
+            last_order_bar_ = bar_index_;
+        }
+    }
+
+    std::vector<Seen> seen;
+    std::vector<int> bars;
+
+private:
+    int last_order_bar_ = -1;
+};
+
+void test_coof_recalculation_flags() {
+    std::printf("test_coof_recalculation_flags\n");
+    struct Path {
+        const char* tag;
+        bool aggregated;
+        bool magnifier;
+    };
+    const Path paths[] = {
+        {"chart 15 -> 15, calc_on_order_fills", false, false},
+        {"aggregated 1 -> 15, calc_on_order_fills", true, false},
+        {"aggregated 1 -> 15, magnifier, calc_on_order_fills", true, true},
+    };
+    const auto fifteen = feed(kFord15);
+    const auto one = feed(kFord1m);
+    const Run control = run_batch(fifteen, kRth, kNewYork, "15", "15", false);
+    for (const Path& path : paths) {
+        CoofSessionHost host;
+        if (path.aggregated) {
+            host.run(one.data(), static_cast<int>(one.size()), "1", "15", path.magnifier);
+        } else {
+            host.run(fifteen.data(), static_cast<int>(fifteen.size()), "15", "15", false);
+        }
+        CHECK(host.last_error().empty());
+        // One recalculation per filled order: 12:30, 13:00, 15:30 and the
+        // next day's 09:30 from 07-02; 12:30 and the next session's 09:30 from
+        // the half day; 12:30, 13:00 and 15:30 on 07-07, whose 15:45 order
+        // fills after the window.
+        CHECK(host.seen.size() == control.seen.size() + 9);
+        // Every callback of one bar reads the same flags; collapsed to one per
+        // bar they are the calc_on_order_fills-off run's.
+        std::vector<Seen> collapsed;
+        bool one_answer = host.seen.size() == host.bars.size();
+        for (std::size_t i = 0; one_answer && i < host.seen.size(); ++i) {
+            if (i > 0 && host.bars[i] == host.bars[i - 1]) {
+                one_answer = same_bars({host.seen[i]}, {host.seen[i - 1]});
+                continue;
+            }
+            collapsed.push_back(host.seen[i]);
+        }
+        CHECK(one_answer);
+        CHECK(same_bars(collapsed, control.seen));
+        if (!one_answer || !same_bars(collapsed, control.seen)) {
+            show("chart 15 -> 15 (control)", control);
+            show(path.tag, Run{host.seen, host.last_error()});
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -532,6 +630,7 @@ int main() {
     test_tv_eth_24x7();
     test_stream_realtime();
     test_overnight_session_day_roll();
+    test_coof_recalculation_flags();
 
     std::printf("\nsession_islastbar_aggregation: %d passed, %d failed\n",
                 tests_passed, tests_failed);
