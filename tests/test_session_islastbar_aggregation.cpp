@@ -397,8 +397,14 @@ void test_tv_eth_24x7() {
 // (ab9714be pine_stream.cpp:458-469, the rule the batch live tail reads).
 // Warmup 15:30 .. 15:45 ET, realtime ticks 15:50 .. 15:59: the realtime 15:50
 // is not the session's last bar, 15:55 is. Since R4 slice C both realtime bars
-// were flagged. The warmup's final bar keeps the run-end convention the
-// legacy chart-timeframe warmup read too.
+// were flagged.
+//
+// The final WARMUP bar is not a run end either (lane E25 finding 3). A stream
+// replays its warmup and then keeps going, so the bar after 15:45 is 15:50 on
+// the calendar, exactly as it is for the realtime bar that follows it and for
+// the batch live tail. Only a batch run that stops there reads "last" from
+// having no next bar. TradingView agrees: the tapes flag the last bar of the
+// session DAY (15:55 here), never the bar a chart happens to be drawn up to.
 void test_stream_realtime() {
     std::printf("test_stream_realtime\n");
     struct Shape {
@@ -426,8 +432,13 @@ void test_stream_realtime() {
         const Run run{host.seen, host.last_error()};
         CHECK(run.error.empty());
         CHECK(bits(run.seen, &Seen::ismarket) == "111111");
-        CHECK(bits(run.seen, &Seen::islastbar) == "000101");
-        if (bits(run.seen, &Seen::islastbar) != "000101") show(shape.tag, run);
+        // expectation corrected: "000101" -> "000001", because the warmup's
+        // final bar (15:45) is not the end of the run — the stream continues
+        // into the realtime ticks — so it reads its next script bar on the
+        // calendar like every other bar of a stream, and 15:55 is the only
+        // last bar of this session.
+        CHECK(bits(run.seen, &Seen::islastbar) == "000001");
+        if (bits(run.seen, &Seen::islastbar) != "000001") show(shape.tag, run);
     }
 }
 
