@@ -840,6 +840,10 @@ list(APPEND TEST_SOURCES test_native_continuation_digest_tail)
 # session_islastbar) replayed through the Pine adapter on both paths.
 list(APPEND TEST_SOURCES test_session_islastbar_aggregation)
 
+# R5 E27: where a process_orders_on_close fill is dated on the aggregated path,
+# against the chart-timeframe path and against TradingView's own tape.
+list(APPEND TEST_SOURCES test_pooc_fill_stamp_aggregation)
+
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
 # this list at the end of TEST_SOURCES: the retired-owner inventory above is
@@ -1488,6 +1492,12 @@ endif()
 if(TARGET test_session_islastbar_aggregation)
     target_compile_definitions(test_session_islastbar_aggregation PRIVATE
         PINEFORGE_E25_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# R5 E27 replays the same tape tree for the POOC fill stamp; source-bound too.
+if(TARGET test_pooc_fill_stamp_aggregation)
+    target_compile_definitions(test_pooc_fill_stamp_aggregation PRIVATE
+        PINEFORGE_E27_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
 endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
