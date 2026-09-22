@@ -25,8 +25,11 @@ enum class Leg : uint8_t { Stop, Limit, Trail };
 // lifecycle_v2. See ADR-0001 "Deprecated public spellings".
 enum class Domain : uint8_t {
     Ordinary, FillRecalc, Magnifier, MagnifierFillRecalc, RawTicks,
-    Coof = FillRecalc,                    // deprecated spelling of FillRecalc
-    MagnifierCoof = MagnifierFillRecalc,  // deprecated spelling of MagnifierFillRecalc
+    Coof [[deprecated("Coof is the historical spelling of FillRecalc; removed at lifecycle_v2")]]
+        = FillRecalc,
+    MagnifierCoof [[deprecated("MagnifierCoof is the historical spelling of "
+                               "MagnifierFillRecalc; removed at lifecycle_v2")]]
+        = MagnifierFillRecalc,
 };
 enum class Phase : uint8_t { Observation, AfterMargin };
 enum class Fold : uint8_t { Prefix, Continue };

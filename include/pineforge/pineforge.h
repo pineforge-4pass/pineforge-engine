@@ -69,6 +69,17 @@
   #define PF_API
 #endif
 
+/* A public spelling kept only as a value-identical alias for compiled
+ * consumers (ADR-0001 "Deprecated public spellings"): a consumer that still
+ * names it compiles, with the compiler's deprecation diagnostic. */
+#if defined(__GNUC__) || defined(__clang__)
+  #define PF_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#elif defined(_MSC_VER)
+  #define PF_DEPRECATED(msg) __declspec(deprecated(msg))
+#else
+  #define PF_DEPRECATED(msg)
+#endif
+
 /** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
  *  whenever a caller-visible struct grows. Consumers MUST verify
  *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest.
@@ -279,6 +290,8 @@ typedef struct pf_equity_stats_s {
      *  serialized report key stays `sharpe_tv` (report-schema name). */
     union {
         double sharpe_monthly;
+        PF_DEPRECATED("sharpe_tv is the historical spelling of sharpe_monthly; "
+                      "removed at PF_ABI_VERSION 5")
         double sharpe_tv;              /**< Deprecated spelling of
                                         *   pf_equity_stats_s::sharpe_monthly. */
     };
@@ -289,6 +302,8 @@ typedef struct pf_equity_stats_s {
      *  terms as sharpe_monthly / sharpe_tv above. */
     union {
         double sortino_monthly;
+        PF_DEPRECATED("sortino_tv is the historical spelling of sortino_monthly; "
+                      "removed at PF_ABI_VERSION 5")
         double sortino_tv;             /**< Deprecated spelling of
                                         *   pf_equity_stats_s::sortino_monthly. */
     };

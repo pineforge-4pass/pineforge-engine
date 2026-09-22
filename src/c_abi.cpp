@@ -192,10 +192,16 @@ static_assert(offsetof(pf_equity_stats_t, sharpe_monthly) == 48,
               "pf_equity_stats_t::sharpe_monthly offset moved");
 static_assert(offsetof(pf_equity_stats_t, sortino_monthly) == 56,
               "pf_equity_stats_t::sortino_monthly offset moved");
+/* The two assertions below name the deprecated spellings on purpose (they are
+ * what pins each alias to its generic storage), so they compile without the
+ * deprecation diagnostic every other use of those names draws. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 static_assert(offsetof(pf_equity_stats_t, sharpe_tv) == offsetof(pf_equity_stats_t, sharpe_monthly),
               "the deprecated sharpe_tv spelling must name the sharpe_monthly storage");
 static_assert(offsetof(pf_equity_stats_t, sortino_tv) == offsetof(pf_equity_stats_t, sortino_monthly),
               "the deprecated sortino_tv spelling must name the sortino_monthly storage");
+#pragma GCC diagnostic pop
 static_assert(offsetof(pf_equity_stats_t, sharpe_bar) == 64,
               "pf_equity_stats_t::sharpe_bar offset moved");
 static_assert(offsetof(pf_equity_stats_t, open_pl) == 112,

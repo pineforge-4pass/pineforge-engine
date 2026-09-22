@@ -1518,6 +1518,30 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
 
+# R5 lane F6: the P2c historical spellings -- pf_equity_stats_t::sharpe_tv /
+# sortino_tv and exit_legs::Domain::Coof / MagnifierCoof -- are
+# compiler-deprecated aliases (ADR-0001 "Deprecated public spellings"). These
+# TUs name them on purpose: test_c_abi exercises the C alias, and the two
+# twins keep their frozen base CHECK texts verbatim. They build without the
+# diagnostic; test_deprecated_public_spellings holds that every other use
+# draws it, that the generic spellings compile clean, and that the aliases
+# still compile.
+foreach(_pf_deprecated_spelling_test
+        test_c_abi test_metrics_l4d test_exit_lifecycle_clock_l4c)
+    if(TARGET ${_pf_deprecated_spelling_test})
+        target_compile_options(${_pf_deprecated_spelling_test}
+            PRIVATE -Wno-deprecated-declarations)
+    endif()
+endforeach()
+add_test(NAME test_deprecated_public_spellings
+    COMMAND ${CMAKE_COMMAND}
+        -DPF_CC=${CMAKE_C_COMPILER}
+        -DPF_CXX=${CMAKE_CXX_COMPILER}
+        "-DPF_INCLUDES=${PROJECT_SOURCE_DIR}/include|${PROJECT_BINARY_DIR}/include"
+        -DPF_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPF_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/deprecated_spellings
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/deprecated_spellings.cmake)
+
 # R5 L13: the C-level native host API. One ctest row, two translation units.
 # test_native_c_api.c is compiled by the C compiler, so any C++ syntax leaking
 # into <pineforge/native_c_api.h> is a hard build failure and the "pure-C
