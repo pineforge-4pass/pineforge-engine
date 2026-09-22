@@ -757,6 +757,19 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
     // one-price open bar has no path left to fold.
     if (excursion_range_end_projection_) return owned;
     if (excursion_margin_call_ && excursion_margin_fill_only_) return owned;
+    // Both folds below walk this bar's modeled path, so both need the leg
+    // order the RUN declares (NativeRunSpec::path_order), not the sampler's
+    // thread-local override: NativePathOrderScope installs that only while
+    // the intrabar driver materializes a sample path, never around a host
+    // callback, so a question asked here would always be answered AUTO
+    // (engine_internal.hpp, set_path_order_override). It is asked of the
+    // consumer, which is the same call
+    // BacktestEngine::declare_opened_lot_entry_bar_mask derives
+    // facts.entry_bar_{high,low}_masked on — one resolution for the mask and
+    // for the arithmetic that completes it, so the two cannot disagree. Under
+    // AUTO it is the open-proximity rule this read always returned here.
+    const bool path_high_first = as_native_consumer(
+        const_cast<IExecutionConsumer&>(execution_consumer())).path_high_first(current_bar_);
     if (excursion_margin_call_) {
         // ab9714be pine_risk.cpp:256-292: a margin-call liquidation at the
         // adverse extreme owns the rest of the bar. Which part of the bar it
@@ -765,8 +778,7 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
         // sample only the traversed waypoint prefix.
         const Bar sample_bar = margin_call_sample_bar(
             current_bar_, facts.fill_price, excursion_margin_prefix_,
-            internal::bar_path_uses_high_first(current_bar_),
-            syminfo_.mintick, config_.slippage);
+            path_high_first, syminfo_.mintick, config_.slippage);
         const bool margin_same_bar = facts.entry_bar_index == facts.exit_bar_index;
         const double margin_high = (margin_same_bar && facts.entry_bar_high_masked)
                                        ? facts.entry_price : sample_bar.high;
@@ -799,11 +811,14 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
     }
     const double touch_price = bar_fill_price(facts.fill_price);
     double fill_pos = 0.0;
-    if (!internal::first_touch_position(current_bar_, touch_price, &fill_pos))
+    // The fill's position and the extremes it is compared against have to be
+    // coordinates on ONE walk, so the order resolved above picks the path
+    // here too (the two-argument form would re-derive it from the override).
+    if (!internal::first_touch_position(current_bar_, path_high_first, touch_price,
+                                        &fill_pos))
         return owned;
-    const bool high_first = internal::bar_path_uses_high_first(current_bar_);
-    const double high_pos = high_first ? 1.0 : 2.0;
-    const double low_pos = high_first ? 2.0 : 1.0;
+    const double high_pos = path_high_first ? 1.0 : 2.0;
+    const double low_pos = path_high_first ? 2.0 : 1.0;
     const bool same_bar = facts.entry_bar_index == facts.exit_bar_index;
     const bool mask_high = same_bar && facts.entry_bar_high_masked;
     const bool mask_low = same_bar && facts.entry_bar_low_masked;
