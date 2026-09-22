@@ -224,10 +224,18 @@ kernel and own these quirks, each at its site:
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
   with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:12413`) for the scheduling,
   `resolve_margin_requirement` (`pine_adapter.cpp:12446`) for the ten-significant-digit money,
-  and `resolve_margin_call_units` for the lot-floored 4x restore. What has no kernel check point
-  at all stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:14992`), the account-currency FX rollover
-  slice, the pre-open admission slice and the 1x-long money call — plus the TV admission scopes
+  and `resolve_margin_call_units` for the lot-floored 4x restore. That hook answers every call
+  on purpose (R5 lane F7): TradingView floors the restore onto the lot grid before the multiple,
+  so on a gridded tape the kernel's own `ShortfallMultiple 4` books 5 lots where TradingView
+  books 4 (`tests/test_native_margin_hooks_twin.cpp` MG-F3); the two agree without a grid, but
+  the knob would fold into every margin run's identity. The account-currency FX rollover has a
+  kernel check point, `FxRoll`, and the adapter refuses it by kind: TradingView's rollover is a
+  broker-open checkpoint at the open price (`apply_fx_open_margin_slice`, at any positive
+  margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
+  0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
+  stays adapter-side: the `process_orders_on_close` chronology exception
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:14992`), the pre-open admission slice and
+  the 1x-long money call — plus the TV admission scopes
   (`src/compat/pine/market_admission.cpp:33-46`) and the review fold they feed (`:67-72`,
   `:79-136`).
 - **Calculation timing.** The cadence itself is the kernel's: a `calc_on_order_fills` strategy

@@ -501,6 +501,38 @@ void twin_rounded_money_and_whole_drop() {
     CHECK(plain.empty());
 }
 
+// MG-F3 (R5 lane F7: the D2 question, decided). The gridded shortfall:
+// TradingView floors the restore onto the lot grid BEFORE the multiple. 20
+// long at 100 on 1000 at 50 % margin on a one-unit grid, a bar reaching 93.9:
+//   restore = (20*93.9*0.5 - (1000 + 20*(93.9-100))) / (93.9*0.5)
+//           = 1.2992545260915842
+//   TradingView = floor(1.2992...) * 4 = 4 lots, floored again = 4
+//   the kernel's own ShortfallMultiple 4 = 4 * 1.2992... = 5.197..., onto the
+//   grid = 5 -- executed here, no longer a comment.
+// So the units hook keeps answering on a gridded tape. On the no-grid tape of
+// twin_leveraged_long the kernel's multiple books the adapter's units bit for
+// bit, which does not buy handing it the knob there: NativeMarginModel::sizing
+// is folded into every margin run's identity, so declaring it for the no-grid
+// runs alone is an epoch decision this lane does not take.
+void twin_gridded_shortfall() {
+    TvConfig config;
+    config.capital = 1000.0;
+    config.units = 20.0;
+    config.margin_pct = 50.0;
+    config.qty_step = 1.0;
+    const std::vector<Bar> bars = {ohlc(0, 100.0, 100.0, 100.0, 100.0),
+                                   ohlc(1, 100.0, 100.5, 93.9, 94.0)};
+    std::vector<Slice> plain;
+    const auto rows = run_twin("MG-F3", config, bars, &plain);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].units == 4.0);
+    CHECK(rows[0].price == 93.9);
+    REQUIRE(plain.size() == 1);
+    std::printf("  MG-F3  TradingView %.17g | kernel ShortfallMultiple 4 %.17g\n",
+                rows[0].units, plain[0].units);
+    CHECK(plain[0].units == 5.0);
+}
+
 // MG-FX (R5 lane F7, M9). The account FX roll. A carried 1x long, 100 at 100
 // on 10000, crosses a 1 -> 1.001 step at bar 2's open. Bar 1 closes at 99,
 // bar 2 is O 100 H 101 L 97 C 99.
@@ -622,6 +654,7 @@ int main() {
     test("twin-forced-price", twin_forced_execution_price);
     test("twin-cash-commission", twin_cash_commission_equity_and_level);
     test("twin-rounded-money", twin_rounded_money_and_whole_drop);
+    test("twin-gridded-shortfall", twin_gridded_shortfall);
     test("twin-fx-roll-broker-open", twin_fx_roll_broker_open);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
