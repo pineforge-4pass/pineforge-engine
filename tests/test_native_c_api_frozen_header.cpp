@@ -10,9 +10,13 @@
 //
 // The evidence is behavioural, not a size literal: a frozen caller sends the
 // v1 `struct_size` it was compiled with, and the current runtime must still
-// accept it. Append a field to the live header without a version bump and the
-// sizes diverge, the runtime answers PF_NATIVE_E_STRUCT, and these rows fail
-// — which is exactly the refusal the header documents.
+// accept it. The live header has appended deliberately additive tails since
+// (the request, the spec extension, the callback table and the working-row
+// readout), each publishing the earlier length as a `*_SIZE` constant the
+// runtime keeps accepting; these rows are that promise, executed. A change
+// that is not such a tail — or a runtime that stops accepting a published
+// length — answers PF_NATIVE_E_STRUCT and fails them: the refusal the header
+// documents.
 //
 // Everything here is written to the C subset the frozen header declares; the
 // file is C++ only so ctest can link one executable without a second C target.
@@ -54,7 +58,55 @@ struct FrozenState {
     int refused_struct = 0;
     int submitted = 0;
     uint64_t entry = 0;
+    // The resting request the frozen reader reads back.
+    uint64_t resting = 0;
+    int working_rows = -1;
+    int working_found = 0;
+    int working_refused = 0;
+    int working_overrun = 0;
+    int working_fields = 0;
+    int rest_cancelled = 0;
 };
+
+// A frozen working row with a guard band behind it. pf_native_working_v1 grew
+// an additive tail (trail_has_arm_price, reserved1) after this header froze, so
+// the frozen sizeof is the runtime's PF_NATIVE_WORKING_V1_BASE_SIZE: the
+// runtime must serve it and write no byte past it.
+struct GuardedWorkingRow {
+    pf_native_working_v1 row;
+    unsigned char guard[32];
+};
+static_assert(offsetof(GuardedWorkingRow, guard) == sizeof(pf_native_working_v1),
+              "the guard band must start where the frozen row ends");
+constexpr unsigned char kGuardByte = 0xA5;
+
+void read_frozen_working_rows(FrozenState* state) {
+    state->working_rows = strategy_native_working_len_v1(state->host);
+    for (int index = 0; index < state->working_rows; ++index) {
+        GuardedWorkingRow guarded;
+        std::memset(&guarded, 0, sizeof(guarded.row));
+        std::memset(guarded.guard, kGuardByte, sizeof(guarded.guard));
+        guarded.row.struct_size = static_cast<uint32_t>(sizeof(pf_native_working_v1));
+        const int rc = strategy_native_working_get_v1(state->host, index, &guarded.row);
+        if (rc == PF_NATIVE_E_STRUCT) state->working_refused = 1;
+        for (unsigned char byte : guarded.guard) {
+            if (byte != kGuardByte) state->working_overrun = 1;
+        }
+        if (rc != PF_NATIVE_OK || guarded.row.incarnation != state->resting) continue;
+        state->working_found = 1;
+        state->working_fields =
+            guarded.row.struct_size == sizeof(pf_native_working_v1)
+            && guarded.row.version == PF_NATIVE_API_VERSION
+            && guarded.row.intent == PF_NATIVE_INTENT_TRANSACT
+            && guarded.row.intent_value == 1.0
+            && guarded.row.trigger == PF_NATIVE_TRIGGER_LIMIT
+            && guarded.row.trigger_state == PF_NATIVE_TRIGGER_STATE_LIMIT_READY
+            && guarded.row.p1 == 50.0
+            && guarded.row.owner == PF_NATIVE_OWNER_INDEPENDENT
+            && guarded.row.label != nullptr
+            && std::strcmp(guarded.row.label, "frozen-rest") == 0;
+    }
+}
 
 const pf_bar_t* frozen_bars(int* n) {
     static pf_bar_t bars[12];
@@ -94,6 +146,27 @@ int frozen_on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1* at) 
         const int rc = strategy_native_submit_v1(state->host, &request, &state->entry, nullptr);
         if (rc == PF_NATIVE_E_STRUCT) state->refused_struct = 1;
         if (rc == PF_NATIVE_OK) state->submitted = 1;
+    } else if (state->calculations == 3) {
+        // A buy limit far below every bar (lows 99..110): it rests, so the
+        // next calculation has a working row to read back.
+        pf_native_request_v1 request;
+        std::memset(&request, 0, sizeof(request));
+        request.struct_size = static_cast<uint32_t>(sizeof(request));
+        request.version = PF_NATIVE_API_VERSION;
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+        request.intent_value = 1.0;
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.p1 = 50.0;
+        request.label = "frozen-rest";
+        const int rc = strategy_native_submit_v1(state->host, &request, &state->resting, nullptr);
+        if (rc == PF_NATIVE_E_STRUCT) state->refused_struct = 1;
+    } else if (state->calculations == 4) {
+        read_frozen_working_rows(state);
+    } else if (state->calculations == 5) {
+        if (state->resting != 0
+            && strategy_native_cancel_v1(state->host, state->resting) == PF_NATIVE_OK) {
+            state->rest_cancelled = 1;
+        }
     } else if (state->calculations == 6) {
         pf_native_request_v1 request;
         std::memset(&request, 0, sizeof(request));
@@ -166,6 +239,17 @@ int main() {
     check(state.refused_struct == 0,
           "the current runtime refused a frozen-sized struct (the v1 layout moved)");
     check(state.submitted == 1, "the frozen caller's request was not accepted");
+    check(state.resting != 0, "the frozen caller's resting limit was not accepted");
+    check(state.working_rows >= 1, "the frozen reader saw no working row");
+    check(state.working_refused == 0,
+          "the current runtime refused the frozen caller's working row "
+          "(the readout's base length is no longer served)");
+    check(state.working_overrun == 0,
+          "the current runtime wrote past the frozen caller's working row");
+    check(state.working_found == 1, "the frozen reader did not find its resting request");
+    check(state.working_fields == 1,
+          "the frozen reader's working row does not describe its resting limit");
+    check(state.rest_cancelled == 1, "the frozen caller could not cancel its resting limit");
     check(report.total_trades == 1, "the frozen caller saw a different closed-trade count");
     strategy_native_report_free_v1(&report);
 
