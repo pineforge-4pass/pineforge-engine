@@ -79,39 +79,51 @@ configuration**, not one-shot: it stays in effect until a caller passes
    scalars are folded without the range-end row.
 5. Interior bars (every bar before the last) are unaffected.
 
-Dispatch-path scope: effects 1, 3, and 4 above are honoured on every
-dispatch path. Effect 2 (`session.islastbar` from the bucket calendar) is
-honoured only on `run_simple_bar_loop` (the `input_tf == script_tf` simple
-bar loop); the single-timeframe `run(bars, n)` overload never evaluates
-session predicates at all (pre-existing — `session.ismarket`/
-`session.islastbar` stay at their reset-state `false` there regardless of
-this flag). On the non-magnifier aggregation path (`input_tf < script_tf`)
-effect 2 is UNDEFINED: the tail bar's `session.islastbar` reads the
-ordinary `in_session && barstate.islast` expression instead of the
-calendar lookahead (false there, since this flag also forces
-`barstate.islast` false). Callers must feed an
-`input_tf == script_tf` array until that gap closes, matching
-`strategy_set_probe_suppress_tail_logic`'s dispatch-path-scope caveat below.
+Dispatch-path scope: all four effects are honoured on every dispatch path,
+including effect 2. This paragraph used to scope effect 2 to
+`run_simple_bar_loop`, deny that the single-timeframe `run(bars, n)`
+overload evaluates session predicates at all, and call effect 2 UNDEFINED
+under aggregation; all three were measured false. On an RTH tape that ends
+at the session close — so the calendar lookahead answers "last" while
+`in_session && barstate.islast` cannot, this flag having forced
+`barstate.islast` off — every path flags the tail bar from the calendar:
+
+| path | `session.ismarket` | `session.islastbar` | `barstate.islast` |
+|---|---|---|---|
+| `run(bars, n)` | `111111` | `000001` | `000000` |
+| `run(1, 1)` chart timeframe | `111111` | `000001` | `000000` |
+| `run(1, 5)` aggregation | `111111` | `000001` | `000000` |
+| `run(1, 5)` aggregation, magnifier | `111111` | `000001` | `000000` |
+
+Read the tail bar's `session.islastbar` column: `1` is the calendar
+lookahead's answer, and the legacy expression could only have produced `0`.
+The one dispatch-path caveat that remains is not this flag's: a
+non-24x7 tape still needs the v2 `SessionCalendar` for early closes, so
+`session.islastbar`/`isfirstbar` scripts stay blocked until then, with or
+without the realtime tail.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.
 
 ### §3.2 — `strategy_set_probe_suppress_tail_logic(s, on)`
 
-The last bar of the array fed to every subsequent `run()` runs only the
-broker's pre-`on_bar` steps and returns, in this order: intraday-cap
-deferred close, advancing native source-series history
-(`_push_source_series`), settling native resting requests against the bar,
-the max-intraday-loss path check
-(`evaluate_max_intraday_loss_over_path`), and updating per-trade extremes
-(`update_per_trade_extremes`). `on_bar` is never invoked for that bar, and
-nothing that ordinarily runs after it runs either — no
-`invoke_chart_on_bar`, no `flush_same_bar_close`, no POOC second pass, no
-`process_margin_call`, no `settle_dormant_bracket_reissues`, no
-post-liquidation sizing refresh. A margin call or intraday-cap close that
-would ordinarily fire against the forming bar therefore surfaces only at
-settlement (the next non-suppressed run), never against the still-forming
-probe bar itself.
+The last bar of the array fed to every subsequent `run()` does not
+calculate the script: the host's `on_bar` is not invoked for that bar, so
+neither is anything the script would have ordered on it. What the *broker*
+owes that bar it still does, because the adapter settles the bar's close
+whether or not the script ran. A margin call or an intraday-cap close that
+comes due against the forming bar is therefore **booked on that bar**, not
+deferred to the next non-suppressed run. Measured on a two-bar short tape
+whose second bar liquidates: with the flag on, the host is called once
+(bar 0 only) and the closed-trade row is still
+`Margin call @105.0000 qty=3.809524 t=2000` — the same row, at the same
+timestamp, as the same tape with the flag off.
+
+This paragraph used to promise the opposite ("surfaces only at settlement")
+and to list `process_margin_call` among the steps that never run. The
+ruling of 2026-09-22 is that the scheduler is right and the promise was
+wrong: a caller polling a forming bar wants the liquidation the broker has
+already decided, not a report that arrives one run late.
 
 The run's last-bar fills are exactly the settled book's fills against the
 forming bar, and the post-run pending-order book is the book in force
@@ -119,19 +131,43 @@ during that bar. This is persistent configuration, like
 `strategy_set_realtime_tail`, and **independent of it** — the two flags are
 not coupled; set each explicitly.
 
-Dispatch-path scope: honoured only on the standard `dispatch_bar` path (the
-single-timeframe run loop and the `input_tf == script_tf` simple bar loop).
-Silent no-op under `calc_on_order_fills` and under the bar magnifier —
-both are gated features in v1 and a probe must not enable them. On the
-non-magnifier aggregation path (`input_tf < script_tf`) the semantics are
-UNDEFINED until the partial-bucket forming-bar flag lands: callers must
-feed an `input_tf == script_tf` array until that flag exists. Under
-`process_orders_on_close`, the pre-script carried-position margin helpers
-`dispatch_bar` runs ahead of the script (`tv_money_long_margin_call(…,
-carried_pooc_pre_close=true)` and
-`process_carried_pooc_short_margin_before_script`) are also skipped on the
-suppressed last bar, alongside `process_margin_call` itself. Clear this
-flag before `strategy_stream_begin`; the warmup replay is a `run()`.
+Dispatch-path scope, measured on a ten-bar 1m tape (and a 17-bar one for
+the aggregation row), counting the host calls with the flag off and on:
+
+| path | calls off | calls on | what the flag does |
+|---|---|---|---|
+| `run(bars, n)` / `run(1, 1)` | 10 | 9 | the last bar is not calculated |
+| `run(1, 1)` + bar magnifier | 10 | 9 | honoured, not a no-op |
+| `run(1, 5)` aggregation | 3 | 2 | the last **complete** bucket is not calculated |
+| `run(1, 1)` + `calc_on_order_fills` | 11 | 10 | see below |
+
+Two of these contradict what this paragraph used to claim. The bar
+magnifier is **not** a silent no-op: the probe is honoured there exactly as
+on `dispatch_bar`. And `calc_on_order_fills` is not a no-op either, but it
+is not a full suppression: the tail bar's *ordinary* calculation is
+suppressed, while a fill landing on the tail bar still recalculates the
+script. With the flag off, bar 9 is calculated twice (once ordinarily, once
+for the fill); with it on, bar 9 is calculated once, and that one call has
+`barstate.islast` set — it is the fill recalculation.
+
+The aggregation path is not UNDEFINED either; it is the row above, and the
+partial bucket it used to be blocked on is a separate fact: a trailing
+partial bucket is **never** calculated, with or without this flag. On
+17 1-minute bars aggregated to 5 minutes, the host sees the buckets opening
+at +0, +5 and +10 minutes with the flag off, and +0 and +5 with it on. The
+bucket opening at +15, which holds only two of its five inputs, appears on
+neither.
+
+`strategy_stream_begin` does not need this flag cleared: it **refuses**
+while either historical override is set, with
+`native stream cannot use historical probe/tail overrides`. A one-bar array
+is all tail, so `run(bars, 1)` under this flag calculates nothing.
+
+Under `process_orders_on_close`, the pre-script carried-position margin
+helpers `dispatch_bar` runs ahead of the script
+(`tv_money_long_margin_call(…, carried_pooc_pre_close=true)` and
+`process_carried_pooc_short_margin_before_script`) are skipped on the
+suppressed last bar along with the script calculation itself.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.
