@@ -325,12 +325,16 @@ def collect(page: Path, text: str) -> list[Anchor]:
                             match.group('path'), first, last,
                             (digit_start, match.end() - digit_start), symbol, span, mode))
 
-    # Continuations inherit the last full anchor's path from the same physical line.
+    # Continuations inherit the path of the last FULL anchor before them on the
+    # same physical line -- by position, never another continuation (list order
+    # would hand `:49` in "`a` x.cpp:40 (`:40`), `b` y.cpp:53 (`:49`)" x.cpp's path).
+    full = list(found)
     for match in CONT_RE.finditer(text):
         if fenced(match.start()) or any(lo <= match.start() < hi for lo, hi in taken):
             continue
         line = doc_line(match.start())
-        prior = [a for a in found if a.doc_line == line and a.end <= match.start()]
+        prior = sorted((a for a in full if a.doc_line == line and a.end <= match.start()),
+                       key=lambda a: a.end)
         if not prior:
             continue
         first = int(match.group('a'))

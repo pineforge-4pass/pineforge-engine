@@ -153,6 +153,17 @@ class MustFail(unittest.TestCase):
 class MustPass(unittest.TestCase):
     """The pages' own conventions are not defects."""
 
+    def test_a_continuation_takes_the_last_full_anchor_s_path(self) -> None:
+        # Before lane F2 the second `:3` took native_host.hpp's path from the
+        # earlier continuation `:18` and was judged against the wrong file.
+        body = ('`on_native_bar` native_host.hpp:18 (`:18`), `drive` '
+                'src/native_host_driver.cpp:3 (`:3`).\n')
+        with tree(body) as t:
+            code, out = t.run('--list')
+            self.assertEqual(code, 0, out)
+            self.assertIn('src/native_host_driver.cpp:3', out)
+            self.assertNotIn('native_host.hpp:3 ', out)
+
     def test_correct_anchor(self) -> None:
         with tree('See `NativeRunSpec` native_host.hpp:5.\n') as t:
             code, out = t.run()
