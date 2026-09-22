@@ -130,12 +130,12 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The public C surface is **97 `PF_API` declarations** across two headers:
+The public C surface is **99 `PF_API` declarations** across two headers:
 
 - `<pineforge/pineforge.h>` — **65**: 57 runtime implementations plus eight
   per-strategy generated exports. This is what a compiled strategy `.so`
   exports and what a harness calls.
-- `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **32**: the other
+- `<pineforge/native_c_api.h>` (included by `pineforge.h`) — **34**: the other
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.

@@ -1344,7 +1344,7 @@ forced liquidation" — pineforge's own C ABI derives `close_cause`
 `MARGIN_CALL` from exactly that id — and every broker spells its own. Each
 folds into the model's digest only when set, so a model that does not name its
 ticket digests as it did before they existed
-(`tests/test_native_margin_ticket.cpp`).
+(`tests/test_native_margin_kernel_r5.cpp`).
 
 **The TradingView margin call is this model.** The Pine adapter sets `margin`
 from `strategy(margin_long=, margin_short=)` — the two percents are the
@@ -3321,7 +3321,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-33 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+34 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -3766,7 +3766,7 @@ With the option OFF the build excludes, each with a CMake STATUS line:
 - the installed `include/pineforge/source/` and `include/pineforge/compat/`
   headers, which would otherwise declare functions with no definition;
 - every Pine-bound target: the corpus and bench strategies, the tutorial
-  strategy, and the live runner's `examples/strategy.cpp`
+  strategy, and the live runner's `runner/examples/strategy.cpp`
   (`native-market-example` and `native-selected-example` still build);
 - every test translation unit that reaches a `pineforge/source/` or
   `compat/pine/` header, and the receipt-backed ABI rows whose pairing TU
@@ -3785,7 +3785,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**: `KERNEL_MIN_TESTS` in
-`scripts/ci_verify.py` (193 rows) is the count the kernel-only CTest set is
+`scripts/ci_verify.py` is the count the kernel-only CTest set is
 expected to run, and the `ctest-floor` stage fails the run when fewer rows
 ran or CTest printed no count it can read, so a test TU that silently becomes
 source-bound (or a filter that empties the suite) is a refusal rather than a

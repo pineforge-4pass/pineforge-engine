@@ -2,7 +2,8 @@
 
 Status at 2026-09-14: R4-A is complete; R4-B native execution terms are in
 implementation. The table records acceptance status, not elapsed work or a
-forecast.
+forecast. That snapshot predates the close of R4 and the R5 audit waves, so
+read the table below as its record, not as today's status.
 
 The acceptance boundary is a standalone C++ backtest and forward-execution
 state machine. Codegen and explicit adapters own PineScript policy. During
@@ -131,14 +132,17 @@ This records a local implementation boundary only. It is not a parity campaign
 acceptance claim: the integration owner still performs the final composite
 measurement and gate.
 
-## Current R4-C epoch baseline
+## R4-C epoch baseline (historical)
 
-The current L1 baseline uses `native_order_v5`, engine/host <!-- verified HEAD -->
+R4-C's L1 baseline used `native_order_v5`, engine/host <!-- verified HEAD -->
 `engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and <!-- verified HEAD -->
-the source extension domain `pineforge-source-adapter/v2`. The frozen ab9714b <!-- verified HEAD -->
-provider remains v16 for the required bidirectional rejection pairs. Identity
-values remain `native_order_v1`; native run-spec is v2, calendar remains v2,
-the driver is v5, and `PF_ABI_VERSION` remains 4.
+the source extension domain `pineforge-source-adapter/v2`; its native run-spec <!-- verified HEAD -->
+was v2. Each of those has moved since: the tree now declares `native_order_v6`,
+`engine_script_run_v18`, `native-consumer/v8`, `pineforge-broker-state/v18`,
+`pineforge-source-adapter/v3` and `native_run_spec_v3`. Unchanged since R4-C:
+identity values `native_order_v1`, the calendar `native_calendar_v2`, the
+driver `native_driver_v5`, `PF_ABI_VERSION` 4, and the frozen ab9714b provider
+at v16 for the required bidirectional rejection pairs.
 
 ## Completed R3 settlement and observation milestones
 

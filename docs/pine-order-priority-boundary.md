@@ -54,11 +54,12 @@ before metadata. Neither metadata nor an implicit constructor default repairs
 old source. Existing checked-in corpus/tutorial C++ must likewise be regenerated
 before using it for Pine behavior measurements; compilation alone is insufficient.
 
-Rebuild every C++ consumer with matching current headers and archive. The class
-namespace is `engine_script_run_v4`; frozen v2/base38 and v3/f864 callers are <!-- verified HEAD -->
-compile/link rejection controls. Broker fingerprint domain and stream fingerprint
-version are now 4 and include priority attachment/configuration. Prior hashes
-are not comparable. Public C functions, PODs and ABI/API versions are unchanged;
+Rebuild every C++ consumer with matching current headers and archive. This lane
+moved the class namespace to `engine_script_run_v4` (since advanced to <!-- verified HEAD -->
+`engine_script_run_v18`); frozen v2/base38 and v3/f864 callers were its
+compile/link rejection controls. The broker fingerprint domain and the stream
+fingerprint version moved to 4 then, including priority attachment and
+configuration. Prior hashes are not comparable. Public C functions, PODs and ABI/API versions are unchanged;
 an erased handle still belongs to its creating module.
 
 ## Remaining native gap and evidence limits

@@ -170,7 +170,7 @@ kernel-recorded report. Each is a CTest row: `ctest --test-dir build -R example_
 Hand the runtime a callback table and drive the kernel from any language with
 a C FFI — no C++ in your own code. The complete file is
 [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
-32 `strategy_native_*` functions are declared in
+34 `strategy_native_*` functions are declared in
 [`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
 summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
 
