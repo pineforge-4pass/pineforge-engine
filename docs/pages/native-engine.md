@@ -2566,7 +2566,7 @@ and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
 setter is a source mutation and **throws**, latching `Failed`
 (`UnsupportedSource`) through `guard_native_mutation`
-(`engine_aux_security.cpp:78`, `native_execution_consumer.cpp:991-1007`).
+(`engine_aux_security.cpp:78`, `native_execution_consumer.cpp:1043-1059`).
 
 ## Batch OHLCV vs ticks vs quiet
 
