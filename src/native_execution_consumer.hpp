@@ -426,6 +426,10 @@ private:
     bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;
+    // The string equality projection_ok compares with (the .cpp's same_text),
+    // for tests/test_native_projection_compare.cpp to hold against
+    // std::string's own.
+    static bool same_bytes(const std::string& a, const std::string& b) noexcept;
     bool begin_ready(BacktestEngine& engine, NativeRunPhase phase, int64_t initial_floor_ms);
     bool prepare_public_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_staged_ingress(BacktestEngine& engine);

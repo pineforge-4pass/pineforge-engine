@@ -2143,6 +2143,44 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     return true;
 }
 
+namespace {
+
+template <typename Word>
+inline Word load_word(const char* p) noexcept {
+    Word word;
+    std::memcpy(&word, p, sizeof word);
+    return word;
+}
+
+// std::string's own equality -- the same length and the same bytes -- with
+// every byte inside one of a few word loads, the last overlapping the word
+// before it: no byte loop and no library call. projection_ok runs it over ten
+// short strings at every input and callback boundary.
+inline bool same_text(const std::string& a, const std::string& b) noexcept {
+    const std::size_t n = a.size();
+    if (n != b.size()) return false;
+    const char* x = a.data();
+    const char* y = b.data();
+    if (n >= 8) {
+        for (std::size_t i = 0; i + 8 < n; i += 8) {
+            if (load_word<std::uint64_t>(x + i) != load_word<std::uint64_t>(y + i)) return false;
+        }
+        return load_word<std::uint64_t>(x + n - 8) == load_word<std::uint64_t>(y + n - 8);
+    }
+    if (n >= 4) {
+        return load_word<std::uint32_t>(x) == load_word<std::uint32_t>(y)
+            && load_word<std::uint32_t>(x + n - 4) == load_word<std::uint32_t>(y + n - 4);
+    }
+    // Three bytes or fewer: the first, the middle and the last are all of them.
+    return n == 0 || (x[0] == y[0] && x[n / 2] == y[n / 2] && x[n - 1] == y[n - 1]);
+}
+
+}  // namespace
+
+bool NativeExecutionConsumer::same_bytes(const std::string& a, const std::string& b) noexcept {
+    return same_text(a, b);
+}
+
 bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const {
     const auto* spec = spec_ptr();
     if (!spec) return false;
@@ -2161,40 +2199,23 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
     if (engine.syminfo_.mintick != spec->price_tick) return false;
     if (engine.commission_type_ != fee_to_commission(spec->fee_kind)) return false;
     if (engine.commission_value_ != spec->fee_value) return false;
-    // The ten strings, in the order they have always been compared, by
-    // std::string's own equality -- the same length and the same bytes --
-    // written out here: this check runs at every input and callback boundary,
-    // and the library spelling pays an out-of-line compare per string.
-    const std::pair<const std::string*, const std::string*> texts[] = {
-        {&engine.syminfo_.ticker, &spec->ticker},
-        {&engine.syminfo_.tickerid, &spec->tickerid},
-        {&engine.syminfo_.type, &spec->type},
-        {&engine.syminfo_.currency, &spec->currency},
-        {&engine.syminfo_.basecurrency, &spec->basecurrency},
-        {&engine.syminfo_.description, &spec->description},
-        {&engine.syminfo_.volumetype, &spec->volumetype},
-        {&engine.syminfo_.timezone, &spec->timezone},
-        {&engine.syminfo_.session, &spec->session},
-        {&engine.chart_timezone_, &spec->chart_timezone},
+    // The ten strings, in the order they have always been compared.
+    using Text = std::pair<std::string SymInfo::*, std::string NativeRunSpec::*>;
+    static constexpr Text kSymbolTexts[] = {
+        {&SymInfo::ticker, &NativeRunSpec::ticker},
+        {&SymInfo::tickerid, &NativeRunSpec::tickerid},
+        {&SymInfo::type, &NativeRunSpec::type},
+        {&SymInfo::currency, &NativeRunSpec::currency},
+        {&SymInfo::basecurrency, &NativeRunSpec::basecurrency},
+        {&SymInfo::description, &NativeRunSpec::description},
+        {&SymInfo::volumetype, &NativeRunSpec::volumetype},
+        {&SymInfo::timezone, &NativeRunSpec::timezone},
+        {&SymInfo::session, &NativeRunSpec::session},
     };
-    for (const auto& text : texts) {
-        const std::size_t n = text.first->size();
-        if (n != text.second->size()) return false;
-        const char* x = text.first->data();
-        const char* y = text.second->data();
-        std::size_t i = 0;
-        for (; i + sizeof(std::uint64_t) <= n; i += sizeof(std::uint64_t)) {
-            std::uint64_t u;
-            std::uint64_t v;
-            std::memcpy(&u, x + i, sizeof u);
-            std::memcpy(&v, y + i, sizeof v);
-            if (u != v) return false;
-        }
-        for (; i < n; ++i) {
-            if (x[i] != y[i]) return false;
-        }
+    for (const Text& text : kSymbolTexts) {
+        if (!same_text(engine.syminfo_.*text.first, spec->*text.second)) return false;
     }
-    return true;
+    return same_text(engine.chart_timezone_, spec->chart_timezone);
 }
 
 NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
