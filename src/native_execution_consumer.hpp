@@ -275,6 +275,14 @@ public:
     // two computations equal bit for bit; no host reaches it.
     void set_match_band_precheck(bool enabled) noexcept { match_band_precheck_ = enabled; }
 
+    // The per-point guards in front of drain_queued_notifications,
+    // recalculate_at_modeled_point and the three margin check points skip
+    // each body exactly where it would return on its first test (R5 lane
+    // PERF-L1). Off, every guard calls its body, which makes that test itself:
+    // the pre-lane computation, kept so tests/test_native_lean_path.cpp can
+    // hold the two equal bit for bit. No host reaches it.
+    void set_point_guards(bool enabled) noexcept { point_guards_ = enabled; }
+
 private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;
@@ -376,7 +384,14 @@ private:
     NativeCurrentPointView execution_anchor(const native_order::MatchCursor& cursor,
                                             double resolved) const;
     void enqueue_applied_notification(AppliedNotification notification);
-    void drain_applied_notifications(BacktestEngine& engine);
+    // With nothing queued a drain delivers, counts and re-arms nothing: the
+    // queue is empty only after its own clear(), which also rewinds the head
+    // (R5 lane PERF-L1), so every caller's empty drain is a branch.
+    void drain_applied_notifications(BacktestEngine& engine) {
+        if (!applied_notifications_.empty() || !point_guards_)
+            drain_queued_notifications(engine);
+    }
+    void drain_queued_notifications(BacktestEngine& engine);
     void invoke_applied_callback(BacktestEngine& engine, const AppliedNotification& notification);
     void finish_callback(BacktestEngine& engine, uint64_t ordinal);
     std::vector<native_order::OpeningObservation> read_openings(
@@ -581,7 +596,13 @@ private:
     void latch_failure(NativeFailure failure) noexcept;
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
     void render(BacktestEngine& engine, const char* text) const;
-    const NativeRunSpec* spec_ptr() const;
+    // The running spec while the run runs (cache_running_policy), else the
+    // lifecycle probe: inline, so the per-point reads of the spec below cost
+    // a load, not a call.
+    const NativeRunSpec* spec_ptr() const {
+        return running_spec_ ? running_spec_ : lifecycle_spec();
+    }
+    const NativeRunSpec* lifecycle_spec() const;
     // The run's declared price tick: the ladder a trailing stop spelled a
     // whole number of ticks away names (R5 lane E16). Zero with no spec.
     double ladder_tick() const;
@@ -701,7 +722,13 @@ private:
     // One Tick recalculation at a modeled path point / observed print, for a
     // spec that asked for EveryModeledPoint. Inert for every other spec.
     void recalculate_at_point(BacktestEngine& engine, const Bar& bar,
-                              const NativeDriverPoint& point);
+                              const NativeDriverPoint& point) {
+        if (calculation_trigger() == NativeCalculationTrigger::EveryModeledPoint
+            || !point_guards_)
+            recalculate_at_modeled_point(engine, bar, point);
+    }
+    void recalculate_at_modeled_point(BacktestEngine& engine, const Bar& bar,
+                                      const NativeDriverPoint& point);
     void invoke_sub_bar_callback(BacktestEngine& engine, const Bar& sub,
                                  const NativeDriverPoint& point);
     // Frame bookkeeping shared by the mid-path callbacks above and by
@@ -711,8 +738,15 @@ private:
                            CallbackPhase phase);
     NativeCurrentPointView point_frame_view(const NativeDriverPoint& point) const;
     const Bar& calculating_bar(const BacktestEngine& engine) const noexcept;
-    NativeCalculationTrigger calculation_trigger() const noexcept;
-    bool recalculates_on_fills() const noexcept;
+    NativeCalculationTrigger calculation_trigger() const noexcept {
+        const auto* spec = spec_ptr();
+        return spec ? spec->calculation : NativeCalculationTrigger::BarClose;
+    }
+    bool recalculates_on_fills() const noexcept {
+        const auto trigger = calculation_trigger();
+        return trigger == NativeCalculationTrigger::BarCloseAndFills
+            || trigger == NativeCalculationTrigger::EveryModeledPoint;
+    }
     // The lookahead-free bar so far. Folded from the modeled points as they
     // are presented, keyed by the script bar's own open so a new script bar
     // always restarts it; `volume` accrues only activity actually consumed
@@ -772,7 +806,10 @@ private:
                                native_order::MatchRejectReason* reason) const;
     // L4 generic margin model. Every one of these is inert for a spec that
     // leaves `margin` unset, which is every source-projected spec.
-    const NativeMarginModel* margin_model() const noexcept;
+    const NativeMarginModel* margin_model() const noexcept {
+        const auto* spec = spec_ptr();
+        return spec && spec->margin ? &*spec->margin : nullptr;
+    }
     std::optional<double> maintenance_fraction(bool short_side) const noexcept;
     // E3: the account-currency rate ONE check point converts at -- the one the
     // declared curve has in force at that point's own cursor. The engine's own
@@ -801,17 +838,38 @@ private:
         const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
         NativeMarginCheckKind kind, double* out_equity, double* out_required) const;
     void withdraw_margin_liquidation(BacktestEngine& engine);
+    // The three check points below return on their first test for a run
+    // with no margin model (and the FX roll, with no staged curve), so each
+    // one's guard makes that test before the call (R5 lane PERF-L1).
     void maintain_margin_liquidation(BacktestEngine& engine,
                                      const native_order::MatchCursor& cursor,
                                      NativePathPhase phase, double fallback_price,
-                                     NativeMarginCheckKind kind);
+                                     NativeMarginCheckKind kind) {
+        if (margin_model() != nullptr || !point_guards_)
+            maintain_margin_at(engine, cursor, phase, fallback_price, kind);
+    }
+    void maintain_margin_at(BacktestEngine& engine, const native_order::MatchCursor& cursor,
+                            NativePathPhase phase, double fallback_price,
+                            NativeMarginCheckKind kind);
     void calculation_margin_check(BacktestEngine& engine, const NativeCoordinate& calc,
-                                  double mark);
+                                  double mark) {
+        const auto* margin = margin_model();
+        if ((margin != nullptr && margin->check == NativeLiquidationCheck::CalculationOnly)
+            || !point_guards_)
+            calculation_margin_check_at(engine, calc, mark);
+    }
+    void calculation_margin_check_at(BacktestEngine& engine, const NativeCoordinate& calc,
+                                     double mark);
     // MG9: a step of the declared FX curve is a check point of its own. Run
     // at the head of every matched driver point; inert without a staged curve
     // and a margin model, so no other run reaches past its first test.
     void fx_roll_margin_check(BacktestEngine& engine, const NativeDriverPoint& point,
-                              bool continuous, double from_price);
+                              bool continuous, double from_price) {
+        if ((staged_fx_curve_ && margin_model() != nullptr) || !point_guards_)
+            fx_roll_margin_check_at(engine, point, continuous, from_price);
+    }
+    void fx_roll_margin_check_at(BacktestEngine& engine, const NativeDriverPoint& point,
+                                 bool continuous, double from_price);
     // One kernel-originated reduction: the margin model's liquidation, and
     // (L9) the risk block's own flatten. `origin`, `label` and `comment` name
     // which, and only a resting liquidation is retained as margin state.
@@ -828,7 +886,10 @@ private:
         double position_after);
     // L9 generic risk limits. Every one of these is inert for a spec that
     // leaves `risk` unset, which is every source-projected spec.
-    const NativeRiskLimits* risk_limits() const noexcept;
+    const NativeRiskLimits* risk_limits() const noexcept {
+        const auto* spec = spec_ptr();
+        return spec && spec->risk ? &*spec->risk : nullptr;
+    }
     bool risk_blocked() const noexcept;
     // The risk day of an instant on the spec's own basis: the session day of
     // the run's calendar, or the civil day of the all-day calendar built for
@@ -1163,6 +1224,14 @@ private:
     // rest of its row (set_match_band_precheck). A choice between two
     // computations of the same values, so it is not run state either.
     bool match_band_precheck_ = true;
+    // deliver_intrabar_script's sub-bars and samples (R5 lane PERF-L1).
+    // Scratch like match_rows_: cleared at every script bar, capacity only
+    // between bars, never read across one, folded into nothing.
+    std::vector<const Bar*> intrabar_sub_bars_;
+    std::vector<double> intrabar_samples_;
+    // set_point_guards. Like match_row_reuse_, a choice between two
+    // computations of the same values, not run state.
+    bool point_guards_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

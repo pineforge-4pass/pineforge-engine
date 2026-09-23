@@ -979,6 +979,16 @@ list(APPEND TEST_SOURCES test_adapter_command_allocations)
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_host_reads)
+# R5 lane PERF-L1: the exact guards in front of the per-point bodies against
+# the bodies themselves over fixed and randomized runs, and every value a host
+# reads inside every hook of the fixed runs, pinned on f71cd820 -- the frames
+# built in place and the magnifier's scratch buffers move none. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_lean_path)
+# R5 lane PERF-L1: a synthesized or lower intrabar path delivers its script
+# bars without a heap allocation per bar (two to five at f71cd820). Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
