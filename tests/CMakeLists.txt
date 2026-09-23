@@ -922,6 +922,11 @@ list(APPEND TEST_SOURCES test_native_intrabar_lower_lookup)
 # own length; the values the pump feeds are pinned. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_batch_log_presize)
+# R5 PERF-K1: every calendar-derived value a bare host observes over twelve
+# scenarios (intervals, coordinates, session-day facts, series buckets, driver
+# rows), pinned on fc7aad62 -- the values the session-day memo must reproduce.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_calendar_hash_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
