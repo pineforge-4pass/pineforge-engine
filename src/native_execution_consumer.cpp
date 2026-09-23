@@ -2044,7 +2044,7 @@ NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
         return interval_cache_.input_interval;
     }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp, calendar_memo_);
     if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
     interval_cache_.input_ts = timestamp;
     interval_cache_.input_interval = interval;
@@ -2057,7 +2057,7 @@ NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
         return interval_cache_.script_interval;
     }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
-    auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp, calendar_memo_);
     if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
     interval_cache_.script_ts = timestamp;
     interval_cache_.script_interval = interval;
@@ -2128,7 +2128,7 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
-    session_day_memo_.reset();
+    reset_calendar_memos();
     // L9: a CalendarDayInTimezone risk day keys on the plain civil date of the
     // spec's scheduling timezone, which is the trading date of an all-day
     // session there. Built once per run, and only for the basis that needs it.
@@ -2309,7 +2309,7 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
-    session_day_memo_.reset();
+    reset_calendar_memos();
     pairing_ = candidate.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
                                               : native_calendar::compatibility(input_tf_, script_tf_);
     // Direct native FX setup is per-ready-spec as before. C/C++ staged ingress
@@ -6958,7 +6958,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
 NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point(int64_t ms) const {
     try {
         if (!session_day_memo_ || !session_day_memo_->holds(ms)) {
-            auto day = native_calendar::session_day_at(calendar_, ms);
+            auto day = native_calendar::session_day_at(calendar_, ms, calendar_memo_);
             if (!day) return {};
             if (!day->holds(ms)) return {day->in_session_at(ms), day->ordinal};
             session_day_memo_ = std::move(day);
@@ -8257,7 +8257,7 @@ bool NativeExecutionConsumer::deliver_timeframe_bar(
     const native_calendar::Timeframe& built_from =
         subscription.auxiliary && auxiliary_tf_ ? *auxiliary_tf_ : input_tf_;
     if (auto interval = native_calendar::interval_containing(
-            calendar_, subscription.tf, built_from, first_contributing_ms)) {
+            calendar_, subscription.tf, built_from, first_contributing_ms, calendar_memo_)) {
         context.interval = *interval;
     }
     context.completion = completion;
@@ -8334,7 +8334,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             return false;
         }
         for (std::int64_t missing = expected; missing < bar.timestamp;) {
-            if (native_calendar::in_session(calendar_, missing)) {
+            if (native_calendar::in_session(calendar_, missing, calendar_memo_)) {
                 processing_input_ = false;
                 present_refusal(engine, "native stream has an in-session gap");
                 return false;
@@ -8400,7 +8400,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                 // after an RTH 15:45 is skipped to Tue 09:30, while a missing
                 // in-session slot is still the gap refused below.
                 while (expected_label < bar.timestamp
-                       && !native_calendar::in_session(calendar_, expected_label)) {
+                       && !native_calendar::in_session(calendar_, expected_label, calendar_memo_)) {
                     if (expected_label > std::numeric_limits<int64_t>::max() - step) {
                         processing_input_ = false;
                         present_refusal(engine, "native confirmed bar timestamp overflows");
@@ -8879,7 +8879,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
             prev_sequence = tick.sequence;
             prev_has_sequence = true;
         }
-        auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp);
+        auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp, calendar_memo_);
         if (!interval) {
             present_refusal(engine, "native tick is not aligned");
             return false;
@@ -8992,7 +8992,7 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
     else if (last_accepted_input_) cursor = last_accepted_input_->next_input_open_ms;
     else if (last_observed_slot_open_) cursor = last_observed_slot_open_;
     while (cursor) {
-        auto interval = native_calendar::interval_containing(calendar_, input_tf_, *cursor);
+        auto interval = native_calendar::interval_containing(calendar_, input_tf_, *cursor, calendar_memo_);
         if (!interval) break;
         if (interval->next_period_open_ms > exclusive_end_ms) break;
         if (last_finalized_input_ && last_finalized_input_->open_ms == interval->open_ms) {
@@ -9005,7 +9005,7 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
             || (last_observed_slot_open_ && *last_observed_slot_open_ == interval->open_ms)
             || (last_accepted_input_ && last_accepted_input_->open_ms == interval->open_ms);
         const bool tradable = interval->last_traded_close_ms > interval->eligible_open_ms
-            && native_calendar::in_session(calendar_, interval->eligible_open_ms);
+            && native_calendar::in_session(calendar_, interval->eligible_open_ms, calendar_memo_);
         if (forming_here) {
             if (!finalize_observed_tick_slot(engine, *interval, NativeCompletionKind::Confirmed)) {
                 return false;
@@ -9024,7 +9024,7 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
 bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTick& tick) {
     processing_input_ = true;
     select_input_mode(InputMode::ObservedTicks);
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp, calendar_memo_);
     if (!interval) {
         processing_input_ = false;
         present_refusal(engine, "native tick is not aligned");
@@ -9192,7 +9192,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         if (finalize_partial_input_bar && has_forming_) {
             auto forming_interval = native_calendar::interval_containing(
-                calendar_, input_tf_, forming_.timestamp);
+                calendar_, input_tf_, forming_.timestamp, calendar_memo_);
             if (forming_interval) {
                 if (!finalize_observed_tick_slot(engine, *forming_interval,
                                                  NativeCompletionKind::PartialFinalized)) {

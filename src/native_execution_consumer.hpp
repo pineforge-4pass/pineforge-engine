@@ -3,6 +3,8 @@
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 
+#include "native_calendar_memo.hpp"
+
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -937,6 +939,16 @@ private:
     // calendar, rebuilt whenever calendar_ is, so one session day is resolved
     // once rather than once per bar. Derived, never folded.
     mutable std::optional<native_calendar::NativeSessionDay> session_day_memo_;
+    // Every session day read off calendar_, for every interval and in-session
+    // lookup the consumer makes (native_calendar_memo.hpp): the few days a
+    // run's bars fall in are resolved once, not once per lookup. A memo over
+    // calendar_ alone, rebuilt whenever calendar_ is. Derived, never folded.
+    mutable native_calendar::SessionDayMemo calendar_memo_;
+    // Forget both memos: called wherever calendar_ is rebuilt.
+    void reset_calendar_memos() const noexcept {
+        session_day_memo_.reset();
+        calendar_memo_.reset();
+    }
     Bar forming_{};
     bool has_forming_ = false;
     double last_price_ = 0.0;

@@ -1,6 +1,8 @@
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_run_spec.hpp>
 
+#include "native_calendar_memo.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -106,6 +108,9 @@ NativeInputPreflightResult preflight_native_inputs(
         }
     }
     if (canonical) {
+        // This preflight's own memo of the session parsed above: the few
+        // session days the input spans are resolved once, not once per bar.
+        native_calendar::SessionDayMemo memo;
         std::optional<native_calendar::NativeInterval> previous;
         for (int i = 0; i < n; ++i) {
             const Bar& bar = bars[i];
@@ -121,7 +126,7 @@ NativeInputPreflightResult preflight_native_inputs(
                 return out;
             }
             auto interval = native_calendar::interval_containing(
-                *parsed_session, *parsed_tf, bar.timestamp);
+                *parsed_session, *parsed_tf, bar.timestamp, memo);
             if (!interval) {
                 out.error = NativeInputPreflightError::Unaligned;
                 out.index = i;
@@ -148,7 +153,7 @@ NativeInputPreflightResult preflight_native_inputs(
                 }
                 if (policy == NativeInputPolicy::StreamWarmup) {
                     auto expected = native_calendar::interval_containing(
-                        *parsed_session, *parsed_tf, previous->next_input_open_ms);
+                        *parsed_session, *parsed_tf, previous->next_input_open_ms, memo);
                     if (!expected || expected->open_ms != interval->open_ms) {
                         out.error = NativeInputPreflightError::InSessionGap;
                         out.index = i;

@@ -932,6 +932,10 @@ list(APPEND TEST_SOURCES test_native_calendar_hash_witness)
 # memo-free calendar does, over walks and random instants across clock
 # changes, year ends and session breaks in six zones. Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo)
+# R5 PERF-K1: canonical slot labels no longer resolve the calendar per bar --
+# an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
+# run (84 per bar before the memo). Source-free.
+list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
