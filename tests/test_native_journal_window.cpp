@@ -17,7 +17,10 @@
 //      scan made quadratic (4x the chain must cost < 5x);
 //   4. a live deferred group-adjustment chain pins the window at its head,
 //      and the arm that reads it back through collect_pending_chain answers
-//      as it does on a core that retired nothing.
+//      as it does on a core that retired nothing;
+//   5. a trail's TrailArm ordinal lives in its tracking state
+//      (TrailTrack / TrailActive::activation_ordinal), so it outlives the
+//      retired event, and a successor that retained the ride answers 0.
 #include <pineforge/native_order.hpp>
 
 #include <algorithm>
@@ -598,6 +601,94 @@ void a_live_chain_pins_the_window() {
     CHECK(bound);
     for (const auto& row : retired) std::printf("  %s\n", row.c_str());
 }
+// ── 5. a trail's arm lives in its state ──────────────────────────────────
+// NativeTrailState::activation_ordinal was answered by a backward journal
+// scan for the request's TrailArm event; it is now the tracking state's own
+// field, so retiring the event leaves the answer where it was. A successor
+// that retained its predecessor's ride never armed, and answers 0 -- what the
+// scan answered for it, since the TrailArm event names the predecessor.
+void a_trail_carries_its_arm_ordinal() {
+    const no::RunIdentity run{"journal-trail", 1};
+    no::WorkingRequestCore core(run);
+    uint64_t inc = 1;
+    uint64_t ord = 1;
+    no::Request request{no::Transact{-1.0}, "trail", ""};
+    request.trigger = no::Trail{1.0, 105.0};
+    const auto accepted = core.submit(request, 0, inc, ord);
+    CHECK(accepted.status == no::SubmitStatus::Accepted);
+    const no::RequestHandle handle = *accepted.handle;
+    const auto cursor_at = [](uint64_t point) {
+        no::MatchCursor cursor;
+        cursor.point.ordinal = point;
+        cursor.point.effective_time_ms = 1000;
+        cursor.point.provenance = NativePriceProvenance::ObservedPrint;
+        return cursor;
+    };
+    const auto transition = [&](const no::TriggerTransition& step) -> uint64_t {
+        auto prepared = core.prepare_trigger(handle, step, no::DriverEligibilityClass::ObservedPrint, ord);
+        CHECK(std::holds_alternative<no::PreparedMutation>(prepared));
+        if (!std::holds_alternative<no::PreparedMutation>(prepared)) return 0;
+        auto installed = core.install_mutation(std::get<no::PreparedMutation>(std::move(prepared)));
+        CHECK(std::holds_alternative<no::Installed>(installed));
+        const auto& range = std::get<no::Installed>(installed).events;
+        ord += range.count;
+        return ordinal_of(core.history_at(range.first_index));
+    };
+    const uint64_t arm = transition(no::BeginTrailTracking{cursor_at(20), 106.0});
+    const auto* live = core.find_live(handle);
+    CHECK(live && std::holds_alternative<no::TrailTrack>(live->trigger_state));
+    if (!live || !std::holds_alternative<no::TrailTrack>(live->trigger_state)) return;
+    CHECK(std::get<no::TrailTrack>(live->trigger_state).activation_ordinal == arm);
+    const auto* arm_event = std::get_if<no::ActivatedEvent>(core.event_at(no::EventId{run, arm}));
+    CHECK(arm_event && arm_event->kind == no::ActivationKind::TrailArm);
+    CHECK(arm_event && std::get<no::TrailTrack>(arm_event->after).activation_ordinal == arm);
+    // The arm event retires; the state still names it.
+    CHECK(core.retire_history(core.last_ordinal()) > 0);
+    CHECK(core.event_at(no::EventId{run, arm}) == nullptr);
+    live = core.find_live(handle);
+    CHECK(live && std::get<no::TrailTrack>(live->trigger_state).activation_ordinal == arm);
+    // A successor that retains the ride armed nothing itself.
+    no::ReplaceOptions retain;
+    retain.retain_trigger_state = true;
+    no::Request moved = request;
+    moved.trigger = no::Trail{1.5, 105.0};
+    const auto replaced = core.replace(handle, moved, 0, inc, ord, std::nullopt, retain);
+    CHECK(replaced.status == no::ReplaceStatus::Replaced);
+    const auto* successor = core.find_live(*replaced.successor);
+    CHECK(successor && std::holds_alternative<no::TrailTrack>(successor->trigger_state));
+    if (successor && std::holds_alternative<no::TrailTrack>(successor->trigger_state)) {
+        const auto& track = std::get<no::TrailTrack>(successor->trigger_state);
+        CHECK(track.activation_ordinal == 0);
+        CHECK(track.best == 106.0);
+    }
+    // The trigger carries the arm it tracked from (its own: here 0).
+    no::Request fresh{no::Transact{-1.0}, "trail-2", ""};
+    fresh.trigger = no::Trail{1.0, 105.0};
+    const no::RequestHandle second = *core.submit(fresh, 0, inc, ord).handle;
+    auto step2 = [&](const no::TriggerTransition& step) -> uint64_t {
+        auto prepared = core.prepare_trigger(second, step, no::DriverEligibilityClass::ObservedPrint, ord);
+        CHECK(std::holds_alternative<no::PreparedMutation>(prepared));
+        if (!std::holds_alternative<no::PreparedMutation>(prepared)) return 0;
+        auto installed = core.install_mutation(std::get<no::PreparedMutation>(std::move(prepared)));
+        const auto& range = std::get<no::Installed>(installed).events;
+        ord += range.count;
+        return ordinal_of(core.history_at(range.first_index));
+    };
+    const uint64_t second_arm = step2(no::BeginTrailTracking{cursor_at(40), 107.0});
+    const uint64_t trigger = step2(no::ActivateTrail{cursor_at(41), 105.5});
+    const auto* triggered = core.find_live(second);
+    CHECK(triggered && std::holds_alternative<no::TrailActive>(triggered->trigger_state));
+    if (triggered && std::holds_alternative<no::TrailActive>(triggered->trigger_state)) {
+        CHECK(std::get<no::TrailActive>(triggered->trigger_state).activation_ordinal == second_arm);
+    }
+    const auto* trigger_event = std::get_if<no::ActivatedEvent>(core.event_at(no::EventId{run, trigger}));
+    CHECK(trigger_event && trigger_event->kind == no::ActivationKind::TrailTrigger);
+    CHECK(trigger_event
+          && std::get<no::TrailActive>(trigger_event->after).activation_ordinal == second_arm);
+    std::printf("  trail arm %llu kept in state across its retirement; retained successor 0; "
+                "trigger carries arm %llu\n", static_cast<unsigned long long>(arm),
+                static_cast<unsigned long long>(second_arm));
+}
 }  // namespace
 
 int main() {
@@ -605,6 +696,7 @@ int main() {
     for (uint64_t seed : {11ULL, 29ULL, 47ULL, 83ULL}) the_chain_index_answers_what_the_journal_did(seed);
     membership_is_not_a_chain_walk();
     a_live_chain_pins_the_window();
+    a_trail_carries_its_arm_ordinal();
     if (failures != 0) {
         std::printf("test_native_journal_window: %d of %d checks failed\n", failures, checks);
         return 1;

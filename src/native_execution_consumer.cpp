@@ -5825,9 +5825,11 @@ std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
 
     if (const auto* tracking = std::get_if<native_order::TrailTrack>(&live->trigger_state)) {
         state.best_price = tracking->best;
+        state.activation_ordinal = tracking->activation_ordinal;
     } else if (const auto* active = std::get_if<native_order::TrailActive>(
                    &live->trigger_state)) {
         state.best_price = active->best_at_trigger;
+        state.activation_ordinal = active->activation_ordinal;
     } else {
         return std::nullopt;
     }
@@ -5838,15 +5840,6 @@ std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
             state.best_price, trail.offset, request_is_buy(engine, *live),
             &state.current_level, ladder_tick())) {
         return std::nullopt;
-    }
-    for (auto it = requests_.history().rbegin(); it != requests_.history().rend(); ++it) {
-        const auto* activated = std::get_if<native_order::ActivatedEvent>(&*it);
-        if (activated && activated->definition
-            && activated->definition->handle == target
-            && activated->kind == native_order::ActivationKind::TrailArm) {
-            state.activation_ordinal = activated->ordinal;
-            break;
-        }
     }
     return state;
 }

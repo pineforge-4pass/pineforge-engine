@@ -614,11 +614,19 @@ struct StopActive {};
 struct StopLimitPending {};
 struct StopLimitLive {};
 struct TrailWaitArm {};
+/// A trail riding its running best. `activation_ordinal` is the ordinal of
+/// this request's own TrailArm ActivatedEvent -- NativeTrailState's
+/// activation_ordinal, kept in state so it outlives the journal window -- and
+/// 0 for a successor that retained its predecessor's tracking
+/// (ReplaceOptions::retain_trigger_state), which never armed itself.
 struct TrailTrack {
     double best = 0.0;
+    uint64_t activation_ordinal = 0;
 };
+/// A triggered trail; `activation_ordinal` carries TrailTrack's.
 struct TrailActive {
     double best_at_trigger = 0.0;
+    uint64_t activation_ordinal = 0;
 };
 using TriggerState = std::variant<MarketReady, LimitReady, StopIdle, StopActive, StopLimitPending,
                                   StopLimitLive, TrailWaitArm, TrailTrack, TrailActive>;

@@ -2056,7 +2056,13 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         definition->root = predecessor.root ? *predecessor.root : predecessor.handle;
     }
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
-    if (options.retain_trigger_state) live.trigger_state = retained;
+    if (options.retain_trigger_state) {
+        live.trigger_state = retained;
+        // The retained ride is the predecessor's; the successor has armed
+        // nothing of its own, which is what its TrailArm ordinal says.
+        if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
+        if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+    }
     ReplacedEvent replaced;
     replaced.ordinal = ordinal;
     replaced.predecessor_definition = live_[live_index].definition;
@@ -2476,6 +2482,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     auto emit_activated = [&](ActivationKind kind, TriggerState after, const MatchCursor& cursor,
                               double price) {
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        // A trail's arm is the event its tracking state names from then on
+        // (NativeTrailState::activation_ordinal), so the state outlives the
+        // journal window that holds the event.
+        if (kind == ActivationKind::TrailArm) {
+            if (auto* track = std::get_if<TrailTrack>(&after)) track->activation_ordinal = ordinal;
+        }
         ActivatedEvent activated;
         activated.ordinal = ordinal;
         activated.definition = updated.definition;
@@ -2618,7 +2630,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         || !stop_price_reached(is_buy, level, trail_hit.reached_price, grid)) {
         return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
     }
-    return emit_activated(ActivationKind::TrailTrigger, TrailActive{track->best}, trail_hit.cursor,
+    return emit_activated(ActivationKind::TrailTrigger,
+                          TrailActive{track->best, track->activation_ordinal}, trail_hit.cursor,
                           native_matching::grid_reached_print(
                               trail_hit.reached_price, level, /*le=*/!is_buy, grid));
 }
