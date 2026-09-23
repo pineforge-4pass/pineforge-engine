@@ -992,8 +992,7 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
     // In place for the host that installed the receipt readers, as in
     // observe_terminal_receipts.
     if (event_high_water_reader_ && terminal_receipt_high_water_reader_) {
-        return as_native_consumer(const_cast<IExecutionConsumer&>(
-                   PineStrategyHost::adapter_receipt_consumer(host)))
+        return as_native_consumer(pine_view(&host)->execution_consumer())
             .visit_commands_after(receipt_cursor_, follows);
     }
     for (const auto& row : host.native_events(receipt_cursor_)) {
@@ -1207,8 +1206,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     // In place for the host that installed the receipt readers, as in
     // observe_terminal_receipts.
     if (event_high_water_reader_ && terminal_receipt_high_water_reader_) {
-        as_native_consumer(const_cast<IExecutionConsumer&>(
-            PineStrategyHost::adapter_receipt_consumer(require_host())))
+        as_native_consumer(pine_view(&require_host())->execution_consumer())
             .visit_commands_after(receipt_cursor_, suspend);
     } else {
         for (const auto& row : require_host().native_events(receipt_cursor_)) {
@@ -3887,8 +3885,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
         // account rows included; it moves the same way here. A cancel issued
         // while observing appends above that high water -- as it appended
         // past the end of the snapshot -- and the next read observes it.
-        const auto& consumer = as_native_consumer(const_cast<IExecutionConsumer&>(
-            PineStrategyHost::adapter_receipt_consumer(host)));
+        const auto& consumer = as_native_consumer(pine_view(&host)->execution_consumer());
         const std::uint64_t high_water = consumer.event_high_water();
         if (high_water > receipt_cursor_) {
             consumer.visit_commands_after(receipt_cursor_,
