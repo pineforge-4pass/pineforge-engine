@@ -467,6 +467,14 @@ private:
     // refreshes follow one another (R5 lane PERF-K3). The buffer keeps its
     // capacity from call to call; once the rows are reused they form a heap
     // whose top is the row the scan's own comparison, `precedes`, picks.
+    //
+    // A scan usually keeps its rows already in that order: the book is in
+    // incarnation order, and a book of requests awaiting their allowance
+    // gives every row the cursor's own t. While the kept rows stay an
+    // ascending run they are taken from its front instead (R5 lane PERF-L5):
+    // `precedes` orders rows totally, so the front of an ascending run is the
+    // row a heap would put on top, and the first row out of order turns the
+    // rest into that heap.
     class MatchRows {
     public:
         // The order match_path picks its winner in: the earliest cursor, then
@@ -480,22 +488,27 @@ private:
         }
         void clear() noexcept {
             rows_.clear();
+            head_ = 0;
+            ascending_ = true;
             heaped_ = false;
         }
-        void keep(const MatchCandidate& row) {
-            rows_.push_back(row);
-            if (heaped_) sift_up();
-        }
-        // Takes the first row off, arranging the heap on first use, and
-        // answers the working-book index that row was scanned at.
+        void keep(const MatchCandidate& row);
+        // Takes the first row off -- the run's front, or the heap's top,
+        // arranging the heap on first use -- and answers the working-book
+        // index that row was scanned at.
         std::size_t take_first();
         const MatchCandidate* first() const noexcept {
+            if (ascending_) return head_ < rows_.size() ? &rows_[head_] : nullptr;
             return rows_.empty() ? nullptr : &rows_.front();
         }
 
     private:
         void sift_up();
         std::vector<MatchCandidate> rows_;
+        // While ascending_, the rows still to take are rows_[head_..] in
+        // `precedes` order; the rows before head_ were taken.
+        std::size_t head_ = 0;
+        bool ascending_ = true;
         bool heaped_ = false;
     };
 

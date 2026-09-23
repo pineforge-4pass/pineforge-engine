@@ -5269,7 +5269,38 @@ void NativeExecutionConsumer::MatchRows::sift_up() {
                    [](const MatchCandidate& a, const MatchCandidate& b) { return precedes(b, a); });
 }
 
+void NativeExecutionConsumer::MatchRows::keep(const MatchCandidate& row) {
+    if (ascending_) {
+        // The run stays ascending with the row after its last one or, once a
+        // row was taken, before its front, in the slot that row left.
+        if (head_ == rows_.size() || !precedes(row, rows_.back())) {
+            rows_.push_back(row);
+            return;
+        }
+        if (head_ > 0 && precedes(row, rows_[head_])) {
+            rows_[--head_] = row;
+            return;
+        }
+        // Out of order: the rows still to take become the heap. A scan that
+        // has taken none arranges it at its first take, as before.
+        const bool taken = head_ > 0;
+        rows_.erase(rows_.begin(), rows_.begin() + static_cast<std::ptrdiff_t>(head_));
+        head_ = 0;
+        ascending_ = false;
+        if (taken) {
+            std::make_heap(rows_.begin(), rows_.end(),
+                           [](const MatchCandidate& a, const MatchCandidate& b) {
+                               return precedes(b, a);
+                           });
+            heaped_ = true;
+        }
+    }
+    rows_.push_back(row);
+    if (heaped_) sift_up();
+}
+
 std::size_t NativeExecutionConsumer::MatchRows::take_first() {
+    if (ascending_) return rows_[head_++].live_index;
     const auto below = [](const MatchCandidate& a, const MatchCandidate& b) {
         return precedes(b, a);
     };
