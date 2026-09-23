@@ -1057,25 +1057,29 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
 // index itself), drops them at every run begin, and never reads them. They
 // are derived from state the adapter retains and hashes, folded into nothing,
 // and each lookup answers what the walk it replaces answers.
-struct PineExecutionAdapter::LookupIndex final : NativeHostCache {
+namespace {
+
+class AdapterLookupIndex final : public NativeHostCache {
+public:
     // Per cohort, over its origin roster: how many roster entries are folded,
     // and whether a folded origin is an opening on each side. The roster only
     // grows (every accepted opening is appended once, after its placement row
     // exists), and an opening row's `opening` and `is_long` are never written
     // after it is remembered, so the two flags only ever turn on and a fold
     // over the entries appended since the last lookup keeps them exact. Keyed
-    // by the cohort's facts, whose node the cohort map never moves; the map
-    // is only cleared by reset_for_run, which clears this index too.
+    // by the address of the cohort's facts, whose node the cohort map never
+    // moves; the map is only cleared by reset_for_run, which clears this
+    // index too.
     struct CohortSides {
         std::size_t folded = 0;
         bool opened_long = false;
         bool opened_short = false;
     };
 
-    const PineExecutionAdapter* owner = nullptr;
+    const void* owner = nullptr;
     std::uint64_t run = 0;
     std::uint64_t answers = 0;
-    std::unordered_map<const CohortFacts*, CohortSides> cohort_sides;
+    std::unordered_map<const void*, CohortSides> cohort_sides;
 
     // Over the placement table, which retains every row by incarnation:
     // exit legs by the origin they are bound to and their leg kind, and
@@ -1188,23 +1192,35 @@ struct PineExecutionAdapter::LookupIndex final : NativeHostCache {
     }
 };
 
-PineExecutionAdapter::LookupIndex* PineExecutionAdapter::lookup_index(
-        bool create) const noexcept {
-    auto* pine = pine_view(host_);
-    if (!pine) return nullptr;
-    auto& consumer = as_native_consumer(pine->execution_consumer());
-    // The consumer keeps one cache per host; this adapter's is the one it
-    // adopted in this run. Any other (another adapter bound to the same host,
-    // an earlier run) is replaced, never read.
-    auto* index = dynamic_cast<LookupIndex*>(consumer.host_cache());
-    if (index && index->owner == this && index->run == run_counter_) return index;
+// The index `consumer` keeps for the adapter at `owner` in run `run`: the
+// one it adopted in this run, else (when `create`) a fresh one, else null.
+// Any other cache it holds (another adapter bound to the same host, an
+// earlier run) is replaced, never read.
+AdapterLookupIndex* adapter_lookup_index(IExecutionConsumer* consumer, const void* owner,
+                                         std::uint64_t run, bool create = true) noexcept {
+    if (!consumer) return nullptr;
+    auto& native = as_native_consumer(*consumer);
+    auto* index = dynamic_cast<AdapterLookupIndex*>(native.host_cache());
+    if (index && index->owner == owner && index->run == run) return index;
     if (!create) return nullptr;
     try {
-        auto fresh = std::make_unique<LookupIndex>();
-        fresh->owner = this;
-        fresh->run = run_counter_;
-        return static_cast<LookupIndex*>(consumer.adopt_host_cache(std::move(fresh)));
+        auto fresh = std::make_unique<AdapterLookupIndex>();
+        fresh->owner = owner;
+        fresh->run = run;
+        return static_cast<AdapterLookupIndex*>(native.adopt_host_cache(std::move(fresh)));
     } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
+}
+
+} // namespace
+
+IExecutionConsumer* PineExecutionAdapter::bound_consumer() const noexcept {
+    auto* pine = pine_view(host_);
+    if (!pine) return nullptr;
+    try {
+        return &pine->execution_consumer();
+    } catch (...) {
         return nullptr;
     }
 }
@@ -1221,7 +1237,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
         }
         return false;
     };
-    LookupIndex* index = lookup_index();
+    AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
         auto& sides = index->cohort_sides[&cohort];
@@ -1264,7 +1280,8 @@ bool PineExecutionAdapter::origin_leg_consumed(
                 return consumed(handle.incarnation);
             });
     };
-    LookupIndex* index = LookupIndex::exit_leg(family) ? lookup_index() : nullptr;
+    AdapterLookupIndex* index = AdapterLookupIndex::exit_leg(family)
+        ? adapter_lookup_index(bound_consumer(), this, run_counter_) : nullptr;
     if (!index) return walk();
     try {
         index->sync_rows(placement_, live_handles_);
@@ -1298,7 +1315,7 @@ bool PineExecutionAdapter::immediate_close_placed_on(std::int32_t bar) const noe
         return std::any_of(placement_.begin(), placement_.end(),
             [&](const auto& row) { return placed(row.second); });
     };
-    LookupIndex* index = lookup_index();
+    AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
         index->sync_rows(placement_, live_handles_);
@@ -1630,7 +1647,8 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 }
 
 void PineExecutionAdapter::reset_for_run() {
-    if (auto* index = lookup_index(false)) index->clear();
+    if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
+        index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
     cohort_order_.clear();
@@ -3859,7 +3877,7 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             settle_slot(cohort->second, trade, drained);
             return remaining > 0.0;
         };
-        auto* lookup = lookup_index();
+        auto* lookup = adapter_lookup_index(bound_consumer(), this, run_counter_);
         if (!lookup) {
             for (const auto& origin : cohort->second.origins)
                 if (!consume_origin(origin.incarnation)) break;

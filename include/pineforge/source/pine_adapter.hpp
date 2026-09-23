@@ -1226,14 +1226,13 @@ private:
     std::vector<std::size_t> live_origin_positions(const CohortFacts&) const;
     // R5 lane PERF-P7: lookups over the bookkeeping the adapter retains for
     // the whole run -- every origin a cohort ever accepted, every leg an exit
-    // family ever placed -- answered from indexes the native consumer keeps
-    // for this adapter (NativeHostCache; defined in pine_adapter.cpp), since
-    // the adapter is a by-value member of PineStrategyHost and so holds none.
-    // Each answers exactly what the walk it replaces answers, and each walks
-    // when the consumer keeps no cache. lookup_index() is that cache for this
-    // run (built on first use when `create`), or null.
-    struct LookupIndex;
-    LookupIndex* lookup_index(bool create = true) const noexcept;
+    // family ever placed -- answered from an index the native consumer keeps
+    // for this adapter (its host cache; pine_adapter.cpp), since the adapter
+    // is a by-value member of PineStrategyHost and so holds none. Each
+    // answers exactly what the walk it replaces answers, and each walks when
+    // the consumer keeps no cache. bound_consumer() is the bound host's
+    // consumer, or null for a host that is not a PineStrategyHost.
+    IExecutionConsumer* bound_consumer() const noexcept;
     // Whether any origin the cohort ever accepted is an opening on that side.
     bool cohort_opened_on_side(const CohortFacts&, bool is_long) const noexcept;
     // Whether a leg of that kind the (exit id, from_entry) family placed for
