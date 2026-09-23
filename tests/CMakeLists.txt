@@ -1028,6 +1028,12 @@ list(APPEND TEST_SOURCES test_ta_kc_range)
 # formulas re-aggregated naively, and against ta::pivot_point_levels.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_pivot_point_levels)
+# R5 lane K-COHORT: a cohort close selects each opening on its roster once,
+# however many lots that opening's fills left, and books what the same close
+# bound without a roster books (BindOpenings over the members, and one
+# BindOpening per member). Source-free, so it also runs in the kernel-only
+# profile.
+list(APPEND TEST_SOURCES test_native_cohort_sliced_close)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
