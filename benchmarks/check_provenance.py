@@ -116,14 +116,6 @@ class Tree:
     def is_commit(self, sha: str) -> bool:
         return self._git("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
 
-    def gitlink(self, path: str) -> str:
-        self.reads.append(f"gitlink {path}")
-        res = (self._git("ls-tree", self.rev, path) if self.rev
-               else self._git("ls-files", "-s", path))
-        out = res.stdout.split()
-        if not out or out[0] != "160000":
-            raise Unsourced(f"{path} is not a gitlink")
-        return out[2] if self.rev else out[1]
 
 
 @dataclass(frozen=True)
@@ -302,8 +294,10 @@ def corpus_half(tree, m):
     selection = tree.json(SELECTION)
     slots = [int(s["slot"][:3]) for s in selection["slots"] if s["source"] == "corpus"]
     families = selection["counts"]["corpus"]["families"]
+    # The corpus pin the population was drawn at, not the tree's current pin:
+    # a later corpus re-pin leaves the draw where it was.
     return {"n": len(slots), "lo": min(slots), "hi": max(slots),
-            "gitlink": [Prefix(selection["inputs"]["corpusGitlink"]), Prefix(tree.gitlink("corpus"))],
+            "gitlink": Prefix(selection["inputs"]["corpusGitlink"]),
             "least": min(f["slots"] for f in families.values()), "families": len(families)}
 
 
