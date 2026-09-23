@@ -902,6 +902,10 @@ list(APPEND TEST_SOURCES test_native_command_history_read)
 # on fc7aad62 (receipt cursors, recorded broker-state hashes, trades), and a
 # commandless read that allocates nothing. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
+# R5 PERF-K3: the values five randomized books produce, pinned on fc7aad62
+# before the matcher's rows are reused. Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_match_hash_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
