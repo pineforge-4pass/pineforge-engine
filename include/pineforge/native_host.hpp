@@ -1258,7 +1258,10 @@ public:
     /// declares no NativeRunSpec::risk; observation only, it moves nothing.
     NativeRiskState native_risk_state() const;
     /// Owning snapshots copied at query time. Later commands/reset do not
-    /// invalidate already returned values.
+    /// invalidate already returned values. The rows are what the run's
+    /// NativeRunSpec::event_retention keeps: under Window the command events
+    /// the host has not yet acknowledged, and no driver point or account row;
+    /// a read from below native_event_window_start() starts there.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
     /// The host has read every event through `through_ordinal` (R5 lane V19-B).
     /// Under NativeEventRetention::Window the kernel drops the acknowledged

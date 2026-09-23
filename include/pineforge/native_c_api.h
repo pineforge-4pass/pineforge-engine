@@ -2747,8 +2747,11 @@ PF_API int strategy_native_open_lot_get_v1(pf_strategy_t s, int index,
  *  execution and the account observation it produced carry the same one. A
  *  page therefore never ends in the middle of such a group (for @p cap >= 2),
  *  so a poller advances by the last returned `ordinal` without losing or
- *  repeating a row. The history is append-only, so the same @p after_ordinal
- *  always yields the same rows.
+ *  repeating a row. The rows are what the run's event retention keeps
+ *  (#pf_native_event_retention_t): under FULL and COMMANDS the history is
+ *  append-only, so the same @p after_ordinal always yields the same rows;
+ *  under WINDOW a read answers what the window still holds, and one from
+ *  below its start (#strategy_native_event_window_v1) starts there.
  *  @return The number written (>= 0), or a negative status. */
 PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
                                      pf_native_event_v1* out, int cap);

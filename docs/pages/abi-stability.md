@@ -141,7 +141,7 @@ layouts inside v19. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v3` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v7`, the private
 consumer identity is
-`native-consumer/v8`, driver types are `native_driver_v5`, and run specs are
+`native-consumer/v9`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
 the continuation hash only when it is non-empty; R5 L4 adds
 `NativeRunSpec::margin`, folded only when it is set; R5 L5 adds `calculation`,
@@ -263,6 +263,20 @@ at once again: R5 lane PERF-P1's deferred view saved the v18 log folds, which
 v19 no longer makes, and no value moves with it. `native_run_spec_digest`
 keeps its byte-wise FNV-1a and its values. The values the tree pins were
 re-pinned once, each marked "expectation corrected".
+The journal window (R5 lane V19-B) moves the request values to
+`native_order_v7`: the order core's command journal is a window with
+absolute positions, `RequestDefinition::root` and the core's chain index
+replace the journal scan the cohort commands made, and a trail's arm ordinal
+is its tracking state's. `NativeRunSpec::event_retention` joins
+`native_run_spec_v3` and folds into the spec digest only when it is not the
+default `Window`, so a spec that leaves it keeps its digest. The C surface
+grows additively under `PF_ABI_VERSION` 4 — `strategy_native_acknowledge_events_v1`,
+`strategy_native_event_window_v1` and a fifth `pf_native_run_spec_ext_v1`
+layout — and a C caller that does not send the retention word keeps `FULL`,
+so a caller built before the tail reads back the record it always did. The
+continuation folds the state the window made durable (the chain index, a
+trail's arm ordinal, the FX-roll check's two driver instants); the values
+that moved with it were re-pinned once more, each marked.
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v7`.
 Terms receipts, attempted terms, deferred

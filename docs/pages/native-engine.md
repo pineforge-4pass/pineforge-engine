@@ -271,12 +271,12 @@ the sub-bar sections of `tests/test_native_calc_timing.cpp`.
 
 ### Validating a spec
 
-`validate_native_run_spec(spec)` (`native_run_spec.hpp:763`) answers a
-`NativeRunSpecValidation` (`native_run_spec.hpp:746`): a
-`NativeRunSpecError` (`native_run_spec.hpp:645`) and the
-`NativeRunSpecField` (`native_run_spec.hpp:614`) it first failed on, with
+`validate_native_run_spec(spec)` (`native_run_spec.hpp:797`) answers a
+`NativeRunSpecValidation` (`native_run_spec.hpp:780`): a
+`NativeRunSpecError` (`native_run_spec.hpp:677`) and the
+`NativeRunSpecField` (`native_run_spec.hpp:645`) it first failed on, with
 `ok()` and an explicit `operator bool`. `normalize_native_run_spec(spec)`
-(`native_run_spec.hpp:773`) validates and rewrites the one admitted literal —
+(`native_run_spec.hpp:807`) validates and rewrites the one admitted literal —
 a numeric `-0` fee becomes `+0` — leaving every other literal alone. Neither
 allocates on the failure path, neither changes a spec it rejects, and the
 field order is deterministic, so a host can report "which field" rather than
@@ -294,7 +294,7 @@ field order is deterministic, so a host can report "which field" rather than
 valid and clear the curve. `validate_native_fx_curve`
 (`native_fx_curve.hpp:48`) is the same judgement as a pure query.
 
-`native_run_spec_digest(spec)` (`native_run_spec.hpp:849`) is the portable
+`native_run_spec_digest(spec)` (`native_run_spec.hpp:883`) is the portable
 constant described under *Lifecycle and run identity*: exactly the fields the
 consumer folds into a run's continuation identity, and nothing else. Each
 feature suite pins the refusals of the fields it owns — the eighteen
@@ -468,7 +468,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2583-2633`), under the same legality rule; see *Driving the
+(`native_c_api.h:2636-2686`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -1759,15 +1759,16 @@ says otherwise, and the C spellings are in
 | `native_marked_equity(mark)` | the account's marked equity at `mark` | `strategy_native_marked_equity_v1` |
 | `native_working_requests()` | one `NativeWorkingRequest` `native_host.hpp:669` per live request: its `definition`, its `remaining` and its `trigger_state` | `strategy_native_working_len_v1` / `_get_v1` |
 | `trail_state(handle)` | `NativeTrailState` `native_host.hpp:657`: `activated`, `best_price`, `current_level`, `activation_ordinal`; `nullopt` when the handle is not a live trail | `strategy_native_trail_state_v1` |
-| `native_events(after)` | `NativeMarketEvent` `native_host.hpp:370` rows: a `NativeEventKind` `native_host.hpp:360` (`Command`, `Driver`, `Account`) and exactly one of `command`, `driver` (`NativeDriverPoint` `market_driver.hpp:91`) or `account` (`NativeAccountObservation` `native_host.hpp:351`) | `strategy_native_events_v1` |
+| `native_events(after)` | `NativeMarketEvent` `native_host.hpp:370` rows: a `NativeEventKind` `native_host.hpp:360` (`Command`, `Driver`, `Account`) and exactly one of `command`, `driver` (`NativeDriverPoint` `market_driver.hpp:91`) or `account` (`NativeAccountObservation` `native_host.hpp:351`) — the rows the run's `event_retention` keeps (*What a run keeps of its events*) | `strategy_native_events_v1` |
+| `native_event_window_start()` | the oldest ordinal a read can still return: every command event at or above it is retained; 1 while nothing was dropped | `strategy_native_event_window_v1` |
 | `current_execution_point()` | `NativeCurrentPointView` `native_host.hpp:646`: the active callback's decision context, its price, the `NativeCurrentQuoteKind` `native_host.hpp:451` and the ordinal the quote came from; `nullopt` outside a decision point | `pf_native_decision_v1::price` / `::quote_kind` |
 | `native_risk_state()` | `NativeRiskState` `native_host.hpp:631`: whether openings are blocked and why, the risk day, the fills counted in it, the loss-day streak, the peak equity and the day's opening equity | `strategy_native_risk_state_v1` |
 | `native_liquidation_price()` | the solved level `L`, or `nullopt` | `strategy_native_liquidation_price_v1` |
 | `current_partial_bar()` | the lookahead-free bar so far at this cursor | `strategy_native_partial_bar_v1` |
 | `native_series_bar(i)` | the latest delivered bucket of subscription `i` | `strategy_native_series_bar_v1` |
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
-| `native_decision_floor()` (`native_host.hpp:1267`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
-| `native_consumed_high_water()` (`native_host.hpp:1272`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
+| `native_decision_floor()` (`native_host.hpp:1291`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
+| `native_consumed_high_water()` (`native_host.hpp:1296`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
 | `native_continuation_hash()` | the consumer's continuation identity: a fold of its live state (*What the continuation and the broker-state hash fold*), the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:685` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
@@ -1806,7 +1807,7 @@ bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:1384`). The kernel resolves each session day once through
+(`native_c_api.h:1421`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -1830,6 +1831,59 @@ only with `PF_NATIVE_INTENT_HOST_SIZED`, whose units the `on_close_units`
 hook answers. `tests/test_native_adapter_lowering_l1.cpp` pins enrollment and
 the cohort close from a bare host, and the cohort scenario of
 `tests/test_native_c_api.c` does the same from C.
+
+### What a run keeps of its events {#native_engine_event_retention}
+
+`NativeRunSpec::event_retention` (`NativeEventRetention`, R5 lane V19-B)
+chooses what `native_events()` can still return. It is reporting: no fill, no
+decision and no value the continuation folds depends on it, except that the
+spec digest folds a retention other than the default.
+
+| retention | what the kernel keeps | memory |
+|---|---|---|
+| `Window` (the default) | the command journal, only until the host has read it; no driver point, no account row | O(live) |
+| `Commands` | the whole command journal and every account row; no driver point | O(run) |
+| `Full` | the whole command journal, every driver point and every account row — the record every run kept before the field existed | O(run) |
+
+Under `Window` a host that polls says what it has read:
+`native_acknowledge_events(through_ordinal)` records that every event through
+that ordinal is consumed, and the kernel drops the acknowledged command events
+at the next script-bar boundary, keeping every one above it. Until a host
+acknowledges, the kernel treats it as served by its callbacks alone and closes
+its window at every script-bar end, so a polling host acknowledges `0` from
+`on_native_run_begin` ("nothing read yet") and then its cursor as it reads.
+An acknowledgement is never lowered by a later, smaller one; one above the
+event high water acknowledges the high water, never an event that has not
+happened; and before a run begins, or once it has ended, it records nothing.
+`Full` and `Commands` keep the whole journal whatever is acknowledged.
+`native_event_window_start()` answers the oldest ordinal a read can still
+return, and `native_events(after)` for an `after` below it starts there.
+
+The kernel never drops an event its own live state still reads. A queued
+applied notification (and the margin receipt it carries) pins the window at
+its execution, a live deferred group-adjustment chain pins it at its head,
+and the rest of what the journal used to answer is state now: a request's
+replace-chain root is `RequestDefinition::root` (`native_order.hpp:708`) and
+the order core's chain index, which is all a cohort command reads about a
+request that is no longer working; a trail's arm ordinal
+(`NativeTrailState::activation_ordinal`) is its tracking state's
+(`TrailTrack` `native_order.hpp:622`); the FX-roll margin check reads the
+last two driver points' instants; and a group-effect receipt whose outcome
+event was dropped stands on its own record. A host that wants the whole run
+after it has ended asks for `Full` (or `Commands`); the Pine adapter declares
+`Window` and acknowledges its receipt cursor as it observes the journal.
+
+A C host spells the retention in `pf_native_run_spec_ext_v1`'s fifth layout
+(below). A C caller that does not send it — `strategy_configure_native_v1`,
+any earlier layout, a clear bit — keeps `Full`, the record its layout was
+published with.
+
+`tests/test_native_event_retention.cpp` (kernel-only) holds the readbacks to a
+`Full` record pinned before the window existed, row for row, over randomized
+books; pins every acknowledgement edge above; and runs the same books with the
+window closing at every driver point (a test switch), booking the trades
+`Full` books. `tests/test_native_journal_window.cpp` holds the chain index to
+a journal oracle and a live deferred chain to its pin.
 
 ## Reporting for native hosts
 
@@ -2073,7 +2127,12 @@ Both digests fold **state**, not history (the v19 value epoch, R5 lane V19-A:
   visible a difference that leaves no other trace, such as a Cancelled
   receipt's reason (the host's own cancel against an owner's). The command
   history, the driver log and the account log are **not** folded: they are
-  readbacks of how the run got there. So equal state answers an equal value,
+  readbacks of how the run got there. What the journal window made state (R5
+  lane V19-B) folds where it exists: the order core's chain index — each
+  replace successor's root, once, at the replace — a trail's arm ordinal in
+  its tracking state, and, under a staged FX curve and a margin model, the
+  two driver-point instants the FX-roll check reads. The acknowledgement and
+  the event high waters are readback bookkeeping and fold nowhere. So equal state answers an equal value,
   two command histories that reach one state answer one value, and a read costs
   the live state whatever the run's length. The fold takes one
   multiply-xorshift per 64-bit word; a string folds as its length, then its
@@ -2732,7 +2791,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`native_c_api.h:37-39`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2533`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2586`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
@@ -3538,6 +3597,7 @@ one, each integer pinned by a `static_assert` in `src/native_c_host.cpp`:
 | `calculation` | ext | `pf_native_calc_trigger_e` | `PF_NATIVE_CALC_TRIGGER_BAR_CLOSE`, `_BAR_CLOSE_AND_FILLS`, `_EVERY_MODELED_POINT` |
 | `open_bar_view` | ext | `pf_native_open_bar_view_e` | `PF_NATIVE_OPEN_BAR_VIEW_COMPLETE`, `_OPEN_ONLY` |
 | `margin_sizing` | ext | `pf_native_liquidation_sizing_e` | `PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM`, `_SHORTFALL_MULTIPLE`, `_FLATTEN` |
+| `event_retention` | ext | `pf_native_event_retention_e` | `PF_NATIVE_EVENT_RETENTION_WINDOW`, `_FULL`, `_COMMANDS`; a caller that does not send the word keeps `_FULL` |
 
 A value outside its enumeration is `PF_NATIVE_E_TAG` from
 `strategy_configure_native_ext_v1`, and the handle stays unconfigured.
@@ -3609,19 +3669,24 @@ A caller sending the base length keeps working unchanged and is refused with
 configures a host from the frozen v1 copy of the struct, so that acceptance is
 executed rather than asserted.
 
-The auxiliary finer feed (`PF_NATIVE_SPEC_EXT_AUXILIARY_FEED`) is the **last
-additive tail**, behind the risk one and the intrabar / policy one:
+The auxiliary finer feed (`PF_NATIVE_SPEC_EXT_AUXILIARY_FEED`) is the fourth
+additive tail, behind the risk one and the intrabar / policy one:
 `auxiliary_tf`, `auxiliary_bars`, `auxiliary_n`, a reserved word that must be
 zero, and `subscription_sources` — an optional array of
 `pf_native_series_source_e`, one word per subscription row, `NULL` meaning
 every series is built from the input (the subscription row itself has no spare
-word left, so the source rides beside it rather than in it). The struct
-therefore has four published lengths and the runtime accepts each:
-`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`, `PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`,
-`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE` (each the offset of the first field of
-the tail behind it, not a literal) and the current `sizeof`; a caller is
+word left, so the source rides beside it rather than in it). The event
+retention (`PF_NATIVE_SPEC_EXT_EVENT_RETENTION`, R5 lane V19-B) is the last:
+`event_retention`, a `pf_native_event_retention_e` word, and a reserved word
+that must be zero. The struct therefore has five published lengths and the
+runtime accepts each: `PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`,
+`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`, `PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`,
+`PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE` (each the offset of the first field
+of the tail behind it, not a literal) and the current `sizeof`; a caller is
 refused with `PF_NATIVE_E_STRUCT` for a bit whose tail it does not carry, and
-any other length is refused outright. A realtime stream appends later feed
+any other length is refused outright. A caller that does not set the
+retention bit keeps `PF_NATIVE_EVENT_RETENTION_FULL`, so every caller
+compiled before the tail existed reads back the record it always did. A realtime stream appends later feed
 bars with `strategy_native_append_auxiliary_bars_v1`, the C spelling of
 `append_auxiliary_bars`: `PF_NATIVE_OK`, or `PF_NATIVE_E_STATE` for every
 by-name refusal above with the reason in `strategy_get_last_error`.
@@ -3743,7 +3808,12 @@ as the refusal the header promises rather than as silent misreading.
 
 **Events.** `strategy_native_events_v1` flattens `native_events()` into one
 tagged POD: the nineteen `CommandEvent` alternatives, plus the driver point
-and the account observation. One kind named in the design is **not**
+and the account observation — the rows the run's retention keeps. A C host
+under `PF_NATIVE_EVENT_RETENTION_WINDOW` acknowledges what it read with
+`strategy_native_acknowledge_events_v1` (from `on_run_begin` with 0, then its
+cursor) and reads where the window starts with
+`strategy_native_event_window_v1`, the C spellings of
+`native_acknowledge_events` and `native_event_window_start`. One kind named in the design is **not**
 represented and never appears: a completed higher-timeframe bucket, which is
 delivered through the `on_timeframe_bar` callback and never recorded in the
 event history. Ordinals are non-decreasing rather than strictly increasing —
