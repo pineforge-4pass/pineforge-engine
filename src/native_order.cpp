@@ -5,8 +5,12 @@
 // rounded anchor, a reached print and a quantized fill agree tick for tick.
 // The header is value-only geometry; it brings no host into the core.
 #include "native_matching.hpp"
+// The owner's incarnation index definition_for reads while it is published
+// (R5 lane PERF-P7, P7a); internal, and the core holds none of it.
+#include "native_definition_index.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -939,23 +943,34 @@ const RequestDefinition* WorkingRequestCore::definition_for(
     // increasing incarnations, so the most recent occurrence is normally
     // close to the tail. Search backwards to avoid a whole-run forward scan
     // at every generic cohort candidate.
-    for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
-        const auto& event = *it;
-        if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
-            if (accepted->definition && accepted->definition->handle == handle)
-                return accepted->definition.get();
-        } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
-            if (replaced->predecessor_definition
-                && replaced->predecessor_definition->handle == handle) {
-                return replaced->predecessor_definition.get();
-            }
-            if (replaced->successor_definition
-                && replaced->successor_definition->handle == handle) {
-                return replaced->successor_definition.get();
+    const auto scan = [&]() -> const RequestDefinition* {
+        for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
+            const auto& event = *it;
+            if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
+                if (accepted->definition && accepted->definition->handle == handle)
+                    return accepted->definition.get();
+            } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+                if (replaced->predecessor_definition
+                    && replaced->predecessor_definition->handle == handle) {
+                    return replaced->predecessor_definition.get();
+                }
+                if (replaced->successor_definition
+                    && replaced->successor_definition->handle == handle) {
+                    return replaced->successor_definition.get();
+                }
             }
         }
+        return nullptr;
+    };
+    // R5 lane PERF-P7 (P7a): while the consumer publishes its incarnation
+    // index for this core (native_definition_index.hpp), the index answers
+    // where the scan stops, verified against this history; what it cannot
+    // vouch for is scanned.
+    if (const auto* indexed = DefinitionIndex::published_lookup(*this, handle)) {
+        assert(indexed == scan());
+        return indexed;
     }
-    return nullptr;
+    return scan();
 }
 
 std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
