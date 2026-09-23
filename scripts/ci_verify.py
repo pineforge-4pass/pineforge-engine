@@ -140,7 +140,25 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # (their TUs reach the source layer -- see RELEASE_MIN_TESTS); F7 and F10 add
 # no row. 214 registered, 213 run: the WebSocket row still skips on a system
 # libcurl.
-KERNEL_MIN_TESTS = 213
+# 229 run = those 213 plus the sixteen TUs of R5 performance slice A (INT17)
+# that this profile builds -- measured on the integrated tree (ctest -N), not
+# summed from the lanes' own bases:
+#   +1 P1    test_native_continuation_view
+#   +3 P23   test_native_projection_witness, test_native_projection_compare,
+#            test_native_callback_caches
+#   +1 P4    test_native_command_history_read
+#   +3 K3    test_native_match_rescan_scaling, test_native_match_row_reuse,
+#            test_native_match_hash_witness
+#   +2 K24   test_native_intrabar_lower_lookup, test_native_batch_log_presize
+#   +3 K1    test_native_calendar_hash_witness, test_native_calendar_memo,
+#            test_native_calendar_memo_cost
+#   +3 P5611 test_utc_month_key_arithmetic, test_local_time_fields,
+#            test_local_time_lock_free_hit
+# All sixteen are source-free. Lanes P1, P23, P4 and P5611 add five
+# release-only rows between them (their TUs reach the source layer -- see
+# RELEASE_MIN_TESTS). 230 registered, 229 run: the WebSocket row still skips
+# on a system libcurl.
+KERNEL_MIN_TESTS = 229
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -188,7 +206,15 @@ KERNEL_MIN_TESTS = 213
 #   +1 F5  test_session_day_facts_adapter
 #   +1 F9  test_adapter_recording_hash_witness
 # No release row skips, so 586 registered is 586 run.
-RELEASE_MIN_TESTS = 586
+# 607 = those 586 plus the twenty-one TUs of R5 performance slice A (INT17):
+# the sixteen KERNEL_MIN_TESTS lists above, which register here too, plus the
+# five source-bound ones the kernel profile does not build:
+#   +1 P1    test_adapter_continuation_view
+#   +1 P23   test_adapter_host_view_memo
+#   +1 P4    test_adapter_receipts_in_place
+#   +2 P5611 test_chart_day_key_arithmetic, test_aggregates_input_bars_literals
+# No release row skips, so 607 registered is 607 run.
+RELEASE_MIN_TESTS = 607
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
