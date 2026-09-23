@@ -139,6 +139,30 @@ public:
                                            : dynamic_cast<const NativeStrategyHost*>(&engine);
     }
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
+    // The command rows of events_after(after_ordinal), read in place (R5 lane
+    // PERF-P4). The history is in ordinal order, so those rows are exactly
+    // the events from first_command_after(after_ordinal) on (the history's
+    // size when there are none); events_after takes its own slice here too.
+    // visit_commands_after visits them as the history stood when the call
+    // began, in history order, with one COPY per event -- the copy each
+    // materialised row was -- so a visitor that appends to the history (a
+    // cancel it issues) neither sees what it appended nor holds an event the
+    // append reallocated. It stops at, and answers, the first true a visitor
+    // returns. Driver points and account rows are never visited.
+    std::size_t first_command_after(uint64_t after_ordinal) const noexcept;
+    template <class Visit>
+    bool visit_commands_after(uint64_t after_ordinal, Visit&& visit) const {
+        const auto& history = requests_.history();
+        const std::size_t end = history.size();
+        // The history only grows inside a run; the size is re-read anyway so
+        // a visit can never index past it.
+        for (std::size_t index = first_command_after(after_ordinal);
+             index < end && index < history.size(); ++index) {
+            const native_order::CommandEvent event = history[index];
+            if (visit(event)) return true;
+        }
+        return false;
+    }
     uint64_t event_high_water() const noexcept;
     uint64_t terminal_receipt_high_water() const noexcept {
         return terminal_receipt_high_water_;

@@ -9387,28 +9387,31 @@ double NativeExecutionConsumer::marked(const BacktestEngine& engine, double pric
     return engine.marked_equity(price);
 }
 
+std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal) const noexcept {
+    const auto& history = requests_.history();
+    if (history.empty() || command_ordinal(history.back()) <= after_ordinal) return history.size();
+    // A reader's cursor is usually a few events behind the tail: walk back
+    // from it, and bisect only a long suffix.
+    auto it = history.end();
+    while (it != history.begin()) {
+        auto prev = std::prev(it);
+        if (command_ordinal(*prev) <= after_ordinal) break;
+        it = prev;
+        if (std::distance(it, history.end()) > 32) {
+            it = std::upper_bound(history.begin(), it, after_ordinal,
+                [](uint64_t ordinal, const native_order::CommandEvent& event) {
+                    return ordinal < command_ordinal(event);
+                });
+            break;
+        }
+    }
+    return static_cast<std::size_t>(std::distance(history.begin(), it));
+}
+
 std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t after_ordinal) const {
     const auto& history = requests_.history();
-    auto command_begin = history.end();
-    if (!history.empty() && command_ordinal(history.back()) > after_ordinal) {
-        auto it = history.end();
-        while (it != history.begin()) {
-            auto prev = std::prev(it);
-            if (command_ordinal(*prev) <= after_ordinal) {
-                command_begin = it;
-                break;
-            }
-            it = prev;
-            if (std::distance(it, history.end()) > 32) {
-                command_begin = std::upper_bound(history.begin(), it, after_ordinal,
-                    [](uint64_t ordinal, const native_order::CommandEvent& event) {
-                        return ordinal < command_ordinal(event);
-                    });
-                break;
-            }
-        }
-        if (it == history.begin()) command_begin = history.begin();
-    }
+    const auto command_begin = history.begin()
+        + static_cast<std::ptrdiff_t>(first_command_after(after_ordinal));
 
     auto driver_begin = driver_log_.end();
     if (!driver_log_.empty() && driver_log_.back().coordinate.ordinal > after_ordinal) {
