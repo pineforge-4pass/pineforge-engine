@@ -515,6 +515,34 @@ struct NativeAuxiliaryFeed {
     std::vector<Bar> bars;
 };
 
+/// What the kernel keeps of a run's event record, the rows native_events()
+/// returns (R5 lane V19-B). It is reporting: no fill, no decision and no
+/// state the continuation folds depends on it; it bounds what a run holds.
+///
+/// Window, the default, keeps the command journal only until every reader has
+/// consumed it. A host that polls native_events() acknowledges what it has
+/// read (NativeStrategyHost::native_acknowledge_events) and the kernel drops
+/// the acknowledged events at the next script-bar boundary; a host that never
+/// acknowledges is served by its callbacks alone, and its window closes at
+/// every script-bar end. The kernel never drops an event its own live state
+/// still reads -- a deferred group-adjustment chain, an applied notification
+/// not yet delivered -- and keeps no driver point and no account observation.
+/// Memory is O(live), not O(run).
+///
+/// Commands keeps the whole command journal and every account observation,
+/// and no driver point. Full keeps everything: the command journal, every
+/// driver point and every account observation, which is the record every run
+/// kept before this field existed and is O(run) in memory. A host that reads
+/// the whole run's events once it has ended asks for Full (or Commands).
+///
+/// Folded into the spec digest only when it is not Window, so a spec that
+/// leaves the default keeps the digest it had before the field existed.
+enum class NativeEventRetention : std::uint32_t {
+    Window = 0,
+    Full = 1,
+    Commands = 2,
+};
+
 /// One complete setup value, staged/copied by NativeStrategyHost before it is
 /// applied at begin. This aggregate owns no host phase, consumed-run counter,
 /// parsed-calendar authority, physical account, or C transport presence mask.
@@ -606,6 +634,9 @@ struct NativeRunSpec {
     /// pre-feed one. Folded into it only when the block is present, exactly as
     /// `margin` and `risk` are.
     std::optional<NativeAuxiliaryFeed> auxiliary_feed;
+    /// What native_events() can still return; see NativeEventRetention.
+    /// Folded into the spec digest only when it is not Window.
+    NativeEventRetention event_retention = NativeEventRetention::Window;
 };
 
 /// Which field a validation refused, in deterministic first-error order. It is
@@ -634,6 +665,7 @@ enum class NativeRunSpecField : std::uint8_t {
     RiskLimits, RiskDrawdown, RiskIntradayLoss, RiskLossDays, RiskFillsPerDay,
     RiskDayBasis, RiskAction,
     AuxiliaryFeedTimeframe, AuxiliaryFeedBars, SubscriptionSource,
+    EventRetention,
 };
 
 /// Why a field was refused. Read it beside NativeRunSpecValidation::field: the
@@ -739,6 +771,8 @@ enum class NativeRunSpecError : std::uint8_t {
     // the same reason on the curve. Read with NativeRunSpecField::None: there
     // is no "where", only a "when".
     WrongPhase,
+    // An event retention outside its enumeration.
+    UnknownEventRetention,
 };
 
 /// Allocation-free facts suitable for the host's durable failure variant.

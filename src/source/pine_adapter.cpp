@@ -2022,6 +2022,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         inert.sample_eligibility = IntrabarPath::SampleEligibility::ContinuousSegments;
         spec.intrabar.value = std::move(inert);
     }
+    // The adapter reads the command journal above its own receipt cursor and
+    // nowhere else, and acknowledges the cursor as it moves
+    // (observe_terminal_receipts), so it keeps only the unread window: the
+    // kernel default, which folds nothing into the spec digest.
+    spec.event_retention = NativeEventRetention::Window;
     const auto validation = validate_native_run_spec(spec);
     if (!validation) {
         throw std::logic_error("Pine adapter produced invalid native run spec field "

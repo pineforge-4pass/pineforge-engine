@@ -322,6 +322,11 @@ void hash_spec(F& f, const NativeRunSpec& spec,
         f.u(spec.max_recalculations_per_point);
         f.u(static_cast<uint64_t>(spec.open_bar_view));
     }
+    // V19-B: event retention folds only where a host moved it off the
+    // Window default, so every spec that leaves it keeps its digest.
+    if (spec.event_retention != NativeEventRetention::Window) {
+        f.u(static_cast<uint64_t>(spec.event_retention));
+    }
 }
 
 template <class F>

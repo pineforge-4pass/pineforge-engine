@@ -936,6 +936,10 @@ list(APPEND TEST_SOURCES test_native_state_continuation)
 # live deferred group-adjustment chain pinning the window. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_journal_window)
+# R5 V19-B: what a run keeps of its event record (NativeRunSpec::
+# event_retention) and the host acknowledgement that closes a polling host's
+# window. Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_event_retention)
 # R5 PERF-K1: every calendar-derived value a bare host observes over twelve
 # scenarios (intervals, coordinates, session-day facts, series buckets, driver
 # rows), pinned on fc7aad62 -- the values the session-day memo must reproduce.

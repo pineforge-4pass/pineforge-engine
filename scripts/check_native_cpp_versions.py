@@ -370,6 +370,19 @@ def check_texts(files):
                    'ScopeBasisbasis=ScopeBasis::AtMatch;'):
         if pinned not in fraction:
             raise ValueError('ScopeFraction omits a pinned default: ' + pinned)
+    # R5 V19-B: the chain root is appended after origin (every existing
+    # aggregate initializer keeps its meaning), and a trail's arm ordinal is
+    # appended to both of its tracking states.
+    definition = re.sub(r'\s+', '', body(order, r'struct\s+RequestDefinition\s*\{',
+                                          'request definition'))
+    if not definition.endswith('RequestOriginorigin=RequestOrigin::Host;'
+                               'std::optional<RequestHandle>root;'):
+        raise ValueError('RequestDefinition must end with origin, then the chain root')
+    for state, first in (('TrailTrack', 'doublebest=0.0;'),
+                         ('TrailActive', 'doublebest_at_trigger=0.0;')):
+        shape = re.sub(r'\s+', '', body(order, r'struct\s+' + state + r'\s*\{', state))
+        if shape != first + 'uint64_tactivation_ordinal=0;':
+            raise ValueError(state + ' must keep its best, then the arm ordinal')
     live = re.sub(r'\s+', '', body(order, r'struct\s+LiveRequest\s*\{', 'live request'))
     for pinned in ('std::optional<double>sizing_units;',
                    'std::optional<double>sizing_scope;',
@@ -434,7 +447,8 @@ def check_texts(files):
                    "NativeMarginEquityBasis", "NativeLiquidationLevelBase",
                    "NativeCalculationTrigger", "NativeOpenBarView",
                    "NativeLossLimit", "NativeRiskDay", "NativeRiskAction",
-                   "NativeRiskLimits", "NativeSeriesSource", "NativeAuxiliaryFeed"),
+                   "NativeRiskLimits", "NativeSeriesSource", "NativeAuxiliaryFeed",
+                   "NativeEventRetention"),
             "native_run_spec_v3",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
@@ -481,7 +495,8 @@ def check_texts(files):
             'std::uint32_tmax_recalculations_per_point=8;',
             'NativeOpenBarViewopen_bar_view=NativeOpenBarView::Complete;',
             'std::optional<NativeRiskLimits>risk;',
-            'std::optional<NativeAuxiliaryFeed>auxiliary_feed;'):
+            'std::optional<NativeAuxiliaryFeed>auxiliary_feed;',
+            'NativeEventRetentionevent_retention=NativeEventRetention::Window;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v3 omits required policy member: ' + member)
     subscription = body(spec, r'struct\s+NativeTimeframeSubscription\s*\{',
@@ -497,6 +512,12 @@ def check_texts(files):
     auxiliary_feed = body(spec, r'struct\s+NativeAuxiliaryFeed\s*\{', 'native auxiliary feed')
     if re.sub(r'\s+', '', auxiliary_feed) != 'std::stringtf;std::vector<Bar>bars;':
         raise ValueError('native auxiliary feed must preserve its member order and shape')
+    # R5 V19-B: the retention policy is appended last with its Window default,
+    # which folds nothing, and its values are the C words.
+    retention = body(spec, r'enum\s+class\s+NativeEventRetention\s*:\s*std::uint32_t\s*\{',
+                     'native event retention')
+    if re.sub(r'\s+', '', retention) != 'Window=0,Full=1,Commands=2,':
+        raise ValueError('native event retention must keep Window=0, Full=1, Commands=2')
     series_source = body(spec, r'enum\s+class\s+NativeSeriesSource\s*:\s*std::uint8_t\s*\{',
                          'native series source')
     if re.sub(r'\s+', '', series_source) != 'Input=0,AuxiliaryFeed=1,':
@@ -535,7 +556,8 @@ def check_texts(files):
                   'Calculation', 'OpenBarView',
                   'RiskLimits', 'RiskDrawdown', 'RiskIntradayLoss', 'RiskLossDays',
                   'RiskFillsPerDay', 'RiskDayBasis', 'RiskAction',
-                  'AuxiliaryFeedTimeframe', 'AuxiliaryFeedBars', 'SubscriptionSource'):
+                  'AuxiliaryFeedTimeframe', 'AuxiliaryFeedBars', 'SubscriptionSource',
+                  'EventRetention'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v3 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
@@ -555,7 +577,8 @@ def check_texts(files):
                   'InvalidAuxiliaryFeedTimeframe', 'AuxiliaryFeedNotFinerThanInput',
                   'UnorderedAuxiliaryFeedBars', 'InvalidAuxiliaryFeedBar',
                   'AuxiliaryFeedWithoutTimeframe', 'UnknownSeriesSource',
-                  'SubscriptionWithoutAuxiliaryFeed', 'SubscriptionFinerThanAuxiliaryFeed'):
+                  'SubscriptionWithoutAuxiliaryFeed', 'SubscriptionFinerThanAuxiliaryFeed',
+                  'UnknownEventRetention'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
@@ -580,6 +603,7 @@ def check_texts(files):
             or 'MarginModelConflict' not in spec_src
             or 'spec.risk' not in spec_src
             or 'ZeroRiskLimit' not in spec_src
+            or 'spec.event_retention' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')

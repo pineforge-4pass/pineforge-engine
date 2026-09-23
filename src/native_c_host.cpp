@@ -665,6 +665,8 @@ PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionWithoutAuxiliaryFeed,
 PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionFinerThanAuxiliaryFeed,
             PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED);
 PF_PIN_WORD(pineforge::NativeRunSpecError::WrongPhase, PF_NATIVE_SPEC_ERROR_WRONG_PHASE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownEventRetention,
+            PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION);
 PF_PIN_WORD(pineforge::NativeRunSpecField::None, PF_NATIVE_SPEC_FIELD_NONE);
 PF_PIN_WORD(pineforge::NativeRunSpecField::SessionKey, PF_NATIVE_SPEC_FIELD_SESSION_KEY);
 PF_PIN_WORD(pineforge::NativeRunSpecField::RunNumber, PF_NATIVE_SPEC_FIELD_RUN_NUMBER);
@@ -750,6 +752,7 @@ PF_PIN_WORD(pineforge::NativeRunSpecField::AuxiliaryFeedBars,
             PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS);
 PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionSource,
             PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE);
+PF_PIN_WORD(pineforge::NativeRunSpecField::EventRetention, PF_NATIVE_SPEC_FIELD_EVENT_RETENTION);
 PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::None, PF_NATIVE_APPEND_ERROR_NONE);
 PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::HostFailed,
             PF_NATIVE_APPEND_ERROR_HOST_FAILED);
@@ -1098,6 +1101,7 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecError value) noexcept {
     case V::SubscriptionFinerThanAuxiliaryFeed:
         return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED;
     case V::WrongPhase: return PF_NATIVE_SPEC_ERROR_WRONG_PHASE;
+    case V::UnknownEventRetention: return PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -1169,6 +1173,7 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecField value) noexcept {
     case V::AuxiliaryFeedTimeframe: return PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME;
     case V::AuxiliaryFeedBars: return PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS;
     case V::SubscriptionSource: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE;
+    case V::EventRetention: return PF_NATIVE_SPEC_FIELD_EVENT_RETENTION;
     }
     return static_cast<std::uint32_t>(value);
 }

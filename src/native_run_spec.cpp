@@ -121,6 +121,16 @@ bool valid_open_bar_view(NativeOpenBarView view) noexcept {
     return false;
 }
 
+bool valid_event_retention(NativeEventRetention retention) noexcept {
+    switch (retention) {
+    case NativeEventRetention::Window:
+    case NativeEventRetention::Full:
+    case NativeEventRetention::Commands:
+        return true;
+    }
+    return false;
+}
+
 bool valid_path_order(NativePathOrder order) noexcept {
     switch (order) {
     case NativePathOrder::Auto:
@@ -595,6 +605,8 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         return {Error::UnknownCalculationTrigger, Field::Calculation};
     if (!valid_open_bar_view(spec.open_bar_view))
         return {Error::UnknownOpenBarView, Field::OpenBarView};
+    if (!valid_event_retention(spec.event_retention))
+        return {Error::UnknownEventRetention, Field::EventRetention};
     if (const auto feed =
             auxiliary_feed_shapes(spec.auxiliary_feed, spec.timeframe_undetected);
         !feed) {

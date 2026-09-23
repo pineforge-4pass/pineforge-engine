@@ -1157,12 +1157,15 @@ typedef enum pf_native_spec_error_e {
     PF_NATIVE_SPEC_ERROR_UNKNOWN_SERIES_SOURCE                  = 50,
     PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_WITHOUT_AUXILIARY_FEED    = 51,
     PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED = 52,
-    PF_NATIVE_SPEC_ERROR_WRONG_PHASE                            = 53  /**< The CALL was refused
+    PF_NATIVE_SPEC_ERROR_WRONG_PHASE                            = 53, /**< The CALL was refused
                                                                        *   before any field was
                                                                        *   judged: not in the
                                                                        *   phase it is legal
                                                                        *   in. Read with
                                                                        *   FIELD_NONE. */
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION                = 54  /**< An `event_retention`
+                                                                       *   word outside
+                                                                       *   #pf_native_event_retention_t. */
 } pf_native_spec_error_t;
 
 /** Where a declaration was refused — `NativeRunSpecField`, the first field
@@ -1234,7 +1237,8 @@ typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_RISK_ACTION                 = 60,
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME    = 61,
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS         = 62,
-    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63
+    PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63,
+    PF_NATIVE_SPEC_FIELD_EVENT_RETENTION             = 64
 } pf_native_spec_field_t;
 
 /** Why an append was refused — `NativeAuxiliaryAppendError`: the `error`
