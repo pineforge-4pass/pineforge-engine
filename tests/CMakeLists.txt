@@ -1583,6 +1583,16 @@ endif()
 add_test(NAME test_l4g_runtime_budget_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_runtime_budget.py)
 
+# R5 lane PERF-P7: the lookup-index scaling row's ratio is a Release-only
+# gate, as the runtime budget's is. A non-Release library asserts every
+# indexed lookup equal to the walk it replaces (pine_adapter.cpp,
+# native_order.cpp), which restores the walk's cost by design; there the row
+# still runs both workloads and checks what they produced.
+if(TARGET test_adapter_lookup_index_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    set_tests_properties(test_adapter_lookup_index_scaling PROPERTIES
+        ENVIRONMENT "PINEFORGE_P7_SCALING_GATE=0")
+endif()
+
 
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.

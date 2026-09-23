@@ -29,6 +29,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <vector>
@@ -135,9 +137,17 @@ Leg replay(Workload workload, const std::vector<Bar>& bars) {
     return leg;
 }
 
+// tests/CMakeLists.txt turns the ratio gate off for a non-Release library,
+// whose assertions walk beside every indexed lookup: there the row runs each
+// workload once, at a quarter of the length, and checks what it produced.
+bool gated() {
+    const char* gate = std::getenv("PINEFORGE_P7_SCALING_GATE");
+    return !(gate && std::strcmp(gate, "0") == 0);
+}
+
 Leg best_of_five(Workload workload, const std::vector<Bar>& bars) {
     Leg best;
-    for (int attempt = 0; attempt < 5; ++attempt) {
+    for (int attempt = 0; attempt < (gated() ? 5 : 1); ++attempt) {
         const Leg sample = replay(workload, bars);
         if (attempt == 0 || sample.seconds < best.seconds) best = sample;
     }
@@ -148,19 +158,24 @@ constexpr int kBars = 6000;
 constexpr double kShapeBound = 5.0;
 
 void cost_is_linear_in_the_bars(Workload workload, const char* name) {
-    const std::vector<Bar> small_tape = tape(kBars);
-    const std::vector<Bar> large_tape = tape(kBars * 4);
+    const int bars = gated() ? kBars : kBars / 4;
+    const std::vector<Bar> small_tape = tape(bars);
+    const std::vector<Bar> large_tape = tape(bars * 4);
     const Leg small = best_of_five(workload, small_tape);
     const Leg large = best_of_five(workload, large_tape);
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
     std::printf("%s: %d bars %.4fs (%d trades), %d bars %.4fs (%d trades), ratio %.2f "
-                "(bound %.1f)\n", name, kBars, small.seconds, small.trades, kBars * 4,
+                "(bound %.1f)\n", name, bars, small.seconds, small.trades, bars * 4,
                 large.seconds, large.trades, ratio, kShapeBound);
     CHECK(small.seconds > 0.0);
     // The workloads did what they describe: a reversal (or a bracket fill)
     // on a steady share of the bars, four times as many on the long tape.
-    CHECK(small.trades >= kBars / 8);
+    CHECK(small.trades >= bars / 8);
     CHECK(large.trades >= 3 * small.trades);
+    if (!gated()) {
+        std::printf("  (ratio not gated: non-Release library)\n");
+        return;
+    }
     CHECK(ratio < kShapeBound);
 }
 
