@@ -440,7 +440,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1590-1601`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:8195-8233`), which admits the begin, checks the
+(`native_execution_consumer.cpp:8420-8458`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -593,11 +593,11 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5048-5052`). Requests accepted before the
+`native_execution_consumer.cpp:5272-5276`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:6302-6304`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:6526-6528`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6208`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
@@ -1860,7 +1860,7 @@ always had — `set_broker_state_hash_recording(true)`
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:6992`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7216`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
