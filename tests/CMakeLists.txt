@@ -913,6 +913,11 @@ list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
 list(APPEND TEST_SOURCES test_native_match_rescan_scaling)
 list(APPEND TEST_SOURCES test_native_match_row_reuse)
 list(APPEND TEST_SOURCES test_native_match_hash_witness)
+# R5 PERF-K24 (K2): a retained lower feed hands each script bar its sub-bars
+# by binary search, so a lower-timeframe run stays linear in its length; the
+# values the selection feeds are pinned. Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_intrabar_lower_lookup)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

@@ -7125,10 +7125,17 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     if (lower) {
         const int64_t begin = base.open_ms;
         const int64_t end = script_.interval.next_input_open_ms;
-        for (const auto& candidate : lower->bars) {
-            if (candidate.timestamp >= begin && candidate.timestamp < end) {
-                sub_bars.push_back(&candidate);
-            }
+        // preflight_intrabar_path refused this feed unless its stamps strictly
+        // increase (NotStrictlyIncreasing, under either label policy), so the
+        // bars of [begin, end) are one contiguous run of it, in feed order:
+        // find the first by binary search and walk to the window's end. A
+        // scan of the whole feed for every script bar made the run quadratic
+        // in its length.
+        auto candidate = std::lower_bound(
+            lower->bars.begin(), lower->bars.end(), begin,
+            [](const Bar& bar, int64_t time) { return bar.timestamp < time; });
+        for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {
+            sub_bars.push_back(&*candidate);
         }
         // The generic lower-feed path follows the legacy pump's fallback: a
         // script bar with no assigned lower bars walks its own OHLC path.
