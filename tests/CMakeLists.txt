@@ -994,6 +994,11 @@ list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 # of randomized zoned, aggregated and streamed runs. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_lookup_memos)
+# R5 lane PERF-L1: the inline abort and projection checks fail every boundary
+# as f71cd820 did (pinned), the array-free margin sizing price is the array
+# walk bit for bit, and a frame constructed from its parts is the aggregate
+# the callbacks built. Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_point_checks)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

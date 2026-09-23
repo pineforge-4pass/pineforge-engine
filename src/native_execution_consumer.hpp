@@ -309,6 +309,16 @@ private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;
         uint64_t acceptance_cutoff = 0;
+        CurrentExecutionFrame() = default;
+        CurrentExecutionFrame(const NativeCurrentPointView& at, uint64_t cutoff)
+            : point(at), acceptance_cutoff(cutoff) {}
+        // A callback's frame from its parts, so the optional that holds it
+        // constructs it in place (R5 lane PERF-L1).
+        CurrentExecutionFrame(const NativeDecisionContext& decision, double price,
+                              NativeCurrentQuoteKind quote_kind, uint64_t quote_origin_ordinal,
+                              uint64_t cutoff)
+            : point{decision, price, quote_kind, quote_origin_ordinal},
+              acceptance_cutoff(cutoff) {}
     };
     // Stable append-only history index, never a borrowed element reference.
     struct AppliedNotification {
@@ -1052,11 +1062,26 @@ private:
     bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
     bool deliver_tick(BacktestEngine& engine, const TradeTick& tick);
     // The cooperative abort alone: check_abort_or_projection's first half, for
-    // a boundary no host code has run since the last full check.
+    // a boundary no host code has run since the last full check. Both answer
+    // a boundary that passes inline and leave the failure to latch_abort and
+    // latch_projection_mismatch (R5 lane PERF-L1).
     bool check_abort(BacktestEngine& engine, NativeFailureOperation operation,
-                     uint64_t ordinal = 0);
+                     uint64_t ordinal = 0) {
+        if (failed()) return false;
+        if (!engine.abort_requested_.load(std::memory_order_relaxed)) return true;
+        latch_abort(engine, operation, ordinal);
+        return false;
+    }
     bool check_abort_or_projection(BacktestEngine& engine, NativeFailureOperation operation,
-                                   uint64_t ordinal = 0);
+                                   uint64_t ordinal = 0) {
+        if (!check_abort(engine, operation, ordinal)) return false;
+        if (projection_ok(engine)) return true;
+        latch_projection_mismatch(engine, operation, ordinal);
+        return false;
+    }
+    void latch_abort(BacktestEngine& engine, NativeFailureOperation operation, uint64_t ordinal);
+    void latch_projection_mismatch(BacktestEngine& engine, NativeFailureOperation operation,
+                                   uint64_t ordinal);
     void present_refusal(BacktestEngine& engine, const char* text);
     bool finalize_elapsed_slots(BacktestEngine& engine, int64_t exclusive_end_ms);
     bool emit_quiet_carried_open(BacktestEngine& engine,

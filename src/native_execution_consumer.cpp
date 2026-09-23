@@ -1481,33 +1481,23 @@ bool NativeExecutionConsumer::admit_public_stream_input(BacktestEngine& engine,
     return true;
 }
 
-bool NativeExecutionConsumer::check_abort(BacktestEngine& engine,
+void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
                                           NativeFailureOperation operation,
                                           uint64_t ordinal) {
-    if (failed()) return false;
-    if (engine.abort_requested_.load(std::memory_order_relaxed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
-        const auto* spec = spec_ptr();
-        if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
-            render(engine, "native run aborted");
-        } else {
-            engine.last_error_.clear();
-        }
-        return false;
+    fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
+    const auto* spec = spec_ptr();
+    if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
+        render(engine, "native run aborted");
+    } else {
+        engine.last_error_.clear();
     }
-    return true;
 }
 
-bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
+void NativeExecutionConsumer::latch_projection_mismatch(BacktestEngine& engine,
                                                         NativeFailureOperation operation,
                                                         uint64_t ordinal) {
-    if (!check_abort(engine, operation, ordinal)) return false;
-    if (!projection_ok(engine)) {
-        fail(engine, NativeFailure{NativeFailureCode::ProjectionMismatch, operation, ordinal});
-        render(engine, "native projection mismatch");
-        return false;
-    }
-    return true;
+    fail(engine, NativeFailure{NativeFailureCode::ProjectionMismatch, operation, ordinal});
+    render(engine, "native projection mismatch");
 }
 
 double NativeExecutionConsumer::ladder_tick() const {
@@ -3216,29 +3206,30 @@ bool NativeExecutionConsumer::margin_check_admitted(
 double NativeExecutionConsumer::margin_sizing_price(
         bool short_side, NativePathPhase phase, double fallback) const noexcept {
     if (!has_margin_path_) return fallback;
-    const NativePathPhase order[4] = {
-        NativePathPhase::Open,
-        margin_path_high_first_ ? NativePathPhase::High : NativePathPhase::Low,
-        margin_path_high_first_ ? NativePathPhase::Low : NativePathPhase::High,
-        NativePathPhase::Close,
-    };
-    const double prices[4] = {
-        margin_path_bar_.open,
-        margin_path_high_first_ ? margin_path_bar_.high : margin_path_bar_.low,
-        margin_path_high_first_ ? margin_path_bar_.low : margin_path_bar_.high,
-        margin_path_bar_.close,
-    };
+    // The waypoints in walk order -- open, the first extreme, the second,
+    // close -- and the position of `phase` among them. Spelled without local
+    // arrays (R5 lane PERF-L1), which hardened toolchains stack-protect at
+    // every bar-open check: the same order, the same scan.
+    const NativePathPhase first = margin_path_high_first_ ? NativePathPhase::High
+                                                          : NativePathPhase::Low;
+    const NativePathPhase second = margin_path_high_first_ ? NativePathPhase::Low
+                                                           : NativePathPhase::High;
     int current = -1;
-    for (int index = 0; index < 4; ++index) {
-        if (order[index] == phase) {
-            current = index;
-            break;
-        }
-    }
+    if (phase == NativePathPhase::Open) current = 0;
+    else if (phase == first) current = 1;
+    else if (phase == second) current = 2;
+    else if (phase == NativePathPhase::Close) current = 3;
     if (current < 0) return fallback;
+    const auto price_at = [&](int index) {
+        switch (index) {
+        case 1: return margin_path_high_first_ ? margin_path_bar_.high : margin_path_bar_.low;
+        case 2: return margin_path_high_first_ ? margin_path_bar_.low : margin_path_bar_.high;
+        default: return margin_path_bar_.close;
+        }
+    };
     double adverse = fallback;
     for (int index = current + 1; index < 4; ++index) {
-        const double price = prices[index];
+        const double price = price_at(index);
         if (!std::isfinite(price) || !(price > 0.0)) continue;
         if (!std::isfinite(adverse) || (short_side ? price > adverse : price < adverse)) {
             adverse = price;
@@ -6700,11 +6691,7 @@ void NativeExecutionConsumer::invoke_applied_callback(
         if (applied.ordinal != notification.ordinal)
             throw std::logic_error("native notification identity mismatch");
         // `notification` is the drain's own copy, never the frame it replaces.
-        {
-            auto& frame = current_frame_.emplace();
-            frame.point = notification.point;
-            frame.acceptance_cutoff = next_timeline_ordinal_ - 1;
-        }
+        current_frame_.emplace(notification.point, next_timeline_ordinal_ - 1);
         callback_context_ = notification.point.decision;
         callback_context_.decision_floor_ms = decision_floor();
         current_frame_->point.decision.decision_floor_ms = decision_floor();
@@ -6814,17 +6801,12 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     if (callback_context_.script_bar_open_ms == 0) {
         callback_context_.script_bar_open_ms = point.coordinate.open_ms;
     }
-    // The frame is built where it lives, one copy of the context rather than
-    // three (R5 lane PERF-L1); every field is assigned, so it holds what the
+    // The frame is constructed where it lives, from its parts: one copy of the
+    // context rather than three (R5 lane PERF-L1), every field what the
     // aggregate it replaces held.
-    {
-        auto& frame = current_frame_.emplace();
-        frame.point.decision = callback_context_;
-        frame.point.price = point.raw_price;
-        frame.point.quote_kind = NativeCurrentQuoteKind::MarketDecision;
-        frame.point.quote_origin_ordinal = point.coordinate.ordinal;
-        frame.acceptance_cutoff = next_timeline_ordinal_ - 1;
-    }
+    current_frame_.emplace(callback_context_, point.raw_price,
+                           NativeCurrentQuoteKind::MarketDecision, point.coordinate.ordinal,
+                           next_timeline_ordinal_ - 1);
     open_point_epoch();
     // L5 open-bar view. OpenOnly masks this one callback's lookahead: the
     // host sees H = L = C = open and no volume, and so does current_bar_
@@ -6919,14 +6901,8 @@ bool NativeExecutionConsumer::invoke_tick_callback(
     tick_callback_context_ = presented;
     tick_callback_bar_ = bar;
     callback_context_ = presented.decision;
-    {
-        auto& frame = current_frame_.emplace();
-        frame.point.decision = callback_context_;
-        frame.point.price = bar.close;
-        frame.point.quote_kind = NativeCurrentQuoteKind::MarketDecision;
-        frame.point.quote_origin_ordinal = callback_context_.coordinate.ordinal;
-        frame.acceptance_cutoff = next_timeline_ordinal_ - 1;
-    }
+    current_frame_.emplace(callback_context_, bar.close, NativeCurrentQuoteKind::MarketDecision,
+                           callback_context_.coordinate.ordinal, next_timeline_ordinal_ - 1);
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Tick;
     try {
@@ -6988,13 +6964,9 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     if (callback_context_.sub_index < 0) callback_context_.sub_index = 0;
     if (callback_context_.sub_bar_open_ms == 0) callback_context_.sub_bar_open_ms = coordinate.open_ms;
     if (callback_context_.script_bar_open_ms == 0) callback_context_.script_bar_open_ms = coordinate.open_ms;
-    {
-        // The quote kind and origin keep the view's defaults, as they did.
-        auto& frame = current_frame_.emplace();
-        frame.point.decision = callback_context_;
-        frame.point.price = bar.close;
-        frame.acceptance_cutoff = next_timeline_ordinal_ - 1;
-    }
+    // The quote kind and origin are the view's defaults, as they were.
+    current_frame_.emplace(callback_context_, bar.close, NativeCurrentQuoteKind::MarketDecision,
+                           uint64_t{0}, next_timeline_ordinal_ - 1);
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Bar;
     open_point_epoch();
