@@ -396,7 +396,17 @@ to `VWAP::compute / recompute`; Pine v6's 3-tuple form
 backed by the `VWAPBands` wrapper class (`ta.hpp`), which routes the
 standard `compute / recompute` dispatch to
 `VWAP::compute_bands / recompute_bands` with the construction-time
-`stdev_mult` (see `tests/test_vwap_bands.cpp`). Official `ta.obv`,
+`stdev_mult` (see `tests/test_vwap_bands.cpp`). `VWAP` restarts its
+accumulation when the symbol's session day changes, which is Pine's default
+anchor. Any other anchor is `AnchoredVWAP`: `compute(src, volume, anchor)`
+restarts the sums on every bar whose `anchor` is true (that bar is the first
+of the new accumulation) and answers `na` until the first such bar;
+`compute_bands(src, volume, anchor, stdev_mult)` is the 3-tuple form with a
+per-bar multiplier, and `AnchoredVWAPBands(stdev_mult)` wraps it for the
+standard `compute / recompute` dispatch. The arithmetic is `VWAP`'s, so an
+anchor on exactly `VWAP`'s reset bars (and on the first bar) reproduces it
+bit for bit; `PF_VWAP_HAS_ANCHOR_INPUT` marks the forms' presence (see
+`tests/test_ta_anchored_vwap.cpp`). Official `ta.obv`,
 `ta.accdist`, `ta.nvi`, `ta.pvi`, `ta.pvt`, `ta.wad`, `ta.wvad`, and
 `ta.iii` are series variables backed by `OBV`, `AccDist`, `NVI`, `PVI`,
 `PVT`, `WAD`, `WVAD`, and `III`. Parenthesized call forms such as

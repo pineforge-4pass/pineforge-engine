@@ -827,7 +827,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.tsi()` | fn | ✅ Runtime | `ta::TSI` class | |
 | `ta.valuewhen()` | fn | ✅ Runtime | `ta::ValueWhen` class | |
 | `ta.variance()` | fn | ✅ Runtime | `ta::Variance` class | |
-| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` (single value) + `ta::VWAPBands` 3-tuple class (`VWAPBandsResult{vwap,upper,lower}`) | Both overloads supported; Sprint B added 3-arg `(src, anchor, stdev_mult)` form with running variance |
+| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` (single value) + `ta::VWAPBands` 3-tuple class (`VWAPBandsResult{vwap,upper,lower}`); any anchor other than the session day: `ta::AnchoredVWAP` + `ta::AnchoredVWAPBands` | Both overloads supported; Sprint B added 3-arg `(src, anchor, stdev_mult)` form with running variance. `AnchoredVWAP::compute(src, volume, anchor)` restarts on each bar the anchor is true and is na until the first (R5 lane TA1) |
 | `ta.vwma()` | fn | ✅ Runtime | `ta::VWMA` class | |
 | `ta.wma()` | fn | ✅ Runtime | `ta::WMA` class | |
 | `ta.wpr()` | fn | ✅ Runtime | `ta::WPR` class | |

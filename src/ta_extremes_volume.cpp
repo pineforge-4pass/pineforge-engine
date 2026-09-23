@@ -664,6 +664,46 @@ VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp
     return {mean, mean + band_offset, mean - band_offset};
 }
 
+// --- Anchored VWAP ---
+// VWAP's sums, restarted by the caller's anchor instead of a calendar day:
+// the anchored bar clears them and then enters them, so it starts the new
+// accumulation, and nothing is answered before the first anchored bar. The
+// sums use VWAP's exact expressions, which is what makes an anchor on VWAP's
+// own reset bars reproduce it bit for bit.
+bool AnchoredVWAP::accumulate(double src, double volume, bool anchor) {
+    saved_cum_pv_ = cum_pv_;
+    saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
+    saved_started_ = started_;
+    if (anchor) {
+        cum_pv_ = 0.0;
+        cum_vol_ = 0.0;
+        cum_pv_sq_ = 0.0;
+        started_ = true;
+    }
+    if (!started_ || is_na(src) || is_na(volume)) return false;
+    cum_pv_ += src * volume;
+    cum_pv_sq_ += src * src * volume;
+    cum_vol_ += volume;
+    return cum_vol_ != 0.0;
+}
+
+double AnchoredVWAP::compute(double src, double volume, bool anchor) {
+    if (!accumulate(src, volume, anchor)) return na<double>();
+    return cum_pv_ / cum_vol_;
+}
+
+VWAPBandsResult AnchoredVWAP::compute_bands(double src, double volume, bool anchor,
+                                            double stdev_mult) {
+    if (!accumulate(src, volume, anchor)) return {na<double>(), na<double>(), na<double>()};
+    double mean = cum_pv_ / cum_vol_;
+    double variance = cum_pv_sq_ / cum_vol_ - mean * mean;
+    if (variance < 0.0) variance = 0.0;  // guard against floating-point underflow
+    double stdev = std::sqrt(variance);
+    double band_offset = stdev_mult * stdev;
+    return {mean, mean + band_offset, mean - band_offset};
+}
+
 // --- Mode ---
 double Mode::compute(double src) {
     if (is_na(src)) return na<double>();
@@ -861,6 +901,24 @@ VWAPBandsResult VWAP::recompute_bands(double src, double volume, int64_t timesta
     cum_pv_sq_ = saved_cum_pv_sq_;
     anchor_day_ = saved_anchor_day_;
     return compute_bands(src, volume, timestamp_ms, stdev_mult, tz, session);
+}
+
+// --- Anchored VWAP ---
+double AnchoredVWAP::recompute(double src, double volume, bool anchor) {
+    cum_pv_ = saved_cum_pv_;
+    cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
+    started_ = saved_started_;
+    return compute(src, volume, anchor);
+}
+
+VWAPBandsResult AnchoredVWAP::recompute_bands(double src, double volume, bool anchor,
+                                              double stdev_mult) {
+    cum_pv_ = saved_cum_pv_;
+    cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
+    started_ = saved_started_;
+    return compute_bands(src, volume, anchor, stdev_mult);
 }
 
 // --- Mode ---

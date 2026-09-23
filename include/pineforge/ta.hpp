@@ -1179,6 +1179,62 @@ public:
     }
 };
 
+// --- Anchored VWAP (the accumulation restarts where the caller says) ---
+// VWAP over the bars since the most recent bar whose `anchor` was true, that
+// bar included: an anchored bar starts a new accumulation, and until the first
+// anchored bar the value is na (ta.vwap's anchor: "When true, calculations
+// reset"; "Calculations only begin the first time the anchor condition
+// becomes true. Until then, the function returns na"). The arithmetic is
+// VWAP's -- running sums of src * volume, src * src * volume and volume, the
+// bands mean +/- stdev_mult * sqrt(max(0, sum(src*src*volume) / sum(volume) -
+// mean * mean)) -- so an anchor raised on the bars where VWAP's session day
+// changes, and on the first bar, reproduces VWAP bit for bit. An na src or
+// volume answers na and adds nothing; an anchor on such a bar still resets the
+// sums. A zero summed volume answers na. recompute() re-runs the current bar
+// from the state its first compute() found, anchor included.
+class AnchoredVWAP {
+    double cum_pv_ = 0.0;
+    double cum_vol_ = 0.0;
+    double cum_pv_sq_ = 0.0;
+    bool started_ = false;   // an anchored bar has been seen
+
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_cum_pv_ = 0.0, saved_cum_vol_ = 0.0, saved_cum_pv_sq_ = 0.0;
+    bool saved_started_ = false;
+
+    // Folds one bar into the sums; false when the bar has no value.
+    bool accumulate(double src, double volume, bool anchor);
+
+public:
+    AnchoredVWAP() = default;
+    double compute(double src, double volume, bool anchor);
+    double recompute(double src, double volume, bool anchor);
+    VWAPBandsResult compute_bands(double src, double volume, bool anchor, double stdev_mult);
+    VWAPBandsResult recompute_bands(double src, double volume, bool anchor, double stdev_mult);
+};
+
+// The 3-tuple form with a construction-time stdev_mult, for the standard
+// compute()/recompute() dispatch (VWAPBands' shape). A per-bar multiplier goes
+// through AnchoredVWAP::compute_bands directly.
+class AnchoredVWAPBands {
+    AnchoredVWAP vwap_;
+    double stdev_mult_;
+public:
+    explicit AnchoredVWAPBands(double stdev_mult) : stdev_mult_(stdev_mult) {}
+    VWAPBandsResult compute(double src, double volume, bool anchor) {
+        return vwap_.compute_bands(src, volume, anchor, stdev_mult_);
+    }
+    VWAPBandsResult recompute(double src, double volume, bool anchor) {
+        return vwap_.recompute_bands(src, volume, anchor, stdev_mult_);
+    }
+};
+
+// Feature macro: AnchoredVWAP / AnchoredVWAPBands exist (generated code may
+// compile an anchored call site out on older engines, as with
+// PF_VWAP_HAS_SESSION_ANCHOR).
+#define PF_VWAP_HAS_ANCHOR_INPUT 1
+
 // --- Statistical ---
 class Mode {
     int length_;

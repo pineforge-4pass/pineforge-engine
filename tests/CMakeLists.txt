@@ -1004,6 +1004,10 @@ list(APPEND TEST_SOURCES test_native_lookup_memos)
 # walk bit for bit, and a frame constructed from its parts is the aggregate
 # the callbacks built. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_point_checks)
+# R5 lane TA1: ta::AnchoredVWAP / AnchoredVWAPBands against a naive
+# recomputation from the last anchored bar, and against ta::VWAP's session-day
+# reset. Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_ta_anchored_vwap)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
