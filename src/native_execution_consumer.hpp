@@ -448,6 +448,21 @@ private:
         bool shared_cursor_collision = false;
         std::size_t live_index = 0;
     };
+    // Where a non-Evaluate row of match_path came from at its point: the row's
+    // request, trigger state, side and level when it was scanned, and whether
+    // its hit landed on the level. A later rescan of the same request at the
+    // same key inherits `at_level` and `trigger_level` from it.
+    struct MatchProvenance {
+        native_order::RequestHandle handle;
+        std::uint64_t point_ordinal = 0;
+        MatchKind kind = MatchKind::Fill;
+        std::size_t trigger_state_index = 0;
+        bool is_buy = false;
+        std::optional<double> trigger_level;
+        double t = 0.0;
+        double raw_price = 0.0;
+        bool at_level = false;
+    };
     // The candidate rows match_path keeps at its cursor while allowance
     // refreshes follow one another (R5 lane PERF-K3). The buffer keeps its
     // capacity from call to call; once the rows are reused they form a heap
@@ -665,6 +680,17 @@ private:
             int64_t cycle) const;
     native_order::TargetObservation read_target(
             const BacktestEngine& engine, const native_order::LiveRequest* live) const;
+    void read_target_into(const BacktestEngine& engine, const native_order::LiveRequest* live,
+                          native_order::TargetObservation& out,
+                          std::vector<native_order::RequestHandle>& handles) const;
+    void read_openings_into(const BacktestEngine& engine,
+                            const std::vector<native_order::RequestHandle>& handles,
+                            int64_t cycle,
+                            std::vector<native_order::OpeningObservation>& out) const;
+    std::optional<native_order::Side> scratch_cohort_side(
+        const BacktestEngine& engine, const native_order::LiveRequest& live);
+    bool scratch_request_is_buy(const BacktestEngine& engine,
+                                const native_order::LiveRequest& live);
     const native_order::TargetObservation* cached_cohort_target(
             const BacktestEngine& engine, const native_order::LiveRequest& live);
     void clear_cohort_target_cache() noexcept;
@@ -1052,6 +1078,26 @@ private:
     // (set_match_row_reuse). A choice between two computations of the same
     // values, so it is not run state either.
     bool match_row_reuse_ = true;
+    // match_path's other per-call scratch (R5 lane PERF-L5): the pointers a
+    // scan of more than eight live requests reads the book through, the
+    // provenance of the rows it built, and the (incarnation, kind) keys it
+    // skips at the current cursor, kept sorted. Each is emptied where the
+    // local it replaces was born, so between calls it is capacity only and a
+    // warm matcher allocates nothing per point. match_path never re-enters
+    // itself: it runs only inside the driver's delivery of an input, and a
+    // host callback cannot deliver one. Scratch, never run state, and folded
+    // into nothing.
+    std::vector<const native_order::LiveRequest*> match_snapshot_;
+    std::vector<MatchProvenance> match_provenance_;
+    std::vector<std::pair<std::uint64_t, std::uint8_t>> match_skipped_;
+    // observe_trails' copy of the book's handles, the same kind of scratch:
+    // match_path is its only caller.
+    std::vector<native_order::RequestHandle> match_trail_handles_;
+    // The target a matcher read builds when the cohort cache does not answer
+    // it (read_target_into), and the cohort's lot handles that read collects:
+    // one read at a time, each consumed before the next.
+    native_order::TargetObservation match_target_;
+    std::vector<native_order::RequestHandle> match_target_handles_;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

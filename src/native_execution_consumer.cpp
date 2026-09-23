@@ -13,7 +13,6 @@
 #include <cstring>
 #include <limits>
 #include <new>
-#include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -2826,16 +2825,30 @@ native_order::OpeningObservation NativeExecutionConsumer::read_opening(
 native_order::TargetObservation NativeExecutionConsumer::read_target(
         const BacktestEngine& engine, const native_order::LiveRequest* live) const {
     native_order::TargetObservation out;
+    std::vector<native_order::RequestHandle> handles;
+    read_target_into(engine, live, out, handles);
+    return out;
+}
+
+// read_target, written over `out` (and the cohort's lot handles over
+// `handles`) so a caller that keeps both reuses their capacity (R5 lane
+// PERF-L5). Every field of `out` is rewritten.
+void NativeExecutionConsumer::read_target_into(
+        const BacktestEngine& engine, const native_order::LiveRequest* live,
+        native_order::TargetObservation& out,
+        std::vector<native_order::RequestHandle>& handles) const {
     out.current_position = read_position(engine);
-    if (!live) return out;
+    out.opening.reset();
+    out.openings.clear();
+    if (!live) return;
     if (const auto* opening = std::get_if<native_order::OpeningClose>(&live->authority)) {
         out.opening = read_opening(engine, opening->opening, opening->cycle);
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
-        out.openings = read_openings(engine, openings->openings, openings->cycle);
+        read_openings_into(engine, openings->openings, openings->cycle, out.openings);
     } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
         const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
-        if (!position) return out;
-        std::vector<native_order::RequestHandle> handles;
+        if (!position) return;
+        handles.clear();
         handles.reserve(engine.pyramid_entries_.size());
         for (const auto& lot : engine.pyramid_entries_) {
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
@@ -2843,13 +2856,41 @@ native_order::TargetObservation NativeExecutionConsumer::read_target(
                 handles.push_back(std::move(handle));
             }
         }
-        out.openings = read_openings(engine, handles, position->cycle);
+        read_openings_into(engine, handles, position->cycle, out.openings);
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&live->request().owner)) {
-        out.openings = read_openings(engine, bind->openings, bind->cycle);
+        read_openings_into(engine, bind->openings, bind->cycle, out.openings);
     } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
         out.opening = read_opening(engine, bind->opening, bind->cycle);
     }
-    return out;
+}
+
+// cohort_side and request_is_buy for the matcher, reading the target into its
+// scratch (match_target_): the same values, without a target built per read.
+// match_path and observe_trails are the only callers, and neither holds the
+// scratch across a call to either.
+std::optional<native_order::Side> NativeExecutionConsumer::scratch_cohort_side(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) {
+    if (!std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        return std::nullopt;
+    }
+    read_target_into(engine, &live, match_target_, match_target_handles_);
+    for (const auto& opening : match_target_.openings) {
+        if (!opening.has_live_matching_lot) continue;
+        if (const auto* position = std::get_if<native_order::PositionNonflat>(
+                &opening.current_position)) {
+            return position->side;
+        }
+    }
+    return std::nullopt;
+}
+
+bool NativeExecutionConsumer::scratch_request_is_buy(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) {
+    if (std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        const auto side = scratch_cohort_side(engine, live);
+        return side && *side == native_order::Side::Short;
+    }
+    return requests_.working_is_buy(live);
 }
 
 const native_order::TargetObservation* NativeExecutionConsumer::cached_cohort_target(
@@ -4117,6 +4158,11 @@ void NativeExecutionConsumer::drain_after_applied(
             note_absent(handle);
         }
 
+        // The queue drains the waiting children of its seeds: with no other
+        // seed and none waiting on the filler it would drain nothing, so the
+        // filler's seed is not built (R5 lane PERF-L5), as drain_parent_terminal
+        // already does for a single parent.
+        if (seeds.empty() && !requests_.has_waiting_children(filler)) return;
         seeds.push_back({applied, filler});
         drain_dependency_queue(engine, std::move(seeds), NativeFailureOperation::Settlement);
     } catch (const std::exception& e) {
@@ -4145,14 +4191,17 @@ void NativeExecutionConsumer::observe_trails(
     evaluation.cursor = cursor;
     evaluation.driver_class = classify_driver(point, continuous);
     evaluation.existing_matching_bit = point.matching;
-    std::vector<native_order::RequestHandle> handles;
+    // The book as it stood on entry, in the consumer's scratch: match_path is
+    // the only caller, and nothing below reaches either function again.
+    auto& handles = match_trail_handles_;
+    handles.clear();
     handles.reserve(live_requests.size());
     for (const auto& live : live_requests) handles.push_back(live.handle());
     for (const auto& handle : handles) {
         if (failed()) return;
         const auto* live = requests_.find_live(handle);
         if (!live) continue;
-        evaluation.cohort_side = cohort_side(engine, *live);
+        evaluation.cohort_side = scratch_cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
             && !evaluation.cohort_side) {
             continue;
@@ -4160,7 +4209,7 @@ void NativeExecutionConsumer::observe_trails(
         if (!requests_.evaluation_eligible(*live, evaluation)) continue;
         const auto* track = std::get_if<native_order::TrailTrack>(&live->trigger_state);
         if (!track) continue;
-        const bool buy = request_is_buy(engine, *live);
+        const bool buy = scratch_request_is_buy(engine, *live);
         if (!native_matching::trail_best_improves(track->best, price, buy)) continue;
         native_order::Preparation<native_order::PreparedMutation> prep;
         try {
@@ -4237,6 +4286,19 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
         const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
         int64_t cycle) const {
     std::vector<native_order::OpeningObservation> out;
+    read_openings_into(engine, handles, cycle, out);
+    return out;
+}
+
+// read_openings, written over `out` so a caller that keeps it reuses its
+// capacity. The rows are ordered by incarnation, ties in handle order: a
+// stable sort, whose result is unique. A short list is sorted by stable
+// insertion instead of std::stable_sort, whose libstdc++ spelling allocates
+// a merge buffer on every call; a long one keeps std::stable_sort.
+void NativeExecutionConsumer::read_openings_into(
+        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
+        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
+    out.clear();
     out.reserve(handles.size());
     for (const auto& handle : handles) {
         native_order::OpeningObservation row;
@@ -4244,11 +4306,23 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
         row.queried_cycle = cycle;
         out.push_back(std::move(row));
     }
-    std::stable_sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+    const auto by_incarnation = [](const native_order::OpeningObservation& a,
+                                   const native_order::OpeningObservation& b) {
         return a.queried_opening.incarnation < b.queried_opening.incarnation;
-    });
+    };
+    constexpr std::size_t kInsertionSortRows = 32;
+    if (out.size() <= kInsertionSortRows) {
+        for (std::size_t i = 1; i < out.size(); ++i) {
+            if (!by_incarnation(out[i], out[i - 1])) continue;
+            native_order::OpeningObservation row = std::move(out[i]);
+            std::size_t j = i;
+            for (; j > 0 && by_incarnation(row, out[j - 1]); --j) out[j] = std::move(out[j - 1]);
+            out[j] = std::move(row);
+        }
+    } else {
+        std::stable_sort(out.begin(), out.end(), by_incarnation);
+    }
     refresh_openings(engine, out);
-    return out;
 }
 
 void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
@@ -5246,18 +5320,9 @@ void NativeExecutionConsumer::match_path(
 
     using Kind = MatchKind;
     using Candidate = MatchCandidate;
-    struct CandidateProvenance {
-        native_order::RequestHandle handle;
-        std::uint64_t point_ordinal = 0;
-        Kind kind = Kind::Fill;
-        std::size_t trigger_state_index = 0;
-        bool is_buy = false;
-        std::optional<double> trigger_level;
-        double t = 0.0;
-        double raw_price = 0.0;
-        bool at_level = false;
-    };
-    std::vector<CandidateProvenance> candidate_provenance;
+    using CandidateProvenance = MatchProvenance;
+    auto& candidate_provenance = match_provenance_;
+    candidate_provenance.clear();
 
     auto same_optional_bits = [](const std::optional<double>& left,
                                  const std::optional<double>& right) {
@@ -5413,16 +5478,26 @@ void NativeExecutionConsumer::match_path(
         if (!live) return false;
         const auto* target = cached_cohort_target(engine, *live);
         const bool buy = target ? requests_.working_is_buy(*live, side_from_target(*target))
-                                : request_is_buy(engine, *live);
+                                : scratch_request_is_buy(engine, *live);
         return row.is_buy == buy
             && row.trigger_state_index == live->trigger_state.index()
             && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
     };
 
-    std::set<std::pair<uint64_t, std::uint8_t>> skipped;
+    // The (incarnation, kind) keys passed over at the current cursor: a set,
+    // kept as a sorted run in the consumer's scratch.
+    auto& skipped = match_skipped_;
+    skipped.clear();
     double skip_t = t_cursor;
     auto skip_key = [](uint64_t incarnation, Kind kind) {
         return std::pair<uint64_t, std::uint8_t>{incarnation, static_cast<std::uint8_t>(kind)};
+    };
+    auto is_skipped = [&](const std::pair<uint64_t, std::uint8_t>& key) {
+        return std::binary_search(skipped.begin(), skipped.end(), key);
+    };
+    auto skip = [&](const std::pair<uint64_t, std::uint8_t>& key) {
+        const auto at = std::lower_bound(skipped.begin(), skipped.end(), key);
+        if (at == skipped.end() || *at != key) skipped.insert(at, key);
     };
 
     // Rows survive an allowance refresh (R5 lane PERF-K3). Every live request
@@ -5496,7 +5571,6 @@ void NativeExecutionConsumer::match_path(
         // Snapshot pointers through that selection pass. The ordinary route
         // has only the two bracket siblings, so keep it on the stack.
         std::array<const native_order::LiveRequest*, 8> inline_snapshot{};
-        std::vector<const native_order::LiveRequest*> overflow_snapshot;
         const auto& live_requests = requests_.live();
         const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
         std::size_t snapshot_size = live_requests.size();
@@ -5511,6 +5585,8 @@ void NativeExecutionConsumer::match_path(
             for (std::size_t i = 0; i < snapshot_size; ++i)
                 inline_snapshot[i] = &live_requests[i];
         } else {
+            auto& overflow_snapshot = match_snapshot_;
+            overflow_snapshot.clear();
             overflow_snapshot.reserve(snapshot_size);
             for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
             snapshot = overflow_snapshot.data();
@@ -5526,15 +5602,14 @@ void NativeExecutionConsumer::match_path(
             candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point)
                 || born_on_remaining_path(*live);
             const native_order::TargetObservation* candidate_target = nullptr;
-            std::optional<native_order::TargetObservation> uncached_target;
             if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
                 // Candidate selection is read-only. Reuse its complete target
                 // observation for the side and trigger calculations, then
                 // rebuild at the selected mutation boundary below.
                 candidate_target = cached_cohort_target(engine, *live);
                 if (!candidate_target) {
-                    uncached_target = read_target(engine, live);
-                    candidate_target = &*uncached_target;
+                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    candidate_target = &match_target_;
                 }
                 candidate_eval.cohort_side = side_from_target(*candidate_target);
             }
@@ -5667,7 +5742,7 @@ void NativeExecutionConsumer::match_path(
                 erase_provenance_for(handle);
                 continue;
             }
-            if (skipped.count(skip_key(row.incarnation, row.kind))) {
+            if (is_skipped(skip_key(row.incarnation, row.kind))) {
                 erase_provenance_for(handle);
                 continue;
             }
@@ -5726,10 +5801,10 @@ void NativeExecutionConsumer::match_path(
             || born_on_remaining_path(*live);
         const auto* winner_target = cached_cohort_target(engine, *live);
         eval.cohort_side = winner_target ? side_from_target(*winner_target)
-                                         : cohort_side(engine, *live);
+                                         : scratch_cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
             && !eval.cohort_side) {
-            skipped.insert(skip_key(winner->incarnation, winner->kind));
+            skip(skip_key(winner->incarnation, winner->kind));
             continue;
         }
         if (winner->kind == Kind::Evaluate) {
@@ -5749,8 +5824,8 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                 } else {
-                    const auto obs = read_target(engine, live);
-                    if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    if (requests_.refresh_allowance(winner->handle, eval, match_target_)) {
                         rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
@@ -5767,8 +5842,9 @@ void NativeExecutionConsumer::match_path(
                     prep = requests_.prepare_evaluation(
                         winner->handle, eval, *winner_target, next_timeline_ordinal_);
                 } else {
+                    read_target_into(engine, live, match_target_, match_target_handles_);
                     prep = requests_.prepare_evaluation(
-                        winner->handle, eval, read_target(engine, live), next_timeline_ordinal_);
+                        winner->handle, eval, match_target_, next_timeline_ordinal_);
                 }
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
@@ -5781,7 +5857,7 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (std::holds_alternative<native_order::NoChange>(prep)) {
-                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                skip(skip_key(winner->incarnation, winner->kind));
                 continue;
             }
             auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
@@ -5832,7 +5908,7 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (std::holds_alternative<native_order::NoChange>(prep)) {
-                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                skip(skip_key(winner->incarnation, winner->kind));
                 continue;
             }
             auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
@@ -5843,7 +5919,7 @@ void NativeExecutionConsumer::match_path(
             if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
                 const auto* activated = requests_.find_live(winner->handle);
                 if (activated) {
-                    const bool buy = request_is_buy(engine, *activated);
+                    const bool buy = scratch_request_is_buy(engine, *activated);
                     CandidateProvenance transfer;
                     transfer.handle = winner->handle;
                     transfer.point_ordinal = P;
@@ -5862,7 +5938,7 @@ void NativeExecutionConsumer::match_path(
 
         live = scanned_request(*winner);
         if (!live) continue;
-        const bool buy = request_is_buy(engine, *live);
+        const bool buy = scratch_request_is_buy(engine, *live);
         const bool limit_governed =
             std::holds_alternative<native_order::LimitReady>(live->trigger_state)
             || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state);
@@ -5908,7 +5984,7 @@ void NativeExecutionConsumer::match_path(
                 && winner->shared_cursor_collision);
         consuming_request_ = false;
         if (failed()) return;
-        if (!outcome) skipped.insert(skip_key(winner->incarnation, winner->kind));
+        if (!outcome) skip(skip_key(winner->incarnation, winner->kind));
         drain_applied_notifications(engine);
     }
     if (continuous && t_cursor < 1.0 && !failed()) {

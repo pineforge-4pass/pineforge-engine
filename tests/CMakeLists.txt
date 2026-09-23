@@ -955,6 +955,12 @@ list(APPEND TEST_SOURCES test_local_time_lock_free_hit)
 # pinned on f71cd820 (witness). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_match_band_witness)
+# R5 lane PERF-L5: a warm matcher allocates nothing per driver point -- its
+# snapshot, provenance, skip keys and trail handles live in the consumer's
+# scratch. Steady books over a window of bars allocate what an idle run does
+# (fails on f71cd820). Source-free, so it also runs in the kernel-only
+# profile.
+list(APPEND TEST_SOURCES test_native_match_allocations)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
