@@ -34,6 +34,17 @@ public:
     // How many lookups the cache answered in place of the host's own scan.
     virtual std::uint64_t answered() const noexcept = 0;
 };
+// The journal window's stress switch (NativeExecutionConsumer::
+// set_retire_every_point): a build compiled with
+// -DPINEFORGE_STRESS_RETIRE_EVERY_POINT starts every consumer with it on, so a
+// harness that cannot reach the consumer -- the corpus, the kernel battery --
+// runs every Window run retiring at every driver point. Off in every shipped
+// build.
+#ifdef PINEFORGE_STRESS_RETIRE_EVERY_POINT
+inline constexpr bool kRetireEveryPointDefault = true;
+#else
+inline constexpr bool kRetireEveryPointDefault = false;
+#endif
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -360,6 +371,26 @@ public:
         host_cache_enabled_ = enabled;
         if (!enabled) host_cache_.reset();
     }
+    // V19-B: under NativeEventRetention::Window the journal retires what its
+    // host acknowledged at every script-bar boundary. This switch retires at
+    // every driver point instead -- the most any reader can lose -- so a run
+    // whose trades match its Full twin's proves that no kernel read touches a
+    // retired event (tests/test_native_event_retention.cpp, and the corpus
+    // and battery under -DPINEFORGE_STRESS_RETIRE_EVERY_POINT). A choice of
+    // how early the window closes, never run state; no host reaches it.
+    void set_retire_every_point(bool enabled) noexcept { retire_every_point_ = enabled; }
+    // V19-B: keep `retention` of the event record instead of what the spec
+    // declares, from the next begin on (nullopt restores the spec's). For a
+    // test that reads a whole run's events from a host whose spec it does not
+    // write -- the Pine host declares Window -- a readback choice alone: the
+    // spec, its digest and every decision are the spec's. No host reaches it.
+    void set_retention_override(std::optional<NativeEventRetention> retention) noexcept {
+        retention_override_ = retention;
+    }
+    // The ExecutionAppliedEvents this run committed, retained or retired: what
+    // a host that counts its fills reads once the window has retired them.
+    // Derived, folded into nothing.
+    std::uint64_t applied_event_count() const noexcept { return applied_events_; }
 
 private:
     struct CurrentExecutionFrame {
@@ -1117,6 +1148,12 @@ private:
                         const native_order::MatchCursor& cursor, bool continuous,
                         double price);
     void record_driver(const NativeDriverPoint& point);
+    // V19-B: the run's event retention (Window without a spec), and the
+    // retirement itself: the acknowledged -- or, for a host that never
+    // acknowledged, every -- journal event at or below the ordinal of the
+    // oldest applied notification still queued, the kernel's own reader.
+    NativeEventRetention retention() const noexcept;
+    void retire_journal() noexcept;
     NativeCoordinate coordinate_from(const native_calendar::NativeInterval& interval,
                                      int index, int64_t effective,
                                      NativePriceProvenance provenance,
@@ -1326,6 +1363,22 @@ private:
     int64_t last_print_time_ms_ = 0;
     std::vector<NativeDriverPoint> driver_log_;
     std::vector<NativeAccountObservation> account_log_;
+    // V19-B: the newest driver point and account observation the run
+    // produced, retained or not -- the stream's high water, which
+    // event_high_water() answers under every retention -- and the instants
+    // of the last two driver points, the only driver facts a decision reads
+    // (fx_roll_margin_check's previous point). The high waters are readback
+    // state and fold nowhere; the two instants fold with the margin state
+    // they serve.
+    struct DriverMark {
+        uint64_t ordinal = 0;
+        int64_t effective_time_ms = 0;
+    };
+    uint64_t last_driver_ordinal_ = 0;
+    uint64_t last_account_ordinal_ = 0;
+    std::array<DriverMark, 2> driver_marks_{};
+    std::size_t driver_mark_count_ = 0;
+    std::uint64_t applied_events_ = 0;
     NativeDecisionContext callback_context_{};
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
@@ -1473,6 +1526,14 @@ private:
     // Never read by the consumer, dropped at every run begin.
     std::unique_ptr<NativeHostCache> host_cache_;
     bool host_cache_enabled_ = true;
+    // set_retire_every_point's switch; kRetireEveryPointDefault above.
+    bool retire_every_point_ = kRetireEveryPointDefault;
+    // set_retention_override's choice, when a test made one.
+    std::optional<NativeEventRetention> retention_override_;
+    // V19-B: the chain root of every replace successor, as the core's chain
+    // index records it -- durable cohort state the continuation folds once
+    // per replace (note_committed_events). Reset with the other digests.
+    AppendDigest chain_roots_{};
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

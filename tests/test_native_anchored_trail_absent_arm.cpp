@@ -56,6 +56,8 @@ constexpr double kTrailOffset = 0.50;
 
 NativeRunSpec e1_spec(const char* key) {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = "1";
     s.script_tf = "1";

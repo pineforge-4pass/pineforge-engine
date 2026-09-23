@@ -58,6 +58,7 @@ int main() {
         {100.0, 100.0, 100.0, 100.0, 1000.0, 1'000},
         {100.0, 100.0, 100.0, 100.0, 1000.0, 2'000},
     };
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 2);
     CHECK(host.last_error().empty());
     const auto long_entry = latest(host, "Long");

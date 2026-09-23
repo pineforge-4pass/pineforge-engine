@@ -118,7 +118,8 @@
  *                                          pf_native_close_execution_e, pf_native_open_directions_e,
  *                                          pf_native_report_policy_e, pf_native_price_grid_e,
  *                                          pf_native_grid_rounding_e, pf_native_calc_trigger_e,
- *                                          pf_native_open_bar_view_e and pf_native_liquidation_sizing_e words
+ *                                          pf_native_open_bar_view_e, pf_native_liquidation_sizing_e
+ *                                          and pf_native_event_retention_e words
  *   [C]  configure_native_fx_curve         strategy_configure_native_fx_curve_v1 (pineforge.h)
  *   [C]  native_state                      strategy_native_state_v1
  *   [C]  submit                            strategy_native_submit_v1 -- a WAIT_FOR_APPLIED child's
@@ -730,8 +731,38 @@ typedef enum pf_native_spec_ext_mask_e {
      *  pf_native_run_spec_ext_v1 carries the auxiliary tail may set this bit;
      *  a caller sending any earlier layout is refused with
      *  PF_NATIVE_E_STRUCT. */
-    PF_NATIVE_SPEC_EXT_AUXILIARY_FEED = 1u << 9
+    PF_NATIVE_SPEC_EXT_AUXILIARY_FEED = 1u << 9,
+    /** What the run keeps of its event record (`event_retention`). Only a
+     *  caller whose pf_native_run_spec_ext_v1 carries the retention tail may
+     *  set this bit; a caller sending any earlier layout is refused with
+     *  PF_NATIVE_E_STRUCT. Without it the run keeps
+     *  #PF_NATIVE_EVENT_RETENTION_FULL. */
+    PF_NATIVE_SPEC_EXT_EVENT_RETENTION = 1u << 10
 } pf_native_spec_ext_mask_t;
+
+/** What a run keeps of its event record — `NativeRunSpec::event_retention`,
+ *  the `event_retention` word of #pf_native_run_spec_ext_v1, read under
+ *  #PF_NATIVE_SPEC_EXT_EVENT_RETENTION.
+ *
+ *  WINDOW keeps the command journal only until the host has read it: a host
+ *  that polls #strategy_native_events_v1 acknowledges what it has read
+ *  (#strategy_native_acknowledge_events_v1) and the kernel drops the
+ *  acknowledged events at the next script-bar boundary, while a host that
+ *  never acknowledges is served by its callbacks alone and its window closes
+ *  at every script-bar end. No driver point and no account row is kept.
+ *  COMMANDS keeps the whole command journal and every account row, and no
+ *  driver point. FULL keeps everything, O(run) in memory.
+ *
+ *  A C host that does not set the bit -- every caller of
+ *  #strategy_configure_native_v1, and every caller of an earlier
+ *  pf_native_run_spec_ext_v1 layout -- runs under FULL, the record its
+ *  layout was published with, so reading a whole run's events after it has
+ *  ended keeps working unchanged. The C++ default is WINDOW. */
+typedef enum pf_native_event_retention_e {
+    PF_NATIVE_EVENT_RETENTION_WINDOW   = 0, /**< The unread journal only. */
+    PF_NATIVE_EVENT_RETENTION_FULL     = 1, /**< Journal, driver points, account rows. */
+    PF_NATIVE_EVENT_RETENTION_COMMANDS = 2  /**< Journal and account rows. */
+} pf_native_event_retention_t;
 
 /** The bars a declared series is built from — `NativeSeriesSource`. */
 typedef enum pf_native_series_source_e {
@@ -2153,18 +2184,20 @@ typedef struct pf_native_subscription_v1 {
  *  #pf_native_run_spec_v1 now travels here. The one deliberate omission is
  *  `identity`, which the base spec owns.
  *
- *  This struct has FOUR published layouts and the runtime accepts any of
+ *  This struct has FIVE published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
  *  (#PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE); that layout plus L9's `risk_*`
  *  tail (#PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE); that one plus N8's intrabar
  *  path, the four feed-shape and presentation policies, and the margin
  *  model's equity basis, level base and liquidation strings
- *  (#PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE); and the current one, which
- *  appends the `auxiliary_*` tail after them. A caller compiled against an
- *  earlier layout keeps working unchanged and simply cannot set the mask
- *  bits its struct has no fields for (#PF_NATIVE_SPEC_EXT_RISK,
- *  #PF_NATIVE_SPEC_EXT_INTRABAR, #PF_NATIVE_SPEC_EXT_FEED_POLICY,
- *  #PF_NATIVE_SPEC_EXT_AUXILIARY_FEED): doing so is PF_NATIVE_E_STRUCT. Any
+ *  (#PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE); that one plus the
+ *  `auxiliary_*` tail (#PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE); and the
+ *  current one, which appends the `event_retention` tail after them. A
+ *  caller compiled against an earlier layout keeps working unchanged and
+ *  simply cannot set the mask bits its struct has no fields for
+ *  (#PF_NATIVE_SPEC_EXT_RISK, #PF_NATIVE_SPEC_EXT_INTRABAR,
+ *  #PF_NATIVE_SPEC_EXT_FEED_POLICY, #PF_NATIVE_SPEC_EXT_AUXILIARY_FEED,
+ *  #PF_NATIVE_SPEC_EXT_EVENT_RETENTION): doing so is PF_NATIVE_E_STRUCT. Any
  *  other `struct_size` is PF_NATIVE_E_STRUCT too. Every tail is append-only:
  *  nothing above them moved. */
 typedef struct pf_native_run_spec_ext_v1 {
@@ -2272,6 +2305,13 @@ typedef struct pf_native_run_spec_ext_v1 {
      *  every series is built from the input. Meaningful only together with
      *  PF_NATIVE_SPEC_EXT_SUBSCRIPTIONS. */
     const uint32_t* subscription_sources;
+
+    /* ── The additive event-retention tail (V19-B). Read only when
+     * `present_mask` carries PF_NATIVE_SPEC_EXT_EVENT_RETENTION; a caller
+     * sending an earlier layout stops at `subscription_sources` or above and
+     * runs under PF_NATIVE_EVENT_RETENTION_FULL. ── */
+    uint32_t event_retention;  /**< #pf_native_event_retention_t. */
+    uint32_t reserved2;        /**< Must be 0. */
 } pf_native_run_spec_ext_v1;
 
 /** Byte length of #pf_native_run_spec_ext_v1 as the L13 lane first published
@@ -2294,6 +2334,13 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  same reason #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is an offset. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE \
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, auxiliary_tf))
+
+/** Byte length of #pf_native_run_spec_ext_v1 with the `auxiliary_*` tail but
+ *  before the `event_retention` tail was appended — the fourth of its five
+ *  published layouts, an offset for the same reason
+ *  #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is. */
+#define PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE \
+    ((uint32_t)offsetof(pf_native_run_spec_ext_v1, event_retention))
 
 /** The C host's strategy logic.
  *

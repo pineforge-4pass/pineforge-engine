@@ -711,12 +711,16 @@ void cancelled_reason_is_kept() {
             h.cancel(*p.handle);
         };
     };
+    // Both runs keep their whole event record (V19-B) so the event counts
+    // below are the runs' own, not two empty windows.
+    NativeRunSpec kept = base_spec();
+    kept.event_retention = NativeEventRetention::Full;
     Host a_host;
     a_host.bar_script = parent_first(false);   // child: OwnerGone
-    CHECK(run(a_host, base_spec(), 6));
+    CHECK(run(a_host, kept, 6));
     Host b_host;
     b_host.bar_script = parent_first(true);    // child: User
-    CHECK(run(b_host, base_spec(), 6));
+    CHECK(run(b_host, kept, 6));
     // The same book and the same live tables; the reasons alone differ.
     CHECK(a_host.native_working_requests().empty());
     CHECK(b_host.native_working_requests().empty());

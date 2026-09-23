@@ -325,6 +325,8 @@ private:
 
 NativeRunSpec spec_for(bool path, std::uint64_t run) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {"perf-p4-history-read", run};
     spec.input_tf = "1";
     spec.script_tf = "1";

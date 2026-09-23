@@ -43,7 +43,8 @@ constexpr const char* kRiskLabel = "__kernel_risk__";
 // native_continuation_hash(). The neutrality claim is those equalities plus
 // the ones below: `risk` folds nothing while it is unset, and declaring a
 // block — even one with no limit in it — is what moves the fold.
-constexpr std::uint64_t kNeutralSpecDigest = 15437506464986222338ull;
+// expectation corrected: 15437506464986222338 -> 7338385168451407203, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+constexpr std::uint64_t kNeutralSpecDigest = 7338385168451407203ull;
 constexpr std::uint64_t kNeutralReportDigest = 4693577342710743061ull;
 constexpr std::size_t kNeutralEventCount = 39;
 
@@ -69,6 +70,8 @@ std::vector<Bar> hourly(const std::vector<double>& prices, std::int64_t first = 
 NativeRunSpec risk_spec(const char* key, const char* tf = "60",
                         const char* session = "24x7") {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = tf;
     s.script_tf = tf;

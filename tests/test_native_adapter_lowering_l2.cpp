@@ -121,6 +121,7 @@ public:
 void undetected_one_bar_provider_witness() {
     OneBarHost host;
     const Bar bars[] = {bar(12345)}; // L1b timestamp partition, deliberately off grid.
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 1);
     const auto state = host.native_state();
     CHECK(state.kind == NativeLifecycleKind::Completed);
@@ -138,6 +139,7 @@ void undetected_one_bar_provider_witness() {
 void command_lowering_and_current_execution_witness() {
     EntryCloseHost host;
     const Bar bars[] = {bar(60000), bar(120000), bar(180000), bar(240000)};
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 4);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(applied_with_label(host, "E") >= 1);
@@ -148,6 +150,7 @@ void command_lowering_and_current_execution_witness() {
 void deferred_cohort_exit_witness() {
     DeferredExitHost host;
     const Bar bars[] = {bar(60000), bar(120000), bar(180000, 110.0), bar(240000, 110.0)};
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 4);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(applied_with_label(host, "E") >= 1);
@@ -167,6 +170,7 @@ void deferred_cohort_exit_witness() {
 void coof_first_open_current_execution_witness() {
     CoofFirstOpenHost host;
     const Bar bars[] = {bar(60000), bar(120000), bar(180000)};
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 3);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(applied_with_label(host, "seed") == 1);
@@ -192,6 +196,7 @@ void provider_projection_and_rich_syminfo_witness() {
     rich.qty_step = 0.5;
     const Bar bars[] = {bar(1736121600000LL), bar(1736121660000LL)};
     InputsMap inputs{{"mode", "rich"}};
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 2, "1", "1", inputs, rich);
     const auto state = host.native_state();
     CHECK(state.kind == NativeLifecycleKind::Completed && state.spec);

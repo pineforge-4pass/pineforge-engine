@@ -39,8 +39,10 @@ constexpr const char* kLiquidationLabel = "__kernel_liquidation__";
 // nothing while it is unset, and declaring a model (even one whose every field
 // is its default) is what moves the fold — plus the fills, the book and the
 // trade counts, which are unchanged from the pre-L4 tree.
-constexpr std::uint64_t kNeutralSpecDigest = 2166775980498865536ULL;
-constexpr std::uint64_t kNeutralRichSpecDigest = 17505314342075340318ULL;
+// expectation corrected: 2166775980498865536 -> 17871597783527180193, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+constexpr std::uint64_t kNeutralSpecDigest = 17871597783527180193ULL;
+// expectation corrected: 17505314342075340318 -> 10784497393114828799, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+constexpr std::uint64_t kNeutralRichSpecDigest = 10784497393114828799ULL;
 
 Bar ohlc(int index, double open, double high, double low, double close,
          double volume = 1.0) {
@@ -49,6 +51,8 @@ Bar ohlc(int index, double open, double high, double low, double close,
 
 NativeRunSpec margin_spec(const char* key) {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = "1";
     s.script_tf = "1";

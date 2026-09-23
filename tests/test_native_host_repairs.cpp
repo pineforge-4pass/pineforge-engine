@@ -51,6 +51,8 @@ double bits_to_double(std::uint64_t bits) {
 
 NativeRunSpec spec_for(const std::string& key, uint64_t run) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity.session_key = key;
     spec.identity.run_number = run;
     spec.input_tf = "1";

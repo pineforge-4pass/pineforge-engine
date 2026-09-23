@@ -95,12 +95,23 @@ static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE + 10u * sizeof(std::uint32_t)
                          + 2u * sizeof(double),
               "the pf_native_run_spec_ext_v1 risk tail moved");
-/* So is the auxiliary-feed tail, last of the three: three pointers and two
- * words past the layout N8's intrabar / policy tail left. */
-static_assert(sizeof(pf_native_run_spec_ext_v1)
+/* So is the auxiliary-feed tail: three pointers and two words past the
+ * layout N8's intrabar / policy tail left. */
+static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE + 3u * sizeof(void*)
                          + 2u * sizeof(std::uint32_t),
               "the pf_native_run_spec_ext_v1 auxiliary tail moved");
+/* And the event-retention tail, last of the four: two words past it. */
+static_assert(sizeof(pf_native_run_spec_ext_v1)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE + 2u * sizeof(std::uint32_t),
+              "the pf_native_run_spec_ext_v1 event-retention tail moved");
+static_assert(static_cast<int>(pineforge::NativeEventRetention::Window)
+                      == PF_NATIVE_EVENT_RETENTION_WINDOW
+                  && static_cast<int>(pineforge::NativeEventRetention::Full)
+                         == PF_NATIVE_EVENT_RETENTION_FULL
+                  && static_cast<int>(pineforge::NativeEventRetention::Commands)
+                         == PF_NATIVE_EVENT_RETENTION_COMMANDS,
+              "NativeEventRetention drifted");
 static_assert(static_cast<int>(pineforge::NativeSeriesSource::Input)
                       == PF_NATIVE_SERIES_SOURCE_INPUT
                   && static_cast<int>(pineforge::NativeSeriesSource::AuxiliaryFeed)
@@ -2731,6 +2742,16 @@ constexpr bool c_spelled(pineforge::NativeOpenBarView view) noexcept {
     return false;
 }
 
+constexpr bool c_spelled(pineforge::NativeEventRetention retention) noexcept {
+    switch (retention) {
+    case pineforge::NativeEventRetention::Window:
+    case pineforge::NativeEventRetention::Full:
+    case pineforge::NativeEventRetention::Commands:
+        return true;
+    }
+    return false;
+}
+
 constexpr bool c_spelled(pineforge::NativeLiquidationSizing sizing) noexcept {
     switch (sizing) {
     case pineforge::NativeLiquidationSizing::RestoreMinimum:
@@ -2784,7 +2805,10 @@ static_assert(all_spelled<pineforge::NativeFeeKind>(PF_NATIVE_FEE_PERCENT,
                   && all_spelled<pineforge::NativeLiquidationSizing>(
                       PF_NATIVE_LIQUIDATION_SIZING_RESTORE_MINIMUM,
                       PF_NATIVE_LIQUIDATION_SIZING_SHORTFALL_MULTIPLE,
-                      PF_NATIVE_LIQUIDATION_SIZING_FLATTEN),
+                      PF_NATIVE_LIQUIDATION_SIZING_FLATTEN)
+                  && all_spelled<pineforge::NativeEventRetention>(
+                      PF_NATIVE_EVENT_RETENTION_WINDOW, PF_NATIVE_EVENT_RETENTION_FULL,
+                      PF_NATIVE_EVENT_RETENTION_COMMANDS),
               "a value the C header names is refused by its translation");
 static_assert(!c_spelled(pineforge::NativeReportPolicy::KernelRecordedAtHostMarks),
               "KernelRecordedAtHostMarks has no C name, so its word must stay refused");
@@ -2840,6 +2864,10 @@ int translate_base_spec(const pf_native_run_spec_v1& in, pineforge::NativeRunSpe
     if (in.optional_mask & PF_NATIVE_SPEC_OPTIONAL_MAX_OPEN_LOTS) {
         out.max_open_lots = in.max_open_lots;
     }
+    /* V19-B: this layout predates the retention word, so its caller keeps
+     * the record it was published with: every event, readable after the run.
+     * Only the extension's retention tail chooses anything else. */
+    out.event_retention = pineforge::NativeEventRetention::Full;
     return PF_NATIVE_OK;
 }
 
@@ -2970,13 +2998,22 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
 }
 
 int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
-                   bool has_risk_tail, bool has_policy_tail, bool has_auxiliary_tail) {
-    if (ext.present_mask & ~0x3ffu) return PF_NATIVE_E_TAG;
+                   bool has_risk_tail, bool has_policy_tail, bool has_auxiliary_tail,
+                   bool has_retention_tail) {
+    if (ext.present_mask & ~0x7ffu) return PF_NATIVE_E_TAG;
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) && !has_risk_tail) {
         return PF_NATIVE_E_STRUCT;
     }
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_AUXILIARY_FEED) && !has_auxiliary_tail) {
         return PF_NATIVE_E_STRUCT;
+    }
+    if ((ext.present_mask & PF_NATIVE_SPEC_EXT_EVENT_RETENTION) && !has_retention_tail) {
+        return PF_NATIVE_E_STRUCT;
+    }
+    /* V19-B: without the bit the base translation's FULL stands. */
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_EVENT_RETENTION) {
+        if (ext.reserved2 != 0u) return PF_NATIVE_E_TAG;
+        if (!translate_word(ext.event_retention, spec.event_retention)) return PF_NATIVE_E_TAG;
     }
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_AUXILIARY_FEED) {
         if (!ext.auxiliary_tf || ext.auxiliary_n < 0
@@ -3788,11 +3825,14 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!base || !ext) return PF_NATIVE_E_ARGUMENT;
         if (base->struct_size != sizeof(pf_native_run_spec_v1)) return PF_NATIVE_E_STRUCT;
-        /* Four published layouts, and only four: the base one the lane
+        /* Five published layouts, and only five: the base one the lane
          * first shipped, that plus L9's risk tail, that plus N8's intrabar /
-         * policy tail, and the current one with the auxiliary-feed tail
-         * behind it. Anything else is a caller this runtime cannot read. */
-        const bool has_auxiliary_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+         * policy tail, that plus the auxiliary-feed tail, and the current one
+         * with V19-B's event-retention tail behind it. Anything else is a
+         * caller this runtime cannot read. */
+        const bool has_retention_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        const bool has_auxiliary_tail =
+            has_retention_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE;
         const bool has_policy_tail =
             has_auxiliary_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE;
         const bool has_risk_tail =
@@ -3811,7 +3851,7 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
         pineforge::NativeRunSpec spec;
         if (int rc = translate_base_spec(*base, spec); rc != PF_NATIVE_OK) return rc;
         if (int rc = apply_spec_ext(spec, *ext, has_risk_tail, has_policy_tail,
-                                    has_auxiliary_tail);
+                                    has_auxiliary_tail, has_retention_tail);
             rc != PF_NATIVE_OK) {
             return rc;
         }

@@ -14,7 +14,15 @@
   },
   "removedStorage": [],
   "addedStorage": [],
-  "addedValueMembers": [],
+  "addedValueMembers": [
+    "NativeRunSpec::event_retention",
+    "NativeEventRetention",
+    "NativeRunSpecField::EventRetention",
+    "NativeRunSpecError::UnknownEventRetention",
+    "RequestDefinition::root",
+    "TrailTrack::activation_ordinal",
+    "TrailActive::activation_ordinal"
+  ],
   "addedVirtuals": [],
   "removedVirtuals": [],
   "rejectionPairs": [

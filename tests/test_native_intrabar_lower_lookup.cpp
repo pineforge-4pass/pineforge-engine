@@ -136,6 +136,8 @@ std::vector<Bar> lower_feed(Feed shape, int count) {
 
 NativeRunSpec lower_spec(Feed shape, int count, bool raw_labels, const char* session_key) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {session_key, 1};
     spec.input_tf = "5";
     spec.script_tf = "5";
@@ -298,13 +300,23 @@ struct Pinned {
 //   3688284093780238334ull -> 19126489985415469ull
 //   6853731202851505960ull -> 11214347720918037394ull
 //   6726314833335123700ull -> 1957262624383604956ull
+// expectation corrected (v19-B, 6 values), because v19-B: the run keeps
+// NativeEventRetention::Full to count its driver points, and the spec digest
+// folds a retention that is not the default Window; trades, trade digests
+// and driver points did not move:
+//   10889724778366893781ull -> 12678158763721467250ull
+//   11890728307108792147ull -> 82279288603700875ull
+//   11131379411467769408ull -> 27817212454474162ull
+//   19126489985415469ull -> 11026420420329913868ull
+//   11214347720918037394ull -> 10331922125992720379ull
+//   1957262624383604956ull -> 4486098428384108224ull
 const Pinned kPinned[] = {
     {Feed::Tiling, false, "k24-lower-tiling",
-     {39, 0xd2ac6e3a775d5206ull, 4800ull, 10889724778366893781ull, 11890728307108792147ull}},
+     {39, 0xd2ac6e3a775d5206ull, 4800ull, 12678158763721467250ull, 82279288603700875ull}},
     {Feed::Ragged, false, "k24-lower-ragged",
-     {39, 0xd1675820a42f7e8cull, 2520ull, 11131379411467769408ull, 19126489985415469ull}},
+     {39, 0xd1675820a42f7e8cull, 2520ull, 27817212454474162ull, 11026420420329913868ull}},
     {Feed::Tiling, true, "k24-lower-raw",
-     {39, 0xd1675820a42f7e8cull, 960ull, 11214347720918037394ull, 1957262624383604956ull}},
+     {39, 0xd1675820a42f7e8cull, 960ull, 10331922125992720379ull, 4486098428384108224ull}},
 };
 
 void the_selected_sub_bars_feed_the_same_run() {

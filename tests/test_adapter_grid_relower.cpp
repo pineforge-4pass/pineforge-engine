@@ -261,6 +261,8 @@ NativeRunSpec grid_spec(const char* key, NativePriceGrid grid,
                         NativeGridRounding rounding = NativeGridRounding::HalfUp) {
     NativeRunSpec s;
     s.identity = {key, 1};
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.input_tf = "1"; s.script_tf = "1";
     s.tickerid = "TEST:GRID"; s.timezone = "UTC"; s.session = "24x7";
     s.initial_capital = 100000; s.point_value = 1; s.account_fx = 1;

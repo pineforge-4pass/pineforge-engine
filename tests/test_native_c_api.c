@@ -651,8 +651,10 @@ static void check_spec_extension(void) {
     CHECK(host != NULL, "extension host create failed");
     if (!host) return;
 
+    /* Four bytes short of the current layout is no published layout: the
+     * fourth one (PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE) is eight short. */
     memset(&ext, 0, sizeof(ext));
-    ext.struct_size = (uint32_t)sizeof(ext) - 8u;
+    ext.struct_size = (uint32_t)sizeof(ext) - 4u;
     ext.version = PF_NATIVE_API_VERSION;
     CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_E_STRUCT,
                  "mis-sized spec extension not refused");
@@ -1112,6 +1114,147 @@ static void check_event_polling(void) {
     CHECK_EQ_INT(strategy_native_events_v1(host, first[a - 1].ordinal, page, 8), 0,
                  "polling past the last ordinal returned rows");
     strategy_native_host_free(host);
+}
+
+/* ── V19-B: the event retention and the acknowledgement, from C ─────
+ *
+ * The retention word travels in pf_native_run_spec_ext_v1's fifth layout,
+ * under PF_NATIVE_SPEC_EXT_EVENT_RETENTION. A caller that does not send it --
+ * strategy_configure_native_v1, an earlier layout, a clear bit -- keeps FULL,
+ * the record its layout was published with. */
+typedef struct retention_run {
+    int configure;          /* strategy_configure_native_ext_v1's status */
+    int rows;
+    int commands;
+    int drivers;
+    int accounts;
+    uint64_t first;         /* the first returned ordinal (0 when none) */
+    uint64_t window;        /* strategy_native_event_window_v1 */
+} retention_run;
+
+static int retention_poll_begin(void* user) {
+    twin_state* state = (twin_state*)user;
+    return strategy_native_acknowledge_events_v1(state->host, 0) == PF_NATIVE_OK ? 0 : 1;
+}
+
+/* size 0 = strategy_configure_native_v1 alone. */
+static retention_run retention_case(uint32_t size, uint32_t mask, uint32_t word,
+                                    uint32_t reserved2, int poll) {
+    static pf_native_event_v1 rows[PF_TWIN_MAX_EVENTS];
+    retention_run out;
+    twin_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    const pf_bar_t* bars;
+    int n = 0;
+    int i;
+
+    memset(&out, 0, sizeof(out));
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = twin_on_bar;
+    if (poll) table.on_run_begin = retention_poll_begin;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "retention host create failed");
+    if (!state.host) {
+        out.configure = -100;
+        return out;
+    }
+    if (size == 0u) {
+        out.configure = strategy_configure_native_v1(state.host, &spec);
+    } else {
+        memset(&ext, 0, sizeof(ext));
+        ext.struct_size = size;
+        ext.version = PF_NATIVE_API_VERSION;
+        ext.present_mask = mask;
+        ext.event_retention = word;
+        ext.reserved2 = reserved2;
+        out.configure = strategy_configure_native_ext_v1(state.host, &spec, &ext);
+    }
+    if (out.configure == PF_NATIVE_OK) {
+        bars = pf_twin_bars(&n);
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                     "retention run");
+        memset(rows, 0, sizeof(rows));
+        out.rows = strategy_native_events_v1(state.host, 0, rows, PF_TWIN_MAX_EVENTS);
+        for (i = 0; i < out.rows; ++i) {
+            if (i == 0) out.first = rows[i].ordinal;
+            if (rows[i].kind == PF_NATIVE_EVENT_DRIVER_POINT) {
+                ++out.drivers;
+            } else if (rows[i].kind == PF_NATIVE_EVENT_ACCOUNT) {
+                ++out.accounts;
+            } else {
+                ++out.commands;
+            }
+        }
+        CHECK_EQ_INT(strategy_native_event_window_v1(state.host, &out.window), PF_NATIVE_OK,
+                     "retention window read");
+    }
+    strategy_native_host_free(state.host);
+    return out;
+}
+
+static void check_event_retention(void) {
+    const uint32_t current = (uint32_t)sizeof(pf_native_run_spec_ext_v1);
+    const uint32_t bit = PF_NATIVE_SPEC_EXT_EVENT_RETENTION;
+    retention_run v1, clear, older, full, commands, window, polled, bad_word, bad_reserved,
+        older_bit;
+
+    v1 = retention_case(0u, 0u, 0u, 0u, 0);
+    clear = retention_case(current, 0u, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
+    older = retention_case(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, 0u, 0u, 0u, 0);
+    full = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_FULL, 0u, 0);
+    commands = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_COMMANDS, 0u, 0);
+    window = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
+    polled = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 1);
+    bad_word = retention_case(current, bit, 7u, 0u, 0);
+    bad_reserved = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_FULL, 1u, 0);
+    older_bit = retention_case(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, bit,
+                               PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
+
+    /* A caller that does not send the word keeps everything. */
+    CHECK_EQ_INT(v1.configure, PF_NATIVE_OK, "the v1 spec was refused");
+    CHECK(v1.drivers > 0 && v1.accounts > 0 && v1.commands > 0,
+          "a v1 caller lost part of its record");
+    CHECK(v1.window == 1u, "a v1 caller's window moved");
+    CHECK_EQ_INT(clear.configure, PF_NATIVE_OK, "a clear retention bit was refused");
+    CHECK(clear.rows == v1.rows && clear.window == 1u,
+          "a clear retention bit did not keep FULL");
+    CHECK_EQ_INT(older.configure, PF_NATIVE_OK, "the fourth layout was refused");
+    CHECK(older.rows == v1.rows && older.window == 1u, "the fourth layout did not keep FULL");
+    CHECK_EQ_INT(full.configure, PF_NATIVE_OK, "FULL was refused");
+    CHECK(full.rows == v1.rows && full.window == 1u, "FULL is not the v1 record");
+    /* COMMANDS: every command and account row, no driver point. */
+    CHECK_EQ_INT(commands.configure, PF_NATIVE_OK, "COMMANDS was refused");
+    CHECK(commands.drivers == 0, "COMMANDS kept a driver point");
+    CHECK(commands.commands == v1.commands && commands.accounts == v1.accounts,
+          "COMMANDS dropped a command or an account row");
+    CHECK(commands.window == 1u, "COMMANDS retired a command");
+    /* WINDOW, a host that never acknowledges: served by its callbacks, its
+     * window closes at every script bar; no driver point, no account row. */
+    CHECK_EQ_INT(window.configure, PF_NATIVE_OK, "WINDOW was refused");
+    CHECK(window.drivers == 0 && window.accounts == 0, "WINDOW kept a driver or account row");
+    CHECK(window.window > 1u, "WINDOW retired nothing");
+    CHECK(window.rows == 0 || window.first >= window.window,
+          "WINDOW returned a row below its window");
+    /* WINDOW, a host that acknowledged "nothing read yet" at its begin: it
+     * keeps every command. */
+    CHECK_EQ_INT(polled.configure, PF_NATIVE_OK, "a polling WINDOW host was refused");
+    CHECK(polled.commands == v1.commands && polled.drivers == 0 && polled.accounts == 0,
+          "a polling WINDOW host lost an unread command");
+    CHECK(polled.window == 1u, "a polling WINDOW host's unread commands were retired");
+    /* Refusals: a word outside the enumeration, a nonzero reserved word, and
+     * the bit from a layout that has no field for it. */
+    CHECK_EQ_INT(bad_word.configure, PF_NATIVE_E_TAG, "an unknown retention word was accepted");
+    CHECK_EQ_INT(bad_reserved.configure, PF_NATIVE_E_TAG, "a nonzero reserved2 was accepted");
+    CHECK_EQ_INT(older_bit.configure, PF_NATIVE_E_STRUCT,
+                 "the retention bit was accepted from the fourth layout");
+    /* The two symbols refuse what they cannot read. */
+    CHECK_EQ_INT(strategy_native_acknowledge_events_v1(NULL, 0u), PF_NATIVE_E_HANDLE,
+                 "a NULL handle's acknowledgement was accepted");
+    CHECK_EQ_INT(strategy_native_event_window_v1(NULL, NULL), PF_NATIVE_E_HANDLE,
+                 "a NULL handle's window read was accepted");
 }
 
 /* ── L9's risk limits, read back through the C event history ────── */
@@ -5233,7 +5376,11 @@ static void check_spec_word_layout(void) {
                      "open_bar_view moved");
         CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, margin_sizing), 40,
                      "margin_sizing moved");
-        CHECK_EQ_INT(sizeof(pf_native_run_spec_ext_v1), 304, "pf_native_run_spec_ext_v1 resized");
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, event_retention), 304,
+                     "the event-retention tail does not start where the auxiliary layout ended");
+        CHECK_EQ_INT(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, 304,
+                     "the auxiliary layout's length moved");
+        CHECK_EQ_INT(sizeof(pf_native_run_spec_ext_v1), 312, "pf_native_run_spec_ext_v1 resized");
     }
 }
 
@@ -7837,6 +7984,7 @@ int pf_native_c_api_checks(void) {
     check_lifecycle_round_trips();
     check_callback_failure_latch();
     check_event_polling();
+    check_event_retention();
     check_risk_event();
     check_absent_accessors();
     check_live_accessors();

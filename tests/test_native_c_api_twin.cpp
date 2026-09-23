@@ -42,6 +42,8 @@ bool same(double a, double b) {
 
 pineforge::NativeRunSpec twin_spec() {
     pineforge::NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = pineforge::NativeEventRetention::Full;
     spec.identity.session_key = "native-c-api-twin";
     spec.identity.run_number = 1;
     spec.input_tf = "5";

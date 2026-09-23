@@ -365,6 +365,7 @@ void test_tapes_replay() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, trail_points_of(probe, e));
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             CHECK(host.last_error().empty());
             CHECK(host.trade_count() == 1);
@@ -410,6 +411,7 @@ void test_booked_price_is_the_reach_tick() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, trail_points_of(probe, e));
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             const double tick = probe.mintick;
@@ -504,6 +506,7 @@ void test_placement_close_in_the_cell_has_reached() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, probe.trail_points[e]);
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             const double tick = probe.mintick;
@@ -563,6 +566,7 @@ void test_the_running_best_starts_where_the_leg_says() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, probe.trail_points[e]);
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             const double tick = probe.mintick;

@@ -97,12 +97,23 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 //   scenario 2: trace 0xbb418c97d4bf88d6ull -> 0x1efe2595ab94f133ull, continuation 0x2732195aa3cfe316ull -> 0x142af6401b6f66a1ull, broker 0x7838cead071bfe52ull -> 0x16dc1e7b2b17e445ull
 //   scenario 3: trace 0x9f47b34a2cefaa05ull -> 0xbe543a454300ded7ull, continuation 0x51a1f04d16ce368bull -> 0xdd2049d30f042dacull, broker 0xf5bf106315ac47c6ull -> 0x23cdee2a26ae76fcull
 //   scenario 4: trace 0xd3d2e27954ded699ull -> 0xe947a05c6802cc68ull, continuation 0x982e33e828e2888bull -> 0xa1b0cd08a0745aceull, broker 0x8911765c8468153full -> 0xd229c4059b4b3e02ull
+// expectation corrected (v19-B): the three hash columns of every scenario moved
+// once more, because v19-B folds what the journal window no longer carries
+// -- each replace successor's chain root and each armed trail's arm ordinal --
+// and the book keeps NativeEventRetention::Full to read its events back,
+// which the spec digest folds; trades, trade digest, events, event digest
+// and the three counters did not move:
+//   scenario 0: trace 0xbf20063974900e4dull -> 0x136dcf16c6fa5351ull, continuation 0x3e2b890b050bb7f6ull -> 0x4691676bcf0aa127ull, broker 0x31b25c79e6d96125ull -> 0x329da07804463d91ull
+//   scenario 1: trace 0xef22cca6d2c4f35aull -> 0x4e8e642c6c4f5571ull, continuation 0xb93799c02a326127ull -> 0x4be23aedc760df3bull, broker 0x4360ee8ddf384d25ull -> 0x1abd121fb23e8f41ull
+//   scenario 2: trace 0x1efe2595ab94f133ull -> 0x39e317e0536c5304ull, continuation 0x142af6401b6f66a1ull -> 0xe9e168e352f9f8d4ull, broker 0x16dc1e7b2b17e445ull -> 0xda88af88ef6027d6ull
+//   scenario 3: trace 0xbe543a454300ded7ull -> 0x359cc22165da6d96ull, continuation 0xdd2049d30f042dacull -> 0x01e03db6f203e11eull, broker 0x23cdee2a26ae76fcull -> 0x071b47fad3d98bf7ull
+//   scenario 4: trace 0xe947a05c6802cc68ull -> 0xad4443d75ee5d3bcull, continuation 0xa1b0cd08a0745aceull -> 0xc8d5da5d64e610d6ull, broker 0xd229c4059b4b3e02ull -> 0x874121590b093b20ull
 const Pin kPins[kScenarios] = {
-    {0xbf20063974900e4dull, 0x3e2b890b050bb7f6ull, 0x31b25c79e6d96125ull, 309, 0xd46895e4cb220464ull, 4636, 0x2f871fcdc8768b61ull, 1080, 647, 446},
-    {0xef22cca6d2c4f35aull, 0xb93799c02a326127ull, 0x4360ee8ddf384d25ull, 249, 0x7cc7976babca3c43ull, 2681, 0x7d16f612ee716310ull, 589, 142, 352},
-    {0x1efe2595ab94f133ull, 0x142af6401b6f66a1ull, 0x16dc1e7b2b17e445ull, 1342, 0x58b908db693694bcull, 16128, 0x6366cacce74b3948ull, 4400, 1950, 1779},
-    {0xbe543a454300ded7ull, 0xdd2049d30f042dacull, 0x23cdee2a26ae76fcull, 430, 0x76f5a9cacb8e69deull, 3362, 0xce2d56d15c6cf10cull, 891, 102, 549},
-    {0xe947a05c6802cc68ull, 0xa1b0cd08a0745aceull, 0xd229c4059b4b3e02ull, 502, 0x696bcd30b1e40f3bull, 4081, 0x572e1013d4fadde4ull, 1165, 94, 665},
+    {0x136dcf16c6fa5351ull, 0x4691676bcf0aa127ull, 0x329da07804463d91ull, 309, 0xd46895e4cb220464ull, 4636, 0x2f871fcdc8768b61ull, 1080, 647, 446},
+    {0x4e8e642c6c4f5571ull, 0x4be23aedc760df3bull, 0x1abd121fb23e8f41ull, 249, 0x7cc7976babca3c43ull, 2681, 0x7d16f612ee716310ull, 589, 142, 352},
+    {0x39e317e0536c5304ull, 0xe9e168e352f9f8d4ull, 0xda88af88ef6027d6ull, 1342, 0x58b908db693694bcull, 16128, 0x6366cacce74b3948ull, 4400, 1950, 1779},
+    {0x359cc22165da6d96ull, 0x01e03db6f203e11eull, 0x071b47fad3d98bf7ull, 430, 0x76f5a9cacb8e69deull, 3362, 0xce2d56d15c6cf10cull, 891, 102, 549},
+    {0xad4443d75ee5d3bcull, 0xc8d5da5d64e610d6ull, 0x874121590b093b20ull, 502, 0x696bcd30b1e40f3bull, 4081, 0x572e1013d4fadde4ull, 1165, 94, 665},
 };
 #endif
 

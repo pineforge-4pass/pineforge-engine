@@ -300,6 +300,7 @@ void test_tapes_replay() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, probe.trail_points ? probe.trail_points[e] : kNaN);
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             CHECK(host.last_error().empty());
             CHECK(host.trade_count() == 1);
@@ -338,6 +339,7 @@ void test_kernel_arm_is_the_quantized_boundary() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, probe.trail_points[e]);
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TapeTrade& tv = tape[static_cast<std::size_t>(e)];
             const double tick = probe.mintick;
@@ -387,6 +389,7 @@ void test_sub_tick_level_is_not_rounded_onto_the_fill() {
         for (int e = 0; e < probe.entries; ++e) {
             const auto bars = entry_bars(probe, e);
             TapeHost host(probe, probe.trail_points ? probe.trail_points[e] : kNaN);
+            host.fixture_retain_all_events();  // read after the run (V19-B)
             host.run(bars.data(), static_cast<int>(bars.size()));
             const TrailRecord record = trail_record(host);
             CHECK(record.arm_price.has_value());

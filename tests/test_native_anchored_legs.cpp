@@ -42,7 +42,8 @@ namespace tk = pineforge::native_toolkit;
 namespace {
 
 // ── Portable pins (harvested on engine main 3f6fd57, see the header) ────
-constexpr std::uint64_t kNeutralSpecDigest = 16941677776193786888ULL;
+// expectation corrected: 16941677776193786888 -> 4011217037958131497, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+constexpr std::uint64_t kNeutralSpecDigest = 4011217037958131497ULL;
 constexpr std::uint64_t kNeutralReportDigest = 7202933235328973332ULL;
 constexpr std::size_t kNeutralEventCount = 72;
 
@@ -87,6 +88,8 @@ std::vector<Bar> staircase() {
 // and the kernel recording the report so the equity metrics exist.
 NativeRunSpec bracket_spec(const char* key, double tick = 0.01) {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = "1"; s.script_tf = "1";
     s.tickerid = "TEST:L7B"; s.timezone = "UTC"; s.session = "24x7";

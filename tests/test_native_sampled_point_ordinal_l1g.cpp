@@ -37,6 +37,8 @@ void near(double actual, double expected) {
 
 NativeRunSpec sampled_spec() {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {"sampled-ordinal", 1};
     spec.input_tf = "1";
     spec.script_tf = "1";

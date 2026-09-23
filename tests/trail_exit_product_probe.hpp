@@ -164,6 +164,8 @@ inline TrailExitProjection trail_exit(const TrailExitScenario& scenario) {
     const std::vector<Bar> bars = {degenerate_bar(scenario.entry, 1000), issue, probe};
 
     ProbeHost host(scenario);
+    // The projection reads the run's whole event record once it has ended.
+    host.fixture_retain_all_events();
     host.run(bars.data(), static_cast<int>(bars.size()));
     out.error = host.last_error();
     out.position_after = host.physical_position().signed_units;

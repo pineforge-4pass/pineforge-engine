@@ -177,6 +177,7 @@ void rejected_third_has_no_public_execution() {
         flat(100.0, 60'000), flat(100.0, 120'000), flat(100.0, 180'000),
     };
     PairHost host(PairHost::Variant::RejectedThird);
+    host.fixture_retain_all_events();  // read after the run (V19-B)
     host.run(bars, 3, "1", "1");
     CHECK(host.last_error().empty());
     // The legacy Book's immediate `!has("huge")` was a private staging

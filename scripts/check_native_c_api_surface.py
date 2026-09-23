@@ -91,6 +91,7 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_calc_trigger_e": ("native_run_spec.hpp", "NativeCalculationTrigger", {}),
     "pf_native_open_bar_view_e": ("native_run_spec.hpp", "NativeOpenBarView", {}),
     "pf_native_liquidation_sizing_e": ("native_run_spec.hpp", "NativeLiquidationSizing", {}),
+    "pf_native_event_retention_e": ("native_run_spec.hpp", "NativeEventRetention", {}),
     "pf_native_series_source_e": ("native_run_spec.hpp", "NativeSeriesSource", {}),
     "pf_native_size_price_e": ("native_order.hpp", "SizePrice", {}),
     "pf_native_scope_basis_e": ("native_order.hpp", "ScopeBasis", {}),

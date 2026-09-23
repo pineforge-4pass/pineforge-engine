@@ -89,6 +89,10 @@ pineforge::NativeRunSpec make_spec() {
     pineforge::NativeRunSpec spec;
     spec.identity.session_key = "native-risk-limits-example";
     spec.identity.run_number = 1;
+    // This example reads its whole event record once the run has ended, so
+    // it keeps it all: the default, Window, keeps only what a host has not
+    // yet acknowledged (native_acknowledge_events).
+    spec.event_retention = pineforge::NativeEventRetention::Full;
     spec.input_tf = "360";
     spec.script_tf = "360";
     spec.ticker = "MOCK";

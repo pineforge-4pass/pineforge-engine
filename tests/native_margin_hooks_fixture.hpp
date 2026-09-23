@@ -37,6 +37,8 @@ inline NativeRunSpec margin_spec(const char* key) {
     s.fee_kind = NativeFeeKind::CashPerExecution;
     s.fee_value = 0.0;
     s.close_execution = NativeCloseExecution::AfterCalculation;
+    // The fixture's hosts read their whole event record once a run ends (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     return s;
 }
 

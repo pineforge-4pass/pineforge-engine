@@ -76,6 +76,8 @@ inline NativeRunSpec spec(const char* key="r4-current",double fee=0) {
     s.initial_capital=10000;s.point_value=1;s.account_fx=1;s.price_tick=.01;
     s.fee_kind=NativeFeeKind::CashPerExecution;s.fee_value=fee;
     s.close_execution=NativeCloseExecution::AfterCalculation;
+    // The fixture's hosts read their whole event record once a run ends (V19-B).
+    s.event_retention=NativeEventRetention::Full;
     return s;
 }
 inline no::Request tx(double q,const char* label="open") { return {no::Transact{q},label,""}; }

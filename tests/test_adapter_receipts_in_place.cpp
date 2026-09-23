@@ -1574,6 +1574,8 @@ void check_pinned(const Expected& want) {
 // end on the high water every row above that command reaches.
 void a_commandless_read_allocates_nothing(bool magnifier) {
     WitnessHost host(Scenario::Quiet);
+    // The read below walks the run's whole event record once it has ended.
+    host.fixture_retain_all_events();
     run(host, Scenario::Quiet, magnifier);
     std::uint64_t last_command = 0;
     std::uint64_t high_water = 0;

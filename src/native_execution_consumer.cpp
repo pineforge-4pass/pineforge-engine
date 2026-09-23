@@ -924,9 +924,22 @@ void hash_event_record(F& f, const native_order::CommandEvent& event) noexcept {
 template <class F>
 void hash_trigger_state(F& f, const native_order::TriggerState& state) noexcept {
     f.u(state.index());
-    if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) f.d(track->best);
+    // v19-B: a trail's arm ordinal is state now (it outlives the journal
+    // window that holds its TrailArm event). It folds only where a trail
+    // armed itself; a retaining successor's 0 folds nothing.
+    if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
+        f.d(track->best);
+        if (track->activation_ordinal != 0) {
+            f.u(1);
+            f.u(track->activation_ordinal);
+        }
+    }
     if (const auto* active = std::get_if<native_order::TrailActive>(&state)) {
         f.d(active->best_at_trigger);
+        if (active->activation_ordinal != 0) {
+            f.u(1);
+            f.u(active->activation_ordinal);
+        }
     }
 }
 
@@ -1638,6 +1651,29 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(group_receipts_.h);
     f.u(event_records_.count);
     f.u(event_records_.h);
+    // v19-B: the core's chain index, the cohort state the journal window no
+    // longer carries. Every replace successor's root folds once, at its
+    // commit (note_committed_events); a run that never replaced folds
+    // nothing. The issued incarnations are one dense range [1,
+    // last_incarnation] under a consumer, which the counter above already
+    // folds, and fold here only where they are not.
+    if (chain_roots_.count != 0) {
+        f.u(chain_roots_.count);
+        f.u(chain_roots_.h);
+    }
+    {
+        const auto& issued = requests_.issued_incarnations();
+        const bool dense = issued.empty()
+            || (issued.size() == 1 && issued.front().first == 1
+                && issued.front().second == requests_.last_incarnation());
+        if (!dense) {
+            f.u(issued.size());
+            for (const auto& range : issued) {
+                f.u(range.first);
+                f.u(range.second);
+            }
+        }
+    }
     f.b(current_input_open_.has_value());
     if (current_input_open_) f.i(*current_input_open_);
     f.b(observed_input_cursor_.has_value());
@@ -1691,6 +1727,16 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         }
         f.u(margin_point_ordinal_);
         f.u(margin_point_calls_);
+        // v19-B: the last two driver points' instants, which the FX-roll
+        // check reads for its previous point now that no driver log is
+        // kept. Only a staged curve reads them, so only it folds them.
+        if (staged_fx_curve_) {
+            f.u(driver_mark_count_);
+            for (std::size_t i = 0; i < driver_mark_count_; ++i) {
+                f.u(driver_marks_[i].ordinal);
+                f.i(driver_marks_[i].effective_time_ms);
+            }
+        }
     }
     // L9 durable risk ledger. It exists only under declared risk limits, and
     // folds only there, so no pre-L9 continuation identity moves.
@@ -2192,11 +2238,27 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     last_print_time_ms_ = 0;
     driver_log_.clear();
     account_log_.clear();
+    // v19-B: a log the run's retention does not keep holds no storage either
+    // (a reservation made before this begin, for another retention, is
+    // returned here).
+    const NativeEventRetention kept = retention_override_.value_or(spec.event_retention);
+    if (kept != NativeEventRetention::Full) {
+        std::vector<NativeDriverPoint>().swap(driver_log_);
+    }
+    if (kept == NativeEventRetention::Window) {
+        std::vector<NativeAccountObservation>().swap(account_log_);
+    }
+    last_driver_ordinal_ = 0;
+    last_account_ordinal_ = 0;
+    driver_marks_ = {};
+    driver_mark_count_ = 0;
+    applied_events_ = 0;
     // The v19 running digests restart with the request core they cover and
     // with the closed rows reset_run_state cleared above.
     event_records_.reset();
     group_receipts_.reset();
     cohort_receipts_.reset();
+    chain_roots_.reset();
     closed_rows_digest_ = BrokerStateHashSink{}.h;
     closed_rows_digested_ = 0;
     closed_rows_final_ = 0;
@@ -2432,19 +2494,56 @@ NativeCoordinate NativeExecutionConsumer::coordinate_from(
 }
 
 void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
-    // The driver log is an owning readback surface (native_events); since v19
-    // no hash folds it.
-    driver_log_.push_back(point);
+    // Every driver point is a point the journal window may close at under the
+    // stress switch (set_retire_every_point); by default it closes at
+    // script-bar boundaries only.
+    if (retire_every_point_) retire_journal();
+    // The FX-roll check's previous point, and the stream's high water, are
+    // kept whatever the retention.
+    driver_marks_[0] = driver_marks_[1];
+    driver_marks_[1] = DriverMark{point.coordinate.ordinal, point.coordinate.effective_time_ms};
+    if (driver_mark_count_ < 2) ++driver_mark_count_;
+    last_driver_ordinal_ = point.coordinate.ordinal;
+    // The driver log is an owning readback surface (native_events), kept only
+    // under NativeEventRetention::Full; since v19 no hash folds it.
+    if (retention() == NativeEventRetention::Full) driver_log_.push_back(point);
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
     // The driver log alone. The command history is sized by pump_batch from
     // what the batch records; a reservation made here before begin_ready
     // never reached a run anyway, since begin_ready resets the request core.
+    // A run that keeps no driver points reserves none.
+    if (retention() != NativeEventRetention::Full) return;
     if (expected_points > driver_log_.max_size()) {
         throw std::length_error("native driver-log capacity exhausted");
     }
     if (expected_points > driver_log_.capacity()) driver_log_.reserve(expected_points);
+}
+
+NativeEventRetention NativeExecutionConsumer::retention() const noexcept {
+    if (retention_override_) return *retention_override_;
+    const auto* spec = spec_ptr();
+    return spec ? spec->event_retention : NativeEventRetention::Window;
+}
+
+// The journal window closes at every script-bar boundary (and, under the
+// stress switch, at every driver point). A host that acknowledged keeps what
+// it has not read; a host that never did is served by its callbacks, so the
+// window closes on everything. Either way it stops ahead of the oldest
+// applied notification still queued -- the kernel's own reader, including the
+// one being delivered -- and the core stops ahead of any live deferred
+// group-adjustment chain (retire_history). Every event is folded into the
+// event-record digest at its commit, so a retirement never outruns it.
+void NativeExecutionConsumer::retire_journal() noexcept {
+    if (retention() != NativeEventRetention::Window || failed()) return;
+    uint64_t through = events_acknowledged_ ? acknowledged_through_
+                                            : std::numeric_limits<uint64_t>::max();
+    for (const auto& notification : applied_notifications_) {
+        if (notification.ordinal == 0) return;
+        through = std::min(through, notification.ordinal - 1);
+    }
+    requests_.retire_history(through);
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -3330,14 +3429,15 @@ void NativeExecutionConsumer::fx_roll_margin_check_at(
         BacktestEngine& engine, const NativeDriverPoint& point,
         bool continuous, double from_price) {
     if (!staged_fx_curve_ || margin_model() == nullptr || failed()) return;
-    std::size_t walked = driver_log_.size();
-    if (walked != 0
-        && driver_log_[walked - 1].coordinate.ordinal == point.coordinate.ordinal) {
-        --walked;
-    }
+    // The previous point: the newest recorded driver point other than this
+    // one (which may already be recorded), from the two marks record_driver
+    // keeps whatever the retention.
+    std::size_t walked = driver_mark_count_;
+    if (walked != 0 && driver_marks_[1].ordinal == point.coordinate.ordinal) --walked;
     if (walked == 0) return;
-    const double before = engine.account_currency_fx_at(
-        driver_log_[walked - 1].coordinate.effective_time_ms);
+    const DriverMark& previous = walked == driver_mark_count_ ? driver_marks_[1]
+                                                              : driver_marks_[0];
+    const double before = engine.account_currency_fx_at(previous.effective_time_ms);
     const double after = engine.account_currency_fx_at(point.coordinate.effective_time_ms);
     if (native_matching::double_bits(before) == native_matching::double_bits(after)) return;
     NativePathPhase standing = point.coordinate.path_phase;
@@ -4888,7 +4988,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
         // Allocate before financial effects, with geometric growth rather than
         // recopying the complete observation/notification prefix on each fill.
-        reserve_next(account_log_);
+        if (retention() != NativeEventRetention::Window) reserve_next(account_log_);
         reserve_next(applied_notifications_);
         AppliedNotification notification;
         notification.history_index = requests_.history_end();
@@ -4932,7 +5032,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         observation.realized_balance = engine.initial_capital_ + engine.net_profit_sum_;
         for (const auto& lot : engine.pyramid_entries_) observation.signed_units += lot.qty;
         if (engine.position_side_ == PositionSide::SHORT) observation.signed_units = -observation.signed_units;
-        account_log_.push_back(observation);
+        // The account row is a readback (native_events) kept under Full and
+        // Commands; its ordinal is the stream's high water under all three.
+        last_account_ordinal_ = observation.ordinal;
+        if (retention() != NativeEventRetention::Window) account_log_.push_back(observation);
         engine.bar_index_ = ctx.interval_index;
         // L9: one applied fill of its risk day. Counting only — settlement is
         // not a decision point, so no limit is evaluated here.
@@ -7016,6 +7119,7 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         if (failed()) return;
     }
     record_script_report_point(engine, base.open_ms);
+    retire_journal();
 }
 
 void NativeExecutionConsumer::deliver_intrabar_script(
@@ -7240,6 +7344,7 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         if (failed()) return;
     }
     record_script_report_point(engine, base.open_ms);
+    retire_journal();
 }
 
 int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) const noexcept {
@@ -7416,6 +7521,7 @@ void NativeExecutionConsumer::deliver_aggregate_calculation(
         if (failed()) return;
     }
     record_script_report_point(engine, base.open_ms);
+    retire_journal();
 }
 
 // The lazy seal. A script interval none of its own inputs sealed -- a session
@@ -8475,6 +8581,9 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
                                                driver_log_.max_size())) {
             hint([&] { reserve_driver_log(points); });
         }
+        // v19-B: under Window the journal is a window, whose length says
+        // nothing about the batch's; only a retained journal is presized.
+        if (retention() == NativeEventRetention::Window) return;
         const auto& history = requests_.history();
         if (const std::size_t events = presize(history_base, history.size(),
                                                history.capacity(), consumed,
@@ -9582,12 +9691,10 @@ std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t af
 }
 
 uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
-    // The core's last committed ordinal: the newest command event, retained
-    // or retired.
-    uint64_t high = requests_.last_ordinal();
-    if (!driver_log_.empty()) high = std::max(high, driver_log_.back().coordinate.ordinal);
-    if (!account_log_.empty()) high = std::max(high, account_log_.back().ordinal);
-    return high;
+    // The newest event the run produced, retained or not: the core's last
+    // committed ordinal, the last driver point and the last account row. A
+    // retention changes what a read returns, never where the stream stands.
+    return std::max({requests_.last_ordinal(), last_driver_ordinal_, last_account_ordinal_});
 }
 
 void NativeExecutionConsumer::acknowledge_events(uint64_t through_ordinal) noexcept {
@@ -9630,13 +9737,31 @@ void NativeExecutionConsumer::note_committed_events(
     StateFold records;
     records.run_base = requests_.identity().run_number;
     records.h = event_records_.h;
+    StateFold roots;
+    roots.run_base = records.run_base;
+    roots.h = chain_roots_.h;
+    std::uint64_t root_count = chain_roots_.count;
     const std::size_t base = requests_.history_base();
     for (std::size_t index = std::max<std::size_t>(event_records_.count, base);
          index < requests_.history_end(); ++index) {
-        hash_event_record(records, requests_.history()[index - base]);
+        const auto& event = requests_.history()[index - base];
+        hash_event_record(records, event);
+        if (std::holds_alternative<native_order::ExecutionAppliedEvent>(event)) ++applied_events_;
+        // v19-B: the chain index is durable cohort state, folded once per
+        // replace successor, at the replace that names its root.
+        if (const auto* replaced = std::get_if<native_order::ReplacedEvent>(&event)) {
+            const auto& successor = replaced->successor_definition;
+            if (successor && successor->root) {
+                roots.u(successor->handle.incarnation);
+                roots.u(successor->root->incarnation);
+                ++root_count;
+            }
+        }
     }
     event_records_.h = records.h;
     event_records_.count = requests_.history_end();
+    chain_roots_.h = roots.h;
+    chain_roots_.count = root_count;
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;

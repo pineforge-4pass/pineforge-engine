@@ -72,6 +72,8 @@ struct Host final : NativeStrategyHost {
 
 NativeRunSpec specification(double tick) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {"l5o-zero-price-tick", 1};
     spec.input_tf = "1";
     spec.script_tf = "1";

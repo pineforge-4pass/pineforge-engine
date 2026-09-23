@@ -497,6 +497,8 @@ std::string terms_receipt_json(const native_order::TermsResolvedEvent& event) {
 
 NativeRunSpec spec(const char* input = "1", const char* script = "1") {
     NativeRunSpec result;
+    // Reads its whole event record once the run has ended (V19-B).
+    result.event_retention = NativeEventRetention::Full;
     result.identity = {"calendar-driver-contract", 1};
     result.input_tf = input;
     result.script_tf = script;

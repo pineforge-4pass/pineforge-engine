@@ -48,6 +48,9 @@ public:
 
 pineforge::NativeRunSpec page_spec() {
 #include "pine_to_native_worked_spec.inc"
+    // The row reads the run's whole event record once it has ended; the
+    // page's host needs no readback and keeps the default Window (V19-B).
+    spec.event_retention = pineforge::NativeEventRetention::Full;
     return spec;
 }
 

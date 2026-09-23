@@ -476,6 +476,13 @@ public:
     }
     bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
 
+    // Keep every event of the following runs readable after they end
+    // (NativeEventRetention::Full as a readback, R5 lane V19-B). The adapter
+    // declares Window and acknowledges what it reads, so a fixture that reads
+    // a whole run's native_events() asks for this before the run. The spec,
+    // its digest and every decision stay the adapter's.
+    void fixture_retain_all_events();
+
 protected:
     // Narrow test-facade configuration slots keep the frozen L0 oracle bodies
     // unchanged while routing their setup through the source configuration

@@ -138,6 +138,8 @@ void check_native_position_and_source_empty_settlement() {
 
 NativeRunSpec native_spec() {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity.session_key = "r4-c-s20-s21";
     spec.identity.run_number = 1;
     spec.input_tf = "1";

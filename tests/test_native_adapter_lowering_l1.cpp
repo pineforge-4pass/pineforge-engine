@@ -50,6 +50,8 @@ Bar bar(std::int64_t timestamp, double open = 100.0, double high = 100.0,
 NativeRunSpec spec_for(const char* key, std::uint64_t run = 1,
                        const char* input_tf = "1", const char* script_tf = "1") {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {key, run};
     spec.input_tf = input_tf;
     spec.script_tf = script_tf;

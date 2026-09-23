@@ -9,6 +9,8 @@ struct Native final : NativeStrategyHost {
 };
 NativeRunSpec configuration() {
   NativeRunSpec s;
+  // Reads its whole event record once the run has ended (V19-B).
+  s.event_retention = NativeEventRetention::Full;
   s.identity={"r2-auto-path-witness",1}; s.input_tf="1"; s.script_tf="1";
   s.ticker="N";s.tickerid="TEST:N";s.type="crypto";s.currency="USD";
   s.basecurrency="USD";s.description="native";s.volumetype="base";

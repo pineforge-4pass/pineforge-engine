@@ -123,6 +123,8 @@ Request flat(const char* label = "", const char* comment = "") {
 
 NativeRunSpec spec_for(const std::string& key, uint64_t run) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = pineforge::NativeEventRetention::Full;
     spec.identity.session_key = key;
     spec.identity.run_number = run;
     spec.input_tf = "1";

@@ -349,6 +349,8 @@ struct KernelHost final : NativeStrategyHost {
 NativeRunSpec kernel_spec(const char* key) {
     NativeRunSpec s;
     s.identity = {key, 1};
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.input_tf = "60";
     s.script_tf = "60";
     s.tickerid = "TEST:N12";

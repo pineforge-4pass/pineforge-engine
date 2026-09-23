@@ -30,6 +30,8 @@ struct Host final : NativeStrategyHost {
 };
 NativeRunSpec spec(const char* key,int slippage=0) {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity={key,1}; s.input_tf="1";s.script_tf="1";
     s.ticker="N";s.tickerid="TEST:N";s.type="crypto";s.currency="USD";
     s.basecurrency="USD";s.description="native matching acceptance";s.volumetype="base";

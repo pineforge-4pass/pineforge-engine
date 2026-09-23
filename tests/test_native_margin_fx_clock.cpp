@@ -63,6 +63,8 @@ Bar calm(int index, double price = 100.0) { return ohlc(index, price, price, pri
 // the presented clock stands ahead of the cursor.
 NativeRunSpec clock_spec(const char* key, const char* script = "1") {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = "1";
     s.script_tf = script;

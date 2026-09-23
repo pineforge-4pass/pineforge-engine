@@ -57,7 +57,8 @@ namespace {
 // this test's own fold over the observable closed rows. Both are observed on
 // THIS tree for the L4 default surface and guard that this lane moved
 // neither. The continuation itself is compared between two runs in process.
-constexpr std::uint64_t kL4DefaultSpecDigest = 16781023430602848315ULL;
+// expectation corrected: 16781023430602848315 -> 11251058089389769594, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+constexpr std::uint64_t kL4DefaultSpecDigest = 11251058089389769594ULL;
 constexpr std::uint64_t kL4DefaultReportDigest = 17348290694371301405ULL;
 
 // FNV-1a over every closed row a run reports: the report as a host reads it.

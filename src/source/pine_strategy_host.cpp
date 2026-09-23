@@ -291,11 +291,6 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
-    if (args.n > 0 && static_cast<std::size_t>(args.n)
-        <= std::numeric_limits<std::size_t>::max() / 4U) {
-        as_native_consumer(execution_consumer()).reserve_driver_log(
-            static_cast<std::size_t>(args.n) * 4U);
-    }
     // Source placement evidence is retained by request incarnation so a
     // re-issued bracket can preserve its exact historical projection.  Batch
     // callers already disclose their bar count here; reserve the ordinary
@@ -1086,16 +1081,16 @@ source::PineStrategyHost::BarTime source::PineStrategyHost::fixture_chart_time(
     return result;
 }
 
+void source::PineStrategyHost::fixture_retain_all_events() {
+    as_native_consumer(execution_consumer()).set_retention_override(NativeEventRetention::Full);
+}
+
 std::uint64_t source::PineStrategyHost::fixture_applied_receipt_count() const {
-    std::uint64_t count = 0;
-    for (const auto& event : native_events(0)) {
-        if (!event.command
-            || !std::holds_alternative<native_order::ExecutionAppliedEvent>(*event.command)) {
-            continue;
-        }
-        ++count;
-    }
-    return count;
+    // Every ExecutionAppliedEvent the run committed. The adapter acknowledges
+    // the journal as it reads it, so the window no longer holds the whole
+    // run; the kernel's own count of the events it committed is the same
+    // number the journal scan made when it did.
+    return as_native_consumer(execution_consumer()).applied_event_count();
 }
 
 bool source::PineStrategyHost::history_advances_new_bar() const noexcept {

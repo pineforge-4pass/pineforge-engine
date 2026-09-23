@@ -58,6 +58,7 @@ SymInfo symbol(double step = 0.0) {
 void run(source::PineNativeHost& host, const std::vector<Bar>& bars,
          const SymInfo& info = symbol()) {
     InputsMap inputs;
+    host.fixture_retain_all_events();
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", inputs, info);
     CHECK(host.last_error().empty());
 }

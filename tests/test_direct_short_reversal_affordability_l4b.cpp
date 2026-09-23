@@ -245,6 +245,9 @@ void direction_and_add_controls_remain_command_driven() {
     PublicReversal direction(PublicReversal::Mode::Direction, false);
     PublicReversal add(PublicReversal::Mode::Add, false);
     const auto bars = tape();
+    // The comparison below reads both runs' whole event records (V19-B).
+    direction.fixture_retain_all_events();
+    add.fixture_retain_all_events();
     direction.run(bars.data(), static_cast<int>(bars.size()));
     add.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(direction.last_error().empty());

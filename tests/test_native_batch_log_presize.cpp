@@ -225,6 +225,8 @@ struct Config {
 
 NativeRunSpec spec_for(const Config& c, const char* session_key) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {session_key, 1};
     spec.input_tf = c.aggregated ? "1" : "5";
     spec.script_tf = "5";
@@ -400,32 +402,50 @@ struct Pinned {
 //   k24-reissue-canonical: continuation 3546404124219280572ull -> 15679351232072391977ull, broker 16042671105544878872ull -> 96449490030966840ull
 //   k24-bracket-canonical: continuation 15954092093213330626ull -> 6169224142335521897ull, broker 15258347239628143751ull -> 15272909929862720322ull
 //   k24-bracket-stream: continuation 9764567397585213717ull -> 1886979334084681129ull, broker 16914546972851419556ull -> 15380761345244795255ull
+// expectation corrected (v19-B): the continuation and broker-state hash of
+// every run moved once more, because v19-B: each run keeps
+// NativeEventRetention::Full to count its driver points and events, and the
+// spec digest folds a retention that is not the default Window; the reissue
+// runs also fold each replace successor's chain root. Trades, trade digests,
+// driver points and command events did not move:
+//   k24-idle-raw: continuation 17651724755287230786ull -> 7064720261992521123ull, broker 5532199380425826332ull -> 12470590214657723820ull
+//   k24-market-raw: continuation 12105252018339267424ull -> 2807188055616340417ull, broker 15174147556366118888ull -> 3421832422185525800ull
+//   k24-reissue-raw: continuation 9645562378066648731ull -> 138574470264575484ull, broker 7090076358007169415ull -> 14041681273026148620ull
+//   k24-bracket-raw: continuation 17521879095250218081ull -> 1047605911260740056ull, broker 10503022833842912387ull -> 8878901545577481248ull
+//   k24-burst-raw: continuation 798486196248088765ull -> 6235366456615652126ull, broker 17373938088521880793ull -> 16639775381939621756ull
+//   k24-bracket-synth: continuation 4075442391936166510ull -> 7762032925305995059ull, broker 4691396875037838892ull -> 9762893318044456255ull
+//   k24-bracket-synth-volume: continuation 17477682317664326905ull -> 5528847174455583299ull, broker 9266881001929990480ull -> 8396626339752131633ull
+//   k24-market-after-calc: continuation 6449396963817711530ull -> 14566427108214292414ull, broker 11954051044830210918ull -> 752215177105200869ull
+//   k24-bracket-aggregated: continuation 11268793798675469861ull -> 7891820420429602791ull, broker 5075748201224444045ull -> 7321557278893600124ull
+//   k24-reissue-canonical: continuation 15679351232072391977ull -> 3609935701573586264ull, broker 96449490030966840ull -> 10739619068307988300ull
+//   k24-bracket-canonical: continuation 6169224142335521897ull -> 15506983471220809652ull, broker 15272909929862720322ull -> 13995092185068427530ull
+//   k24-bracket-stream: continuation 1886979334084681129ull -> 12255391317148595120ull, broker 15380761345244795255ull -> 2630080329691288926ull
 const Pinned kPinned[] = {
     {"k24-idle-raw", {Mode::Idle, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 17651724755287230786ull, 5532199380425826332ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 7064720261992521123ull, 12470590214657723820ull}},
     {"k24-market-raw", {Mode::Market, true, Path::None, false, false, false}, 3000,
-     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 12105252018339267424ull, 15174147556366118888ull}},
+     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 2807188055616340417ull, 3421832422185525800ull}},
     {"k24-reissue-raw", {Mode::Reissue, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 9645562378066648731ull, 7090076358007169415ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 138574470264575484ull, 14041681273026148620ull}},
     {"k24-bracket-raw", {Mode::Bracket, true, Path::None, false, false, false}, 3000,
-     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 17521879095250218081ull, 10503022833842912387ull}},
+     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 1047605911260740056ull, 8878901545577481248ull}},
     {"k24-burst-raw", {Mode::Burst, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 798486196248088765ull, 17373938088521880793ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 6235366456615652126ull, 16639775381939621756ull}},
     {"k24-bracket-synth", {Mode::Bracket, true, Path::Synthesized, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 4075442391936166510ull, 4691396875037838892ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 7762032925305995059ull, 9762893318044456255ull}},
     {"k24-bracket-synth-volume",
      {Mode::Bracket, true, Path::SynthesizedVolume, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 17477682317664326905ull, 9266881001929990480ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 5528847174455583299ull, 8396626339752131633ull}},
     {"k24-market-after-calc", {Mode::Market, true, Path::None, true, false, false}, 3000,
-     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 6449396963817711530ull, 11954051044830210918ull}},
+     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 14566427108214292414ull, 752215177105200869ull}},
     {"k24-bracket-aggregated", {Mode::Bracket, true, Path::None, false, true, false}, 3000,
-     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 11268793798675469861ull, 5075748201224444045ull}},
+     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 7891820420429602791ull, 7321557278893600124ull}},
     {"k24-reissue-canonical", {Mode::Reissue, false, Path::None, false, false, false}, 240,
-     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 15679351232072391977ull, 96449490030966840ull}},
+     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 3609935701573586264ull, 10739619068307988300ull}},
     {"k24-bracket-canonical", {Mode::Bracket, false, Path::None, false, false, false}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 6169224142335521897ull, 15272909929862720322ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 15506983471220809652ull, 13995092185068427530ull}},
     {"k24-bracket-stream", {Mode::Bracket, false, Path::None, false, false, true}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 1886979334084681129ull, 15380761345244795255ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 12255391317148595120ull, 2630080329691288926ull}},
 };
 
 void the_pump_feeds_the_same_run() {

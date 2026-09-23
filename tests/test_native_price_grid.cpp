@@ -42,6 +42,8 @@ struct Host final : NativeStrategyHost {
 
 NativeRunSpec spec(const char* key) {
     NativeRunSpec s;
+    // Reads its whole event record once the run has ended (V19-B).
+    s.event_retention = NativeEventRetention::Full;
     s.identity = {key, 1};
     s.input_tf = "1"; s.script_tf = "1";
     s.tickerid = "TEST:GRID"; s.timezone = "UTC"; s.session = "24x7";
@@ -374,7 +376,8 @@ void hash_folds_only_when_set() {
     // continuation hash (which folds the installed zone data's content) it is
     // the same number on every machine. The constant guards the
     // fold's field list and order; the neutrality claim is the equalities.
-    constexpr std::uint64_t kSpecDigest = 3103595961916934085ULL;
+    // expectation corrected: 3103595961916934085 -> 7607397433345632324, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
+    constexpr std::uint64_t kSpecDigest = 7607397433345632324ULL;
     CHECK(native_run_spec_digest(spec("g-empty")) == kSpecDigest);
     // Spelling both grid fields out at their defaults folds nothing new, and a
     // rounding policy alone is not a behaviour: an unset grid folds nothing.

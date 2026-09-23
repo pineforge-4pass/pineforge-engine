@@ -292,6 +292,8 @@ std::vector<Bar> ladder(std::int64_t first, std::int64_t step, int count) {
 NativeRunSpec spec_for(const char* key, const char* timezone, const char* session,
                        const char* input_tf, const char* script_tf) {
     NativeRunSpec spec;
+    // Reads its whole event record once the run has ended (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     spec.identity = {key, 1};
     spec.input_tf = input_tf;
     spec.script_tf = script_tf;

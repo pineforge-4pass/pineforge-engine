@@ -878,6 +878,10 @@ PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spe
         if (spec->optional_mask & 2u) cpp.max_abs_units = spec->max_abs_units;
         if (spec->optional_mask & 4u) cpp.initial_margin_fraction = spec->initial_margin_fraction;
         if (spec->optional_mask & 8u) cpp.max_open_lots = spec->max_open_lots;
+        // V19-B: the v1 base specification predates the retention word, so its
+        // caller keeps the record it was published with (every event, readable
+        // after the run); pf_native_run_spec_ext_v1's retention tail chooses.
+        cpp.event_retention = pineforge::NativeEventRetention::Full;
         const auto result = host->configure_native(cpp);
         return result.status == pineforge::NativeSetupStatus::Applied ? 0 : -1;
     } catch (...) {

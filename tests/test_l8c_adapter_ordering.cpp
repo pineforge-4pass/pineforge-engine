@@ -101,6 +101,7 @@ public:
 void mixed_side_stop_order_is_legacy_deterministic() {
     StopQueueProbe host;
     const Bar bars[] = {bar(1'000)};
+    host.fixture_retain_all_events();
     host.run(bars, 1, "1", "1");
     CHECK(host.last_error().empty());
     CHECK(accepted_labels(host) == std::vector<std::string>({"A", "C", "B"}));
@@ -149,7 +150,8 @@ void reversal_cancels_cohorts_by_sorted_source_id() {
             const std::string right = "cohort-" + std::to_string(second);
             const std::vector<std::string> sorted{left, right};
             CohortCancellationProbe host(left, right);
-            host.run(bars, 5, "1", "1");
+            host.fixture_retain_all_events();
+    host.run(bars, 5, "1", "1");
             CHECK(host.last_error().empty());
             if (host.cohort_iteration != sorted) {
                 found_unsorted = true;
@@ -205,6 +207,7 @@ public:
 void equal_command_keys_use_source_sequence_as_the_stable_tie() {
     EqualCommandTieProbe host;
     const Bar bars[] = {bar(1'000), bar(2'000), bar(3'000)};
+    host.fixture_retain_all_events();
     host.run(bars, 3, "1", "1");
     CHECK(host.last_error().empty());
     const auto cancelled = cancelled_labels(host);
