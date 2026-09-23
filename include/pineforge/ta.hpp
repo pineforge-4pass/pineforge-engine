@@ -1287,6 +1287,86 @@ public:
 std::vector<double> pivot_point_levels(const std::string& method,
                                        double high, double low, double close);
 
+// --- Pivot point levels of an anchored period ---
+
+// The six pivot types. DM is DeMark's.
+enum class PivotLevelsType : unsigned char {
+    Traditional = 0,
+    Fibonacci = 1,
+    Woodie = 2,
+    Classic = 3,
+    DM = 4,
+    Camarilla = 5,
+};
+
+// The type spelled "Traditional", "Fibonacci", "Woodie", "Classic", "DM" or
+// "Camarilla"; std::invalid_argument for any other name.
+PivotLevelsType pivot_levels_type(const std::string& name);
+
+// The 11 pivot levels [P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5] of a
+// period of bars, na for the levels a type does not define. A period runs
+// from an anchored bar (bar 0 before the first anchor) to the bar before the
+// next anchored bar; a period is aggregated as its first finite open, highest
+// finite high, lowest finite low and last finite close.
+//
+// developing = false: the levels computed on the last anchored bar, from the
+// period that bar closed (and, for Woodie, that bar's own open -- the open of
+// the period the levels are for), held until the next anchored bar; all na
+// before the first anchored bar that closes a non-empty period.
+// developing = true: the levels of the period in progress, this bar included,
+// recomputed on every bar (DM reads the period's own open). Woodie has no
+// developing levels -- its levels need the open of the period after the one
+// measured -- so compute() and recompute() throw std::runtime_error for that
+// pair, which fails a run as any exception out of a script callback does.
+//
+// The formulas are the standard pivot definitions, Traditional's R3..S5 and
+// Woodie's among them, evaluated operation by operation as written: P =
+// (H + L + C) / 3, R1 = P * 2 - L, ..., R3 = P * 2 + (H - 2 * L), ..., R5 =
+// P * 4 + (H - 4 * L); Woodie P = (H + L + 2 * O_next) / 4, R3 = H + 2 * (P -
+// L), R4 = R3 + (H - L); DM X = O == C ? H + L + 2 * C : C > O ? 2 * H + L +
+// C : 2 * L + H + C, P = X / 4, R1 = X / 2 - L, S1 = X / 2 - H; Camarilla R1 =
+// C + 1.1 * (H - L) / 12, ..., R5 = (H / L) * C (na on a zero low), S5 = C -
+// (R5 - C). Anchored on every bar with developing = false, this is the free
+// function above wherever that function spells the same formula (every level
+// of Fibonacci, Classic and Camarilla; P, R1, S1, R2 and S2 of Traditional);
+// the free function's Traditional R3..S5, Woodie and DM formulas differ.
+// recompute() re-runs the current bar from the state its first compute()
+// found.
+class PivotPointLevels {
+public:
+    PivotPointLevels() = default;
+    std::vector<double> compute(PivotLevelsType type, bool anchor, bool developing,
+                                double open, double high, double low, double close);
+    std::vector<double> recompute(PivotLevelsType type, bool anchor, bool developing,
+                                  double open, double high, double low, double close);
+    // The type by name (pivot_levels_type()).
+    std::vector<double> compute(const std::string& type, bool anchor, bool developing,
+                                double open, double high, double low, double close);
+    std::vector<double> recompute(const std::string& type, bool anchor, bool developing,
+                                  double open, double high, double low, double close);
+
+private:
+    struct Period {
+        double open = na<double>();
+        double high = na<double>();
+        double low = na<double>();
+        double close = na<double>();
+        void enter(double o, double h, double l, double c);
+    };
+    struct Levels {
+        double v[11];
+    };
+    static Levels no_levels();
+
+    Period period_;                        // the period in progress
+    Levels held_ = no_levels();            // the levels of the last closed period
+    Period saved_period_;
+    Levels saved_held_ = no_levels();
+};
+
+// Feature macro: PivotPointLevels / PivotLevelsType / pivot_levels_type exist.
+#define PF_PIVOT_LEVELS_HAS_ANCHOR 1
+
 } // namespace ta
 
 } // namespace pineforge

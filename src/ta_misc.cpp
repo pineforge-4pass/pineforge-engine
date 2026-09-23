@@ -1,5 +1,5 @@
 /*
- * ta_misc.cpp — stats + helpers + free functions: Linreg, PercentRank, PercentileNearestRank, PercentileLinearInterpolation, Correlation, BarsSince, ValueWhen, pivot_point_levels
+ * ta_misc.cpp — stats + helpers + free functions: Linreg, PercentRank, PercentileNearestRank, PercentileLinearInterpolation, Correlation, BarsSince, ValueWhen, pivot_point_levels, PivotPointLevels
  *
  * Carved out of ta.cpp during the v0.1 file-split (phase 6) so the
  * 66-class TA library becomes navigable. Every class declared in
@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -436,6 +437,156 @@ std::vector<double> pivot_point_levels(const std::string& method,
     }
     // Unknown method: return P and leave absent levels as na.
     return out;
+}
+
+// ============================================================================
+// Pivot point levels of an anchored period
+// ============================================================================
+
+namespace {
+
+// The levels of the period (o, h, l, c) -- next_open is the open of the
+// period the levels are for, which only Woodie reads -- into out[11], each
+// formula evaluated operation by operation as the standard definition spells
+// it. A formula missing one of its inputs leaves all eleven na, as the free
+// function does for a missing high, low or close.
+void pivot_levels_of(PivotLevelsType type, double o, double h, double l, double c,
+                     double next_open, double* out) {
+    for (int i = 0; i < 11; ++i) out[i] = na<double>();
+    switch (type) {
+    case PivotLevelsType::Woodie: {
+        if (is_na(h) || is_na(l) || is_na(next_open)) return;
+        const double P = (h + l + 2.0 * next_open) / 4.0;
+        const double R3 = h + 2.0 * (P - l);
+        const double S3 = l - 2.0 * (h - P);
+        out[0] = P;
+        out[1] = 2.0 * P - l;           out[2] = 2.0 * P - h;
+        out[3] = P + (h - l);           out[4] = P - (h - l);
+        out[5] = R3;                    out[6] = S3;
+        out[7] = R3 + (h - l);          out[8] = S3 - (h - l);
+        return;
+    }
+    case PivotLevelsType::DM: {
+        if (is_na(o) || is_na(h) || is_na(l) || is_na(c)) return;
+        double x;
+        if (o == c)      x = h + l + 2.0 * c;
+        else if (c > o)  x = 2.0 * h + l + c;
+        else             x = 2.0 * l + h + c;
+        out[0] = x / 4.0;
+        out[1] = x / 2.0 - l;           out[2] = x / 2.0 - h;
+        return;
+    }
+    case PivotLevelsType::Traditional:
+    case PivotLevelsType::Fibonacci:
+    case PivotLevelsType::Classic:
+    case PivotLevelsType::Camarilla:
+        break;
+    }
+    if (is_na(h) || is_na(l) || is_na(c)) return;
+    const double P = (h + l + c) / 3.0;
+    out[0] = P;
+    switch (type) {
+    case PivotLevelsType::Traditional:
+        out[1] = P * 2.0 - l;                   out[2] = P * 2.0 - h;
+        out[3] = P + (h - l);                   out[4] = P - (h - l);
+        out[5] = P * 2.0 + (h - 2.0 * l);       out[6] = P * 2.0 - (2.0 * h - l);
+        out[7] = P * 3.0 + (h - 3.0 * l);       out[8] = P * 3.0 - (3.0 * h - l);
+        out[9] = P * 4.0 + (h - 4.0 * l);       out[10] = P * 4.0 - (4.0 * h - l);
+        return;
+    case PivotLevelsType::Fibonacci:
+        out[1] = P + 0.382 * (h - l);           out[2] = P - 0.382 * (h - l);
+        out[3] = P + 0.618 * (h - l);           out[4] = P - 0.618 * (h - l);
+        out[5] = P + (h - l);                   out[6] = P - (h - l);
+        return;
+    case PivotLevelsType::Classic:
+        out[1] = 2.0 * P - l;                   out[2] = 2.0 * P - h;
+        out[3] = P + (h - l);                   out[4] = P - (h - l);
+        out[5] = P + 2.0 * (h - l);             out[6] = P - 2.0 * (h - l);
+        out[7] = P + 3.0 * (h - l);             out[8] = P - 3.0 * (h - l);
+        return;
+    case PivotLevelsType::Camarilla: {
+        out[1] = c + 1.1 * (h - l) / 12.0;      out[2] = c - 1.1 * (h - l) / 12.0;
+        out[3] = c + 1.1 * (h - l) / 6.0;       out[4] = c - 1.1 * (h - l) / 6.0;
+        out[5] = c + 1.1 * (h - l) / 4.0;       out[6] = c - 1.1 * (h - l) / 4.0;
+        out[7] = c + 1.1 * (h - l) / 2.0;       out[8] = c - 1.1 * (h - l) / 2.0;
+        const double R5 = l != 0.0 ? (h / l) * c : na<double>();
+        out[9] = R5;
+        out[10] = is_na(R5) ? na<double>() : c - (R5 - c);
+        return;
+    }
+    case PivotLevelsType::Woodie:
+    case PivotLevelsType::DM:
+        return;
+    }
+}
+
+} // namespace
+
+PivotLevelsType pivot_levels_type(const std::string& name) {
+    if (name == "Traditional") return PivotLevelsType::Traditional;
+    if (name == "Fibonacci") return PivotLevelsType::Fibonacci;
+    if (name == "Woodie") return PivotLevelsType::Woodie;
+    if (name == "Classic") return PivotLevelsType::Classic;
+    if (name == "DM") return PivotLevelsType::DM;
+    if (name == "Camarilla") return PivotLevelsType::Camarilla;
+    throw std::invalid_argument("pivot point levels: unknown type '" + name + "'");
+}
+
+void PivotPointLevels::Period::enter(double o, double h, double l, double c) {
+    if (is_na(open) && !is_na(o)) open = o;
+    if (!is_na(h) && (is_na(high) || h > high)) high = h;
+    if (!is_na(l) && (is_na(low) || l < low)) low = l;
+    if (!is_na(c)) close = c;
+}
+
+PivotPointLevels::Levels PivotPointLevels::no_levels() {
+    Levels levels;
+    for (double& v : levels.v) v = na<double>();
+    return levels;
+}
+
+std::vector<double> PivotPointLevels::compute(PivotLevelsType type, bool anchor, bool developing,
+                                              double open, double high, double low, double close) {
+    if (developing && type == PivotLevelsType::Woodie) {
+        throw std::runtime_error(
+            "pivot point levels: the Woodie type has no developing levels (a Woodie "
+            "period's levels need the open of the period after it)");
+    }
+    saved_period_ = period_;
+    saved_held_ = held_;
+    if (anchor) {
+        // This bar closes the period in progress and opens the next one: the
+        // held levels are the closed period's, with this bar's open as the
+        // open of the period they are for.
+        pivot_levels_of(type, period_.open, period_.high, period_.low, period_.close, open,
+                        held_.v);
+        period_ = Period{};
+    }
+    period_.enter(open, high, low, close);
+    if (!developing) return std::vector<double>(held_.v, held_.v + 11);
+    std::vector<double> out(11);
+    pivot_levels_of(type, period_.open, period_.high, period_.low, period_.close, na<double>(),
+                    out.data());
+    return out;
+}
+
+std::vector<double> PivotPointLevels::recompute(PivotLevelsType type, bool anchor, bool developing,
+                                                double open, double high, double low,
+                                                double close) {
+    period_ = saved_period_;
+    held_ = saved_held_;
+    return compute(type, anchor, developing, open, high, low, close);
+}
+
+std::vector<double> PivotPointLevels::compute(const std::string& type, bool anchor, bool developing,
+                                              double open, double high, double low, double close) {
+    return compute(pivot_levels_type(type), anchor, developing, open, high, low, close);
+}
+
+std::vector<double> PivotPointLevels::recompute(const std::string& type, bool anchor,
+                                                bool developing, double open, double high,
+                                                double low, double close) {
+    return recompute(pivot_levels_type(type), anchor, developing, open, high, low, close);
 }
 
 } // namespace ta

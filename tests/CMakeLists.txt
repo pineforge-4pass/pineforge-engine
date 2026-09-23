@@ -1018,6 +1018,10 @@ list(APPEND TEST_SOURCES test_ta_kc_basis)
 # R5 lane TA1: ta::KC / ta::KCW's useTrueRange against f_kc / f_kcw.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_kc_range)
+# R5 lane TA1: ta::PivotPointLevels, held and developing, against the pivot
+# formulas re-aggregated naively, and against ta::pivot_point_levels.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_ta_pivot_point_levels)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

@@ -448,6 +448,32 @@ Woodie pivots use this runtime's close-based fallback because the free
 function does not receive the period open required by TradingView's full
 Woodie formula.
 
+### `PivotPointLevels` — pivot levels of an anchored period
+
+`PivotPointLevels::compute(type, anchor, developing, open, high, low, close)`
+(and `recompute`, with the same arguments) is the stateful form of Pine's
+`ta.pivot_point_levels(type, anchor, developing)`. `type` is a
+`PivotLevelsType` or one of the six names (`pivot_levels_type(name)`, which
+refuses any other name with `std::invalid_argument`). A period runs from an
+anchored bar (bar 0 before the first anchor) to the bar before the next
+anchored bar, aggregated as its first open, highest high, lowest low and last
+close (finite values only). With `developing = false` it answers the levels
+computed on the last anchored bar from the period that bar closed -- Woodie
+with that bar's own open, the open of the period the levels are for -- and
+holds them until the next anchored bar (`na` before the first). With
+`developing = true` it recomputes the levels of the period in progress on
+every bar; Woodie has no developing levels, and that pair throws
+`std::runtime_error`, which fails the run like any exception out of a script
+callback (`strategy_get_last_error` carries the text). The formulas are the
+standard definitions, operation by operation (Traditional `R3 = P * 2 + (H -
+2 * L)`, ..., `S5 = P * 4 - (4 * H - L)`; Woodie `P = (H + L + 2 * open) /
+4`, `R3 = H + 2 * (P - L)`, `R4 = R3 + (H - L)`; DM's `X` on the period's
+open against its close). Anchored on every bar with `developing = false` it
+equals the free function above for every level of Fibonacci, Classic and
+Camarilla and for P, R1, S1, R2 and S2 of Traditional; the free function's
+Traditional R3..S5, Woodie and DM formulas are its own
+(`PF_PIVOT_LEVELS_HAS_ANCHOR`, `tests/test_ta_pivot_point_levels.cpp`).
+
 ## Math (`<pineforge/math.hpp>`)
 
 The runtime exposes only two pieces under math:
