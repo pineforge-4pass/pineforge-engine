@@ -158,7 +158,18 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # release-only rows between them (their TUs reach the source layer -- see
 # RELEASE_MIN_TESTS). 230 registered, 229 run: the WebSocket row still skips
 # on a system libcurl.
-KERNEL_MIN_TESTS = 229
+# 237 run = those 229 plus the eight TUs of R5 performance slice B (INT18)
+# that this profile builds -- measured on the integrated tree (ctest -N), not
+# summed from the lanes' own bases:
+#   +5 L1 test_native_host_reads, test_native_lean_path,
+#         test_native_intrabar_scratch, test_native_lookup_memos,
+#         test_native_point_checks
+#   +3 L5 test_native_match_band_witness, test_native_match_allocations,
+#         test_native_match_band_precheck
+# All eight are source-free. Lane L5 adds one release-only row and lane L4
+# three (their TUs reach the source layer -- see RELEASE_MIN_TESTS). 238
+# registered, 237 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 237
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -214,7 +225,14 @@ KERNEL_MIN_TESTS = 229
 #   +1 P4    test_adapter_receipts_in_place
 #   +2 P5611 test_chart_day_key_arithmetic, test_aggregates_input_bars_literals
 # No release row skips, so 607 registered is 607 run.
-RELEASE_MIN_TESTS = 607
+# 619 = those 607 plus the twelve rows of R5 performance slice B (INT18): the
+# eight KERNEL_MIN_TESTS lists above, which register here too, plus the four
+# source-bound ones the kernel profile does not build:
+#   +1 L5 test_adapter_command_allocations
+#   +3 L4 test_adapter_quiet_bar, test_adapter_quiet_bar_probe,
+#         test_adapter_quiet_bar_differential
+# No release row skips, so 619 registered is 619 run.
+RELEASE_MIN_TESTS = 619
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
