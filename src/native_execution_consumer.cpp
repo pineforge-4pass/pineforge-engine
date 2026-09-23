@@ -2554,6 +2554,15 @@ void NativeExecutionConsumer::read_target_into(
             }
         }
         read_openings_into(engine, handles, position->cycle, out.openings);
+        // An opening that filled in several slices holds one lot per slice.
+        // The roster selects each opening once -- settlement closes all of its
+        // lots and refuses an opening named twice -- and the rows arrive in
+        // incarnation order, so one opening's rows sit together.
+        out.openings.erase(std::unique(out.openings.begin(), out.openings.end(),
+                                       [](const auto& a, const auto& b) {
+                                           return a.queried_opening == b.queried_opening;
+                                       }),
+                           out.openings.end());
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&live->request().owner)) {
         read_openings_into(engine, bind->openings, bind->cycle, out.openings);
     } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
