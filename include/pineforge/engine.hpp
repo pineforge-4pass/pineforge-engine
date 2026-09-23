@@ -185,8 +185,9 @@ struct Trade {
     // strategy.close/close_all market close, a reversal-driven close, a
     // margin-call slice, or an intraday-cap close. The kernel never sets it:
     // its one writer is the Pine adapter, which labels the rows an exit-leg
-    // fill closed (source::PineStrategyHost::adapter_label_bracket_trades),
-    // so a bare host's bracket leg reads SCRIPT.
+    // fill closed (source::PineStrategyHost::adapter_label_bracket_trades). A
+    // bare host's bracket leg reads BRACKET through close_cause below instead,
+    // which the kernel records when the leg's owner armed it.
     // ABI v4 task 9: closed_trade_close_cause() reads this to distinguish
     // BRACKET (2) from SCRIPT (1), after the row's recorded close_cause, which
     // a margin-call or intraday-cap row carries instead.
@@ -204,9 +205,11 @@ struct Trade {
     bool open_at_end = false;
     // Why this row exited, when the closer knew. A kernel-originated
     // liquidation or risk flatten carries its own cause through the settling
-    // execution::Fill; a host that runs its own forced-close policy records
-    // its cause on the row. Unspecified leaves closed_trade_close_cause() to
-    // the generic facts above (open_at_end, exit_from_bracket).
+    // execution::Fill, and so does a close its owner's fill armed (Bracket;
+    // the relation native_toolkit::submit_bracket builds); a host that runs
+    // its own forced-close policy records its cause on the row. Unspecified
+    // leaves closed_trade_close_cause() to the generic facts above
+    // (open_at_end, exit_from_bracket).
     execution::CloseCause close_cause = execution::CloseCause::Unspecified;
 };
 

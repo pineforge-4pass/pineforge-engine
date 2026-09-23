@@ -24,10 +24,13 @@ using Action = std::variant<Flatten, order_action::Reduce, order_action::Transac
 // Unspecified leaves the classification to the generic facts already on the
 // row (open_at_end -> RangeEnd, exit_from_bracket -> Bracket, otherwise
 // Script). Liquidation and RiskLimit are what a kernel-originated request
-// carries (native_order::RequestOrigin::KernelLiquidation / KernelRisk); a
-// host that runs its own forced-close policy — the Pine adapter's margin call,
-// its strategy.risk.max_intraday_loss close and its filled-order cap close —
-// records its own cause on the row it produced.
+// carries (native_order::RequestOrigin::KernelLiquidation / KernelRisk), and
+// Bracket is what a host request its owner's fill armed carries when it only
+// closes (a native_order::WaitForApplied owner with a Reduce, Flatten or
+// host-sized close intent, the relation native_toolkit::submit_bracket
+// builds); a host that runs its own forced-close policy — the Pine adapter's
+// margin call, its strategy.risk.max_intraday_loss close and its filled-order
+// cap close — records its own cause on the row it produced.
 enum class CloseCause : std::uint8_t {
     Unspecified = 0,
     Script = 1,

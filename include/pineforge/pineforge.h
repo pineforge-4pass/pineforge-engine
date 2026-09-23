@@ -445,11 +445,11 @@ typedef struct pf_report_s {
      * #strategy_set_broker_state_hash_recording is on; freed by
      * #report_free. NULL / 0-length when recording was off (default) or no
      * script bars were dispatched. When populated, len ==
-     * script_bars_processed. For a compiled Pine strategy the last element
-     * equals #strategy_broker_state_hash's value at the end of the run; a bare
-     * native host's value is read after the run's teardown, not latched at its
-     * last script point, so it differs [F3 will change: the kernel latches it
-     * for every host, so the two agree]. ABI v4. */
+     * script_bars_processed, and the last element equals
+     * #strategy_broker_state_hash's value at the end of the run for a
+     * compiled Pine strategy and a bare native host alike: the recorder
+     * latches the continuation at each report point, and the scalar read
+     * after the run folds the last latch. ABI v4. */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
 } pf_report_t;
@@ -1178,7 +1178,8 @@ typedef enum pf_close_cause_e {
  *      `-1` below, final review F7).
  *    - `1` SCRIPT -- a `strategy.close` / `strategy.close_all` market close,
  *      or a reversal-driven close.
- *    - `2` BRACKET -- a `strategy.exit` stop/limit/trail/profit/loss leg.
+ *    - `2` BRACKET -- a `strategy.exit` stop/limit/trail/profit/loss leg,
+ *      or a native host's close its owner's fill armed.
  *    - `3` MARGIN_CALL -- a forced liquidation slice.
  *    - `4` INTRADAY_LOSS_CAP -- `risk.max_intraday_loss`.
  *    - `5` INTRADAY_FILL_CAP -- the max-filled-orders intraday cap.
@@ -1189,10 +1190,15 @@ typedef enum pf_close_cause_e {
  *  engine_trade_accessors.cpp): `open_at_end` -> 6; then the cause the
  *  CLOSER recorded on the row (`execution::CloseCause`, whose numbers are
  *  exactly these values) -- a kernel-originated liquidation or risk flatten
- *  states it through the settling fill, and a host running its own
- *  forced-close policy states it on the row it produced, which is where the
- *  Pine adapter's margin-call (3), max-intraday-loss (4) and filled-order-cap
- *  (5) rows get their value; then the row's `exit_from_bracket` flag -- true
+ *  states it through the settling fill, and so does a host request its
+ *  owner's fill armed (a `WaitForApplied` owner relation, as
+ *  `native_toolkit::submit_bracket` builds, with an intent that only closes:
+ *  `Reduce`, `Flatten` or a host-sized close), which records `2` BRACKET; a
+ *  host running its own forced-close policy states it on the row it
+ *  produced, which is where the Pine adapter's margin-call (3),
+ *  max-intraday-loss (4) and filled-order-cap (5) rows get their value (the
+ *  adapter classifies its own bracket rows by order family, so it clears the
+ *  kernel's `2` on them first); then the row's `exit_from_bracket` flag -- true
  *  only for a REAL `strategy.exit` leg, either an `OrderType::EXIT` fill
  *  whose id does NOT carry the internal `"__close__"` prefix that a deferred
  *  `strategy.close`/`close_all` order is also given (that path reuses the
@@ -1203,7 +1209,8 @@ typedef enum pf_close_cause_e {
  *  A Pine/source run's values are unchanged. A bare native host that declares
  *  a kernel margin model now reads `3` for its own liquidation rows (and `4`
  *  for a kernel risk flatten) where the retired string derivation, which only
- *  recognised the adapter's sentinels, answered `1`.
+ *  recognised the adapter's sentinels, answered `1`, and it reads `2` for a
+ *  bracket leg its owner armed, where it read `1` before R5 lane F3.
  *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
  *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
  *  convention -- #strategy_pending_order_fill_qty,

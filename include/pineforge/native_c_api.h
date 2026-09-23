@@ -181,13 +181,13 @@
  *
  * pf_native_decision_v1 carries three of NativeDecisionContext's four
  * session-day facts (in_session, opens_session_day, closes_session_day, in
- * the struct's former tail padding) and not the fourth,
- * closes_session_day_open_ended. That one differs from closes_session_day on a
- * batch's final bar alone, for a host that recomputes a batch whose last input
- * is still forming; a C host's live edge is the strategy_stream_* ingress,
- * whose bars already read the calendar there, and a fifth byte would grow the
- * struct past the size the frozen v1 caller checks. Executed by the
- * session-day scenario of tests/test_native_c_api.c.
+ * the base layout's former tail padding, so a table of every published length
+ * is handed them) and not the fourth, closes_session_day_open_ended. That one
+ * differs from closes_session_day on a batch's final bar alone, for a host
+ * that recomputes a batch whose last input is still forming; a C host's live
+ * edge is the strategy_stream_* ingress, whose bars already read the calendar
+ * there, and that padding holds exactly the three facts and their presence
+ * byte. Executed by the session-day scenario of tests/test_native_c_api.c.
  *
  * BASE-CLASS SEAMS
  * ────────────────
@@ -2917,10 +2917,11 @@ PF_API int strategy_native_cohort_remove_v1(pf_strategy_t s, uint64_t cohort,
  *  attempt, so this call takes both halves and applies them together.
  *  @p base is the same #pf_native_run_spec_v1 the other entry point takes.
  *
- *  Refuses without mutation, the handle staying usable, for an already-configured
- *  handle, a mis-sized struct or an unknown enumerator. A specification the
- *  kernel's own validation rejects answers PF_NATIVE_E_ARGUMENT and, exactly as
- *  `configure_native` does, leaves the host Failed (InvalidSpecification).
+ *  Refuses without mutation — the handle stays usable — for an
+ *  already-configured handle, a mis-sized struct, an unknown enumerator, or a
+ *  specification the kernel's own validation rejects, which answers
+ *  PF_NATIVE_E_ARGUMENT: the call validates the whole specification before it
+ *  configures, so a rejected one leaves the handle Unconfigured.
  *  @return PF_NATIVE_OK, or a negative status. */
 PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
                                             const pf_native_run_spec_v1* base,

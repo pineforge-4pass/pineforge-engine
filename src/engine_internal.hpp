@@ -113,8 +113,6 @@ bool first_touch_position(const Bar& bar, bool high_first, double level,
 // open-equals-stop case both legs return 0 simultaneously and the dual-stop
 // arbitration breaks the tie in favour of the long leg — this matches TV's
 // broker emulator on probe 83.
-bool entry_stop_first_touch(const Bar& bar, double stop_level,
-                                   bool is_long, double* out_pos);
 bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
                             bool is_long, double* out_pos);
 

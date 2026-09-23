@@ -11,49 +11,6 @@ namespace pineforge::source {
 
 namespace {
 
-// The open of the aggregated script bar after the one that opened at
-// script_open_ms: the chart-grid bucket of the first retained input past that
-// bar's bucket, or none when the retained input ends inside it. A bucket is
-// at most one script bar wide, so only the inputs of that span are asked for
-// their bucket.
-std::optional<std::int64_t> next_aggregated_script_open(
-        const std::vector<Bar>& inputs, std::int64_t script_open_ms,
-        int script_tf_seconds, const std::string& timezone, const std::string& session) {
-    const auto bucket = [&](std::int64_t ms) {
-        return session_intraday_bucket_open_ms(ms, script_tf_seconds, timezone, session);
-    };
-    const auto before = [](const Bar& bar, std::int64_t ms) { return bar.timestamp < ms; };
-    const auto span_begin = std::lower_bound(inputs.begin(), inputs.end(),
-                                             script_open_ms, before);
-    const auto span_end = std::lower_bound(
-        span_begin, inputs.end(),
-        script_open_ms + static_cast<std::int64_t>(script_tf_seconds) * 1000, before);
-    const auto next = std::partition_point(span_begin, span_end, [&](const Bar& bar) {
-        return bucket(bar.timestamp) <= script_open_ms;
-    });
-    if (next == inputs.end()) return std::nullopt;
-    return bucket(next->timestamp);
-}
-
-// session.islastbar looks one script bar ahead: on the chart timeframe to the
-// next retained bar, aggregated to the next bucket the retained input holds,
-// so both paths read the same chart alike. (ab9714be pine_scheduler.cpp:
-// 1865-1869 read the aggregated flag as in_session && barstate.islast.)
-// `script_index` is the chart index of the bar being published.
-std::optional<std::int64_t> next_script_open(
-        const std::vector<Bar>& inputs, const NativeRunSpec& spec, int script_index,
-        std::int64_t script_open_ms) {
-    const int ratio = tf_ratio(spec.input_tf, spec.script_tf);
-    if (ratio == 1 && script_index + 1 < static_cast<int>(inputs.size()))
-        return inputs[static_cast<std::size_t>(script_index + 1)].timestamp;
-    if ((ratio > 1 || ratio == -1) && tf_is_intraday(spec.script_tf)) {
-        return next_aggregated_script_open(inputs, script_open_ms,
-                                           tf_to_seconds(spec.script_tf), spec.timezone,
-                                           spec.session);
-    }
-    return std::nullopt;
-}
-
 // A chart whose script bar aggregates several input bars, as run_begin's
 // needs_aggregation reads it: the kernel's interval index is then the INPUT bar
 // a script bucket opens on, where the host's lots carry the chart bar.
@@ -223,15 +180,12 @@ int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) co
 }
 
 std::optional<double> PineScheduler::next_input_waypoint(
-        const NativeDecisionContext& context, double current_price,
-        NativePathOrder order) const noexcept {
+        const PineStrategyHost& host, const NativeDecisionContext& context,
+        double current_price) const noexcept {
     const auto found = std::find_if(retained_.bars.begin(), retained_.bars.end(),
         [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
     if (found == retained_.bars.end()) return std::nullopt;
-    bool high_first = std::abs(found->high - found->open)
-        < std::abs(found->open - found->low);
-    if (order == NativePathOrder::HighFirst) high_first = true;
-    else if (order == NativePathOrder::LowFirst) high_first = false;
+    const bool high_first = host.adapter_.source_path_uses_high_first(*found);
     const NativePathPhase phase[] = {
         NativePathPhase::Open,
         high_first ? NativePathPhase::High : NativePathPhase::Low,
@@ -555,15 +509,12 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     publish_series(script_bar, host);
     // The session flags belong to the script bar, not to a callback: a
     // calc_on_order_fills recalculation that already published this bar set
-    // them (recalculate below) and its close reads the same answer. Asked
-    // again, the dual would read this bar as its own predecessor, and the
-    // lookahead would start from a count the recalculation already advanced
-    // (lane F1).
+    // them (recalculate below) and its close reads the same answer (lane F1).
+    // They are the kernel's session-day facts of the bar (lane F5), which
+    // every callback of the bar carries alike.
     if (const auto state = host.native_state(); state.spec
         && !state.spec->timeframe_undetected && !had_coof_recalc) {
-        host.scheduler_update_session_state(
-            script_bar, next_script_open(retained_.bars, *state.spec, source_bar_count_,
-                                         script_bar.timestamp));
+        host.scheduler_update_session_state();
     }
     const bool suppress_probe_tail = host.probe_suppress_tail_logic()
         && expected_source_bars_ > 0
@@ -675,9 +626,7 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     if (const auto state = host.native_state(); state.spec
         && !state.spec->timeframe_undetected
         && last_published_script_open_ms_ != context.script_bar_open_ms) {
-        host.scheduler_update_session_state(
-            callback_bar, next_script_open(retained_.bars, *state.spec, source_bar_count_,
-                                           callback_bar.timestamp));
+        host.scheduler_update_session_state();
     }
     NativeDecisionContext coof_context = context;
     if (at_open) coof_context.coordinate.path_phase = NativePathPhase::Open;

@@ -74,9 +74,11 @@ public:
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }
     int source_bar_index_for(const NativeDecisionContext& context) const noexcept;
+    // The leg order is the kernel's answer for the input bar
+    // (PineExecutionAdapter::source_path_uses_high_first), not a copy of it.
     std::optional<double> next_input_waypoint(
-        const NativeDecisionContext&, double current_price,
-        NativePathOrder) const noexcept;
+        const PineStrategyHost&, const NativeDecisionContext&,
+        double current_price) const noexcept;
     const Bar* current_script_bar() const noexcept {
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
     }

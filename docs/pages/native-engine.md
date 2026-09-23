@@ -438,7 +438,7 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:1737-1748`) is **not** refused as a source mutation: it
+overload (`engine.hpp:1590-1601`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
 (`native_execution_consumer.cpp:8195-8233`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
@@ -1369,7 +1369,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:12319-12343`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:12318-12342`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1795,7 +1795,7 @@ bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:916`). The kernel resolves each session day once through
+(`native_c_api.h:1382`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -1832,11 +1832,11 @@ host that marks its own equity keeps this default and owns the whole series.
 
 **The scalar extremes are not part of that bargain.** `max_drawdown_`,
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
-through `max_drawdown_percent()` (`engine.hpp:1471`), `max_runup_percent()`
-(`engine.hpp:940`) and `max_contracts_held_all/long/short()`
-(`max_contracts_held_all` `engine.hpp:1952-1954`) — are a property of the RUN: what it drew down, what
+through `max_drawdown_percent()` (`engine.hpp:1474`), `max_runup_percent()`
+(`engine.hpp:943`) and `max_contracts_held_all/long/short()`
+(`max_contracts_held_all` `engine.hpp:1803-1805`) — are a property of the RUN: what it drew down, what
 it ran up, the most it ever held. The kernel folds them
-(`update_equity_extremes`, `engine.hpp:1326`) at every script calculation
+(`update_equity_extremes`, `engine.hpp:1329`) at every script calculation
 under **every** report policy, so a `HostRecorded` host reads them truthfully
 without asking the kernel to record anything. Before R5 lane E2 the fold was
 reachable only through the two recording policies, and a defaulted host read
@@ -1856,7 +1856,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2088`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2091`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows. With the switch on,
 one row follows each point, after the extremes that point just folded
@@ -1972,7 +1972,7 @@ only. Pinned by `closed_rows_by_index` in
 ### Why a row closed
 
 Every closed row carries the cause its closer recorded:
-`execution::CloseCause` (`execution.hpp:31`) — `Unspecified`, `Script`,
+`execution::CloseCause` (`execution.hpp:34`) — `Unspecified`, `Script`,
 `Bracket`, `Liquidation`, `RiskLimit`, `FillCap`, `RangeEnd`. A
 kernel-originated close states it through the settling fill, which is how a
 bare host's own rows get theirs: the margin model's liquidation books
@@ -1980,8 +1980,8 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (`engine.hpp:1797`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1216`) the C one, with the
+`closed_trade_close_cause(i)` (`engine.hpp:1800`) is the C++ read and
+`strategy_closed_trade_close_cause` (`pineforge.h:1223`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
@@ -2012,11 +2012,11 @@ struct RegimeHost : pineforge::NativeStrategyHost {
 };
 ```
 
-- `hash_host_extension` (`engine.hpp:398`, protected virtual on
+- `hash_host_extension` (`engine.hpp:401`, protected virtual on
   `BacktestEngine`) is called exactly once per hash, last, after the kernel's
   fold. What it writes is part of the scalar `broker_state_hash()`, of every
   per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
-- `BrokerStateHashSink` (`engine.hpp:343`) is a complete public type: FNV-1a
+- `BrokerStateHashSink` (`engine.hpp:346`) is a complete public type: FNV-1a
   over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
   NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
 - An override **replaces** the default. A host that overrides nothing folds
@@ -2031,9 +2031,13 @@ struct RegimeHost : pineforge::NativeStrategyHost {
   it, so a subclass still written against it compiles and hashes unchanged;
   new hosts override `hash_host_extension`. The Pine adapter folds its own
   state through the generic hook like any other host.
-- The C callback table carries no hash hook, so a C host's broker-state hash
-  is the kernel's own fold (`native_c_api.h`, "not exposed"). The per-bar rows
-  need no hook and are available to a C host as described above.
+- A C host folds its own durable state through
+  `pf_native_callbacks_v1::on_hash_extension`, the C route of
+  `hash_host_extension`: it answers a 64-bit digest of that state, which the
+  kernel folds after its own bytes with a domain tag, in every per-bar row, the
+  final and the stream hash. Without it the C host's broker-state hash is the
+  kernel's own fold. The per-bar rows need no hook and are available to a C
+  host as described above.
 
 ## Calendar, session, timeframes, warmup
 
@@ -2147,10 +2151,11 @@ and the input's `on_native_bar` follows it.
 - `lookahead = false` (Pine's `barmerge.lookahead_off`): the bucket is
   delivered on the input bar that completes it, never earlier — its **last**
   contributing input bar when that bar closes it (`Confirmed`, a bucket the
-  session close clips short of its nominal end included: the calendar knows
-  that bar is the session's last), or, for a bucket only a later input reveals
-  as complete (a hole over its last slot), the next period's **first** input
-  bar (`LazyComplete`), which contributes nothing to it.
+  session close or a break in the session clips short of its nominal end
+  included: the calendar knows that bar is its window's last), or, for a
+  bucket only a later input reveals as complete (a hole over its last slot),
+  the next period's **first** input bar (`LazyComplete`), which contributes
+  nothing to it.
 - `lookahead = true` (`barmerge.lookahead_on`): the completed bucket's final
   OHLCV is delivered at its **first** contributing input bar, and
   `native_series_bar` answers with it from then on.
@@ -2576,13 +2581,13 @@ class Htf final : public pineforge::NativeStrategyHost {
 Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator and
 the Pine scheduler aggregate with (`TimeframeAggregator`
-`pine_scheduler_native.cpp:174`). What it does **not** give you is what a
+`pine_scheduler_native.cpp:131`). What it does **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:1694`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:1697`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
@@ -3329,7 +3334,7 @@ one derived class so the C boundary can write the presentation error string.
 A host that is not written in C++ does not subclass `NativeStrategyHost`: it
 hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
-34 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
+39 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the 57 compiled-strategy runtime symbols and their
@@ -3427,12 +3432,17 @@ the `FromOwnerFill` anchor, the
 capacity, the owner relation with its incarnations and cycle, the group and
 its effect, and the label and comment. The two anchored-leg knobs ride an
 additive tail behind `PF_NATIVE_REQUEST_V1_BASE_SIZE` (`anchor_rounding`,
-`visibility`): the runtime accepts both lengths, so a caller compiled against
-the base layout keeps working and gets the defaults. The arm hook itself is
-not exposed (the callback table carries no answering hook); a C host's
-anchored leg is armed at the kernel level. `PF_NATIVE_INTENT_HOST_SIZED` is
-deliberately refused with `PF_NATIVE_E_UNSUPPORTED`: `HostSized` is the
-adapter's sizing seam, and a C host sizes with `Sized`.
+`visibility`), and later tails add the sizing detail, the trail seed and the
+arm relation (`arm_first_match`, `arm_scope`): the runtime accepts every
+published length, so a caller compiled against an earlier layout keeps working
+and gets the defaults. Where an anchored leg is armed is answered through
+`pf_native_callbacks_v1::on_anchored_level`, the C route of
+`resolve_anchored_level`, or left to the kernel's level.
+`PF_NATIVE_INTENT_HOST_SIZED` is refused with `PF_NATIVE_E_UNSUPPORTED` but for
+the two closes the kernel spells no other way — a cohort close
+(`PF_NATIVE_OWNER_BIND_COHORT`) and a `WAIT_FOR_APPLIED` child that carries
+the arm tail — whose units `on_close_units` answers: `HostSized` is otherwise
+the adapter's sizing seam, and a C host sizes with `Sized`.
 
 **The run specification.** `strategy_configure_native_v1` still takes the v1
 spec. The fields added after it — report policy and the open-position row,
@@ -3630,27 +3640,28 @@ BASE-CLASS SEAMS (below). The entry-bar mask scenario of
 
 **What is not exposed, and why.** The header opens with a **COVERAGE** block:
 one line per public member of `NativeStrategyHost`, carrying either the C
-spelling (`[C]`) or the reason there is none (`[--]`). Eight members are
+spelling (`[C]`) or the reason there is none (`[--]`). Four members are
 excluded today — `prepare_native_begin` (it borrows the codegen ingress a C
-host never supplies), `validate_execution_precommit` and
-`inspect_current_execution` (their views are deep C++ aggregates — an
-`ExecutionPlan`, an `AccountEffectProjection`, a variable-length closed-row
-P&L vector — with no size-prefixed POD, and each names its C-level
-substitute), `resolve_anchored_level` (the generic knob is
-`anchor_rounding`), `submit_market` / `replace_market` (C++ conveniences
-that refuse non-market extras; the same request is `strategy_native_submit_v1`
-with `PF_NATIVE_TRIGGER_MARKET`), `declare_auxiliary_feed` (a C host declares
-the feed up front in the run spec's auxiliary tail; the begin-time
-replacement takes a `std::optional<NativeAuxiliaryFeed>`) and
-`native_sized_units` (its basis is the C++ `native_order::Sized` variant). `scripts/check_native_c_api_surface.py`
+host never supplies), `inspect_current_execution` (its preview carries the
+account-effect projection and a variable-length closed-row P&L vector with no
+size-prefixed POD; `strategy_native_execute_current_v1` answers the same
+verdicts) and `submit_market` / `replace_market` (C++ conveniences that refuse
+non-market extras; the same request is `strategy_native_submit_v1` with
+`PF_NATIVE_TRIGGER_MARKET`). Every policy hook has a C route since R5 lane F4:
+`validate_execution_precommit` is `on_precommit`, `resolve_anchored_level`
+`on_anchored_level`, the price and shape half of `resolve_execution_terms`
+`on_execution_terms`, `declare_auxiliary_feed`
+`strategy_native_declare_auxiliary_feed_v1` and `native_sized_units`
+`strategy_native_sized_units_v1`. `scripts/check_native_c_api_surface.py`
 proves the block is exactly that class's public surface and runs as a source
 guard in every `ci_verify.py` profile, so the list cannot silently go stale;
 `scripts/test_check_native_c_api_surface.py` proves the guard can fail. A
 second list, **BASE-CLASS SEAMS**, is the same census for the members of the
 base a host is documented to call or override from its callbacks, opted in
 one by one by a `@host-seam` line in `engine.hpp`: today the entry-bar mask
-declaration (spelled) and `hash_host_extension` with its deprecated spelling
-(excluded: the callback table carries no hash hook).
+declaration and `hash_host_extension` (both spelled, the second as
+`on_hash_extension`) and its deprecated spelling `hash_source_extension`
+(excluded: C only ever had the current spelling).
 
 **Errors and hardening.** Every struct is tagged and size-prefixed
 (`struct_size`, `version`); a mismatch is `PF_NATIVE_E_STRUCT`, an enumerator

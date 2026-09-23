@@ -583,7 +583,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // accumulator vector and pushes once per dispatch.
         //
         // Bucket-aware dispatch (mirrors feed_ratio_mode in
-        // src/timeframe.cpp:270): when the incoming bar belongs to a
+        // src/timeframe.cpp:1100): when the incoming bar belongs to a
         // different wall-clock script-TF bucket than the buffered
         // window, we MUST flush the buffer (even if partial) BEFORE
         // pushing — otherwise a feed gap, warmup misalignment, or

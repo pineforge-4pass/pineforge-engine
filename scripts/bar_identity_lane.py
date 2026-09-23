@@ -128,7 +128,7 @@ def classify_open(bucket_rows: list[dict], agg_open: float, derived_open: float)
     """derive rule (scripts/derive_corpus_feeds.py _resample_15m): open = the
     bucket's first POSITIVE-volume row's open (or the first row's, if the
     whole bucket is zero-volume). Engine (feed_reset_current /
-    feed_merge_into_current, src/timeframe.cpp:863,902-911): open = the
+    feed_merge_into_current, src/timeframe.cpp:1026,1065-1074): open = the
     bucket's true first row's open, always. A divergence is explained only
     when the bucket opens with a run of zero-volume rows followed by a
     positive-volume one, and the two aggregations' opens match that rule
@@ -155,7 +155,7 @@ def classify_hl_close(field: str, bucket_rows: list[dict], agg_val: float, deriv
     positive-volume rows, and the two extremes actually differ. Under the
     derive rule this script currently knows about (scripts/derive_corpus_feeds.py
     :127-131 folds high/low over every row regardless of volume, same as the
-    engine's feed_merge_into_current, src/timeframe.cpp:916-923), those two
+    engine's feed_merge_into_current, src/timeframe.cpp:1079-1086), those two
     extremes can never differ -- so this bucket is unreachable today. That is
     the honest state, not a bug: it stays unreachable until the derive rule
     itself changes to something volume-sensitive."""

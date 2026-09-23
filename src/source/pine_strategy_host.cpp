@@ -1743,8 +1743,7 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
     }
 }
 
-void source::PineStrategyHost::scheduler_update_session_state(
-        const Bar&, std::optional<std::int64_t>) {
+void source::PineStrategyHost::scheduler_update_session_state() {
     // The three session flags are the kernel's session-day facts of this
     // script bar, selected before the source callback reads them (R5 lane F5).
     // The rule lane E26 established here -- TradingView ends a session at the
@@ -1761,9 +1760,9 @@ void source::PineStrategyHost::scheduler_update_session_state(
     // convention -- the kernel's open-ended reading, which equals the ordinary
     // one on every other bar.
     //
-    // The retained-input lookahead the scheduler still passes is unused: under
-    // calc_on_order_fills it read two bars ahead on a bar a fill recalculation
-    // had already published (tests/test_session_day_facts_adapter.cpp).
+    // The scheduler's retained-input lookahead that fed the old rule is gone:
+    // under calc_on_order_fills it read two bars ahead on a bar a fill
+    // recalculation had already published (tests/test_session_day_facts_adapter.cpp).
     const auto point = current_execution_point();
     if (!point) return;
     const NativeDecisionContext& facts = point->decision;

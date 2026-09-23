@@ -51,8 +51,9 @@ finding to report, not a step to take.
    needs the word "TradingView", it belongs in `src/source/`,
    `src/compat/pine/` or in codegen. *Ruled:* ADR 0001, "Boundary rules",
    rule 1. *Enforced:* `scripts/check_kernel_residuals.py` runs `strings` and
-   `nm` over the built `libpineforge_kernel.a` and fails on a
-   TradingView-shaped name with no row in ADR 0001's residual table.
+   `nm` over the built `libpineforge_kernel.a`, reads the headers the kernel
+   profile installs, and fails on a TradingView-shaped name with no row in
+   ADR 0001's residual table.
 
 2. **A kernel capability is opt-in.** A new `NativeRunSpec` field, a new
    request kind, or a new virtual with an empty default — never a changed
@@ -103,8 +104,8 @@ finding to report, not a step to take.
    coverage claim.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:127 and
-    `RELEASE_MIN_TESTS` ci_verify.py:168. Adding rows means raising the floor
+    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:143 and
+    `RELEASE_MIN_TESTS` ci_verify.py:191. Adding rows means raising the floor
     in the same commit.
 
 ## The recipe for a lane
@@ -249,7 +250,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:127, `RELEASE_MIN_TESTS` ci_verify.py:168). It
+(`KERNEL_MIN_TESTS` ci_verify.py:143, `RELEASE_MIN_TESTS` ci_verify.py:191). It
 counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared

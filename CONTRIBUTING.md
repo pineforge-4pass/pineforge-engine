@@ -137,7 +137,7 @@ What each gate refuses:
 | `check_c_abi_runtime.py` | a `PF_API` runtime export added or removed without its inventory row |
 | `check_native_c_api_surface.py` | a public `NativeStrategyHost` member with no C spelling and no recorded reason |
 | `check_native_feature_rulings.py` | a `NativeRunSpec` field the adapter does not declare and the ADR does not rule |
-| `check_kernel_residuals.py` | a TradingView-shaped name reaching the kernel archive without an ADR 0001 row |
+| `check_kernel_residuals.py` | a TradingView-shaped name reaching the kernel archive or its installed headers without an ADR 0001 row |
 | `check_native_cpp_versions.py`, `check_aggregate_cpp_versions.py` | an internal C++ epoch moved without its consumers |
 | `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
 | `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |
@@ -149,8 +149,8 @@ What each gate refuses:
 ### The floors
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
-floor — `KERNEL_MIN_TESTS` ci_verify.py:127 and `RELEASE_MIN_TESTS`
-ci_verify.py:168.
+floor — `KERNEL_MIN_TESTS` ci_verify.py:143 and `RELEASE_MIN_TESTS`
+ci_verify.py:191.
 A deleted or silently skipped row is a failure, not a quieter run. If your
 change adds rows, raise the floor in the same commit and say by how much; if it
 legitimately removes one, lower it deliberately and say why. `--min-tests`

@@ -124,7 +124,23 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # already registered, and E27's witness includes pineforge/source/, so it
 # registers in release only -- see RELEASE_MIN_TESTS. Still 203 registered,
 # 202 run, recounted on the integrated tree.
-KERNEL_MIN_TESTS = 202
+# 213 run = those 202 plus the eleven TUs of the R5 wave F (INT16) that this
+# profile builds -- measured on the integrated tree (ctest -N), not summed
+# from the lanes' own bases:
+#   +3 F12 example_native_fee_reserve_strategy, example_native_fx_roll_strategy,
+#          example_native_broker_hash_strategy
+#   +3 F6  test_f6_dead_kernel_members, test_timeframe_trace_switch_once,
+#          test_deprecated_public_spellings
+#   +1 F3  test_native_bare_host_contracts
+#   +1 F4  test_native_c_api_c99
+#   +1 F5  test_native_session_day_facts
+#   +1 F14 test_native_session_boundaries
+#   +1 F2  test_pine_to_native_worked
+# All eleven are source-free. Lanes F1, F5 and F9 add a release-only row each
+# (their TUs reach the source layer -- see RELEASE_MIN_TESTS); F7 and F10 add
+# no row. 214 registered, 213 run: the WebSocket row still skips on a system
+# libcurl.
+KERNEL_MIN_TESTS = 213
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -165,7 +181,14 @@ KERNEL_MIN_TESTS = 202
 # kernel floor does not move. Lane E26 adds no row: its witnesses are
 # scenarios inside test_session_islastbar_aggregation, which lane E25
 # already registered. No release row skips, so 572 registered is 572 run.
-RELEASE_MIN_TESTS = 572
+# 586 = those 572 plus the fourteen TUs of the R5 wave F (INT16): the eleven
+# KERNEL_MIN_TESTS lists above, which register here too, plus the three
+# source-bound ones the kernel profile does not build:
+#   +1 F1  test_aggregated_path_regressions
+#   +1 F5  test_session_day_facts_adapter
+#   +1 F9  test_adapter_recording_hash_witness
+# No release row skips, so 586 registered is 586 run.
+RELEASE_MIN_TESTS = 586
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as

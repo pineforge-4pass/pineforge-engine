@@ -746,10 +746,8 @@ private:
     void scheduler_record_broker_hash();
     void capture_script_continuation_hash();
     // The one writer of the three session flags below: it selects the
-    // kernel's session-day facts of the script bar being published. The
-    // second argument, the scheduler's retained-input lookahead, is unused.
-    void scheduler_update_session_state(
-        const Bar&, std::optional<std::int64_t> next_script_open_ms);
+    // kernel's session-day facts of the script bar being published.
+    void scheduler_update_session_state();
     execution::AccountEffectProjection adapter_project_flatten(
         double price, const std::string& id, const std::string& comment,
         std::uint64_t incarnation) const;

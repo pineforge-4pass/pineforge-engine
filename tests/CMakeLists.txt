@@ -1640,7 +1640,11 @@ add_executable(test_native_c_api_c99 test_native_c_api_c99.c)
 set_target_properties(test_native_c_api_c99 PROPERTIES
     C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
 target_link_libraries(test_native_c_api_c99 PRIVATE pineforge)
-target_compile_options(test_native_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra)
+# It reads P2c's historical spellings (sharpe_tv, sortino_tv) on purpose, to
+# hold that the aliases share storage, so like test_c_abi it builds without
+# their deprecation diagnostic.
+target_compile_options(test_native_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra
+    -Wno-deprecated-declarations)
 if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_native_c_api_c99 PRIVATE ${_pf_cov_test_flags})
 endif()

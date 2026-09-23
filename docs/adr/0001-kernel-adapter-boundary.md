@@ -134,10 +134,10 @@ summary of it.
   the field comments say so, and `scripts/check_adapter_spec_shadowing.py` holds the adapter to
   the fields it actually needs.
 - **Feeding data.** Bars enter through the engine's own entry points: `run(bars, n)`
-  (`engine.hpp:1663`), the timeframe `run` (`engine.hpp:1675`), the rich begin
-  (`run` `engine.hpp:1900`), or `stream_begin` (`engine.hpp:1719`) / `stream_push_bar`
-  (`engine.hpp:1725`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
-  (`engine.hpp:1729`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:71`), not a feed API; read
+  (`engine.hpp:1666`), the timeframe `run` (`engine.hpp:1678`), the rich begin
+  (`run` `engine.hpp:1751`), or `stream_begin` (`engine.hpp:1722`) / `stream_push_bar`
+  (`engine.hpp:1728`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
+  (`engine.hpp:1732`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:71`), not a feed API; read
   `examples/native/native_market_strategy.cpp` for a host that drives both a batch and a stream.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
@@ -148,18 +148,18 @@ summary of it.
   `NativeSeriesSource::AuxiliaryFeed` for a series finer than the input. The kernel owns the
   aggregation, the `lookahead`/`gaps` delivery rules and the lazy-seal chronology; TradingView's
   `request.security` *semantics* are not in it. `prepare_native_security_feeds` stays protected
-  (`engine.hpp:1603`) and `configure_security_evaluators` stays an empty virtual
-  (`engine.hpp:1286`) — a host does not register an evaluator by hand — while
-  `set_native_security_feed` (`engine.hpp:1694`) is the pre-run door for a series'
+  (`engine.hpp:1606`) and `configure_security_evaluators` stays an empty virtual
+  (`engine.hpp:1289`) — a host does not register an evaluator by hand — while
+  `set_native_security_feed` (`engine.hpp:1697`) is the pre-run door for a series'
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:78`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
   `configure_native_fx_curve` (`native_host.hpp:1143`).
-- **Reporting.** `fill_report` (`engine.hpp:1807`, `src/engine_report.cpp:40`) gives a bare host
+- **Reporting.** `fill_report` (`engine.hpp:1810`, `src/engine_report.cpp:40`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
   `record_equity_point` / `update_equity_extremes` remain protected
-  (`update_equity_extremes` `engine.hpp:1326`, `record_equity_point` `engine.hpp:1344`);
+  (`update_equity_extremes` `engine.hpp:1329`, `record_equity_point` `engine.hpp:1347`);
   `KernelRecorded` has the consumer mark one point per script calculation, and
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
@@ -177,12 +177,12 @@ summary of it.
   hosts ever agreed. A tzdata release that rewrites the zone's rules still moves the digest,
   because the run then read different rules (`tests/test_native_continuation_portable.cpp`,
   measured equal on macOS/arm64 and Linux/aarch64 at tzdata 2026c).
-  `broker_state_hash()` (`engine.hpp:1991`)
+  `broker_state_hash()` (`engine.hpp:1994`)
   folds that hash with position and lot state under the pinned domain
   `pineforge-broker-state/v18` (`engine_state_hash.cpp:32`); it is the one exported to C
   (`c_abi.cpp:442`). A host folds its **own** durable state into it through
-  `hash_host_extension` (`engine.hpp:398`), whose deprecated spelling
-  `hash_source_extension` (`engine.hpp:404`) the generic default forwards to. Per-bar rows of
+  `hash_host_extension` (`engine.hpp:401`), whose deprecated spelling
+  `hash_source_extension` (`engine.hpp:407`) the generic default forwards to. Per-bar rows of
   the same hash are recorded under `KernelRecorded` with the recording switch on.
 
 ## How the source-adapter reflects Pine for parity
@@ -193,11 +193,11 @@ into kernel driving — never by special-casing the kernel *for a specific scrip
 kernel and own these quirks, each at its site:
 
 - **Seams the adapter overrides.** The kernel is driven, not patched. `PineStrategyHost` overrides
-  `resolve_execution_terms` (`pine_strategy_host.cpp:730`) for TV sizing and fill spelling;
-  `validate_execution_precommit` (`pine_strategy_host.cpp:755`), whose
-  `validate_precommit` (`pine_adapter.cpp:11339`) returns `AdmitWithHostMargin`
-  (`pine_adapter.cpp:11584`) to own the opening margin decision; `owns_lot_excursions() = true`
-  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:869`), so
+  `resolve_execution_terms` (`pine_strategy_host.cpp:674`) for TV sizing and fill spelling;
+  `validate_execution_precommit` (`pine_strategy_host.cpp:699`), whose
+  `validate_precommit` (`pine_adapter.cpp:11338`) returns `AdmitWithHostMargin`
+  (`pine_adapter.cpp:11583`) to own the opening margin decision; `owns_lot_excursions() = true`
+  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:784`), so
   MFE/MAE are measured on TV tick-quantized prices; and `on_native_tick`
   (`pine_strategy_host.cpp:361`) / `on_native_applied` (`pine_strategy_host.cpp:457`) for
   `calc_on_order_fills` re-entry. `process_orders_on_close` becomes
@@ -212,18 +212,18 @@ kernel and own these quirks, each at its site:
   (`src/compat/pine/exit_activation.cpp:42-60`) and historical birth reach
   (`src/compat/pine/order_birth.cpp:5-14`).
 - **Trail and tick conventions.** The half-tick arm threshold measured against tick-quantized
-  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:8011-8016`); the half-tick
+  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:7921-7926`); the half-tick
   trigger threshold (`pine_adapter.cpp:322-334`) and raw-vs-booked fill spelling, behind the
-  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:10050`).
+  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:9960`).
 - **Money arithmetic.** Ten-significant-digit half-up money (`source_money_round`
-  `pine_adapter.cpp:441-447`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
+  `pine_adapter.cpp:435-441`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
 - **Close reservations.** `strategy.close` callsite batching, two-call provenance and the entry-id
-  ledger (`close_logical_units_` `pine_adapter.hpp:1417-1428`); the POOC reservation-growth population predicate
+  ledger (`close_logical_units_` `pine_adapter.hpp:1413-1424`); the POOC reservation-growth population predicate
   (`src/compat/pine/reservation_expansion.cpp:9-20`).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
-  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:12319`) for the scheduling,
-  `resolve_margin_requirement` (`pine_adapter.cpp:12355`) for the ten-significant-digit money,
+  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:12318`) for the scheduling,
+  `resolve_margin_requirement` (`pine_adapter.cpp:12354`) for the ten-significant-digit money,
   and `resolve_margin_call_units` for the lot-floored 4x restore. That hook answers every call
   on purpose (R5 lane F7): TradingView floors the restore onto the lot grid before the multiple,
   so on a gridded tape the kernel's own `ShortfallMultiple 4` books 5 lots where TradingView
@@ -234,7 +234,7 @@ kernel and own these quirks, each at its site:
   margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
   0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
   stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:14816`), the pre-open admission slice and
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:14815`), the pre-open admission slice and
   the 1x-long money call — plus the TV admission scopes
   (`src/compat/pine/market_admission.cpp:33-46`) and the review fold they feed (`:67-72`,
   `:79-136`).
@@ -242,16 +242,16 @@ kernel and own these quirks, each at its site:
   projects `NativeCalculationTrigger::BarCloseAndFills` with TradingView's guard literal as
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
-  (`next_source_path_waypoint` `pine_adapter.cpp:6597`), the first-open execution chain and its
-  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:734`), and the two fills Pine refuses to
+  (`next_source_path_waypoint` `pine_adapter.cpp:6596`), the first-open execution chain and its
+  own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:683`), and the two fills Pine refuses to
   recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:3973`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the three session flags generated code
   reads, `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
-  `pine_strategy_host.hpp:852`), which `scheduler_update_session_state`
-  (`pine_strategy_host.cpp:1644`) selects from the kernel's session-day facts before each source
+  `pine_strategy_host.hpp:850`), which `scheduler_update_session_state`
+  (`pine_strategy_host.cpp:1746`) selects from the kernel's session-day facts before each source
   callback — the host computes no session-day rule of its own; `barstate_islast_`, still a
-  `BacktestEngine` member (`engine.hpp:368`) only this host writes; the live-tail /
+  `BacktestEngine` member (`engine.hpp:374`) only this host writes; the live-tail /
   probe-suppress overrides (`set_realtime_tail` `pine_strategy_host.hpp:446`,
   `set_probe_suppress_tail_logic` `pine_strategy_host.hpp:472`), whose live-probe protocol is
   also the one Pine policy left over the session flags: its batch's final bar reads the kernel's
@@ -291,8 +291,8 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   927-961 of that tree, between `round_to_mintick` and `bar_fill_price`), deleted by R5 lane E6;
   the lines 73-180 earlier drafts cited are and were live code (`ClosedLotExcursionFacts`,
   `PyramidEntry`, `Trade`, each with its own doc). The arithmetic is
-  adapter-side (`source_money_round` `pine_adapter.cpp:441-447`). `strategy.close` batching and the entry-id ledger
-  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:1417-1428`) and
+  adapter-side (`source_money_round` `pine_adapter.cpp:435-441`). `strategy.close` batching and the entry-id ledger
+  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:1413-1424`) and
   only names survive in comments. The TradingView margin-call toggle is **gone**: there is no
   `set_margin_call_enabled` in the tree, and what enables the model is the presence of
   `NativeRunSpec::margin`. So is the string-sentinel decoding of adapter-written comments:
@@ -302,7 +302,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   lot flags: `skip_entry_bar_high` / `skip_entry_bar_low` (`engine.hpp:149`), hashed
   (`skip_entry_bar_high` `src/engine_state_hash.cpp:65`) and, since R5 lane E6, set by no host at
   all: the excursion owner declares where its fill sat (`declare_opened_lot_entry_bar_mask`
-  `pine_strategy_host.cpp:605`) and the kernel derives the pair — the intrabar-fill excursion
+  `pine_strategy_host.cpp:546`) and the kernel derives the pair — the intrabar-fill excursion
   mask. Rule 5 is now scoped to that pair's storage; the comment residue it also covered was
   deleted by R5 lane E6 (Section A below).
 - **The wider coupling inventory, re-derived.** `docs/design/native-feature-parity.md` §2.ii
@@ -313,7 +313,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   the two generic functions (`bar_path_uses_high_first`, `entry_stop_first_touch` is the
   source layer's own). The Pine `request.security` *semantics* left the kernel for
   `src/source/pine_security_eval.cpp`; what stays is the generic evaluator registry
-  (`SecurityEvalState` `engine.hpp:1127`), ruled by design §2.ii row m (the kernel keeps the
+  (`SecurityEvalState` `engine.hpp:1130`), ruled by design §2.ii row m (the kernel keeps the
   registry, the aggregator and one generic step), and the authoritative-feed store, ruled below
   (Section B's authoritative-feed row, with design §2.ii row s).
   What remains, each with a ruling in this document: the comparison band in kernel TA
@@ -322,7 +322,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 - **The C API trades.** Two disjoint runtime inventories, both pinned.
   `src/c_abi.cpp` implements the **57** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
-  **34** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
+  **39** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
   callback table (`strategy_native_host_create_v1` `native_c_api.h:2490`), runs a batch
   (`strategy_native_run_v1` `native_c_api.h:2503`), and **submits, replaces, cancels and
   executes** orders — `strategy_native_submit_v1` (`native_c_api.h:2531`), `_replace_v1`
@@ -334,8 +334,8 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   block is exactly that class's public surface. `strategy_create` / `run_backtest` stay
   codegen-emitted (`include/pineforge/pineforge.h:583`), which is why a C host frees its report
   with `strategy_native_report_free_v1`.
-- **The examples are a gated target with executed assertions.** Fifteen Pine-free hosts ship
-  under `examples/native/` — thirteen C++ and two C — each including only
+- **The examples are a gated target with executed assertions.** Eighteen Pine-free hosts ship
+  under `examples/native/` — sixteen C++ and two C — each including only
   `<pineforge/native_host.hpp>` (or `native_c_api.h`), linking `PineForge::kernel`, and checking
   its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
   (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:305`) and
@@ -359,32 +359,43 @@ same check is the CTest row `test_kernel_residuals` in every profile):
 python3 scripts/check_kernel_residuals.py --archive build-ci-kernel/lib/libpineforge_kernel.a
 ```
 
-The checker reads the archive's linkable surface — `nm -C` over the archive
-(defined and undefined symbols, demangled) and `strings -a` over a copy whose
-debug information has been stripped, so a `-g` build's DWARF names are not
-mistaken for residue (gap lane P2b) — and matches the residual vocabulary,
-whole identifiers only, against the **first column** of the tables in this section.
-The vocabulary is fixed in the script (`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`):
-an identifier containing `pine` (not `pineforge`), `tradingview`, `barmerge`,
-`coof`, `pooc`, `market_admission`, `calc_on_order_fills`,
-`process_orders_on_close` or a `tv` segment; a text containing `strategy.<name>`,
-`ta.<name>`, `request.security`, `barmerge.<name>` or `__margin_call__`, where
-`<name>` is a Pine member and not a C/C++ file suffix (`ta.ema` is a call,
-`ta.hpp` is this project's header, which a sanitizer build writes into rodata as
-a real literal). Every
-match must be listed exactly — an identifier by its name, a text by a phrase it
-contains — and every listed match must still be in the archive, so a lane that
-adds a name adds its row and a lane that removes one removes its row. A name that
-is not in these tables fails the `kernel` profile. The audit's original probe is a
-subset of that vocabulary and still reads exactly the seventeen `pine_*` names:
+The checker reads two surfaces: the archive's linkable surface — `nm -C` over
+the archive (defined and undefined symbols, demangled; the platform's C-symbol
+underscore is not a second name) and `strings -a` over a copy whose debug
+information has been stripped, so a `-g` build's DWARF names are not mistaken
+for residue (gap lane P2b) — and, since R5 lane F6, every header the kernel
+profile installs (the CMake install rule's own exclusions), comments stripped.
+It matches the residual vocabulary, whole identifiers only, against the **first
+column** of the tables in this section. The vocabulary is fixed in the script
+(`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`): an identifier containing `pine` (not
+`pineforge`), `tradingview`, `barmerge`, `coof`, `pooc`, `market_admission`,
+`calc_on_order_fills`, `process_orders_on_close` or a `tv` segment, and since
+lane F6 also a `strategy()` declaration parameter (`pyramiding`, `default_qty`,
+`calc_on_every_tick`, ...), the namespace `syminfo` or `barstate`, or the
+underscore spelling of a Pine member whose namespace word is generic
+(`strategy_entry`, `ta_ema`, `request_security`, `security_lower_tf`,
+`session_ismarket`, `gaps_on` / `lookahead_off`: the member names are listed, so
+`strategy_native_*` and `ta_misc` stay the kernel's own); a text containing
+`strategy.<name>`, `ta.<name>`, `request.security`, `barmerge.<name>`, a dotted
+`session.` / `barstate.` member or a `__name__` sentinel label, where `<name>`
+is a Pine member and not a C/C++ file suffix (`ta.ema` is a call, `ta.hpp` is
+this project's header, which a sanitizer build writes into rodata as a real
+literal). Every match must be listed exactly — an identifier by its name, a text
+by a phrase it contains — and every listed match must still be in the archive
+or the installed headers, so a lane that adds a name adds its row and a lane
+that removes one removes its row. A name that is not in these tables fails the
+`kernel` profile. The audit's original probe is a subset of that vocabulary and
+still reads exactly the seventeen `pine_*` names:
 
 ```
 strings -a build-ci-kernel/lib/libpineforge_kernel.a | grep -iP 'pine(?!forge)|tradingview|barmerge'
 ```
 
-Every match is a field name of the frozen pending-row POD or one of the three
-`last_error` texts below, and nothing else; the kernel-only archive defines no
-symbol the vocabulary matches. Each is listed here with its ruling.
+Every match is one of the rows below: the field names of the frozen pending-row
+POD and the three `last_error` texts, and, since lane F6's wider vocabulary and
+second surface, frozen C export names, codegen-ABI members of `BacktestEngine`,
+the kernel's own sentinel labels and the installed-header spellings of the
+generated-code runtime. Each is listed here with its ruling.
 
 | archive string or installed-header name | where it comes from | ruling |
 |---|---|---|
@@ -401,7 +412,7 @@ symbol the vocabulary matches. Each is listed here with its ruling.
 | `__kernel_liquidation__`, `__kernel_risk__` | `src/native_execution_consumer.cpp` (`kNativeLiquidationLabel`, `kNativeRiskLabel`; documented at `NativeMarginModel::liquidation_label`, `include/pineforge/native_run_spec.hpp`); read since lane F6, whose vocabulary names every `__name__` label | **not residue** (rule 2): the tickets the kernel books its OWN liquidation and risk flatten under, spelled so no host request id can collide with them (a host request is never a kernel liquidation). The mechanism is generic -- another venue's host reads the same ticket, and `NativeMarginModel::liquidation_label` replaces it with the broker's own. The one Pine-adapter sentinel the archive carried, `__close__` (`internal::kClosePrefix`, zero readers), was deleted by lane F6 (`tests/test_f6_dead_kernel_members.cpp`). |
 | `strategy_position_size`, `strategy_position_avg_price` | frozen `PF_API` exports (`src/c_abi.cpp`, `include/pineforge/pineforge.h`), pinned by `scripts/check_c_abi_runtime.py`; read since lane F6, whose vocabulary names the underscore spelling of every Pine `strategy.*` member | **retained**: frozen C ABI export names. The value is the kernel's own -- signed position units and their volume-weighted entry price -- and the spelling is the Pine built-in a porting consumer looks for, the vocabulary row of Section B ("the C ABI's documented vocabulary"). Renaming either is a C ABI break. |
 | `set_syminfo_mintick`, `set_syminfo_pointvalue`, `set_syminfo_session`, `set_syminfo_string`, `set_syminfo_timezone`, `set_syminfo_type`, `get_syminfo_metadata`, `syminfo`, `syminfo_`, `syminfo_mintick_`, `syminfo_tz`, `strategy_set_syminfo_metadata`, `strategy_set_syminfo_mintick`, `strategy_set_syminfo_pointvalue`, `strategy_set_syminfo_session`, `strategy_set_syminfo_string`, `strategy_set_syminfo_timezone`, `strategy_set_syminfo_type` | `BacktestEngine`'s symbol-information ingress and members (`include/pineforge/engine.hpp`), the `syminfo` begin argument (`NativeBeginArgs`, `include/pineforge/native_host.hpp`; `include/pineforge/execution_consumer.hpp`), the `syminfo_tz` parameter of the calendar functions (`include/pineforge/session_time.hpp`) and the frozen C setters (`src/c_abi.cpp`, `include/pineforge/pineforge.h`); read since lane F6, whose vocabulary names `syminfo` | **retained**, the whole family on the terms of the `SymInfo` / `set_syminfo_metadata` row below: `syminfo` is the frozen ABI's word for instrument metadata, the kernel reads the values it carries (tick, point value, session, timezone, instrument type) and never a Pine name. The members are codegen ABI as well -- generated strategies read `syminfo_` (e.g. `syminfo_.timezone`), `syminfo_mintick_` and `get_syminfo_metadata` -- so a rename is a C ABI break and a codegen change. |
-| `barstate_islast_`, `session_ismarket_`, `session_isfirstbar_`, `session_islastbar_` | protected `BacktestEngine` members (`include/pineforge/engine.hpp`); read since lane F6, whose vocabulary names `barstate` and the underscore spelling of Pine's `session.*` members | **retained as codegen ABI**: the Pine language flags generated strategies read directly (`barstate.islast`, `session.ismarket`, `session.isfirstbar`, `session.islastbar`; protected members of `BacktestEngine` are the codegen contract). The source host writes them (`source::PineStrategyHost`, the session-day rule of R5 lanes E25/E26); the kernel only clears them in `reset_run_state()` and decides nothing on them. Moving them to the source host is a codegen change and an `engine_script_run` epoch. |
+| `barstate_islast_` | a protected `BacktestEngine` member (`include/pineforge/engine.hpp`); read since lane F6, whose vocabulary names `barstate` | **retained as codegen ABI**: the Pine language flag generated strategies read directly (`barstate.islast`; protected members of `BacktestEngine` are the codegen contract). Only the source host writes it (`source::PineStrategyHost`); no kernel translation unit reads or writes it. The three session flags this row also ruled when lane F6 wrote it -- `session_ismarket_`, `session_isfirstbar_`, `session_islastbar_` -- left the kernel class in R5 lane F5, inside the unshipped `engine_script_run_v18` layout: they are `PineStrategyHost` members now, which generated code reaches unqualified as before, selected from the kernel's session-day facts (E26-7 below). |
 | `sharpe_tv`, `sortino_tv`, `Coof`, `MagnifierCoof` | `pf_equity_stats_t` (`include/pineforge/pineforge.h`) and `exit_legs::Domain` (`include/pineforge/exit_leg_lifecycle.hpp`); read since lane F6, whose gate reads the installed headers | **deprecated aliases**, ruled in "Deprecated public spellings" below: value-identical historical spellings of `sharpe_monthly` / `sortino_monthly` / `FillRecalc` / `MagnifierFillRecalc`, compiler-deprecated since lane F6, removed at `PF_ABI_VERSION` 5 / `lifecycle_v2`. | <!-- verified HEAD -->
 | `pine_time`, `pine_time_close`, `pine_time_tradingday`, `pine_hour`, `pine_minute`, `pine_second`, `pine_dayofmonth`, `pine_dayofweek`, `pine_month`, `pine_year`, `pine_weekofyear`, `pine_session_ismarket`, `pine_session_ispremarket`, `pine_session_ispostmarket`, `PF_PINE_TIME_HAS_SYMINFO_TZ`, `PF_PINE_TIME_HAS_SESSION_DAY`, `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`, `pine_random`, `PineMatrix`, `PineGenericMatrix` | installed headers `include/pineforge/session_time.hpp`, `include/pineforge/str_utils.hpp`, `include/pineforge/math.hpp`, `include/pineforge/matrix.hpp`, `include/pineforge/generic_matrix.hpp`; inline forwards and aliases, so no archive symbol | **retained as deprecated spellings for generated code** (design §2.ii h, lanes L11 and N14): each is an exact inline forward to, or alias of, a neutral primary (`timeframe_time`, `local_hour`, `session_ismarket`, `str_format`, `deterministic_random`, `NumericMatrix`, `GenericMatrix<T>`, ...), and the two macros are the feature tests generated code compiles against. The codegen transpiler emits them (`pine_hour` alone in 66 corpus strategies), so dropping one is a codegen change. |
 | `PineMap`, `PineMapBare`, `PineMapKeyEqual`, `PineMapKeyHash`, `is_pine_map_key_v`, `is_pine_map_snapshot_value_v`, `Pine`, `pine_color`, `pine_drawing_error`, `pine_log_info`, `pine_log_warning`, `pine_log_error`, `pine_runtime_error` | installed headers `include/pineforge/map.hpp` (the type, its detail traits and its `static_assert` texts, where the bare word `Pine` is read), `include/pineforge/color.hpp`, `include/pineforge/drawing.hpp`, `include/pineforge/log.hpp`; header-only, outside the kernel's compile closure, so no archive symbol | **retained**: the header-only runtime of generated strategies, primary spellings with no neutral alias (the codegen transpiler emits `PineMap`, `pine_color`, `pine_log_*` and `pine_runtime_error`). No kernel translation unit includes these headers; the kernel profile installs them because its install rule ships all of `include/pineforge` but `source/` and `compat/`. A neutral spelling, or a move under `source/`, is a codegen change and an open decision (AUDIT3-opus, GAP-15). |
@@ -450,13 +461,15 @@ removal is scheduled for the next epoch of the ABI that carries it. Nothing here
 an offset, a size, a serialized key or a behaviour: `PF_ABI_VERSION` stays 4 and `lifecycle_v1`
 stays `lifecycle_v1`, because an alias needs no epoch.
 
-This table is deliberately OUTSIDE the residual-vocabulary section above.
+This table is not one of the residual-vocabulary tables above.
 `scripts/check_kernel_residuals.py` rules by presence: it reads the first column of every table in
 the section "Residual TradingView-named surface in the kernel-only archive" and fails on a ruled
-name that is no longer in the archive. None of the four names below is a symbol or a string literal
-in `libpineforge_kernel.a` — a struct field name and an enumerator exist only at compile time, and
-neither is written into any `last_error` text — so a row here would be a stale row there. Verified
-on a Release and on a Debug archive: `0 findings`, both profiles, with these aliases in the tree.
+name that is in neither the archive nor the installed headers. None of the four names below is a
+symbol or a string literal in `libpineforge_kernel.a` — a struct field name and an enumerator exist
+only at compile time, and neither is written into any `last_error` text — but since lane F6 the
+gate reads the installed headers as well, where all four are spelled, so the residual section
+rules them in a row of its own that points here. Verified on a Release and on a Debug archive:
+`0 findings`, both profiles, with these aliases in the tree.
 
 | name | generic spelling | ABI that carries it | removal epoch | why retained |
 |---|---|---|---|---|
@@ -521,13 +534,13 @@ Every line number in this section names its symbol on this tree, which
 | `NativeRunSpec` field | ruling | what the adapter runs instead | measurement and ruling of record | executed native consumers |
 |---|---|---|---|---|
 | `price_grid`, `grid_rounding` | **native-only** | TradingView's per-order-kind tick rules on top of `None`: `source_trigger_threshold` (`pine_adapter.cpp:323`), `source_level_on_price_grid` (`:309`), `nearest_tick` (`:247`) / `source_bar_fill_tick` (`:268`) / `directional_tick` (`:292`), behind the terms seam | R5-3 and design risk E7 ruled `None` for the adapter before the lane ran; lanes R7 and N13 measured the alternative anyway (raw levels submitted, `QuantizeFillsAndTriggers` with `HalfUp` declared). L8b closed the first blocker (no run aborts). The second has no remedy on either side: TradingView quantizes per order kind (stop and limit legs and a trail's activation on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors raw), the grid is one rule for the run, and it still moves 30 pinned checks in 4 units; a per-kind mask would spell that inconsistency into the kernel. The corpus cannot arbitrate (every probe runs a 0.01 tick on an on-grid feed; 5 of 312 differ in an engine-only column). Permanent witness: `tests/test_adapter_grid_relower.cpp`, whose section 5 pins the trail stop the grid fires a bar early. Design row PG and §3.6 | `examples/native/native_price_grid_strategy.cpp`, `examples/native/native_price_grid_c.c`, `tests/test_native_price_grid.cpp` |
-| `risk` | **native-only** | all of `strategy.risk.*` but the direction: `update_risk_state` (`pine_adapter.cpp:12117`), `SourceDayLedger`, `submit_intraday_loss_close` (`pine_adapter.cpp:13118`), `chart_day_key` (`pine_adapter.cpp:12011`), `compat::pine::IntradayCap` with `IntradayOrderBudget` (337 lines) | Structural first: Pine's risk calls are per-bar statements, so a limit reaches the adapter on script bar 0, after `project()` (`pine_strategy_host.cpp:314`) and `configure_native` (`pine_strategy_host.cpp:315`) have fixed and digested the spec. In substance (lane N12, `tests/test_adapter_risk_relower.cpp`, 62 checks over nine paired scenarios): the drawdown latch samples at the close only and still admits a reversal; the loss-day streak counts trades, not days; the intraday loss closes at the path's adverse extreme, refuses every placement and withdraws the book; the fill cap charges slots, transfers quota and closes at the bar's better extreme on the chart timezone's day. With the kernel seeded on the corpus, 3 of 4 cap probes diverge (3840 of 3916, 312 of 604, 2370 of 2384 rows). `strategy.risk.allow_entry_in` is the one rule that is the kernel's already (`allowed_open_directions`). Design §3.6 | `examples/native/native_risk_limits_strategy.cpp`, `examples/native/native_trail_risk_strategy.cpp`, `tests/test_native_risk_limits.cpp`, `tests/test_native_c_api.c` |
-| `max_abs_units` | **adapter-policy** | `strategy.risk.max_position_size` as a gate on the LIVE book before the fill (`max_position_size` `pine_adapter.cpp:11625-11626`): an entry is refused once the book already holds the limit | design row MG2 (R5-1): the resulting-book cap is the generic one. Measured by N12's scenario `PS` in `tests/test_adapter_risk_relower.cpp`: two-unit entries against a limit of 3 leave the adapter at 4 and the kernel cap at 2 | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_run_spec.cpp` |
-| `max_open_lots` | **adapter-policy** | Pine pyramiding is a per-cycle entry count in the adapter's command policy; a resting source entry must not consume a physical-lot cap before it fills, so `project()` leaves the cap unset (`max_open_lots` `pine_adapter.cpp:1554-1556`) | design row MG3 (R5-1); the contract comment in `project()` | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_margin_model.cpp` |
+| `risk` | **native-only** | all of `strategy.risk.*` but the direction: `update_risk_state` (`pine_adapter.cpp:12116`), `SourceDayLedger`, `submit_intraday_loss_close` (`pine_adapter.cpp:13117`), `chart_day_key` (`pine_adapter.cpp:12010`), `compat::pine::IntradayCap` with `IntradayOrderBudget` (337 lines) | Structural first: Pine's risk calls are per-bar statements, so a limit reaches the adapter on script bar 0, after `project()` (`pine_strategy_host.cpp:314`) and `configure_native` (`pine_strategy_host.cpp:315`) have fixed and digested the spec. In substance (lane N12, `tests/test_adapter_risk_relower.cpp`, 62 checks over nine paired scenarios): the drawdown latch samples at the close only and still admits a reversal; the loss-day streak counts trades, not days; the intraday loss closes at the path's adverse extreme, refuses every placement and withdraws the book; the fill cap charges slots, transfers quota and closes at the bar's better extreme on the chart timezone's day. With the kernel seeded on the corpus, 3 of 4 cap probes diverge (3840 of 3916, 312 of 604, 2370 of 2384 rows). `strategy.risk.allow_entry_in` is the one rule that is the kernel's already (`allowed_open_directions`). Design §3.6 | `examples/native/native_risk_limits_strategy.cpp`, `examples/native/native_trail_risk_strategy.cpp`, `tests/test_native_risk_limits.cpp`, `tests/test_native_c_api.c` |
+| `max_abs_units` | **adapter-policy** | `strategy.risk.max_position_size` as a gate on the LIVE book before the fill (`max_position_size` `pine_adapter.cpp:11530-11531`): an entry is refused once the book already holds the limit | design row MG2 (R5-1): the resulting-book cap is the generic one. Measured by N12's scenario `PS` in `tests/test_adapter_risk_relower.cpp`: two-unit entries against a limit of 3 leave the adapter at 4 and the kernel cap at 2 | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_run_spec.cpp` |
+| `max_open_lots` | **adapter-policy** | Pine pyramiding is a per-cycle entry count in the adapter's command policy; a resting source entry must not consume a physical-lot cap before it fills, so `project()` leaves the cap unset (`max_open_lots` `pine_adapter.cpp:1540-1542`) | design row MG3 (R5-1); the contract comment in `project()` | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_margin_model.cpp` |
 | `initial_margin_fraction` | **adapter-policy** | TradingView's ten-significant-digit money admission against the signal-time tuple, answered as `AdmitWithHostMargin`; the `margin` model the adapter does declare is maintenance-only (`NativeMarginModel` `pine_adapter.cpp:1567-1575`, `margin.maintenance_long` `pine_adapter.cpp:1582`) | design row MG4 and the wave-4 ruling recorded in `project()`: a positive initial requirement would decline openings TradingView takes | `tests/test_native_precommit_view.cpp`, `tests/test_native_margin_model.cpp` |
 | `report_open_position_at_end` | **adapter-policy** | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it (`scheduler_record_range_end`): report shape, not a mark-to-market row (`pine_adapter.cpp:1514-1521`) | design row RP5; the kernel reads the field under `KernelRecorded` only, which `scripts/check_adapter_spec_shadowing.py` gates | `examples/native/native_sized_report_strategy.cpp`, `tests/test_native_report_truth.cpp` |
 | `open_bar_view` | **adapter-policy** | `Complete`: TradingView's bar-open scheduling and its `calc_on_order_fills` callback read the whole script bar (`pine_adapter.cpp:1505-1507`) | design rows CT4 and E5: the open-only view is opt-in because the adapter needs the full bar | `examples/native/native_calc_on_fills_strategy.cpp`, `tests/test_native_calc_timing.cpp` |
-| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1661`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
+| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1595`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
 | `auxiliary_feed` | **adapter-policy** | the adapter's own auxiliary drive: the chart-slice mapping and the deferred first bucket (`src/source/pine_aux_security.cpp`) | lane N7, retained on three measurements: 0 of 312 corpus probes install an auxiliary feed; TradingView's chart slice leaves pre-range coverage inert where the kernel folds it by time, and evaluates after the bar's matching pass where the kernel delivers before it (`tests/test_native_auxiliary_feed_twin.cpp`, rows B and C). Design §2.iv | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
 <!-- native-feature-rulings:end -->
 
@@ -550,25 +563,25 @@ number names its symbol on this tree.
 
 | C++ hook | C route | witness in `tests/test_native_c_api.c` |
 |---|---|---|
-| `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2040`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
-| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2825`), reading a SIZED request's own sizing block | the sizing-query scenario |
-| `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2390`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
-| `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2399`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
-| `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2406`) | the anchored-level scenario |
-| `hash_host_extension` | `on_hash_extension` (`native_c_api.h:2417`): a 64-bit digest folded after the kernel's own bytes | the hash-extension scenario |
+| `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2077`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
+| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2866`), reading a SIZED request's own sizing block | the sizing-query scenario |
+| `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2427`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
+| `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2436`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
+| `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2443`) | the anchored-level scenario |
+| `hash_host_extension` | `on_hash_extension` (`native_c_api.h:2454`): a 64-bit digest folded after the kernel's own bytes | the hash-extension scenario |
 
 **What stays as it is, and why.**
 
 | surface | ruling | reason |
 |---|---|---|
-| `cancel_all` (`native_host.hpp:1203`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2560`). |
-| `cohort_add` (`native_host.hpp:1221`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`receipts` `native_execution_consumer.cpp:769`), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
-| `native_sized_units` (`native_host.hpp:1250`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:2797`). |
-| `pf_native_working_v1` without the leg's anchor or owner relation (E13 f4) | **carried** | The C++ host reads them off `NativeWorkingRequest::definition`, so the C readout's relation tail carries them: `anchor` (`native_c_api.h:1556`) through `arm_scope`, the request as the kernel holds it now (an armed leg reads ABSOLUTE with its installed level). |
-| `hash_source_extension` (`engine.hpp:401`) | **C++-only** | The deprecated spelling of `hash_host_extension`, kept so an existing C++ subclass compiles and folds unchanged. A C host has only ever had the current spelling, `on_hash_extension`. |
-| `NativeReportPolicy::KernelRecordedAtHostMarks` (`native_run_spec.hpp:63`) | **C++-only** (lane E22's ruling, restated) | Under it the host names each report point from inside its own callbacks, and the C table has no call that marks one: a C host could only declare a series nobody records. `pf_native_report_policy_e` (`native_c_api.h:630`) leaves its value unnamed, and the enum guard holds that exclusion. |
-| `strategy_set_path_order` (`pineforge.h:898`) clamps an out-of-range mode to AUTO | **retained** | A `void` ABI v4 setter cannot answer a refusal. Its values are now documented as `pf_native_path_order_e`'s (`native_c_api.h:838`); a C host that wants an unknown word refused declares `path_order` in `pf_native_run_spec_ext_v1`, which answers `PF_NATIVE_E_TAG`. |
-| the enumerated `int32` fields of `pf_pending_order_v1_t` (`strategy_pending_order_get` `pineforge.h:992`) | **no C names in the header; generator-owned** | The mirror is generated from the Pine source host's resting-order record by `scripts/gen_pending_order_mirror.py` (held by its `--check` source guard) and self-described at run time by `strategy_pending_order_layout`. Its enumerated fields are the source layer's order vocabulary, not a kernel enumeration. A C name for them belongs in that generator, which owns the struct, so that it cannot drift from the mirror — never hand-written beside it. |
+| `cancel_all` (`native_host.hpp:1203`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2597`). |
+| `cohort_add` (`native_host.hpp:1221`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`receipts` `native_execution_consumer.cpp:786`), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
+| `native_sized_units` (`native_host.hpp:1250`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:2838`). |
+| `pf_native_working_v1` without the leg's anchor or owner relation (E13 f4) | **carried** | The C++ host reads them off `NativeWorkingRequest::definition`, so the C readout's relation tail carries them: `anchor` (`native_c_api.h:1593`) through `arm_scope`, the request as the kernel holds it now (an armed leg reads ABSOLUTE with its installed level). |
+| `hash_source_extension` (`engine.hpp:407`) | **C++-only** | The deprecated spelling of `hash_host_extension`, kept so an existing C++ subclass compiles and folds unchanged. A C host has only ever had the current spelling, `on_hash_extension`. |
+| `NativeReportPolicy::KernelRecordedAtHostMarks` (`native_run_spec.hpp:63`) | **C++-only** (lane E22's ruling, restated) | Under it the host names each report point from inside its own callbacks, and the C table has no call that marks one: a C host could only declare a series nobody records. `pf_native_report_policy_e` (`native_c_api.h:640`) leaves its value unnamed, and the enum guard holds that exclusion. |
+| `strategy_set_path_order` (`pineforge.h:917`) clamps an out-of-range mode to AUTO | **retained** | A `void` ABI v4 setter cannot answer a refusal. Its values are now documented as `pf_native_path_order_e`'s (`native_c_api.h:848`); a C host that wants an unknown word refused declares `path_order` in `pf_native_run_spec_ext_v1`, which answers `PF_NATIVE_E_TAG`. |
+| the enumerated `int32` fields of `pf_pending_order_v1_t` (`strategy_pending_order_get` `pineforge.h:1011`) | **no C names in the header; generator-owned** | The mirror is generated from the Pine source host's resting-order record by `scripts/gen_pending_order_mirror.py` (held by its `--check` source guard) and self-described at run time by `strategy_pending_order_layout`. Its enumerated fields are the source layer's order vocabulary, not a kernel enumeration. A C name for them belongs in that generator, which owns the struct, so that it cannot drift from the mirror — never hand-written beside it. |
 
 ## TradingView-calibrated kernel mechanisms (rule 2's own account)
 
@@ -608,7 +621,7 @@ The table records, at the tree the doc wave read, what each block described and 
 | `src/engine_run.cpp`, lines 162-186 | `process_orders_on_close` semantics | the spec field `NativeCloseExecution::AfterCalculation` (`NativeCloseExecution::AfterCalculation` `native_run_spec.hpp:35`) |
 | `include/pineforge/engine.hpp`, lines 1262-1330 | TradingView freezes default market-order sizing at the signal bar | `native_order::SizePrice` (`Signal`, `SignalOnTick`) with `SizeTime::AtAcceptance` — a request value that names no platform |
 | `include/pineforge/engine.hpp`, lines 1352-1381 | TradingView liquidates intrabar, before the bar-close script body | `NativeLiquidationCheck` (`NativeLiquidationCheck` `native_run_spec.hpp:157`), whose three values are three broker models |
-| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:441-447`) |
+| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:435-441`) |
 
 ### B. Live kernel mechanisms with a calibrated number — each passes the amended rule 2
 
@@ -616,17 +629,17 @@ The table records, at the tree the doc wave read, what each block described and 
 |---|---|---|---|---|
 | `utc_floor_day_ms` `src/timeframe.cpp:152` (the `TradingView` comment `:146`) | daily boundaries are anchored at symbol-local midnight | the anchor is `spec.timezone`'s data, not a platform's; another venue is driven by naming its zone | a "which midnight" field over a zone the spec already names | `tests/test_native_calendar.cpp`, `tests/test_session_day_anchors.cpp` |
 | `session_period_last_traded_close_ms` `src/timeframe.cpp:817` (the `TradingView` comment `:808`) | a D/W/M period is finished at the last traded close of its last session | every venue calendar must answer "is this period over"; the answer is computed from `spec.session` and `spec.timezone` | a per-run completion-rule switch over a choice the session template already makes | `tests/test_calendar_aggregation_wm.cpp`, `tests/test_session_calendar_extra.cpp` |
-| the session-day split `crosses_boundary` `src/timeframe.cpp:742-748` | calendar periods split on the session-day clock, not the civil one | continuous-session instruments need a session-day clock whatever platform asks; the class comes from `spec.type` | hash-visible surface for what `spec.type` decides | `tests/test_session_day_anchors.cpp` |
+| the session-day split `crosses_boundary` `src/timeframe.cpp:905-911` | calendar periods split on the session-day clock, not the civil one | continuous-session instruments need a session-day clock whatever platform asks; the class comes from `spec.type` | hash-visible surface for what `spec.type` decides | `tests/test_session_day_anchors.cpp` |
 | the aggregated bar's label `bar_label_ms` `src/timeframe.cpp:1067-1074` | an aggregated bar is dated by the period it opens | a label rule is needed to key any bucket; this one is the period key | a label-policy field for a key the aggregator owns | `tests/test_calendar_aggregation_wm.cpp`, `tests/test_calendar_wm_open_utc_fastpath.cpp` |
-| real-end and chart-close completion (`Real-end completion` `src/timeframe.cpp:1194-1215`, `Chart-close completion` `:1071-1090`) | a thin or session-clipped intraday bucket completes on the bar whose end reaches the bucket end, or on the session's last bar | both are "the period is over" tests over feed data; a gap-free 24x7 feed is bit-identical either way, which the comment states and the tests pin | a completion-mode field over a bucket the calendar already closes | `tests/test_calendar_aggregation_wm.cpp`, `tests/test_native_htf_subscriptions.cpp` |
-| the holiday session walk `set_native_periods` `src/timeframe.cpp:1452` (the `TradingView` comment `:1469`) | a session that pauses and reopens the same day is one session day | the rule reads the feed's own stamps; the holiday is data | a holiday table in the kernel | `tests/test_calendar_aggregation_wm.cpp` |
+| real-end and chart-close completion (`Real-end completion` `src/timeframe.cpp:1194-1215`, `Chart-close completion` `:1239-1258`) | a thin or session-clipped intraday bucket completes on the bar whose end reaches the bucket end, or on the session's last bar | both are "the period is over" tests over feed data; a gap-free 24x7 feed is bit-identical either way, which the comment states and the tests pin | a completion-mode field over a bucket the calendar already closes | `tests/test_calendar_aggregation_wm.cpp`, `tests/test_native_htf_subscriptions.cpp` |
+| the holiday session walk `set_native_periods` `src/timeframe.cpp:1620` (the `TradingView` comment `:1469`) | a session that pauses and reopens the same day is one session day | the rule reads the feed's own stamps; the holiday is data | a holiday table in the kernel | `tests/test_calendar_aggregation_wm.cpp` |
 | `bar_path_uses_high_first` `src/engine_path_resolve.cpp:40` (the `TradingView` comment `:43`), `compute_ohlc_path_legs` `src/magnifier.cpp:53` (the `TradingView` comment `:49`), `entry_stop_first_touch` `src/engine_internal.hpp:116-124` | with only OHLC the intrabar walk order is unknowable, so the open-proximity heuristic picks the first leg | **and the knob exists**: `NativeRunSpec::path_order` (`NativePathOrder` `native_run_spec.hpp:334`) states `HighFirst` / `LowFirst` explicitly, so a replay host does not depend on the inference | already spelled, and `Auto` is the default that moves no identity | `tests/test_native_run_spec.cpp`, `tests/test_native_price_grid.cpp` |
-| `round_to_mintick` `include/pineforge/engine.hpp:729` (the `TradingView` comment `:707`) | nearest-tick rounding, ties away from zero | a tick ladder is the instrument's, declared as `price_tick`; the generic surface over it is `NativePriceGrid` + `NativeGridRounding` | TradingView's **per-order-kind** quantization is exactly the knob that would not be generic — it is the measured content of the `price_grid` native-only ruling above | `tests/test_native_price_grid.cpp` |
+| `round_to_mintick` `include/pineforge/engine.hpp:732` (the `TradingView` comment `:716`) | nearest-tick rounding, ties away from zero | a tick ladder is the instrument's, declared as `price_tick`; the generic surface over it is `NativePriceGrid` + `NativeGridRounding` | TradingView's **per-order-kind** quantization is exactly the knob that would not be generic — it is the measured content of the `price_grid` native-only ruling above | `tests/test_native_price_grid.cpp` |
 | `ta::ATR` `include/pineforge/ta.hpp:321` (the `TradingView` comment `:334`) | average true range over Wilder's `RMA` | Wilder's ATR is the textbook definition; the comment records which convention and the tape that pinned the recompute behaviour | a seeding/averaging field on an indicator whose definition is the convention | `tests/test_ta_rma_warmup.cpp`, `tests/test_recompute.cpp` |
 | `ta::StdDev` `include/pineforge/ta.hpp:430` (the `TradingView` comment `:420`) | the population (biased) standard deviation | biased vs sample is a textbook choice, and the kernel states which | a per-instance switch is the *right* answer where two conventions genuinely compete, which is why `ta::EmaSeeding` exists and this one does not need it | `tests/test_ta_indicators_extras.cpp` |
 | `float_band_eq` `include/pineforge/ta_compare_band.hpp:38` | a relative-epsilon float comparison for indicator equality | an epsilon band is needed by any float comparison; the width is the calibration | a band-width field on a comparison the indicators share | `tests/test_dmi_parity.cpp`, `tests/test_ta_osc_edge.cpp` |
-| the two delivery rules, `projected_first_index` `src/native_execution_consumer.cpp:7534-7537` (lookahead) and `clear_if_gapped` `:7528-7531` (gaps) | deliver a completed bucket at its **first** contributing bar (lookahead), and **clear** the series on a bar it publishes nothing on (gaps) | both are delivery rules over a bucket the aggregator already closed; neither reads a platform. They are spec fields: `NativeTimeframeSubscription::lookahead` / `::gaps` | already spelled, and both default to the rule that moves no identity | `tests/test_native_htf_subscriptions.cpp` |
-| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:2127`, `::gaps` `:2131` | the C spelling of those two rules | since R5 lane E7 both words are typed and named after the kernel's own delivery rules (`pf_native_lookahead_e` `include/pineforge/native_c_api.h:703`, `pf_native_gaps_e` `:714`); the C header no longer names `barmerge` at all, and the migration page maps Pine's words onto them — a *pointer to the reader's vocabulary*, not a justification | — | `tests/test_native_c_api.c` |
+| the two delivery rules, `projected_first_index` `src/native_execution_consumer.cpp:7759-7762` (lookahead) and `clear_if_gapped` `:7753-7756` (gaps) | deliver a completed bucket at its **first** contributing bar (lookahead), and **clear** the series on a bar it publishes nothing on (gaps) | both are delivery rules over a bucket the aggregator already closed; neither reads a platform. They are spec fields: `NativeTimeframeSubscription::lookahead` / `::gaps` | already spelled, and both default to the rule that moves no identity | `tests/test_native_htf_subscriptions.cpp` |
+| `pf_native_subscription_v1::lookahead` `include/pineforge/native_c_api.h:2127`, `::gaps` `:2131` | the C spelling of those two rules | since R5 lane E7 both words are typed and named after the kernel's own delivery rules (`pf_native_lookahead_e` `include/pineforge/native_c_api.h:743`, `pf_native_gaps_e` `:754`); the C header no longer names `barmerge` at all, and the migration page maps Pine's words onto them — a *pointer to the reader's vocabulary*, not a justification | — | `tests/test_native_c_api.c` |
 | the authoritative-feed partition `src/engine_aux_security.cpp` | a feed is the venue's own bars of one timeframe; its stamps are the period partition | already ruled: design §2.ii row s, and the residual table's own row | the policy knob is installing the feed or not | `tests/test_native_htf_subscriptions.cpp`, `tests/test_native_security_feed.cpp` |
 | `session_template_knows_early_close` `src/engine_security.cpp` | the instrument-class classification | already ruled: design §2.ii row t; `SymInfo::type`'s vocabulary is fixed by the frozen C ABI | — | `tests/test_native_wm_buckets.cpp` |
 | `skip_entry_bar_high` / `skip_entry_bar_low` `include/pineforge/engine.hpp:149` | the intrabar-fill excursion mask: the part of a bar traversed before a priced entry filled is not that trade's excursion | the mask is generic — an excursion is measured from the fill — and since R5 lane E6 no host raises the flags: the excursion owner declares where its fill sat and the kernel derives the pair from the bar's path (`declare_opened_lot_entry_bar_mask` `src/engine_path_resolve.cpp:109`); with no declaration the kernel samples the whole bar | already spelled the generic way: `owns_lot_excursions()` + `closed_lot_excursion` hand the whole measurement to a host | `tests/test_l11a_host_excursion.cpp` |
@@ -638,7 +651,7 @@ The table records, at the tree the doc wave read, what each block described and 
 | `build_close_trade_with_costs` and `record_close_trade` `src/engine_orders.cpp` | a closing row's percent P&L is its NET P&L (both commissions deducted) over its entry cost at the same account-currency rate; its excursions include the exit fill itself and sit on the net open-profit basis (the entry commission deducted, the favorable magnitude floored at 0); a row whose P&L is exactly zero counts as even | accounting definitions over the row's own booked numbers -- entry cost, commissions, fill price -- so another venue is driven by its own fees and fills; nothing branches on a platform | a gross/net or tolerance switch over report arithmetic the run's fee terms already decide. One question stays open, recorded at the site: the net basis is applied to a host-owned excursion's magnitudes too (RULING A48's hook) | the corpus parity gate (`scripts/check_corpus_parity.sh`: 312 recorded trade lists carrying the percent P&L and both excursion columns, graded against TradingView's exports) and `tests/test_max_contracts_held.cpp` (a zero-P&L row counted even); the calibration records are the comments at the site (R5 lane F6 reworded them to the mechanism) |
 | the indicator library -- `include/pineforge/ta.hpp`, `src/ta_moving_averages.cpp`, `src/ta_oscillators.cpp`, `src/ta_extremes_volume.cpp`, `src/ta_volatility_trend.cpp`, `src/ta_misc.cpp`, `include/pineforge/window_sum.hpp`, `include/pineforge/math.hpp` | each indicator implements its Pine `ta.*` / `math.*` definition -- warm-up and na rules, the window call-site ring, the compensated window sum, tie and epsilon rules -- and its comments record the TradingView tape or export that calibrated each number (the `ta::ATR` and standard-deviation rows above are two of them) | an indicator is a function of its inputs, the same for every venue; generated strategies call exactly these classes, and where two textbook conventions genuinely compete the choice is a per-instance option (`ta::EmaSeeding`), never a branch on the platform | a convention switch on every indicator, for a choice the script already made by calling that Pine function | the kernel-only TA suites `tests/test_ta_*.cpp` and the corpus parity gate |
 | the language calendar functions -- `include/pineforge/session_time.hpp`, `src/session_time.cpp` (`timeframe_time`, `local_hour` and its siblings, `session_in_market`, `session_trading_day_open_ms`, ...) | the definitions of Pine's `time()` / `time_close()` / bare-time / `session.is*` built-ins for generated code: session and timezone parsing, the invalid- and 24-hour-session spellings, `time("60")` day keying, `session.is*` on daily charts, each comment naming the tape that pinned it | the inputs are data -- a session string, a timezone, a timeframe -- so another venue is driven by its own session template; nothing branches on a platform, and a native host's calendar is the separate generic `native_calendar` | a rules switch on functions whose definition the generated script chose by calling them | `tests/test_session_time.cpp`, `tests/test_pine_time_day_stamp_grid.cpp` and the corpus parity gate |
-| `present_session_day` `src/native_execution_consumer.cpp:6435`, presenting `NativeDecisionContext::in_session` `include/pineforge/market_driver.hpp:154` and the three facts after it | a script bar's session-day facts: in session on the run's calendar; it opens / closes its session day when the bar before / after it is out of session or on another session day, that bar being the one the run holds (batch input, stream warmup) and otherwise the calendar's slot one script width away; the run's first bar opens its day, a batch's final bar closes it, a D/W/M bar holds whole days | the session, the timezone and the session day are the run's own calendar (`spec.session`, `spec.timezone`, `native_calendar::session_day_ordinal`), the neighbours are the run's own input, and a second venue drives it through that data alone. The reading is TradingView's session DAY, measured on its tapes by lanes E25/E26 (`tests/fixtures/session_islastbar`: 255/255 NYSE:F last bars, 255/255 first, 370/370 ETH last), which a bare host now reproduces from the kernel alone | a switch over the run-end convention or the neighbour rule would put a hash-visible choice on the surface for what the run's own input already decides. The one host that reads its batch end differently — a live probe recomputing a batch whose last input is still forming — reads a second fact, `closes_session_day_open_ended`, not a switch; the facts are presentation and fold into no digest | `tests/test_native_session_day_facts.cpp` (kernel-only: the tapes, the audit's Tokyo `2230-0500` session, streams, a fill recalculation), the C scenario of `tests/test_native_c_api.c`, and `tests/test_session_day_facts_adapter.cpp` (the adapter selects them flag for flag) |
+| `present_session_day` `src/native_execution_consumer.cpp:6511`, presenting `NativeDecisionContext::in_session` `include/pineforge/market_driver.hpp:154` and the three facts after it | a script bar's session-day facts: in session on the run's calendar; it opens / closes its session day when the bar before / after it is out of session or on another session day, that bar being the one the run holds (batch input, stream warmup) and otherwise the calendar's slot one script width away; the run's first bar opens its day, a batch's final bar closes it, a D/W/M bar holds whole days | the session, the timezone and the session day are the run's own calendar (`spec.session`, `spec.timezone`, `native_calendar::session_day_ordinal`), the neighbours are the run's own input, and a second venue drives it through that data alone. The reading is TradingView's session DAY, measured on its tapes by lanes E25/E26 (`tests/fixtures/session_islastbar`: 255/255 NYSE:F last bars, 255/255 first, 370/370 ETH last), which a bare host now reproduces from the kernel alone | a switch over the run-end convention or the neighbour rule would put a hash-visible choice on the surface for what the run's own input already decides. The one host that reads its batch end differently — a live probe recomputing a batch whose last input is still forming — reads a second fact, `closes_session_day_open_ended`, not a switch; the facts are presentation and fold into no digest | `tests/test_native_session_day_facts.cpp` (kernel-only: the tapes, the audit's Tokyo `2230-0500` session, streams, a fill recalculation), the C scenario of `tests/test_native_c_api.c`, and `tests/test_session_day_facts_adapter.cpp` (the adapter selects them flag for flag) |
 
 The rows above account for every site the two audits named, and none of them is justified by
 "because TradingView does it" over a mechanism that is not generic. They do not yet account for
@@ -740,7 +753,7 @@ buildable archive with no source-layer object in it; size with `Sized` or with y
 let the kernel record the equity curve, the per-bar broker hashes and the open-position row, or
 record them yourself; declare higher-timeframe series and an auxiliary finer feed in the run
 spec; declare a margin model, a risk block and a price grid; and submit, replace, cancel, bracket
-and trail through one request type. Fifteen example hosts do exactly that, each asserting its own
+and trail through one request type. Eighteen example hosts do exactly that, each asserting its own
 numbers in a gated CTest row, and the `kernel` profile of `scripts/ci_verify.py` runs the whole
 suite with no adapter compiled.
 

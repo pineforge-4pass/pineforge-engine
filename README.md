@@ -159,18 +159,19 @@ class HelloKernel : public pineforge::NativeStrategyHost {
 // trade_count() / get_trade(i) read the closed rows back.
 ```
 
-Thirteen more hosts under [`examples/native/`](examples/native/) cover kernel
-sizing, anchored brackets on a price grid, trails in ticks, a margin model with
-a real liquidation, account risk limits, calculation timing, higher-timeframe
-series, an auxiliary finer feed, the open book lot by lot, and a
-kernel-recorded report. Each is a CTest row: `ctest --test-dir build -R example_`.
+The other hosts under [`examples/native/`](examples/native/) cover kernel
+sizing and its fee reserve, anchored brackets on a price grid, trails in ticks,
+a margin model with a real liquidation and an FX-curve roll, account risk
+limits, calculation timing, higher-timeframe series, an auxiliary finer feed,
+the open book lot by lot, per-bar broker-state hashes, and a kernel-recorded
+report. Each is a CTest row: `ctest --test-dir build -R example_`.
 
 ### 3. C, against the same kernel
 
 Hand the runtime a callback table and drive the kernel from any language with
 a C FFI — no C++ in your own code. The complete file is
 [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
-34 `strategy_native_*` functions are declared in
+39 `strategy_native_*` functions are declared in
 [`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
 summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
 
@@ -390,7 +391,7 @@ The gates a pull request passes, one line each:
 |---|---|---|
 | TradingView parity | `./scripts/check_corpus_parity.sh --subset` | A trade that moved: 30 probes re-run and hashed against `scripts/corpus_parity_baseline.txt`. The full 312-probe sweep (`--subset` dropped) runs nightly. |
 | CTest row floors | `ci_verify.py release` / `kernel` | A test row that vanished: each profile counts the rows that actually ran against a floor. |
-| Kernel residuals | `scripts/check_kernel_residuals.py` | A TradingView-shaped name reaching the kernel archive without an ADR 0001 row. |
+| Kernel residuals | `scripts/check_kernel_residuals.py` | A TradingView-shaped name reaching the kernel archive or its installed headers without an ADR 0001 row. |
 | Feature rulings | `scripts/check_native_feature_rulings.py` | A `NativeRunSpec` field the adapter does not declare and the ADR does not rule. |
 | C surface | `scripts/check_c_abi_runtime.py`, `scripts/check_native_c_api_surface.py` | A `PF_API` export added without its inventory row; a public host member with no C spelling and no recorded reason. |
 | Twin parity | `scripts/check_twin_parity.py` | A frozen assertion quietly rewritten instead of a behaviour change being argued. |
@@ -462,7 +463,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **34 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **39 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
@@ -480,10 +481,13 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
 | `strategy_native_partial_bar_v1` / `_series_bar_v1` / `_trail_state_v1` / `_liquidation_price_v1` | The four optional reads — the bar so far at the cursor, a declared higher-timeframe series' latest bucket, a live trail's projection, the solved liquidation level. Each answers `PF_NATIVE_ABSENT` where the C++ `std::optional` is empty |
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |
+| `strategy_native_margin_call_v1` | One margin call's whole economics by its event ordinal (`pf_native_margin_call_v1`: mark, units, the position before and after, the surviving book's equity and requirement, the re-solved liquidation price) |
+| `strategy_native_sized_units_v1` | The units a `PF_NATIVE_INTENT_SIZED` request resolves to under the run's spec — the kernel's own sizing function, as a pure query before submitting |
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
-| `strategy_native_declare_subscriptions_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list |
+| `strategy_native_declare_subscriptions_v1` / `_ext_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list; `_ext_v1` adds a series source per row and writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) |
+| `strategy_native_declare_auxiliary_feed_v1` | Declare, replace or withdraw the run's auxiliary finer feed from inside `on_run_begin`, with the same typed refusal |
 | `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies). The two specs' nine enum-valued words stay `uint32_t` and each has a C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e` |
-| `strategy_native_append_auxiliary_bars_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed |
+| `strategy_native_append_auxiliary_bars_v1` / `_ext_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed; `_ext_v1` writes the typed append refusal (`pf_native_append_error_e`) and the bar it stopped on |
 | `strategy_native_declare_opened_lot_entry_bar_mask_v1` | From inside `on_applied`, say where the fill that opened a lot sat on its entry bar (`pf_native_opened_lot_fill_point_e`: on the bar's path, or after it); the kernel derives the lot's entry-bar mask that `on_lot_excursion`'s facts carry back |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
 
@@ -501,12 +505,13 @@ layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
 struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
 plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`) and the
 current one with the auxiliary-feed tail behind it; `pf_native_callbacks_v1`
-has two — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`)
-and the same struct with its appended tail. The runtime accepts each, so a host
+has three — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
+that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`) and the
+current one with the policy-hook tail behind it. The runtime accepts each, so a host
 compiled against an earlier one keeps working unchanged. An **observation**
 callback that returns non-zero latches
-`NativeFailureCode::CallbackException` and ends the run `Failed`; the four
-**answering** hooks in the table's tail instead return a `pf_native_answer_e`
+`NativeFailureCode::CallbackException` and ends the run `Failed`; the
+**answering** hooks in the table's two tails instead return a `pf_native_answer_e`
 choosing whose answer the kernel uses, and can never fail the run. Streaming
 needs no new symbol: the `strategy_stream_*` family takes these handles
 unchanged. Worked example: [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c);

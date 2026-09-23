@@ -148,9 +148,12 @@ struct PineSizingSnapshot {
     bool at_fill = false;
 };
 
-// Immutable source placement evidence keyed by the native request handle.
-// It is written only at submit/replace/applied boundaries and is read by the
-// const terms/precommit/projection methods.
+// Source placement evidence keyed by the native request handle, read by the
+// const terms/precommit/projection methods. It is written at the
+// submit/replace/applied boundaries, and a retained row is also rewritten in
+// place after them -- a filled entry's row when its first exit is attached,
+// and the adapter's whole-table scans (suspending, reviving or preserving
+// brackets) -- so a row is not immutable evidence of its placement.
 struct PlacementSnapshot {
     PineOrderFamily family = PineOrderFamily::Entry;
     SourceId source_id{};
@@ -309,7 +312,7 @@ struct PlacementSnapshot {
 };
 
 // Source placement handles are monotonically allocated by the native core.
-// Retain their immutable evidence in incarnation order rather than in a
+// Retain their evidence in incarnation order rather than in a
 // node-per-row hash table: historical re-issued brackets then remain cheap to
 // append and lookup without changing the observable key/value collection.
 class PlacementTable {
@@ -1159,8 +1162,6 @@ private:
     void apply_fx_open_margin_slice(const Bar&, const NativeDecisionContext&);
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
                                        const NativeDecisionContext&);
-    void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate,
-                                bool execute_at_current);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
                                   bool opening_checkpoint = false);
@@ -1176,10 +1177,6 @@ private:
         const Bar&, const NativeDecisionContext&);
     bool market_orders_pending_at_close(const NativeDecisionContext& context,
                                         std::uint64_t except_incarnation = 0) const;
-    bool carried_pooc_short_margin_before_script_scope(
-        const NativeDecisionContext&) const;
-    bool carried_pooc_short_priced_exit_after_adverse_scope(
-        const Bar&) const;
     bool defer_rounded_pooc_short_margin_until_close(const Bar&) const;
     bool declined_reversal_at_open(const Bar&) const;
     bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
@@ -1263,7 +1260,6 @@ private:
     bool coof_fill_at_path_point(double waypoint) const noexcept;
     bool coof_current_fill_was_forced_waypoint() const noexcept;
     double coof_next_waypoint(int* path_index = nullptr) const noexcept;
-    double next_coof_waypoint_price() const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
     void flush_coof_tail(bool openings_only = false,
                          bool include_next_open = false);

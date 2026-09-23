@@ -4098,8 +4098,7 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
         if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
             const auto point = require_host().current_execution_point();
             const auto next = pine_host->scheduler_.next_input_waypoint(
-                coof_context_, point ? point->price : kNaN,
-                state.spec->path_order);
+                *pine_host, coof_context_, point ? point->price : kNaN);
             if (next) return *next;
         }
     }

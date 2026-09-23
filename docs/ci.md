@@ -465,7 +465,7 @@ the page's own Pine declaration computes. The row registers in every profile.
 
 The sixth guard is the documentation build. `docs/build.sh` runs Doxygen over
 the whole public surface — every header under `include/pineforge`, the C API
-and C ABI headers, the fifteen native examples, the adapter units, the pages,
+and C ABI headers, the eighteen native examples, the adapter units, the pages,
 the front-door documents, the design document and the ADR — and then reads `docs/site/doxygen-warnings.log`.
 Doxygen's `WARN_AS_ERROR` is global, which would let a stale comment in a
 legacy adapter header stop the site from building, so the gate is scoped in the
