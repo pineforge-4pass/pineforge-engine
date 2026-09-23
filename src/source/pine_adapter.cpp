@@ -3892,7 +3892,10 @@ void PineExecutionAdapter::consume_closed_trade_rows(
         std::vector<std::pair<std::size_t, std::uint64_t>> carrying;
         carrying.reserve(cohort->second.live_units_by_origin.size());
         for (const auto& unit : cohort->second.live_units_by_origin) {
-            if (const auto* positions = cohort->second.origins.positions_of(unit.first))
+            // Empty only after a push_back that failed to allocate: no roster
+            // entry carries the incarnation, so the walk never visits it.
+            const auto* positions = cohort->second.origins.positions_of(unit.first);
+            if (positions && !positions->empty())
                 carrying.emplace_back(positions->front(), unit.first);
         }
         std::sort(carrying.begin(), carrying.end());
