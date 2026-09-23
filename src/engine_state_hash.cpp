@@ -3,6 +3,7 @@
 // override in src/source/pine_state_hash.cpp.
 #include "engine_internal.hpp"
 #include "broker_state_hash_internal.hpp"
+#include "native_execution_consumer.hpp"
 
 namespace pineforge {
 
@@ -29,7 +30,7 @@ uint64_t BacktestEngine::broker_state_hash_projection() const {
 uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
         std::uint64_t execution_hash) const {
     BrokerStateHashSink f;
-    f.s("pineforge-broker-state/v18");
+    f.s("pineforge-broker-state/v19");
     f.u(execution_hash);
 
     // --- Position core ---
@@ -104,12 +105,12 @@ uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
     f.d(max_contracts_held_long_);
     f.d(max_contracts_held_short_);
 
+    // v19: the closed rows fold as their count and the consumer's running
+    // digest of them, each row folded once, when it is final -- not a walk of
+    // every row at every read, which made per-bar recording quadratic
+    // (NativeExecutionConsumer::closed_rows_digest has the finality rule).
     f.u(trades_.size());
-    for (const auto& t : trades_) {
-        f.i(t.entry_time); f.i(t.exit_time);
-        f.d(t.entry_price); f.d(t.exit_price);
-        f.d(t.qty); f.d(t.pnl);
-    }
+    f.u(as_native_consumer(execution_consumer()).closed_rows_digest(trades_));
 
     hash_host_extension(f);
     return f.h;

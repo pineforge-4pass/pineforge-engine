@@ -291,13 +291,20 @@ struct Pinned {
     Observed expected;
 };
 
+// expectation corrected (6 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); trades, trade digests and driver points did not move:
+//   11952820133879191213ull -> 10889724778366893781ull
+//   13409848690567451958ull -> 11890728307108792147ull
+//   11796713569757805492ull -> 11131379411467769408ull
+//   3688284093780238334ull -> 19126489985415469ull
+//   6853731202851505960ull -> 11214347720918037394ull
+//   6726314833335123700ull -> 1957262624383604956ull
 const Pinned kPinned[] = {
     {Feed::Tiling, false, "k24-lower-tiling",
-     {39, 0xd2ac6e3a775d5206ull, 4800ull, 11952820133879191213ull, 13409848690567451958ull}},
+     {39, 0xd2ac6e3a775d5206ull, 4800ull, 10889724778366893781ull, 11890728307108792147ull}},
     {Feed::Ragged, false, "k24-lower-ragged",
-     {39, 0xd1675820a42f7e8cull, 2520ull, 11796713569757805492ull, 3688284093780238334ull}},
+     {39, 0xd1675820a42f7e8cull, 2520ull, 11131379411467769408ull, 19126489985415469ull}},
     {Feed::Tiling, true, "k24-lower-raw",
-     {39, 0xd1675820a42f7e8cull, 960ull, 6853731202851505960ull, 6726314833335123700ull}},
+     {39, 0xd1675820a42f7e8cull, 960ull, 11214347720918037394ull, 1957262624383604956ull}},
 };
 
 void the_selected_sub_bars_feed_the_same_run() {

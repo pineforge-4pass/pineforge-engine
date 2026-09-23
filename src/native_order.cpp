@@ -1144,6 +1144,11 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
     return true;
 }
 
+GroupEffectReceipt WorkingRequestCore::group_effect_receipt(std::size_t index) const {
+    const ReceiptKey& key = receipts_.at(index);
+    return GroupEffectReceipt{key.cause, key.recipient, key.effect, key.outcome_ordinal};
+}
+
 WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
         const EventId& cause, const RequestHandle& recipient, GroupEffect effect,
         uint64_t* outcome) const {

@@ -34,14 +34,10 @@ public:
     uint64_t continuation_hash() const noexcept override;
     // The continuation a host latches at a script point (the engine's
     // last_script_continuation_* snapshot), taken as a VIEW of the fold and
-    // folded when it is first read (R5 lane PERF-P1). A view is the bytes the
-    // fold would consume, in fold order, with the command history's and the
-    // driver log's digests left as holes at the lengths those logs had; a
-    // read folds both digests to exactly those lengths and the bytes around
-    // them, which is the value continuation_hash() answered at the capture.
-    // Both logs only grow within a run, continuation_hash() folds a pending
-    // view before it carries the digests past it, and begin_ready drops one
-    // before it clears them.
+    // folded when it is first read (R5 lane PERF-P1). Since v19 a view is the
+    // words the fold would mix, in fold order -- the live state at the
+    // capture -- and a read mixes them, which is the value continuation_hash()
+    // answered at the capture. begin_ready drops a view of the run it ends.
     void capture_continuation_view() noexcept;
     void drop_continuation_view() const noexcept;
     bool continuation_view_pending() const noexcept;
@@ -227,6 +223,17 @@ public:
         return false;
     }
     uint64_t event_high_water() const noexcept;
+    // The v19 broker-state hash's closed-row half (pineforge-broker-state/v19,
+    // BacktestEngine::broker_state_hash_from_execution_hash): a running digest
+    // of `rows`' six folded fields, each final row folded once. See the
+    // definition for the finality rule. closed_rows_digest_holds re-folds the
+    // rows the digest has taken and answers whether they still match: the
+    // Debug check a run's end makes, and a witness's probe.
+    uint64_t closed_rows_digest(const std::vector<Trade>& rows) const;
+    bool closed_rows_digest_holds(const std::vector<Trade>& rows) const noexcept;
+    // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
+    // changed after they were final; the next read folds them again.
+    void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
     uint64_t terminal_receipt_high_water() const noexcept {
         return terminal_receipt_high_water_;
     }
@@ -1118,16 +1125,15 @@ private:
     bool finalize_observed_tick_slot(BacktestEngine& engine,
                                      const native_calendar::NativeInterval& interval,
                                      NativeCompletionKind kind);
-    // Carry a digest to exactly `count` rows of its log: the log's length for
-    // a fold, a view's captured length for a view.
-    void sync_history_digest(std::size_t count) const noexcept;
-    void sync_driver_digest(std::size_t count) const noexcept;
-    void fold_driver_digest(const NativeDriverPoint& point) const noexcept;
-    void fold_account_digest(const NativeAccountObservation& row) const noexcept;
     bool pre_open_birth_eligible(const native_order::RequestHandle&,
                                  const NativeDriverPoint&) const noexcept;
     void record_pre_open_birth(const native_order::Request&, const native_order::RequestHandle&);
-    void note_terminal_events(const native_order::EventRange& events) noexcept;
+    void note_committed_events(const native_order::EventRange& events) noexcept;
+    void note_cohort_receipts() noexcept;
+    void verify_closed_rows(const BacktestEngine& engine) const noexcept;
+    void rewind_closed_rows(std::size_t first) const noexcept;
+    uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
+    void forget_spec_digests() const noexcept;
 
     NativeLifecycle state_{NativeUnconfigured{}};
     // native_host()'s answer for the engine the last public begin named.
@@ -1303,9 +1309,29 @@ private:
     // continuation read at every report point is not linear in the feed.
     mutable std::optional<SpecBarDigests> spec_bar_digests_;
     const SpecBarDigests& spec_bar_digests(const NativeRunSpec& spec) const noexcept;
-    mutable AppendDigest history_digest_{};
-    mutable AppendDigest driver_digest_{};
-    mutable AppendDigest account_digest_{};
+    // v19: the spec as the continuation folds it, one word taken once per
+    // applied spec and run generation (spec_digest). The same pure cache
+    // discipline as spec_bar_digests_, cleared with it (forget_spec_digests).
+    mutable std::optional<uint64_t> spec_digest_;
+    mutable uint64_t spec_digest_run_base_ = 0;
+    // v19 running digests of the order core's append-only rows, folded once
+    // each at the commit that adds the row (note_committed_events,
+    // note_cohort_receipts) and folded into the continuation as (count, h):
+    // every committed event's compact record, the group-effect receipts and
+    // the cohort receipts. Reset with the request core in begin_ready.
+    AppendDigest event_records_{};
+    AppendDigest group_receipts_{};
+    AppendDigest cohort_receipts_{};
+    // v19 closed rows (closed_rows_digest): the running digest over
+    // trades_[0, closed_rows_digested_), and the mark below which rows are
+    // final -- every row an execution booked whose applied notification has
+    // returned. Derived from the engine's rows; reset with them in begin_ready.
+    mutable std::uint64_t closed_rows_digest_ = 1469598103934665603ULL;
+    mutable std::size_t closed_rows_digested_ = 0;
+    std::size_t closed_rows_final_ = 0;
+    // The digest after each digested row, so an amendment (closed_rows_amended)
+    // rewinds to the row before it in O(1): one word per closed row.
+    mutable std::vector<std::uint64_t> closed_row_prefix_;
     // R5 lane PERF-P1: the latched continuation, as a view (see
     // capture_continuation_view). Derived, never folded; one per consumer,
     // its buffer reused by the next capture.
@@ -1314,11 +1340,7 @@ private:
         // continuation_hash() records the view instead of folding.
         enum class State : std::uint8_t { None, Recording, Pending, Folded };
         State state = State::None;
-        std::vector<unsigned char> bytes;
-        std::size_t history_hole = 0;
-        std::size_t driver_hole = 0;
-        std::size_t history_count = 0;
-        std::size_t driver_count = 0;
+        std::vector<uint64_t> words;
         uint64_t run_number = 0;
         bool complete = false;
         uint64_t value = 0;
@@ -1397,6 +1419,10 @@ private:
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
     return static_cast<NativeExecutionConsumer&>(consumer);
+}
+
+inline const NativeExecutionConsumer& as_native_consumer(const IExecutionConsumer& consumer) {
+    return static_cast<const NativeExecutionConsumer&>(consumer);
 }
 
 }  // inline namespace engine_script_run_v19

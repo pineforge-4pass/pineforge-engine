@@ -924,6 +924,12 @@ list(APPEND TEST_SOURCES test_native_intrabar_lower_lookup)
 # own length; the values the pump feeds are pinned. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_batch_log_presize)
+# R5 V19-A: the v19 continuation folds live state only -- every folded member
+# moves it, two histories to one state share it, a Cancelled reason still
+# moves it -- and the v19 broker-state hash's running closed-row digest keeps
+# kernel-recorded per-bar hashes linear and takes a row once it is final.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_state_continuation)
 # R5 PERF-K1: every calendar-derived value a bare host observes over twelve
 # scenarios (intervals, coordinates, session-day facts, series buckets, driver
 # rows), pinned on fc7aad62 -- the values the session-day memo must reproduce.

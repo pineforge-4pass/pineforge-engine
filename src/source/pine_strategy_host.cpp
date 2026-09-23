@@ -13,6 +13,7 @@
 #include <ctime>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -1682,7 +1683,8 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-static void sort_same_bar_exit_trades(std::vector<Trade>&, source::PineExecutionAdapter&);
+static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>&,
+                                                            source::PineExecutionAdapter&);
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
@@ -1712,14 +1714,19 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     max_drawdown_ = 0.0;
     max_runup_ = 0.0;
     for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
-    sort_same_bar_exit_trades(trades_, adapter_);
+    if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
+        native_closed_rows_amended(*moved);
     current_bar_ = saved;
 }
 
 // ab9714be pine_fills.cpp:664-670: same-bar bracket exit trades sort by script command sequence created_seq
-static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
-                                      source::PineExecutionAdapter& adapter) {
-    if (trades.size() < 2) return;
+// The rows are final kernel rows by now (their applied notifications have
+// returned), so a sort that moves one answers the first row it moved, which
+// the caller hands to the kernel before the next hash read
+// (NativeStrategyHost::native_closed_rows_amended).
+static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>& trades,
+                                                            source::PineExecutionAdapter& adapter) {
+    if (trades.size() < 2) return std::nullopt;
     const std::size_t end = trades.size();
     std::size_t start = end - 1;
     while (start > 0
@@ -1746,6 +1753,7 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
                 const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
                 return sa < sb;
             });
+        const bool moved = !std::is_sorted(indices.begin(), indices.end());
         std::vector<Trade> sorted;
         sorted.reserve(end - start);
         for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
@@ -1753,7 +1761,9 @@ static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
         // The adapter's exit phases are keyed by trade index: move them with
         // the trades so the next call reads each trade's own phase.
         adapter.permute_exit_phases(start, indices);
+        if (moved) return start;
     }
+    return std::nullopt;
 }
 
 void source::PineStrategyHost::scheduler_update_session_state() {
@@ -1813,7 +1823,8 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     adapter_.begin_source_evaluation();
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
-    sort_same_bar_exit_trades(trades_, adapter_);
+    if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
+        native_closed_rows_amended(*moved);
     adapter_.observe_terminal_receipts();
     // ab9714be src/source/pine_scheduler.cpp:242,258: under
     // process_orders_on_close the orders that were already resting fill at step 1

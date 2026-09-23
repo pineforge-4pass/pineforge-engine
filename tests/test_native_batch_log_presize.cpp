@@ -383,32 +383,49 @@ struct Pinned {
 
 // Raw-label runs are long enough to reach the projection's later checkpoints;
 // canonical ones stay short (their calendar is the costly part of a bar).
+// expectation corrected: the continuation and broker-state hash of every
+// run moved once, because v19 folds the continuation over live state
+// word-wise (native-consumer/v9) and the broker-state hash folds a running
+// closed-row digest (pineforge-broker-state/v19); trades, trade digests,
+// driver points and command events did not move:
+//   k24-idle-raw: continuation 15539970654880779486ull -> 17651724755287230786ull, broker 1122760425777655983ull -> 5532199380425826332ull
+//   k24-market-raw: continuation 2691280101907842234ull -> 12105252018339267424ull, broker 4988579385215033226ull -> 15174147556366118888ull
+//   k24-reissue-raw: continuation 559917846442483075ull -> 9645562378066648731ull, broker 6145463019870918596ull -> 7090076358007169415ull
+//   k24-bracket-raw: continuation 12662973670975696652ull -> 17521879095250218081ull, broker 13042963852800490529ull -> 10503022833842912387ull
+//   k24-burst-raw: continuation 5169680609674392705ull -> 798486196248088765ull, broker 15585026011916021389ull -> 17373938088521880793ull
+//   k24-bracket-synth: continuation 645448626090986029ull -> 4075442391936166510ull, broker 513613226666104824ull -> 4691396875037838892ull
+//   k24-bracket-synth-volume: continuation 6659251462066295108ull -> 17477682317664326905ull, broker 12441617458333709903ull -> 9266881001929990480ull
+//   k24-market-after-calc: continuation 16754399976542058856ull -> 6449396963817711530ull, broker 6653512602343788203ull -> 11954051044830210918ull
+//   k24-bracket-aggregated: continuation 11576338549970754230ull -> 11268793798675469861ull, broker 2782850178320540896ull -> 5075748201224444045ull
+//   k24-reissue-canonical: continuation 3546404124219280572ull -> 15679351232072391977ull, broker 16042671105544878872ull -> 96449490030966840ull
+//   k24-bracket-canonical: continuation 15954092093213330626ull -> 6169224142335521897ull, broker 15258347239628143751ull -> 15272909929862720322ull
+//   k24-bracket-stream: continuation 9764567397585213717ull -> 1886979334084681129ull, broker 16914546972851419556ull -> 15380761345244795255ull
 const Pinned kPinned[] = {
     {"k24-idle-raw", {Mode::Idle, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 15539970654880779486ull, 1122760425777655983ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 17651724755287230786ull, 5532199380425826332ull}},
     {"k24-market-raw", {Mode::Market, true, Path::None, false, false, false}, 3000,
-     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 2691280101907842234ull, 4988579385215033226ull}},
+     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 12105252018339267424ull, 15174147556366118888ull}},
     {"k24-reissue-raw", {Mode::Reissue, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 559917846442483075ull, 6145463019870918596ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 9645562378066648731ull, 7090076358007169415ull}},
     {"k24-bracket-raw", {Mode::Bracket, true, Path::None, false, false, false}, 3000,
-     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 12662973670975696652ull, 13042963852800490529ull}},
+     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 17521879095250218081ull, 10503022833842912387ull}},
     {"k24-burst-raw", {Mode::Burst, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 5169680609674392705ull, 15585026011916021389ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 798486196248088765ull, 17373938088521880793ull}},
     {"k24-bracket-synth", {Mode::Bracket, true, Path::Synthesized, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 645448626090986029ull, 513613226666104824ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 4075442391936166510ull, 4691396875037838892ull}},
     {"k24-bracket-synth-volume",
      {Mode::Bracket, true, Path::SynthesizedVolume, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 6659251462066295108ull, 12441617458333709903ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 17477682317664326905ull, 9266881001929990480ull}},
     {"k24-market-after-calc", {Mode::Market, true, Path::None, true, false, false}, 3000,
-     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 16754399976542058856ull, 6653512602343788203ull}},
+     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 6449396963817711530ull, 11954051044830210918ull}},
     {"k24-bracket-aggregated", {Mode::Bracket, true, Path::None, false, true, false}, 3000,
-     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 11576338549970754230ull, 2782850178320540896ull}},
+     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 11268793798675469861ull, 5075748201224444045ull}},
     {"k24-reissue-canonical", {Mode::Reissue, false, Path::None, false, false, false}, 240,
-     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 3546404124219280572ull, 16042671105544878872ull}},
+     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 15679351232072391977ull, 96449490030966840ull}},
     {"k24-bracket-canonical", {Mode::Bracket, false, Path::None, false, false, false}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 15954092093213330626ull, 15258347239628143751ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 6169224142335521897ull, 15272909929862720322ull}},
     {"k24-bracket-stream", {Mode::Bracket, false, Path::None, false, false, true}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 9764567397585213717ull, 16914546972851419556ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 1886979334084681129ull, 15380761345244795255ull}},
 };
 
 void the_pump_feeds_the_same_run() {

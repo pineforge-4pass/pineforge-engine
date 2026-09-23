@@ -746,7 +746,11 @@ int main() {
         CHECK(b.native_state().kind == NativeLifecycleKind::Completed);
         near(a.physical_position().signed_units, 1.0);
         near(b.physical_position().signed_units, 1.0);
-        CHECK(a.native_continuation_hash() != b.native_continuation_hash());
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only (native-consumer/v9): the filled request is gone and
+        // its comment lives on in the lot, which the broker-state hash folds.
+        CHECK(a.native_continuation_hash() == b.native_continuation_hash());
+        CHECK(a.broker_state_hash() != b.broker_state_hash());
         const auto events_a = a.native_events(0);
         const auto events_b = b.native_events(0);
         const auto* applied_a = first_applied(events_a);
@@ -771,7 +775,9 @@ int main() {
         Bar bars[1] = {bar_at(60000, 100, 101, 99, 100)};
         a.run(bars, 1);
         b.run(bars, 1);
-        CHECK(a.native_continuation_hash() != b.native_continuation_hash());
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only: a rejected attempt's quantity bits leave none.
+        CHECK(a.native_continuation_hash() == b.native_continuation_hash());
         near(a.physical_position().signed_units, 0.0);
         near(b.physical_position().signed_units, 0.0);
     }
@@ -787,7 +793,9 @@ int main() {
         Bar bars[1] = {bar_at(60000, 100, 101, 99, 100)};
         plus.run(bars, 1);
         minus.run(bars, 1);
-        CHECK(plus.native_continuation_hash() != minus.native_continuation_hash());
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only: a rejected attempt's signed zero leaves none.
+        CHECK(plus.native_continuation_hash() == minus.native_continuation_hash());
     }
 
     {
@@ -1254,7 +1262,10 @@ int main() {
         a.run(bars, 1);
         (void)a.native_continuation_hash();
         b.run(bars, 1);
-        CHECK(a.native_continuation_hash() != b.native_continuation_hash());
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only (read cadence never mattered; now the history
+        // does not either).
+        CHECK(a.native_continuation_hash() == b.native_continuation_hash());
         CommentHost ca;
         CommentHost cb;
         ca.comment = "alpha";
@@ -1266,7 +1277,10 @@ int main() {
         ca.run(two, 2);
         (void)ca.native_continuation_hash();
         cb.run(two, 2);
-        CHECK(ca.native_continuation_hash() != cb.native_continuation_hash());
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only; the comment stays in the lot the broker hash folds.
+        CHECK(ca.native_continuation_hash() == cb.native_continuation_hash());
+        CHECK(ca.broker_state_hash() != cb.broker_state_hash());
         near(ca.physical_position().signed_units, 1.0);
         near(cb.physical_position().signed_units, 1.0);
     }

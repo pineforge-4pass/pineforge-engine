@@ -149,6 +149,8 @@
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
+ *   [--] native_closed_rows_amended        a C host reads the closed rows and never writes one -- the kernel
+ *                                          books them -- so it has no amendment to name
  *   [C]  native_sized_units                strategy_native_sized_units_v1 -- a PF_NATIVE_INTENT_SIZED
  *                                          pf_native_request_v1 is the Sized basis; its sizing block is
  *                                          read, nothing is submitted

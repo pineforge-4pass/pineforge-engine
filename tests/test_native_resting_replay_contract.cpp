@@ -1346,7 +1346,16 @@ void perturb_one_field(double sign) {
         CHECK(events_of<no::ExecutionAppliedEvent>(a).empty());
         CHECK(events_of<no::ExecutionAppliedEvent>(b).empty());
         a.tick(0, 100); b.tick(0, 100);
-        CHECK(a.native_continuation_hash() != b.native_continuation_hash());
+        // expectation corrected: the continuation differed after the tick at
+        // every step -> it differs exactly while a changed request is still
+        // live, because v19 folds live state only (native-consumer/v9); a
+        // request that filled away leaves its difference in the broker book
+        // (physical_diverges) or nowhere.
+        const bool live = !a.native_working_requests().empty()
+            || !b.native_working_requests().empty();
+        CHECK((a.native_continuation_hash() != b.native_continuation_hash()) == live);
+        CHECK((a.broker_state_hash() != b.broker_state_hash())
+              == (live || step.physical_diverges));
         if (step.physical_diverges) {
             CHECK(!bits_eq(a.physical_position().signed_units, b.physical_position().signed_units)
                   || a.trade_count() != b.trade_count()
@@ -1403,7 +1412,11 @@ void inert_text(double sign, bool comment) {
     same_physical(a, b, false);
     same_d(a.physical_position().signed_units, 0);
     a.tick(0, 100); b.tick(0, 100);
-    CHECK(a.native_continuation_hash() != b.native_continuation_hash());
+    // expectation corrected: continuation != -> ==, because v19 folds live
+    // state only: the filled request is gone, and its text lives on in the
+    // lot, which the broker-state hash folds.
+    CHECK(a.native_continuation_hash() == b.native_continuation_hash());
+    CHECK(a.broker_state_hash() != b.broker_state_hash());
     same_physical(a, b, false);
     same_d(a.physical_position().signed_units, sign * 2);
     same_d(a.physical_position().average_price, 100);
@@ -1670,7 +1683,12 @@ void a_h1_h2_fresh_terms_replay_and_hash_mutations() {
     run_terms(replay, "H2-terms", 0.0);
     run_terms(changed, "H2-terms", 1.0);
     CHECK(first.native_continuation_hash() == replay.native_continuation_hash());
-    CHECK(first.native_continuation_hash() != changed.native_continuation_hash());
+    // expectation corrected: continuation != -> ==, because v19 folds live
+    // state only: the terms receipt is history; the price it resolved lives on
+    // in the lot the broker-state hash folds.
+    CHECK(first.native_continuation_hash() == changed.native_continuation_hash());
+    CHECK(first.broker_state_hash() == replay.broker_state_hash());
+    CHECK(first.broker_state_hash() != changed.broker_state_hash());
     const auto first_receipts = events_of<no::TermsResolvedEvent>(first);
     const auto replay_receipts = events_of<no::TermsResolvedEvent>(replay);
     REQUIRE(first_receipts.size() == 1 && replay_receipts.size() == 1);
@@ -1691,7 +1709,10 @@ void a_h1_h2_fresh_terms_replay_and_hash_mutations() {
     };
     run_nan(nan_a, "H1-nan", nan_one);
     run_nan(nan_b, "H1-nan", nan_two);
-    CHECK(nan_a.native_continuation_hash() != nan_b.native_continuation_hash());
+    // expectation corrected: continuation != -> ==, because v19 folds live
+    // state only: the rejected attempt's NaN payload leaves none (the
+    // rejection's kind and reason, which the event record keeps, are equal).
+    CHECK(nan_a.native_continuation_hash() == nan_b.native_continuation_hash());
     const auto rejection_a = events_of<no::MatchRejectedEvent>(nan_a);
     const auto rejection_b = events_of<no::MatchRejectedEvent>(nan_b);
     REQUIRE(rejection_a.size() == 1 && rejection_b.size() == 1);
@@ -1723,8 +1744,13 @@ void d4_real_appended_histories_cover_terms_fields() {
     const auto one = run_host_sized(units_one, "D4-history", 1.0, 0.0);
     const auto two = run_host_sized(units_two, "D4-history", 2.0, 0.0);
     const auto price = run_host_sized(price_changed, "D4-history", 1.0, 1.0);
-    CHECK(units_one.native_continuation_hash() != units_two.native_continuation_hash());
-    CHECK(units_one.native_continuation_hash() != price_changed.native_continuation_hash());
+    // expectation corrected: continuation != -> ==, because v19 folds live
+    // state only: the receipts are history, and what they resolved lives on
+    // in the book the broker-state hash folds.
+    CHECK(units_one.native_continuation_hash() == units_two.native_continuation_hash());
+    CHECK(units_one.native_continuation_hash() == price_changed.native_continuation_hash());
+    CHECK(units_one.broker_state_hash() != units_two.broker_state_hash());
+    CHECK(units_one.broker_state_hash() != price_changed.broker_state_hash());
     CHECK(!equal_terms_resolved_bits(one, two, true));
     CHECK(!equal_terms_resolved_bits(one, price, true));
 

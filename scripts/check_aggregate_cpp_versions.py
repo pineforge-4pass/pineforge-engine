@@ -95,8 +95,8 @@ def check(root: Path = ROOT) -> None:
     generic_body = body(generic_hash,
                         r"(?:std::)?uint64_t\s+BacktestEngine::broker_state_hash_from_execution_hash\(\s*(?:std::)?uint64_t\s+execution_hash\)\s+const\s*\{",
                         "broker hash")
-    if not re.match(r"\s*BrokerStateHashSink\s+f;\s*f\.s\(\"pineforge-broker-state/v18\"\);", generic_body):
-        raise ValueError("broker hash requires the v18 domain")
+    if not re.match(r"\s*BrokerStateHashSink\s+f;\s*f\.s\(\"pineforge-broker-state/v19\"\);", generic_body):
+        raise ValueError("broker hash requires the v19 domain")
     if not re.search(r"hash_host_extension\(f\);\s*return\s+f\.h;\s*$", generic_body):
         raise ValueError("broker hash must end with the generic host extension")
     if "hash_source_extension" in generic_body:
@@ -105,10 +105,10 @@ def check(root: Path = ROOT) -> None:
                        r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{",
                        "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    if compact.count("integer(18);integer(broker_state_hash());") != 1:
-        raise ValueError("stream hash requires one unconditional v18 broker fold")
-    if "if(false){integer(18);integer(broker_state_hash());}" in compact:
-        raise ValueError("stream v18 fold must be unconditional")
+    if compact.count("integer(19);integer(broker_state_hash());") != 1:
+        raise ValueError("stream hash requires one unconditional v19 broker fold")
+    if "if(false){integer(19);integer(broker_state_hash());}" in compact:
+        raise ValueError("stream v19 fold must be unconditional")
 
 
 def main() -> int:

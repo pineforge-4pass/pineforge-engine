@@ -1542,6 +1542,17 @@ struct CohortReceipt {
     RequestHandle origin{};
 };
 
+/// One group-effect receipt: the applied event that caused it, the request it
+/// acted on, the effect, and the ordinal of the event that recorded the
+/// outcome. A drain that meets the same cause, recipient and effect again finds
+/// it and applies nothing (WorkingRequestCore::group_effect_receipt).
+struct GroupEffectReceipt {
+    EventId cause{};
+    RequestHandle recipient{};
+    GroupEffect effect = GroupEffect::Reduce;
+    uint64_t outcome_ordinal = 0;
+};
+
 class WorkingRequestCore {
 public:
     explicit WorkingRequestCore(RunIdentity identity);
@@ -1562,6 +1573,16 @@ public:
     const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
     }
+    /// The core's two durable counters: the ordinal of the last committed
+    /// event and the last incarnation a command consumed. A later command must
+    /// exceed both.
+    uint64_t last_ordinal() const noexcept { return last_ordinal_; }
+    uint64_t last_incarnation() const noexcept { return last_incarnation_; }
+    /// The group-effect receipts, in commit order: the idempotence keys a later
+    /// drain consults. Read-only; the consumer's state continuation folds each
+    /// once, when it commits.
+    std::size_t group_effect_receipt_count() const noexcept { return receipts_.size(); }
+    GroupEffectReceipt group_effect_receipt(std::size_t index) const;
     const LiveRequest* find_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
 

@@ -21,15 +21,15 @@
 //      is therefore unreachable by the matcher under EITHER visibility.
 //
 // This unit proves both ends of that: the executed outcome of the two
-// spellings is identical, in batch AND on a stream. One thing does separate
-// them, and it separates them for good -- the continuation hash folds
-// arm_price.has_value() by design, and continuation_hash() folds the command
-// HISTORY, whose acceptance row keeps the definition as submitted. So the
-// spelling is a durable identity choice with no behavioural consequence,
-// which is precisely why the Pine adapter keeps writing the placeholder
-// (src/source/pine_adapter.cpp relative_leg_shapes): swapping its spelling
-// would move the continuation identity of every corpus run that anchors a
-// trail, and buy nothing.
+// spellings is identical, in batch AND on a stream. One thing separates them
+// while the leg waits -- the continuation hash folds arm_price.has_value() of
+// every live request by design. Until the v19 value epoch it separated them
+// for good, because continuation_hash() folded the command HISTORY, whose
+// acceptance row keeps the definition as submitted; since v19
+// (native-consumer/v9) it folds live state only, so the two spellings share
+// one continuation once the arm has installed the same definition. The Pine
+// adapter's placeholder (src/source/pine_adapter.cpp relative_leg_shapes)
+// now moves only a digest read while a leg waits.
 //
 // The rule the lane states on the page is pinned here too: an absent arm is
 // accepted, a WRITTEN non-placeholder arm is still refused, exactly as a
@@ -265,25 +265,20 @@ void the_placeholder_is_ceremony_on_a_stream() {
     }
 }
 
-// ── 4. The spelling is a permanent continuation-identity choice ────────
+// ── 4. The spelling is a continuation-identity choice while the leg waits ──
 void the_spelling_is_durable_identity() {
     const Observed placeholder = observe(true, false, "e1-hash");
     const Observed absent = observe(false, false, "e1-hash");
     // hash_trigger() folds arm_price.has_value(), so a waiting leg's digest
     // tells the two spellings apart.
     CHECK(placeholder.waiting_hash != absent.waiting_hash);
-    // expectation corrected: final_hash equal -> final_hash differing,
-    // because the arm does NOT erase the spelling. The materialized
-    // definition converges (scenario 2 proves the executed outcome is
-    // identical), but continuation_hash() also folds sync_history_digest()
-    // over requests_.history(), and the acceptance command in that history
-    // keeps the definition AS SUBMITTED. The choice is therefore durable for
-    // the rest of the run even though nothing observable depends on it --
-    // which is exactly why the Pine adapter's placeholder
-    // (src/source/pine_adapter.cpp relative_leg_shapes) must stay: swapping
-    // its spelling would move the continuation identity of every corpus run
-    // that anchors a trail, with no behavioural reason to.
-    CHECK(placeholder.final_hash != absent.final_hash);
+    // expectation corrected: final_hash differing -> final_hash equal,
+    // because v19 folds live state only (native-consumer/v9). The arm
+    // installs one definition for both spellings (scenario 2 proves the
+    // executed outcome is identical), and the command history whose
+    // acceptance row kept the definition AS SUBMITTED is no longer an input
+    // (lane E1 had corrected it the other way for exactly that history fold).
+    CHECK(placeholder.final_hash == absent.final_hash);
     // The difference is the spelling and nothing else: the same spelling run
     // twice agrees on both digests.
     const Observed again = observe(false, false, "e1-hash");

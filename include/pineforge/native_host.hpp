@@ -1280,6 +1280,14 @@ public:
     /// values between runs. C spelling:
     /// strategy_native_continuation_hash_v1.
     uint64_t native_continuation_hash() const;
+    /// The closed rows (the engine's trades_) are part of broker_state_hash(), folded
+    /// once each through a running digest (pineforge-broker-state/v19). A row is final
+    /// once the applied notification of the execution that booked it has returned; a
+    /// host may amend it until then. A host that amends or reorders a final row names
+    /// the first row it changed here, before the next hash read, and the kernel folds
+    /// the rows from there again. Debug builds re-fold every digested row at a run's end
+    /// and abort if one changed unannounced.
+    void native_closed_rows_amended(std::size_t first_row);
 
     friend class NativeExecutionConsumer;
 

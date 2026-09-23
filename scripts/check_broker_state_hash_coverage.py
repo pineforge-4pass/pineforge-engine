@@ -220,19 +220,19 @@ def main(root: Path = ROOT) -> int:
         source_hash = executable_hash_text(source_hash_raw)
         adapter_header = (root / "include/pineforge/source/pine_adapter.hpp").read_text()
         stream_hash = clean((root / "src/engine_stream.cpp").read_text())
-        require_once(engine_hash, 'f.s("pineforge-broker-state/v18")', "generic hash domain")
+        require_once(engine_hash, 'f.s("pineforge-broker-state/v19")', "generic hash domain")
         require_once(adapter_header, 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"',
                      "source hash domain")
-        require_once(stream_hash, "integer(18); integer(broker_state_hash());",
-                     "stream v18 fold")
+        require_once(stream_hash, "integer(19); integer(broker_state_hash());",
+                     "stream v19 fold")
         host_header = (root / "include/pineforge/source/pine_strategy_host.hpp").read_text()
         require_once(host_header,
                      'kSourceSecurityDomain[] = "pineforge-source-security/v6"',
                      "source request.security hash domain")
         require_once(source_hash, "f.s(kSourceSecurityDomain);",
                      "source request.security hash fold")
-        if "if (false) { integer(18); integer(broker_state_hash()); }" in stream_hash:
-            raise ValueError("stream v18 fold must be unconditional")
+        if "if (false) { integer(19); integer(broker_state_hash()); }" in stream_hash:
+            raise ValueError("stream v19 fold must be unconditional")
         # R5 N5 (RP10): the fold ends in the generic host seam. The projection
         # calls hash_host_extension exactly once and never the deprecated
         # spelling; the default forwards to that spelling, whose default is

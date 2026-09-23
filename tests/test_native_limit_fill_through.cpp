@@ -179,9 +179,11 @@ void crossing_is_capped_or_carried() {
         one_fill(through, side, side.level, side.carried, no::NativeCandidatePriceKind::TriggerLevel);
         CHECK(bounded.consulted[0].default_resolved_price == side.level);
         CHECK(through.consulted[0].default_resolved_price == side.carried);
-        // The flag is durable request state: the same tape, a different
-        // identity, and a different book.
-        CHECK(bounded.continuation != through.continuation);
+        // The flag is durable request state while the request lives; the
+        // filled request leaves the price it booked in a different book.
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only (native-consumer/v9): the request filled away.
+        CHECK(bounded.continuation == through.continuation);
         CHECK(bounded.broker != through.broker);
     }
 }
@@ -200,7 +202,10 @@ void gap_open_books_the_print() {
                  no::NativeCandidatePriceKind::PointPrice);
         CHECK(bounded.consulted[0].default_resolved_price == side.level);
         CHECK(through.consulted[0].default_resolved_price == side.gap_carried);
-        CHECK(bounded.continuation != through.continuation);
+        // expectation corrected: continuation != -> ==, because v19 folds
+        // live state only; the two books differ (the broker-state hash).
+        CHECK(bounded.continuation == through.continuation);
+        CHECK(bounded.broker != through.broker);
     }
 }
 
@@ -242,9 +247,12 @@ void zero_slippage_books_the_level_on_both() {
         CHECK(bounded.lots[0].entry_time_ms == through.lots[0].entry_time_ms);
         CHECK(bounded.position.average_price == through.position.average_price);
         // Same book, different ledger: the filled request's definition still
-        // carries the flag, and it is hashed like every durable request fact.
-        CHECK(bounded.continuation != through.continuation);
-        CHECK(bounded.broker != through.broker);
+        // carried the flag in the command history.
+        // expectation corrected: continuation != and broker != -> both ==,
+        // because v19 folds live state only (native-consumer/v9): the ledger
+        // is a readback, and the two hosts' states are the same state.
+        CHECK(bounded.continuation == through.continuation);
+        CHECK(bounded.broker == through.broker);
     }
 }
 

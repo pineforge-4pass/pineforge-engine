@@ -59,16 +59,19 @@ constexpr uint64_t kFnvPowers[9] = {
 
 // A continuation view's buffer grows here, out of the fold's way, and never
 // throws: a buffer that cannot grow ends the recording and the capture folds.
-bool reserve_view_bytes(std::vector<unsigned char>& out, size_t n) noexcept {
-    if (n > out.max_size() - out.size()) return false;
+bool reserve_view_words(std::vector<uint64_t>& out) noexcept {
+    if (out.size() == out.max_size()) return false;
     try {
-        out.reserve(std::max({out.size() + n, out.capacity() * 2, size_t{4096}}));
+        out.reserve(std::max({out.size() + 1, out.capacity() * 2, size_t{512}}));
     } catch (...) {
         return false;
     }
     return true;
 }
 
+// FNV-1a 64 over the canonical bytes of each value: the run-spec digest's fold
+// (native_run_spec_digest, the portable spec identity). The continuation no
+// longer folds through it since v19 (StateFold below).
 struct Fnv {
     uint64_t h = 1469598103934665603ULL;
     // Native run generations (`RunIdentity::run_number`, the consumed
@@ -118,49 +121,79 @@ struct Fnv {
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
 
+// The v19 continuation's fold (native-consumer/v9, R5 lane V19-A): one
+// multiply-xorshift per 64-bit word, in fold order, where Fnv above takes one
+// multiply per byte (PERF0-P's O1, PERF-D1 step s6). A scalar is one word; a
+// string is its length, then its bytes eight at a time, the last word
+// zero-padded. Every step is a bijection of the accumulator for a fixed word,
+// and of the word for a fixed accumulator, so two folds of one length that
+// differ in a single word never collide. WordSink spells every value as words
+// once, for both sinks below, so the words a view records are the words the
+// fold mixes by construction.
+template <class Sink>
+struct WordSink {
+    void bytes(const void* p, size_t n) noexcept {
+        const auto* c = static_cast<const unsigned char*>(p);
+        size_t at = 0;
+        for (; at + sizeof(uint64_t) <= n; at += sizeof(uint64_t)) {
+            uint64_t w = 0;
+            std::memcpy(&w, c + at, sizeof w);
+            sink().word(w);
+        }
+        if (at < n) {
+            uint64_t w = 0;
+            std::memcpy(&w, c + at, n - at);
+            sink().word(w);
+        }
+    }
+    void u(uint64_t v) noexcept { sink().word(v); }
+    void i(int64_t v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); sink().word(bits);
+    }
+    // Exact attempted IEEE-754 bits, as Fnv::d.
+    void d(double v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); sink().word(bits);
+    }
+    void b(bool v) noexcept { sink().word(v ? 1U : 0U); }
+    void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
+
+private:
+    Sink& sink() noexcept { return static_cast<Sink&>(*this); }
+};
+
+constexpr uint64_t kStateFoldSeed = 1469598103934665603ULL;
+
+struct StateFold : WordSink<StateFold> {
+    uint64_t h = kStateFoldSeed;
+    // As Fnv's: run generations fold relative to the run the digest describes.
+    uint64_t run_base = 0;
+    void word(uint64_t w) noexcept {
+        h ^= w;
+        h *= 0x9E3779B97F4A7C15ULL;
+        h ^= h >> 32;
+    }
+};
+
 // R5 lane PERF-P1: the sink a continuation view is recorded into
-// (NativeExecutionConsumer::capture_continuation_view). The same primitives
-// as Fnv, appending the bytes Fnv would fold -- in the order bytes() reads
-// them: a scalar's eight object bytes, a bool's one -- instead of folding
-// them. It is a type of its own, and the hash helpers below take either sink,
-// so the eager fold every other caller runs is compiled exactly as it was. A
-// buffer that cannot grow latches `failed`, and the capture folds at once.
-struct FnvRecord {
-    std::vector<unsigned char>& out;
+// (NativeExecutionConsumer::capture_continuation_view): the words a StateFold
+// would mix, in order, appended instead of mixed. It is a type of its own, and
+// the hash helpers below take either sink, so the fold every other caller runs
+// is compiled exactly as it would be alone. A buffer that cannot grow latches
+// `failed`, and the capture folds at once.
+struct StateRecord : WordSink<StateRecord> {
+    explicit StateRecord(std::vector<uint64_t>& words) noexcept : out(words) {}
+    std::vector<uint64_t>& out;
     uint64_t run_base = 0;
     bool failed = false;
-    void bytes(const void* p, size_t n) noexcept {
+    void word(uint64_t w) noexcept {
         if (failed) return;
-        if (out.capacity() - out.size() < n && !reserve_view_bytes(out, n)) {
+        if (out.size() == out.capacity() && !reserve_view_words(out)) {
             failed = true;
             return;
         }
-        const auto* c = static_cast<const unsigned char*>(p);
-        out.insert(out.end(), c, c + n);
+        out.push_back(w);
     }
-    void scalar(uint64_t bits) noexcept { bytes(&bits, sizeof bits); }
-    void u(uint64_t v) noexcept { scalar(v); }
-    void i(int64_t v) noexcept {
-        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
-    }
-    void d(double v) noexcept {
-        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
-    }
-    void b(bool v) noexcept { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
-    void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
-
-// Folds recorded bytes exactly as bytes() would, eight at a time through
-// scalar(), which reads a word's object bytes in memory order and collapses
-// its zero runs: a view's replay costs what the fold it recorded would have.
-void fold_recorded(Fnv& f, const unsigned char* p, size_t n) noexcept {
-    for (; n >= sizeof(uint64_t); p += sizeof(uint64_t), n -= sizeof(uint64_t)) {
-        uint64_t word = 0;
-        std::memcpy(&word, p, sizeof word);
-        f.scalar(word);
-    }
-    f.bytes(p, n);
-}
 
 template <class F>
 void hash_coordinate(F& f, const NativeCoordinate& c) noexcept;
@@ -853,6 +886,9 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
     }, authority);
 }
 
+// The cohort rosters: live matching authority, walked at every read. Their
+// receipts are append-only history of the roster commands and fold through a
+// running digest instead, one receipt at its commit (hash_cohort_receipt).
 template <class F>
 void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexcept {
     const auto& cohorts = requests.cohorts();
@@ -862,14 +898,56 @@ void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexce
         f.u(roster.origins.size());
         for (const auto& origin : roster.origins) hash_handle(f, origin);
     }
-    const auto& receipts = requests.cohort_receipts();
-    f.u(receipts.size());
-    for (const auto& receipt : receipts) {
-        f.u(static_cast<std::uint64_t>(receipt.operation));
-        f.u(static_cast<std::uint64_t>(receipt.status));
-        hash_cohort_handle(f, receipt.cohort);
-        hash_handle(f, receipt.origin);
-    }
+}
+
+template <class F>
+void hash_cohort_receipt(F& f, const native_order::CohortReceipt& receipt) noexcept {
+    f.u(static_cast<std::uint64_t>(receipt.operation));
+    f.u(static_cast<std::uint64_t>(receipt.status));
+    hash_cohort_handle(f, receipt.cohort);
+    hash_handle(f, receipt.origin);
+}
+
+// One group-effect receipt, as the running digest folds it at its commit.
+template <class F>
+void hash_group_effect_receipt(F& f, const native_order::GroupEffectReceipt& receipt) noexcept {
+    hash_event_id(f, receipt.cause);
+    hash_handle(f, receipt.recipient);
+    f.u(static_cast<std::uint64_t>(receipt.effect));
+    f.u(receipt.outcome_ordinal);
+}
+
+// The compact record of one committed event (v19): its kind, and the reason a
+// refusal, a cancel, a rejected match, a terminal fill, an activation or a risk
+// event carries. The live table, the core's counters and the receipts already
+// fold whatever an event changed; this keeps the one difference that leaves no
+// other trace -- why a request ended, or why a command was refused -- and
+// nothing of an event's payload or timing, so two histories that reach one
+// state through the same outcomes share a continuation.
+template <class F>
+void hash_event_record(F& f, const native_order::CommandEvent& event) noexcept {
+    f.u(event.index());
+    f.u(std::visit([](const auto& payload) -> std::uint64_t {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, native_order::RejectedEvent>
+                      || std::is_same_v<T, native_order::ReplaceRejectedEvent>
+                      || std::is_same_v<T, native_order::MatchRejectedEvent>) {
+            return static_cast<std::uint64_t>(payload.reason);
+        } else if constexpr (std::is_same_v<T, native_order::CancelledEvent>) {
+            return static_cast<std::uint64_t>(payload.reason)
+                | (payload.cause ? std::uint64_t{1} << 32 : std::uint64_t{0});
+        } else if constexpr (std::is_same_v<T, native_order::ExecutionAppliedEvent>) {
+            return (payload.terminal ? std::uint64_t{1} : std::uint64_t{0})
+                | (payload.terminal_reason
+                       ? (static_cast<std::uint64_t>(*payload.terminal_reason) + 1) << 8
+                       : std::uint64_t{0});
+        } else if constexpr (std::is_same_v<T, native_order::ActivatedEvent>
+                             || std::is_same_v<T, native_order::NativeRiskEvent>) {
+            return static_cast<std::uint64_t>(payload.kind);
+        } else {
+            return 0;
+        }
+    }, event));
 }
 
 template <class F>
@@ -1045,212 +1123,6 @@ template <class F>
 void hash_bar(F& f, const Bar& bar) noexcept {
     f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
     f.i(bar.timestamp);
-}
-
-template <class F>
-void hash_command(F& f, const native_order::CommandEvent& event) noexcept {
-    std::visit([&](const auto& payload) {
-        using T = std::decay_t<decltype(payload)>;
-        f.u(payload.ordinal);
-        if constexpr (std::is_same_v<T, native_order::AcceptedEvent>) {
-            f.u(1);
-            hash_definition(f, payload.definition);
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::RejectedEvent>) {
-            f.u(2);
-            hash_request(f, payload.request);
-            f.u(static_cast<uint64_t>(payload.reason));
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::ReplacedEvent>) {
-            f.u(3);
-            hash_definition(f, payload.predecessor_definition);
-            hash_definition(f, payload.successor_definition);
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::ReplaceRejectedEvent>) {
-            f.u(4);
-            hash_definition(f, payload.live_definition);
-            hash_request(f, payload.attempted);
-            f.u(static_cast<uint64_t>(payload.reason));
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::CancelledEvent>) {
-            f.u(5);
-            hash_definition(f, payload.definition);
-            f.u(static_cast<uint64_t>(payload.reason));
-            f.b(payload.cause.has_value());
-            if (payload.cause) hash_event_id(f, *payload.cause);
-            hash_authority(f, payload.prior_authority);
-            hash_remaining_projection(f, payload.unexecuted);
-            hash_pending(f, payload.pending);
-        } else if constexpr (std::is_same_v<T, native_order::NotWorkingEvent>) {
-            f.u(6);
-            hash_handle(f, payload.target);
-            hash_optional_request(f, payload.attempted);
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::InvalidHandleEvent>) {
-            f.u(7);
-            hash_handle(f, payload.target);
-            hash_optional_request(f, payload.attempted);
-            hash_surface(f, payload.surface);
-        } else if constexpr (std::is_same_v<T, native_order::NoEffectEvent>) {
-            f.u(8);
-            hash_definition(f, payload.definition);
-            hash_remaining_projection(f, payload.remaining);
-            hash_authority(f, payload.authority);
-            hash_cursor(f, payload.cursor);
-        } else if constexpr (std::is_same_v<T, native_order::MatchRejectedEvent>) {
-            f.u(9);
-            f.u(static_cast<uint64_t>(payload.reason));
-            hash_definition(f, payload.definition);
-            hash_remaining_projection(f, payload.remaining);
-            hash_authority(f, payload.authority);
-            hash_cursor(f, payload.cursor);
-            hash_optional_execution_terms(f, payload.attempted_terms);
-        } else if constexpr (std::is_same_v<T, native_order::ExecutionAppliedEvent>) {
-            f.u(10);
-            hash_definition(f, payload.definition);
-            f.d(payload.raw_price);
-            f.d(payload.resolved_price);
-            f.d(payload.current_ticket);
-            f.u(payload.first_trade_index);
-            f.u(payload.closed_trade_count);
-            f.u(payload.opened_lot_incarnation);
-            f.d(payload.closed_units);
-            f.d(payload.opened_units);
-            f.d(payload.filled_working);
-            hash_remaining_projection(f, payload.remaining_before);
-            hash_remaining_projection(f, payload.remaining_after);
-            hash_allowance(f, payload.allowance_before);
-            hash_allowance(f, payload.allowance_after);
-            f.b(payload.terminal);
-            f.b(payload.terminal_reason.has_value());
-            if (payload.terminal_reason) {
-                f.u(static_cast<uint64_t>(*payload.terminal_reason));
-            }
-            f.i(payload.cycle_before);
-            f.i(payload.cycle_after);
-            hash_scope(f, payload.scope);
-            hash_cursor(f, payload.cursor);
-        } else if constexpr (std::is_same_v<T, native_order::CloseBoundEvent>) {
-            f.u(11);
-            hash_definition(f, payload.definition);
-            f.i(payload.cycle);
-            f.u(static_cast<uint64_t>(payload.side));
-            hash_cursor(f, payload.cursor);
-            hash_authority(f, payload.before);
-            hash_authority(f, payload.after);
-        } else if constexpr (std::is_same_v<T, native_order::ActivatedEvent>) {
-            f.u(12);
-            hash_definition(f, payload.definition);
-            f.u(static_cast<uint64_t>(payload.kind));
-            hash_trigger_state(f, payload.before);
-            hash_trigger_state(f, payload.after);
-            f.d(payload.reached_price);
-            hash_cursor(f, payload.cursor);
-        } else if constexpr (std::is_same_v<T, native_order::ReservationReducedEvent>) {
-            f.u(13);
-            hash_definition(f, payload.definition);
-            hash_event_id(f, payload.cause);
-            hash_handle(f, payload.recipient);
-            f.u(static_cast<uint64_t>(payload.effect));
-            f.d(payload.requested_delta);
-            f.d(payload.actual_deduction);
-            f.d(payload.before.q);
-            hash_remaining_projection(f, payload.after);
-        } else if constexpr (std::is_same_v<T, native_order::DeferredGroupAdjustmentEvent>) {
-            f.u(14);
-            hash_definition(f, payload.definition);
-            hash_event_id(f, payload.cause);
-            hash_handle(f, payload.recipient);
-            f.u(static_cast<uint64_t>(payload.effect));
-            f.d(payload.deferred_delta);
-            hash_pending(f, payload.pending_before);
-            f.d(payload.pending_after.total);
-            f.u(payload.pending_after.count);
-            hash_event_id(f, payload.pending_after.tail_receipt);
-            f.b(payload.previous_pending_receipt.has_value());
-            if (payload.previous_pending_receipt) {
-                hash_event_id(f, *payload.previous_pending_receipt);
-            }
-        } else if constexpr (std::is_same_v<T, native_order::QuantityBoundEvent>) {
-            f.u(15);
-            hash_definition(f, payload.definition);
-            hash_event_id(f, payload.source);
-            f.d(payload.source_units);
-            f.u(payload.prior_adjustment_ids.size());
-            for (const auto& id : payload.prior_adjustment_ids) hash_event_id(f, id);
-            f.d(payload.pending_total);
-            f.d(payload.effective_deduction);
-            hash_remaining_projection(f, payload.remaining);
-        } else if constexpr (std::is_same_v<T, native_order::ArmedEvent>) {
-            f.u(16);
-            hash_definition(f, payload.definition);
-            hash_authority(f, payload.before);
-            hash_authority(f, payload.after);
-            f.u(payload.enrollment.index());
-            if (const auto* from_cmd = std::get_if<native_order::EnrollmentFromCommand>(&payload.enrollment)) {
-                hash_event_id(f, from_cmd->accepted);
-            }
-            if (const auto* from_app = std::get_if<native_order::EnrollmentFromApplied>(&payload.enrollment)) {
-                hash_event_id(f, from_app->cause);
-                hash_cursor(f, from_app->cursor);
-            }
-            f.b(payload.quantity_resolution.has_value());
-            if (payload.quantity_resolution) hash_event_id(f, *payload.quantity_resolution);
-        } else if constexpr (std::is_same_v<T, native_order::MarginCallEvent>) {
-            f.u(18);
-            hash_definition(f, payload.definition);
-            hash_event_id(f, payload.applied);
-            hash_cursor(f, payload.cursor);
-            f.u(static_cast<uint64_t>(payload.side));
-            f.d(payload.mark);
-            f.d(payload.equity);
-            f.d(payload.required);
-            f.d(payload.liquidation_price);
-            f.d(payload.units);
-            f.d(payload.position_before);
-            f.d(payload.position_after);
-        } else if constexpr (std::is_same_v<T, native_order::NativeRiskEvent>) {
-            f.u(19);
-            f.u(static_cast<uint64_t>(payload.kind));
-            f.d(payload.limit);
-            f.d(payload.observed);
-            f.i(payload.day_ordinal);
-            hash_cursor(f, payload.cursor);
-        } else if constexpr (std::is_same_v<T, native_order::TermsResolvedEvent>) {
-            f.u(17);
-            hash_definition(f, payload.definition);
-            hash_cursor(f, payload.cursor);
-            hash_terms_input(f, payload.input);
-            f.u(payload.prior_adjustment_ids.size());
-            for (const auto& id : payload.prior_adjustment_ids) hash_event_id(f, id);
-            f.d(payload.pending_total);
-            f.d(payload.effective_deduction);
-            hash_remaining_projection(f, payload.remaining_before);
-            hash_remaining_projection(f, payload.remaining_after);
-            hash_allowance(f, payload.allowance_after);
-        } else {
-            static_assert(!sizeof(T), "unhashed native command event");
-        }
-    }, event);
-}
-
-template <class F>
-void hash_driver_point(F& f, const NativeDriverPoint& point) noexcept {
-    hash_coordinate(f, point.coordinate);
-    f.d(point.raw_price);
-    f.b(point.sequence.has_value());
-    if (point.sequence) f.u(*point.sequence);
-    f.b(point.matching);
-    f.b(point.excursion);
-}
-
-template <class F>
-void hash_account_row(F& f, const NativeAccountObservation& row) noexcept {
-    f.u(row.ordinal);
-    f.i(row.effective_time_ms);
-    f.d(row.marked_equity);
-    f.d(row.realized_balance);
-    f.d(row.signed_units);
 }
 
 // R5 lane E23: the digest names the run's INPUTS, and where a zone file lives
@@ -1621,13 +1493,22 @@ const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar
 }
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
-    // The fold, for either sink (R5 lane PERF-P1). An Fnv folds it now. A
-    // FnvRecord records the bytes an Fnv would fold into the view being
-    // captured, and leaves the two lazily folded digests behind as holes at
-    // their logs' lengths; the account digest is folded as each row is
-    // appended, so it is recorded like any other value.
+    // The v19 continuation (native-consumer/v9, R5 lane V19-A) folds what a
+    // resume continues from -- the consumer's live state -- and nothing that
+    // only records how the run got there: the command history, the driver log
+    // and the account log are readbacks, never inputs, so a read costs the
+    // live state, whatever the run's length, and two runs that reach one
+    // state share one continuation. What the order core carries forward
+    // beyond its live table and rosters folds as its two counters and three
+    // running digests, each row folded once, at its commit: the group-effect
+    // receipts, the cohort receipts, and the compact record of every
+    // committed event (hash_event_record), which keeps visible a difference
+    // that leaves no other trace, such as a Cancelled receipt's reason. The
+    // spec folds as a digest taken once per applied spec and run
+    // (spec_digest). The fold, for either sink (R5 lane PERF-P1): a StateFold
+    // mixes it now; a StateRecord records the words it would mix into the
+    // view being captured.
     const auto fold = [this](auto& f) noexcept {
-        constexpr bool recording = std::is_same_v<std::decay_t<decltype(f)>, FnvRecord>;
         f.run_base = requests_.identity().run_number;
         f.s(kNativeConsumerSemanticVersion);
         f.s(kNativeDriverSemanticVersion);
@@ -1728,7 +1609,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             f.u(auxiliary_appended_digest_);
         }
         if (const auto* spec = spec_ptr()) {
-            hash_spec(f, *spec, &spec_bar_digests(*spec));
+            f.u(spec_digest(*spec, f.run_base));
             // L5: the recalculation cadence is durable decision state only for a
             // spec that opted into it. Folding it conditionally keeps a default
             // run's continuation identity byte-identical to the pre-lane tree.
@@ -1768,30 +1649,17 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         // immediately after the request table so a membership-only change cannot
         // share a continuation identity with an otherwise identical run.
         hash_cohorts(f, requests_);
-        // Both logs are append-only for the life of a run -- begin_ready is the
-        // only thing that clears them, and it resets these digests and rebinds
-        // the run identity in the same breath -- and each fold chains on the one
-        // before it. A digest that is behind therefore needs its TAIL folded,
-        // exactly as the command history's does; re-deriving the whole log at
-        // every query is the same chain at quadratic cost, which a host that
-        // reads the continuation once per bar pays in full (lane E24 measured
-        // 4x the bars costing 16x the CPU under broker-state-hash recording).
-        if constexpr (!recording) {
-            sync_history_digest(requests_.history().size());
-            sync_driver_digest(driver_log_.size());
-        }
-        if (account_digest_.count > account_log_.size()) account_digest_.reset();
-        for (std::size_t index = account_digest_.count; index < account_log_.size(); ++index) {
-            fold_account_digest(account_log_[index]);
-        }
-        if constexpr (recording) {
-            continuation_view_.history_count = requests_.history().size();
-            f.u(continuation_view_.history_count);
-            continuation_view_.history_hole = continuation_view_.bytes.size();
-        } else {
-            f.u(history_digest_.count);
-            f.u(history_digest_.h);
-        }
+        f.u(cohort_receipts_.count);
+        f.u(cohort_receipts_.h);
+        // The order core's durable state beyond its tables: the two counters a
+        // later command must exceed, the group-effect receipts a later drain
+        // consults, and the committed events' compact records.
+        f.u(requests_.last_ordinal());
+        f.u(requests_.last_incarnation());
+        f.u(group_receipts_.count);
+        f.u(group_receipts_.h);
+        f.u(event_records_.count);
+        f.u(event_records_.h);
         f.b(current_input_open_.has_value());
         if (current_input_open_) f.i(*current_input_open_);
         f.b(observed_input_cursor_.has_value());
@@ -1825,16 +1693,6 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         hash_driver_statistics(f, driver_statistics_);
         f.u(static_cast<uint64_t>(pairing_.pairing));
         f.i(pairing_.group_factor);
-        if constexpr (recording) {
-            continuation_view_.driver_count = driver_log_.size();
-            f.u(continuation_view_.driver_count);
-            continuation_view_.driver_hole = continuation_view_.bytes.size();
-        } else {
-            f.u(driver_digest_.count);
-            f.u(driver_digest_.h);
-        }
-        f.u(account_digest_.count);
-        f.u(account_digest_.h);
         if (precommit_digest_.count != 0) {
             f.u(precommit_digest_.count);
             f.u(precommit_digest_.h);
@@ -1876,34 +1734,36 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             }
         }
     };
+#ifndef NDEBUG
+    // Debug builds hold the running digests to the rows they cover: every
+    // committed event, group-effect receipt and cohort receipt is folded.
+    if (event_records_.count != requests_.history().size()
+        || group_receipts_.count != requests_.group_effect_receipt_count()
+        || cohort_receipts_.count != requests_.cohort_receipts().size()) {
+        std::abort();
+    }
+#endif
     if (continuation_view_.state == ContinuationView::State::Recording) {
-        FnvRecord record{continuation_view_.bytes};
+        StateRecord record{continuation_view_.words};
         fold(record);
         continuation_view_.complete = !record.failed;
         return 0;
     }
-    // A pending view names both digests at the lengths it was taken at, and
-    // this fold carries them to the logs' ends, where nothing can take them
-    // back: the view is folded first.
-    if (continuation_view_.state == ContinuationView::State::Pending) fold_continuation_view();
-    Fnv f;
+    StateFold f;
     fold(f);
     return f.h;
 }
 
 // R5 lane PERF-P1. A Pine run latches the continuation at its last script
-// point and nothing on the benchmark or report path ever reads it, yet that
-// one fold took a fifth of the run: every driver point (four a bar) and every
-// command event of the run folded into their digests at the end. A view
-// copies the bytes of the live state the fold reads -- the request table, the
-// cohort rosters and receipts, the frames and cursors -- and leaves the two
-// logs where they lie; the first reader pays the fold that was skipped, and
-// no one else does. A buffer that cannot grow falls back to folding at once,
-// so the value never depends on memory.
+// point and nothing on the benchmark or report path ever reads it. A view
+// records the words of the fold instead of mixing them, and the first reader
+// mixes them; no one else does. Since v19 the fold is the live state alone,
+// so a view is the words that state spells. A buffer that cannot grow falls
+// back to folding at once, so the value never depends on memory.
 void NativeExecutionConsumer::capture_continuation_view() noexcept {
     auto& view = continuation_view_;
     view.state = ContinuationView::State::None;
-    view.bytes.clear();
+    view.words.clear();
     if (defer_continuation_views_) {
         view.run_number = requests_.identity().run_number;
         view.state = ContinuationView::State::Recording;
@@ -1912,15 +1772,14 @@ void NativeExecutionConsumer::capture_continuation_view() noexcept {
         if (view.complete) {
 #ifndef NDEBUG
             // Debug builds prove every view against the eager fold it
-            // replaces. The fold leaves both digests at the view's lengths,
-            // so the view stays pending and a later read still folds it.
+            // replaces, then leave it pending, so a later read still folds it.
             const uint64_t eager = continuation_hash();
             if (fold_continuation_view() != eager) std::abort();
 #endif
             view.state = ContinuationView::State::Pending;
             return;
         }
-        view.bytes.clear();
+        view.words.clear();
     }
     view.value = continuation_hash();
     view.state = ContinuationView::State::Folded;
@@ -1944,35 +1803,40 @@ uint64_t NativeExecutionConsumer::latched_continuation(uint64_t eager) const noe
     return eager;
 }
 
-// The view's value: both digests carried to exactly the lengths it was taken
-// at -- from wherever they stand, which is never past them, since
-// continuation_hash() folds a pending view before it moves them -- then the
-// recorded bytes with the two digests in their holes.
+// The view's value: the recorded words, mixed in order.
 uint64_t NativeExecutionConsumer::fold_continuation_view() const noexcept {
     auto& view = continuation_view_;
 #ifndef NDEBUG
-    // Debug builds hold the invariants that make a view foldable: it is of
-    // this run, its logs have only grown since, and neither digest is past it.
-    if (view.run_number != requests_.identity().run_number
-        || view.history_count > requests_.history().size()
-        || view.driver_count > driver_log_.size()
-        || history_digest_.count > view.history_count
-        || driver_digest_.count > view.driver_count) {
-        std::abort();
-    }
+    // Debug builds hold the invariant that makes a view foldable: it is of
+    // this run.
+    if (view.run_number != requests_.identity().run_number) std::abort();
 #endif
-    sync_history_digest(view.history_count);
-    sync_driver_digest(view.driver_count);
-    const unsigned char* const bytes = view.bytes.data();
-    Fnv f;
-    fold_recorded(f, bytes, view.history_hole);
-    f.u(history_digest_.h);
-    fold_recorded(f, bytes + view.history_hole, view.driver_hole - view.history_hole);
-    f.u(driver_digest_.h);
-    fold_recorded(f, bytes + view.driver_hole, view.bytes.size() - view.driver_hole);
+    StateFold f;
+    for (const uint64_t w : view.words) f.word(w);
     view.value = f.h;
     view.state = ContinuationView::State::Folded;
     return view.value;
+}
+
+// The spec folds as one word: its digest, taken once per applied spec and run
+// generation (the fold folds a run number relative to the run it describes).
+// A pure cache of values the continuation folds; forget_spec_digests clears it
+// wherever the applied spec changes.
+uint64_t NativeExecutionConsumer::spec_digest(const NativeRunSpec& spec,
+                                              uint64_t run_base) const noexcept {
+    if (!spec_digest_ || spec_digest_run_base_ != run_base) {
+        StateFold f;
+        f.run_base = run_base;
+        hash_spec(f, spec, &spec_bar_digests(spec));
+        spec_digest_ = f.h;
+        spec_digest_run_base_ = run_base;
+    }
+    return *spec_digest_;
+}
+
+void NativeExecutionConsumer::forget_spec_digests() const noexcept {
+    spec_bar_digests_.reset();
+    spec_digest_.reset();
 }
 
 bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
@@ -2301,7 +2165,7 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     // persists across a completed/aborted handle and is reapplied by the next
     // provider begin, so it must survive that provider's configure call.
     if (!staged_ingress_fx_) staged_fx_curve_.reset();
-    spec_bar_digests_.reset();
+    forget_spec_digests();
     leave_running();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
@@ -2430,9 +2294,15 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     last_print_time_ms_ = 0;
     driver_log_.clear();
     account_log_.clear();
-    history_digest_.reset();
-    driver_digest_.reset();
-    account_digest_.reset();
+    // The v19 running digests restart with the request core they cover and
+    // with the closed rows reset_run_state cleared above.
+    event_records_.reset();
+    group_receipts_.reset();
+    cohort_receipts_.reset();
+    closed_rows_digest_ = BrokerStateHashSink{}.h;
+    closed_rows_digested_ = 0;
+    closed_rows_final_ = 0;
+    closed_row_prefix_.clear();
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -2663,53 +2533,10 @@ NativeCoordinate NativeExecutionConsumer::coordinate_from(
     return c;
 }
 
-void NativeExecutionConsumer::sync_history_digest(std::size_t count) const noexcept {
-    const auto& hist = requests_.history();
-    count = std::min(count, hist.size());
-    if (history_digest_.count > count) history_digest_.reset();
-    if (history_digest_.count == count) return;
-    Fnv f;
-    f.run_base = requests_.identity().run_number;
-    f.h = history_digest_.h;
-    for (std::size_t i = history_digest_.count; i < count; ++i) {
-        hash_command(f, hist[i]);
-    }
-    history_digest_.h = f.h;
-    history_digest_.count = count;
-}
-
-void NativeExecutionConsumer::sync_driver_digest(std::size_t count) const noexcept {
-    count = std::min(count, driver_log_.size());
-    if (driver_digest_.count > count) driver_digest_.reset();
-    for (std::size_t index = driver_digest_.count; index < count; ++index) {
-        fold_driver_digest(driver_log_[index]);
-    }
-}
-
-void NativeExecutionConsumer::fold_driver_digest(const NativeDriverPoint& point) const noexcept {
-    Fnv f;
-    f.run_base = requests_.identity().run_number;
-    f.h = driver_digest_.h;
-    hash_driver_point(f, point);
-    driver_digest_.h = f.h;
-    ++driver_digest_.count;
-}
-
-void NativeExecutionConsumer::fold_account_digest(const NativeAccountObservation& row) const noexcept {
-    Fnv f;
-    f.run_base = requests_.identity().run_number;
-    f.h = account_digest_.h;
-    hash_account_row(f, row);
-    account_digest_.h = f.h;
-    ++account_digest_.count;
-}
-
 void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
+    // The driver log is an owning readback surface (native_events); since v19
+    // no hash folds it.
     driver_log_.push_back(point);
-    // The driver log is an owning readback surface. Its continuation digest is
-    // queried only by native-state consumers, so append the point now and
-    // fold the derived digest lazily in continuation_hash() rather than at
-    // every ordinary source-route waypoint.
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
@@ -3356,7 +3183,7 @@ void NativeExecutionConsumer::withdraw_margin_liquidation(BacktestEngine& engine
         return;
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
-    note_terminal_events(ok.events);
+    note_committed_events(ok.events);
     clear_cohort_target_cache();
     catch_up_timeline();
     if (status == native_order::CancelStatus::Cancelled) {
@@ -3449,7 +3276,7 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
         return false;
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
-    note_terminal_events(ok.events);
+    note_committed_events(ok.events);
     clear_cohort_target_cache();
     catch_up_timeline();
     if (ok.result.status != native_order::SubmitStatus::Accepted || !ok.result.handle) {
@@ -3897,12 +3724,8 @@ bool NativeExecutionConsumer::install_mutation(
         render(engine, "native mutation install failed");
         return false;
     }
-    note_terminal_events(std::get<native_order::Installed>(result).events);
+    note_committed_events(std::get<native_order::Installed>(result).events);
     clear_cohort_target_cache();
-    // The continuation digest is a readback value.  Keep its append cursor
-    // lazy: a source host that projects its own broker hash must not re-fold
-    // every immutable history event at each ordinary command boundary.
-    // continuation_hash() synchronizes it before exposing the value.
     catch_up_timeline();
     return true;
 }
@@ -3924,7 +3747,7 @@ bool NativeExecutionConsumer::install_execution(
         render(engine, "native execution install failed after settlement");
         return false;
     }
-    note_terminal_events(std::get<native_order::Installed>(result).events);
+    note_committed_events(std::get<native_order::Installed>(result).events);
     clear_cohort_target_cache();
     catch_up_timeline();
     return true;
@@ -5129,7 +4952,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                 const auto* admitted_spec = spec_ptr();
                 if (admitted_spec
                     && (admitted_spec->initial_margin_fraction || admitted_spec->margin)) {
-                    Fnv digest;
+                    StateFold digest;
                     digest.run_base = requests_.identity().run_number;
                     digest.h = precommit_digest_.h;
                     digest.u(P);
@@ -5200,7 +5023,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         for (const auto& lot : engine.pyramid_entries_) observation.signed_units += lot.qty;
         if (engine.position_side_ == PositionSide::SHORT) observation.signed_units = -observation.signed_units;
         account_log_.push_back(observation);
-        fold_account_digest(observation);
         engine.bar_index_ = ctx.interval_index;
         // L9: one applied fill of its risk day. Counting only — settlement is
         // not a decision point, so no limit is evaluated here.
@@ -6693,6 +6515,14 @@ void NativeExecutionConsumer::invoke_applied_callback(
             requests_.history().at(notification.history_index));
         if (applied.ordinal != notification.ordinal)
             throw std::logic_error("native notification identity mismatch");
+        // The kernel books rows at the end of the engine's rows, so a booking
+        // below the final mark means the host removed rows since: the
+        // closed-row digest forgets them, and the rows this execution booked
+        // are not final until its notification returns (closed_rows_digest).
+        if (applied.first_trade_index < closed_rows_final_) {
+            closed_rows_final_ = applied.first_trade_index;
+            rewind_closed_rows(applied.first_trade_index);
+        }
         // `notification` is the drain's own copy, never the frame it replaces.
         current_frame_.emplace(notification.point, next_timeline_ordinal_ - 1);
         callback_context_ = notification.point.decision;
@@ -6715,6 +6545,14 @@ void NativeExecutionConsumer::invoke_applied_callback(
                 host->on_native_margin_call(receipt);
             }
         }
+        // v19: the rows this execution booked are final now that its host has
+        // been notified of it (closed_rows_digest). Debug builds fold them at
+        // once, so a later amendment of one is caught at the run's end.
+        closed_rows_final_ = std::max<std::size_t>(
+            closed_rows_final_, applied.first_trade_index + applied.closed_trade_count);
+#ifndef NDEBUG
+        (void)closed_rows_digest(engine.trades_);
+#endif
         finish_callback(engine, notification.ordinal);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8029,7 +7867,7 @@ NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
         running->spec.auxiliary_feed);
     if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
-    spec_bar_digests_.reset();
+    forget_spec_digests();
     result.status = NativeSetupStatus::Applied;
     return result;
 }
@@ -8054,7 +7892,7 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
         running->spec.timeframe_undetected, declared);
     if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
-    spec_bar_digests_.reset();
+    forget_spec_digests();
     result.status = NativeSetupStatus::Applied;
     return result;
 }
@@ -8789,6 +8627,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         NativeRunSpec spec = running->spec;
         leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
         render(engine, e.what());
@@ -8833,6 +8672,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         NativeRunSpec spec = running->spec;
         leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
         render(engine, e.what());
@@ -8875,6 +8715,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         NativeRunSpec spec = running->spec;
         leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
+        verify_closed_rows(engine);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
         render(engine, e.what());
@@ -9413,6 +9254,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         NativeRunSpec spec = std::move(running->spec);
         state_.emplace<NativeCompleted>(NativeCompleted{std::move(spec), NativeCompletion::StreamEnded});
         engine.stream_phase_ = BacktestEngine::StreamPhase::IDLE;
+        verify_closed_rows(engine);
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Stream});
@@ -9451,7 +9293,7 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
         throw std::runtime_error("native submit install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
-    note_terminal_events(ok.events);
+    note_committed_events(ok.events);
     clear_cohort_target_cache();
     catch_up_timeline();
     if (ok.result.status == native_order::SubmitStatus::Accepted) {
@@ -9495,7 +9337,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         throw std::runtime_error("native replace install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::ReplaceResult>>(installed);
-    note_terminal_events(ok.events);
+    note_committed_events(ok.events);
     if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
         const auto* successor = requests_.find_live(*ok.result.successor);
         if (successor && std::holds_alternative<native_order::CohortClose>(successor->authority)) {
@@ -9583,7 +9425,7 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         throw std::runtime_error("native cancel install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
-    note_terminal_events(ok.events);
+    note_committed_events(ok.events);
     clear_cohort_target_cache();
     catch_up_timeline();
     if (predicted_status == native_order::CancelStatus::Cancelled) {
@@ -9696,8 +9538,11 @@ void NativeExecutionConsumer::cohort_add(
     }
     try {
         requests_.cohort_add(cohort, std::move(origin));
+        note_cohort_receipts();
         clear_cohort_target_cache();
     } catch (const std::exception& e) {
+        // The core may have appended the receipt before it refused.
+        note_cohort_receipts();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
         throw;
@@ -9712,8 +9557,11 @@ void NativeExecutionConsumer::cohort_remove(
     }
     try {
         requests_.cohort_remove(cohort, std::move(origin));
+        note_cohort_receipts();
         clear_cohort_target_cache();
     } catch (const std::exception& e) {
+        // The core may have appended the receipt before it refused.
+        note_cohort_receipts();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
         throw;
@@ -9833,7 +9681,11 @@ uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
     return high;
 }
 
-void NativeExecutionConsumer::note_terminal_events(
+// After every install: the terminal-receipt watermark over the events it
+// committed, then the v19 running digests the continuation folds -- each
+// committed event's compact record and each new group-effect receipt, folded
+// once, here, while the rows are the history's tail.
+void NativeExecutionConsumer::note_committed_events(
         const native_order::EventRange& events) noexcept {
     const auto& history = requests_.history();
     const std::size_t end = std::min(history.size(), events.first_index + events.count);
@@ -9854,6 +9706,111 @@ void NativeExecutionConsumer::note_terminal_events(
                 terminal_receipt_high_water_, command_ordinal(event));
         }
     }
+    StateFold records;
+    records.run_base = requests_.identity().run_number;
+    records.h = event_records_.h;
+    for (std::size_t index = event_records_.count; index < history.size(); ++index) {
+        hash_event_record(records, history[index]);
+    }
+    event_records_.h = records.h;
+    event_records_.count = history.size();
+    const std::size_t receipts = requests_.group_effect_receipt_count();
+    if (group_receipts_.count < receipts) {
+        StateFold f;
+        f.run_base = requests_.identity().run_number;
+        f.h = group_receipts_.h;
+        for (std::size_t index = group_receipts_.count; index < receipts; ++index) {
+            hash_group_effect_receipt(f, requests_.group_effect_receipt(index));
+        }
+        group_receipts_.h = f.h;
+        group_receipts_.count = receipts;
+    }
+}
+
+// The v19 broker-state hash's closed rows (pineforge-broker-state/v19): each
+// row's (entry_time, exit_time, entry_price, exit_price, qty, pnl), in the
+// canonical bytes of BrokerStateHashSink, chained over the rows in order.
+// A row is final once the applied notification of the execution that booked
+// it has returned (closed_rows_final_): its host may still amend it while that
+// callback runs -- the source host dates an aggregated chart's exit at the
+// chart bar there -- and afterwards only by naming the first row it changed
+// (closed_rows_amended; the source host's same-bar exit order does). Rows
+// removed from the end are found without that: the kernel only appends, so a
+// read over fewer rows than the digest took, or a booking below the final mark
+// (invoke_applied_callback), forgets the rows from there. A read folds the
+// final rows it has not folded into the running digest, once each, and the
+// rows past the mark, whose notification is still pending, into its answer
+// only.
+namespace {
+void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
+    f.i(row.entry_time); f.i(row.exit_time);
+    f.d(row.entry_price); f.d(row.exit_price);
+    f.d(row.qty); f.d(row.pnl);
+}
+}  // namespace
+
+uint64_t NativeExecutionConsumer::closed_rows_digest(
+        const std::vector<Trade>& rows) const {
+    const std::size_t final_rows = std::min(closed_rows_final_, rows.size());
+    if (closed_rows_digested_ > final_rows) rewind_closed_rows(final_rows);
+    BrokerStateHashSink f;
+    f.h = closed_rows_digest_;
+    for (std::size_t index = closed_rows_digested_; index < final_rows; ++index) {
+        fold_closed_row(f, rows[index]);
+        closed_row_prefix_.push_back(f.h);
+    }
+    closed_rows_digest_ = f.h;
+    closed_rows_digested_ = final_rows;
+    for (std::size_t index = final_rows; index < rows.size(); ++index) {
+        fold_closed_row(f, rows[index]);
+    }
+    return f.h;
+}
+
+void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const noexcept {
+    if (first >= closed_rows_digested_) return;
+    closed_rows_digested_ = first;
+    closed_row_prefix_.resize(first);
+    closed_rows_digest_ = first == 0 ? BrokerStateHashSink{}.h : closed_row_prefix_.back();
+}
+
+bool NativeExecutionConsumer::closed_rows_digest_holds(
+        const std::vector<Trade>& rows) const noexcept {
+    if (closed_rows_digested_ > rows.size()) return false;
+    BrokerStateHashSink f;
+    for (std::size_t index = 0; index < closed_rows_digested_; ++index) {
+        fold_closed_row(f, rows[index]);
+    }
+    return f.h == closed_rows_digest_;
+}
+
+void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) const noexcept {
+#ifndef NDEBUG
+    // Debug builds re-fold, at the run's end, every closed row the running
+    // digest has taken: a host that amended a folded field of a final row
+    // without naming it aborts here instead of answering a digest no fresh
+    // fold reproduces. Rows removed from the end are forgotten first, as a
+    // read would.
+    if (engine.trades_.size() < closed_rows_digested_)
+        rewind_closed_rows(engine.trades_.size());
+    if (!closed_rows_digest_holds(engine.trades_)) std::abort();
+#else
+    (void)engine;
+#endif
+}
+
+// After every roster command: the cohort receipt it appended, folded once.
+void NativeExecutionConsumer::note_cohort_receipts() noexcept {
+    const auto& receipts = requests_.cohort_receipts();
+    if (cohort_receipts_.count >= receipts.size()) return;
+    StateFold f;
+    f.run_base = requests_.identity().run_number;
+    f.h = cohort_receipts_.h;
+    for (std::size_t index = cohort_receipts_.count; index < receipts.size(); ++index) {
+        hash_cohort_receipt(f, receipts[index]);
+    }
+    cohort_receipts_.h = f.h;
+    cohort_receipts_.count = receipts.size();
 }
 
 void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {
@@ -10142,6 +10099,10 @@ uint64_t NativeStrategyHost::native_consumed_high_water() const {
 uint64_t NativeStrategyHost::native_continuation_hash() const {
     return NativeExecutionConsumer::bound(*this)
         .continuation_hash();
+}
+
+void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
+    as_native_consumer(execution_consumer()).closed_rows_amended(first_row);
 }
 
 // R5 lane F3: the latch record_script_report_point takes at every

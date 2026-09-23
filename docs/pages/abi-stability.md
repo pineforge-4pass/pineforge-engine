@@ -236,18 +236,25 @@ its creating strategy module. A fully self-contained old module can still use
 its own matching runtime; this check does not turn it into a v11 module.
 
 The current integrated representation uses generic broker fingerprint domain
-`pineforge-broker-state/v18` and stream fingerprint version 18; the source
+`pineforge-broker-state/v19` and stream fingerprint version 19; the source
 extension begins with `pineforge-source-adapter/v3`. Native consumer identity
-is `native-consumer/v8`, driver values own `native_driver_v5`, and run specs own
+is `native-consumer/v9`, driver values own `native_driver_v5`, and run specs own
 `native_run_spec_v3`. R5 lane E23 bumped the consumer identity v7 -> v8: the
-continuation digest's *recipe* changed, because the timezone identity now enters
+continuation digest's *recipe* changed, because the timezone identity entered
 it as `TimezoneIdentityDescriptor::resource_digest` — an FNV-1a over the zone
 files the resolver read — in place of `zoneinfo_root` and `resource_paths`, which
-named this machine rather than the run. Every established continuation value, and
-every `broker_state_hash` that wraps one, therefore moves. Nothing in the tree
-pinned an old value: no test compares either hash to a literal, and no frozen
-fixture or ABI provider carries one. The broker/stream fingerprint
-`pineforge-broker-state/v18` is unshipped and stays.
+named this machine rather than the run. The v19 value epoch (R5 lane V19-A)
+bumps it v8 -> v9 and moves every continuation, broker-state, stream and
+recorded per-bar value once, while no trade moves: the continuation folds the
+consumer's live state only, word by word (one multiply-xorshift per 64-bit
+word), and no longer the command history, the driver log or the account log;
+it folds the order core's two counters and running digests of its group-effect
+receipts, its cohort receipts and a compact record (kind and reason) of every
+committed event; and the broker fingerprint `pineforge-broker-state/v19` folds
+the closed rows as their count and a running digest, each row once it is final,
+instead of every row at every read. `native_run_spec_digest` keeps its
+byte-wise FNV-1a and its values. The values the tree pins were re-pinned once,
+each marked "expectation corrected".
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v6`.
 Terms receipts, attempted terms, deferred

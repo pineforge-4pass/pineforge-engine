@@ -100,7 +100,7 @@ class Coverage(unittest.TestCase):
 
     def test_generic_domain_is_pinned(self):
         result, output = self.check((
-            ("src/engine_state_hash.cpp", "pineforge-broker-state/v18",
+            ("src/engine_state_hash.cpp", "pineforge-broker-state/v19",
              "pineforge-broker-state/v0"),))
         self.assertEqual(result, 1, output)
 

@@ -130,7 +130,7 @@ symbol stub is a reverse-link control, not a build of the entire old runtime.
 No mismatch test program is executed.
 
 Broker hashes moved to `pineforge-broker-state/v4` here (since advanced to <!-- verified HEAD -->
-`pineforge-broker-state/v18`), and stream fingerprints began with version 4 then.
+`pineforge-broker-state/v19`), and stream fingerprints began with version 4 then.
 Each Pine component's own schema remained 1. Public C ABI version4, stream API
 version1, POD layouts, exports and `PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1` remain
 unchanged. This version correction changes linking and serialized hash bytes,

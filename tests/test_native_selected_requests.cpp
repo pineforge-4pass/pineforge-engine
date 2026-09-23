@@ -182,7 +182,12 @@ uint64_t selection_hash(int mode) {
 }
 void cohort_hashes() {
     const auto canonical=selection_hash(0);CHECK(canonical==selection_hash(1));
-    CHECK(canonical!=selection_hash(2));CHECK(selection_hash(3)!=selection_hash(4));
+    CHECK(canonical!=selection_hash(2));
+    // expectation corrected: selection_hash(3) != selection_hash(4) -> ==,
+    // because v19 folds live state only (native-consumer/v9): both attempts
+    // are rejected for the same reason, and a rejected attempt's member order
+    // leaves no state behind.
+    CHECK(selection_hash(3)==selection_hash(4));
 }
 // Explicit rebates remain a financial Fill contract, not a caller-supplied
 // NativeCurrentExecution fee. Exercise that shared pinned allocation through

@@ -412,7 +412,7 @@ closure markers and `scripts/check_design_inventory.py`).
 | L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:650-675) untouched — **retained after measurement, audit lane N12; native-only by ruling, audit lane P6: §3.6.1** | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
 | L10 | `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` (§2.v) | build-only | the examples run in ctest; the independence checker compiles the relocated examples |
 | L11 | — (renames / moves, §2.ii a-i) | rename / move only; hashed enumerator values pinned; sweep unchanged | — |
-| L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (the `"pineforge-broker-state/v17"` literal of that wave, since moved to `"pineforge-broker-state/v18"` engine_state_hash.cpp:32 and pinned to one occurrence by check_broker_state_hash_coverage.py:223) | trades identical, hashes re-baselined once | <!-- verified HEAD -->
+| L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (the `"pineforge-broker-state/v17"` literal of that wave, since moved to `"pineforge-broker-state/v19"` engine_state_hash.cpp:32 and pinned to one occurrence by check_broker_state_hash_coverage.py:223) | trades identical, hashes re-baselined once | <!-- verified HEAD -->
 | L13 | `pf_native_*` symbols (§2.iii) | additive symbols; `check_c_abi_runtime.py` exits 0 | a pure-C twin of the market example reproduces the C++ trade rows (O) and the event-history hash (F); C test: submit a market, replace a limit, cancel a child, read the Applied event (S) |
 
 ### 3.4 Input dependency notes against the R5-11 order
@@ -1017,7 +1017,18 @@ But `trades_` engine.hpp:542 is a protected member any host can write, so a
 lane that takes the consumer-side digest has to make that contract explicit.
 Folding `(count, digest)` in place of the rows saves the 256-entry table but
 still needs the storage and the contract, and it moves every broker hash: an
-epoch decision (`pineforge-broker-state/v18`).
+epoch decision (then `pineforge-broker-state/v18`, since advanced). <!-- verified HEAD -->
+
+**Revised by the v19 value epoch (R5 lane V19-A).** The epoch took that
+decision: `pineforge-broker-state/v19` folds the closed rows as their count and
+a running digest the heap-owned execution consumer keeps
+(`NativeExecutionConsumer::closed_rows_digest`), so no `BacktestEngine` member
+moved for it. The contract is explicit: a row is final once the applied
+notification of the execution that booked it has returned -- the Pine host's
+amendments (the aggregated exit date among them) all land inside
+`on_native_applied` -- and a read folds the rows past that mark into its answer
+without keeping them. Debug builds re-fold the digested rows at every run's
+end.
 
 **C. The terminal continuation capture (E24 STOP1).** A Pine run's scalar
 `broker_state_hash()` folds the continuation as it stood at the run's last

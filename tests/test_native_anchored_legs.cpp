@@ -419,38 +419,47 @@ void rounding_is_validated_at_acceptance() {
     completed(host);
 }
 
-// The rounding folds into the continuation identity only when it is set.
+// The rounding folds into the continuation identity only when it is set,
+// for as long as the leg carries its anchor: until its owner's fill arms it.
+// expectation corrected: the three roundings answered three continuations at
+// the run's end -> they differ while the leg waits unarmed and answer one at
+// the end, because v19 folds live state only (native-consumer/v9): the arm
+// installs one level (every rounding lands on the same tick here) and drops
+// the anchor, so the rounding lives on only in the command history.
 void rounding_folds_only_when_set() {
-    auto probe = [](no::NativeAnchorRounding rounding) {
+    struct Probe {
+        std::uint64_t unarmed = 0;
+        std::uint64_t armed = 0;
+    };
+    auto probe = [](std::optional<no::NativeAnchorRounding> rounding) {
         Host host;
+        Probe out;
         host.beginning = [&](Host& base) {
             const auto parent = put(base, tx(1.0, "entry"));
             auto leg = owner_close("leg");
             leg.trigger = no::Stop{0.0};
             leg.owner = no::WaitForApplied{parent};
-            leg.anchor = no::FromOwnerFill{-10.0, true, rounding};
+            leg.anchor = rounding ? no::FromOwnerFill{-10.0, true, *rounding}
+                                  : no::FromOwnerFill{-10.0, true};
             put(base, leg);
+            out.unarmed = base.native_continuation_hash();
         };
         run(host, bracket_spec("l7b-rounding-fold"), {100.0});
         completed(host);
-        return host.native_continuation_hash();
+        out.armed = host.native_continuation_hash();
+        return out;
     };
     const auto raw = probe(no::NativeAnchorRounding::Raw);
-    Host plain;
-    plain.beginning = [&](Host& base) {
-        const auto parent = put(base, tx(1.0, "entry"));
-        auto leg = owner_close("leg");
-        leg.trigger = no::Stop{0.0};
-        leg.owner = no::WaitForApplied{parent};
-        leg.anchor = no::FromOwnerFill{-10.0, true};
-        put(base, leg);
-    };
-    run(plain, bracket_spec("l7b-rounding-fold"), {100.0});
-    completed(plain);
-    CHECK(plain.native_continuation_hash() == raw);
-    CHECK(probe(no::NativeAnchorRounding::HalfUp) != raw);
-    CHECK(probe(no::NativeAnchorRounding::Directional) != raw);
-    CHECK(probe(no::NativeAnchorRounding::HalfUp) != probe(no::NativeAnchorRounding::Directional));
+    const auto plain = probe(std::nullopt);
+    const auto half_up = probe(no::NativeAnchorRounding::HalfUp);
+    const auto directional = probe(no::NativeAnchorRounding::Directional);
+    CHECK(plain.unarmed == raw.unarmed);
+    CHECK(half_up.unarmed != raw.unarmed);
+    CHECK(directional.unarmed != raw.unarmed);
+    CHECK(half_up.unarmed != directional.unarmed);
+    CHECK(plain.armed == raw.armed);
+    CHECK(half_up.armed == raw.armed);
+    CHECK(directional.armed == raw.armed);
 }
 
 // ── 2. The arm hook restates the level, once, before the ArmedEvent ─────

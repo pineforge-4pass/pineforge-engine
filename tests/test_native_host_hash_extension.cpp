@@ -22,8 +22,13 @@ namespace {
 // exactly the bytes it folded before the generic hook existed. Every operand
 // is an exact binary fraction and the projection takes the execution hash as
 // an argument, so the values carry no machine identity.
-constexpr std::uint64_t kMainFreshBrokerState = 11785313996075156269ull;
-constexpr std::uint64_t kMainRoundTripBrokerState = 10289062291417719237ull;
+// expectation corrected: kMainFreshBrokerState 11785313996075156269 ->
+// 11586397687161007292 and kMainRoundTripBrokerState 10289062291417719237 ->
+// 10013208167264848130, because v19 folds the broker-state domain
+// pineforge-broker-state/v19 and the closed rows as (count, running digest);
+// the host still folds exactly the default's "no extension" marker.
+constexpr std::uint64_t kMainFreshBrokerState = 11586397687161007292ull;
+constexpr std::uint64_t kMainRoundTripBrokerState = 10013208167264848130ull;
 
 constexpr std::uint64_t kProbeExecutionHash = 0x5eed1234abcd0005ull;
 
