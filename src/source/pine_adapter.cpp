@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 
 namespace pineforge::source {
@@ -480,6 +481,31 @@ bool throttled_rearm_already_queued(
         }
     }
     return false;
+}
+
+// The bound host's PineStrategyHost view, dynamic_cast's own answer taken once
+// per host instead of at every call site (several a bar). That answer is fixed
+// by three facts -- the host's address, the address of the object it is part
+// of and that object's dynamic type -- and the memo is keyed by all three, so
+// a host built at an address another type used before is never answered from
+// that type's entry. It is a per-thread memo, not an adapter member: the
+// adapter is a by-value member of PineStrategyHost, whose layout is the
+// generated script's ABI.
+PineStrategyHost* pine_view(NativeStrategyHost* host) noexcept {
+    if (host == nullptr) return nullptr;
+    struct Memo {
+        const NativeStrategyHost* host = nullptr;
+        const void* object = nullptr;
+        const std::type_info* type = nullptr;
+        PineStrategyHost* view = nullptr;
+    };
+    static thread_local Memo memo;
+    const void* object = dynamic_cast<const void*>(host);
+    const std::type_info* type = &typeid(*host);
+    if (memo.host != host || memo.object != object || memo.type != type) {
+        memo = Memo{host, object, type, dynamic_cast<PineStrategyHost*>(host)};
+    }
+    return memo.view;
 }
 
 } // namespace
@@ -2229,7 +2255,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         && last_margin_call_at_script_close_
         && last_margin_call_closed_units_ == 1.0
         && last_margin_call_remaining_units_ == std::abs(physical.signed_units)) {
-        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&host);
+        const auto* pine_host = pine_view(&host);
         const auto state = host.native_state();
         const bool magnifier = pine_host
             && pine_host->scheduler_.bar_magnifier_enabled();
@@ -2761,7 +2787,7 @@ double PineExecutionAdapter::percent_commission_live_equity(double mark) const n
     // ab9714be pine_fills.cpp:1411-1426: entry-bar affordability marks open positions
     // from closed equity (initial capital + realized net profit) minus the open
     // entries' percentage commission, plus the lot's open PnL.
-    if (auto* pine = dynamic_cast<PineStrategyHost*>(host_)) {
+    if (auto* pine = pine_view(host_)) {
         if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
             && config_.commission_value > 0.0
             && pine->position_side_ != PositionSide::FLAT) {
@@ -3239,7 +3265,7 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
 // scalar and series are the engine's own (staged_configuration copies them at
 // begin), validated positive and finite by their setters.
 double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const noexcept {
-    const auto* pine = dynamic_cast<const PineStrategyHost*>(host_);
+    const auto* pine = pine_view(host_);
     return pine ? pine->account_currency_fx_at(timestamp_ms) : staged_.account_fx;
 }
 
@@ -4050,7 +4076,7 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
 // (NativeExecutionConsumer::path_high_first, which E19's excursion seam
 // already reads). The source layer asks rather than keeping a copy of the rule.
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
-    auto* pine = dynamic_cast<PineStrategyHost*>(host_);
+    auto* pine = pine_view(host_);
     return pine != nullptr
         && as_native_consumer(pine->execution_consumer()).path_high_first(bar);
 }
@@ -4095,7 +4121,7 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
     if (!coof_recalc_active_ || !coof_script_bar_valid_) return kNaN;
     const auto state = require_host().native_state();
     if (state.spec && state.spec->intrabar.lower()) {
-        if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+        if (const auto* pine_host = pine_view(&require_host())) {
             const auto point = require_host().current_execution_point();
             const auto next = pine_host->scheduler_.next_input_waypoint(
                 *pine_host, coof_context_, point ? point->price : kNaN);
@@ -4678,7 +4704,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         native_stop = source_trigger_threshold(
             stop_price, staged_.syminfo.mintick, is_long, false);
     }
-    const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+    const auto* pine_host = pine_view(&require_host());
     const bool nonpositive_priced = priced && pine_host
         && pine_host->scheduler_uses_aux_security_feed()
         && !finite_positive(native_limit) && !finite_positive(native_stop);
@@ -4738,7 +4764,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (pure_stop_entry && explicit_fixed && current != 0.0
         && ((current > 0.0) != is_long) && source_point
         && !config_.process_orders_on_close && !config_.calc_on_order_fills) {
-        auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host());
+        auto* pine_host = pine_view(&require_host());
         const auto next = pine_host
             ? pine_host->scheduler_.next_source_bar(
                 source_point->decision.coordinate.interval_index)
@@ -5398,7 +5424,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             || !source_point) {
             return false;
         }
-        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+        const auto* pine_host = pine_view(&require_host());
         const auto next = pine_host
             ? pine_host->scheduler_.next_source_bar(
                 source_point->decision.coordinate.interval_index)
@@ -5448,7 +5474,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             && config_.default_qty_type
                 == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             && config_.default_qty_value <= 100.0) {
-            if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host())) {
+            if (auto* pine_host = pine_view(&require_host())) {
                 if (const auto next = pine_host->scheduler_.next_source_bar(
                         source_point->decision.coordinate.interval_index)) {
                     NativeDecisionContext next_context = source_point->decision;
@@ -5655,7 +5681,7 @@ void PineExecutionAdapter::flush_pending_closes() {
     double remaining = 0.0;
     for (const auto& site : sites) remaining += site.target;
     std::vector<std::pair<std::uint64_t, double>> fifo_lots;
-    if (const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+    if (const auto* pine = pine_view(&require_host())) {
         fifo_lots.reserve(pine->pyramid_entries_.size());
         for (const auto& lot : pine->pyramid_entries_)
             fifo_lots.emplace_back(lot.entry_incarnation, lot.qty);
@@ -5857,7 +5883,7 @@ void PineExecutionAdapter::observe_close_policy(
     // the binary64 position difference qty_before - position_qty_, not by the
     // settled close units; the two can differ by a few ULPs.
     double actual_fill = event.closed_units;
-    if (const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host());
+    if (const auto* pine = pine_view(&require_host());
         pine && std::isfinite(pine->precommit_held_units_)) {
         actual_fill = std::max(0.0, pine->precommit_held_units_ - remaining_position);
     }
@@ -6039,7 +6065,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const bool pooc_ordinary_close_all = config_.process_orders_on_close
             && !immediately && !config_.calc_on_order_fills && !coof_recalc_active_;
         if (pooc_ordinary_close_all && accepted) {
-            if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host()))
+            if (auto* pine_host = pine_view(&require_host()))
                 pine_host->freeze_script_position_view();
         }
         if ((immediately || pooc_ordinary_close_all) && accepted) {
@@ -6067,7 +6093,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 && pending.projection_position_side == static_cast<std::int32_t>(side)
                 && pending.is_long == (side == PositionSide::LONG)
                 && !pending.projection_over_pyramiding;
-            const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+            const auto* pine_host = pine_view(&require_host());
             const bool has_physical_id = pine_host
                 && pine_host->adapter_has_open_entry_id(pending.source_id);
             if (!pure_prior_stop || !has_physical_id) continue;
@@ -6711,7 +6737,7 @@ void PineExecutionAdapter::close_all() {
             && pending.projection_position_side == static_cast<std::int32_t>(side)
             && pending.is_long == (side == PositionSide::LONG)
             && !pending.projection_over_pyramiding;
-        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+        const auto* pine_host = pine_view(&require_host());
         const bool has_physical_id = pine_host
             && pine_host->adapter_has_open_entry_id(pending.source_id);
         if (!pure_prior_stop || !has_physical_id) continue;
@@ -8903,7 +8929,7 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
             return;
         }
         const auto point = require_host().current_execution_point();
-        auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host());
+        auto* pine_host = pine_view(&require_host());
         if (!point || !pine_host) return;
         const auto next = pine_host->scheduler_.next_source_bar(
             point->decision.coordinate.interval_index);
@@ -10809,7 +10835,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             // sizes from the hypothetical Flatten's realized balance.  The
             // old opening fee and this close's fee are thereby realized once,
             // before reserving the new percentage opening commission.
-            const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+            const auto* pine_host = pine_view(&require_host());
             if (!pine_host) return result;
             const auto projection = pine_host->adapter_project_flatten(
                 result.resolved_price, source.source_id, source.comment,
@@ -10908,7 +10934,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 }
             }
             const auto state = require_host().native_state();
-            const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+            const auto* pine_host = pine_view(&require_host());
             const bool magnifier = pine_host
                 && pine_host->scheduler_.bar_magnifier_enabled();
             const double close_surplus = source.projection_tv_carry_qty
@@ -11360,7 +11386,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // slice (complete-bar trim or traversed prefix).
         if (source.family == PineOrderFamily::Margin
             && view.inspected_closed_units > 0.0) {
-            if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+            if (auto* pine = pine_view(&require_host())) {
                 const Bar& sample_bar = pine->current_bar_;
                 const bool is_long_pos = pine->position_side_ == PositionSide::LONG;
                 const bool crosses = opening_slice_precedes_priced_exit_fill(
@@ -12045,7 +12071,7 @@ compat::pine::CapClock PineExecutionAdapter::cap_clock(
 compat::pine::Calculation PineExecutionAdapter::cap_calculation(
         const NativeDecisionContext& context) const {
     const auto state = require_host().native_state();
-    const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+    const auto* pine_host = pine_view(&require_host());
     const bool magnifier = pine_host
         ? pine_host->scheduler_.bar_magnifier_enabled()
         : context.sub_count > 1;
@@ -12527,7 +12553,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
     // 1e-7 guard to what the current evaluation and that history support, so
     // a real 1e-7 rounding deficit fires (Q 891538.56 at 1.15798 marked at
     // 1.15808: equity 1032472.9759999 against required money 1032472.976).
-    const auto* pine = dynamic_cast<const PineStrategyHost*>(&require_host());
+    const auto* pine = pine_view(&require_host());
     const bool supported_guard_scope = pine
         && pine->position_entry_count_ == 1 && pine->pyramid_entries_.size() == 1
         && pine->net_profit_sum_ == pine->net_profit_roundoff_value_
@@ -13334,7 +13360,7 @@ void PineExecutionAdapter::observe_intraday_cap(
                 origin);
     const auto position = require_host().physical_position();
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
-    if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+    if (const auto* pine_host = pine_view(&require_host())) {
         if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
     }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
@@ -13375,7 +13401,7 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
     cap.outcome(compat::pine::FillOutcome::NoEffect, origin);
     const auto position = require_host().physical_position();
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
-    if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+    if (const auto* pine_host = pine_view(&require_host())) {
         if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
     }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
@@ -14921,7 +14947,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // RULING A48: the closed row's excursions come from the host's own
         // per-lot sampler, so the resting-stop fill-based drawdown
         // normalization this call site used to request is gone with it.
-        if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host())) {
+        if (auto* pine_host = pine_view(&require_host())) {
             pine_host->adapter_label_bracket_trades(event, from_bracket);
         }
     }
@@ -15697,7 +15723,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         last_margin_call_closed_units_ = event.closed_units;
         last_margin_call_remaining_units_ = std::abs(physical.signed_units);
         const auto state = require_host().native_state();
-        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+        const auto* pine_host = pine_view(&require_host());
         const bool magnifier = pine_host
             && pine_host->scheduler_.bar_magnifier_enabled();
         const bool ordinary_margin_receipt = !config_.process_orders_on_close
@@ -16283,7 +16309,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         && !placement_snapshot->from_entry.empty()
         && require_host().physical_position().signed_units != 0.0
         && current_position_cycle_ > 0) {
-        auto* pine = dynamic_cast<PineStrategyHost*>(&require_host());
+        auto* pine = pine_view(&require_host());
         const auto cohort = cohorts_by_id_.find(placement_snapshot->from_entry);
         if (pine && cohort != cohorts_by_id_.end()) {
             // The lots carry the chart bar wherever the host re-stamps them
