@@ -5186,6 +5186,26 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
     return std::nullopt;
 }
 
+// A heap on precedes keeps the row that precedes every other on top.
+void NativeExecutionConsumer::MatchRows::sift_up() {
+    std::push_heap(rows_.begin(), rows_.end(),
+                   [](const MatchCandidate& a, const MatchCandidate& b) { return precedes(b, a); });
+}
+
+std::size_t NativeExecutionConsumer::MatchRows::take_first() {
+    const auto below = [](const MatchCandidate& a, const MatchCandidate& b) {
+        return precedes(b, a);
+    };
+    if (!heaped_) {
+        std::make_heap(rows_.begin(), rows_.end(), below);
+        heaped_ = true;
+    }
+    const std::size_t live_index = rows_.front().live_index;
+    std::pop_heap(rows_.begin(), rows_.end(), below);
+    rows_.pop_back();
+    return live_index;
+}
+
 void NativeExecutionConsumer::match_path(
         BacktestEngine& engine, const NativeDriverPoint& point,
         bool continuous, double from_price, double to_price) {
@@ -5221,24 +5241,8 @@ void NativeExecutionConsumer::match_path(
     observe_trails(engine, point, path_cursor, continuous,
                    native_matching::price_at(from_price, to_price, t_cursor));
 
-    enum class Kind : std::uint8_t {
-        Evaluate = 0,
-        ActivateStop = 1,
-        ActivateStopLimit = 2,
-        BeginTrail = 3,
-        ActivateTrail = 4,
-        Fill = 5,
-    };
-    struct Candidate {
-        native_order::RequestHandle handle;
-        uint64_t incarnation = 0;
-        double t = 0.0;
-        double price = 0.0;
-        Kind kind = Kind::Fill;
-        std::optional<double> trigger_level;
-        bool at_level = false;
-        bool shared_cursor_collision = false;
-    };
+    using Kind = MatchKind;
+    using Candidate = MatchCandidate;
     struct CandidateProvenance {
         native_order::RequestHandle handle;
         std::uint64_t point_ordinal = 0;
@@ -5418,14 +5422,63 @@ void NativeExecutionConsumer::match_path(
         return std::pair<uint64_t, std::uint8_t>{incarnation, static_cast<std::uint8_t>(kind)};
     };
 
+    // Rows survive an allowance refresh (R5 lane PERF-K3). Every live request
+    // refresh_point_allowances did not refresh in bulk is an Evaluate winner
+    // of its own at each point, and each winner used to be followed by a scan
+    // of the whole book: K such requests cost K scans of K rows per point.
+    // When the winner is an Evaluate row whose refresh_allowance succeeds at
+    // an unmoved cursor -- the same t, bit for bit, so the same cursor price
+    // and path cursor -- the next scan differs from the last in that row only:
+    //  - refresh_allowance writes the winner's allowance and the core's epoch
+    //    and nothing else. It moves no request, trigger state, roster,
+    //    position or pre-open birth and installs nothing, so the cohort
+    //    target cache is not cleared either.
+    //  - A row reads its own request (eligibility_facts, cause_floor,
+    //    needs_evaluation, level_for, working_is_buy; none reads another
+    //    request or the epoch), the unchanged cursor and engine, the cohort
+    //    target cache, which the last full scan already consulted for every
+    //    request, and the skip set, which is cleared only when the cursor
+    //    moves.
+    //  - Its provenance lookup reads its own request's rows, and rescanning
+    //    it would only append a copy of the row it already left. The erase at
+    //    the loop head would drop nothing: every row it tests passed at the
+    //    last head or was pushed since from the same state.
+    // So after such a refresh only the winner is rescanned, and the next
+    // winner comes from the rows already built. Their incarnations are
+    // distinct (the book holds each request once) and every row's t is
+    // finite, so (t, incarnation) orders them totally and a heap on the
+    // scan's own comparison yields exactly the row the full rescan would
+    // pick. Any other outcome -- a fill, a trigger, a mutation, a skip, a
+    // moved cursor -- scans the whole book again. Rows are kept from four
+    // live requests on; below that a scan is as cheap as keeping them.
+    constexpr std::size_t kKeepRowsFrom = 4;
+    auto& rows = match_rows_;
+    rows.clear();
+    bool rescan_winner_only = false;
+    // The request a row was scanned from. The book does not change between a
+    // scan and its winner's first use, so the row's own index names it; the
+    // core's handle lookup answers whenever the reuse is switched off.
+    auto scanned_request = [&](const Candidate& row) -> const native_order::LiveRequest* {
+        const auto& book = requests_.live();
+        if (match_row_reuse_ && row.live_index < book.size()
+            && book[row.live_index].handle() == row.handle) {
+            return &book[row.live_index];
+        }
+        return requests_.find_live(row.handle);
+    };
+
     while (!failed()) {
-        candidate_provenance.erase(
-            std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
-                [&](const CandidateProvenance& row) {
-                    return row.point_ordinal != P || row.t < t_cursor
-                        || !provenance_still_matches(row);
-                }),
-            candidate_provenance.end());
+        const bool winner_only = rescan_winner_only;
+        rescan_winner_only = false;
+        if (!winner_only) {
+            candidate_provenance.erase(
+                std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
+                    [&](const CandidateProvenance& row) {
+                        return row.point_ordinal != P || row.t < t_cursor
+                            || !provenance_still_matches(row);
+                    }),
+                candidate_provenance.end());
+        }
         if (skip_t != t_cursor) {
             skipped.clear();
             skip_t = t_cursor;
@@ -5443,8 +5496,15 @@ void NativeExecutionConsumer::match_path(
         std::vector<const native_order::LiveRequest*> overflow_snapshot;
         const auto& live_requests = requests_.live();
         const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
-        const std::size_t snapshot_size = live_requests.size();
-        if (snapshot_size <= inline_snapshot.size()) {
+        std::size_t snapshot_size = live_requests.size();
+        std::size_t winner_index = 0;
+        if (winner_only) {
+            // The refreshed winner's row is the first one: take it off and
+            // scan that one request again.
+            winner_index = rows.take_first();
+            inline_snapshot[0] = &live_requests[winner_index];
+            snapshot_size = 1;
+        } else if (snapshot_size <= inline_snapshot.size()) {
             for (std::size_t i = 0; i < snapshot_size; ++i)
                 inline_snapshot[i] = &live_requests[i];
         } else {
@@ -5452,6 +5512,9 @@ void NativeExecutionConsumer::match_path(
             for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
             snapshot = overflow_snapshot.data();
         }
+        const bool keep_rows = winner_only
+            || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
+        if (!winner_only) rows.clear();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
             const auto* live = snapshot[snapshot_index];
             if (!live) continue;
@@ -5633,15 +5696,18 @@ void NativeExecutionConsumer::match_path(
                         != native_matching::double_bits(*row.trigger_level);
                 }
             }
-            if (!winner
-                || row.t < winner->t
-                || (row.t == winner->t && row.incarnation < winner->incarnation)
-                || (row.t == winner->t && row.incarnation == winner->incarnation
-                    && static_cast<uint8_t>(row.kind) < static_cast<uint8_t>(winner->kind))) {
-                winner = row;
-            }
+            row.live_index = winner_only ? winner_index : snapshot_index;
+            if (keep_rows) rows.keep(row);
+            if (!winner || MatchRows::precedes(row, *winner)) winner = row;
+        }
+        if (winner_only) {
+            // Every other request's row is the one the last scan built.
+            winner.reset();
+            if (const auto* first = rows.first()) winner = *first;
         }
         if (!winner) break;
+        const bool cursor_unmoved =
+            native_matching::double_bits(winner->t) == native_matching::double_bits(t_cursor);
         if (continuous && winner->t > t_cursor) {
             apply_excursion(engine, winner->price);
             path_cursor = make_cursor(point, winner->t);
@@ -5651,7 +5717,7 @@ void NativeExecutionConsumer::match_path(
         cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
-        const auto* live = requests_.find_live(winner->handle);
+        const auto* live = scanned_request(*winner);
         if (!live) continue;
         eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)
             || born_on_remaining_path(*live);
@@ -5664,20 +5730,25 @@ void NativeExecutionConsumer::match_path(
             continue;
         }
         if (winner->kind == Kind::Evaluate) {
+            // A refresh at this cursor leaves every other row as it is.
+            const bool reuse_after_refresh = keep_rows && cursor_unmoved;
             try {
                 if (winner_target) {
                     if (requests_.refresh_allowance(winner->handle, eval, *winner_target)) {
+                        rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
                 } else if (std::holds_alternative<native_order::BookClose>(live->authority)) {
                     native_order::TargetObservation obs;
                     obs.current_position = read_position(engine);
                     if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                        rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
                 } else {
                     const auto obs = read_target(engine, live);
                     if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                        rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
                 }
@@ -5786,7 +5857,7 @@ void NativeExecutionConsumer::match_path(
             continue;
         }
 
-        live = requests_.find_live(winner->handle);
+        live = scanned_request(*winner);
         if (!live) continue;
         const bool buy = request_is_buy(engine, *live);
         const bool limit_governed =

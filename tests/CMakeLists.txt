@@ -905,6 +905,13 @@ list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
 # R5 PERF-K3: the values five randomized books produce, pinned on fc7aad62
 # before the matcher's rows are reused. Source-free, so it also runs in the
 # kernel-only profile.
+# R5 PERF-K3: the matcher reuses its candidate rows after an allowance
+# refresh. The cost stays linear in the live requests (scaling), the reuse is
+# the full rescan bit for bit over randomized books (differential), and the
+# values of fixed books are the ones fc7aad62 produced (witness). All three
+# are source-free, so they also run in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_match_rescan_scaling)
+list(APPEND TEST_SOURCES test_native_match_row_reuse)
 list(APPEND TEST_SOURCES test_native_match_hash_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and

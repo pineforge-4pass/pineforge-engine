@@ -216,6 +216,15 @@ public:
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index) const;
 
+    // match_path reuses the candidate rows it scanned instead of rescanning
+    // the whole working book after an allowance refresh (R5 lane PERF-K3).
+    // The reuse is exact, so it is not a run-spec choice: it is on unless
+    // this turns it off, which restores the full rescan after every winner
+    // and the core's handle lookup for the winner. The switch exists so
+    // tests/test_native_match_row_reuse.cpp can hold the two computations
+    // equal bit for bit; no host reaches it.
+    void set_match_row_reuse(bool enabled) noexcept { match_row_reuse_ = enabled; }
+
 private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;
@@ -412,6 +421,65 @@ private:
     struct CohortTargetCacheEntry {
         native_order::RequestHandle handle{};
         native_order::TargetObservation target{};
+    };
+
+    // One candidate of match_path's winner selection at its current cursor.
+    // `live_index` is the request's position in the working book when the row
+    // was scanned: nothing mutates the book between a scan and the reuse of
+    // its rows, so it names the request without a handle search.
+    enum class MatchKind : std::uint8_t {
+        Evaluate = 0,
+        ActivateStop = 1,
+        ActivateStopLimit = 2,
+        BeginTrail = 3,
+        ActivateTrail = 4,
+        Fill = 5,
+    };
+    struct MatchCandidate {
+        native_order::RequestHandle handle;
+        uint64_t incarnation = 0;
+        double t = 0.0;
+        double price = 0.0;
+        MatchKind kind = MatchKind::Fill;
+        std::optional<double> trigger_level;
+        bool at_level = false;
+        bool shared_cursor_collision = false;
+        std::size_t live_index = 0;
+    };
+    // The candidate rows match_path keeps at its cursor while allowance
+    // refreshes follow one another (R5 lane PERF-K3). The buffer keeps its
+    // capacity from call to call; once the rows are reused they form a heap
+    // whose top is the row the scan's own comparison, `precedes`, picks.
+    class MatchRows {
+    public:
+        // The order match_path picks its winner in: the earliest cursor, then
+        // the oldest request, then the kind.
+        static bool precedes(const MatchCandidate& row, const MatchCandidate& other) noexcept {
+            return row.t < other.t
+                || (row.t == other.t && row.incarnation < other.incarnation)
+                || (row.t == other.t && row.incarnation == other.incarnation
+                    && static_cast<std::uint8_t>(row.kind)
+                           < static_cast<std::uint8_t>(other.kind));
+        }
+        void clear() noexcept {
+            rows_.clear();
+            heaped_ = false;
+        }
+        void keep(const MatchCandidate& row) {
+            rows_.push_back(row);
+            if (heaped_) sift_up();
+        }
+        // Takes the first row off, arranging the heap on first use, and
+        // answers the working-book index that row was scanned at.
+        std::size_t take_first();
+        const MatchCandidate* first() const noexcept {
+            return rows_.empty() ? nullptr : &rows_.front();
+        }
+
+    private:
+        void sift_up();
+        std::vector<MatchCandidate> rows_;
+        bool heaped_ = false;
     };
 
     // R4-D L10z review fix 4: the interval lookup cache is per-consumer state,
@@ -962,6 +1030,16 @@ private:
     uint32_t recalc_epoch_count_ = 0;
     uint64_t recalculations_ = 0;
     uint64_t recalculations_skipped_ = 0;
+    // match_path's candidate rows at its current cursor. Every call starts
+    // from an empty buffer, so between calls this is capacity only: the scan
+    // stays allocation-free once it has seen its widest book. Scratch, never
+    // run state, and folded into nothing. Declared last, with the switch
+    // below, so no member the consumer reads at every point changes offset.
+    MatchRows match_rows_;
+    // Whether match_path reuses those rows after a refresh
+    // (set_match_row_reuse). A choice between two computations of the same
+    // values, so it is not run state either.
+    bool match_row_reuse_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
