@@ -1034,6 +1034,11 @@ list(APPEND TEST_SOURCES test_ta_pivot_point_levels)
 # BindOpening per member). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_cohort_sliced_close)
+# R5 lane PERF-P7: the lookups the lane turns from history walks into
+# indexes, as the values four Pine scenarios reach through them -- every
+# recorded broker-state row, every read, every trade -- pinned on f71cd820
+# before the indexes existed. Source-bound.
+list(APPEND TEST_SOURCES test_adapter_lookup_index_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
