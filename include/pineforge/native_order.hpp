@@ -22,13 +22,13 @@
 #include <vector>
 
 namespace pineforge::native_order {
-inline namespace native_order_v6 {
+inline namespace native_order_v7 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v6.
+// Identity types remain native_order_v1. Request/core/event values are v7.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
 // source instead of a dummy units field. ExecutionPlan is a transient widening
 // used at the core/consumer boundary.
@@ -1961,7 +1961,7 @@ static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);
 static_assert(std::variant_size_v<TriggerAnchor> == 2);
 
-}  // inline namespace native_order_v6
+}  // inline namespace native_order_v7
 }  // namespace pineforge::native_order
 
 namespace std {

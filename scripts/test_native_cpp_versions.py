@@ -28,7 +28,7 @@ class NativeVersions(unittest.TestCase):
             check_texts(changed)
 
     def test_activation_grid_is_pinned_and_handed_to_the_core(self):
-        # R5 L8b: the activation grid is a native_order_v6 value struct with
+        # R5 L8b: the activation grid is a native_order_v7 value struct with
         # inactive defaults, prepare_trigger takes it defaulted last, and the
         # consumer hands it to both trigger sites from the matcher's own gate.
         for before, after in (
@@ -186,7 +186,7 @@ class NativeVersions(unittest.TestCase):
                     'class RemovedNativePathOrderScope {')
 
     def test_anchored_leg_rounding_is_pinned_and_folded_when_set(self):
-        # R5 L7b: the per-anchor rounding is a native_order_v6 member appended
+        # R5 L7b: the per-anchor rounding is a native_order_v7 member appended
         # last with a Raw default, its enumerators are pinned, the arm reads
         # the tick through ArmContext, and the fold is conditional.
         for before, after in (
@@ -287,7 +287,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_placement_time_sizing_members_are_pinned_and_hashed(self):
         # R5 L3b: the sizing-price rule, the scope basis and the three frozen
-        # placement-time measurements are native_order_v6 members, each folded
+        # placement-time measurements are native_order_v7 members, each folded
         # into the continuation digest only where it is actually set.
         for before, after in (
             ('enum class SizePrice : std::uint8_t '
@@ -393,9 +393,9 @@ class NativeVersions(unittest.TestCase):
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v6", "native_order_v1"),
-            (FILES[1], "native_order_v6", "native_order_v1"),
-            (FILES[11], "native_order_v1", "native_order_v6"),
+            (FILES[0], "native_order_v7", "native_order_v1"),
+            (FILES[1], "native_order_v7", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v7"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
             (FILES[4], "native_run_spec_v3", "native_run_spec_v1"),
@@ -411,7 +411,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v6"),
+            (FILES[0], "native_order_v7"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
@@ -424,7 +424,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v6"),
+            (FILES[0], "native_order_v7"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
@@ -437,7 +437,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v6", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v7", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
             (FILES[8], "engine_script_run_v19", "class NativeStrategyHost"),
@@ -550,8 +550,8 @@ class NativeVersions(unittest.TestCase):
         needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v6",
-            "}  // inline namespace native_order_v6\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
+            "}  // inline namespace native_order_v7",
+            "}  // inline namespace native_order_v7\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -707,10 +707,10 @@ class NativeVersions(unittest.TestCase):
     def test_order_namespace_is_derived_not_literal(self):
         from check_native_cpp_abi import current_order_namespace
         self.assertEqual(current_order_namespace(
-            'inline namespace native_order_v6 { struct X {}; }'), 'native_order_v6')
+            'inline namespace native_order_v7 { struct X {}; }'), 'native_order_v7')
         with self.assertRaises(RuntimeError):
             current_order_namespace(
-                'inline namespace native_order_v6 { }\n'
+                'inline namespace native_order_v7 { }\n'
                 'inline namespace native_order_v3 { }')
 
     def test_missing_cancelled_mutation_is_exactly_one(self):

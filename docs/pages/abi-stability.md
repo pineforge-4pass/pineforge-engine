@@ -135,9 +135,11 @@ generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
 `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
 `host-fc7aad6`, the last epoch-18 `main` commit, and
 `relocation-manifest-v18-v19.json` beside it is the live transition: no host
-virtual is added or removed, and later v19 lanes change layouts inside v19. L3b removes the source compatibility
+virtual is added or removed, the request values move from `native_order_v6` <!-- verified HEAD -->
+to `native_order_v7` inside the epoch (R5 lane V19-B), and later v19 lanes change
+layouts inside v19. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v3` hashes adapter and scheduler state
-instead. Native request/core/event values are `native_order_v6`, the private
+instead. Native request/core/event values are `native_order_v7`, the private
 consumer identity is
 `native-consumer/v8`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
@@ -145,8 +147,8 @@ the continuation hash only when it is non-empty; R5 L4 adds
 `NativeRunSpec::margin`, folded only when it is set; R5 L5 adds `calculation`,
 `max_recalculations_per_point` and `open_bar_view`, folded only once the
 trigger or the open-bar view is non-default). R5 L4 also adds
-`RequestDefinition::origin` and the `MarginCallEvent` alternative to
-`native_order_v6`; `RequestOrigin::Host` — every host request — folds nothing,
+`RequestDefinition::origin` and the `MarginCallEvent` alternative to the
+request values; `RequestOrigin::Host` — every host request — folds nothing,
 so no established continuation hash moves.
 
 | Matrix role | Internal identity |
@@ -262,7 +264,7 @@ v19 no longer makes, and no value moves with it. `native_run_spec_digest`
 keeps its byte-wise FNV-1a and its values. The values the tree pins were
 re-pinned once, each marked "expectation corrected".
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
-`native_order_v1`; request, core, and event values own `native_order_v6`.
+`native_order_v1`; request, core, and event values own `native_order_v7`.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and

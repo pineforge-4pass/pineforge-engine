@@ -115,7 +115,7 @@ NOISE_NM = [
     "T pineforge::ta::ema_na_warmup_flag()",
     "s pineforge::ta::ema_na_warmup_flag()::flag",
     "T pineforge::engine_script_run_v19::NativeStrategyHost::on_native_margin_call("
-    "pineforge::native_order::native_order_v6::MarginCallEvent const&)",
+    "pineforge::native_order::native_order_v7::MarginCallEvent const&)",
     "libpineforge_kernel.a(pending_order_mirror.cpp.o):",
 ]
 # The frozen C ABI's symbol-info ingress, which lane F6's `syminfo` word now

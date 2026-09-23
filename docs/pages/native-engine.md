@@ -471,7 +471,7 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 (`native_c_api.h:2583-2633`), under the same legality rule; see *Driving the
 kernel from C* below.
 
-`native_order::Request` values belong to `native_order_v6`
+`native_order::Request` values belong to `native_order_v7`
 (`native_order.hpp:25`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
@@ -3134,7 +3134,7 @@ engine quantity; a fraction that does not buy one whole step is
 submit.
 
 Neither kind is emitted by the Pine adapter, which keeps resolving its own
-`HostSized` terms; `native_order` values therefore belong to `native_order_v6`.
+`HostSized` terms; `native_order` values therefore belong to `native_order_v7`.
 
 ### Source-layer boundary
 

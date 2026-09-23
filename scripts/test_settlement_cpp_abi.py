@@ -62,6 +62,19 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
+    def test_v6_order_epoch_is_refused(self):
+        # V19-B: the relocation manifest pins native_order_v6 -> v7, so a
+        # tree whose request values are still v6 fails the surface audit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            include = root / "include"
+            shutil.copytree(ROOT / "include", include)
+            path = include / "pineforge/native_order.hpp"
+            path.write_text(path.read_text().replace(
+                "inline namespace native_order_v7 {", "inline namespace native_order_v6 {", 1))
+            with self.assertRaises(RuntimeError):
+                checker.verify(include)
+
     def test_missing_tick_hook_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

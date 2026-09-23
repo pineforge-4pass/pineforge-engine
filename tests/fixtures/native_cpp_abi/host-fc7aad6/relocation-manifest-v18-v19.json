@@ -8,6 +8,10 @@
     "from": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18",
     "to": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19"
   },
+  "orderEpoch": {
+    "from": "native_order_v6",
+    "to": "native_order_v7"
+  },
   "removedStorage": [],
   "addedStorage": [],
   "addedValueMembers": [],

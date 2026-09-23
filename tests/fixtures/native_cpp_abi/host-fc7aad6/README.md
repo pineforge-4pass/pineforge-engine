@@ -16,5 +16,6 @@ The provider is intentionally the authentic predecessor of the live v19
 archive. The ABI matrices require v18↔v19 rejection in both directions while
 retaining the historical v13/v14/v15/v16 controls. Its sibling
 `relocation-manifest-v18-v19.json` pins what the epoch moved at the public
-surface: the host capability macro, no host virtual added or removed, and the
-storage later v19 lanes relocate inside the epoch.
+surface: the host capability macro, no host virtual added or removed, the
+request-value epoch `native_order_v6` -> `native_order_v7` that V19-B moves
+inside the epoch, and the storage later v19 lanes relocate inside it.

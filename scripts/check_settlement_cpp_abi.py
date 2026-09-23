@@ -56,6 +56,16 @@ def verify(include: Path) -> dict:
         raise RuntimeError("current native host omits its v19 capability macro")
     if capability["from"] in native:
         raise RuntimeError("current native host still defines the v18 capability macro")
+    # V19-B moves the request/core/event values inside the epoch: the frozen
+    # v18 closure's native_order_v6 against the live native_order_v7.
+    order = (include / "pineforge/native_order.hpp").read_text()
+    order_epoch = manifest.get("orderEpoch") or {}
+    if order_epoch != {"from": "native_order_v6", "to": "native_order_v7"}:
+        raise RuntimeError("v18-v19 relocation order epoch drift")
+    if "inline namespace " + order_epoch["to"] + " {" not in order:
+        raise RuntimeError("current native_order.hpp does not declare native_order_v7")
+    if "inline namespace " + order_epoch["from"] + " {" in order:
+        raise RuntimeError("current native_order.hpp still declares native_order_v6")
     historical = json.loads(V16_V18_MANIFEST.read_text())
     if historical.get("schema") != "pineforge-r4-d-relocation/v1" or historical.get(
             "transition") != {"from": "engine_script_run_v16", "to": "engine_script_run_v18"}:
@@ -98,6 +108,7 @@ def verify(include: Path) -> dict:
     if pairs != [["v18-frozen", "v19-current"], ["v19-current", "v18-frozen"]]:
         raise RuntimeError("v18/v19 rejection pairs drift")
     return {"transition": manifest["transition"], "rejectionPairs": pairs,
+            "orderEpoch": order_epoch,
             "addedStorage": manifest.get("addedStorage", []),
             "retiredHeader": RETIRED_HEADER}
 

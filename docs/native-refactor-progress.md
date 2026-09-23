@@ -137,7 +137,7 @@ measurement and gate.
 R4-C's L1 baseline used `native_order_v5`, engine/host <!-- verified HEAD -->
 `engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and <!-- verified HEAD -->
 the source extension domain `pineforge-source-adapter/v2`; its native run-spec <!-- verified HEAD -->
-was v2. Each of those has moved since: the tree now declares `native_order_v6`,
+was v2. Each of those has moved since: the tree now declares `native_order_v7`,
 `engine_script_run_v19`, `native-consumer/v9`, `pineforge-broker-state/v19`,
 `pineforge-source-adapter/v3` and `native_run_spec_v3`. Unchanged since R4-C:
 identity values `native_order_v1`, the calendar `native_calendar_v2`, the
