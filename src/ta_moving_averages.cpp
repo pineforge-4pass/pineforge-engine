@@ -445,8 +445,8 @@ double VWMA::compute(double src, double vol) {
 // ALMA (Arnaud Legoux Moving Average)
 // ============================================================================
 
-ALMA::ALMA(int length, double offset, double sigma)
-    : length_(length), offset_(offset), sigma_(sigma) {}
+ALMA::ALMA(int length, double offset, double sigma, bool floor)
+    : length_(length), offset_(offset), sigma_(sigma), floor_(floor) {}
 
 double ALMA::compute(double src) {
     buffer_.push_back(src);
@@ -454,6 +454,7 @@ double ALMA::compute(double src) {
     int sz = (int)buffer_.size();
     if (sz < length_) return na<double>();
     double m = offset_ * (length_ - 1);
+    if (floor_) m = std::floor(m);
     double s = length_ / sigma_;
     double norm = 0, sum = 0;
     for (int i = 0; i < length_; i++) {
@@ -594,6 +595,7 @@ double ALMA::recompute(double src) {
     if (sz < length_) return na<double>();
 
     double m = offset_ * (length_ - 1);
+    if (floor_) m = std::floor(m);
     double s = length_ / sigma_;
     double norm = 0, sum = 0;
     for (int i = 0; i < length_; i++) {

@@ -1008,6 +1008,9 @@ list(APPEND TEST_SOURCES test_native_point_checks)
 # recomputation from the last anchored bar, and against ta::VWAP's session-day
 # reset. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_anchored_vwap)
+# R5 lane TA1: ta::ALMA's floor input against TradingView's spelled-out ALMA.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_ta_alma_floor)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

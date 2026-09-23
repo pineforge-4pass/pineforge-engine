@@ -781,16 +781,24 @@ public:
 
 // --- ALMA (Arnaud Legoux Moving Average) ---
 
+// The Gaussian's centre is m = offset * (length - 1); with `floor` it is
+// floor(offset * (length - 1)) ("whether the offset calculation is floored
+// before ALMA is calculated", default false). Omitting floor is the unfloored
+// ALMA, value for value.
 class ALMA {
     int length_;
     double offset_, sigma_;
+    bool floor_;
     std::deque<double> buffer_;
 
 public:
-    ALMA(int length, double offset = 0.85, double sigma = 6.0);
+    ALMA(int length, double offset = 0.85, double sigma = 6.0, bool floor = false);
     double compute(double src);
     double recompute(double src);
 };
+
+// Feature macro: ALMA takes the floor input (a fourth constructor argument).
+#define PF_ALMA_HAS_FLOOR 1
 
 // --- SWMA (Symmetrically Weighted Moving Average, period=4) ---
 

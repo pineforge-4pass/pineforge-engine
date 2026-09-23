@@ -359,8 +359,12 @@ the result to `k` and compute `d = ta.sma(k, length)`.
 ### Single-value TA classes
 
 Moving averages and smoothing (`src/ta_moving_averages.cpp`): `SMA`,
-`EMA`, `RMA`, `WMA`, `HMA`, `VWMA`, `ALMA(length, offset=0.85, sigma=6.0)`,
-`SWMA` (period-4 symmetric weights).
+`EMA`, `RMA`, `WMA`, `HMA`, `VWMA`,
+`ALMA(length, offset=0.85, sigma=6.0, floor=false)`, `SWMA` (period-4
+symmetric weights). `ALMA`'s `floor` centres the Gaussian at
+`floor(offset * (length - 1))` instead of `offset * (length - 1)`, Pine's
+`ta.alma(..., floor)`; omitting it is the unfloored ALMA, value for value
+(`PF_ALMA_HAS_FLOOR`, `tests/test_ta_alma_floor.cpp`).
 
 Oscillators / momentum (`src/ta_oscillators.cpp`): `RSI`, `Stoch`,
 `CCI`, `MFI`, `Mom`, `ROC`, `CMO`, `TSI(short_length, long_length)`,

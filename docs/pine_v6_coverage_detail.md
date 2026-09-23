@@ -772,7 +772,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `ta.alma()` | fn | ✅ Runtime | `ta::ALMA` class | |
+| `ta.alma()` | fn | ✅ Runtime | `ta::ALMA` class | `floor` is the fourth constructor argument, `ALMA(length, offset, sigma, floor)` (R5 lane TA1) |
 | `ta.atr()` | fn | ✅ Runtime | `ta::ATR` class | |
 | `ta.barssince()` | fn | ✅ Runtime | `ta::BarsSince` class | |
 | `ta.bb()` | fn | ✅ Runtime | `ta::BB` class | |
