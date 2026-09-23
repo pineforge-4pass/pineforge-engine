@@ -936,6 +936,13 @@ list(APPEND TEST_SOURCES test_native_calendar_memo)
 # an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
 # run (84 per bar before the memo). Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
+# R5 lane PERF-P5611 (P5): the monthly-Sharpe walk's UTC month key by integer
+# civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
+# R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
+# same arithmetic, swept against gmtime_r through the host. Source-bound.
+list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

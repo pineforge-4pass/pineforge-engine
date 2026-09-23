@@ -26,14 +26,8 @@ inline bool match(const TradeC& t, TradeFilter f) {
 
 // (year*12 + month) bucket key for ts in chart tz. Caller hoists ONE
 // ScopedTimezone guard around the whole walk — per-point guards are a
-// process-global setenv/tzset round trip each (see timezone.hpp).
-inline int month_key_utc(int64_t ts_ms) {
-    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
-    time_t secs = (time_t)(ts_ms / 1000);
-    struct tm tb {};
-    gmtime_r(&secs, &tb);
-    return (tb.tm_year + 1900) * 12 + tb.tm_mon;
-}
+// process-global setenv/tzset round trip each (see timezone.hpp). The UTC
+// key is detail::month_key_utc below.
 inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
     // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
     time_t secs = (time_t)(ts_ms / 1000);
@@ -68,6 +62,37 @@ inline void sharpe_sortino(const std::vector<double>& r, double rf_period,
 }
 
 }  // namespace
+
+namespace detail {
+
+// month_key_local's UTC twin: gmtime_r's (tm_year + 1900) * 12 + tm_mon for
+// the point's whole seconds, by Howard Hinnant's civil_from_days on the
+// floor day instead of one libc call per point. Exact for every second
+// within +/-2^40 of the epoch (about 34,800 years each way); gmtime_r keeps
+// the rest. External linkage only so tests/test_utc_month_key_arithmetic.cpp
+// can sweep it against libc; not part of the installed API.
+int month_key_utc(int64_t ts_ms) {
+    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
+    time_t secs = (time_t)(ts_ms / 1000);
+    constexpr int64_t kCivilSpan = int64_t{1} << 40;
+    if (secs > -kCivilSpan && secs < kCivilSpan) {
+        const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+        const int64_t z = days + 719468;
+        const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+        const int64_t doe = z - era * 146097;
+        const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        const int64_t mp = (5 * doy + 2) / 153;
+        const int64_t month = mp < 10 ? mp + 3 : mp - 9;
+        const int64_t year = yoe + era * 400 + (month <= 2 ? 1 : 0);
+        return static_cast<int>(year * 12 + month - 1);
+    }
+    struct tm tb {};
+    gmtime_r(&secs, &tb);
+    return (tb.tm_year + 1900) * 12 + tb.tm_mon;
+}
+
+}  // namespace detail
 
 pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
                                      TradeFilter filter, double initial_capital) {
@@ -225,7 +250,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
             month_end.push_back(last_eq);
         };
         if (utc) {
-            walk(month_key_utc);
+            walk(detail::month_key_utc);
         } else {
             tz_util::ScopedTimezone guard(chart_tz);   // ONE guard for the whole walk
             walk(month_key_local);

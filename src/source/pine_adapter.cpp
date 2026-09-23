@@ -12085,6 +12085,23 @@ std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) cons
     };
     const std::string& timezone = staged_.chart_timezone;
     if (timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC") {
+        // gmtime_r's day and month without the libc call every bar paid:
+        // Howard Hinnant's civil_from_days on the floor day, exact for every
+        // second within +/-2^40 of the epoch. gmtime_r keeps the rest.
+        constexpr std::int64_t kCivilSpan = std::int64_t{1} << 40;
+        const std::int64_t secs = static_cast<std::int64_t>(seconds);
+        if (secs > -kCivilSpan && secs < kCivilSpan) {
+            const std::int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+            const std::int64_t z = days + 719468;
+            const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+            const std::int64_t doe = z - era * 146097;
+            const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const std::int64_t mp = (5 * doy + 2) / 153;
+            const std::int64_t day = doy - (153 * mp + 2) / 5 + 1;
+            const std::int64_t month = mp < 10 ? mp + 3 : mp - 9;
+            return day * 100 + month;
+        }
         if (!utc()) return std::numeric_limits<std::int64_t>::min();
     } else {
         try {
