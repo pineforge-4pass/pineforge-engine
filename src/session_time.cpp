@@ -2,8 +2,11 @@
 #include <pineforge/na.hpp>
 #include <pineforge/timeframe.hpp>
 #include "timezone.hpp"
+#include <atomic>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <string>
 #include <unordered_set>
@@ -25,28 +28,305 @@ int hhmm_to_minutes(const std::string& hhmm) {
     return h * 60 + m;
 }
 
-// Decompose a Unix-ms timestamp into local calendar fields for `tz` WITHOUT the
-// per-call setenv/tzset churn that made hour()/minute()/... pathologically slow
-// on macOS (each changed-TZ tzset() does a notifyd Mach-IPC round-trip ~173us;
-// ~888k/run over the full feed -> minutes of apparent "hang", KI-35). UTC needs
-// no tz -> tzset-free gmtime_r; other zones use the CACHED tz_util::ScopedTimezone
-// (skips tzset when the active zone is unchanged, and never restores), so a run
-// that stays on one zone pays a single tzset. DST stays exact: localtime_r
-// consults the tz database exactly as the old inline lambda did.
-static void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
-    // Detect UTC on the NORMALIZED string, but hand the RAW tz to
-    // ScopedTimezone — it normalizes internally (timezone.cpp), so passing an
-    // already-normalized string double-normalizes and flips the sign of fixed
-    // offsets ("UTC+2" -> "UTC-2" -> "UTC+2" => wrong hour). IANA/UTC zones are
-    // idempotent under normalize so this only bit offset-string tz inputs.
-    const std::string t = normalize_timezone_for_posix(tz);
-    if (t.empty() || t == "UTC" || t == "Etc/UTC") {
-        gmtime_r(&secs, &out);
-    } else {
-        tz_util::ScopedTimezone guard(tz);
-        localtime_r(&secs, &out);
+namespace {
+
+// Calendar fields by integer arithmetic (Howard Hinnant's civil_from_days on
+// the floor day) for every second within +/-2^40 of the epoch, about 34,800
+// years each way; libc answers the rest.
+constexpr int64_t kCivilSpan = int64_t{1} << 40;
+
+bool in_civil_span(int64_t secs) {
+    return secs > -kCivilSpan && secs < kCivilSpan;
+}
+
+// gmtime_r's nine ISO fields of `secs` (in_civil_span only).
+void civil_fields(int64_t secs, struct tm& out) {
+    const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+    const int64_t second_of_day = secs - days * 86400;
+    const int64_t z = days + 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const int64_t doe = z - era * 146097;
+    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);  // from March 1
+    const int64_t mp = (5 * doy + 2) / 153;                       // 0 = March
+    const int64_t year = yoe + era * 400 + (mp >= 10 ? 1 : 0);
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    out.tm_sec = static_cast<int>(second_of_day % 60);
+    out.tm_min = static_cast<int>(second_of_day / 60 % 60);
+    out.tm_hour = static_cast<int>(second_of_day / 3600);
+    out.tm_mday = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+    out.tm_mon = static_cast<int>(mp < 10 ? mp + 2 : mp - 10);
+    out.tm_year = static_cast<int>(year - 1900);
+    out.tm_wday = static_cast<int>(((days + 4) % 7 + 7) % 7);  // 1970-01-01: Thursday
+    out.tm_yday = static_cast<int>(mp < 10 ? doy + 59 + (leap ? 1 : 0) : doy - 306);
+    out.tm_isdst = 0;
+}
+
+bool same_civil_fields(const struct tm& a, const struct tm& b) {
+    return a.tm_sec == b.tm_sec && a.tm_min == b.tm_min && a.tm_hour == b.tm_hour
+        && a.tm_mday == b.tm_mday && a.tm_mon == b.tm_mon && a.tm_year == b.tm_year
+        && a.tm_wday == b.tm_wday && a.tm_yday == b.tm_yday;
+}
+
+// Days from 1970-01-01 to (year, month 1-12, day): civil_fields' inverse.
+int64_t days_from_civil(int64_t year, int64_t month, int64_t day) {
+    year -= month <= 2;
+    const int64_t era = (year >= 0 ? year : year - 399) / 400;
+    const int64_t yoe = year - era * 400;
+    const int64_t doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+// The zone name gmtime_r reports ("UTC" on macOS, "GMT" on glibc): libc's own
+// static text, read once. An idempotent atomic cache, not a guarded static:
+// every thread would store the same pointer, and the guard is what a
+// sanitizer build pays for per call.
+const char* utc_zone_name() {
+    static std::atomic<const char*> cached{nullptr};
+    const char* name = cached.load(std::memory_order_acquire);
+    if (name == nullptr) {
+        struct tm probe {};
+        const time_t zero = 0;
+        gmtime_r(&zero, &probe);
+        name = probe.tm_zone;
+        cached.store(name, std::memory_order_release);
     }
+    return name;
+}
+
+// gmtime_r, every field.
+void utc_fields(time_t secs, struct tm& out) {
+    if (!in_civil_span(static_cast<int64_t>(secs))) {
+        gmtime_r(&secs, &out);
+        return;
+    }
+    civil_fields(static_cast<int64_t>(secs), out);
+    out.tm_gmtoff = 0;
+    out.tm_zone = const_cast<char*>(utc_zone_name());
+}
+
+// A zone's offset intervals, memoised per thread: [lo, hi] is a span of
+// seconds over which localtime_r gave one (tm_gmtoff, tm_isdst, tm_zone), and
+// the fields of any second in it are the civil fields of that second plus
+// tm_gmtoff. Read with no libc call, no process lock and no TZ switch while a
+// stamp stays inside; every edge is a localtime_r answer under the zone's
+// ScopedTimezone, taken while answering a stamp outside every interval.
+//
+// A stamp outside costs what it always did, one localtime_r, and opens a
+// one-second interval. A stamp that lands within kBridgeSteps probe gaps of an
+// interval in the same state joins it -- a run reading bar after bar, a daily
+// bar included -- once localtime_r confirms that state every kProbeGap across
+// the gap, and the interval then reaches up to kReachSteps gaps further in the
+// direction the reads moved, stopping at the exact transition second (bisected)
+// when a probe reads another state. So localtime_r was asked about a second at
+// most kProbeGap from any second an interval holds, and an interval can only
+// miss a pair of transitions closer together than that which restore the same
+// offset, flag and abbreviation: the assumption tzcode's own zdump makes when it
+// samples localtime at twelve-hour intervals to find transitions (zdump(8),
+// LIMITATIONS). The shortest gap between two transitions of one zone in the tz
+// database is days (6.9 over 1970-2100 in 2026c). A zone whose libc fields are
+// not civil-plus-offset (leap-second "right/" zones) is never memoised:
+// localtime_r answers each of its calls. A thread holds kZoneSlots intervals,
+// the least recently read one giving way.
+constexpr int64_t kProbeGap = 12 * 3600;
+constexpr int kBridgeSteps = 4;   // a gap of up to 48 h is bridged
+constexpr int kReachSteps = 60;   // an interval grows by up to 30 days per miss
+constexpr int kZoneSlots = 8;
+
+struct ZoneInterval {
+    char zone[48];           // the caller's spelling (zone_size bytes)
+    std::size_t zone_size;   // 0: slot unused
+    bool utc;                // normalize_timezone_for_posix(zone) is UTC
+    int64_t lo, hi;          // lo > hi: no interval
+    long gmtoff;
+    int isdst;
+    char abbr[16];
+    std::uint64_t last_read;
+};
+
+thread_local ZoneInterval tl_zones[kZoneSlots] = {};
+thread_local std::uint64_t tl_zone_clock = 0;
+
+bool plain_utc_spelling(const std::string& tz) {
+    return tz.empty() || tz == "UTC" || tz == "Etc/UTC" || tz == "GMT" || tz == "Etc/GMT";
+}
+
+bool holds_zone(const ZoneInterval& slot, const std::string& tz) {
+    return slot.zone_size != 0 && slot.zone_size == tz.size()
+        && std::memcmp(slot.zone, tz.data(), tz.size()) == 0;
+}
+
+bool normalizes_to_utc(const std::string& tz) {
+    const std::string t = normalize_timezone_for_posix(tz);
+    return t.empty() || t == "UTC" || t == "Etc/UTC";
+}
+
+// Whether `tz` reads as UTC (its POSIX normalization is "UTC"), asked of the
+// memo for a spelling it holds.
+bool utc_zone(const std::string& tz) {
+    if (plain_utc_spelling(tz)) return true;
+    for (const ZoneInterval& slot : tl_zones) {
+        if (holds_zone(slot, tz)) return slot.utc;
+    }
+    return normalizes_to_utc(tz);
+}
+
+ZoneInterval& claim_zone_slot(const std::string& tz, bool utc) {
+    ZoneInterval* slot = &tl_zones[0];
+    for (ZoneInterval& candidate : tl_zones) {
+        if (candidate.zone_size == 0) {
+            slot = &candidate;
+            break;
+        }
+        if (candidate.last_read < slot->last_read) slot = &candidate;
+    }
+    std::memcpy(slot->zone, tz.data(), tz.size());
+    slot->zone_size = tz.size();
+    slot->utc = utc;
+    slot->lo = 1;
+    slot->hi = 0;
+    slot->last_read = ++tl_zone_clock;
+    return *slot;
+}
+
+bool same_state(const struct tm& t, long gmtoff, int isdst, const char* abbr) {
+    return t.tm_zone != nullptr && t.tm_gmtoff == gmtoff && t.tm_isdst == isdst
+        && std::strcmp(t.tm_zone, abbr) == 0;
+}
+
+// localtime_r at `secs` reads the slot's state, and the civil fields of `secs`
+// plus its offset are libc's. Under the zone's ScopedTimezone only.
+bool state_holds(const ZoneInterval& slot, int64_t secs) {
+    const time_t t = static_cast<time_t>(secs);
+    struct tm probe {};
+    if (localtime_r(&t, &probe) == nullptr
+        || !same_state(probe, slot.gmtoff, slot.isdst, slot.abbr)) {
+        return false;
+    }
+    struct tm civil {};
+    civil_fields(secs + slot.gmtoff, civil);
+    return same_civil_fields(civil, probe);
+}
+
+// Every kProbeGap strictly between two seconds already in the slot's state
+// (`from` < `to`, at most kBridgeSteps gaps apart) reads that state too.
+bool bridges(const ZoneInterval& slot, int64_t from, int64_t to) {
+    for (int64_t probe = from + kProbeGap; probe < to; probe += kProbeGap) {
+        if (!state_holds(slot, probe)) return false;
+    }
+    return true;
+}
+
+// The farthest second from `from` (in the slot's state) in `direction` (+1 or
+// -1), at most kReachSteps gaps on, that is still in it: the last probe that
+// read the state, or the transition edge bisected after it.
+int64_t reach(const ZoneInterval& slot, int64_t from, int64_t direction) {
+    int64_t inside = from;
+    for (int step = 0; step < kReachSteps; ++step) {
+        int64_t outside = inside + direction * kProbeGap;
+        if (state_holds(slot, outside)) {
+            inside = outside;
+            continue;
+        }
+        while (inside - outside > 1 || outside - inside > 1) {
+            const int64_t mid = inside + (outside - inside) / 2;
+            if (state_holds(slot, mid))
+                inside = mid;
+            else
+                outside = mid;
+        }
+        break;
+    }
+    return inside;
+}
+
+}  // namespace
+
+// Decompose a Unix-ms timestamp into local calendar fields for `tz` -- every
+// field gmtime_r (UTC) or localtime_r under the zone's ScopedTimezone gives --
+// WITHOUT per-call libc on the hot path (hour()/minute()/... each bar). A zone
+// that normalizes to UTC is civil arithmetic (utc_fields). Another zone reads
+// the thread's offset intervals while the stamp is inside one, and asks
+// localtime_r under the CACHED tz_util::ScopedTimezone only for a stamp outside
+// them, so a run pays neither the process lock nor a tzset per call: each
+// changed-TZ tzset() on macOS is a notifyd Mach-IPC round trip (~173us; ~888k/run
+// over the full feed -> minutes of apparent "hang", KI-35). DST stays exact:
+// every interval edge is a localtime_r answer. External linkage only so
+// tests/test_local_time_fields.cpp can compare it with libc field by field; not
+// part of the installed API.
+void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
+    const time_t secs = static_cast<time_t>(bar_ms / 1000);
+    if (plain_utc_spelling(tz)) {
+        utc_fields(secs, out);
+        return;
+    }
+    const int64_t at = static_cast<int64_t>(secs);
+    bool held = false;
+    bool utc = false;
+    for (ZoneInterval& slot : tl_zones) {
+        if (!holds_zone(slot, tz)) continue;
+        held = true;
+        utc = slot.utc;
+        if (utc) {
+            slot.last_read = ++tl_zone_clock;
+            break;
+        }
+        if (slot.lo <= at && at <= slot.hi) {
+            slot.last_read = ++tl_zone_clock;
+            civil_fields(at + slot.gmtoff, out);
+            out.tm_isdst = slot.isdst;
+            out.tm_gmtoff = slot.gmtoff;
+            out.tm_zone = slot.abbr;
+            return;
+        }
+    }
+    if (!held) {
+        // Detect UTC on the NORMALIZED string, but hand the RAW tz to
+        // ScopedTimezone — it normalizes internally (timezone.cpp), so passing
+        // an already-normalized string double-normalizes and flips the sign of
+        // fixed offsets ("UTC+2" -> "UTC-2" -> "UTC+2" => wrong hour).
+        utc = normalizes_to_utc(tz);
+        if (utc && tz.size() <= sizeof(ZoneInterval::zone)) claim_zone_slot(tz, true);
+    }
+    if (utc) {
+        utc_fields(secs, out);
+        return;
+    }
+    tz_util::ScopedTimezone guard(tz);
+    if (localtime_r(&secs, &out) == nullptr || out.tm_zone == nullptr) return;
+    const int64_t margin = (kBridgeSteps + kReachSteps + 1) * kProbeGap + 2 * 86400;
+    if (tz.size() > sizeof(ZoneInterval::zone) || !in_civil_span(at - margin)
+        || !in_civil_span(at + margin)
+        || std::strlen(out.tm_zone) >= sizeof(ZoneInterval::abbr)) {
+        return;
+    }
+    struct tm civil {};
+    civil_fields(at + out.tm_gmtoff, civil);
+    if (!same_civil_fields(civil, out)) return;
+    const int64_t bridge = kBridgeSteps * kProbeGap;
+    for (ZoneInterval& slot : tl_zones) {
+        if (!holds_zone(slot, tz) || slot.lo > slot.hi
+            || !same_state(out, slot.gmtoff, slot.isdst, slot.abbr)) {
+            continue;
+        }
+        if (at > slot.hi && at - slot.hi <= bridge && bridges(slot, slot.hi, at)) {
+            slot.hi = reach(slot, at, +1);
+            slot.last_read = ++tl_zone_clock;
+            return;
+        }
+        if (at < slot.lo && slot.lo - at <= bridge && bridges(slot, at, slot.lo)) {
+            slot.lo = reach(slot, at, -1);
+            slot.last_read = ++tl_zone_clock;
+            return;
+        }
+    }
+    ZoneInterval& slot = claim_zone_slot(tz, false);
+    slot.gmtoff = out.tm_gmtoff;
+    slot.isdst = out.tm_isdst;
+    std::strcpy(slot.abbr, out.tm_zone);
+    slot.lo = at;
+    slot.hi = at;
 }
 
 // Pine time/date extraction — value-identical to the codegen's former inline
@@ -67,12 +347,9 @@ int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
     // UTC needs no tzset: local midnight is exact integer floor. Avoiding
     // ScopedTimezone(UTC) here keeps the process TZ from flipping to UTC every
     // bar (which would re-slow the strategy's hour()/minute() zone) — see KI-35.
-    {
-        const std::string t = normalize_timezone_for_posix(tz);
-        if (t.empty() || t == "UTC" || t == "Etc/UTC") {
-            time_t secs = static_cast<time_t>(bar_ms / 1000);
-            return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
-        }
+    if (utc_zone(tz)) {
+        time_t secs = static_cast<time_t>(bar_ms / 1000);
+        return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
     }
     return calendar_day_open_local_ms_tz(bar_ms, tz);
 }
@@ -164,17 +441,14 @@ static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz
     // — see KI-35: time("W") under UTC alternating with hour(time, tz) defeats
     // the single-slot g_active_tz cache and pays a tzset->notifyd round trip
     // per bar.
-    {
-        const std::string t = normalize_timezone_for_posix(tz);
-        if (t.empty() || t == "UTC" || t == "Etc/UTC") {
-            time_t secs = static_cast<time_t>(bar_ms / 1000);
-            int64_t days = static_cast<int64_t>(secs) / 86400;
-            if (secs % 86400 != 0 && secs < 0)
-                --days;  // floor toward -inf (pre-1970 bars)
-            int wday = static_cast<int>(((days + 4) % 7 + 7) % 7);  // 0=Sun, == tm_wday
-            int days_from_mon = (wday + 6) % 7;
-            return (days - days_from_mon) * 86400000LL;
-        }
+    if (utc_zone(tz)) {
+        time_t secs = static_cast<time_t>(bar_ms / 1000);
+        int64_t days = static_cast<int64_t>(secs) / 86400;
+        if (secs % 86400 != 0 && secs < 0)
+            --days;  // floor toward -inf (pre-1970 bars)
+        int wday = static_cast<int>(((days + 4) % 7 + 7) % 7);  // 0=Sun, == tm_wday
+        int days_from_mon = (wday + 6) % 7;
+        return (days - days_from_mon) * 86400000LL;
     }
     return calendar_week_open_local_ms_tz(bar_ms, tz);
 }
@@ -197,22 +471,19 @@ static int64_t calendar_week_open_local_ms_tz(int64_t bar_ms, const std::string&
 static int64_t calendar_month_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
 
 static int64_t calendar_month_open_local_ms(int64_t bar_ms, const std::string& tz) {
-    // UTC needs no tzset: gmtime_r yields the day-of-month, and every UTC day
-    // is exactly 86400 s, so the month open is the day floor minus
+    // UTC needs no tzset: gmtime_r's day-of-month (utc_fields), and every UTC
+    // day is exactly 86400 s, so the month open is the day floor minus
     // (tm_mday - 1) days. Avoiding ScopedTimezone(UTC) here keeps the process
     // TZ from flipping to UTC every bar (which would re-slow the strategy's
     // hour()/minute() zone) — see KI-35.
-    {
-        const std::string t = normalize_timezone_for_posix(tz);
-        if (t.empty() || t == "UTC" || t == "Etc/UTC") {
-            time_t secs = static_cast<time_t>(bar_ms / 1000);
-            int64_t days = static_cast<int64_t>(secs) / 86400;
-            if (secs % 86400 != 0 && secs < 0)
-                --days;  // floor toward -inf (pre-1970 bars)
-            struct tm g {};
-            gmtime_r(&secs, &g);
-            return (days - (g.tm_mday - 1)) * 86400000LL;
-        }
+    if (utc_zone(tz)) {
+        time_t secs = static_cast<time_t>(bar_ms / 1000);
+        int64_t days = static_cast<int64_t>(secs) / 86400;
+        if (secs % 86400 != 0 && secs < 0)
+            --days;  // floor toward -inf (pre-1970 bars)
+        struct tm g {};
+        utc_fields(secs, g);
+        return (days - (g.tm_mday - 1)) * 86400000LL;
     }
     return calendar_month_open_local_ms_tz(bar_ms, tz);
 }
@@ -275,8 +546,25 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         return open_ms + static_cast<int64_t>(sec) * 1000;
     }
 
-    tz_util::ScopedTimezone guard(tz);
     time_t osec = static_cast<time_t>(open_ms / 1000);
+    if (cp != CalendarPeriod::NONE && utc_zone(tz) && in_civil_span(static_cast<int64_t>(osec))) {
+        // What mktime answers below under TZ=UTC, where it is civil arithmetic:
+        // the next period's 00:00 (the next day, seven days on, the first of the
+        // next month), without switching the process TZ to UTC (KI-35).
+        const int64_t days = static_cast<int64_t>(osec) / 86400
+            - (static_cast<int64_t>(osec) % 86400 < 0 ? 1 : 0);
+        int64_t next = days + (cp == CalendarPeriod::DAY ? 1 : 7);
+        if (cp == CalendarPeriod::MONTH) {
+            struct tm fields {};
+            civil_fields(static_cast<int64_t>(osec), fields);
+            next = fields.tm_mon == 11
+                ? days_from_civil(fields.tm_year + 1900 + 1, 1, 1)
+                : days_from_civil(fields.tm_year + 1900, fields.tm_mon + 2, 1);
+        }
+        return next * 86400 * 1000 - 1;
+    }
+
+    tz_util::ScopedTimezone guard(tz);
     struct tm local_tm {};
     localtime_r(&osec, &local_tm);
 

@@ -947,6 +947,13 @@ list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
 # one definition's equal-literal answer judged against tf_ratio over every
 # admitted literal pair. Source-bound.
 list(APPEND TEST_SOURCES test_aggregates_input_bars_literals)
+# R5 lane PERF-P5611 (P11): the language time built-ins' decomposition --
+# UTC by civil arithmetic, other zones from memoised offset intervals --
+# against libc field by field, and a memoised zoned read that no longer waits
+# for the process timezone lock. Source-free, so both also run in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_local_time_fields)
+list(APPEND TEST_SOURCES test_local_time_lock_free_hit)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1643,6 +1650,7 @@ endif()
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
+target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)
 
 # Pure-C sanity test for <pineforge/pineforge.h>. Compiled with the C
 # compiler so any C++-only syntax leaking into the public header
