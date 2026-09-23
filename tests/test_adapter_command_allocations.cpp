@@ -39,6 +39,10 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+// Counts the re-issued exit's heap allocations: every replaceable form, one
+// allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -47,22 +51,6 @@
 #include <limits>
 #include <new>
 #include <vector>
-
-namespace {
-bool count_allocations = false;
-std::size_t allocations = 0;
-}  // namespace
-
-void* operator new(std::size_t size) {
-    if (count_allocations) ++allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;
@@ -155,14 +143,10 @@ private:
         if (i % 15 == 14) strategy_close_all();
         if (live_position_size() > 0.0) {
             const bool counting = i >= 10 && i < kBars - 5;
-            if (counting) {
-                allocations = 0;
-                count_allocations = true;
-            }
+            const std::size_t before = global_allocation::allocations;
             strategy_exit("guard", "L", bar.close + away, bar.close - away);
             if (counting) {
-                count_allocations = false;
-                counted += allocations;
+                counted += global_allocation::allocations - before;
                 ++counted_calls;
             }
         }

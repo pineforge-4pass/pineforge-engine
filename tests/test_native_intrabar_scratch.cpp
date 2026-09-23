@@ -25,42 +25,15 @@
 // Source-free: this TU runs in the kernel-only profile.
 #include <pineforge/native_host.hpp>
 
+// The counting operator new: every replaceable form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <string>
 #include <vector>
-
-namespace {
-
-bool g_counting = false;
-std::uint64_t g_allocations = 0;
-
-}  // namespace
-
-void* operator new(std::size_t n) {
-    if (g_counting) ++g_allocations;
-    if (void* p = std::malloc(n ? n : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t n) {
-    if (g_counting) ++g_allocations;
-    if (void* p = std::malloc(n ? n : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new(std::size_t n, const std::nothrow_t&) noexcept {
-    if (g_counting) ++g_allocations;
-    return std::malloc(n ? n : 1);
-}
-void* operator new[](std::size_t n, const std::nothrow_t&) noexcept {
-    if (g_counting) ++g_allocations;
-    return std::malloc(n ? n : 1);
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace pineforge;
 
@@ -155,16 +128,15 @@ std::uint64_t allocations(Path path, bool tolerant, int n) {
         return ~0ULL;
     }
     const auto bars = bars_of(n, path == Path::Lower ? 5 * kMinute : kMinute);
-    g_allocations = 0;
-    g_counting = true;
+    const std::uint64_t before = global_allocation::allocations;
     host.run(bars.data(), n);
-    g_counting = false;
+    const std::uint64_t during = global_allocation::allocations - before;
     const auto state = host.native_state();
     if (state.kind != NativeLifecycleKind::Completed || host.bars != static_cast<std::uint64_t>(n)) {
         std::fprintf(stderr, "  %s: the run did not complete\n", kPathNames[static_cast<int>(path)]);
         return ~0ULL;
     }
-    return g_allocations;
+    return during;
 }
 
 double per_bar(Path path, bool tolerant, int n) {

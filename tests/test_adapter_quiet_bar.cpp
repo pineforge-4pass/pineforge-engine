@@ -50,6 +50,10 @@
 #if defined(PINEFORGE_QUIET_BAR_WITNESS_PROBE)
 #include "../src/source/pine_quiet_bar.hpp"
 #endif
+// Counts the quiet bars' heap allocations: every replaceable form, one
+// allocator. `allocations` below reads its count; `count_allocations` says
+// whether a bar records it.
+#include "global_allocation_replacement.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -66,19 +70,8 @@
 
 namespace {
 bool count_allocations = false;
-std::size_t allocations = 0;
+std::size_t& allocations = global_allocation::allocations;
 }  // namespace
-
-void* operator new(std::size_t size) {
-    if (count_allocations) ++allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;

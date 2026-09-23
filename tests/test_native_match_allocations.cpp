@@ -31,6 +31,9 @@
 // Source-free: it also runs in the kernel-only profile.
 #include <pineforge/native_host.hpp>
 
+// Counts the window's heap allocations: every replaceable form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -39,22 +42,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-
-namespace {
-bool count_allocations = false;
-std::size_t allocations = 0;
-}  // namespace
-
-void* operator new(std::size_t size) {
-    if (count_allocations) ++allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;
@@ -126,13 +113,11 @@ public:
         ++bar_;
         if (bar_ == kFirstCounted) {
             working_in_window = native_working_requests().size();
-            allocations = 0;
-            count_allocations = true;
+            window_start_ = global_allocation::allocations;
             return;
         }
         if (bar_ == kLastCounted) {
-            count_allocations = false;
-            counted = allocations;
+            counted = global_allocation::allocations - window_start_;
             return;
         }
         if (bar_ == 1) open(bar);
@@ -197,6 +182,7 @@ private:
 
     Book book_;
     int bar_ = 0;
+    std::size_t window_start_ = 0;
     std::optional<no::CohortHandle> cohort_;
 };
 
@@ -236,7 +222,6 @@ Counted run(Book book, bool synthesized, const std::vector<Bar>& bars) {
         return out;
     }
     host.run(bars.data(), static_cast<int>(bars.size()));
-    count_allocations = false;
     out.completed = host.native_state().kind == NativeLifecycleKind::Completed;
     out.allocations = host.counted;
     out.working = host.working_in_window;
