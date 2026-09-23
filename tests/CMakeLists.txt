@@ -878,6 +878,11 @@ list(APPEND TEST_SOURCES test_native_continuation_view)
 # (chart, magnifier, aggregated, calc_on_order_fills, recording, streams).
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_continuation_view)
+# R5 PERF-P23: where a host's write to a projected field is caught -- every
+# NativeStrategyHost hook, every projected field -- pinned at the lane's base
+# before the projection check was trimmed. Source-free, so it also runs in
+# the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_projection_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
