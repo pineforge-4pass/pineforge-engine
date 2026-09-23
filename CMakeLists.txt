@@ -209,6 +209,16 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
         -ffp-contract=off
     )
 
+    # The same rule travels to every consumer. A strategy translation unit
+    # (a corpus / bench / tutorial generated.cpp, or anything a downstream
+    # find_package(PineForge) project links) inlines the header-side
+    # arithmetic -- ta::* classes, series math -- next to the generated Pine
+    # expressions, so compiled with contraction on it fuses the multiply-adds
+    # the library's own objects never fuse. INTERFACE, not PUBLIC: the
+    # library's own flags above stay exactly as they are. install(EXPORT)
+    # carries it into PineForgeTargets.cmake.
+    target_compile_options(${_pf_library} INTERFACE -ffp-contract=off)
+
     target_include_directories(${_pf_library}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

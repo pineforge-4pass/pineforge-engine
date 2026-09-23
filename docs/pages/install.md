@@ -81,8 +81,10 @@ A self-contained smoke test ships under `cmake/smoke_consumer/`:
 ```bash
 cmake -S cmake/smoke_consumer -B build-smoke
 cmake --build build-smoke
-./build-smoke/smoke_consumer    # prints the runtime version
+./build-smoke/smoke_version     # prints the runtime version
 ```
 
 If this prints the version you installed (`0.14.0` for this tree's `VERSION`)
-you're done.
+you're done. The configure step also checks that the package hands its
+consumers `-ffp-contract=off`, and the program exits 1 instead if its own
+multiply-add was fused.

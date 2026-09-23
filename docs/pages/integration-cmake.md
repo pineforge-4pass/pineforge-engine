@@ -23,6 +23,11 @@ carries:
 - the include directory containing `<pineforge/pineforge.h>`
 - the static library `libpineforge.a`
 - the standard C++ runtime (since the static lib is C++)
+- the compile option `-ffp-contract=off`, so a translation unit that links
+  it (a strategy's `generated.cpp` above all) rounds every `*` and `+` on its
+  own, as `libpineforge.a` and TradingView's runtime do, instead of fusing
+  them into one FMA on ARM64 or FMA-enabled x86 (`PineForge::kernel`
+  carries it too)
 
 ## Locating a non-default install
 
@@ -49,7 +54,7 @@ later 0.x.y) is the recommended pin.
 ## Linking from a hand-written Makefile
 
 ```make
-CFLAGS  += -I$(PREFIX)/include
+CFLAGS  += -I$(PREFIX)/include -ffp-contract=off
 LDFLAGS += -L$(PREFIX)/lib
 LDLIBS  += -lpineforge -lstdc++ -lm
 
@@ -59,6 +64,8 @@ runner: runner.o
 
 `-lstdc++` is required even from C TUs because the runtime is C++ inside.
 `-lm` covers the `math.h` calls inside the runtime's TA classes.
+`-ffp-contract=off` is the option the CMake package hands every consumer;
+compile a strategy's `generated.cpp` with it too (`CXXFLAGS`).
 
 ## Linking from pkg-config
 
@@ -75,7 +82,7 @@ libdir=${prefix}/lib
 Name: pineforge
 Description: Deterministic PineScript v6 backtest runtime
 Version: 0.14.0
-Cflags: -I${includedir}
+Cflags: -I${includedir} -ffp-contract=off
 Libs: -L${libdir} -lpineforge -lstdc++ -lm
 ```
 

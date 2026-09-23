@@ -21,8 +21,12 @@ python3 scripts/ci_verify.py release --build-dir build --jobs 4
 The command runs source guards, configures and rebuilds every enabled target,
 prepares the real historical ABI providers, runs CTest, installs the package,
 and builds and runs the `find_package` consumer. The smoke test compares the
-installed library's reported version with `VERSION`. After a successful build,
-a failing test suite does not hide a separate install or package failure.
+installed library's reported version with `VERSION`; its configure refuses a
+package whose `PineForge::pineforge` or `PineForge::kernel` no longer carries
+`-ffp-contract=off` to consumers, and on an FMA-capable host (macOS arm64) its
+run fails when a multiply-add in the consumer's own TU was fused. After a
+successful build, a failing test suite does not hide a separate install or
+package failure.
 Release and native profiles also install into a disposable prefix, remove the
 source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.

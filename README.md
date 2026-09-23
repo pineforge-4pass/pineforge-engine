@@ -128,7 +128,7 @@ validation scoreboard below measures.
 ```bash
 pip install pineforge-codegen
 pineforge-codegen strategy.pine -o generated.cpp
-c++ -std=c++17 -shared -fPIC generated.cpp -lpineforge -o strategy.so
+c++ -std=c++17 -ffp-contract=off -shared -fPIC generated.cpp -lpineforge -o strategy.so
 python3 scripts/run_strategy.py .          # or drive it over the C ABI
 ```
 

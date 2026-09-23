@@ -241,7 +241,9 @@ if [[ "${SKIP_PINEFORGE:-0}" != "1" && "${SKIP_INDICATORS:-0}" != "1" ]]; then
     if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" \
           || "${ROOT_DIR}/build/lib/libpineforge.a" -nt "${CANON_BIN}" ]]; then
         log "building PineForge canonical indicator runner"
-        c++ -std=c++17 -O2 -I "${ROOT_DIR}/include" \
+        # -ffp-contract=off as libpineforge and every strategy target: the
+        # ta::* arithmetic inlined here must round like TradingView's (no FMA).
+        c++ -std=c++17 -O2 -ffp-contract=off -I "${ROOT_DIR}/include" \
             "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" \
             -L "${ROOT_DIR}/build/lib" \
             -Wl,-force_load,"${ROOT_DIR}/build/lib/libpineforge.a" \
