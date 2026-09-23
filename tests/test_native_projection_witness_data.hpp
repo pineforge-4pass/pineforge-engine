@@ -1,7 +1,7 @@
 // Harvested by test_native_projection_witness at the lane's base (fc7aad62)
 // with PF_PROJECTION_WITNESS_DUMP=1. One row per profile/hook/trigger: the
-// outcome every field's write produces there, then the writes whose outcome
-// differs by field. kind 3 = Completed, 4 = Failed; code 10 = ProjectionMismatch;
+// outcome every write produces there, then the writes whose outcome differs
+// by field. kind 3 = Completed, 4 = Failed; code 10 = ProjectionMismatch;
 // op 2 = Begin, 4 = Input, 5 = Callback, 6 = Settlement.
 constexpr Expected kExpected[] = {
     {"batch/prepare_native_begin/1",

@@ -11,11 +11,14 @@
 //
 // This witness writes each projected field from each host hook -- every
 // NativeStrategyHost virtual and BacktestEngine::hash_host_extension -- at the
-// hook's first call and at its third, over batch, aggregated, margin,
-// anchored, lower-timeframe, subscription, tick and confirmed-bar stream runs,
-// and pins everything the write leaves behind: whether the hook ran, the
-// lifecycle, and the whole NativeFailure (code, operation, ordinal,
-// discriminator, context kind) with the error text. kExpected was harvested at
+// hook's first call and at its third; each string is written three ways, by a
+// longer value and, keeping its length, at its first and at its last byte, and
+// the spec's strings run from 3 to 41 bytes, so every path of the inline
+// comparison is exercised where a write is caught. The runs are batch,
+// aggregated, margin, anchored, lower-timeframe, subscription, tick-stream
+// and confirmed-bar-stream runs, and each write's whole outcome is pinned:
+// whether the hook ran, the lifecycle, and the NativeFailure (code,
+// operation, ordinal, discriminator, context kind) with the error text. kExpected was harvested at
 // the lane's base (fc7aad62, PF_PROJECTION_WITNESS_DUMP=1) and holds unchanged
 // after it.
 //
@@ -77,6 +80,14 @@ constexpr const char* kFieldNames[] = {
 constexpr int kFields = static_cast<int>(Field::Count);
 static_assert(sizeof(kFieldNames) / sizeof(kFieldNames[0]) == kFields, "one name per field");
 
+// How a field is written: a new value (a longer string, a moved number or
+// array element) or, for a string, one byte flipped in place so the length
+// stays what the spec says.
+enum class Write : int { Value, FirstByte, LastByte };
+constexpr const char* kWriteSuffix[] = {"", "/first", "/last"};
+
+bool is_text(Field f) { return static_cast<int>(f) >= static_cast<int>(Field::Ticker); }
+
 // The run shapes, each chosen so its hooks are reached.
 enum class Profile : int {
     Batch,       // entry + flatten, fills recalculated, kernel-recorded hashes, owned excursions
@@ -137,6 +148,7 @@ struct WitnessHost final : NativeStrategyHost {
     bool arm = false;
     Hook target = Hook::Count;
     Field field = Field::Count;
+    Write how = Write::Value;
     int trigger = 0;
     int calls[kHooks] = {};
     int closes = 0;
@@ -144,11 +156,34 @@ struct WitnessHost final : NativeStrategyHost {
 
     void poke(Hook hook) {
         const int n = ++calls[static_cast<int>(hook)];
-        if (arm && hook == target && n == trigger) write(field);
+        if (arm && hook == target && n == trigger) write(field, how);
     }
     void poke(Hook hook) const { const_cast<WitnessHost*>(this)->poke(hook); }
 
-    void write(Field f) {
+    std::string* text_of(Field f) {
+        switch (f) {
+        case Field::Ticker: return &syminfo_.ticker;
+        case Field::TickerId: return &syminfo_.tickerid;
+        case Field::Type: return &syminfo_.type;
+        case Field::Currency: return &syminfo_.currency;
+        case Field::BaseCurrency: return &syminfo_.basecurrency;
+        case Field::Description: return &syminfo_.description;
+        case Field::VolumeType: return &syminfo_.volumetype;
+        case Field::Timezone: return &syminfo_.timezone;
+        case Field::Session: return &syminfo_.session;
+        case Field::ChartTimezone: return &chart_timezone_;
+        default: return nullptr;
+        }
+    }
+
+    void write(Field f, Write w) {
+        if (w != Write::Value) {
+            std::string* text = text_of(f);
+            if (text == nullptr || text->empty()) return;
+            char& byte = w == Write::FirstByte ? text->front() : text->back();
+            byte = static_cast<char>(byte ^ 0x01);
+            return;
+        }
         switch (f) {
         case Field::InitialCapital: initial_capital_ += 1.0; break;
         case Field::PointValue: syminfo_.pointvalue += 1.0; break;
@@ -296,9 +331,10 @@ NativeRunSpec base_spec(const char* key) {
     s.tickerid = "TEST:MOCK";
     s.type = "crypto";
     s.currency = "USD";
-    s.basecurrency = "BTC";
-    s.description = "witness";
-    s.volumetype = "base";
+    // Lengths 3, 4, 6, 8, 9, 16 and 41: every path of the inline comparison.
+    s.basecurrency = "BTCUSDTP";
+    s.description = "projection witness, forty-one bytes long.";
+    s.volumetype = "base-quote-units";
     s.timezone = "UTC";
     s.session = "24x7";
     s.chart_timezone = "UTC";
@@ -474,8 +510,8 @@ std::string cell_of(const Cell& cell, int trigger) {
 
 // The pinned outcome of one write: its field's own row when the write is one
 // whose outcome depends on the field, else its cell's.
-const char* expected_outcome(const std::string& cell, int field) {
-    const std::string key = cell + "/" + kFieldNames[field];
+const char* expected_outcome(const std::string& cell, const std::string& field) {
+    const std::string key = cell + "/" + field;
     for (const Expected& row : kFieldExceptions)
         if (key == row.key) return row.outcome;
     for (const Expected& row : kExpected)
@@ -519,30 +555,35 @@ void every_write_fails_where_it_did() {
         for (int trigger : kTriggers) {
             const std::string name = cell_of(cell, trigger);
             for (int f = 0; f < kFields; ++f) {
-                WitnessHost host;
-                const bool ok = configure(host, cell.profile);
-                CHECK(ok);
-                if (!ok) continue;
-                host.arm = true;
-                host.target = cell.hook;
-                host.field = static_cast<Field>(f);
-                host.trigger = trigger;
-                drive(host, cell.profile);
-                const std::string observed = outcome(host, cell.hook, trigger);
-                ++writes;
-                if (observed.find("code=10 ") != std::string::npos) ++caught;
-                if (dump) {
-                    std::printf("    {\"%s/%s\", \"%s\"},\n", name.c_str(), kFieldNames[f],
-                                observed.c_str());
+                const int kinds = is_text(static_cast<Field>(f)) ? 3 : 1;
+                for (int k = 0; k < kinds; ++k) {
+                    WitnessHost host;
+                    const bool ok = configure(host, cell.profile);
+                    CHECK(ok);
+                    if (!ok) continue;
+                    host.arm = true;
+                    host.target = cell.hook;
+                    host.field = static_cast<Field>(f);
+                    host.how = static_cast<Write>(k);
+                    host.trigger = trigger;
+                    drive(host, cell.profile);
+                    const std::string observed = outcome(host, cell.hook, trigger);
+                    const std::string field = std::string(kFieldNames[f]) + kWriteSuffix[k];
+                    ++writes;
+                    if (observed.find("code=10 ") != std::string::npos) ++caught;
+                    if (dump) {
+                        std::printf("    {\"%s/%s\", \"%s\"},\n", name.c_str(), field.c_str(),
+                                    observed.c_str());
+                    }
+                    const char* expected = expected_outcome(name, field);
+                    const bool same = expected != nullptr && observed == expected;
+                    if (!same) {
+                        std::fprintf(stderr, "  %s/%s\n    expected: %s\n    observed: %s\n",
+                                     name.c_str(), field.c_str(),
+                                     expected ? expected : "(no row)", observed.c_str());
+                    }
+                    CHECK(same);
                 }
-                const char* expected = expected_outcome(name, f);
-                const bool same = expected != nullptr && observed == expected;
-                if (!same) {
-                    std::fprintf(stderr, "  %s/%s\n    expected: %s\n    observed: %s\n",
-                                 name.c_str(), kFieldNames[f],
-                                 expected ? expected : "(no row)", observed.c_str());
-                }
-                CHECK(same);
             }
         }
     }
