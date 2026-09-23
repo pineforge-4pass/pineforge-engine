@@ -902,6 +902,11 @@ list(APPEND TEST_SOURCES test_native_command_history_read)
 # on fc7aad62 (receipt cursors, recorded broker-state hashes, trades), and a
 # commandless read that allocates nothing. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
+# R5 PERF-L4: the Pine adapter's quiet-bar gates move no value -- the whole
+# battery's observations pinned on f71cd820 -- and a bar with nothing to act
+# on allocates nothing in the adapter's hooks. Source-bound. Its ungated and
+# probed twins are built from the same TU below the target loop.
+list(APPEND TEST_SOURCES test_adapter_quiet_bar)
 # R5 PERF-K3: the matcher reuses its candidate rows after an allowance
 # refresh. The cost stays linear in the live requests (scaling), the reuse is
 # the full rescan bit for bit over randomized books (differential), and the
@@ -1413,6 +1418,53 @@ foreach(test_name ${TEST_SOURCES})
         add_test(NAME ${test_name} COMMAND ${test_name})
     endif()
 endforeach()
+
+# R5 PERF-L4: the witness's two references. The source layer is compiled
+# twice more, with the kernel archive below it: once with every quiet-bar gate
+# compiled out (PINEFORGE_PINE_QUIET_BAR_GATES=0), once gated; both carry the
+# gate probe (src/source/pine_quiet_bar.hpp). The differential row requires
+# the shipped library's transcript to be the ungated one, line for line; the
+# probe row requires a quiet bar to run no hook body and every gate to be
+# taken both ways across the battery. Neither archive is installed.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_quiet_bar)
+    get_target_property(_pf_quiet_library_options pineforge COMPILE_OPTIONS)
+    set(_pf_quiet_sources)
+    foreach(_pf_quiet_source IN LISTS PINEFORGE_SOURCE_LAYER_SOURCES)
+        list(APPEND _pf_quiet_sources ${PROJECT_SOURCE_DIR}/${_pf_quiet_source})
+    endforeach()
+    foreach(_pf_quiet_variant ungated probe)
+        set(_pf_quiet_gates 1)
+        if(_pf_quiet_variant STREQUAL "ungated")
+            set(_pf_quiet_gates 0)
+        endif()
+        set(_pf_quiet_library pineforge_source_quiet_${_pf_quiet_variant})
+        add_library(${_pf_quiet_library} STATIC ${_pf_quiet_sources})
+        target_compile_options(${_pf_quiet_library} PRIVATE ${_pf_quiet_library_options})
+        target_include_directories(${_pf_quiet_library} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_compile_definitions(${_pf_quiet_library} PRIVATE
+            PINEFORGE_PINE_QUIET_BAR_GATES=${_pf_quiet_gates}
+            PINEFORGE_PINE_QUIET_BAR_PROBE=1)
+        target_link_libraries(${_pf_quiet_library} PUBLIC pineforge_kernel)
+        set(_pf_quiet_test test_adapter_quiet_bar_${_pf_quiet_variant})
+        add_executable(${_pf_quiet_test} test_adapter_quiet_bar.cpp)
+        target_link_libraries(${_pf_quiet_test} PRIVATE ${_pf_quiet_library})
+        target_compile_definitions(${_pf_quiet_test} PRIVATE
+            PINEFORGE_QUIET_BAR_WITNESS_PROBE
+            PINEFORGE_PINE_QUIET_BAR_GATES=${_pf_quiet_gates}
+            PINEFORGE_PINE_QUIET_BAR_PROBE=1)
+        target_compile_options(${_pf_quiet_test} PRIVATE -ffp-contract=off -UNDEBUG)
+        if(PINEFORGE_ENABLE_COVERAGE)
+            target_compile_options(${_pf_quiet_test} PRIVATE ${_pf_cov_test_flags})
+        endif()
+    endforeach()
+    add_test(NAME test_adapter_quiet_bar_probe COMMAND test_adapter_quiet_bar_probe)
+    add_test(NAME test_adapter_quiet_bar_differential
+        COMMAND ${CMAKE_COMMAND}
+            -DGATED=$<TARGET_FILE:test_adapter_quiet_bar>
+            -DUNGATED=$<TARGET_FILE:test_adapter_quiet_bar_ungated>
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/quiet_bar_differential
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/quiet_bar_differential.cmake)
+endif()
 
 pineforge_add_twin_test(test_l8c_short_seed_p0_10 test_l8c_short_seed_guards p0-10)
 pineforge_add_twin_test(test_l8c_short_seed_p1_16 test_l8c_short_seed_guards p1-16)

@@ -6,6 +6,7 @@
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "pine_quiet_bar.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1822,8 +1823,14 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // evaluation. Draining it here keeps the body's position state, and the
     // levels it re-prices, on the same side of the fill as the owner; a leg that
     // carries a predecessor receipt stays staged for the flush below the body.
-    adapter_.flush_pending_bracket_legs({}, /*post_calculation=*/false,
-                                       /*pre_script_drain=*/true);
+    // Quiet-bar gates (pine_quiet_bar.hpp): a drain with nothing staged or
+    // queued is not called.
+    using detail::QuietHook;
+    using detail::skip_quiet;
+    if (!skip_quiet(QuietHook::BracketLegs, adapter_.pending_bracket_legs_.empty())) {
+        adapter_.flush_pending_bracket_legs({}, /*post_calculation=*/false,
+                                           /*pre_script_drain=*/true);
+    }
     struct ChartEmaNaWarmupScope {
         bool previous;
         explicit ChartEmaNaWarmupScope(bool enabled)
@@ -1846,13 +1853,18 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         bar_index_ = previous_bar_index;
         barstate_islast_ = previous_barstate_islast;
     }
-    adapter_.flush_pending_closes();
+    if (!skip_quiet(QuietHook::PendingCloses, adapter_.close_batch_callsites_.empty()))
+        adapter_.flush_pending_closes();
     adapter_.flush_pending_entries();
-    adapter_.flush_pending_bracket_legs();
+    if (!skip_quiet(QuietHook::BracketLegs, adapter_.pending_bracket_legs_.empty()))
+        adapter_.flush_pending_bracket_legs();
     // After every command of this evaluation is in the kernel: a queued
     // relative strategy.exit whose parent entry is now a live request becomes
     // that parent's anchored bracket child.
-    adapter_.anchor_relative_exits();
+    if (!skip_quiet(QuietHook::RelativeExits, adapter_.anchored_relative_legs_.empty()
+                                              && adapter_.pending_relative_exits_.empty())) {
+        adapter_.anchor_relative_exits();
+    }
     if (advance_source_index) {
         scheduler_mark_report_point(bar.timestamp);
         prev_bar_timestamp_ = bar.timestamp;

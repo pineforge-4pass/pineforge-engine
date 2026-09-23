@@ -10,6 +10,7 @@
 #include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
+#include "pine_quiet_bar.hpp"
 
 #include <algorithm>
 #include <array>
@@ -508,7 +509,29 @@ PineStrategyHost* pine_view(NativeStrategyHost* host) noexcept {
     return memo.view;
 }
 
+// True when the placement row of some live handle satisfies `row`: the
+// quiet-bar gates' scan (pine_quiet_bar.hpp). It reads and allocates nothing
+// beyond the rows it visits.
+template <class Row>
+bool any_live_row(const std::vector<native_order::RequestHandle>& live,
+                  const PlacementTable& placement, Row&& row) {
+    for (const auto& handle : live) {
+        const auto found = placement.find(handle.incarnation);
+        if (found != placement.end() && row(found->second)) return true;
+    }
+    return false;
+}
+
 } // namespace
+
+#if PINEFORGE_PINE_QUIET_BAR_PROBE
+namespace detail {
+QuietBarCounts& quiet_bar_counts() noexcept {
+    static QuietBarCounts counts;
+    return counts;
+}
+}  // namespace detail
+#endif
 
 // ab9714be pine_fills.cpp:2009-2023: a margin slice born in a prefix-sampling
 // chronology (the POOC pre-script pass, or the 1x-long opening slice taken
@@ -3846,12 +3869,30 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
 
 void PineExecutionAdapter::observe_terminal_receipts() {
     auto& host = require_host();
-    const auto state = host.native_state();
     // A PineStrategyHost's command history is read in place, through its
     // consumer; any other host is read through native_events().
     auto* pine = pine_view(&host);
     const NativeExecutionConsumer* consumer = pine
         ? &as_native_consumer(pine->execution_consumer()) : nullptr;
+    // Quiet: no command event above the cursor -- nothing at all above it,
+    // or only driver points and account rows, which are never observed. This
+    // is every read of a bar that issued no command. The read below would
+    // then visit nothing and end with the cursor on the high water, which is
+    // all this does. It also leaves the terminal watermark alone, as the read
+    // would: a terminal receipt is a command, and every command's ordinal
+    // exceeds the high water of the read before it, so the first read after
+    // one always takes the full path, which raises the watermark past it.
+    if (consumer) {
+        const std::uint64_t high_water = consumer->event_high_water();
+        const bool quiet = high_water <= receipt_cursor_
+            || consumer->first_command_after(receipt_cursor_)
+                   == consumer->first_command_after(std::numeric_limits<std::uint64_t>::max());
+        if (detail::skip_quiet(detail::QuietHook::ReceiptRead, quiet)) {
+            receipt_cursor_ = std::max(receipt_cursor_, high_water);
+            return;
+        }
+    }
+    const auto state = host.native_state();
     const bool in_place = consumer != nullptr;
     // The terminal watermark is folded into the broker-state hash
     // (pine_state_hash.cpp) and has only ever advanced on a run without an
@@ -8905,6 +8946,16 @@ void PineExecutionAdapter::release_delayed_orders(
 }
 
 void PineExecutionAdapter::flush_pending_entries() {
+    // Quiet (pine_quiet_bar.hpp): no delayed order, same-bar batch or held
+    // entry is queued; the batch's close total is still reset, as the flush
+    // below always does.
+    if (detail::skip_quiet(detail::QuietHook::PendingEntries,
+                           host_ != nullptr && delayed_market_orders_.empty()
+                           && pending_same_bar_commands_.empty()
+                           && pending_entries_.empty())) {
+        pending_same_bar_close_qty_ = 0.0;
+        return;
+    }
     release_delayed_orders();
     flush_pending_same_bar_commands();
     auto queued = std::move(pending_entries_);
@@ -12590,8 +12641,23 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
     // policy over the native position and its ordinary chart path.  It is not
     // a second matching loop: the resulting reduction is still a generic
     // current execution with an immutable source terms fact.
-    const auto position = require_host().physical_position();
     const auto grid = staged_.quantity_grid;
+    // Quiet: out of scope by the run's configuration alone, which the test
+    // below would refuse before it reads the book.
+    if (detail::skip_quiet(detail::QuietHook::TvMoneyLongMargin,
+            host_ != nullptr
+            && (!source_margin_call_enabled_ || stream_mode_
+                || std::abs(config_.margin_long - 100.0) > 1e-12
+                || config_.commission_value != 0.0 || config_.slippage != 0
+                || !grid || !(*grid > 0.0) || *grid > 1.0
+                || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
+                || !staged_.account_fx_effective_from_ms.empty()
+                || cap.active() || risk_.max_intraday_loss > 0.0
+                || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0
+                || last_margin_call_script_bar_ == context.script_bar_open_ms))) {
+        return false;
+    }
+    const auto position = require_host().physical_position();
     if (!source_margin_call_enabled_ || stream_mode_
         || position.signed_units <= 0.0 || position.lot_count != 1
         || std::abs(config_.margin_long - 100.0) > 1e-12
@@ -12761,6 +12827,15 @@ bool PineExecutionAdapter::slipped_pooc_opening_money_scope(
 
 bool PineExecutionAdapter::submit_slipped_pooc_opening_money_call(
         const Bar& bar, const NativeDecisionContext& context) {
+    // Quiet: out of scope by the run's configuration alone, which
+    // slipped_pooc_opening_money_scope refuses before it reads the book.
+    if (detail::skip_quiet(detail::QuietHook::SlippedPoocMoney,
+            host_ != nullptr
+            && (!source_margin_call_enabled_ || stream_mode_
+                || !config_.process_orders_on_close || config_.slippage <= 0
+                || config_.commission_value != 0.0))) {
+        return false;
+    }
     if (!slipped_pooc_opening_money_scope(bar, context)
         || position_open_script_bar_ == context.script_bar_open_ms
         || last_margin_call_script_bar_ == context.script_bar_open_ms) {
@@ -12782,8 +12857,24 @@ bool PineExecutionAdapter::submit_slipped_pooc_opening_money_call(
 
 bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         const Bar& bar, const NativeDecisionContext& context) {
-    const auto position = require_host().physical_position();
     const auto grid = staged_.quantity_grid;
+    // Quiet: out of scope by the run's configuration alone, which the test
+    // below would refuse before it reads the book.
+    if (detail::skip_quiet(detail::QuietHook::TvMoneyTrailMargin,
+            host_ != nullptr
+            && (!source_margin_call_enabled_ || config_.calc_on_order_fills || stream_mode_
+                || std::abs(config_.margin_long - 100.0) > 1e-12
+                || config_.commission_value != 0.0 || config_.slippage != 0
+                || config_.pyramiding < 0 || config_.pyramiding > 1
+                || !grid || !(*grid > 0.0) || *grid >= 1.0
+                || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
+                || !staged_.account_fx_effective_from_ms.empty()
+                || cap.active() || risk_.max_intraday_loss > 0.0
+                || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0
+                || last_margin_call_script_bar_ == context.script_bar_open_ms))) {
+        return false;
+    }
+    const auto position = require_host().physical_position();
     if (!source_margin_call_enabled_ || config_.calc_on_order_fills || stream_mode_
         || position.signed_units <= 1.0 || position.lot_count != 1
         || std::abs(config_.margin_long - 100.0) > 1e-12
@@ -12938,8 +13029,22 @@ bool PineExecutionAdapter::market_orders_pending_at_close(
 
 bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
         const Bar& bar) const {
-    const auto position = require_host().physical_position();
     const auto grid = staged_.quantity_grid;
+    // Quiet: out of scope by the run's configuration alone, which the test
+    // below would refuse before it reads the book.
+    if (detail::skip_quiet(detail::QuietHook::RoundedPoocShortMargin,
+            host_ != nullptr
+            && (!config_.process_orders_on_close || config_.calc_on_order_fills
+                || stream_mode_ || config_.pyramiding < 0 || config_.pyramiding > 1
+                || config_.commission_value != 0.0 || config_.slippage != 0
+                || std::abs(config_.margin_short - 100.0) > 1e-12
+                || !grid || !(*grid > 0.0) || !(*grid < 1.0)
+                || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
+                || cap.active() || risk_.max_intraday_loss > 0.0
+                || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0))) {
+        return false;
+    }
+    const auto position = require_host().physical_position();
     if (!config_.process_orders_on_close || config_.calc_on_order_fills
         || stream_mode_ || position.signed_units >= 0.0 || position.lot_count != 1
         || position_open_script_bar_ >= bar.timestamp
@@ -14432,15 +14537,63 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         last_broker_open_ms_ = context.script_bar_open_ms;
         ++broker_open_epoch_;
     }
+    // Quiet-bar gates (pine_quiet_bar.hpp): a policy hook below whose body
+    // has nothing to act on at this opening is not called at all. Each
+    // condition is that hook's own no-op precondition.
+    using detail::QuietHook;
+    using detail::skip_quiet;
     // ab9714be prearmed pending-entry legs become executable at the next
     // broker opening, before that bar's path is matched. Releasing them only
     // from the later source close callback misses the intended bar.
-    release_delayed_orders(/*explicit_brackets_only=*/true, bar.open);
+    // Quiet: no order is delayed.
+    if (!skip_quiet(QuietHook::DelayedRelease, delayed_market_orders_.empty()))
+        release_delayed_orders(/*explicit_brackets_only=*/true, bar.open);
     activate_short_seed_plan_at_open(context);
-    update_l4c_priority();
-    apply_open_market_admission(context);
-    defer_open_marketable_sells(bar);
-    reaccept_gapped_bracket_behind_same_id_add(bar, context);
+    // Quiet: OrderPriority::select ranks only a pair of live candidates, and
+    // only for an attached retained-parent rule on a close-order run outside
+    // fill recalculation; otherwise it answers nothing and the book keeps
+    // its order.
+    if (!skip_quiet(QuietHook::L4cPriority,
+            !priority.attached() || !priority.retained_parent_first()
+            || !config_.process_orders_on_close || config_.calc_on_order_fills
+            || coof_recalc_active_ || live_handles_.size() < 2)) {
+        update_l4c_priority();
+    }
+    // Quiet: every admission candidate is a live entry the previous source
+    // bar placed; without one no pair or pyramiding rule applies, nothing is
+    // cancelled and both reviews see no handle.
+    const int source_bar = context.coordinate.interval_index - 1;
+    if (!skip_quiet(QuietHook::OpenMarketAdmission,
+            !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                return row.family == PineOrderFamily::Entry
+                    && row.projection_created_bar == source_bar;
+            }))) {
+        apply_open_market_admission(context);
+    }
+    // Quiet: a sell is deferred only when both a live pure-stop buy entry and
+    // a live pure-stop sell entry are marketable at the fill point (the close
+    // under process_orders_on_close, else the open).
+    const double sell_fill_point = config_.process_orders_on_close ? bar.close : bar.open;
+    const auto marketable_stop_entry = [&](bool is_long) {
+        return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+            return row.is_long == is_long
+                && pure_stop_entry_marketable_at(row, sell_fill_point);
+        });
+    };
+    if (!skip_quiet(QuietHook::OpenMarketableSells,
+            config_.calc_on_order_fills || stream_mode_
+            || !marketable_stop_entry(true) || !marketable_stop_entry(false))) {
+        defer_open_marketable_sells(bar);
+    }
+    // Quiet: a gapped leg is re-accepted only behind a live pure market add
+    // of its own id, which is an opening entry or order.
+    if (!skip_quiet(QuietHook::GappedBracketReaccept,
+            !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
+                return row.opening && (row.family == PineOrderFamily::Entry
+                                       || row.family == PineOrderFamily::Order);
+            }))) {
+        reaccept_gapped_bracket_behind_same_id_add(bar, context);
+    }
     source_shadow_pending_.clear();
     coof_script_bar_ = bar;
     coof_script_bar_valid_ = true;
@@ -14452,7 +14605,24 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // ordinary-path projection untouched, matching the legacy contract.
     last_bar_dual_entry_path_ = 0;
     last_bar_dual_entry_script_open_ms_ = context.script_bar_open_ms;
-    if (!config_.calc_on_order_fills && require_host().physical_position().signed_units == 0.0) {
+    // Quiet: a path is recorded only when this bar touches two live flat
+    // stop entries, each by its own side's test.
+    const auto touched_stop_entry = [&](const PlacementSnapshot& row) {
+        return row.family == PineOrderFamily::Entry
+            && finite_positive(row.exit_levels.stop)
+            && !std::isfinite(row.exit_levels.limit)
+            && !finite_positive(row.exit_levels.trail_offset)
+            && (row.is_long ? bar.high >= row.exit_levels.stop
+                            : bar.low <= row.exit_levels.stop);
+    };
+    std::size_t touched_stop_entries = 0;
+    for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end() && touched_stop_entry(found->second))
+            ++touched_stop_entries;
+    }
+    if (!skip_quiet(QuietHook::DualEntryPath, touched_stop_entries < 2)
+        && !config_.calc_on_order_fills && require_host().physical_position().signed_units == 0.0) {
         std::vector<const PlacementSnapshot*> stops;
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
@@ -14480,8 +14650,17 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             }
         }
     }
-    flush_coof_tail(/*openings_only=*/false, /*include_next_open=*/true);
-    suspend_coof_declined_reversal_at_open(bar, context);
+    // Quiet: no fill recalculation left a request staged.
+    if (!skip_quiet(QuietHook::CoofTail, pending_coof_requests_.empty()))
+        flush_coof_tail(/*openings_only=*/false, /*include_next_open=*/true);
+    // Quiet: brackets are suspended only for a live opening reversal entry.
+    const auto opening_reversal_entry = [](const PlacementSnapshot& row) {
+        return row.opening && row.family == PineOrderFamily::Entry && row.reverse_to;
+    };
+    if (!skip_quiet(QuietHook::CoofDeclinedReversal,
+            !any_live_row(live_handles_, placement_, opening_reversal_entry))) {
+        suspend_coof_declined_reversal_at_open(bar, context);
+    }
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
         close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_open_script_bar_ = context.script_bar_open_ms;
@@ -14492,7 +14671,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         day_ledger_.intraday_start_equity = require_host().native_marked_equity(bar.open);
         day_ledger_.intraday_realized = 0.0;
     }
-    execute_due_cap_close(context);
+    // Quiet: no filled-orders cap close is due.
+    if (!skip_quiet(QuietHook::DueCapClose, !cap.due_cause().has_value()))
+        execute_due_cap_close(context);
     apply_fx_open_margin_slice(bar, context);
     (void)submit_slipped_pooc_opening_money_call(bar, context);
     const auto opening_position = require_host().physical_position();
@@ -14522,7 +14703,11 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         if (last_margin_call_script_bar_ != context.script_bar_open_ms)
             (void)schedule_tv_money_long_margin_before_trail(bar, context);
     }
-    if (!long_full_margin && staged_.account_fx_effective_from_ms.empty()) {
+    // Quiet: a flat book takes no open or path slice -- its margin money is
+    // invalid, it declines no reversal and schedules no path check -- so the
+    // block below changes nothing.
+    if (!long_full_margin && staged_.account_fx_effective_from_ms.empty()
+        && !skip_quiet(QuietHook::OpenMarginCheckpoints, opening_position.signed_units == 0.0)) {
         const double held_at_open = std::abs(opening_position.signed_units);
         bool opposite_entry_waits = false;
         bool whole_market_close_waits = false;
@@ -14576,7 +14761,10 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // suffix: a restored bracket at an earlier level wins naturally, while
         // an unprotected position can take a second slice at the adverse
         // extreme on the same bar.
-        const bool declined_reversal = declined_reversal_at_open(bar);
+        // Quiet: only a live opening reversal entry can be declined.
+        const bool declined_reversal = !skip_quiet(QuietHook::DeclinedReversalAtOpen,
+                !any_live_row(live_handles_, placement_, opening_reversal_entry))
+            && declined_reversal_at_open(bar);
         bool margin_scheduled = false;
         if (!opening_margin_applied
             && !defer_rounded_pooc_short_margin_until_close(bar)
@@ -14588,9 +14776,23 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                 bar, context, margin_scheduled);
         }
     }
-    (void)submit_intraday_loss_close(bar.open, context, true);
-    schedule_intraday_loss_path(bar, context);
-    schedule_preopen_margin_slice(bar, context);
+    // Quiet: without an intraday loss rule no loss is ever breached, so no
+    // close is executed now or scheduled on the path.
+    const bool no_intraday_loss_rule = !(risk_.max_intraday_loss > 0.0);
+    if (!skip_quiet(QuietHook::IntradayLossClose, no_intraday_loss_rule))
+        (void)submit_intraday_loss_close(bar.open, context, true);
+    if (!skip_quiet(QuietHook::IntradayLossPath, no_intraday_loss_rule))
+        schedule_intraday_loss_path(bar, context);
+    // Quiet: margin calls off, a non-percent default quantity or no live
+    // opening entry, which the slice refuses before it reads the book.
+    if (!skip_quiet(QuietHook::PreopenMarginSlice,
+            !source_margin_call_enabled_
+            || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            || !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
+                   return row.opening && row.family == PineOrderFamily::Entry;
+               }))) {
+        schedule_preopen_margin_slice(bar, context);
+    }
     if (context.sub_index == 0)
         cap.ordinary_open(context.coordinate.interval_index);
 }
@@ -14904,10 +15106,40 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
 
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
-    flush_pooc_marketable_limit_entry_fills(bar, context);
-    flush_pooc_marketable_exit_fills(bar, context);
-    admit_deferred_open_marketable_sells();
-    rearm_throttled_reopens();
+    // Quiet-bar gates (pine_quiet_bar.hpp), as at the opening. None fires on
+    // an unbound adapter: its hooks still refuse through require_host().
+    using detail::QuietHook;
+    using detail::skip_quiet;
+    const bool bound = host_ != nullptr;
+    // Quiet: the close fills are a process_orders_on_close pass outside fill
+    // recalculation and streams, and fill only what this bar placed -- an
+    // opening entry, or a limit or stop exit leg.
+    const bool close_fill_pass = config_.process_orders_on_close
+        && !config_.calc_on_order_fills && !stream_mode_ && !coof_recalc_active_;
+    const int bar_index = context.coordinate.interval_index;
+    if (!skip_quiet(QuietHook::PoocLimitEntryFills, bound && (!close_fill_pass
+            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                   return row.family == PineOrderFamily::Entry && row.opening
+                       && row.projection_created_bar == bar_index;
+               })))) {
+        flush_pooc_marketable_limit_entry_fills(bar, context);
+    }
+    if (!skip_quiet(QuietHook::PoocExitFills, bound && (!close_fill_pass
+            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                   return (row.family == PineOrderFamily::ExitLimit
+                           || row.family == PineOrderFamily::ExitStop)
+                       && row.projection_created_bar == bar_index;
+               })))) {
+        flush_pooc_marketable_exit_fills(bar, context);
+    }
+    // Quiet: no sell was deferred at this bar's open.
+    if (!skip_quiet(QuietHook::DeferredSellAdmission,
+                    bound && deferred_open_marketable_sells_.empty())) {
+        admit_deferred_open_marketable_sells();
+    }
+    // Quiet: no flat stop entry was throttled.
+    if (!skip_quiet(QuietHook::ThrottledReopens, bound && throttled_reopen_rearm_.empty()))
+        rearm_throttled_reopens();
     // A tolerant stream can synthesize a pair-less script callback without a
     // separate open hook. Batch bars always pass through on_bar_open and keep
     // their completed arbitration observable after the run.
@@ -14916,7 +15148,23 @@ void PineExecutionAdapter::on_bar_close(
         last_bar_dual_entry_path_ = 0;
         last_bar_dual_entry_script_open_ms_ = context.script_bar_open_ms;
     }
-    apply_terminal_explicit_market_policy(context);
+    // Quiet: the terminal policy is a process_orders_on_close pass at
+    // pyramiding 0 outside streams over two or more explicit-quantity
+    // opening entries this bar placed.
+    std::size_t explicit_entries = 0;
+    if (config_.process_orders_on_close && config_.pyramiding == 0 && !stream_mode_) {
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end() && found->second.opening
+                && found->second.family == PineOrderFamily::Entry
+                && found->second.projection_created_bar == bar_index
+                && finite_positive(found->second.requested_qty)) {
+                ++explicit_entries;
+            }
+        }
+    }
+    if (!skip_quiet(QuietHook::TerminalExplicitMarket, bound && explicit_entries < 2))
+        apply_terminal_explicit_market_policy(context);
     update_risk_state(bar.close);
     if (stream_mode_) return;
     // The native callback frame remains current after the source script
@@ -14928,6 +15176,18 @@ void PineExecutionAdapter::on_bar_close(
     if (defer_rounded_pooc_short_margin_until_close(bar)) {
         const double adverse = nearest_tick(bar.high, staged_.syminfo.mintick);
         (void)submit_margin_call_slice(adverse, context);
+        return;
+    }
+    // Quiet: both checkpoints below belong to a short under one run
+    // configuration each -- a commissioned full-margin short outside
+    // process_orders_on_close, a carried short inside it without fill
+    // recalculation -- and neither applies to this run.
+    if (skip_quiet(QuietHook::CloseMarginCheckpoints,
+            bound
+            && !(!config_.process_orders_on_close && config_.margin_short == 100.0
+              && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+              && config_.commission_value > 0.0)
+            && !(config_.process_orders_on_close && !config_.calc_on_order_fills))) {
         return;
     }
     const auto position = require_host().physical_position();
