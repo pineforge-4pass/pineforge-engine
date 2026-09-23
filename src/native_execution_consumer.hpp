@@ -1072,9 +1072,19 @@ private:
         latch_abort(engine, operation, ordinal);
         return false;
     }
+    // The abort, then the projected engine fields against the applied spec
+    // (projection_ok). Inside a pump (PumpScope) the second half is deferred to
+    // the pump's own boundaries, so a callback or policy-hook boundary checks the
+    // abort alone (v19, lane V19-C).
     bool check_abort_or_projection(BacktestEngine& engine, NativeFailureOperation operation,
                                    uint64_t ordinal = 0) {
         if (!check_abort(engine, operation, ordinal)) return false;
+        return projection_deferred_ || check_projection(engine, operation, ordinal);
+    }
+    // The projection half alone, never deferred: an in-callback execution's own
+    // precondition (execute_current).
+    bool check_projection(BacktestEngine& engine, NativeFailureOperation operation,
+                          uint64_t ordinal = 0) {
         if (projection_ok(engine)) return true;
         latch_projection_mismatch(engine, operation, ordinal);
         return false;
@@ -1082,6 +1092,25 @@ private:
     void latch_abort(BacktestEngine& engine, NativeFailureOperation operation, uint64_t ordinal);
     void latch_projection_mismatch(BacktestEngine& engine, NativeFailureOperation operation,
                                    uint64_t ordinal);
+    // One pump: a batch's whole input loop, or one public stream input. While
+    // one is open, check_abort_or_projection defers its projection compare to
+    // the pump's boundaries -- before its first input and after its last -- and
+    // a host that writes a projected field inside the pump fails there, with
+    // the pump's operation and ordinal 0. Derived call-stack state, never folded.
+    class PumpScope {
+    public:
+        explicit PumpScope(bool& deferred) noexcept : deferred_(deferred), prior_(deferred) {
+            deferred_ = true;
+        }
+        ~PumpScope() { deferred_ = prior_; }
+        PumpScope(const PumpScope&) = delete;
+        PumpScope& operator=(const PumpScope&) = delete;
+
+    private:
+        bool& deferred_;
+        bool prior_;
+    };
+    bool projection_deferred_ = false;
     void present_refusal(BacktestEngine& engine, const char* text);
     bool finalize_elapsed_slots(BacktestEngine& engine, int64_t exclusive_end_ms);
     bool emit_quiet_carried_open(BacktestEngine& engine,

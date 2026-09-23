@@ -6405,7 +6405,10 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
     if (!current_execution_point()) return NativeCurrentRefusal::NoExecutionContext;
     // The in-callback guard must run before allocating a point or inspecting a
     // temporarily modified fee, FX, price tick, calendar or admission setting.
-    if (!check_abort_or_projection(engine, NativeFailureOperation::Command))
+    // It is the execution's own precondition, not a callback boundary, so a
+    // pump does not defer it (V19-C).
+    if (!check_abort(engine, NativeFailureOperation::Command)
+        || !check_projection(engine, NativeFailureOperation::Command))
         throw std::runtime_error("native current execution projection/abort failure");
     try {
         if (auto refusal = validate_current_execution(engine, command)) return *refusal;
@@ -8722,37 +8725,46 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         return size + grown > capacity ? bound : 0;
     };
     std::size_t checkpoint = 64;
-    for (int i = 0; i < n; ++i) {
-        // The previous input's closing check is this loop's last statement,
-        // and no host code runs between it and here: the projection it has
-        // just compared cannot have moved, so every input after the first
-        // re-reads only the abort flag, the one thing another thread may set.
-        if (!(i == 0 ? check_abort_or_projection(engine, NativeFailureOperation::Input)
-                     : check_abort(engine, NativeFailureOperation::Input))) return;
-        if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
-            if (!failed()) {
-                fail(engine, NativeFailure{NativeFailureCode::Preflight,
-                                           NativeFailureOperation::Input});
-            }
-            return;
+    // At each doubling checkpoint of the inputs consumed, size both logs for
+    // the rest of the batch at the rate it has shown so far.
+    const auto presize_logs = [&](std::size_t consumed_inputs) {
+        if (consumed_inputs != checkpoint || checkpoint >= total) return;
+        const std::size_t consumed = checkpoint;
+        checkpoint *= 2;
+        if (const std::size_t points = presize(driver_base, driver_log_.size(),
+                                               driver_log_.capacity(), consumed,
+                                               driver_log_.max_size())) {
+            hint([&] { reserve_driver_log(points); });
         }
-        if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
-        if (static_cast<std::size_t>(i) + 1 == checkpoint && checkpoint < total) {
-            const std::size_t consumed = checkpoint;
-            checkpoint *= 2;
-            if (const std::size_t points = presize(driver_base, driver_log_.size(),
-                                                   driver_log_.capacity(), consumed,
-                                                   driver_log_.max_size())) {
-                hint([&] { reserve_driver_log(points); });
+        const auto& history = requests_.history();
+        if (const std::size_t events = presize(history_base, history.size(),
+                                               history.capacity(), consumed,
+                                               history.max_size())) {
+            hint([&] { requests_.reserve(events); });
+        }
+    };
+    // The pump compares the projected fields before its first input and after
+    // its last (v19, lane V19-C). Every boundary in between -- each input's own
+    // checks, and every callback and policy hook the inputs drive -- re-reads
+    // only the abort flag, the one thing another thread may set; a host that
+    // writes a projected field inside the pump fails at its end.
+    if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
+    {
+        PumpScope pump(projection_deferred_);
+        for (int i = 0; i < n; ++i) {
+            if (i != 0 && !check_abort(engine, NativeFailureOperation::Input)) return;
+            if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
+                if (!failed()) {
+                    fail(engine, NativeFailure{NativeFailureCode::Preflight,
+                                               NativeFailureOperation::Input});
+                }
+                return;
             }
-            const auto& history = requests_.history();
-            if (const std::size_t events = presize(history_base, history.size(),
-                                                   history.capacity(), consumed,
-                                                   history.max_size())) {
-                hint([&] { requests_.reserve(events); });
-            }
+            if (!check_abort(engine, NativeFailureOperation::Input)) return;
+            presize_logs(static_cast<std::size_t>(i) + 1);
         }
     }
+    (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
@@ -8987,8 +8999,13 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
             return false;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
-        if (!consume_confirmed_input(engine, bar, next_interval_index_, false)) return false;
+        {
+            // One public input is one pump (V19-C): compared at its two ends.
+            PumpScope pump(projection_deferred_);
+            if (!consume_confirmed_input(engine, bar, next_interval_index_, false)) return false;
+        }
         select_input_mode(InputMode::ConfirmedBars);
+        if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -9280,7 +9297,11 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
     try {
         if (!preflight_ticks(engine, &tick, 1)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
-        return deliver_tick(engine, tick);
+        {
+            PumpScope pump(projection_deferred_);
+            if (!deliver_tick(engine, tick)) return false;
+        }
+        return check_abort_or_projection(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
         processing_input_ = false;
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -9296,10 +9317,14 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
     try {
         if (!preflight_ticks(engine, ticks, n)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
-        for (int i = 0; i < n; ++i) {
-            if (!deliver_tick(engine, ticks[i])) return false;
-            if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
+        {
+            PumpScope pump(projection_deferred_);
+            for (int i = 0; i < n; ++i) {
+                if (!deliver_tick(engine, ticks[i])) return false;
+                if (!check_abort(engine, NativeFailureOperation::Input)) return false;
+            }
         }
+        if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         return !failed();
     } catch (const std::exception& e) {
         processing_input_ = false;
@@ -9328,20 +9353,24 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         select_input_mode(InputMode::ObservedTicks);
-        if (has_last_price_ || has_forming_) {
-            processing_input_ = true;
-            const bool ok = finalize_elapsed_slots(engine, timestamp_ms);
-            processing_input_ = false;
-            if (!ok) return false;
+        {
+            PumpScope pump(projection_deferred_);
+            if (has_last_price_ || has_forming_) {
+                processing_input_ = true;
+                const bool ok = finalize_elapsed_slots(engine, timestamp_ms);
+                processing_input_ = false;
+                if (!ok) return false;
+            }
+            if (script_.has_data && !script_.sealed
+                && timestamp_ms >= script_.interval.next_period_open_ms) {
+                processing_input_ = true;
+                seal_script(engine, NativeCompletionKind::Confirmed);
+                script_ = ScriptBucket{};
+                processing_input_ = false;
+                if (failed()) return false;
+            }
         }
-        if (script_.has_data && !script_.sealed
-            && timestamp_ms >= script_.interval.next_period_open_ms) {
-            processing_input_ = true;
-            seal_script(engine, NativeCompletionKind::Confirmed);
-            script_ = ScriptBucket{};
-            processing_input_ = false;
-            if (failed()) return false;
-        }
+        if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         raise_floor(timestamp_ms);
         return !failed();
     } catch (const std::exception& e) {
@@ -9362,6 +9391,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         if (finalize_partial_input_bar && has_forming_) {
+            PumpScope pump(projection_deferred_);
             auto forming_interval = native_calendar::interval_containing(
                 calendar_, input_tf_, forming_.timestamp, calendar_memo_);
             if (forming_interval) {
@@ -9372,6 +9402,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
             }
         }
         if (failed()) return false;
+        if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         record_open_position_report_rows(engine);
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) {

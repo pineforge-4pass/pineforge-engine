@@ -106,7 +106,11 @@ void declared_curve_streams_confirmed_bars_only() {
           != std::string::npos);
 }
 
-void post_resolver_projection_guard_blocks_effects() {
+// A resolver that writes a projected field fails the run at the pump's end,
+// not at the policy-hook boundary after it: since the v19 value epoch (R5 lane
+// V19-C) a hook boundary inside a pump checks the cooperative abort alone, so
+// the fill the resolver priced settles on the configuration it left.
+void post_resolver_projection_write_fails_at_the_pump_end() {
     TermsHost host;
     bool called = false;
     host.resolver = [&](const NativeExecutionTermsFacts& facts) {
@@ -120,9 +124,15 @@ void post_resolver_projection_guard_blocks_effects() {
     CHECK(called);
     CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
     CHECK(host.native_state().failure.code == NativeFailureCode::ProjectionMismatch);
-    CHECK(host.lots().empty());
+    // expectation corrected: failed at the Settlement hook boundary with no lot
+    // and no account record -> failed at the pump's end (Input, ordinal 0)
+    // after the fill booked one lot and its account record, because v19
+    // compares the projection per pump (V19-C).
+    CHECK(host.native_state().failure.operation == NativeFailureOperation::Input);
+    CHECK(host.native_state().failure.ordinal == 0);
+    CHECK(host.lots().size() == 1);
     CHECK(host.rows().empty());
-    CHECK(accounts(host) == 0);
+    CHECK(accounts(host) == 1);
 }
 
 void wrong_phase_is_side_effect_free() {
@@ -157,10 +167,17 @@ void preview_projection_barrier_is_a_typed_refusal() {
     };
     run(host, spec("fx-preview-projection"), {100});
     // The callback leaves an intentionally poisoned projected configuration;
-    // end-of-callback guard owns the native failure, not the preview itself.
+    // the pump's end owns the native failure, not the preview itself.
     CHECK(reached);
     CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
-    CHECK(host.lots().empty());
+    // expectation corrected: failed at the end-of-callback boundary with no
+    // lot -> failed at the pump's end (Input, ordinal 0) after the resting
+    // request filled at its next point, because v19 compares the projection
+    // per pump (V19-C). The preview's typed refusal above did not move.
+    CHECK(host.native_state().failure.code == NativeFailureCode::ProjectionMismatch);
+    CHECK(host.native_state().failure.operation == NativeFailureOperation::Input);
+    CHECK(host.native_state().failure.ordinal == 0);
+    CHECK(host.lots().size() == 1);
 }
 
 void a_f2_curve_boundaries_hash_and_a_f6_reset_clock() {
@@ -400,7 +417,8 @@ void d1_applied_callback_uses_activation_timestamp() {
 int main() {
     test("FX activation at execution coordinate", stage_and_apply_at_execution_coordinate);
     test("declared curve streams confirmed bars only", declared_curve_streams_confirmed_bars_only);
-    test("resolver projection barrier", post_resolver_projection_guard_blocks_effects);
+    test("resolver projection write fails at the pump end",
+         post_resolver_projection_write_fails_at_the_pump_end);
     test("wrong phase staging", wrong_phase_is_side_effect_free);
     test("preview projection barrier", preview_projection_barrier_is_a_typed_refusal);
     test("A-F2 curve boundary and A-F6 reset clock", a_f2_curve_boundaries_hash_and_a_f6_reset_clock);

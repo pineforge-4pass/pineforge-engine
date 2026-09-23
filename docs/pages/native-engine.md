@@ -573,12 +573,23 @@ Execution revalidates; editing the preview cannot authorize or alter a fill.
 
 The default-empty `on_native_applied(event, context)` notification follows the
 Account record and group/owner/dependency drains. Synchronous commands enqueue
-notifications FIFO until the outer callback returns and passes projection and
-abort checks. Callback depth stays one; event values remain valid during later
+notifications FIFO until the outer callback returns and passes the abort check.
+Callback depth stays one; event values remain valid during later
 submissions. Notifications never automatically execute newborn requests and
 have no semantic 64-execution cap. Failure after a physical commit discards the
-host; a failed host cannot retry. Configuration projection is checked before
-in-callback execution as well as after callback return.
+host; a failed host cannot retry.
+
+The engine fields a run projects from its spec (the capital, point value, FX
+scalar and curve, tick, commission and the instrument and zone strings) are
+compared with the applied spec before every in-callback execution
+(`execute_current`, whose own precondition it is), at run begin, and at the two
+ends of every pump: a batch before its first input and after its last, a stream
+at each public input (R5 lane V19-C). Every callback and policy-hook boundary
+inside a pump checks the cooperative abort alone. A host that writes a projected
+field inside a pump — outside the contract, which forbids writing protected
+engine fields — fails with `ProjectionMismatch` at the pump's end, with the
+pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
+with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
 derives from `NativeStrategyHost` (`pine_strategy_host.hpp:242`) and lowers

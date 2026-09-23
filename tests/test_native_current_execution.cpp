@@ -319,7 +319,15 @@ void failure_boundaries(int which) {
         if(which==3){apply(b,put(b,tx(1)));throw std::runtime_error("after physical commit");}
     };
     run(h,spec(),{100});CHECK(h.native_state().kind==NativeLifecycleKind::Failed);
-    CHECK(!returned);CHECK(h.notified.empty());CHECK(h.rows().empty());
+    // expectation corrected (which==2): the physical commit's notification was
+    // not delivered, the end-of-callback projection check failing the run first
+    // -> it is delivered, and the run fails at the pump's end (Input, ordinal 0),
+    // because v19 compares the projection per pump (V19-C). An in-callback
+    // execution still compares first (which==0): its own precondition.
+    if(which==2){CHECK(h.native_state().failure.code==NativeFailureCode::ProjectionMismatch);
+        CHECK(h.native_state().failure.operation==NativeFailureOperation::Input);
+        CHECK(h.native_state().failure.ordinal==0);}
+    CHECK(!returned);CHECK(h.notified.size()==size_t(which==2?1:0));CHECK(h.rows().empty());
     near(h.physical_position().signed_units,which==0?0:1);
     CHECK(accounts(h)==size_t(which>=2?1:0));
     refusal(h,{},NativeCurrentRefusal::NoExecutionContext);

@@ -3,11 +3,15 @@
 // A host that writes one of the engine fields the kernel projects from the run
 // spec (initial capital, point value, the account FX scalar and curve, the
 // tick, the commission and the ten instrument and zone strings) fails its run
-// with NativeFailureCode::ProjectionMismatch at the first input or callback
-// boundary after the write. The lane trims that check twice: pump_batch no
-// longer re-compares the fields before an input that the previous input's
-// closing check has just compared -- no host code runs between the two -- and
-// the strings compare inline. Neither may move where a write is caught.
+// with NativeFailureCode::ProjectionMismatch. PERF-P23 trimmed that check
+// twice (no re-compare between two inputs with no host code between them, and
+// inline string compares) without moving where a write is caught. The v19
+// value epoch (R5 lane V19-C) moves it on purpose: the kernel compares the
+// fields at run begin and at each pump's two ends -- a batch before its first
+// input and after its last, a stream at each public input -- and every
+// callback or policy-hook boundary inside a pump checks the cooperative abort
+// alone, so a write inside a pump fails at the pump's end with the pump's
+// operation (Input) and ordinal 0. Every write caught before is still caught.
 //
 // This witness writes each projected field from each host hook -- every
 // NativeStrategyHost virtual and BacktestEngine::hash_host_extension -- at the
@@ -18,9 +22,9 @@
 // aggregated, margin, anchored, lower-timeframe, subscription, tick-stream
 // and confirmed-bar-stream runs, and each write's whole outcome is pinned:
 // whether the hook ran, the lifecycle, and the NativeFailure (code,
-// operation, ordinal, discriminator, context kind) with the error text. kExpected was harvested at
-// the lane's base (fc7aad62, PF_PROJECTION_WITNESS_DUMP=1) and holds unchanged
-// after it.
+// operation, ordinal, discriminator, context kind) with the error text.
+// kExpected was harvested at P23's base (fc7aad62, PF_PROJECTION_WITNESS_DUMP=1)
+// and re-harvested once at V19-C, each moved row marked there.
 //
 // Source-free: this TU runs in the kernel-only profile.
 #include <pineforge/native_host.hpp>
@@ -508,12 +512,9 @@ std::string cell_of(const Cell& cell, int trigger) {
         + kHookNames[static_cast<int>(cell.hook)] + "/" + std::to_string(trigger);
 }
 
-// The pinned outcome of one write: its field's own row when the write is one
-// whose outcome depends on the field, else its cell's.
-const char* expected_outcome(const std::string& cell, const std::string& field) {
-    const std::string key = cell + "/" + field;
-    for (const Expected& row : kFieldExceptions)
-        if (key == row.key) return row.outcome;
+// The pinned outcome of one write: its cell's row. Since V19-C a pump catches
+// every write of a cell at the same boundary, whatever the field.
+const char* expected_outcome(const std::string& cell) {
     for (const Expected& row : kExpected)
         if (cell == row.key) return row.outcome;
     return nullptr;
@@ -575,7 +576,7 @@ void every_write_fails_where_it_did() {
                         std::printf("    {\"%s/%s\", \"%s\"},\n", name.c_str(), field.c_str(),
                                     observed.c_str());
                     }
-                    const char* expected = expected_outcome(name, field);
+                    const char* expected = expected_outcome(name);
                     const bool same = expected != nullptr && observed == expected;
                     if (!same) {
                         std::fprintf(stderr, "  %s/%s\n    expected: %s\n    observed: %s\n",
