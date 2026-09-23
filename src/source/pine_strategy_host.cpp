@@ -161,7 +161,8 @@ std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
     // retained; the continuation snapshot keeps the scalar independent of
     // that switch and of NativeCompleted teardown.
     const std::uint64_t execution = last_script_continuation_valid_
-        ? last_script_continuation_hash_
+        ? as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+              .latched_continuation(last_script_continuation_hash_)
         : execution_consumer().continuation_hash();
     return broker_state_hash_from_execution_hash(execution);
 }
@@ -339,11 +340,19 @@ void source::PineStrategyHost::on_native_run_begin() {
 }
 
 void source::PineStrategyHost::capture_script_continuation_hash() {
-    last_script_continuation_hash_ = execution_consumer().continuation_hash();
-    last_script_continuation_valid_ = true;
+    auto& consumer = as_native_consumer(execution_consumer());
     if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
+        // The row just recorded folds the snapshot now, so it is taken now.
+        consumer.drop_continuation_view();
+        last_script_continuation_hash_ = consumer.continuation_hash();
+        last_script_continuation_valid_ = true;
         broker_state_hashes_.back() = broker_state_hash();
+        return;
     }
+    // Otherwise nothing may ever read it -- a benchmark or a report does not
+    // -- so the snapshot is a view the first reader folds (R5 lane PERF-P1).
+    consumer.capture_continuation_view();
+    last_script_continuation_valid_ = true;
 }
 
 void source::PineStrategyHost::on_native_input(
@@ -1880,6 +1889,7 @@ void source::PineStrategyHost::scheduler_mark_report_point(std::int64_t script_b
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {
     if (!broker_state_hash_recording_) return;
+    as_native_consumer(execution_consumer()).drop_continuation_view();
     last_script_continuation_hash_ = execution_consumer().continuation_hash();
     last_script_continuation_valid_ = true;
     broker_state_hashes_.push_back(broker_state_hash());

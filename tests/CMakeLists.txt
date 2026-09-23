@@ -874,6 +874,10 @@ list(APPEND TEST_SOURCES test_adapter_recording_hash_witness)
 # answers the eager capture's value at every read, pinned on fc7aad62. On a
 # bare host: source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_continuation_view)
+# The same through the Pine host's own terminal capture: every capture site
+# (chart, magnifier, aggregated, calc_on_order_fills, recording, streams).
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_continuation_view)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
