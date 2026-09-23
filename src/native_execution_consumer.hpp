@@ -227,6 +227,15 @@ public:
     // equal bit for bit; no host reaches it.
     void set_match_row_reuse(bool enabled) noexcept { match_row_reuse_ = enabled; }
 
+    // match_path tests a priced trigger against the point's path before the
+    // rest of its row (R5 lane PERF-L5): a request whose trigger the path
+    // cannot reach is passed over without the eligibility read it would
+    // otherwise take first. The pass-over is exact, so it is on unless this
+    // turns it off, which restores the full evaluation of every row. The
+    // switch exists so tests/test_native_match_band_precheck.cpp can hold the
+    // two computations equal bit for bit; no host reaches it.
+    void set_match_band_precheck(bool enabled) noexcept { match_band_precheck_ = enabled; }
+
 private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;
@@ -1111,6 +1120,10 @@ private:
     // one read at a time, each consumed before the next.
     native_order::TargetObservation match_target_;
     std::vector<native_order::RequestHandle> match_target_handles_;
+    // Whether match_path tests a priced trigger against the path before the
+    // rest of its row (set_match_band_precheck). A choice between two
+    // computations of the same values, so it is not run state either.
+    bool match_band_precheck_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

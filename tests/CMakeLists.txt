@@ -951,6 +951,12 @@ list(APPEND TEST_SOURCES test_aggregates_input_bars_literals)
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_local_time_fields)
 list(APPEND TEST_SOURCES test_local_time_lock_free_hit)
+# R5 lane PERF-L5: the matcher passes over a priced trigger its point's path
+# cannot reach before reading the rest of the row, and takes its next winner
+# from an ascending run of rows. Both are the full evaluation bit for bit over
+# books aimed at the band's edges and K3's randomized books (differential).
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_match_band_precheck)
 # R5 lane PERF-L5: the values six books aimed at the band's edges produce,
 # pinned on f71cd820 (witness). Source-free, so it also runs in the
 # kernel-only profile.

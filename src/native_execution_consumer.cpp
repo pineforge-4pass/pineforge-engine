@@ -5476,20 +5476,100 @@ void NativeExecutionConsumer::match_path(
         return false;
     };
 
-    auto needs_evaluation = [&](const native_order::LiveRequest& live,
-                                const native_order::EligibilityFacts& facts) {
-        if (facts.needs_close_bind) return true;
-        if (std::holds_alternative<native_order::AllowanceUnset>(live.allowance)) return true;
+    // Whether a request's allowance was already evaluated at this point. Every
+    // Allowance alternative but AllowanceUnset carries the point it was
+    // evaluated at.
+    auto allowance_at_point = [&](const native_order::LiveRequest& live) {
         if (const auto* units = std::get_if<native_order::AllowanceUnits>(&live.allowance)) {
-            return units->point_ordinal != P;
+            return units->point_ordinal == P;
         }
         if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&live.allowance)) {
-            return all->point_ordinal != P;
+            return all->point_ordinal == P;
         }
         if (const auto* deferred = std::get_if<native_order::AllowanceDeferred>(&live.allowance)) {
-            return deferred->point_ordinal != P;
+            return deferred->point_ordinal == P;
         }
         return false;
+    };
+    auto needs_evaluation = [&](const native_order::LiveRequest& live,
+                                const native_order::EligibilityFacts& facts) {
+        return facts.needs_close_bind || !allowance_at_point(live);
+    };
+
+    // The hit a priced trigger gets on the rest of this segment from `start`,
+    // and the transition that hit would be (R5 lane PERF-L5). One computation
+    // for the band pre-check and the full evaluation below, so the pre-check
+    // passes a row over exactly when the full evaluation would find no hit:
+    //   Absent          no hit, or a trigger that does not price the state it
+    //                   is in; the full evaluation passes the row over.
+    //   Hit             `hit` and `kind` hold the crossing.
+    //   Unpriced        a state no level gates (a market request, an activated
+    //                   stop or trail); the caller decides it.
+    //   Unrepresentable a tracked trail whose offset names no stop from its
+    //                   best; the full evaluation fails the run on it.
+    enum class TriggerReach : std::uint8_t { Absent, Hit, Unpriced, Unrepresentable };
+    auto reach_trigger = [&](const native_order::LiveRequest& live, bool buy,
+                             bool include_current, const native_matching::GeometricHit& start,
+                             std::optional<native_matching::GeometricHit>& hit,
+                             Kind& kind) -> TriggerReach {
+        const auto& trigger = live.request().trigger;
+        const auto& state = live.trigger_state;
+        if (std::holds_alternative<native_order::StopIdle>(state)) {
+            const auto* stop = std::get_if<native_order::Stop>(&trigger);
+            if (!stop) return TriggerReach::Absent;
+            hit = native_matching::first_region_entry(
+                from_price, to_price, start, stop->price, !buy, include_current, grid);
+            kind = Kind::ActivateStop;
+        } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
+            const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
+            if (!sl) return TriggerReach::Absent;
+            hit = native_matching::first_region_entry(
+                from_price, to_price, start, sl->stop, !buy, include_current, grid);
+            kind = Kind::ActivateStopLimit;
+        } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
+            const auto* trail = std::get_if<native_order::Trail>(&trigger);
+            if (!trail) return TriggerReach::Absent;
+            if (!trail->arm_price) {
+                hit = start;
+            } else {
+                hit = native_matching::first_region_entry(
+                    from_price, to_price, start, *trail->arm_price, buy,
+                    include_current, grid);
+            }
+            kind = Kind::BeginTrail;
+        } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
+            const auto* trail = std::get_if<native_order::Trail>(&trigger);
+            if (!trail) return TriggerReach::Absent;
+            double stop = 0.0;
+            if (!native_matching::checked_trail_stop(track->best, trail->offset, buy,
+                                                    &stop, ladder_tick())) {
+                return TriggerReach::Unrepresentable;
+            }
+            hit = native_matching::trail_stop_hit(
+                from_price, to_price, start, track->best, trail->offset, buy, grid,
+                ladder_tick());
+            kind = Kind::ActivateTrail;
+        } else if (std::holds_alternative<native_order::LimitReady>(state)
+                   || std::holds_alternative<native_order::StopLimitLive>(state)) {
+            double level = 0.0;
+            if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+                level = limit->price;
+            } else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
+                level = sl->limit;
+            } else {
+                return TriggerReach::Absent;
+            }
+            hit = native_matching::first_region_entry(
+                from_price, to_price, start, level, buy, include_current, grid);
+            kind = Kind::Fill;
+        } else if (std::holds_alternative<native_order::MarketReady>(state)
+                   || std::holds_alternative<native_order::StopActive>(state)
+                   || std::holds_alternative<native_order::TrailActive>(state)) {
+            return TriggerReach::Unpriced;
+        } else {
+            return TriggerReach::Absent;
+        }
+        return hit ? TriggerReach::Hit : TriggerReach::Absent;
     };
 
     auto side_from_target = [](const native_order::TargetObservation& target)
@@ -5530,6 +5610,30 @@ void NativeExecutionConsumer::match_path(
         const auto at = std::lower_bound(skipped.begin(), skipped.end(), key);
         if (at == skipped.end() || *at != key) skipped.insert(at, key);
     };
+    // Whether a provenance row names this request. Without one, every way the
+    // full evaluation passes the request over leaves the provenance as it was.
+    auto has_provenance = [&](const native_order::RequestHandle& handle) {
+        for (const auto& row : candidate_provenance) {
+            if (row.handle == handle) return true;
+        }
+        return false;
+    };
+    // A row the band pre-check may pass over: a priced trigger state whose
+    // allowance is already this point's, so the row is not an Evaluate row.
+    auto banded = [&](const native_order::LiveRequest& live) {
+        if (std::holds_alternative<native_order::UnboundBookClose>(live.authority)
+            || !allowance_at_point(live)) {
+            return false;
+        }
+        const auto& state = live.trigger_state;
+        return std::holds_alternative<native_order::StopIdle>(state)
+            || std::holds_alternative<native_order::StopLimitPending>(state)
+            || std::holds_alternative<native_order::TrailWaitArm>(state)
+            || std::holds_alternative<native_order::TrailTrack>(state)
+            || std::holds_alternative<native_order::LimitReady>(state)
+            || std::holds_alternative<native_order::StopLimitLive>(state);
+    };
+    const bool band_precheck = match_band_precheck_;
 
     // Rows survive an allowance refresh (R5 lane PERF-K3). Every live request
     // refresh_point_allowances did not refresh in bulk is an Evaluate winner
@@ -5629,11 +5733,11 @@ void NativeExecutionConsumer::match_path(
             const auto* live = snapshot[snapshot_index];
             if (!live) continue;
             const auto& handle = live->handle();
-            native_order::EvaluationContext candidate_eval = eval;
-            candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point)
-                || born_on_remaining_path(*live);
+            const bool cohort_close =
+                std::holds_alternative<native_order::CohortClose>(live->authority);
             const native_order::TargetObservation* candidate_target = nullptr;
-            if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
+            std::optional<native_order::Side> cohort_side;
+            if (cohort_close) {
                 // Candidate selection is read-only. Reuse its complete target
                 // observation for the side and trigger calculations, then
                 // rebuild at the selected mutation boundary below.
@@ -5642,13 +5746,52 @@ void NativeExecutionConsumer::match_path(
                     read_target_into(engine, live, match_target_, match_target_handles_);
                     candidate_target = &match_target_;
                 }
-                candidate_eval.cohort_side = side_from_target(*candidate_target);
+                cohort_side = side_from_target(*candidate_target);
+                if (!cohort_side) {
+                    erase_provenance_for(handle);
+                    continue;
+                }
             }
-            if (std::holds_alternative<native_order::CohortClose>(live->authority)
-                && !candidate_eval.cohort_side) {
-                erase_provenance_for(handle);
-                continue;
+            // A callback-born priced request begins immediately after the
+            // birth print. It may cross a later level on this suffix, but
+            // it does not inherit an already-consumed/equal crossing from
+            // the request that produced the callback.
+            const bool include_current = !born_on_remaining_path(*live)
+                && !armed_after_print_here(*live);
+            // The band pre-check (R5 lane PERF-L5). A priced trigger whose
+            // allowance is already this point's is not an Evaluate row, so
+            // the full evaluation below decides it on reach_trigger alone: no
+            // hit, and it passes the row over. Every other way it can pass
+            // the row over -- an ineligible request, a cause floor past the
+            // point -- erases the request's provenance and nothing else, and
+            // a request with no provenance row has nothing to erase. For such
+            // a request, a trigger the rest of the segment cannot reach is
+            // therefore passed over here with exactly the effect of the full
+            // evaluation, before its eligibility is read: the same start, the
+            // same side and the same geometry, computed as below. A hit, an
+            // unrepresentable trail or an unpriced state goes on to the full
+            // evaluation, which computes them again.
+            if (band_precheck && banded(*live) && !has_provenance(handle)) {
+                const double t_floor = cause_floor(*live);
+                if (t_floor > 1.0) continue;
+                const native_matching::GeometricHit floor_start{
+                    t_floor, t_floor == t_cursor
+                                 ? cursor_price
+                                 : native_matching::price_at(from_price, to_price, t_floor)};
+                const bool floor_buy = cohort_close
+                    ? requests_.working_is_buy(*live, cohort_side)
+                    : request_is_buy(engine, *live);
+                std::optional<native_matching::GeometricHit> reach;
+                Kind reach_kind = Kind::Fill;
+                if (reach_trigger(*live, floor_buy, include_current, floor_start, reach, reach_kind)
+                    == TriggerReach::Absent) {
+                    continue;
+                }
             }
+            native_order::EvaluationContext candidate_eval = eval;
+            candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point)
+                || born_on_remaining_path(*live);
+            candidate_eval.cohort_side = cohort_side;
             const auto facts = requests_.eligibility_facts(*live, candidate_eval);
             if (!facts.birth_ok || facts.waiting || !facts.driver_ok) {
                 erase_provenance_for(handle);
@@ -5671,86 +5814,34 @@ void NativeExecutionConsumer::match_path(
                 row.price = start.price;
                 row.kind = Kind::Evaluate;
             } else {
-                const bool buy = std::holds_alternative<native_order::CohortClose>(live->authority)
+                const bool buy = cohort_close
                     ? requests_.working_is_buy(*live, candidate_eval.cohort_side)
                     : request_is_buy(engine, *live);
-                // A callback-born priced request begins immediately after the
-                // birth print. It may cross a later level on this suffix, but
-                // it does not inherit an already-consumed/equal crossing from
-                // the request that produced the callback.
-                const bool include_current = !born_on_remaining_path(*live)
-                    && !armed_after_print_here(*live);
-                const auto& trigger = live->request().trigger;
-                const auto& state = live->trigger_state;
                 std::optional<native_matching::GeometricHit> hit;
                 Kind kind = Kind::Fill;
-                if (std::holds_alternative<native_order::StopIdle>(state)) {
-                    const auto* stop = std::get_if<native_order::Stop>(&trigger);
-                    if (!stop) continue;
-                    hit = native_matching::first_region_entry(
-                        from_price, to_price, start, stop->price, !buy, include_current, grid);
-                    kind = Kind::ActivateStop;
-                } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
-                    const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
-                    if (!sl) continue;
-                    hit = native_matching::first_region_entry(
-                        from_price, to_price, start, sl->stop, !buy, include_current, grid);
-                    kind = Kind::ActivateStopLimit;
-                } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
-                    const auto* trail = std::get_if<native_order::Trail>(&trigger);
-                    if (!trail) continue;
-                    if (!trail->arm_price) {
-                        hit = start;
-                    } else {
-                        hit = native_matching::first_region_entry(
-                            from_price, to_price, start, *trail->arm_price, buy,
-                            include_current, grid);
-                    }
-                    kind = Kind::BeginTrail;
-                } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
-                    const auto* trail = std::get_if<native_order::Trail>(&trigger);
-                    if (!trail) continue;
-                    double stop = 0.0;
-                    if (!native_matching::checked_trail_stop(track->best, trail->offset, buy,
-                                                            &stop, ladder_tick())) {
-                        fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
-                                                   NativeFailureOperation::Settlement, P});
-                        render(engine, "native trailing offset is not representable");
-                        return;
-                    }
-                    hit = native_matching::trail_stop_hit(
-                        from_price, to_price, start, track->best, trail->offset, buy, grid,
-                        ladder_tick());
-                    kind = Kind::ActivateTrail;
-                } else if (std::holds_alternative<native_order::LimitReady>(state)
-                           || std::holds_alternative<native_order::StopLimitLive>(state)) {
-                    double level = 0.0;
-                    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
-                        level = limit->price;
-                    } else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
-                        level = sl->limit;
-                    } else {
-                        continue;
-                    }
-                    hit = native_matching::first_region_entry(
-                        from_price, to_price, start, level, buy, include_current, grid);
-                    kind = Kind::Fill;
-                } else if (std::holds_alternative<native_order::MarketReady>(state)
-                           || std::holds_alternative<native_order::StopActive>(state)
-                           || std::holds_alternative<native_order::TrailActive>(state)) {
+                switch (reach_trigger(*live, buy, include_current, start, hit, kind)) {
+                case TriggerReach::Absent:
+                    continue;
+                case TriggerReach::Unrepresentable:
+                    fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, "native trailing offset is not representable");
+                    return;
+                case TriggerReach::Unpriced:
                     if (!facts.ready_to_match) {
                         erase_provenance_for(handle);
                         continue;
                     }
-                    if (std::holds_alternative<native_order::MarketReady>(state) && continuous) {
+                    if (std::holds_alternative<native_order::MarketReady>(live->trigger_state)
+                        && continuous) {
                         continue;
                     }
                     hit = start;
                     kind = Kind::Fill;
-                } else {
-                    continue;
+                    break;
+                case TriggerReach::Hit:
+                    break;
                 }
-                if (!hit) continue;
                 if (kind == Kind::Fill) {
                     if (const auto* units = std::get_if<native_order::AllowanceUnits>(&live->allowance)) {
                         if (units->point_ordinal == P && units->left == 0.0) {
