@@ -693,6 +693,10 @@ private:
                                      NativePathPhase phase) const;
     bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
     bool deliver_tick(BacktestEngine& engine, const TradeTick& tick);
+    // The cooperative abort alone: check_abort_or_projection's first half, for
+    // a boundary no host code has run since the last full check.
+    bool check_abort(BacktestEngine& engine, NativeFailureOperation operation,
+                     uint64_t ordinal = 0);
     bool check_abort_or_projection(BacktestEngine& engine, NativeFailureOperation operation,
                                    uint64_t ordinal = 0);
     void present_refusal(BacktestEngine& engine, const char* text);

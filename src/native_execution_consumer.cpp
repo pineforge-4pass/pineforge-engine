@@ -1476,9 +1476,9 @@ bool NativeExecutionConsumer::admit_public_stream_input(BacktestEngine& engine,
     return true;
 }
 
-bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
-                                                        NativeFailureOperation operation,
-                                                        uint64_t ordinal) {
+bool NativeExecutionConsumer::check_abort(BacktestEngine& engine,
+                                          NativeFailureOperation operation,
+                                          uint64_t ordinal) {
     if (failed()) return false;
     if (engine.abort_requested_.load(std::memory_order_relaxed)) {
         fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
@@ -1490,6 +1490,13 @@ bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
         }
         return false;
     }
+    return true;
+}
+
+bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
+                                                        NativeFailureOperation operation,
+                                                        uint64_t ordinal) {
+    if (!check_abort(engine, operation, ordinal)) return false;
     if (!projection_ok(engine)) {
         fail(engine, NativeFailure{NativeFailureCode::ProjectionMismatch, operation, ordinal});
         render(engine, "native projection mismatch");
@@ -2134,16 +2141,39 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
     if (engine.syminfo_.mintick != spec->price_tick) return false;
     if (engine.commission_type_ != fee_to_commission(spec->fee_kind)) return false;
     if (engine.commission_value_ != spec->fee_value) return false;
-    if (engine.syminfo_.ticker != spec->ticker) return false;
-    if (engine.syminfo_.tickerid != spec->tickerid) return false;
-    if (engine.syminfo_.type != spec->type) return false;
-    if (engine.syminfo_.currency != spec->currency) return false;
-    if (engine.syminfo_.basecurrency != spec->basecurrency) return false;
-    if (engine.syminfo_.description != spec->description) return false;
-    if (engine.syminfo_.volumetype != spec->volumetype) return false;
-    if (engine.syminfo_.timezone != spec->timezone) return false;
-    if (engine.syminfo_.session != spec->session) return false;
-    if (engine.chart_timezone_ != spec->chart_timezone) return false;
+    // The ten strings, in the order they have always been compared, by
+    // std::string's own equality -- the same length and the same bytes --
+    // written out here: this check runs at every input and callback boundary,
+    // and the library spelling pays an out-of-line compare per string.
+    const std::pair<const std::string*, const std::string*> texts[] = {
+        {&engine.syminfo_.ticker, &spec->ticker},
+        {&engine.syminfo_.tickerid, &spec->tickerid},
+        {&engine.syminfo_.type, &spec->type},
+        {&engine.syminfo_.currency, &spec->currency},
+        {&engine.syminfo_.basecurrency, &spec->basecurrency},
+        {&engine.syminfo_.description, &spec->description},
+        {&engine.syminfo_.volumetype, &spec->volumetype},
+        {&engine.syminfo_.timezone, &spec->timezone},
+        {&engine.syminfo_.session, &spec->session},
+        {&engine.chart_timezone_, &spec->chart_timezone},
+    };
+    for (const auto& text : texts) {
+        const std::size_t n = text.first->size();
+        if (n != text.second->size()) return false;
+        const char* x = text.first->data();
+        const char* y = text.second->data();
+        std::size_t i = 0;
+        for (; i + sizeof(std::uint64_t) <= n; i += sizeof(std::uint64_t)) {
+            std::uint64_t u;
+            std::uint64_t v;
+            std::memcpy(&u, x + i, sizeof u);
+            std::memcpy(&v, y + i, sizeof v);
+            if (u != v) return false;
+        }
+        for (; i < n; ++i) {
+            if (x[i] != y[i]) return false;
+        }
+    }
     return true;
 }
 
@@ -8335,7 +8365,12 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         }
     } view(*this, bars, n);
     for (int i = 0; i < n; ++i) {
-        if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
+        // The previous input's closing check is this loop's last statement,
+        // and no host code runs between it and here: the projection it has
+        // just compared cannot have moved, so every input after the first
+        // re-reads only the abort flag, the one thing another thread may set.
+        if (!(i == 0 ? check_abort_or_projection(engine, NativeFailureOperation::Input)
+                     : check_abort(engine, NativeFailureOperation::Input))) return;
         if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
             if (!failed()) {
                 fail(engine, NativeFailure{NativeFailureCode::Preflight,
