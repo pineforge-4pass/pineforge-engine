@@ -1308,8 +1308,11 @@ private:
     void set_receipt_high_water_readers(ReceiptHighWaterReader event_reader,
                                         ReceiptHighWaterReader terminal_reader) noexcept;
 
-    // Derived receipt watermark used only to avoid materializing an owning
-    // native-events snapshot when no terminal command was appended.
+    // The consumer's terminal-receipt high water as observe_terminal_receipts
+    // last read it, advanced only on a run without an intrabar path (it stays
+    // 0 under the magnifier). It no longer gates any read: it only feeds the
+    // broker-state hash (pine_state_hash.cpp), so removing it would move
+    // hash values.
     std::uint64_t terminal_receipt_cursor_ = 0;
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
