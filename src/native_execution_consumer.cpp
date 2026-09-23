@@ -1544,6 +1544,15 @@ NativeStateView NativeExecutionConsumer::view() const {
     NativeStateView v;
     v.consumed_high_water = consumed_high_water_;
     v.decision_floor_ms = decision_floor();
+    // running_spec_ is non-null exactly while state_ holds NativeRunning (see
+    // cache_running_policy), whose spec it points at: the view the probe
+    // below builds for that alternative, without walking the variant first.
+    if (running_spec_) {
+        v.kind = NativeLifecycleKind::Running;
+        v.spec = running_spec_;
+        v.phase = std::get_if<NativeRunning>(&state_)->phase;
+        return v;
+    }
     v.spec = spec_ptr();
     if (std::holds_alternative<NativeUnconfigured>(state_)) {
         v.kind = NativeLifecycleKind::Unconfigured;
@@ -9716,30 +9725,6 @@ void NativeExecutionConsumer::cohort_remove(
     }
 }
 
-NativePhysicalPosition NativeExecutionConsumer::position(const BacktestEngine& engine) const {
-    NativePhysicalPosition out;
-    const auto n = engine.pyramid_entries_.size();
-    out.lot_count = n;
-    if (n == 0) return out;
-    if (n == 1) {
-        const auto& lot = engine.pyramid_entries_[0];
-        out.signed_units = engine.position_side_ == PositionSide::SHORT ? -lot.qty : lot.qty;
-        // R4-D L10z review fix 5: the single-lot fast path keeps the weighted
-        // path's zero-quantity guard, so an empty lot reports no average.
-        out.average_price = lot.qty > 0.0 ? lot.price : 0.0;
-        return out;
-    }
-    double qty = 0.0;
-    double weighted = 0.0;
-    for (const auto& lot : engine.pyramid_entries_) {
-        qty += lot.qty;
-        weighted += lot.qty * lot.price;
-    }
-    out.signed_units = engine.position_side_ == PositionSide::SHORT ? -qty : qty;
-    out.average_price = qty > 0.0 ? weighted / qty : 0.0;
-    return out;
-}
-
 double NativeExecutionConsumer::marked(const BacktestEngine& engine, double price) const {
     return engine.marked_equity(price);
 }
@@ -9890,26 +9875,26 @@ NativeStrategyHost::NativeStrategyHost()
 NativeStrategyHost::~NativeStrategyHost() = default;
 
 void NativeStrategyHost::on_bar(const Bar&) {
-    as_native_consumer(execution_consumer()).reject_inherited_on_bar(*this);
+    NativeExecutionConsumer::bound(*this).reject_inherited_on_bar(*this);
 }
 
 NativeSetupResult NativeStrategyHost::configure_native(const NativeRunSpec& spec) {
-    return as_native_consumer(execution_consumer()).configure(*this, spec);
+    return NativeExecutionConsumer::bound(*this).configure(*this, spec);
 }
 
 NativeFxCurveSetupResult NativeStrategyHost::configure_native_fx_curve(
         const NativeFxCurve& curve) {
-    return as_native_consumer(execution_consumer()).configure_fx_curve(curve);
+    return NativeExecutionConsumer::bound(*this).configure_fx_curve(curve);
 }
 
 std::optional<Bar> NativeStrategyHost::native_series_bar(std::size_t subscription) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .series_bar(subscription);
 }
 
 NativeSetupResult NativeStrategyHost::declare_timeframe_subscriptions_result(
         std::vector<NativeTimeframeSubscription> subscriptions) {
-    return as_native_consumer(execution_consumer())
+    return NativeExecutionConsumer::bound(*this)
         .declare_timeframe_subscriptions(std::move(subscriptions));
 }
 
@@ -9923,7 +9908,7 @@ bool NativeStrategyHost::declare_timeframe_subscriptions(
 
 NativeSetupResult NativeStrategyHost::declare_auxiliary_feed_result(
         std::optional<NativeAuxiliaryFeed> feed) {
-    return as_native_consumer(execution_consumer()).declare_auxiliary_feed(std::move(feed));
+    return NativeExecutionConsumer::bound(*this).declare_auxiliary_feed(std::move(feed));
 }
 
 bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFeed> feed) {
@@ -9932,7 +9917,7 @@ bool NativeStrategyHost::declare_auxiliary_feed(std::optional<NativeAuxiliaryFee
 
 NativeAuxiliaryAppendResult NativeStrategyHost::append_auxiliary_bars_result(const Bar* bars,
                                                                              std::size_t n) {
-    return as_native_consumer(execution_consumer()).append_auxiliary_bars(*this, bars, n);
+    return NativeExecutionConsumer::bound(*this).append_auxiliary_bars(*this, bars, n);
 }
 
 // The established spelling, kept exactly.
@@ -9941,106 +9926,106 @@ bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .partial_bar();
 }
 
 std::uint64_t NativeStrategyHost::native_recalculation_count() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .recalculation_count();
 }
 
 std::uint64_t NativeStrategyHost::native_recalculations_skipped() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .recalculations_skipped();
 }
 
 NativeStateView NativeStrategyHost::native_state() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).view();
+    return NativeExecutionConsumer::bound(*this).view();
 }
 
 native_order::SubmitResult NativeStrategyHost::submit(const native_order::Request& request) {
-    return as_native_consumer(execution_consumer()).submit(*this, request);
+    return NativeExecutionConsumer::bound(*this).submit(*this, request);
 }
 
 native_order::ReplaceResult NativeStrategyHost::replace(
         const native_order::RequestHandle& target, const native_order::Request& request) {
-    return as_native_consumer(execution_consumer()).replace(*this, target, request);
+    return NativeExecutionConsumer::bound(*this).replace(*this, target, request);
 }
 
 native_order::SubmitResult NativeStrategyHost::submit_market(const native_order::Request& request) {
-    return as_native_consumer(execution_consumer()).submit_market(*this, request);
+    return NativeExecutionConsumer::bound(*this).submit_market(*this, request);
 }
 
 native_order::ReplaceResult NativeStrategyHost::replace_market(
         const native_order::RequestHandle& target, const native_order::Request& request) {
-    return as_native_consumer(execution_consumer()).replace_market(*this, target, request);
+    return NativeExecutionConsumer::bound(*this).replace_market(*this, target, request);
 }
 
 native_order::ReplaceResult NativeStrategyHost::replace(
         const native_order::RequestHandle& target, const native_order::Request& request,
         native_order::ReplaceOptions options) {
-    return as_native_consumer(execution_consumer()).replace(*this, target, request, options);
+    return NativeExecutionConsumer::bound(*this).replace(*this, target, request, options);
 }
 
 native_order::CancelResult NativeStrategyHost::cancel(const native_order::RequestHandle& target) {
-    return as_native_consumer(execution_consumer()).cancel(*this, target);
+    return NativeExecutionConsumer::bound(*this).cancel(*this, target);
 }
 
 std::vector<NativeWorkingRequest> NativeStrategyHost::native_working_requests() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .working_requests();
 }
 
 std::size_t NativeStrategyHost::cancel_all() {
-    return as_native_consumer(execution_consumer()).cancel_all(*this);
+    return NativeExecutionConsumer::bound(*this).cancel_all(*this);
 }
 
 std::size_t NativeStrategyHost::cancel_where(std::string_view comment) {
-    return as_native_consumer(execution_consumer()).cancel_where(*this, comment);
+    return NativeExecutionConsumer::bound(*this).cancel_where(*this, comment);
 }
 
 std::size_t NativeStrategyHost::cancel_where(std::string_view text, NativeRequestField field) {
-    return as_native_consumer(execution_consumer()).cancel_where(*this, text, field);
+    return NativeExecutionConsumer::bound(*this).cancel_where(*this, text, field);
 }
 
 native_order::CohortHandle NativeStrategyHost::cohort_open() {
-    return as_native_consumer(execution_consumer()).cohort_open(*this);
+    return NativeExecutionConsumer::bound(*this).cohort_open(*this);
 }
 
 void NativeStrategyHost::cohort_add(
         native_order::CohortHandle cohort, native_order::RequestHandle origin) {
-    as_native_consumer(execution_consumer()).cohort_add(*this, cohort, std::move(origin));
+    NativeExecutionConsumer::bound(*this).cohort_add(*this, cohort, std::move(origin));
 }
 
 void NativeStrategyHost::cohort_remove(
         native_order::CohortHandle cohort, native_order::RequestHandle origin) {
-    as_native_consumer(execution_consumer()).cohort_remove(*this, cohort, std::move(origin));
+    NativeExecutionConsumer::bound(*this).cohort_remove(*this, cohort, std::move(origin));
 }
 
 std::optional<NativeCurrentPointView> NativeStrategyHost::current_execution_point() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .current_execution_point();
 }
 
 std::optional<NativeTrailState> NativeStrategyHost::trail_state(
         const native_order::RequestHandle& target) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .trail_state(*this, target);
 }
 
 NativeCurrentExecutionPreview NativeStrategyHost::inspect_current_execution(
         const NativeCurrentExecution& command) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .inspect_current_execution(*this, command);
 }
 
 NativeCurrentExecutionResult NativeStrategyHost::execute_current(const NativeCurrentExecution& command) {
-    return as_native_consumer(execution_consumer()).execute_current(*this, command);
+    return NativeExecutionConsumer::bound(*this).execute_current(*this, command);
 }
 
 NativePhysicalPosition NativeStrategyHost::physical_position() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).position(*this);
+    return NativeExecutionConsumer::bound(*this).position(*this);
 }
 
 // R5 gap lane N18: the book lot by lot. A read of what the engine already
@@ -10092,7 +10077,7 @@ std::vector<NativeOpenLot> NativeExecutionConsumer::open_lots(
 }
 
 std::vector<NativeOpenLot> NativeStrategyHost::native_open_lots(double mark) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .open_lots(*this, mark);
 }
 
@@ -10127,40 +10112,40 @@ std::optional<double> NativeExecutionConsumer::sized_units_preview(
 }
 
 double NativeStrategyHost::native_marked_equity(double mark) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).marked(*this, mark);
+    return NativeExecutionConsumer::bound(*this).marked(*this, mark);
 }
 
 std::optional<double> NativeStrategyHost::native_sized_units(
         const native_order::Sized& sized, double price, double equity, double fx) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .sized_units_preview(sized, price, equity, fx);
 }
 
 std::optional<double> NativeStrategyHost::native_liquidation_price() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .host_liquidation_price(*this);
 }
 
 NativeRiskState NativeStrategyHost::native_risk_state() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .risk_state();
 }
 
 std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t after_ordinal) const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .events_after(after_ordinal);
 }
 
 int64_t NativeStrategyHost::native_decision_floor() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).decision_floor();
+    return NativeExecutionConsumer::bound(*this).decision_floor();
 }
 
 uint64_t NativeStrategyHost::native_consumed_high_water() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).high_water();
+    return NativeExecutionConsumer::bound(*this).high_water();
 }
 
 uint64_t NativeStrategyHost::native_continuation_hash() const {
-    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+    return NativeExecutionConsumer::bound(*this)
         .continuation_hash();
 }
 
@@ -10170,9 +10155,9 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
 // a different fold than the last recorded row.
 std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     const std::uint64_t execution = last_script_continuation_valid_
-        ? as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        ? NativeExecutionConsumer::bound(*this)
               .latched_continuation(last_script_continuation_hash_)
-        : execution_consumer().continuation_hash();
+        : NativeExecutionConsumer::bound(*this).continuation_hash();
     return broker_state_hash_from_execution_hash(execution);
 }
 

@@ -118,7 +118,33 @@ public:
         const BacktestEngine& engine, const NativeCurrentExecution& command) const;
     NativeCurrentExecutionResult execute_current(
         BacktestEngine& engine, const NativeCurrentExecution& command);
-    NativePhysicalPosition position(const BacktestEngine& engine) const;
+    // The book as one aggregate, off the engine's lots. Defined here so every
+    // host read of it (NativeStrategyHost::physical_position) and every margin
+    // check inlines it.
+    NativePhysicalPosition position(const BacktestEngine& engine) const {
+        NativePhysicalPosition out;
+        const auto n = engine.pyramid_entries_.size();
+        out.lot_count = n;
+        if (n == 0) return out;
+        if (n == 1) {
+            const auto& lot = engine.pyramid_entries_[0];
+            out.signed_units = engine.position_side_ == PositionSide::SHORT ? -lot.qty : lot.qty;
+            // R4-D L10z review fix 5: the single-lot fast path keeps the
+            // weighted path's zero-quantity guard, so an empty lot reports no
+            // average.
+            out.average_price = lot.qty > 0.0 ? lot.price : 0.0;
+            return out;
+        }
+        double qty = 0.0;
+        double weighted = 0.0;
+        for (const auto& lot : engine.pyramid_entries_) {
+            qty += lot.qty;
+            weighted += lot.qty * lot.price;
+        }
+        out.signed_units = engine.position_side_ == PositionSide::SHORT ? -qty : qty;
+        out.average_price = qty > 0.0 ? weighted / qty : 0.0;
+        return out;
+    }
     std::vector<NativeOpenLot> open_lots(const BacktestEngine& engine, double mark) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
@@ -139,6 +165,19 @@ public:
     const NativeStrategyHost* native_host(const BacktestEngine& engine) const noexcept {
         return &engine == downcast_engine_ ? downcast_host_
                                            : dynamic_cast<const NativeStrategyHost*>(&engine);
+    }
+    // The consumer `engine` is bound to, read straight off its slot: what
+    // BacktestEngine::execution_consumer() answers, without that out-of-line
+    // (and, on hardened toolchains, stack-protected) call behind every
+    // NativeStrategyHost read -- the Pine adapter makes some forty a bar (R5
+    // lane PERF-L1). A slot left empty still goes through
+    // execution_consumer(), which binds a consumer exactly as it always has.
+    static NativeExecutionConsumer& bound(const BacktestEngine& engine) {
+        IExecutionConsumer* consumer = engine.execution_consumer_slot_.ptr.get();
+        if (consumer == nullptr) {
+            consumer = &const_cast<IExecutionConsumer&>(engine.execution_consumer());
+        }
+        return static_cast<NativeExecutionConsumer&>(*consumer);
     }
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (R5 lane
