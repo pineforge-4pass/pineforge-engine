@@ -21,6 +21,7 @@
 #include <pineforge/engine.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
@@ -141,6 +142,35 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
                                                  int ratio,
                                                  int requested_seconds);
+
+
+// ── Fused settlement (R5 lane PERF-L2, defined in engine_execution.cpp) ──
+// A settlement call that a book of at most one lot settles in one pass
+// (BacktestEngine::NativeSettlementStage::OneLot) takes that pass unless
+// set_fused_settlement(false) turns it off, which restores the staged chain
+// for every call. The pass is exact, so it is not a run-spec choice: the
+// switch and the counts exist so tests/test_native_fused_settlement.cpp can
+// hold the two computations equal bit for bit and see which one ran. Both are
+// process-wide and a run only reads them; no host reaches either.
+
+// The fused-capable entries, as the counts index them: the inspection
+// (inspect_with_membership, inspect_native_reversal_v1), the projection
+// (project_with_membership, project_native_reversal_v1), the precommit
+// preview (both preview_native_settlement_commit) and the settlement
+// (settle_with_membership, settle_native_reversal_at_v1).
+enum class SettlementEntry : int { Inspect = 0, Project = 1, Preview = 2, Settle = 3 };
+inline constexpr int kSettlementEntries = 4;
+
+struct SettlementPathCounts {
+    std::uint64_t fused[kSettlementEntries] = {};
+    std::uint64_t staged[kSettlementEntries] = {};
+};
+
+void set_fused_settlement(bool enabled) noexcept;
+// Enabled, zeroes the counts and counts every later call of a fused-capable
+// entry by the path it took; disabled, stops counting.
+void count_settlement_paths(bool enabled) noexcept;
+SettlementPathCounts settlement_path_counts() noexcept;
 
 
 }  // namespace internal

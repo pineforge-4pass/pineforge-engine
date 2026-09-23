@@ -1,7 +1,9 @@
 #include "engine_internal.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -10,6 +12,15 @@
 
 namespace pineforge {
 namespace {
+// The fused settlement's test switch and probe (internal::set_fused_settlement,
+// internal::count_settlement_paths; R5 lane PERF-L2). A run only reads the
+// mode: the shipped one is 0, fused and uncounted.
+constexpr unsigned kSettlementStagedOnly = 1u;
+constexpr unsigned kSettlementCounting = 2u;
+std::atomic<unsigned> settlement_path_mode{0u};
+std::atomic<std::uint64_t> settlement_path_fused[internal::kSettlementEntries];
+std::atomic<std::uint64_t> settlement_path_staged[internal::kSettlementEntries];
+
 template<class T>
 void reserve_effects(std::vector<T>& values, size_t extra) {
     if (extra > values.max_size() - values.size())
@@ -137,6 +148,37 @@ bool nonempty_lifecycle_refused(const execution::LifecycleEffects* lifecycle) {
 }
 } // namespace
 
+namespace internal {
+void set_fused_settlement(bool enabled) noexcept {
+    if (enabled) {
+        settlement_path_mode.fetch_and(~kSettlementStagedOnly, std::memory_order_relaxed);
+    } else {
+        settlement_path_mode.fetch_or(kSettlementStagedOnly, std::memory_order_relaxed);
+    }
+}
+
+void count_settlement_paths(bool enabled) noexcept {
+    if (!enabled) {
+        settlement_path_mode.fetch_and(~kSettlementCounting, std::memory_order_relaxed);
+        return;
+    }
+    for (int entry = 0; entry < kSettlementEntries; ++entry) {
+        settlement_path_fused[entry].store(0, std::memory_order_relaxed);
+        settlement_path_staged[entry].store(0, std::memory_order_relaxed);
+    }
+    settlement_path_mode.fetch_or(kSettlementCounting, std::memory_order_relaxed);
+}
+
+SettlementPathCounts settlement_path_counts() noexcept {
+    SettlementPathCounts counts;
+    for (int entry = 0; entry < kSettlementEntries; ++entry) {
+        counts.fused[entry] = settlement_path_fused[entry].load(std::memory_order_relaxed);
+        counts.staged[entry] = settlement_path_staged[entry].load(std::memory_order_relaxed);
+    }
+    return counts;
+}
+} // namespace internal
+
 struct BacktestEngine::NativeSettlementStage {
     enum class Phase { Invalid, NoEffect, Ready };
     Phase phase = Phase::Invalid;
@@ -164,6 +206,8 @@ struct BacktestEngine::NativeSettlementStage {
     std::vector<double> current_costs;
     std::vector<PyramidEntry> survivors;
     std::unordered_set<std::uint64_t> selected_ids;
+
+    struct OneLot;
 };
 
 // Only this synchronous call's prospective closes; never stored on the engine
@@ -171,6 +215,450 @@ struct BacktestEngine::NativeSettlementStage {
 struct BacktestEngine::NativeSettlementRows {
     std::vector<Trade> closed_trades;
 };
+
+// The fused settlement (R5 lane PERF-L2; PERF-D1 §8, lane L2): the stage of
+// the common case, in one pass and on the stack.
+//
+// A Flatten, Reduce or Transact on the Book or an opening's scope, with no
+// selection and no lifecycle effect, or a ReverseTo, settles in one pass when
+// the book holds at most one lot and none of it survives: an opening from
+// flat, the whole lot closing, or that close and the opposite opening. Its
+// stage is the chain's scalars with the vectors cut to what one closed lot and
+// one opening need -- closing_indices {0}, closing_quantities {closing},
+// current_costs {close_cost, open_cost}, no survivor, no selection -- and each
+// function below is the chain function it names, on those values, with the
+// chain's tests in the chain's order:
+//   stage    stage_native_settlement, allocate_native_settlement_closes and
+//            finish_native_settlement_stage. It answers false for every call
+//            of another shape (a selection, two lots, an addition or a partial
+//            close that leaves a survivor) and for every call the chain would
+//            not stage Ready (a test it fails, or no effect). It changes
+//            nothing and consults no host, so a call it declines stages
+//            through the chain from scratch.
+//   inspect  inspect_native_settlement_stage.
+//   project  project_native_settlement_stage.
+//   prepare  prepare_native_settlement_commit, after the close row is built.
+//   preview  preview_native_settlement_commit: prepare, then project.
+//   settle   commit_native_settlement_stage: prepare, preflight, commit.
+// The close row is built by build_close_trade_with_costs as often, at the
+// same context, as the chain builds it, so a host that owns lot excursions is
+// consulted exactly as before. Only without such a host does preview hand its
+// row to project instead of building it again at the default context: that
+// row is then a function of the lot, the fill and the fee, and project reads
+// its pnl and commission, which the context does not enter. The effects go
+// through the chain's sinks in the chain's order: record_close_trade,
+// reset_position_state_to_flat, open_quoted_position,
+// stream_refresh_action_metadata. Nothing here names a host or a language.
+struct BacktestEngine::NativeSettlementStage::OneLot {
+    PositionSide incoming = PositionSide::LONG;
+    bool was_long = false;
+    // The one lot closes, whole: closing_indices {0}.
+    bool closes = false;
+    double closing = 0.0;  // closing_quantities.front()
+    double closed = 0.0;
+    double opening = 0.0;
+    double close_cost = 0.0;  // current_costs.front() when the lot closes
+    double open_cost = 0.0;   // current_costs.back()
+    double ticket = 0.0;
+    double after_qty = 0.0;
+    double after_price = 0.0;
+    double fx = 0.0;
+
+    // Whether this call takes the one pass: the test switch, then the shape
+    // and stage(). The probe counts the answer.
+    bool admit(const BacktestEngine& engine, internal::SettlementEntry entry,
+               const execution::Action& action, const execution::Fill& fill,
+               const execution::CloseScope& book_or_opening,
+               const execution::SelectedOpeningSet* selected,
+               const execution::LifecycleEffects* lifecycle, double quote_fx) {
+        const unsigned mode = settlement_path_mode.load(std::memory_order_relaxed);
+        const bool fused = (mode & kSettlementStagedOnly) == 0 && !selected
+            && stage(engine, action, fill, book_or_opening, lifecycle, quote_fx);
+        if (mode & kSettlementCounting) count(entry, fused);
+        return fused;
+    }
+    bool admit(const BacktestEngine& engine, internal::SettlementEntry entry,
+               const execution::ReverseTo& reversal, const execution::Fill& fill,
+               const execution::LifecycleEffects* lifecycle, double quote_fx) {
+        const unsigned mode = settlement_path_mode.load(std::memory_order_relaxed);
+        const bool fused = (mode & kSettlementStagedOnly) == 0
+            && stage(engine, reversal, fill, lifecycle, quote_fx);
+        if (mode & kSettlementCounting) count(entry, fused);
+        return fused;
+    }
+
+    bool stage(const BacktestEngine& engine, const execution::Action& action,
+               const execution::Fill& fill, const execution::CloseScope& book_or_opening,
+               const execution::LifecycleEffects* lifecycle, double quote_fx);
+    bool stage(const BacktestEngine& engine, const execution::ReverseTo& reversal,
+               const execution::Fill& fill, const execution::LifecycleEffects* lifecycle,
+               double quote_fx);
+    execution::SettlementInspection inspect(const BacktestEngine& engine,
+                                            const execution::Fill& fill) const;
+    execution::AccountEffectProjection project(const BacktestEngine& engine,
+                                               const execution::Fill& fill,
+                                               const Trade* row) const;
+    execution::Status preview(const BacktestEngine& engine, const execution::Fill& fill,
+                              const execution::PhysicalExecutionContext& context,
+                              execution::AccountEffectProjection& account,
+                              std::vector<double>& row_pnl, bool reserve_rows) const;
+    execution::Result settle(BacktestEngine& engine, const execution::Fill& fill,
+                             const execution::PhysicalExecutionContext& context) const;
+
+private:
+    static void count(internal::SettlementEntry entry, bool fused) noexcept {
+        auto& counts = fused ? settlement_path_fused : settlement_path_staged;
+        counts[static_cast<int>(entry)].fetch_add(1, std::memory_order_relaxed);
+    }
+    bool finish(const BacktestEngine& engine, const execution::Fill& fill, double quote_fx);
+    void quote(const BacktestEngine& engine, const execution::Fill& fill);
+    Trade close_row(const BacktestEngine& engine, const execution::Fill& fill,
+                    const execution::PhysicalExecutionContext& context) const;
+    execution::Status prepare(const BacktestEngine& engine, const Trade* row) const;
+};
+
+bool BacktestEngine::NativeSettlementStage::OneLot::stage(
+        const BacktestEngine& engine, const execution::Action& action,
+        const execution::Fill& fill, const execution::CloseScope& book_or_opening,
+        const execution::LifecycleEffects* lifecycle, double quote_fx) {
+    using execution::Status;
+    const auto& lots = engine.pyramid_entries_;
+    if (lots.size() > 1) return false;
+    if (!std::isfinite(fill.price)) return false;
+    if (fill.commission_account && !std::isfinite(*fill.commission_account)) return false;
+    const bool flatten = std::holds_alternative<execution::Flatten>(action);
+    const auto* reduce = std::get_if<order_action::Reduce>(&action);
+    const auto* transact = std::get_if<order_action::Transact>(&action);
+    const double requested = reduce ? reduce->units
+        : transact ? std::abs(transact->signed_units) : 0.0;
+    if (!std::isfinite(requested) || (reduce && requested < 0.0)) return false;
+    double held = 0.0;
+    if (engine.validate_native_settlement_book(held) != Status::Applied) return false;
+    if (nonempty_lifecycle_refused(lifecycle)) return false;
+    // An opening scope holds what its lot holds, and a scoped reduction asks
+    // for no more than that; the Book scope holds the whole book.
+    const auto selection = inspect_close_scope(
+        book_or_opening, action, engine.position_cycle_seq_, lots, held);
+    if (selection.status != Status::Applied) return false;
+    const bool scoped = std::holds_alternative<execution::OpeningExposure>(book_or_opening);
+    const double allocation_requested = scoped && reduce
+        ? std::min(requested, selection.held) : requested;
+    const double signed_held = engine.position_side_ == PositionSide::SHORT
+        ? -selection.held : selection.held;
+    if (!flatten && requested == 0.0) return false;
+    if ((flatten || reduce) && lots.empty()) return false;
+    if (reduce && !order_action::plan(signed_held, order_action::Reduce{allocation_requested}))
+        return false;
+    if (transact && !order_action::plan(signed_held, *transact)) return false;
+
+    incoming = transact && transact->signed_units < 0.0
+        ? PositionSide::SHORT : PositionSide::LONG;
+    const bool opposite = transact && engine.position_side_ != PositionSide::FLAT
+        && engine.position_side_ != incoming;
+    was_long = engine.position_side_ == PositionSide::LONG;
+    double remaining = allocation_requested;
+    if (!lots.empty()) {
+        const bool closes_member = (flatten || reduce || opposite)
+            && selected_for_close(book_or_opening, lots.front());
+        const auto split = next_close_split(lots.front(), closes_member, flatten,
+                                            allocation_requested, closed, remaining);
+        // An addition keeps the lot whole and a partial close keeps a part of
+        // it: both leave a survivor, which is the chain's.
+        if (split.status != Status::Applied || split.amount == 0.0 || split.kept != 0.0)
+            return false;
+        closes = true;
+        closing = split.amount;
+    }
+    // A Ready stage of this shape closes the lot or opens: it has an effect.
+    opening = !transact ? 0.0 : opposite ? remaining : requested;
+    return finish(engine, fill, quote_fx);
+}
+
+bool BacktestEngine::NativeSettlementStage::OneLot::stage(
+        const BacktestEngine& engine, const execution::ReverseTo& reversal,
+        const execution::Fill& fill, const execution::LifecycleEffects* lifecycle,
+        double quote_fx) {
+    using execution::Status;
+    const auto& lots = engine.pyramid_entries_;
+    if (lots.size() != 1) return false;
+    if (!std::isfinite(fill.price)) return false;
+    if (fill.commission_account && !std::isfinite(*fill.commission_account)) return false;
+    if (!std::isfinite(reversal.signed_units) || reversal.signed_units == 0.0) return false;
+    double held = 0.0;
+    if (engine.validate_native_settlement_book(held) != Status::Applied) return false;
+    if (nonempty_lifecycle_refused(lifecycle)) return false;
+    incoming = reversal.signed_units < 0.0 ? PositionSide::SHORT : PositionSide::LONG;
+    if (engine.position_side_ == PositionSide::FLAT || engine.position_side_ == incoming)
+        return false;
+    was_long = engine.position_side_ == PositionSide::LONG;
+    // Whole-lot Flatten allocation of the opposite lot; the opening is the
+    // exact target, independently of it.
+    double remaining = 0.0;
+    const auto split = next_close_split(lots.front(), true, true, 0.0, closed, remaining);
+    if (split.status != Status::Applied) return false;
+    closes = true;
+    closing = split.amount;
+    opening = std::abs(reversal.signed_units);
+    if (!std::isfinite(closed + opening)) return false;
+    return finish(engine, fill, quote_fx);
+}
+
+bool BacktestEngine::NativeSettlementStage::OneLot::finish(
+        const BacktestEngine& engine, const execution::Fill& fill, double quote_fx) {
+    fx = quote_fx;
+    quote(engine, fill);
+    ticket = 0.0;
+    const double costs[2] = {close_cost, open_cost};
+    for (int index = closes ? 0 : 1; index < 2; ++index) {
+        if (!std::isfinite(costs[index])) return false;
+        ticket += costs[index];
+        if (!std::isfinite(ticket)) return false;
+    }
+    if (fill.commission_account) ticket = *fill.commission_account;
+    // Nothing survives: the resulting book is the opening alone.
+    after_qty = 0.0;
+    if (opening > 0.0) {
+        const double next = after_qty + opening;
+        if (!std::isfinite(next)) return false;
+        after_qty = next;
+    }
+    after_price = opening > 0.0 ? fill.price : 0.0;
+    return true;
+}
+
+// quote_execution_commissions(closing_quantities, opening, fill, fx) for at
+// most one closed quantity, into {close_cost, open_cost}.
+void BacktestEngine::NativeSettlementStage::OneLot::quote(
+        const BacktestEngine& engine, const execution::Fill& fill) {
+    close_cost = 0.0;
+    open_cost = 0.0;
+    const auto native_modeled_commission = [&](double quantity) {
+        if (engine.commission_type_ == CommissionType::PERCENT) {
+            return std::abs(fill.price) * quantity * engine.syminfo_.pointvalue
+                * fx * (engine.commission_value_ / 100.0);
+        }
+        return engine.calc_commission(fill.price, quantity);
+    };
+    if (!fill.commission_account && engine.commission_type_ != CommissionType::CASH_PER_ORDER) {
+        if (closes) close_cost = native_modeled_commission(closing);
+        open_cost = opening > 0.0 ? native_modeled_commission(opening) : 0.0;
+        return;
+    }
+    double units = opening;
+    if (closes) units += closing;
+    if (units == 0.0) return;
+    if (!std::isfinite(units)) {
+        open_cost = std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
+    const double quoted = fill.commission_account
+        ? *fill.commission_account : engine.calc_commission(fill.price, units);
+    if (!std::isfinite(quoted)) {
+        open_cost = std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
+    double remaining_fee = quoted;
+    if (closes) {
+        double share = opening == 0.0 ? remaining_fee : quoted * (closing / units);
+        share = quoted >= 0.0 ? std::clamp(share, 0.0, remaining_fee)
+                              : std::clamp(share, remaining_fee, 0.0);
+        remaining_fee -= share;
+        close_cost = share;
+    }
+    open_cost = opening > 0.0 ? remaining_fee : 0.0;
+}
+
+// build_native_settlement_close_rows' one row, before its exit id, comment
+// and cause.
+Trade BacktestEngine::NativeSettlementStage::OneLot::close_row(
+        const BacktestEngine& engine, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context) const {
+    const PyramidEntry& lot = engine.pyramid_entries_.front();
+    return engine.build_close_trade_with_costs(lot, closing, fill.price, was_long,
+        engine.allocated_entry_commission(lot, closing), close_cost, context);
+}
+
+execution::SettlementInspection BacktestEngine::NativeSettlementStage::OneLot::inspect(
+        const BacktestEngine& engine, const execution::Fill& fill) const {
+    execution::SettlementInspection out;
+    out.status = execution::Status::Applied;
+    out.closed_units = closed;
+    out.opened_units = incoming == PositionSide::SHORT ? -opening : opening;
+    out.resulting_abs_units = after_qty;
+    out.resulting_lot_count = opening > 0.0 ? 1 : 0;
+    out.resulting_abs_notional = after_qty * std::abs(fill.price)
+        * engine.syminfo_.pointvalue * fx;
+    out.current_ticket = ticket;
+    out.would_open = opening > 0.0;
+    out.incoming_short = incoming == PositionSide::SHORT;
+    return out;
+}
+
+execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot::project(
+        const BacktestEngine& engine, const execution::Fill& fill, const Trade* row) const {
+    using execution::Status;
+    if (opening > 0.0
+        && (engine.next_position_cycle_seq_ <= 0
+            || engine.next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
+        throw std::overflow_error("position cycle sequence exhausted");
+
+    std::optional<Trade> built;
+    if (closes && !row) {
+        built.emplace(close_row(engine, fill, execution::PhysicalExecutionContext{}));
+        row = &*built;
+    }
+    double realized = engine.net_profit_sum_;
+    if (row) {
+        if (!std::isfinite(row->pnl) || !std::isfinite(row->commission))
+            return invalid_projection(Status::InvalidAccounting);
+        realized += row->pnl;
+    }
+    realized += engine.initial_capital_;
+    if (!std::isfinite(realized))
+        return invalid_projection(Status::InvalidAccounting);
+
+    const double account_fx = engine.active_account_currency_fx();
+    const double pv = engine.syminfo_.pointvalue;
+    const PositionSide resulting_side = opening > 0.0 ? incoming : PositionSide::FLAT;
+    const double direction = resulting_side == PositionSide::SHORT ? -1.0 : 1.0;
+    double remaining = 0.0;
+    double equity = realized;
+    if (opening > 0.0) {
+        const double paid = open_cost;
+        remaining += paid;
+        equity += direction * (fill.price - fill.price) * opening * pv * account_fx
+            - paid;
+    }
+    if (!std::isfinite(remaining) || !std::isfinite(equity)
+        || !std::isfinite(after_qty)
+        || !std::isfinite(ticket))
+        return invalid_projection(Status::InvalidAccounting);
+
+    execution::AccountEffectProjection out;
+    out.status = Status::Applied;
+    out.closed_units = closed;
+    out.opened_units = incoming == PositionSide::SHORT ? -opening : opening;
+    out.resulting_abs_units = after_qty;
+    out.resulting_lot_count = opening > 0.0 ? 1 : 0;
+    out.resulting_abs_notional = after_qty * std::abs(fill.price) * pv * account_fx;
+    out.current_ticket = ticket;
+    out.would_open = opening > 0.0;
+    out.incoming_short = incoming == PositionSide::SHORT;
+    out.realized_balance = realized;
+    out.remaining_entry_cost = remaining;
+    out.marked_equity = equity;
+    if (out.resulting_lot_count == 0) {
+        out.cycle_after = 0;
+        out.signed_units_after = 0.0;
+    } else {
+        out.cycle_after = engine.next_position_cycle_seq_;
+        out.signed_units_after = incoming == PositionSide::SHORT ? -after_qty : after_qty;
+    }
+    if (!std::isfinite(out.resulting_abs_notional)
+        || !std::isfinite(out.signed_units_after))
+        return invalid_projection(Status::InvalidAccounting);
+    return out;
+}
+
+execution::Status BacktestEngine::NativeSettlementStage::OneLot::prepare(
+        const BacktestEngine& engine, const Trade* row) const {
+    using execution::Status;
+    if (opening > 0.0
+        && (engine.next_position_cycle_seq_ <= 0
+            || engine.next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
+        throw std::overflow_error("position cycle sequence exhausted");
+    if (!std::isfinite(after_qty) || !std::isfinite(after_price))
+        return Status::InvalidAccounting;
+
+    double next_profit = engine.net_profit_sum_;
+    double next_gross_profit = engine.gross_profit_sum_;
+    double next_gross_loss = engine.gross_loss_sum_;
+    if (row) {
+        if (!std::isfinite(row->pnl) || !std::isfinite(row->commission))
+            return Status::InvalidAccounting;
+        next_profit += row->pnl;
+        if (row->pnl > 0.0) next_gross_profit += row->pnl;
+        if (row->pnl < 0.0) next_gross_loss += row->pnl;
+    }
+    if (!std::isfinite(next_profit) || !std::isfinite(next_gross_profit)
+        || !std::isfinite(next_gross_loss))
+        return Status::InvalidAccounting;
+    return Status::Applied;
+}
+
+execution::Status BacktestEngine::NativeSettlementStage::OneLot::preview(
+        const BacktestEngine& engine, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::AccountEffectProjection& account, std::vector<double>& row_pnl,
+        bool reserve_rows) const {
+    std::optional<Trade> row;
+    if (closes) row.emplace(close_row(engine, fill, context));
+    const auto readiness = prepare(engine, row ? &*row : nullptr);
+    account = project(engine, fill, row && !engine.lot_excursion_hook_ ? &*row : nullptr);
+    row_pnl.clear();
+    if (readiness == execution::Status::Applied) {
+        if (reserve_rows) row_pnl.reserve(row ? 1 : 0);
+        if (row) row_pnl.push_back(row->pnl);
+    }
+    return readiness;
+}
+
+execution::Result BacktestEngine::NativeSettlementStage::OneLot::settle(
+        BacktestEngine& engine, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context) const {
+    std::optional<Trade> row;
+    if (closes) {
+        row.emplace(close_row(engine, fill, context));
+        row->exit_id = fill.id;
+        row->exit_comment = fill.comment;
+        row->close_cause = fill.close_cause;
+    }
+    const Trade* rows = row ? &*row : nullptr;
+    const size_t count = row ? 1 : 0;
+    if (const auto status = prepare(engine, rows); status != execution::Status::Applied)
+        return {status};
+
+    // preflight_native_settlement_effects: nothing survives, so the entry
+    // counter is never asked for another lot.
+    engine.validate_close_trade_counters(rows, count);
+    const size_t events = count + (opening > 0.0 ? 1 : 0);
+    if (engine.stream_observe_actions_) {
+        if (events > std::numeric_limits<uint64_t>::max() - engine.stream_action_sequence_)
+            throw std::overflow_error("stream action sequence overflow");
+        reserve_effects(engine.stream_order_actions_, events);
+    }
+    reserve_effects(engine.trades_, count);
+    if (opening > 0.0) reserve_effects(engine.pyramid_entries_, 1);
+
+    // commit_prepared_native_settlement_stage.
+    const size_t first_trade = engine.trades_.size();
+    const size_t first_action = engine.stream_order_actions_.size();
+    if (row) engine.record_close_trade(std::move(*row));
+    if (closed > 0.0) engine.reset_position_state_to_flat();
+    if (opening > 0.0) {
+        PyramidEntry lot{fill.price, context.effective_time_ms, opening, fill.id,
+                         context.interval_index};
+        lot.entry_incarnation = fill.incarnation;
+        lot.entry_comment = fill.comment;
+        lot.entry_commission_account = open_cost;
+        if (engine.position_side_ == PositionSide::FLAT) {
+            engine.open_quoted_position(incoming, std::move(lot));
+        } else {
+            engine.append_quoted_lot(std::move(lot), after_qty, after_price);
+        }
+    }
+    if (engine.stream_observe_actions_)
+        engine.stream_refresh_action_metadata(first_action, first_trade);
+    execution::Result applied;
+    applied.status = execution::Status::Applied;
+    applied.closed_units = closed;
+    applied.opened_units = incoming == PositionSide::SHORT ? -opening : opening;
+    applied.current_ticket = ticket;
+    applied.first_trade_index = first_trade;
+    applied.closed_trade_count = count;
+    applied.opened_lot_incarnation = opening > 0.0 ? fill.incarnation : 0;
+    return applied;
+}
 
 execution::Status BacktestEngine::validate_native_settlement_book(double& held) const {
     using execution::Status;
@@ -447,6 +935,10 @@ void BacktestEngine::finish_native_settlement_stage(
 
 execution::SettlementInspection BacktestEngine::inspect_native_reversal_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Inspect, reversal, fill, nullptr,
+                  active_account_currency_fx()))
+        return one.inspect(*this, fill);
     NativeSettlementStage stage;
     stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     return inspect_native_settlement_stage(stage, fill);
@@ -454,6 +946,10 @@ execution::SettlementInspection BacktestEngine::inspect_native_reversal_v1(
 
 execution::AccountEffectProjection BacktestEngine::project_native_reversal_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Project, reversal, fill, nullptr,
+                  active_account_currency_fx()))
+        return one.project(*this, fill, nullptr);
     NativeSettlementStage stage;
     stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     return project_native_settlement_stage(stage, fill);
@@ -463,6 +959,10 @@ execution::Result BacktestEngine::settle_native_reversal_at_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context) {
     const execution::LifecycleEffects lifecycle;
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Settle, reversal, fill, &lifecycle,
+                  active_account_currency_fx()))
+        return one.settle(*this, fill, context);
     NativeSettlementStage stage;
     stage_native_settlement(stage, reversal, fill, &lifecycle, active_account_currency_fx());
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
@@ -557,6 +1057,10 @@ execution::Result BacktestEngine::settle_with_membership(
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Settle, action, fill, book_or_opening,
+                  selected, &lifecycle, active_account_currency_fx()))
+        return one.settle(*this, fill, context);
     NativeSettlementStage stage;
     stage_native_settlement(stage, action, fill, book_or_opening, selected, &lifecycle,
                             active_account_currency_fx());
@@ -651,6 +1155,10 @@ execution::Status BacktestEngine::preview_native_settlement_commit(
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope scope, const execution::SelectedOpeningSet* selected,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Preview, action, fill, scope, selected,
+                  nullptr, active_account_currency_fx()))
+        return one.preview(*this, fill, context, account, row_pnl, /*reserve_rows=*/true);
     NativeSettlementStage stage;
     stage_native_settlement(stage, action, fill, scope, selected, nullptr,
                             active_account_currency_fx());
@@ -669,6 +1177,10 @@ execution::Status BacktestEngine::preview_native_settlement_commit(
         const execution::ReverseTo& reversal, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Preview, reversal, fill, nullptr,
+                  active_account_currency_fx()))
+        return one.preview(*this, fill, context, account, row_pnl, /*reserve_rows=*/false);
     NativeSettlementStage stage;
     stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
     NativeSettlementRows rows;
@@ -783,6 +1295,10 @@ execution::SettlementInspection BacktestEngine::inspect_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected, double fx) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Inspect, action, fill, book_or_opening,
+                  selected, nullptr, fx))
+        return one.inspect(*this, fill);
     NativeSettlementStage stage;
     stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr, fx);
     return inspect_native_settlement_stage(stage, fill);
@@ -837,6 +1353,10 @@ execution::AccountEffectProjection BacktestEngine::project_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) const {
+    NativeSettlementStage::OneLot one;
+    if (one.admit(*this, internal::SettlementEntry::Project, action, fill, book_or_opening,
+                  selected, nullptr, active_account_currency_fx()))
+        return one.project(*this, fill, nullptr);
     NativeSettlementStage stage;
     stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr,
                             active_account_currency_fx());
