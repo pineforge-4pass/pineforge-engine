@@ -1045,6 +1045,11 @@ list(APPEND TEST_SOURCES test_adapter_lookup_index_witness)
 # a cohort at every re-issue (differential). Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_definition_index)
+# R5 lane PERF-P7 (P7b): the per-cohort side index behind the applied-reversal
+# purge and bracket_belongs_to_reversal, and the closed-row walk over the
+# roster positions that carry units, against the whole-roster walks, bit for
+# bit, over randomized Pine command streams (differential). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_purge_index)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

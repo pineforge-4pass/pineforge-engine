@@ -2150,6 +2150,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
     definition_index_.reset();
+    host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
     next_timeline_ordinal_ = 1;

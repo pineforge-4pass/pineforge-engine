@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,6 +18,22 @@
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
+
+// Lookup state a host derives from its own bookkeeping and cannot keep in its
+// own object -- a generated script's ABI fixes that object's layout -- parked
+// with the consumer that serves the host (R5 lane PERF-P7). The consumer owns
+// it for the host, drops it at every run begin, so it never outlives the run
+// it was built over, and never reads it: nothing in it is hashed, recorded or
+// otherwise observable, and the host verifies whatever it reads back.
+class NativeHostCache {
+public:
+    NativeHostCache() = default;
+    NativeHostCache(const NativeHostCache&) = delete;
+    NativeHostCache& operator=(const NativeHostCache&) = delete;
+    virtual ~NativeHostCache() = default;
+    // How many lookups the cache answered in place of the host's own scan.
+    virtual std::uint64_t answered() const noexcept = 0;
+};
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -317,6 +334,24 @@ public:
         return definition_index_.answered();
     }
     const native_order::WorkingRequestCore& request_core() const noexcept { return requests_; }
+
+    // The host's parked lookup cache (NativeHostCache), or null. A host adopts
+    // one per run and it lives until the next run begin or the next adoption.
+    // Off, the consumer holds none and refuses adoption, so a host that falls
+    // back to its own scans without a cache scans everything: the switch
+    // exists so tests/test_adapter_purge_index.cpp and
+    // tests/test_adapter_exit_leg_index.cpp can hold the Pine adapter's
+    // cached lookups equal to its scans bit for bit; no host reaches it.
+    NativeHostCache* host_cache() const noexcept { return host_cache_.get(); }
+    NativeHostCache* adopt_host_cache(std::unique_ptr<NativeHostCache> cache) noexcept {
+        if (!host_cache_enabled_) return nullptr;
+        host_cache_ = std::move(cache);
+        return host_cache_.get();
+    }
+    void set_host_cache(bool enabled) noexcept {
+        host_cache_enabled_ = enabled;
+        if (!enabled) host_cache_.reset();
+    }
 
 private:
     struct CurrentExecutionFrame {
@@ -1418,6 +1453,10 @@ private:
     // switch, for the same reason as match_rows_.
     mutable native_order::DefinitionIndex definition_index_;
     bool definition_index_enabled_ = true;
+    // The host's parked lookup cache (adopt_host_cache) and its switch.
+    // Never read by the consumer, dropped at every run begin.
+    std::unique_ptr<NativeHostCache> host_cache_;
+    bool host_cache_enabled_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

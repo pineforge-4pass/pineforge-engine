@@ -14,12 +14,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
+#include <new>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -1048,6 +1051,92 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
     return false;
 }
 
+// R5 lane PERF-P7: the indexes the adapter reads its retained bookkeeping
+// through. The native consumer keeps them for the adapter (a by-value member
+// of PineStrategyHost, whose layout is the generated script's ABI, holds no
+// index itself), drops them at every run begin, and never reads them. They
+// are derived from state the adapter retains and hashes, folded into nothing,
+// and each lookup answers what the walk it replaces answers.
+struct PineExecutionAdapter::LookupIndex final : NativeHostCache {
+    // Per cohort, over its origin roster: how many roster entries are folded,
+    // and whether a folded origin is an opening on each side. The roster only
+    // grows (every accepted opening is appended once, after its placement row
+    // exists), and an opening row's `opening` and `is_long` are never written
+    // after it is remembered, so the two flags only ever turn on and a fold
+    // over the entries appended since the last lookup keeps them exact. Keyed
+    // by the cohort's facts, whose node the cohort map never moves; the map
+    // is only cleared by reset_for_run, which clears this index too.
+    struct CohortSides {
+        std::size_t folded = 0;
+        bool opened_long = false;
+        bool opened_short = false;
+    };
+
+    const PineExecutionAdapter* owner = nullptr;
+    std::uint64_t run = 0;
+    std::uint64_t answers = 0;
+    std::unordered_map<const CohortFacts*, CohortSides> cohort_sides;
+
+    std::uint64_t answered() const noexcept override { return answers; }
+
+    void clear() noexcept {
+        cohort_sides.clear();
+    }
+};
+
+PineExecutionAdapter::LookupIndex* PineExecutionAdapter::lookup_index(
+        bool create) const noexcept {
+    auto* pine = pine_view(host_);
+    if (!pine) return nullptr;
+    auto& consumer = as_native_consumer(pine->execution_consumer());
+    // The consumer keeps one cache per host; this adapter's is the one it
+    // adopted in this run. Any other (another adapter bound to the same host,
+    // an earlier run) is replaced, never read.
+    auto* index = dynamic_cast<LookupIndex*>(consumer.host_cache());
+    if (index && index->owner == this && index->run == run_counter_) return index;
+    if (!create) return nullptr;
+    try {
+        auto fresh = std::make_unique<LookupIndex>();
+        fresh->owner = this;
+        fresh->run = run_counter_;
+        return static_cast<LookupIndex*>(consumer.adopt_host_cache(std::move(fresh)));
+    } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
+}
+
+bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
+                                                 bool is_long) const noexcept {
+    const auto walk = [&] {
+        for (const auto& origin : cohort.origins) {
+            const auto opening = placement_.find(origin.incarnation);
+            if (opening != placement_.end() && opening->second.opening
+                && opening->second.is_long == is_long) {
+                return true;
+            }
+        }
+        return false;
+    };
+    LookupIndex* index = lookup_index();
+    if (!index) return walk();
+    try {
+        auto& sides = index->cohort_sides[&cohort];
+        const auto& roster = cohort.origins;
+        if (roster.size() < sides.folded) sides = {};
+        for (; sides.folded < roster.size(); ++sides.folded) {
+            const auto opening = placement_.find(roster[sides.folded].incarnation);
+            if (opening == placement_.end() || !opening->second.opening) continue;
+            (opening->second.is_long ? sides.opened_long : sides.opened_short) = true;
+        }
+        ++index->answers;
+        const bool opened = is_long ? sides.opened_long : sides.opened_short;
+        assert(opened == walk());
+        return opened;
+    } catch (const std::bad_alloc&) {
+        return walk();
+    }
+}
+
 bool PineExecutionAdapter::bracket_belongs_to_reversal(
         const PlacementSnapshot& bracket,
         const PlacementSnapshot& reversal) const noexcept {
@@ -1057,14 +1146,7 @@ bool PineExecutionAdapter::bracket_belongs_to_reversal(
     if (cohort == cohorts_by_id_.end()) return false;
     const bool prior_long = reversal.projection_position_side
         == static_cast<std::int32_t>(PositionSide::LONG);
-    for (const auto& origin : cohort->second.origins) {
-        const auto opening = placement_.find(origin.incarnation);
-        if (opening != placement_.end() && opening->second.opening
-            && opening->second.is_long == prior_long) {
-            return true;
-        }
-    }
-    return false;
+    return cohort_opened_on_side(cohort->second, prior_long);
 }
 
 void PineExecutionAdapter::suspend_declined_reversal_brackets(
@@ -1200,14 +1282,7 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         bool targets_prior = false;
         if (const auto cohort = cohorts_by_id_.find(candidate.from_entry);
             cohort != cohorts_by_id_.end()) {
-            for (const auto& origin : cohort->second.origins) {
-                const auto opening = placement_.find(origin.incarnation);
-                if (opening != placement_.end() && opening->second.opening
-                    && opening->second.is_long == prior_long) {
-                    targets_prior = true;
-                    break;
-                }
-            }
+            targets_prior = cohort_opened_on_side(cohort->second, prior_long);
         }
         if ((exit && targets_prior) || stale_margin) stale.push_back(handle);
     }
@@ -1216,16 +1291,7 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         retire(handle);
     }
     for (auto& cohort : cohorts_by_id_) {
-        bool prior_side = false;
-        for (const auto& origin : cohort.second.origins) {
-            const auto opening = placement_.find(origin.incarnation);
-            if (opening != placement_.end() && opening->second.opening
-                && opening->second.is_long == prior_long) {
-                prior_side = true;
-                break;
-            }
-        }
-        if (prior_side) {
+        if (cohort_opened_on_side(cohort.second, prior_long)) {
             cohort.second.opened.clear();
             cohort.second.live_units_by_origin.clear();
         }
@@ -1380,6 +1446,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 }
 
 void PineExecutionAdapter::reset_for_run() {
+    if (auto* index = lookup_index(false)) index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
     cohort_order_.clear();
@@ -3595,9 +3662,10 @@ void PineExecutionAdapter::consume_closed_trade_rows(
         if (matched || !(remaining > 0.0)) continue;
         const auto cohort = cohorts_by_id_.find(trade.entry_id);
         if (cohort == cohorts_by_id_.end()) continue;
-        for (const auto& origin : cohort->second.origins) {
-            auto units = cohort->second.live_units_by_origin.find(origin.incarnation);
-            if (units == cohort->second.live_units_by_origin.end()) continue;
+        // False once nothing remains to consume.
+        const auto consume_origin = [&](std::uint64_t incarnation) {
+            auto units = cohort->second.live_units_by_origin.find(incarnation);
+            if (units == cohort->second.live_units_by_origin.end()) return true;
             const double consumed = std::min(units->second, remaining);
             units->second -= consumed;
             remaining -= consumed;
@@ -3605,8 +3673,30 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             if (drained)
                 cohort->second.live_units_by_origin.erase(units);
             settle_slot(cohort->second, trade, drained);
-            if (!(remaining > 0.0)) break;
+            return remaining > 0.0;
+        };
+        auto* lookup = lookup_index();
+        if (!lookup) {
+            for (const auto& origin : cohort->second.origins)
+                if (!consume_origin(origin.incarnation)) break;
+            continue;
         }
+        // The walk above consumes only at a roster position whose origin
+        // still has a unit row, and each such origin only at its first
+        // position: after consuming there, its row is gone (drained) or
+        // nothing remains. So visit exactly those first positions, ascending,
+        // which the roster's position index names without walking the id's
+        // whole history.
+        std::vector<std::pair<std::size_t, std::uint64_t>> carrying;
+        carrying.reserve(cohort->second.live_units_by_origin.size());
+        for (const auto& unit : cohort->second.live_units_by_origin) {
+            if (const auto* positions = cohort->second.origins.positions_of(unit.first))
+                carrying.emplace_back(positions->front(), unit.first);
+        }
+        std::sort(carrying.begin(), carrying.end());
+        ++lookup->answers;
+        for (const auto& origin : carrying)
+            if (!consume_origin(origin.second)) break;
     }
 }
 
