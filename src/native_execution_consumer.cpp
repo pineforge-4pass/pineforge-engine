@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -2732,11 +2733,13 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
+    // The driver log alone. The command history is sized by pump_batch from
+    // what the batch records; a reservation made here before begin_ready
+    // never reached a run anyway, since begin_ready resets the request core.
     if (expected_points > driver_log_.max_size()) {
         throw std::length_error("native driver-log capacity exhausted");
     }
     if (expected_points > driver_log_.capacity()) driver_log_.reserve(expected_points);
-    requests_.reserve(expected_points);
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -8485,6 +8488,69 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             consumer.pumped_last_index_ = -1;
         }
     } view(*this, bars, n);
+    // A batch knows its length, so the two logs it appends to -- the driver
+    // log and the command history -- are sized for it instead of regrown by
+    // doubling, where every regrowth moves the whole log into a freshly
+    // faulted block and unmaps the old one. Capacity is not observable: no
+    // hash, readback or event reads it. A reservation the allocator refuses
+    // leaves the log growing as it always did.
+    //
+    // The driver log is reserved exactly, up front, where its length is a
+    // fact of the spec: one script bar per input (a Passthrough pairing) and
+    // a fixed number of points per script bar -- the four modeled waypoints
+    // or a synthesized path's samples, and the after-calculation close --
+    // with a small allowance for current executions. Any other driver log (a
+    // lower feed, volume-weighted samples, an aggregated script timeframe)
+    // and every command history, whose length the host's commands decide, is
+    // sized at doubling checkpoints from the rate this batch has shown so
+    // far: to its projected end and an eighth, but never beyond
+    // kPresizeFactor times what the log already holds, so a burst early in a
+    // run cannot reserve address space in proportion to the rest of the
+    // batch.
+    constexpr std::size_t kPresizeFactor = 16;
+    const std::size_t total = n > 0 ? static_cast<std::size_t>(n) : 0;
+    const std::size_t driver_base = driver_log_.size();
+    const std::size_t history_base = requests_.history().size();
+    const auto hint = [](auto&& reserve) {
+        try {
+            reserve();
+        } catch (const std::bad_alloc&) {
+        }
+    };
+    if (const auto* spec = spec_ptr(); spec && total > 0
+        && pairing_.pairing == native_calendar::TimeframePairing::Passthrough) {
+        std::size_t per_bar = 0;
+        if (spec->intrabar.is_none()) {
+            per_bar = 4;
+        } else if (const auto* synthesized = spec->intrabar.synthesized_path();
+                   synthesized && !synthesized->volume_weighted) {
+            per_bar = static_cast<std::size_t>(synthesized->samples);
+        }
+        if (per_bar != 0) {
+            if (spec->close_execution == NativeCloseExecution::AfterCalculation) ++per_bar;
+            const std::size_t points = per_bar * total;
+            hint([&] {
+                reserve_driver_log(std::min(driver_base + points + points / 64 + 16,
+                                            driver_log_.max_size()));
+            });
+        }
+    }
+    // The capacity to give a log after `consumed` inputs, or 0 to leave it.
+    const auto presize = [total](std::size_t base, std::size_t size, std::size_t capacity,
+                                 std::size_t consumed, std::size_t max_size) -> std::size_t {
+        if (size <= base || size > max_size / (2 * kPresizeFactor)) return 0;
+        const std::size_t grown = size - base;
+        if (grown > std::numeric_limits<std::size_t>::max() / total) return 0;
+        const std::size_t projected = size + grown * (total - consumed) / consumed;
+        if (projected <= capacity) return 0;
+        const std::size_t wanted = std::min(projected + projected / 8, max_size);
+        const std::size_t bound = size * kPresizeFactor;
+        if (wanted <= bound) return wanted;
+        // At the bound, grow only once the log could not absorb another
+        // window like the one it has just recorded.
+        return size + grown > capacity ? bound : 0;
+    };
+    std::size_t checkpoint = 64;
     for (int i = 0; i < n; ++i) {
         // The previous input's closing check is this loop's last statement,
         // and no host code runs between it and here: the projection it has
@@ -8500,6 +8566,21 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             return;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
+        if (static_cast<std::size_t>(i) + 1 == checkpoint && checkpoint < total) {
+            const std::size_t consumed = checkpoint;
+            checkpoint *= 2;
+            if (const std::size_t points = presize(driver_base, driver_log_.size(),
+                                                   driver_log_.capacity(), consumed,
+                                                   driver_log_.max_size())) {
+                hint([&] { reserve_driver_log(points); });
+            }
+            const auto& history = requests_.history();
+            if (const std::size_t events = presize(history_base, history.size(),
+                                                   history.capacity(), consumed,
+                                                   history.max_size())) {
+                hint([&] { requests_.reserve(events); });
+            }
+        }
     }
 }
 

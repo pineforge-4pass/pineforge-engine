@@ -918,6 +918,10 @@ list(APPEND TEST_SOURCES test_native_match_hash_witness)
 # values the selection feeds are pinned. Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_lower_lookup)
+# R5 PERF-K24 (K4): a batch sizes its driver log and command history for its
+# own length; the values the pump feeds are pinned. Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_batch_log_presize)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
