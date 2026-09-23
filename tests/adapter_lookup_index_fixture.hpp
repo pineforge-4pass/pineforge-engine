@@ -68,7 +68,7 @@ enum class Family { Reversals, Brackets };
 struct StreamConfig {
     std::uint64_t seed = 1;
     Family family = Family::Reversals;
-    int bars = 200;
+    int bars = 320;
     bool magnifier = false;
     bool margin = false;
     bool process_on_close = false;
@@ -81,7 +81,7 @@ inline const char* family_name(Family family) {
 }
 
 // Quarter-tick bars: a random walk with occasional gaps and, when the
-// configuration is leveraged, two slides of about a fifth of the price.
+// configuration is leveraged, three slides of about a fifth of the price.
 inline std::vector<Bar> make_tape(const StreamConfig& config) {
     Rng rng(config.seed ^ 0x7A3F11C5D2E90B47ull);
     std::vector<Bar> bars;
@@ -92,7 +92,8 @@ inline std::vector<Bar> make_tape(const StreamConfig& config) {
         long open = price;
         if (rng.percent(7)) open += rng.percent(50) ? rng.between(3, 12) : -rng.between(3, 12);
         long drift = rng.between(-5, 5);
-        if (config.margin && ((index >= 50 && index < 62) || (index >= 140 && index < 150)))
+        if (config.margin && ((index >= 50 && index < 62) || (index >= 140 && index < 150)
+                              || (index >= 240 && index < 250)))
             drift = -rng.between(6, 9);
         long close = open + drift;
         if (open < 120) open = 120;

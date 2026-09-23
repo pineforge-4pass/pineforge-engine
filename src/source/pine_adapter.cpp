@@ -1192,6 +1192,12 @@ public:
     }
 };
 
+// A walk over at most this many retained entries costs less than reaching
+// the consumer's cache (the host downcast, the consumer, the cache's type):
+// below it the lookups walk, above it they read the index. Either answer is
+// the walk's, so the threshold only moves cost.
+constexpr std::size_t kIndexedFrom = 16;
+
 // The index `consumer` keeps for the adapter at `owner` in run `run`: the
 // one it adopted in this run, else (when `create`) a fresh one, else null.
 // Any other cache it holds (another adapter bound to the same host, an
@@ -1237,6 +1243,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
         }
         return false;
     };
+    if (cohort.origins.size() <= kIndexedFrom) return walk();
     AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
@@ -1280,6 +1287,7 @@ bool PineExecutionAdapter::origin_leg_consumed(
                 return consumed(handle.incarnation);
             });
     };
+    if (members->second.size() <= kIndexedFrom) return walk();
     AdapterLookupIndex* index = AdapterLookupIndex::exit_leg(family)
         ? adapter_lookup_index(bound_consumer(), this, run_counter_) : nullptr;
     if (!index) return walk();
@@ -1315,6 +1323,7 @@ bool PineExecutionAdapter::immediate_close_placed_on(std::int32_t bar) const noe
         return std::any_of(placement_.begin(), placement_.end(),
             [&](const auto& row) { return placed(row.second); });
     };
+    if (placement_.size() <= kIndexedFrom) return walk();
     AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
@@ -3877,7 +3886,8 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             settle_slot(cohort->second, trade, drained);
             return remaining > 0.0;
         };
-        auto* lookup = adapter_lookup_index(bound_consumer(), this, run_counter_);
+        auto* lookup = cohort->second.origins.size() <= kIndexedFrom ? nullptr
+            : adapter_lookup_index(bound_consumer(), this, run_counter_);
         if (!lookup) {
             for (const auto& origin : cohort->second.origins)
                 if (!consume_origin(origin.incarnation)) break;
