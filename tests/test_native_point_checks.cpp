@@ -273,103 +273,200 @@ struct AbortPin {
 };
 
 // Harvested at f71cd820 (the lane's base): -DPF_L1_HARVEST, PF_POINT_CHECKS_DUMP=1.
+// expectation corrected (96 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and each outcome folds native_continuation_hash() -- with that one read masked every outcome (lifecycle, failure code, operation, ordinal, discriminator, context kind, acceptance, error text, trade count, hook counts) is identical on 6976a808 and here; re-harvested the same way on INT19's tree; V19-A's tip (6211dc94) gives the same rows:
+//   batch/error/on_native_input#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   batch/error/on_native_input#3: outcome 11369826695567426895ULL -> 12506965903089361792ULL
+//   batch/error/on_native_bar_open#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   batch/error/on_native_bar_open#3: outcome 11369826695567426895ULL -> 12506965903089361792ULL
+//   batch/error/on_native_bar#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   batch/error/on_native_bar#3: outcome 13682263432178950015ULL -> 1057123432612222053ULL
+//   batch/error/on_native_recalculate#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   batch/error/on_native_recalculate#3: outcome 13682263432178950015ULL -> 1057123432612222053ULL
+//   batch/error/on_native_applied#1: outcome 3755823117091528113ULL -> 5339722451315730454ULL
+//   batch/error/on_native_applied#3: outcome 3748145109051711506ULL -> 1462432089140135432ULL
+//   batch/error/on_native_tick#1: outcome 9490533002201463192ULL -> 14678299568377943283ULL
+//   batch/error/on_native_tick#3: outcome 9490533002201463192ULL -> 14678299568377943283ULL
+//   batch/quiet/on_native_input#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   batch/quiet/on_native_input#3: outcome 11765673491801525143ULL -> 2814996419086419291ULL
+//   batch/quiet/on_native_bar_open#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   batch/quiet/on_native_bar_open#3: outcome 11765673491801525143ULL -> 2814996419086419291ULL
+//   batch/quiet/on_native_bar#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   batch/quiet/on_native_bar#3: outcome 1699454288256336028ULL -> 8283080006278880170ULL
+//   batch/quiet/on_native_recalculate#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   batch/quiet/on_native_recalculate#3: outcome 1699454288256336028ULL -> 8283080006278880170ULL
+//   batch/quiet/on_native_applied#1: outcome 15528389346274352663ULL -> 7077975767914576205ULL
+//   batch/quiet/on_native_applied#3: outcome 11565094891479924078ULL -> 18015243225726523608ULL
+//   batch/quiet/on_native_tick#1: outcome 14776523166362922754ULL -> 18134814941465191729ULL
+//   batch/quiet/on_native_tick#3: outcome 14776523166362922754ULL -> 18134814941465191729ULL
+//   fills/error/on_native_input#1: outcome 118487784913891337ULL -> 17367621735129790840ULL
+//   fills/error/on_native_input#3: outcome 10137690147833345466ULL -> 6438362476430832568ULL
+//   fills/error/on_native_bar_open#1: outcome 118487784913891337ULL -> 17367621735129790840ULL
+//   fills/error/on_native_bar_open#3: outcome 10137690147833345466ULL -> 6438362476430832568ULL
+//   fills/error/on_native_bar#1: outcome 1495795819466735193ULL -> 8524839639049974501ULL
+//   fills/error/on_native_bar#3: outcome 3287078954014157192ULL -> 1218036926535466279ULL
+//   fills/error/on_native_recalculate#1: outcome 1495795819466735193ULL -> 8524839639049974501ULL
+//   fills/error/on_native_recalculate#3: outcome 3287078954014157192ULL -> 1218036926535466279ULL
+//   fills/error/on_native_applied#1: outcome 13619160401413074268ULL -> 16321821413986659647ULL
+//   fills/error/on_native_applied#3: outcome 3672600079008313916ULL -> 4158348421283583503ULL
+//   fills/error/on_native_tick#1: outcome 15212882780062550854ULL -> 7005226954935592032ULL
+//   fills/error/on_native_tick#3: outcome 15212882780062550854ULL -> 7005226954935592032ULL
+//   fills/quiet/on_native_input#1: outcome 8607891012036161609ULL -> 12196372944623838614ULL
+//   fills/quiet/on_native_input#3: outcome 18067290218334227015ULL -> 17546638886976472941ULL
+//   fills/quiet/on_native_bar_open#1: outcome 8607891012036161609ULL -> 12196372944623838614ULL
+//   fills/quiet/on_native_bar_open#3: outcome 18067290218334227015ULL -> 17546638886976472941ULL
+//   fills/quiet/on_native_bar#1: outcome 15300703146662902309ULL -> 14651796593170546901ULL
+//   fills/quiet/on_native_bar#3: outcome 11807124725506397264ULL -> 7653501279252472751ULL
+//   fills/quiet/on_native_recalculate#1: outcome 15300703146662902309ULL -> 14651796593170546901ULL
+//   fills/quiet/on_native_recalculate#3: outcome 11807124725506397264ULL -> 7653501279252472751ULL
+//   fills/quiet/on_native_applied#1: outcome 134644673297929323ULL -> 11885385292447102941ULL
+//   fills/quiet/on_native_applied#3: outcome 649033997403019299ULL -> 2766548411790701755ULL
+//   fills/quiet/on_native_tick#1: outcome 15705536381643470312ULL -> 9309647628106394874ULL
+//   fills/quiet/on_native_tick#3: outcome 15705536381643470312ULL -> 9309647628106394874ULL
+//   stream/error/on_native_input#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   stream/error/on_native_input#3: outcome 11369826695567426895ULL -> 12506965903089361792ULL
+//   stream/error/on_native_bar_open#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   stream/error/on_native_bar_open#3: outcome 11369826695567426895ULL -> 12506965903089361792ULL
+//   stream/error/on_native_bar#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   stream/error/on_native_bar#3: outcome 13682263432178950015ULL -> 1057123432612222053ULL
+//   stream/error/on_native_recalculate#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   stream/error/on_native_recalculate#3: outcome 13682263432178950015ULL -> 1057123432612222053ULL
+//   stream/error/on_native_applied#1: outcome 3755823117091528113ULL -> 5339722451315730454ULL
+//   stream/error/on_native_applied#3: outcome 9325307024482353376ULL -> 1519443849186252878ULL
+//   stream/error/on_native_tick#1: outcome 5260220416353173450ULL -> 3038203095228297971ULL
+//   stream/error/on_native_tick#3: outcome 5260220416353173450ULL -> 3038203095228297971ULL
+//   stream/quiet/on_native_input#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   stream/quiet/on_native_input#3: outcome 11765673491801525143ULL -> 2814996419086419291ULL
+//   stream/quiet/on_native_bar_open#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   stream/quiet/on_native_bar_open#3: outcome 11765673491801525143ULL -> 2814996419086419291ULL
+//   stream/quiet/on_native_bar#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   stream/quiet/on_native_bar#3: outcome 1699454288256336028ULL -> 8283080006278880170ULL
+//   stream/quiet/on_native_recalculate#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   stream/quiet/on_native_recalculate#3: outcome 1699454288256336028ULL -> 8283080006278880170ULL
+//   stream/quiet/on_native_applied#1: outcome 15528389346274352663ULL -> 7077975767914576205ULL
+//   stream/quiet/on_native_applied#3: outcome 6155098625071516347ULL -> 7687428441803015905ULL
+//   stream/quiet/on_native_tick#1: outcome 3723743665420506340ULL -> 17056314215193477229ULL
+//   stream/quiet/on_native_tick#3: outcome 3723743665420506340ULL -> 17056314215193477229ULL
+//   ticks/error/on_native_input#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   ticks/error/on_native_input#3: outcome 14829410450328021149ULL -> 12695806500583197548ULL
+//   ticks/error/on_native_bar_open#1: outcome 1756094627297721218ULL -> 6393539083915214569ULL
+//   ticks/error/on_native_bar_open#3: outcome 14829410450328021149ULL -> 12695806500583197548ULL
+//   ticks/error/on_native_bar#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   ticks/error/on_native_bar#3: outcome 18336705861861220719ULL -> 17972753170949413387ULL
+//   ticks/error/on_native_recalculate#1: outcome 11856778920235710666ULL -> 2421246306453684171ULL
+//   ticks/error/on_native_recalculate#3: outcome 18336705861861220719ULL -> 17972753170949413387ULL
+//   ticks/error/on_native_applied#1: outcome 3755823117091528113ULL -> 5339722451315730454ULL
+//   ticks/error/on_native_applied#3: outcome 7763277276465876675ULL -> 2877234677515189003ULL
+//   ticks/error/on_native_tick#1: outcome 6007603818950591425ULL -> 755879435947172223ULL
+//   ticks/error/on_native_tick#3: outcome 7701426453337871836ULL -> 3586158540922747583ULL
+//   ticks/quiet/on_native_input#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   ticks/quiet/on_native_input#3: outcome 2214991549771150920ULL -> 16192858612202111790ULL
+//   ticks/quiet/on_native_bar_open#1: outcome 7445641636614247716ULL -> 17464479845175602237ULL
+//   ticks/quiet/on_native_bar_open#3: outcome 2214991549771150920ULL -> 16192858612202111790ULL
+//   ticks/quiet/on_native_bar#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   ticks/quiet/on_native_bar#3: outcome 1758333363839272318ULL -> 2497908218272532287ULL
+//   ticks/quiet/on_native_recalculate#1: outcome 2499690141214795442ULL -> 8097870827278573096ULL
+//   ticks/quiet/on_native_recalculate#3: outcome 1758333363839272318ULL -> 2497908218272532287ULL
+//   ticks/quiet/on_native_applied#1: outcome 15528389346274352663ULL -> 7077975767914576205ULL
+//   ticks/quiet/on_native_applied#3: outcome 355827270336707373ULL -> 17168120311484485675ULL
+//   ticks/quiet/on_native_tick#1: outcome 8520651042860323138ULL -> 17346655304003294423ULL
+//   ticks/quiet/on_native_tick#3: outcome 10915210028839708168ULL -> 9104465125362721709ULL
 constexpr AbortPin kAbortPins[] = {
-    {"batch/error/on_native_input#1", 1756094627297721218ULL},
-    {"batch/error/on_native_input#3", 11369826695567426895ULL},
-    {"batch/error/on_native_bar_open#1", 1756094627297721218ULL},
-    {"batch/error/on_native_bar_open#3", 11369826695567426895ULL},
-    {"batch/error/on_native_bar#1", 11856778920235710666ULL},
-    {"batch/error/on_native_bar#3", 13682263432178950015ULL},
-    {"batch/error/on_native_recalculate#1", 11856778920235710666ULL},
-    {"batch/error/on_native_recalculate#3", 13682263432178950015ULL},
-    {"batch/error/on_native_applied#1", 3755823117091528113ULL},
-    {"batch/error/on_native_applied#3", 3748145109051711506ULL},
-    {"batch/error/on_native_tick#1", 9490533002201463192ULL},
-    {"batch/error/on_native_tick#3", 9490533002201463192ULL},
-    {"batch/quiet/on_native_input#1", 7445641636614247716ULL},
-    {"batch/quiet/on_native_input#3", 11765673491801525143ULL},
-    {"batch/quiet/on_native_bar_open#1", 7445641636614247716ULL},
-    {"batch/quiet/on_native_bar_open#3", 11765673491801525143ULL},
-    {"batch/quiet/on_native_bar#1", 2499690141214795442ULL},
-    {"batch/quiet/on_native_bar#3", 1699454288256336028ULL},
-    {"batch/quiet/on_native_recalculate#1", 2499690141214795442ULL},
-    {"batch/quiet/on_native_recalculate#3", 1699454288256336028ULL},
-    {"batch/quiet/on_native_applied#1", 15528389346274352663ULL},
-    {"batch/quiet/on_native_applied#3", 11565094891479924078ULL},
-    {"batch/quiet/on_native_tick#1", 14776523166362922754ULL},
-    {"batch/quiet/on_native_tick#3", 14776523166362922754ULL},
-    {"fills/error/on_native_input#1", 118487784913891337ULL},
-    {"fills/error/on_native_input#3", 10137690147833345466ULL},
-    {"fills/error/on_native_bar_open#1", 118487784913891337ULL},
-    {"fills/error/on_native_bar_open#3", 10137690147833345466ULL},
-    {"fills/error/on_native_bar#1", 1495795819466735193ULL},
-    {"fills/error/on_native_bar#3", 3287078954014157192ULL},
-    {"fills/error/on_native_recalculate#1", 1495795819466735193ULL},
-    {"fills/error/on_native_recalculate#3", 3287078954014157192ULL},
-    {"fills/error/on_native_applied#1", 13619160401413074268ULL},
-    {"fills/error/on_native_applied#3", 3672600079008313916ULL},
-    {"fills/error/on_native_tick#1", 15212882780062550854ULL},
-    {"fills/error/on_native_tick#3", 15212882780062550854ULL},
-    {"fills/quiet/on_native_input#1", 8607891012036161609ULL},
-    {"fills/quiet/on_native_input#3", 18067290218334227015ULL},
-    {"fills/quiet/on_native_bar_open#1", 8607891012036161609ULL},
-    {"fills/quiet/on_native_bar_open#3", 18067290218334227015ULL},
-    {"fills/quiet/on_native_bar#1", 15300703146662902309ULL},
-    {"fills/quiet/on_native_bar#3", 11807124725506397264ULL},
-    {"fills/quiet/on_native_recalculate#1", 15300703146662902309ULL},
-    {"fills/quiet/on_native_recalculate#3", 11807124725506397264ULL},
-    {"fills/quiet/on_native_applied#1", 134644673297929323ULL},
-    {"fills/quiet/on_native_applied#3", 649033997403019299ULL},
-    {"fills/quiet/on_native_tick#1", 15705536381643470312ULL},
-    {"fills/quiet/on_native_tick#3", 15705536381643470312ULL},
-    {"stream/error/on_native_input#1", 1756094627297721218ULL},
-    {"stream/error/on_native_input#3", 11369826695567426895ULL},
-    {"stream/error/on_native_bar_open#1", 1756094627297721218ULL},
-    {"stream/error/on_native_bar_open#3", 11369826695567426895ULL},
-    {"stream/error/on_native_bar#1", 11856778920235710666ULL},
-    {"stream/error/on_native_bar#3", 13682263432178950015ULL},
-    {"stream/error/on_native_recalculate#1", 11856778920235710666ULL},
-    {"stream/error/on_native_recalculate#3", 13682263432178950015ULL},
-    {"stream/error/on_native_applied#1", 3755823117091528113ULL},
-    {"stream/error/on_native_applied#3", 9325307024482353376ULL},
-    {"stream/error/on_native_tick#1", 5260220416353173450ULL},
-    {"stream/error/on_native_tick#3", 5260220416353173450ULL},
-    {"stream/quiet/on_native_input#1", 7445641636614247716ULL},
-    {"stream/quiet/on_native_input#3", 11765673491801525143ULL},
-    {"stream/quiet/on_native_bar_open#1", 7445641636614247716ULL},
-    {"stream/quiet/on_native_bar_open#3", 11765673491801525143ULL},
-    {"stream/quiet/on_native_bar#1", 2499690141214795442ULL},
-    {"stream/quiet/on_native_bar#3", 1699454288256336028ULL},
-    {"stream/quiet/on_native_recalculate#1", 2499690141214795442ULL},
-    {"stream/quiet/on_native_recalculate#3", 1699454288256336028ULL},
-    {"stream/quiet/on_native_applied#1", 15528389346274352663ULL},
-    {"stream/quiet/on_native_applied#3", 6155098625071516347ULL},
-    {"stream/quiet/on_native_tick#1", 3723743665420506340ULL},
-    {"stream/quiet/on_native_tick#3", 3723743665420506340ULL},
-    {"ticks/error/on_native_input#1", 1756094627297721218ULL},
-    {"ticks/error/on_native_input#3", 14829410450328021149ULL},
-    {"ticks/error/on_native_bar_open#1", 1756094627297721218ULL},
-    {"ticks/error/on_native_bar_open#3", 14829410450328021149ULL},
-    {"ticks/error/on_native_bar#1", 11856778920235710666ULL},
-    {"ticks/error/on_native_bar#3", 18336705861861220719ULL},
-    {"ticks/error/on_native_recalculate#1", 11856778920235710666ULL},
-    {"ticks/error/on_native_recalculate#3", 18336705861861220719ULL},
-    {"ticks/error/on_native_applied#1", 3755823117091528113ULL},
-    {"ticks/error/on_native_applied#3", 7763277276465876675ULL},
-    {"ticks/error/on_native_tick#1", 6007603818950591425ULL},
-    {"ticks/error/on_native_tick#3", 7701426453337871836ULL},
-    {"ticks/quiet/on_native_input#1", 7445641636614247716ULL},
-    {"ticks/quiet/on_native_input#3", 2214991549771150920ULL},
-    {"ticks/quiet/on_native_bar_open#1", 7445641636614247716ULL},
-    {"ticks/quiet/on_native_bar_open#3", 2214991549771150920ULL},
-    {"ticks/quiet/on_native_bar#1", 2499690141214795442ULL},
-    {"ticks/quiet/on_native_bar#3", 1758333363839272318ULL},
-    {"ticks/quiet/on_native_recalculate#1", 2499690141214795442ULL},
-    {"ticks/quiet/on_native_recalculate#3", 1758333363839272318ULL},
-    {"ticks/quiet/on_native_applied#1", 15528389346274352663ULL},
-    {"ticks/quiet/on_native_applied#3", 355827270336707373ULL},
-    {"ticks/quiet/on_native_tick#1", 8520651042860323138ULL},
-    {"ticks/quiet/on_native_tick#3", 10915210028839708168ULL},
+    {"batch/error/on_native_input#1", 6393539083915214569ULL},
+    {"batch/error/on_native_input#3", 12506965903089361792ULL},
+    {"batch/error/on_native_bar_open#1", 6393539083915214569ULL},
+    {"batch/error/on_native_bar_open#3", 12506965903089361792ULL},
+    {"batch/error/on_native_bar#1", 2421246306453684171ULL},
+    {"batch/error/on_native_bar#3", 1057123432612222053ULL},
+    {"batch/error/on_native_recalculate#1", 2421246306453684171ULL},
+    {"batch/error/on_native_recalculate#3", 1057123432612222053ULL},
+    {"batch/error/on_native_applied#1", 5339722451315730454ULL},
+    {"batch/error/on_native_applied#3", 1462432089140135432ULL},
+    {"batch/error/on_native_tick#1", 14678299568377943283ULL},
+    {"batch/error/on_native_tick#3", 14678299568377943283ULL},
+    {"batch/quiet/on_native_input#1", 17464479845175602237ULL},
+    {"batch/quiet/on_native_input#3", 2814996419086419291ULL},
+    {"batch/quiet/on_native_bar_open#1", 17464479845175602237ULL},
+    {"batch/quiet/on_native_bar_open#3", 2814996419086419291ULL},
+    {"batch/quiet/on_native_bar#1", 8097870827278573096ULL},
+    {"batch/quiet/on_native_bar#3", 8283080006278880170ULL},
+    {"batch/quiet/on_native_recalculate#1", 8097870827278573096ULL},
+    {"batch/quiet/on_native_recalculate#3", 8283080006278880170ULL},
+    {"batch/quiet/on_native_applied#1", 7077975767914576205ULL},
+    {"batch/quiet/on_native_applied#3", 18015243225726523608ULL},
+    {"batch/quiet/on_native_tick#1", 18134814941465191729ULL},
+    {"batch/quiet/on_native_tick#3", 18134814941465191729ULL},
+    {"fills/error/on_native_input#1", 17367621735129790840ULL},
+    {"fills/error/on_native_input#3", 6438362476430832568ULL},
+    {"fills/error/on_native_bar_open#1", 17367621735129790840ULL},
+    {"fills/error/on_native_bar_open#3", 6438362476430832568ULL},
+    {"fills/error/on_native_bar#1", 8524839639049974501ULL},
+    {"fills/error/on_native_bar#3", 1218036926535466279ULL},
+    {"fills/error/on_native_recalculate#1", 8524839639049974501ULL},
+    {"fills/error/on_native_recalculate#3", 1218036926535466279ULL},
+    {"fills/error/on_native_applied#1", 16321821413986659647ULL},
+    {"fills/error/on_native_applied#3", 4158348421283583503ULL},
+    {"fills/error/on_native_tick#1", 7005226954935592032ULL},
+    {"fills/error/on_native_tick#3", 7005226954935592032ULL},
+    {"fills/quiet/on_native_input#1", 12196372944623838614ULL},
+    {"fills/quiet/on_native_input#3", 17546638886976472941ULL},
+    {"fills/quiet/on_native_bar_open#1", 12196372944623838614ULL},
+    {"fills/quiet/on_native_bar_open#3", 17546638886976472941ULL},
+    {"fills/quiet/on_native_bar#1", 14651796593170546901ULL},
+    {"fills/quiet/on_native_bar#3", 7653501279252472751ULL},
+    {"fills/quiet/on_native_recalculate#1", 14651796593170546901ULL},
+    {"fills/quiet/on_native_recalculate#3", 7653501279252472751ULL},
+    {"fills/quiet/on_native_applied#1", 11885385292447102941ULL},
+    {"fills/quiet/on_native_applied#3", 2766548411790701755ULL},
+    {"fills/quiet/on_native_tick#1", 9309647628106394874ULL},
+    {"fills/quiet/on_native_tick#3", 9309647628106394874ULL},
+    {"stream/error/on_native_input#1", 6393539083915214569ULL},
+    {"stream/error/on_native_input#3", 12506965903089361792ULL},
+    {"stream/error/on_native_bar_open#1", 6393539083915214569ULL},
+    {"stream/error/on_native_bar_open#3", 12506965903089361792ULL},
+    {"stream/error/on_native_bar#1", 2421246306453684171ULL},
+    {"stream/error/on_native_bar#3", 1057123432612222053ULL},
+    {"stream/error/on_native_recalculate#1", 2421246306453684171ULL},
+    {"stream/error/on_native_recalculate#3", 1057123432612222053ULL},
+    {"stream/error/on_native_applied#1", 5339722451315730454ULL},
+    {"stream/error/on_native_applied#3", 1519443849186252878ULL},
+    {"stream/error/on_native_tick#1", 3038203095228297971ULL},
+    {"stream/error/on_native_tick#3", 3038203095228297971ULL},
+    {"stream/quiet/on_native_input#1", 17464479845175602237ULL},
+    {"stream/quiet/on_native_input#3", 2814996419086419291ULL},
+    {"stream/quiet/on_native_bar_open#1", 17464479845175602237ULL},
+    {"stream/quiet/on_native_bar_open#3", 2814996419086419291ULL},
+    {"stream/quiet/on_native_bar#1", 8097870827278573096ULL},
+    {"stream/quiet/on_native_bar#3", 8283080006278880170ULL},
+    {"stream/quiet/on_native_recalculate#1", 8097870827278573096ULL},
+    {"stream/quiet/on_native_recalculate#3", 8283080006278880170ULL},
+    {"stream/quiet/on_native_applied#1", 7077975767914576205ULL},
+    {"stream/quiet/on_native_applied#3", 7687428441803015905ULL},
+    {"stream/quiet/on_native_tick#1", 17056314215193477229ULL},
+    {"stream/quiet/on_native_tick#3", 17056314215193477229ULL},
+    {"ticks/error/on_native_input#1", 6393539083915214569ULL},
+    {"ticks/error/on_native_input#3", 12695806500583197548ULL},
+    {"ticks/error/on_native_bar_open#1", 6393539083915214569ULL},
+    {"ticks/error/on_native_bar_open#3", 12695806500583197548ULL},
+    {"ticks/error/on_native_bar#1", 2421246306453684171ULL},
+    {"ticks/error/on_native_bar#3", 17972753170949413387ULL},
+    {"ticks/error/on_native_recalculate#1", 2421246306453684171ULL},
+    {"ticks/error/on_native_recalculate#3", 17972753170949413387ULL},
+    {"ticks/error/on_native_applied#1", 5339722451315730454ULL},
+    {"ticks/error/on_native_applied#3", 2877234677515189003ULL},
+    {"ticks/error/on_native_tick#1", 755879435947172223ULL},
+    {"ticks/error/on_native_tick#3", 3586158540922747583ULL},
+    {"ticks/quiet/on_native_input#1", 17464479845175602237ULL},
+    {"ticks/quiet/on_native_input#3", 16192858612202111790ULL},
+    {"ticks/quiet/on_native_bar_open#1", 17464479845175602237ULL},
+    {"ticks/quiet/on_native_bar_open#3", 16192858612202111790ULL},
+    {"ticks/quiet/on_native_bar#1", 8097870827278573096ULL},
+    {"ticks/quiet/on_native_bar#3", 2497908218272532287ULL},
+    {"ticks/quiet/on_native_recalculate#1", 8097870827278573096ULL},
+    {"ticks/quiet/on_native_recalculate#3", 2497908218272532287ULL},
+    {"ticks/quiet/on_native_applied#1", 7077975767914576205ULL},
+    {"ticks/quiet/on_native_applied#3", 17168120311484485675ULL},
+    {"ticks/quiet/on_native_tick#1", 17346655304003294423ULL},
+    {"ticks/quiet/on_native_tick#3", 9104465125362721709ULL},
 };
 
 void aborts_are_caught_where_they_were() {
