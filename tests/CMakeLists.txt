@@ -951,6 +951,10 @@ list(APPEND TEST_SOURCES test_aggregates_input_bars_literals)
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_local_time_fields)
 list(APPEND TEST_SOURCES test_local_time_lock_free_hit)
+# R5 lane PERF-L5: the values six books aimed at the band's edges produce,
+# pinned on f71cd820 (witness). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_match_band_witness)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
