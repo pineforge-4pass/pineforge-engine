@@ -902,9 +902,6 @@ list(APPEND TEST_SOURCES test_native_command_history_read)
 # on fc7aad62 (receipt cursors, recorded broker-state hashes, trades), and a
 # commandless read that allocates nothing. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
-# R5 PERF-K3: the values five randomized books produce, pinned on fc7aad62
-# before the matcher's rows are reused. Source-free, so it also runs in the
-# kernel-only profile.
 # R5 PERF-K3: the matcher reuses its candidate rows after an allowance
 # refresh. The cost stays linear in the live requests (scaling), the reuse is
 # the full rescan bit for bit over randomized books (differential), and the
