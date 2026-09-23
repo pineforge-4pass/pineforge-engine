@@ -843,6 +843,10 @@ void WorkingRequestCore::clear_unbound() noexcept {
     last_ordinal_ = 0;
     last_incarnation_ = 0;
     ordinal_index_.clear();
+    history_base_ = 0;
+    retired_through_ = 0;
+    issued_.clear();
+    successor_roots_.clear();
     receipts_.clear();
     next_cohort_handle_ = 1;
     cohorts_.clear();
@@ -866,7 +870,7 @@ WorkingRequestCore::MutationPlan WorkingRequestCore::begin_plan() const {
     require_epoch_room();
     MutationPlan plan;
     plan.run = identity_;
-    plan.history_size = history_.size();
+    plan.history_size = history_end();
     plan.last_ordinal = last_ordinal_;
     bind_plan(plan);
     plan.epoch = epoch_ + 1;
@@ -894,6 +898,12 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
     reserve_n(ordinal_index_, plan.events.size());
     if (plan.live_change == kLivePush) reserve_n(live_, 1);
     if (plan.add_receipt) reserve_n(receipts_, 1);
+    // index_committed's two rows: an incarnation opens at most one issued
+    // range and names at most one successor root.
+    if (plan.consume_incarnation) {
+        reserve_n(issued_, 1);
+        reserve_n(successor_roots_, 1);
+    }
 }
 
 PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
@@ -928,64 +938,119 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
                 return row.first < ordinal;
             });
     if (it == ordinal_index_.end() || it->first != id.ordinal) return nullptr;
-    if (it->second >= history_.size()) return nullptr;
-    const CommandEvent* event = &history_[it->second];
+    // The index holds absolute journal positions; a retired event has left
+    // it together with its row, so a hit is always inside the window.
+    if (it->second < history_base_ || it->second - history_base_ >= history_.size()) return nullptr;
+    const CommandEvent* event = &history_[it->second - history_base_];
     if (event_ordinal(*event) != id.ordinal) return nullptr;
     return event;
 }
 
-const RequestDefinition* WorkingRequestCore::definition_for(
-        const RequestHandle& handle) const noexcept {
-    if (handle.incarnation == 0 || handle.run != identity_) return nullptr;
-    if (const auto* live = find_live(handle)) return live->definition.get();
-    // A definition is immutable and its later lifecycle events retain the
-    // same shared definition pointer. Requests receive monotonically
-    // increasing incarnations, so the most recent occurrence is normally
-    // close to the tail. Search backwards to avoid a whole-run forward scan
-    // at every generic cohort candidate.
-    const auto scan = [&]() -> const RequestDefinition* {
-        for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
-            const auto& event = *it;
-            if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
-                if (accepted->definition && accepted->definition->handle == handle)
-                    return accepted->definition.get();
-            } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
-                if (replaced->predecessor_definition
-                    && replaced->predecessor_definition->handle == handle) {
-                    return replaced->predecessor_definition.get();
-                }
-                if (replaced->successor_definition
-                    && replaced->successor_definition->handle == handle) {
-                    return replaced->successor_definition.get();
-                }
-            }
-        }
-        return nullptr;
-    };
-    // R5 lane PERF-P7 (P7a): while the consumer publishes its incarnation
-    // index for this core (native_definition_index.hpp), the index answers
-    // where the scan stops, verified against this history; what it cannot
-    // vouch for is scanned.
-    if (const auto* indexed = DefinitionIndex::published_lookup(*this, handle)) {
-        assert(indexed == scan());
-        return indexed;
+const CommandEvent& WorkingRequestCore::history_at(std::size_t absolute) const {
+    if (absolute < history_base_ || absolute - history_base_ >= history_.size()) {
+        throw std::out_of_range("native journal position is not retained");
     }
-    return scan();
+    return history_[absolute - history_base_];
 }
 
+// A live deferred group-adjustment chain is re-read event by event whenever
+// its request resolves terms (collect_pending_chain), so its head is the
+// oldest event retire_history must keep. The receipts link back through
+// previous_pending_receipt with strictly decreasing ordinals.
+std::optional<uint64_t> WorkingRequestCore::pending_chain_floor() const {
+    std::optional<uint64_t> floor;
+    for (const auto& live : live_) {
+        const auto* deferred = std::get_if<PendingDeferred>(&live.pending);
+        if (!deferred || deferred->count == 0) continue;
+        EventId cursor = deferred->tail_receipt;
+        uint64_t head = cursor.ordinal;
+        for (uint64_t i = 1; i < deferred->count; ++i) {
+            const CommandEvent* event = event_at(cursor);
+            const auto* payload = event ? std::get_if<DeferredGroupAdjustmentEvent>(event) : nullptr;
+            if (!payload || !payload->previous_pending_receipt
+                || payload->previous_pending_receipt->ordinal >= cursor.ordinal) {
+                break;
+            }
+            cursor = *payload->previous_pending_receipt;
+            head = cursor.ordinal;
+        }
+        if (!floor || head < *floor) floor = head;
+    }
+    return floor;
+}
+
+std::size_t WorkingRequestCore::retire_history(uint64_t through_ordinal) {
+    if (history_.empty()) return 0;
+    uint64_t limit = through_ordinal;
+    if (const auto floor = pending_chain_floor()) {
+        if (*floor == 0) return 0;
+        limit = std::min(limit, *floor - 1);
+    }
+    // Journal ordinals ascend, so the retired events are a prefix, and the
+    // ordinal index holds one row per event in the same order.
+    const auto end = std::upper_bound(
+            history_.begin(), history_.end(), limit,
+            [](uint64_t ordinal, const CommandEvent& event) {
+                return ordinal < event_ordinal(event);
+            });
+    const std::size_t count = static_cast<std::size_t>(end - history_.begin());
+    if (count == 0) return 0;
+    retired_through_ = event_ordinal(history_[count - 1]);
+    history_.erase(history_.begin(), end);
+    ordinal_index_.erase(ordinal_index_.begin(),
+                         ordinal_index_.begin() + static_cast<std::ptrdiff_t>(count));
+    history_base_ += count;
+    return count;
+}
+
+// The chain index. Incarnations are issued in increasing order (usable_
+// incarnation), so both tables only ever grow at their back.
+void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
+    const RequestDefinition* definition = nullptr;
+    if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
+        definition = accepted->definition.get();
+    } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+        definition = replaced->successor_definition.get();
+    }
+    if (!definition) return;
+    const uint64_t incarnation = definition->handle.incarnation;
+    if (!issued_.empty() && issued_.back().second + 1 == incarnation) {
+        issued_.back().second = incarnation;
+    } else {
+        issued_.push_back({incarnation, incarnation});
+    }
+    if (definition->root) successor_roots_.push_back({incarnation, definition->root->incarnation});
+}
+
+bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
+    if (handle.incarnation == 0 || handle.run != identity_) return false;
+    const auto it = std::upper_bound(
+            issued_.begin(), issued_.end(), handle.incarnation,
+            [](uint64_t incarnation, const std::pair<uint64_t, uint64_t>& range) {
+                return incarnation < range.first;
+            });
+    return it != issued_.begin() && handle.incarnation <= std::prev(it)->second;
+}
+
+// A request's chain root, without its predecessors' definitions: the live
+// row carries RequestDefinition::root, and the chain index keeps the root of
+// every replace successor that is no longer working. A request that replaced
+// nothing is its own root. Rosters hold roots only (cohort_add inserts this
+// answer), so a membership test needs nothing but it.
 std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
         const RequestHandle& origin) const {
-    const RequestDefinition* current = definition_for(origin);
-    if (!current) return std::nullopt;
-    RequestHandle root = current->handle;
-    std::size_t remaining = history_.size() + live_.size() + 1;
-    while (current->predecessor) {
-        if (remaining-- == 0) return std::nullopt;
-        current = definition_for(*current->predecessor);
-        if (!current) return std::nullopt;
-        root = current->handle;
+    if (!issued(origin)) return std::nullopt;
+    if (const auto* live = find_live(origin)) {
+        const auto& root = live->definition->root;
+        return root ? *root : live->handle();
     }
-    return root;
+    const auto it = std::lower_bound(
+            successor_roots_.begin(), successor_roots_.end(), origin.incarnation,
+            [](const std::pair<uint64_t, uint64_t>& row, uint64_t incarnation) {
+                return row.first < incarnation;
+            });
+    if (it == successor_roots_.end() || it->first != origin.incarnation) return origin;
+    return RequestHandle{identity_, it->second};
 }
 
 std::size_t WorkingRequestCore::cohort_index(CohortHandle cohort) const noexcept {
@@ -1020,7 +1085,7 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
     const std::size_t index = cohort_index(cohort);
     if (cohort.value == 0 || index == cohorts_.size()) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
-    } else if (!definition_for(origin)) {
+    } else if (!issued(origin)) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     } else if (!find_live(origin)) {
         receipt.status = CohortReceiptStatus::TerminalOrigin;
@@ -1046,8 +1111,6 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
     const std::size_t index = cohort_index(cohort);
     if (cohort.value == 0 || index == cohorts_.size()) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
-    } else if (!definition_for(origin)) {
-        receipt.status = CohortReceiptStatus::UnknownOrigin;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
         auto& origins = cohorts_[index].origins;
         const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
@@ -1064,17 +1127,10 @@ bool WorkingRequestCore::cohort_contains(
         CohortHandle cohort, const RequestHandle& opening) const {
     const std::size_t index = cohort_index(cohort);
     if (cohort.value == 0 || index == cohorts_.size()) return false;
-    const RequestDefinition* current = definition_for(opening);
-    std::size_t remaining = history_.size() + live_.size() + 1;
-    while (current) {
-        const auto& origins = cohorts_[index].origins;
-        if (std::binary_search(origins.begin(), origins.end(), current->handle, handle_less)) {
-            return true;
-        }
-        if (!current->predecessor || remaining-- == 0) break;
-        current = definition_for(*current->predecessor);
-    }
-    return false;
+    const auto root = canonical_cohort_origin(opening);
+    if (!root) return false;
+    const auto& origins = cohorts_[index].origins;
+    return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
 bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
@@ -1179,9 +1235,14 @@ WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
     if (it->cause != cause || it->recipient != recipient || it->effect != effect) {
         return ReceiptLookup::Absent;
     }
-    const CommandEvent* event = event_at(EventId{identity_, it->outcome_ordinal});
-    if (!event || !authenticate_receipt_outcome(*event, cause, recipient, effect)) {
-        return ReceiptLookup::Conflict;
+    // The outcome was authenticated when the receipt committed beside it. An
+    // outcome the journal window has retired stands on that record; one that
+    // is retained is authenticated again.
+    if (it->outcome_ordinal > retired_through_) {
+        const CommandEvent* event = event_at(EventId{identity_, it->outcome_ordinal});
+        if (!event || !authenticate_receipt_outcome(*event, cause, recipient, effect)) {
+            return ReceiptLookup::Conflict;
+        }
     }
     if (outcome) *outcome = it->outcome_ordinal;
     return ReceiptLookup::Present;
@@ -1194,7 +1255,7 @@ std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan
         || plan.generation != instance_->generation || plan.run != identity_) {
         return InstallError::WrongCoreOrRun;
     }
-    if (plan.epoch != epoch_ || plan.history_size != history_.size()
+    if (plan.epoch != epoch_ || plan.history_size != history_end()
         || plan.last_ordinal != last_ordinal_
         || epoch_ == std::numeric_limits<uint64_t>::max()) {
         return InstallError::StalePreparation;
@@ -1221,13 +1282,14 @@ bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
 
 InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     if (const auto error = validate_plan(plan)) return *error;
-    const std::size_t first = history_.size();
+    const std::size_t first = history_end();
     const std::size_t count = plan.events.size();
     for (std::size_t i = 0; i < plan.events.size(); ++i) {
         auto& event = plan.events[i];
         const uint64_t ordinal = event_ordinal(event);
         history_.push_back(std::move(event));
-        ordinal_index_.push_back({ordinal, history_.size() - 1});
+        ordinal_index_.push_back({ordinal, history_end() - 1});
+        if (plan.consume_incarnation) index_committed(history_.back());
         last_ordinal_ = ordinal;
     }
     if (plan.live_change == kLivePush) {
@@ -1275,6 +1337,10 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     last_incarnation_ = other.last_incarnation_;
     epoch_ = other.epoch_;
     ordinal_index_ = std::move(other.ordinal_index_);
+    history_base_ = other.history_base_;
+    retired_through_ = other.retired_through_;
+    issued_ = std::move(other.issued_);
+    successor_roots_ = std::move(other.successor_roots_);
     receipts_ = std::move(other.receipts_);
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
@@ -1295,6 +1361,10 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.last_incarnation_ = 0;
     other.epoch_ = 0;
     other.ordinal_index_.clear();
+    other.history_base_ = 0;
+    other.retired_through_ = 0;
+    other.issued_.clear();
+    other.successor_roots_.clear();
     other.receipts_.clear();
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
@@ -1979,6 +2049,12 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     Birth birth{ordinal, context.decision_time_ms};
     auto definition = std::make_shared<RequestDefinition>(
             RequestDefinition{successor, std::move(staged), birth, staged_target});
+    // The successor inherits its predecessor's chain root, so a cohort names
+    // the whole chain by its first handle without walking back through it.
+    {
+        const RequestDefinition& predecessor = *live_[live_index].definition;
+        definition->root = predecessor.root ? *predecessor.root : predecessor.handle;
+    }
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     if (options.retain_trigger_state) live.trigger_state = retained;
     ReplacedEvent replaced;
@@ -3435,6 +3511,9 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     if (std::holds_alternative<FromOwnerFill>(live.request().anchor)) {
         RequestDefinition materialized{live.definition->handle, live.request(),
                                        live.definition->birth, live.definition->predecessor};
+        // The arm installs a level, not a new chain: a leg that replaced
+        // another keeps the root cohorts name it by.
+        materialized.root = live.definition->root;
         // A closing leg trades against the lot this fill opened; a waiting
         // transaction has its own side. working_is_buy cannot answer for a
         // Wait authority, which has no bound scope yet.

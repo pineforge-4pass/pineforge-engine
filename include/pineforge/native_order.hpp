@@ -690,6 +690,14 @@ struct RequestDefinition {
     std::optional<RequestHandle> predecessor;
     /// Appended last so every existing aggregate initializer keeps its meaning.
     RequestOrigin origin = RequestOrigin::Host;
+    /// The first handle of this request's replace chain -- the request the
+    /// chain began with, which is how a cohort roster names every request of
+    /// the chain (cohort_add, cohort_contains). Empty for a request that
+    /// replaced nothing: its chain begins with itself. Set by the core at the
+    /// replace that creates the definition, from the predecessor's own root,
+    /// so it never needs the predecessor's journal events. Appended after
+    /// `origin` for the same reason `origin` was.
+    std::optional<RequestHandle> root;
 };
 using DefinitionRef = std::shared_ptr<const RequestDefinition>;
 
@@ -1449,6 +1457,10 @@ struct CommittedExecutionFacts {
     ExecutionPlan committed_action{};
 };
 
+/// Where an install put its events: `first_index` is an ABSOLUTE journal
+/// position -- the count of events the run committed before them -- so it
+/// stays valid when the front of the journal is retired
+/// (WorkingRequestCore::history_at reads it back).
 struct EventRange {
     std::size_t first_index = 0;
     std::size_t count = 0;
@@ -1568,7 +1580,30 @@ public:
 
     const RunIdentity& identity() const noexcept { return identity_; }
     const std::vector<LiveRequest>& live() const noexcept { return live_; }
+    /// The command journal's retained window, oldest first. Commits append at
+    /// the back and retire_history drops a prefix, so the window holds the
+    /// absolute journal positions [history_base(), history_end()). A core
+    /// nothing retires -- every core its consumer runs under a retaining
+    /// policy -- keeps the whole journal and history_base() stays 0.
     const std::vector<CommandEvent>& history() const noexcept { return history_; }
+    /// How many events have been retired from the front of the journal.
+    std::size_t history_base() const noexcept { return history_base_; }
+    /// The absolute journal length: every event this run has committed,
+    /// retained or not. EventRange::first_index counts in this space.
+    std::size_t history_end() const noexcept { return history_base_ + history_.size(); }
+    /// The event at an absolute journal position; std::out_of_range when it
+    /// is not retained.
+    const CommandEvent& history_at(std::size_t absolute) const;
+    /// Retire the journal prefix whose ordinals are <= through_ordinal. It
+    /// stops ahead of the first event a live request still reads -- the head
+    /// of a deferred group-adjustment chain (collect_pending_chain) -- and
+    /// moves no live row, counter, receipt or roster: a group-effect receipt
+    /// whose outcome event is retired stands on its own record
+    /// (receipt_lookup), and the cohort lookups read the chain index, never
+    /// the journal. Answers the number of events retired.
+    std::size_t retire_history(uint64_t through_ordinal);
+    /// The ordinal of the newest retired event, 0 while none is.
+    uint64_t retired_through() const noexcept { return retired_through_; }
     const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
     const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
@@ -1583,6 +1618,13 @@ public:
     /// once, when it commits.
     std::size_t group_effect_receipt_count() const noexcept { return receipts_.size(); }
     GroupEffectReceipt group_effect_receipt(std::size_t index) const;
+    /// The incarnations this run issued -- every accepted request and every
+    /// replace successor -- as disjoint ascending [first, last] ranges: the
+    /// half of the chain index that tells a request that ended from one that
+    /// never existed. Read-only; a consumer issues one dense range.
+    const std::vector<std::pair<uint64_t, uint64_t>>& issued_incarnations() const noexcept {
+        return issued_;
+    }
     const LiveRequest* find_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
 
@@ -1782,9 +1824,21 @@ private:
     /// price tick (ActivationGrid::ladder_tick); zero keeps the raw subtraction.
     bool trail_level_ok(double best, double offset, bool is_buy, double* stop,
                         double ladder_tick = 0.0) const noexcept;
-    const RequestDefinition* definition_for(const RequestHandle& handle) const noexcept;
+    /// Whether this run's core accepted a request under `handle`, live or
+    /// not: what a cohort command answers UnknownOrigin by.
+    bool issued(const RequestHandle& handle) const noexcept;
+    /// The first handle of `origin`'s replace chain (RequestDefinition::root),
+    /// read from the live row or, for a request that is no longer working,
+    /// from the chain index; nullopt for a handle this run never issued.
     std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
     std::size_t cohort_index(CohortHandle cohort) const noexcept;
+    /// Records an accepted request's incarnation and, for a replace
+    /// successor, its chain root, in the chain index. Storage is reserved by
+    /// reserve_plan, so this cannot throw inside commit.
+    void index_committed(const CommandEvent& event) noexcept;
+    /// The head of every live deferred group-adjustment chain: the lowest
+    /// ordinal retire_history must keep, or nullopt when no chain is live.
+    std::optional<uint64_t> pending_chain_floor() const;
 
     uint64_t usable_ordinal(uint64_t next) const;
     uint64_t usable_incarnation(uint64_t next) const;
@@ -1832,7 +1886,22 @@ private:
     uint64_t last_ordinal_ = 0;
     uint64_t last_incarnation_ = 0;
     uint64_t epoch_ = 0;
+    // (ordinal, ABSOLUTE journal position) of every retained event, in
+    // ordinal order: event_at's lookup. Retiring drops its prefix with the
+    // journal's.
     std::vector<std::pair<uint64_t, std::size_t>> ordinal_index_;
+    // The journal window: how many events were retired from its front, and
+    // the ordinal of the newest of them.
+    std::size_t history_base_ = 0;
+    uint64_t retired_through_ = 0;
+    // The chain index -- the only facts the cohort lookups need about a
+    // request that is no longer working, kept instead of its definition: the
+    // incarnations this run issued, as disjoint ascending [first, last]
+    // ranges (one range for a consumer, which issues them densely), and the
+    // chain root of every replace successor, ascending by successor
+    // incarnation. Sixteen bytes per replace; nothing else grows with the run.
+    std::vector<std::pair<uint64_t, uint64_t>> issued_;
+    std::vector<std::pair<uint64_t, uint64_t>> successor_roots_;
     struct ReceiptKey {
         EventId cause;
         RequestHandle recipient;

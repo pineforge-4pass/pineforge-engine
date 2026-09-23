@@ -1475,7 +1475,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
 #ifndef NDEBUG
     // Debug builds hold the running digests to the rows they cover: every
     // committed event, group-effect receipt and cohort receipt is folded.
-    if (event_records_.count != requests_.history().size()
+    if (event_records_.count != requests_.history_end()
         || group_receipts_.count != requests_.group_effect_receipt_count()
         || cohort_receipts_.count != requests_.cohort_receipts().size()) {
         std::abort();
@@ -3384,7 +3384,7 @@ std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
         margin_point_ordinal_ = applied.cursor.point.ordinal;
         margin_point_calls_ = 1;
     }
-    const std::size_t index = requests_.history().size();
+    const std::size_t index = requests_.history_end();
     auto prepared = requests_.prepare_margin_call(event, next_timeline_ordinal_);
     if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
         fail_preparation(engine, *error, NativeFailureOperation::Settlement);
@@ -3605,8 +3605,9 @@ void NativeExecutionConsumer::fail_preparation(
 }
 
 void NativeExecutionConsumer::catch_up_timeline() noexcept {
-    if (requests_.history().empty()) return;
-    const uint64_t last = command_ordinal(requests_.history().back());
+    // The core's last committed ordinal, which a retired journal prefix does
+    // not move (0 before the first commit, which catches nothing up).
+    const uint64_t last = requests_.last_ordinal();
     if (last >= next_timeline_ordinal_) next_timeline_ordinal_ = last + 1;
 }
 
@@ -3700,9 +3701,9 @@ void NativeExecutionConsumer::drain_dependency_queue(
                                                cause.ordinal)) {
                 return;
             }
-            if (requests_.find_live(child) == nullptr && !requests_.history().empty()) {
+            if (requests_.find_live(child) == nullptr && requests_.last_ordinal() != 0) {
                 native_order::EventId next_cause = cause;
-                next_cause.ordinal = command_ordinal(requests_.history().back());
+                next_cause.ordinal = requests_.last_ordinal();
                 enqueue_children(next_cause, child, i + 1);
             }
         }
@@ -3738,9 +3739,9 @@ void NativeExecutionConsumer::drain_after_applied(
     try {
         std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
         auto note_absent = [&](const native_order::RequestHandle& parent) {
-            if (requests_.find_live(parent) != nullptr || requests_.history().empty()) return;
+            if (requests_.find_live(parent) != nullptr || requests_.last_ordinal() == 0) return;
             native_order::EventId cause = applied;
-            cause.ordinal = command_ordinal(requests_.history().back());
+            cause.ordinal = requests_.last_ordinal();
             seeds.push_back({std::move(cause), parent});
         };
 
@@ -4883,7 +4884,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         reserve_next(account_log_);
         reserve_next(applied_notifications_);
         AppliedNotification notification;
-        notification.history_index = requests_.history().size();
+        notification.history_index = requests_.history_end();
         notification.ordinal = applied_id.ordinal;
         notification.point = notification_point;
         if (!current) {
@@ -4913,7 +4914,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         committed.committed_action = candidate.physical;
         if (!install_execution(engine, std::move(*token), committed, P)) return std::nullopt;
         const auto& applied = std::get<native_order::ExecutionAppliedEvent>(
-            requests_.history().at(notification.history_index));
+            requests_.history_at(notification.history_index));
         if (applied.ordinal != applied_id.ordinal || (current && !applied.terminal))
             throw std::logic_error("native execution receipt mismatch");
         NativeCurrentExecutionResult outcome{applied};
@@ -5683,12 +5684,11 @@ void NativeExecutionConsumer::match_path(
                                                NativeFailureOperation::Settlement, P)) {
                 return;
             }
-            if (requests_.find_live(winner->handle) == nullptr && !requests_.history().empty()) {
+            if (requests_.find_live(winner->handle) == nullptr && requests_.last_ordinal() != 0) {
                 try {
                     drain_parent_terminal(
                             engine,
-                            native_order::EventId{winner->handle.run,
-                                                  command_ordinal(requests_.history().back())},
+                            native_order::EventId{winner->handle.run, requests_.last_ordinal()},
                             winner->handle, NativeFailureOperation::Settlement);
                 } catch (const std::exception& e) {
                     fail(engine, NativeFailure{NativeFailureCode::Allocation,
@@ -6150,7 +6150,7 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         evaluation.existing_matching_bit = true;
         const auto* live = requests_.find_live(command.target);
         evaluation.cohort_side = live ? cohort_side(engine, *live) : std::nullopt;
-        const auto history_before = requests_.history().size();
+        const auto history_before = requests_.history_end();
         auto prep = requests_.prepare_evaluation(command.target, evaluation,
             read_target(engine, live), next_timeline_ordinal_);
         if (const auto* error = std::get_if<native_order::PreparationError>(&prep)) {
@@ -6170,7 +6170,7 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         }
         if (!live) {
             // Flat Independent closes terminate during the existing evaluation.
-            if (requests_.history().size() <= history_before)
+            if (requests_.history_end() <= history_before)
                 throw std::logic_error("native current evaluation lost target without outcome");
             const auto* no_effect = std::get_if<native_order::NoEffectEvent>(&requests_.history().back());
             if (!no_effect) throw std::logic_error("native current evaluation has no terminal outcome");
@@ -6414,7 +6414,7 @@ void NativeExecutionConsumer::invoke_applied_callback(
         // Owning event and frame values survive submit/replace and further
         // synchronous executions reallocating the append-only history/queue.
         const auto applied = std::get<native_order::ExecutionAppliedEvent>(
-            requests_.history().at(notification.history_index));
+            requests_.history_at(notification.history_index));
         if (applied.ordinal != notification.ordinal)
             throw std::logic_error("native notification identity mismatch");
         // The kernel books rows at the end of the engine's rows, so a booking
@@ -6439,9 +6439,9 @@ void NativeExecutionConsumer::invoke_applied_callback(
         // L4: the margin receipt of this same fill, after the ordinary applied
         // notification and with the same cursor.
         if (notification.margin_call_index
-            && *notification.margin_call_index < requests_.history().size()) {
+            && *notification.margin_call_index < requests_.history_end()) {
             const auto* margin_call = std::get_if<native_order::MarginCallEvent>(
-                &requests_.history().at(*notification.margin_call_index));
+                &requests_.history_at(*notification.margin_call_index));
             if (margin_call) {
                 const auto receipt = *margin_call;
                 host->on_native_margin_call(receipt);
@@ -6494,7 +6494,7 @@ void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine)
         // same point's budget and the cascade is bounded.
         if (!claim_recalculation()) continue;
         const auto applied = std::get<native_order::ExecutionAppliedEvent>(
-            requests_.history().at(notification.history_index));
+            requests_.history_at(notification.history_index));
         enter_point_frame(engine, notification.point, CallbackPhase::Applied);
         invoke_recalculation(engine, calculating_bar(engine),
                              NativeCalculationReason::OrderFill, &applied);
@@ -9582,9 +9582,9 @@ std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t af
 }
 
 uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
-    uint64_t high = 0;
-    const auto& history = requests_.history();
-    if (!history.empty()) high = std::max(high, command_ordinal(history.back()));
+    // The core's last committed ordinal: the newest command event, retained
+    // or retired.
+    uint64_t high = requests_.last_ordinal();
     if (!driver_log_.empty()) high = std::max(high, driver_log_.back().coordinate.ordinal);
     if (!account_log_.empty()) high = std::max(high, account_log_.back().ordinal);
     return high;
@@ -9593,13 +9593,14 @@ uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
 // After every install: the terminal-receipt watermark over the events it
 // committed, then the v19 running digests the continuation folds -- each
 // committed event's compact record and each new group-effect receipt, folded
-// once, here, while the rows are the history's tail.
+// once, here, while the rows are the journal's tail. Positions are absolute
+// (EventRange, history_end), so a retired journal prefix moves none of them.
 void NativeExecutionConsumer::note_committed_events(
         const native_order::EventRange& events) noexcept {
-    const auto& history = requests_.history();
-    const std::size_t end = std::min(history.size(), events.first_index + events.count);
-    for (std::size_t index = events.first_index; index < end; ++index) {
-        const auto& event = history[index];
+    const std::size_t end = std::min(requests_.history_end(), events.first_index + events.count);
+    for (std::size_t index = std::max(events.first_index, requests_.history_base());
+         index < end; ++index) {
+        const auto& event = requests_.history()[index - requests_.history_base()];
         const bool terminal = std::visit([](const auto& payload) {
             using Event = std::decay_t<decltype(payload)>;
             if constexpr (std::is_same_v<Event, native_order::CancelledEvent>
@@ -9618,11 +9619,13 @@ void NativeExecutionConsumer::note_committed_events(
     StateFold records;
     records.run_base = requests_.identity().run_number;
     records.h = event_records_.h;
-    for (std::size_t index = event_records_.count; index < history.size(); ++index) {
-        hash_event_record(records, history[index]);
+    const std::size_t base = requests_.history_base();
+    for (std::size_t index = std::max<std::size_t>(event_records_.count, base);
+         index < requests_.history_end(); ++index) {
+        hash_event_record(records, requests_.history()[index - base]);
     }
     event_records_.h = records.h;
-    event_records_.count = history.size();
+    event_records_.count = requests_.history_end();
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;

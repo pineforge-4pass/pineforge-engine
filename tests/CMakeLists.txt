@@ -930,6 +930,12 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # kernel-recorded per-bar hashes linear and takes a row once it is final.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
+# R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
+# journal positions, the chain index against a journal oracle over randomized
+# command streams, chain membership that is not a chain walk (scaling), and a
+# live deferred group-adjustment chain pinning the window. Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_journal_window)
 # R5 PERF-K1: every calendar-derived value a bare host observes over twelve
 # scenarios (intervals, coordinates, session-day facts, series buckets, driver
 # rows), pinned on fc7aad62 -- the values the session-day memo must reproduce.
