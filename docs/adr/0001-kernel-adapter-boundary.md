@@ -365,8 +365,15 @@ underscore is not a second name) and `strings -a` over a copy whose debug
 information has been stripped, so a `-g` build's DWARF names are not mistaken
 for residue (gap lane P2b) — and, since R5 lane F6, every header the kernel
 profile installs (the CMake install rule's own exclusions), comments stripped.
-It matches the residual vocabulary, whole identifiers only, against the **first
-column** of the tables in this section. The vocabulary is fixed in the script
+Since lane INT16b it also reads the string literals of the translation units the
+archive was built from (`PINEFORGE_KERNEL_SOURCES` in `CMakeLists.txt`, which
+must be exactly the archive's members) and of the `src/` headers they include:
+whether a literal's bytes stay contiguous is the compiler's choice, and GCC 13 on
+x86-64 builds the kernel's liquidation ticket from a 16-byte vector constant and
+an overlapping 8-byte immediate, so that one archive's `strings -a` carries no
+`__kernel_liquidation__` although its code writes it (clang and aarch64 GCC keep
+the array). It matches the residual vocabulary, whole identifiers only, against
+the **first column** of the tables in this section. The vocabulary is fixed in the script
 (`IDENTIFIER_PATTERNS`, `PHRASE_PATTERNS`): an identifier containing `pine` (not
 `pineforge`), `tradingview`, `barmerge`, `coof`, `pooc`, `market_admission`,
 `calc_on_order_fills`, `process_orders_on_close` or a `tv` segment, and since
@@ -381,9 +388,9 @@ underscore spelling of a Pine member whose namespace word is generic
 is a Pine member and not a C/C++ file suffix (`ta.ema` is a call, `ta.hpp` is
 this project's header, which a sanitizer build writes into rodata as a real
 literal). Every match must be listed exactly — an identifier by its name, a text
-by a phrase it contains — and every listed match must still be in the archive
-or the installed headers, so a lane that adds a name adds its row and a lane
-that removes one removes its row. A name that is not in these tables fails the
+by a phrase it contains — and every listed match must still be in the archive,
+the installed headers or a kernel source literal, so a lane that adds a name
+adds its row and a lane that removes one removes its row. A name that is not in these tables fails the
 `kernel` profile. The audit's original probe is a subset of that vocabulary and
 still reads exactly the seventeen `pine_*` names:
 

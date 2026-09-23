@@ -29,6 +29,14 @@ are residue; the generic look-alikes the kernel really spells
 name and a Mach-O underscore is not a second name; and the kernel profile's
 INSTALLED headers are read too -- code identifiers and string literals,
 never comments -- over exactly the header set the CMake install rule ships.
+
+Lane INT16b (PR #278, Linux kernel-only) adds the kernel-source surface: GCC 13
+on x86-64 split `__kernel_liquidation__` into a vector constant and an
+immediate, so its archive's `strings` never carries the label and the ruling
+read stale on that platform alone. The cases reproduce that strings line: stale
+without the source, live through the TU's literal, still stale when no surface
+carries it, never live through a comment or an include path; the surface is
+judged in both directions, and it is exactly the archive's own TU list.
 """
 from __future__ import annotations
 
@@ -507,6 +515,107 @@ class ArchiveSurfaceTests(unittest.TestCase):
         self.assertIn("tv_dow", raw.split(), "the -g archive must record the local")
         self.assertNotIn("tv_dow", "\n".join(stripped_lines).split())
         self.assertIn("tv_probe_literal", "\n".join(stripped_lines).split())
+
+
+# The x86-64 GCC 13.3 archive's own `strings -a` line for the kernel's
+# liquidation label (lane INT16b, PR #278's kernel-only job): five 16-byte
+# vector constants packed in .rodata.cst16, of which "__kernel_liquida" is one;
+# the label's last bytes are the immediate of a `movabs`, so no line carries the
+# whole `__kernel_liquidation__`.
+GCC_X86_SPLIT_LINE = ("native-consumer/native-driver/v5native-calendar/"
+                      "__kernel_liquidaMargin liquidati")
+SPLIT_LABEL = "__kernel_liquidation__"
+
+
+class KernelSourceSurfaceTests(unittest.TestCase):
+    """Lane INT16b: the string literals of the kernel's own translation units
+    are a third surface, so a literal the compiler materialized as constants
+    and immediates is judged the same on every platform -- and a ruling that
+    no surface carries is still stale."""
+
+    def split_archive(self) -> tuple[list[str], list[str]]:
+        strings, nm = table_archive()
+        strings.remove(SPLIT_LABEL)
+        return strings + [GCC_X86_SPLIT_LINE], nm
+
+    def source_literals(self, text: str) -> tuple[list[str], list[str]]:
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-source-") as directory:
+            root = Path(directory)
+            unit = root / "src" / "probe.cpp"
+            unit.parent.mkdir()
+            unit.write_text(text)
+            return guard.read_source_literals(root, [unit])
+
+    def test_without_the_source_the_split_label_reads_stale(self) -> None:
+        """Fail-before: PR #278's Linux verdict, reproduced from its strings line."""
+        findings, _ = guard.evaluate(*self.split_archive(), RULED)
+        self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
+
+    def test_a_label_the_compiler_split_is_live_through_its_source_literal(self) -> None:
+        literals = self.source_literals(
+            'constexpr char kNativeLiquidationLabel[] = "__kernel_liquidation__";\n')
+        findings, summary = guard.evaluate(*self.split_archive(), RULED,
+                                           source_literals=literals)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        self.assertEqual(summary["sourceHits"], 1)
+
+    def test_a_ruling_no_surface_carries_is_still_stale(self) -> None:
+        literals = self.source_literals(
+            'constexpr char kNativeRiskLabel[] = "__kernel_risk__";\n'
+            'constexpr char kComment[] = "Margin liquidation";\n')
+        findings, _ = guard.evaluate(*self.split_archive(), RULED, source_literals=literals)
+        self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
+
+    def test_a_comment_or_an_include_path_is_not_a_source_literal(self) -> None:
+        literals = self.source_literals(
+            '#include "__kernel_liquidation__.hpp"\n'
+            '// constexpr char kLabel[] = "__kernel_liquidation__";\n'
+            '/* "__kernel_liquidation__" */\n'
+            'constexpr char kOther[] = "Margin liquidation";\n')
+        self.assertEqual(literals[0], ["Margin liquidation"])
+        findings, _ = guard.evaluate(*self.split_archive(), RULED, source_literals=literals)
+        self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
+
+    def test_a_kernel_source_literal_is_judged_like_an_archive_text(self) -> None:
+        """The surface is read in both directions: a vocabulary literal a kernel
+        TU compiles needs a row even where no `strings` line shows it."""
+        literals = self.source_literals('const char* reason = "strategy.entry rejected";\n'
+                                        'const char* tag = "tv_probe_source";\n')
+        strings, nm = table_archive()
+        findings, _ = guard.evaluate(strings, nm, RULED, source_literals=literals)
+        self.assertEqual(sorted((f.kind, f.token) for f in findings),
+                         [("unruled", "strategy.entry rejected"),
+                          ("unruled", "tv_probe_source")])
+
+    def test_the_source_list_is_the_kernel_list_the_archive_was_built_from(self) -> None:
+        cmake = guard.CMAKE_LISTS.read_text(encoding="utf-8")
+        units = guard.kernel_translation_units(cmake)
+        self.assertIn("src/native_execution_consumer.cpp", units)
+        self.assertIn("src/reservation_expansion.cpp", units)
+        self.assertNotIn("src/compat/pine/reservation_expansion.cpp", units)
+        members = [Path(unit).name + ".o" for unit in units]
+        files = [guard.repository_path(path, guard.ROOT)
+                 for path in guard.kernel_source_files(guard.ROOT, cmake, members)]
+        self.assertIn("src/native_execution_consumer.cpp", files)
+        self.assertIn("src/native_execution_consumer.hpp", files)   # reached by its include
+        self.assertFalse([f for f in files if f.startswith(("src/source/", "src/compat/"))],
+                         files)
+        for label, wrong in (("a member missing", members[1:]),
+                             ("an extra member", members + ["pine_adapter.cpp.o"])):
+            with self.subTest(label):
+                with self.assertRaises(guard.InfrastructureError):
+                    guard.kernel_source_files(guard.ROOT, cmake, wrong)
+
+    def test_the_kernel_sources_carry_no_unruled_literal(self) -> None:
+        cmake = guard.CMAKE_LISTS.read_text(encoding="utf-8")
+        units = guard.kernel_translation_units(cmake)
+        files = guard.kernel_source_files(guard.ROOT, cmake,
+                                          [Path(unit).name + ".o" for unit in units])
+        literals = guard.read_source_literals(guard.ROOT, files)
+        strings, nm = table_archive()
+        findings, summary = guard.evaluate(strings, nm, RULED, source_literals=literals)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        self.assertGreater(summary["sourceHits"], 0)
 
 
 class StripToolTests(unittest.TestCase):

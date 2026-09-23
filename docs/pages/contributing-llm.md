@@ -52,8 +52,9 @@ finding to report, not a step to take.
    `src/compat/pine/` or in codegen. *Ruled:* ADR 0001, "Boundary rules",
    rule 1. *Enforced:* `scripts/check_kernel_residuals.py` runs `strings` and
    `nm` over the built `libpineforge_kernel.a`, reads the headers the kernel
-   profile installs, and fails on a TradingView-shaped name with no row in
-   ADR 0001's residual table.
+   profile installs and the string literals of the kernel's own translation
+   units, and fails on a TradingView-shaped name with no row in ADR 0001's
+   residual table.
 
 2. **A kernel capability is opt-in.** A new `NativeRunSpec` field, a new
    request kind, or a new virtual with an empty default — never a changed

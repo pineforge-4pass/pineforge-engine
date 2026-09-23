@@ -57,6 +57,27 @@ reads a second surface:
     stripped: code identifiers and string literals are what a consumer
     compiles against, a comment is not.
 
+R5 INT16b adds a third surface, because whether a string literal's bytes stay
+contiguous in the archive is the compiler's decision, not the code's. GCC 13
+on x86-64 (the hosted ubuntu-24.04 runner) builds the std::string the kernel
+books its own liquidation under from a 16-byte vector constant and an
+overlapping 8-byte immediate -- `movdqa .LC168(%rip),%xmm0` ("__kernel_liquida",
+packed into .rodata.cst16 beside other constants) and `movabs
+$0x5f5f6e6f69746164,%rcx` ("dation__"), in
+NativeExecutionConsumer::kernel_submit_liquidation -- because the constexpr
+array's address is never taken; clang (macOS) and GCC on aarch64 keep the
+array. `strings -a` finds no `__kernel_liquidation__` in that one archive, so a
+gate that read only the archive called the ruling stale on Linux x86-64 and
+live everywhere else. So the gate also reads
+
+  * the KERNEL SOURCES -- the string literals of the translation units the
+    archive was built from (CMakeLists.txt's `set(PINEFORGE_KERNEL_SOURCES
+    ...)`, which must be exactly the archive's members) and of the src/
+    headers they include, comments stripped and include paths skipped. They
+    are judged in both directions, like the other two surfaces: a ruling
+    stays live while any surface carries it, and a vocabulary literal a
+    kernel TU compiles must have a row even where the compiler split it.
+
 Exit 0 when every match is ruled and every ruling is live, 1 on a finding,
 2 when the archive, the tools (including the strip tool: the gate fails CLOSED
 rather than read debug information), the install rule or the ADR section
@@ -82,6 +103,11 @@ INCLUDE_ROOT = ROOT / "include"
 HEADER_SUFFIXES = (".h", ".hpp")
 DEFAULT_ARCHIVE = ROOT / "build-ci-kernel" / "lib" / "libpineforge_kernel.a"
 SECTION_HEADING = "## Residual TradingView-named surface in the kernel-only archive"
+# The kernel's translation units as CMakeLists.txt lists them -- the one list
+# both archives compile -- and the private headers they reach: a quoted
+# include resolved beside the including file or under src/.
+KERNEL_SOURCES = re.compile(r"set\(\s*PINEFORGE_KERNEL_SOURCES\s+([^)]*)\)")
+INCLUDE_DIRECTIVE = re.compile(r"^\s*#\s*include\b")
 
 # Pine v6 member names, for the underscore spellings of calls whose namespace
 # word the kernel shares (see IDENTIFIER_PATTERNS). A closed vocabulary, like
@@ -336,22 +362,28 @@ def symbol_name(token: str, source: str) -> str:
 
 
 def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
-             header_lines: tuple[list[str], list[str], list[str], list[str]] | None = None
+             header_lines: tuple[list[str], list[str], list[str], list[str]] | None = None,
+             source_literals: tuple[list[str], list[str]] | None = None
              ) -> tuple[list[Finding], dict[str, int]]:
     """Judge the archive's two surfaces and, when given, the installed headers'
     (code lines and their locations, literal texts and theirs; see
-    read_headers)."""
+    read_headers) and the kernel sources' string literals (texts and their
+    locations; see read_source_literals)."""
     hits = scan(strings_lines, "strings") + scan(nm_lines, "nm")
     header_hits: list[Hit] = []
     if header_lines is not None:
         code, code_where, literals, literal_where = header_lines
         header_hits = (scan(code, "header", texts=False, locations=code_where)
                        + scan(literals, "header-literal", locations=literal_where))
+    source_hits: list[Hit] = []
+    if source_literals is not None:
+        texts, where = source_literals
+        source_hits = scan(texts, "source-literal", locations=where)
     findings: list[Finding] = []
     present: set[str] = set()
     covered: set[str] = set()
     reported: set[tuple[str, str]] = set()
-    for hit in hits + header_hits:
+    for hit in hits + header_hits + source_hits:
         if hit.kind == "identifier":
             name = symbol_name(hit.token, hit.source)
             ruled_as = next((candidate for candidate in (hit.token, name)
@@ -383,20 +415,22 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
         if matched(identifier):
             findings.append(Finding(
                 "stale", identifier,
-                "ruled in ADR-0001 but no longer in the archive or the installed headers; "
-                "drop its row"))
+                "ruled in ADR-0001 but no longer in the archive, the installed headers or "
+                "a kernel source literal; drop its row"))
     for phrase in sorted(ruled.phrases):
         if phrase in covered:
             continue
         if any(pattern.search(phrase) for _, pattern in PHRASE_PATTERNS):
             findings.append(Finding(
                 "stale", phrase,
-                "ruled in ADR-0001 but no archive or header text contains it; drop its row"))
+                "ruled in ADR-0001 but no archive, header or kernel source text contains it; "
+                "drop its row"))
     summary = {
         "hits": len(hits),
         "identifierHits": sum(1 for hit in hits if hit.kind == "identifier"),
         "phraseHits": sum(1 for hit in hits if hit.kind == "phrase"),
         "headerHits": len(header_hits),
+        "sourceHits": len(source_hits),
         "ruledIdentifiersPresent": len(present),
         "ruledPhrasesCovered": len(covered),
         "ruledIdentifiers": len(ruled.identifiers),
@@ -552,6 +586,100 @@ def read_headers(include_root: Path, headers: list[Path]
     return code, code_where, literals, literal_where
 
 
+def kernel_translation_units(cmake_text: str) -> list[str]:
+    """The kernel TUs, repository-relative, as `set(PINEFORGE_KERNEL_SOURCES ...)`
+    lists them in CMakeLists.txt -- the one list both archives compile."""
+    calls = KERNEL_SOURCES.findall(cmake_text)
+    if len(calls) != 1:
+        raise InfrastructureError("CMakeLists.txt: expected exactly one "
+                                  "set(PINEFORGE_KERNEL_SOURCES ...), found " + str(len(calls)))
+    units = calls[0].split()
+    if not units:
+        raise InfrastructureError("CMakeLists.txt: PINEFORGE_KERNEL_SOURCES lists no "
+                                  "translation unit")
+    return units
+
+
+def archive_members(archive: Path) -> list[str]:
+    """The object members `ar t` lists; an archive's symbol index is not one."""
+    return [line.strip() for line in run_tool(["ar", "t", str(archive)]).splitlines()
+            if line.strip().endswith(".o")]
+
+
+def kernel_source_files(root: Path, cmake_text: str, members: list[str]) -> list[Path]:
+    """The translation units `members` were compiled from, then the src/ headers
+    they include.
+
+    The archive must be exactly CMakeLists.txt's kernel list -- CMake names
+    each member `<file>.o` -- so the literals read are the ones this archive
+    compiled, never a source-layer TU's (src/compat/pine/ has a
+    reservation_expansion.cpp too). A header outside src/ is either an
+    installed one, already its own surface, or a system header."""
+    units = kernel_translation_units(cmake_text)
+    expected = [Path(unit).name + ".o" for unit in units]
+    if len(set(expected)) != len(expected):
+        raise InfrastructureError("PINEFORGE_KERNEL_SOURCES lists two translation units "
+                                  "of one file name")
+    missing = sorted(set(expected) - set(members))
+    extra = sorted(set(members) - set(expected))
+    if missing or extra:
+        raise InfrastructureError(
+            "the archive's members are not CMakeLists.txt's PINEFORGE_KERNEL_SOURCES ("
+            + "; ".join(part for part in ("missing " + " ".join(missing) if missing else "",
+                                          "extra " + " ".join(extra) if extra else "")
+                        if part) + ")")
+    source_root = (root / "src").resolve()
+    files: list[Path] = []
+    seen: set[Path] = set()
+    pending = [root / unit for unit in units]
+    while pending:
+        path = pending.pop(0)
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        if not path.is_file():
+            raise InfrastructureError("kernel source is missing: " + str(path))
+        seen.add(resolved)
+        files.append(path)
+        text = path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        for number, literal in split_code_and_literals(text)[1]:
+            if not INCLUDE_DIRECTIVE.match(lines[number - 1]):
+                continue
+            for base in (path.parent, root / "src"):
+                candidate = (base / literal).resolve()
+                if candidate.is_file():
+                    if candidate.is_relative_to(source_root) and candidate not in seen:
+                        pending.append(candidate)
+                    break
+    return files
+
+
+def repository_path(path: Path, root: Path) -> str:
+    """`path` as a location under `root`, or as given when it lies elsewhere."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def read_source_literals(root: Path, files: list[Path]) -> tuple[list[str], list[str]]:
+    """The string literals of `files` with their `file:line` locations: comments
+    stripped (split_code_and_literals), an include directive's path skipped."""
+    literals: list[str] = []
+    where: list[str] = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        relative = repository_path(path, root)
+        for number, literal in split_code_and_literals(text)[1]:
+            if INCLUDE_DIRECTIVE.match(lines[number - 1]):
+                continue
+            literals.append(literal)
+            where.append(f"{relative}:{number}")
+    return literals, where
+
+
 def run_tool(argv: list[str]) -> str:
     if shutil.which(argv[0]) is None:
         raise InfrastructureError(argv[0] + " is not on PATH")
@@ -606,22 +734,30 @@ def read_archive(archive: Path, workdir: Path) -> tuple[list[str], list[str], st
 
 
 def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
-          include_root: Path = INCLUDE_ROOT) -> int:
+          include_root: Path = INCLUDE_ROOT, source_root: Path = ROOT) -> int:
     ruled = ruled_entries(adr.read_text(encoding="utf-8"))
-    headers = kernel_profile_headers(include_root)
+    cmake_text = (source_root / "CMakeLists.txt").read_text(encoding="utf-8")
+    headers = kernel_profile_headers(include_root, cmake_text)
     header_lines = read_headers(include_root, headers)
     with tempfile.TemporaryDirectory(prefix="pineforge-kernel-residuals-") as workdir:
         strings_lines, nm_lines, tool = read_archive(archive, Path(workdir))
-    findings, summary = evaluate(strings_lines, nm_lines, ruled, header_lines=header_lines)
+    sources = kernel_source_files(source_root, cmake_text, archive_members(archive))
+    source_literals = read_source_literals(source_root, sources)
+    units = len(kernel_translation_units(cmake_text))
+    findings, summary = evaluate(strings_lines, nm_lines, ruled, header_lines=header_lines,
+                                 source_literals=source_literals)
     if evidence_dir is not None:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         (evidence_dir / "strings.txt").write_text("\n".join(strings_lines) + "\n")
         (evidence_dir / "nm.txt").write_text("\n".join(nm_lines) + "\n")
         (evidence_dir / "headers.txt").write_text(
             "\n".join(header.relative_to(include_root).as_posix() for header in headers) + "\n")
+        (evidence_dir / "sources.txt").write_text(
+            "\n".join(repository_path(path, source_root) for path in sources) + "\n")
         (evidence_dir / "summary.json").write_text(json.dumps({
             "archive": str(archive), "adr": str(adr), "stripTool": tool,
             "includeRoot": str(include_root), "headers": len(headers),
+            "sources": len(sources), "sourceLiterals": len(source_literals[0]),
             "summary": summary,
             "findings": [finding.__dict__ for finding in findings]}, indent=2) + "\n")
     for finding in findings:
@@ -630,10 +766,13 @@ def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
     print(f"kernel residuals: {archive.name}: linkable surface = "
           f"{len(nm_lines)} nm -C lines and {len(strings_lines)} strings -a lines "
           f"of a {tool} debug-stripped copy; installed surface = {len(headers)} "
-          f"kernel-profile headers under {include_root}")
+          f"kernel-profile headers under {include_root}; source surface = "
+          f"{len(source_literals[0])} string literals of the archive's {units} "
+          f"translation units and the {len(sources) - units} src/ headers they include")
     print(f"kernel residuals: {archive.name}: {summary['hits']} archive hits "
-          f"({summary['identifierHits']} identifiers, {summary['phraseHits']} texts) and "
-          f"{summary['headerHits']} installed-header hits "
+          f"({summary['identifierHits']} identifiers, {summary['phraseHits']} texts), "
+          f"{summary['headerHits']} installed-header hits and "
+          f"{summary['sourceHits']} kernel-source hits "
           f"against {summary['ruledIdentifiers']} ruled identifiers and "
           f"{summary['ruledPhrases']} ruled texts in {adr.name}: "
           f"{summary['findings']} findings ... {verdict}")
