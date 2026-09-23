@@ -1,24 +1,16 @@
 // Literal API/allocator tests. No feed, generated strategy or grader is run.
 #include <pineforge/source/market_admission.hpp>
+// Fails the journal's allocations on demand: every replaceable form, one
+// allocator.
+#include "global_allocation_replacement.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
 
 namespace {
-bool deny_allocation = false;
 int failures = 0, checks = 0;
 }
-void* operator new(std::size_t size) {
-    if (deny_allocation) throw std::bad_alloc();
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace pineforge::admission;
 namespace {
@@ -75,16 +67,16 @@ void sequence_ownership() {
 void allocation_failure_and_retry() {
     Journal journal;
     bool allocation_failed = false;
-    deny_allocation = true;
+    global_allocation::refusing = true;
     try { journal.reserve(); } catch (const std::bad_alloc&) { allocation_failed = true; }
-    deny_allocation = false;
+    global_allocation::refusing = false;
     CHECK(allocation_failed && journal.sequence_frontier() == 1 && outstanding(journal) == 0);
     auto allocation = journal.reserve();
     auto value = command(allocation.sequence());
     allocation_failed = false;
-    deny_allocation = true;
+    global_allocation::refusing = true;
     try { journal.append(value); } catch (const std::bad_alloc&) { allocation_failed = true; }
-    deny_allocation = false;
+    global_allocation::refusing = false;
     CHECK(allocation_failed && journal.events().empty() && outstanding(journal) == 1);
     journal.append(value);
     CHECK(journal.events().size() == 1 && outstanding(journal) == 0);
@@ -132,11 +124,11 @@ void capture_lifetimes() {
         auto allocation = journal.reserve();
         CommandObservation input = *origin(allocation.sequence());
         input.id.assign(256, 'x');
-        deny_allocation = true;
+        global_allocation::refusing = true;
         try {
             CommandCapture invalid(std::move(allocation), input, {}, [&](CommandEvent) { ++completed; });
         } catch (const std::bad_alloc&) { construction_failed = true; }
-        deny_allocation = false;
+        global_allocation::refusing = false;
     }
     CHECK(construction_failed && outstanding(journal) == 0 && completed == 1);
     int original_exception = 0;

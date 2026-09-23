@@ -2,43 +2,15 @@
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+// Refuses the POD getter's heap allocations: every replaceable form, one
+// allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
-
-namespace {
-bool deny_allocation = false;
-std::size_t denied_allocations = 0;
-}
-
-void* operator new(std::size_t size) {
-    if (deny_allocation) {
-        ++denied_allocations;
-        throw std::bad_alloc();
-    }
-    if (void* memory = std::malloc(size)) return memory;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* memory) noexcept { std::free(memory); }
-void operator delete[](void* memory) noexcept { std::free(memory); }
-void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
-void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
-// libstdc++'s temporary buffers (std::stable_sort) allocate through the
-// nothrow forms and release through the sized delete above; replacing only
-// the throwing forms mixes the real operator new with free (ASan
-// alloc-dealloc-mismatch on the sanitizers lane).
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    if (deny_allocation) { ++denied_allocations; return nullptr; }
-    return std::malloc(size);
-}
-void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept {
-    return ::operator new(size, tag);
-}
-void operator delete(void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
-void operator delete[](void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
 
 using namespace pineforge;
 
@@ -191,12 +163,12 @@ void targeted_close_copy_is_allocation_free() {
     CHECK(route.last_error().empty());
     CHECK(route.pending_order_count() == 1);
     pf_pending_order_v1_t row{};
-    const auto before = denied_allocations;
-    deny_allocation = true;
+    const auto before = global_allocation::refused;
+    global_allocation::refusing = true;
     const int status = strategy_pending_order_get(&route, 0, &row, sizeof(row));
-    deny_allocation = false;
+    global_allocation::refusing = false;
     CHECK(status == 0);
-    CHECK(denied_allocations == before);
+    CHECK(global_allocation::refused == before);
     CHECK(std::strcmp(row.id, "__close__L") == 0);
     CHECK(row.pine_frozen_market_instruction_target_id[0] != '\0');
 }

@@ -31,41 +31,14 @@
 
 #include <pineforge/native_host.hpp>
 
+// The counting operator new: every replaceable form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <vector>
-
-namespace {
-
-bool g_counting = false;
-std::uint64_t g_allocations = 0;
-
-void* counted(std::size_t size) {
-    if (g_counting) ++g_allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-
-}  // namespace
-
-void* operator new(std::size_t size) { return counted(size); }
-void* operator new[](std::size_t size) { return counted(size); }
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    if (g_counting) ++g_allocations;
-    return std::malloc(size ? size : 1);
-}
-void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
-    if (g_counting) ++g_allocations;
-    return std::malloc(size ? size : 1);
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
-void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;
@@ -114,13 +87,12 @@ std::uint64_t allocations(const char* timezone, const char* session, const char*
     spec.fee_value = 0;
     spec.slot_label_policy = policy;
     CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
-    g_allocations = 0;
-    g_counting = true;
+    const std::size_t before = global_allocation::allocations;
     host.run(bars.data(), static_cast<int>(bars.size()));
-    g_counting = false;
+    const std::size_t during = global_allocation::allocations - before;
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-    return g_allocations;
+    return during;
 }
 
 void canonical_costs_what_tolerant_costs(const char* name, const char* timezone,

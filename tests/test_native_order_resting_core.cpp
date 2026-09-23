@@ -1,6 +1,9 @@
 #include <pineforge/native_order.hpp>
 
-#include <atomic>
+// Counts the heap allocations of the no-alloc witnesses: every replaceable
+// form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -76,32 +79,6 @@ using pineforge::native_order::WaitForApplied;
 using pineforge::native_order::WorkingRequestCore;
 using pineforge::native_order::has_market_defaults;
 using pineforge::native_order::market_request;
-
-std::atomic<int> g_allocs{0};
-
-void* operator new(std::size_t n) {
-    g_allocs.fetch_add(1, std::memory_order_relaxed);
-    void* p = std::malloc(n ? n : 1);
-    if (!p) throw std::bad_alloc();
-    return p;
-}
-void* operator new(std::size_t n, const std::nothrow_t&) noexcept {
-    g_allocs.fetch_add(1, std::memory_order_relaxed);
-    return std::malloc(n ? n : 1);
-}
-void* operator new(std::size_t n, std::align_val_t a) {
-    g_allocs.fetch_add(1, std::memory_order_relaxed);
-    void* p = nullptr;
-    if (posix_memalign(&p, static_cast<size_t>(a), n ? n : 1) != 0) throw std::bad_alloc();
-    return p;
-}
-void* operator new[](std::size_t n) { return ::operator new(n); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete(void* p, std::align_val_t) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { ::operator delete(p); }
-void operator delete[](void* p, std::size_t) noexcept { ::operator delete(p); }
 
 namespace {
 int checks = 0;
@@ -740,9 +717,9 @@ void long_key_install_and_eligibility_no_alloc() {
     uint64_t inc = 1;
     uint64_t ord = 1;
     auto prepared = core.prepare_submit(Request{Transact{1.0}, "long", ""}, CommandContext{}, inc, ord);
-    g_allocs.store(0);
+    global_allocation::allocations = 0;
     auto installed = core.install_submit(std::move(prepared));
-    CHECK(g_allocs.load() == 0);
+    CHECK(global_allocation::allocations == 0);
     CHECK(std::holds_alternative<CommandInstalled<pineforge::native_order::SubmitResult>>(installed));
     auto result = std::move(std::get<CommandInstalled<pineforge::native_order::SubmitResult>>(installed).result);
     CHECK(result.handle->run.session_key.size() == 80);
@@ -752,19 +729,19 @@ void long_key_install_and_eligibility_no_alloc() {
     Request child{Reduce{pineforge::native_order::ExplicitUnits{1.0}}, "w", ""};
     child.owner = WaitForApplied{*result.handle};
     auto child_prep = core.prepare_submit(child, CommandContext{}, inc, ord);
-    g_allocs.store(0);
+    global_allocation::allocations = 0;
     auto child_inst = core.install_submit(std::move(child_prep));
-    CHECK(g_allocs.load() == 0);
+    CHECK(global_allocation::allocations == 0);
     ++inc;
     ++ord;
     const auto& waiting = core.live().back();
-    g_allocs.store(0);
+    global_allocation::allocations = 0;
     auto facts = core.eligibility_facts(waiting, print_ctx(3));
-    CHECK(g_allocs.load() == 0);
+    CHECK(global_allocation::allocations == 0);
     CHECK(facts.waiting);
     CHECK(facts.authority != nullptr);
 
-    g_allocs.store(0);
+    global_allocation::allocations = 0;
     const auto conv = core.submit(Request{Transact{2.0}, "conv", ""}, 1, inc, ord);
     CHECK(conv.status == SubmitStatus::Accepted);
     CHECK(conv.handle->run.session_key.size() == 80);
@@ -854,16 +831,16 @@ void review_failure_before_witnesses() {
         facts.cycle_after = 7;
         facts.post_target = long_book(7);
         facts.committed_action = Transact{1.0};
-        g_allocs.store(0);
+        global_allocation::allocations = 0;
         auto wrong = b.install_execution(std::move(token), facts);
-        CHECK(g_allocs.load() == 0);
+        CHECK(global_allocation::allocations == 0);
         CHECK(std::holds_alternative<InstallError>(wrong));
         CHECK(std::get<InstallError>(wrong) == InstallError::WrongCoreOrRun);
         CHECK(a.live().size() == 1);
         CHECK(a.find_live(*ha.handle)->definition);
-        g_allocs.store(0);
+        global_allocation::allocations = 0;
         auto retry = a.install_execution(std::move(token), facts);
-        CHECK(g_allocs.load() == 0);
+        CHECK(global_allocation::allocations == 0);
         CHECK(std::holds_alternative<Installed>(retry));
         CHECK(std::get_if<ExecutionAppliedEvent>(&a.history().back())->definition);
         auto consumed = a.install_execution(std::move(token), facts);

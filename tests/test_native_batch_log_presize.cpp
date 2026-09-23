@@ -36,6 +36,14 @@
 // them. Rebuild them the same way; never edit one by hand to make a run pass.
 #include <pineforge/native_host.hpp>
 
+// Every allocation carries its size and whether it was made inside the
+// recorded window in a header, so the window can count what it asked for and
+// what of that it gave back. A block from before the window (a run's begin
+// tears down what configure_native built) is never subtracted. Every
+// replaceable form goes to the one allocator of this header.
+#define PINEFORGE_TEST_ALLOCATION_BYTES 1
+#include "global_allocation_replacement.hpp"
+
 #include <algorithm>
 #include <cinttypes>
 #include <cstddef>
@@ -47,68 +55,16 @@
 #include <optional>
 #include <vector>
 
-// Every allocation carries its size and whether it was made inside the
-// recorded window in a header, so the window can count what it asked for and
-// what of that it gave back. A block from before the window (a run's begin
-// tears down what configure_native built) is never subtracted.
 namespace {
-struct Header {
-    std::size_t size;
-    std::size_t recorded;
-};
-constexpr std::size_t kHeader = 16;  // keeps the fundamental alignment
-static_assert(sizeof(Header) <= kHeader, "allocation header");
 constexpr std::size_t kMaxBlocks = std::size_t{1} << 16;
-bool g_recording = false;
-std::size_t g_live_bytes = 0;
 std::size_t g_block_sizes[kMaxBlocks];  // what the window asked for, in order
 std::size_t g_block_count = 0;          // may pass kMaxBlocks; sizes past it are dropped
 
-void* counted_allocate(std::size_t n) {
-    auto* raw = static_cast<unsigned char*>(std::malloc(n + kHeader));
-    if (!raw) throw std::bad_alloc();
-    const Header header{n, g_recording ? 1u : 0u};
-    std::memcpy(raw, &header, sizeof header);
-    if (g_recording) {
-        g_live_bytes += n;
-        if (g_block_count < kMaxBlocks) g_block_sizes[g_block_count] = n;
-        ++g_block_count;
-    }
-    return raw + kHeader;
-}
-
-void counted_free(void* p) noexcept {
-    if (!p) return;
-    auto* raw = static_cast<unsigned char*>(p) - kHeader;
-    Header header{};
-    std::memcpy(&header, raw, sizeof header);
-    if (g_recording && header.recorded) g_live_bytes -= header.size;
-    std::free(raw);
+void record_block(std::size_t n) {
+    if (g_block_count < kMaxBlocks) g_block_sizes[g_block_count] = n;
+    ++g_block_count;
 }
 }  // namespace
-
-void* operator new(std::size_t n) { return counted_allocate(n); }
-void* operator new[](std::size_t n) { return counted_allocate(n); }
-void* operator new(std::size_t n, const std::nothrow_t&) noexcept {
-    try {
-        return counted_allocate(n);
-    } catch (...) {
-        return nullptr;
-    }
-}
-void* operator new[](std::size_t n, const std::nothrow_t&) noexcept {
-    try {
-        return counted_allocate(n);
-    } catch (...) {
-        return nullptr;
-    }
-}
-void operator delete(void* p) noexcept { counted_free(p); }
-void operator delete[](void* p) noexcept { counted_free(p); }
-void operator delete(void* p, std::size_t) noexcept { counted_free(p); }
-void operator delete[](void* p, std::size_t) noexcept { counted_free(p); }
-void operator delete(void* p, const std::nothrow_t&) noexcept { counted_free(p); }
-void operator delete[](void* p, const std::nothrow_t&) noexcept { counted_free(p); }
 
 namespace {
 using namespace pineforge;
@@ -313,11 +269,12 @@ Traffic traffic(Mode mode, int count) {
     const std::vector<Bar> bars = tape(count, 5 * kMinute);
     Traffic out;
     g_block_count = 0;
-    g_live_bytes = 0;
-    g_recording = true;
+    global_allocation::on_recorded = record_block;
+    global_allocation::live_bytes = 0;
+    global_allocation::recording = true;
     host.run(bars.data(), count);
-    g_recording = false;
-    out.held = g_live_bytes;
+    global_allocation::recording = false;
+    out.held = global_allocation::live_bytes;
     CHECK(g_block_count <= kMaxBlocks);
     out.blocks.assign(g_block_sizes, g_block_sizes + std::min(g_block_count, kMaxBlocks));
     CHECK(host.last_error().empty());

@@ -40,6 +40,9 @@
 
 #include "../src/native_execution_consumer.hpp"
 
+// Counts the heap allocations of (4): every replaceable form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -49,22 +52,6 @@
 #include <string>
 #include <variant>
 #include <vector>
-
-namespace {
-bool count_allocations = false;
-std::size_t allocations = 0;
-}  // namespace
-
-void* operator new(std::size_t size) {
-    if (count_allocations) ++allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;
@@ -396,21 +383,19 @@ void run_one(bool path, std::uint64_t seed) {
     const std::uint64_t last_command = history.back();
     CHECK(!probe.native_events(last_command).empty());
     std::size_t visited = 0;
-    allocations = 0;
-    count_allocations = true;
+    std::size_t allocations = global_allocation::allocations;
     probe.kernel().visit_commands_after(last_command, [&](const no::CommandEvent&) {
         ++visited;
         return false;
     });
     const std::size_t first = probe.kernel().first_command_after(last_command);
-    count_allocations = false;
+    allocations = global_allocation::allocations - allocations;
     CHECK(visited == 0);
     CHECK(first == history.size());
     CHECK(allocations == 0);
-    allocations = 0;
-    count_allocations = true;
+    allocations = global_allocation::allocations;
     const auto rows = probe.native_events(last_command);
-    count_allocations = false;
+    allocations = global_allocation::allocations - allocations;
     CHECK(!rows.empty());
     CHECK(allocations > 0);
 

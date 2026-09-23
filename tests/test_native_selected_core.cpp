@@ -3,7 +3,9 @@
 // companion host tests. This core owns no physical roster or hash implementation.
 #include <pineforge/native_order.hpp>
 
-#include <atomic>
+// Counts the install's heap allocations: every replaceable form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -12,18 +14,6 @@
 
 using namespace pineforge::native_order;
 namespace ex = pineforge::execution;
-
-std::atomic<unsigned> allocations{0};
-void* operator new(std::size_t size) {
-    allocations.fetch_add(1, std::memory_order_relaxed);
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 int checks = 0;
@@ -137,9 +127,9 @@ struct Fixture {
         facts.cycle_after = position ? position->cycle : 0;
         facts.post_target = after;
         facts.committed_action = proposal.physical_action;
-        const auto before_allocations = allocations.load();
+        const auto before_allocations = global_allocation::allocations;
         auto installed = core.install_execution(std::get<PreparedExecution>(std::move(prepared)), facts);
-        const auto after_allocations = allocations.load();
+        const auto after_allocations = global_allocation::allocations;
         CHECK(before_allocations == after_allocations);
         REQUIRE(std::holds_alternative<Installed>(installed));
         CHECK(std::get<Installed>(installed).events.count == 1);

@@ -42,6 +42,10 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+// Counts the heap allocations of the commandless read: every replaceable
+// form, one allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -50,22 +54,6 @@
 #include <limits>
 #include <new>
 #include <vector>
-
-namespace {
-bool count_allocations = false;
-std::size_t allocations = 0;
-}  // namespace
-
-void* operator new(std::size_t size) {
-    if (count_allocations) ++allocations;
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 using namespace pineforge;
@@ -1250,10 +1238,9 @@ void a_commandless_read_allocates_nothing(bool magnifier) {
     CHECK(host.receipt_cursor() > last_command);
     const std::uint64_t terminal = host.terminal_cursor();
     host.rewind_receipt_cursor(last_command);
-    allocations = 0;
-    count_allocations = true;
+    std::size_t allocations = global_allocation::allocations;
     host.observe_receipts();
-    count_allocations = false;
+    allocations = global_allocation::allocations - allocations;
     if (allocations != 0) {
         std::fprintf(stderr, "  commandless receipt read (magnifier %s): %zu allocations\n",
                      magnifier ? "on" : "off", allocations);

@@ -11,20 +11,9 @@
 #include <utility>
 
 // Deterministically exercise a dependency allocation failure without relying
-// on huge allocations or exhausting the machine. This executable is serial.
-static bool refuse_allocation = false;
-void* operator new(std::size_t size) {
-    if (refuse_allocation) throw std::bad_alloc{};
-    if (void* p = std::malloc(size == 0 ? 1 : size)) return p;
-    throw std::bad_alloc{};
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-#if defined(__cpp_sized_deallocation)
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-#endif
+// on huge allocations or exhausting the machine. This executable is serial;
+// every replaceable form goes to one allocator.
+#include "global_allocation_replacement.hpp"
 
 namespace {
 using namespace pineforge;
@@ -551,10 +540,10 @@ void failure_atomicity() {
     // Force parse_session's literal/string allocation beyond any SSO size.
     spec.session = std::string(200, ' ') + "0930-1600";
     const auto before = snapshot(spec);
-    refuse_allocation = true;
+    global_allocation::refusing = true;
     const auto validation = validate_native_run_spec(spec);
     const auto normalization = normalize_native_run_spec(spec);
-    refuse_allocation = false;
+    global_allocation::refusing = false;
     check(validation.error == Error::AllocationFailure, "allocation failure is typed");
     check(normalization.error == Error::AllocationFailure, "normalization allocation failure is typed");
     check(validation.field == Field::Session, "allocation failure names calendar stage");

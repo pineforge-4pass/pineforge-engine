@@ -17,29 +17,18 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
+// Refuses the POD getter's heap allocations: every replaceable form, one
+// allocator. The base body's two names read the shared state.
+#include "global_allocation_replacement.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 
 namespace {
-bool deny_allocation = false;
-std::size_t denied_allocations = 0;
+bool& deny_allocation = global_allocation::refusing;
+std::size_t& denied_allocations = global_allocation::refused;
 }
-
-void* operator new(std::size_t n) {
-    if (deny_allocation) {
-        ++denied_allocations;
-        throw std::bad_alloc();
-    }
-    if (void* p = std::malloc(n ? n : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t n) { return ::operator new(n); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 class LiteralBook : public pineforge::source::PineStrategyHost {

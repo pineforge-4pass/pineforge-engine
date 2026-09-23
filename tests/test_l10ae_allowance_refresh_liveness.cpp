@@ -27,8 +27,11 @@
 //     can own, over every book it may be handed.
 #include <pineforge/native_order.hpp>
 
+// Counts the fast refresh's heap allocations: every replaceable form, one
+// allocator.
+#include "global_allocation_replacement.hpp"
+
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -41,18 +44,6 @@
 namespace no = pineforge::native_order;
 namespace ex = pineforge::execution;
 namespace oa = pineforge::order_action;
-
-std::atomic<unsigned> g_allocations{0};
-void* operator new(std::size_t size) {
-    g_allocations.fetch_add(1, std::memory_order_relaxed);
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 int checks = 0;
@@ -504,9 +495,9 @@ void same_point_refresh_never_hands_back_a_consumed_allowance() {
     // The fast path is a durable-state-only refresh: no receipt, no heap.
     const auto history_before = b.p.fast.core.history().size();
     refresh_fast(b.p.fast, point, b.position);
-    const auto allocations_before = g_allocations.load();
+    const auto allocations_before = global_allocation::allocations;
     refresh_fast(b.p.fast, point, b.position);
-    CHECK(g_allocations.load() == allocations_before);
+    CHECK(global_allocation::allocations == allocations_before);
     CHECK(b.p.fast.core.history().size() == history_before);
     CHECK(refresh_checked(b.p.checked, b.closer, point, b.position));
     agree(b.p, b.closer, "consumption point");
