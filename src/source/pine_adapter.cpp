@@ -978,19 +978,26 @@ bool PineExecutionAdapter::is_declined_market_reversal(
 bool PineExecutionAdapter::follows_same_bar_declined_reversal(
         const PlacementSnapshot& exit, const NativePrecommitView& view) const {
     if (exit.from_entry.empty() || !exit.legs.target().incarnation) return false;
-    const auto rows = require_host().native_events(receipt_cursor_);
-    for (const auto& row : rows) {
-        if (!row.command) continue;
-        const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&*row.command);
+    const auto follows = [&](const native_order::CommandEvent& command) {
+        const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&command);
         if (!rejected || rejected->cursor.point.interval_index != view.cursor.point.interval_index
             || !is_declined_market_reversal(*rejected)) {
-            continue;
+            return false;
         }
         const auto reversal = placement_.find(rejected->handle().incarnation);
-        if (reversal != placement_.end()
-            && bracket_belongs_to_reversal(exit, reversal->second)) {
-            return true;
-        }
+        return reversal != placement_.end()
+            && bracket_belongs_to_reversal(exit, reversal->second);
+    };
+    auto& host = require_host();
+    // In place for the host that installed the receipt readers, as in
+    // observe_terminal_receipts.
+    if (event_high_water_reader_ && terminal_receipt_high_water_reader_) {
+        return as_native_consumer(const_cast<IExecutionConsumer&>(
+                   PineStrategyHost::adapter_receipt_consumer(host)))
+            .visit_commands_after(receipt_cursor_, follows);
+    }
+    for (const auto& row : host.native_events(receipt_cursor_)) {
+        if (row.command && follows(*row.command)) return true;
     }
     return false;
 }
@@ -1188,13 +1195,24 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     // this margin event before the next bar-open receipt sweep.  Apply the
     // already-recorded rejection at this Applied boundary so the revival sees
     // the same lifecycle state as the legacy margin callback.
-    for (const auto& row : require_host().native_events(receipt_cursor_)) {
-        if (!row.command) continue;
-        const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&*row.command);
+    const auto suspend = [&](const native_order::CommandEvent& command) {
+        const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&command);
         if (rejected
             && rejected->cursor.point.interval_index == context.coordinate.interval_index
             && is_declined_market_reversal(*rejected)) {
             suspend_declined_reversal_brackets(*rejected);
+        }
+        return false;
+    };
+    // In place for the host that installed the receipt readers, as in
+    // observe_terminal_receipts.
+    if (event_high_water_reader_ && terminal_receipt_high_water_reader_) {
+        as_native_consumer(const_cast<IExecutionConsumer&>(
+            PineStrategyHost::adapter_receipt_consumer(require_host())))
+            .visit_commands_after(receipt_cursor_, suspend);
+    } else {
+        for (const auto& row : require_host().native_events(receipt_cursor_)) {
+            if (row.command) suspend(*row.command);
         }
     }
     const auto domain = context.sub_count > 1
@@ -3793,21 +3811,19 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
 void PineExecutionAdapter::observe_terminal_receipts() {
     auto& host = require_host();
     const auto state = host.native_state();
+    // Only PineStrategyHost installs the receipt readers (at every begin, on
+    // its own adapter): with them, the host's command history is read in
+    // place; any other host is read through native_events().
+    const bool in_place = event_high_water_reader_ && terminal_receipt_high_water_reader_;
+    // The terminal watermark is folded into the broker-state hash
+    // (pine_state_hash.cpp) and has only ever advanced on a run without an
+    // intrabar path; it still does. The read's early return below no longer
+    // depends on the path.
     std::optional<std::uint64_t> terminal_high_water;
-    if (event_high_water_reader_ && terminal_receipt_high_water_reader_
-        && (!state.spec || state.spec->intrabar.is_none())) {
+    if (in_place && (!state.spec || state.spec->intrabar.is_none())) {
         terminal_high_water = terminal_receipt_high_water_reader_(host);
-        const std::uint64_t event_high_water = event_high_water_reader_(host);
-        if (event_high_water <= receipt_cursor_) {
-            terminal_receipt_cursor_ = std::max(
-                terminal_receipt_cursor_, *terminal_high_water);
-            return;
-        }
     }
-    const auto rows = host.native_events(receipt_cursor_);
-    for (const auto& row : rows) {
-        receipt_cursor_ = std::max(receipt_cursor_, row.ordinal);
-        if (!row.command) continue;
+    const auto observe = [&](const native_order::CommandEvent& command) {
         std::visit([&](const auto& event) {
             using Event = std::decay_t<decltype(event)>;
             // ab9714be pine_fills.cpp:7464-7468 and 355-359: a stale exit whose
@@ -3860,7 +3876,35 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
                 if (event.terminal) cancel_bracket_siblings(event.handle());
             }
-        }, *row.command);
+        }, command);
+    };
+    if (in_place) {
+        // R5 lane PERF-P4: visit the command events above the cursor in place
+        // instead of copying out every row above it. The materialised rows
+        // were in ordinal order, commands first at a tied ordinal, so the
+        // cursor held each command's ordinal while that command was observed
+        // and ended on the high water the rows reached, driver points and
+        // account rows included; it moves the same way here. A cancel issued
+        // while observing appends above that high water -- as it appended
+        // past the end of the snapshot -- and the next read observes it.
+        const auto& consumer = as_native_consumer(const_cast<IExecutionConsumer&>(
+            PineStrategyHost::adapter_receipt_consumer(host)));
+        const std::uint64_t high_water = consumer.event_high_water();
+        if (high_water > receipt_cursor_) {
+            consumer.visit_commands_after(receipt_cursor_,
+                [&](const native_order::CommandEvent& command) {
+                    receipt_cursor_ = std::max(receipt_cursor_, std::visit(
+                        [](const auto& payload) { return payload.ordinal; }, command));
+                    observe(command);
+                    return false;
+                });
+            receipt_cursor_ = std::max(receipt_cursor_, high_water);
+        }
+    } else {
+        for (const auto& row : host.native_events(receipt_cursor_)) {
+            receipt_cursor_ = std::max(receipt_cursor_, row.ordinal);
+            if (row.command) observe(*row.command);
+        }
     }
     if (terminal_high_water) {
         terminal_receipt_cursor_ = std::max(

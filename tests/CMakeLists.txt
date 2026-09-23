@@ -898,6 +898,10 @@ list(APPEND TEST_SOURCES test_adapter_host_view_memo)
 # materialised native_events read, row for row and cursor for cursor.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_command_history_read)
+# R5 PERF-P4: the Pine adapter's in-place receipt reads, pinned value by value
+# on fc7aad62 (receipt cursors, recorded broker-state hashes, trades), and a
+# commandless read that allocates nothing. Source-bound.
+list(APPEND TEST_SOURCES test_adapter_receipts_in_place)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

@@ -659,6 +659,13 @@ private:
                                               const StrategyOverrides&);
     static std::uint64_t adapter_event_high_water(const NativeStrategyHost&) noexcept;
     static std::uint64_t adapter_terminal_receipt_high_water(const NativeStrategyHost&) noexcept;
+    // The consumer whose command history the adapter reads its receipts from
+    // in place (R5 lane PERF-P4). Reached, like the two readers above, only
+    // for the host that installed them -- this class, on its own adapter, at
+    // every begin -- so `host` is a PineStrategyHost.
+    static const IExecutionConsumer& adapter_receipt_consumer(const NativeStrategyHost& host) {
+        return static_cast<const PineStrategyHost&>(host).execution_consumer();
+    }
     std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
         return broker_fill_event_seq_;
     }
