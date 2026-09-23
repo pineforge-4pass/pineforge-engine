@@ -1141,7 +1141,7 @@ private:
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
-    void remember(const native_order::RequestHandle&, PlacementSnapshot);
+    void remember(const native_order::RequestHandle&, PlacementSnapshot&&);
     void retire(native_order::RequestHandle) noexcept;
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;

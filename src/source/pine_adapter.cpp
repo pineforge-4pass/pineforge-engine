@@ -822,11 +822,16 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
         candidates.push_back(std::move(fact));
         candidate_refs.push_back({&candidate, incarnation});
     };
-    for (auto& pending : pending_entries_) collect(pending.snapshot, 0);
-    for (auto& pending : pending_same_bar_commands_) collect(pending.snapshot, 0);
-    for (const auto& live : live_handles_) {
-        const auto existing = placement_.find(live.incarnation);
-        if (existing != placement_.end()) collect(existing->second, live.incarnation);
+    // The candidates feed the reservation-growth selection alone, which only
+    // a full global exit makes; otherwise nothing is selected, nothing is
+    // admitted, and the references are never visited (R5 lane PERF-L5).
+    if (full_global) {
+        for (auto& pending : pending_entries_) collect(pending.snapshot, 0);
+        for (auto& pending : pending_same_bar_commands_) collect(pending.snapshot, 0);
+        for (const auto& live : live_handles_) {
+            const auto existing = placement_.find(live.incarnation);
+            if (existing != placement_.end()) collect(existing->second, live.incarnation);
+        }
     }
     const double percent = std::isfinite(snapshot.qty_percent)
         ? snapshot.qty_percent : 100.0;
@@ -874,6 +879,26 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
 }
 
 void PineExecutionAdapter::update_l4c_priority() {
+    auto& host = require_host();
+    // The one ordering the priority can select, the retained-child /
+    // fresh-parent exception, is refused by OrderPriority::select before it
+    // reads a candidate unless the policy is attached and on, the run
+    // processes orders on close without calc_on_order_fills or a fill
+    // recalculation, and exactly two live handles carry a placement row
+    // (src/compat/pine/order_priority.cpp). Those facts are the adapter's
+    // own, so a call they rule out builds no candidates and reads nothing
+    // (R5 lane PERF-L5); its only effect, the reorder of live_handles_, needs
+    // a selection.
+    if (!priority.attached() || !priority.retained_parent_first()
+        || !config_.process_orders_on_close || config_.calc_on_order_fills
+        || coof_recalc_active_) {
+        return;
+    }
+    std::size_t placed = 0;
+    for (const auto& handle : live_handles_) {
+        if (placement_.find(handle.incarnation) != placement_.end()) ++placed;
+    }
+    if (placed != 2) return;
     std::vector<compat::pine::OrderPriorityCandidate> candidates;
     candidates.reserve(live_handles_.size());
     for (const auto& handle : live_handles_) {
@@ -917,9 +942,9 @@ void PineExecutionAdapter::update_l4c_priority() {
         candidate.oca_type = snapshot.oca_type;
         candidates.push_back(std::move(candidate));
     }
-    const auto point = require_host().current_execution_point();
+    const auto point = host.current_execution_point();
     const compat::pine::OrderPriorityContext context{
-        require_host().physical_position().signed_units == 0.0,
+        host.physical_position().signed_units == 0.0,
         config_.process_orders_on_close, config_.calc_on_order_fills,
         coof_recalc_active_, point && point->decision.sub_count > 1, false, true,
         point ? point->decision.coordinate.interval_index : -1};
@@ -1928,7 +1953,7 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 }
 
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
-                                    PlacementSnapshot snapshot) {
+                                    PlacementSnapshot&& snapshot) {
     if (snapshot.reservation_growth_owner_incarnation != 0
         && snapshot.reservation_growth_owner_incarnation != handle.incarnation) {
         snapshot.reservation_growth_source.assign_capture(
@@ -2396,7 +2421,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     const auto key = replacement_key.empty() ? 0 : key_for(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
-    std::optional<PlacementSnapshot> predecessor_snapshot;
+    // The predecessor's placement row, read in place (R5 lane PERF-L5; this
+    // was a copy of the whole row). Nothing writes the row between here and
+    // its last read below -- the replace runs no adapter code and the table
+    // gains no row before remember() -- except the reset of its legs after
+    // the replace, which moves their value out into predecessor_legs.
+    const PlacementSnapshot* predecessor_snapshot = nullptr;
+    exit_legs::Lifecycle predecessor_legs;
+    // The node retire() would erase for `key`, kept for the successor's
+    // entry instead of allocating one.
+    decltype(live_by_source_key_)::node_type reused_key_node;
     bool predecessor_exit = false;
     bool predecessor_market = false;
     const auto unchanged_dynamic_exit = [&](const PlacementSnapshot& prior) {
@@ -2475,7 +2509,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             existing_handle = existing->second;
             if (const auto previous = placement_.find(existing_handle->incarnation);
                 previous != placement_.end()) {
-                predecessor_snapshot = previous->second;
+                predecessor_snapshot = &previous->second;
                 // The legacy pending book leaves a same-definition bracket
                 // untouched. Its source cohort remains live and its dynamic
                 // close quantity is resolved at fill time, so a normal-bar
@@ -2542,6 +2576,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 // state and firing it against the new lot.
                 if (const auto found_p = placement_.find(existing_handle->incarnation);
                     found_p != placement_.end()) {
+                    predecessor_legs = std::move(found_p->second.legs);
                     found_p->second.legs = {};
                 }
                 snapshot.projection_predecessor = existing_handle->incarnation;
@@ -2553,16 +2588,17 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                         && !std::isfinite(predecessor_snapshot->exit_levels.limit)
                         && !std::isfinite(predecessor_snapshot->exit_levels.stop)
                         && !std::isfinite(predecessor_snapshot->exit_levels.trail_offset);
-                    const bool fresh_after_dormant = predecessor_snapshot->legs.dormant()
+                    const bool fresh_after_dormant = predecessor_legs.dormant()
                         && (snapshot.family == PineOrderFamily::ExitLimit
                             || snapshot.family == PineOrderFamily::ExitStop
                             || snapshot.family == PineOrderFamily::ExitTrail);
+                    const auto predecessor_revision = predecessor_legs.revision();
                     // pine_execution_lifecycle.cpp's same-(id, from_entry)
                     // reissue replaces a dormant bracket wholesale.  Carrying
                     // its suspension into the successor would leave the fresh
                     // source prices permanently unmatchable.
                     if (!fresh_after_dormant) {
-                        snapshot.legs = predecessor_snapshot->legs;
+                        snapshot.legs = std::move(predecessor_legs);
                         snapshot.leg_activation = predecessor_snapshot->leg_activation;
                         snapshot.exit_activation = predecessor_snapshot->exit_activation;
                         snapshot.restored_after_margin =
@@ -2574,7 +2610,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                         existing_handle->incarnation,
                         static_cast<std::int64_t>(predecessor_snapshot->source_sequence),
                         existing_handle->incarnation, predecessor_snapshot->placement_cycle,
-                        predecessor_snapshot->legs.revision(),
+                        predecessor_revision,
                         predecessor_snapshot->requested_qty, kNaN};
                     if ((family == PineOrderFamily::ExitLimit
                          || family == PineOrderFamily::ExitStop
@@ -2609,6 +2645,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 }
                 snapshot.projection_predecessor_exit = predecessor_exit;
                 snapshot.projection_predecessor_market = predecessor_market;
+                reused_key_node = live_by_source_key_.extract(key);
                 retire(*existing_handle);
                 accepted = *result.successor;
             }
@@ -2716,7 +2753,15 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 [&](const DelayedMarketOrder& row) { return row.replacement_key == replacement_key; }),
             delayed_market_orders_.end());
     }
-    if (key != 0) live_by_source_key_[key] = *accepted;
+    if (key != 0) {
+        if (reused_key_node) {
+            reused_key_node.mapped() = *accepted;
+            auto placed = live_by_source_key_.insert(std::move(reused_key_node));
+            if (!placed.inserted) placed.position->second = *accepted;
+        } else {
+            live_by_source_key_[key] = *accepted;
+        }
+    }
     if (opening) {
         const auto source = placement_.at(accepted->incarnation).source_id;
         const auto cohort = cohort_for(source);

@@ -967,6 +967,13 @@ list(APPEND TEST_SOURCES test_native_match_band_witness)
 # (fails on f71cd820). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_match_allocations)
+# R5 lane PERF-L5: the Pine adapter's command path reads the predecessor's
+# placement row in place, builds the L4c priority candidates only when a
+# selection can use them and carries the source-key node over to a
+# successor; four re-issuing scripts' values pinned on f71cd820, and a
+# re-issued strategy.exit's allocations bounded (fails on f71cd820).
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_command_allocations)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
