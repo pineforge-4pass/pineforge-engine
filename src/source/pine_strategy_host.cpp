@@ -57,17 +57,6 @@ void replace_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, Position
     }
 }
 
-// A chart whose script bar aggregates several input bars: the input timeframe
-// is finer than the script's (PineScheduler::run_begin's needs_aggregation).
-// There the kernel's interval index names the INPUT bar a script bucket opens
-// on (390 for the 26th 15m bar of a 1m feed), where a Pine script counts chart
-// bars, as ab9714be's aggregation loop did (lane F1).
-bool aggregates_input_bars(const NativeStateView& state) {
-    if (!state.spec || state.spec->timeframe_undetected) return false;
-    const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
-    return ratio > 1 || ratio == -1;
-}
-
 [[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail) {
     throw std::invalid_argument(
         "bar[" + std::to_string(index) + "]." + field + (detail ? detail : ""));
@@ -122,6 +111,36 @@ void validate_source_begin_bars(const NativeBeginArgs& args) {
 }
 
 }  // namespace
+
+namespace source::detail {
+
+// A chart whose script bar aggregates several input bars: the input timeframe
+// is finer than the script's (PineScheduler::run_begin's needs_aggregation).
+// There the kernel's interval index names the INPUT bar a script bucket opens
+// on (390 for the 26th 15m bar of a 1m feed), where a Pine script counts chart
+// bars, as ab9714be's aggregation loop did (lane F1).
+//
+// The host and the scheduler ask this in their per-bar callbacks, of a spec
+// that cannot change inside the run, so it must not cost a parse of both
+// literals each time. Equal literals -- every chart that does not aggregate --
+// need none: tf_ratio(x, x) is -1 exactly when tf_to_seconds(x) is negative,
+// and a configured spec's literal passed native_calendar::parse_timeframe
+// ([1-9][0-9]*[SDWM]? or a bare D, W or M), so one of at most four characters
+// cannot overflow that int product and is negative only when it is monthly.
+// Every other pair keeps tf_ratio. One definition for both callers
+// (PineScheduler::recalculate declares it in pine_scheduler_native.cpp); the
+// linkage also lets tests/test_aggregates_input_bars_literals.cpp judge it
+// against tf_ratio. Not part of the installed API.
+bool aggregates_input_bars(const NativeStateView& state) {
+    if (!state.spec || state.spec->timeframe_undetected) return false;
+    const std::string& input = state.spec->input_tf;
+    const std::string& script = state.spec->script_tf;
+    if (input == script && !script.empty() && script.size() <= 4) return script.back() == 'M';
+    const int ratio = tf_ratio(input, script);
+    return ratio > 1 || ratio == -1;
+}
+
+}  // namespace source::detail
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : NativeStrategyHost(),
@@ -377,7 +396,7 @@ void source::PineStrategyHost::on_native_tick(
         // realtime print (a price point: H == L == C == print). The lots carry
         // chart-bar indices wherever on_native_applied re-stamps them.
         const int sample_index = scheduler_.bar_magnifier_enabled()
-                || aggregates_input_bars(native_state())
+                || detail::aggregates_input_bars(native_state())
             ? scheduler_.source_bar_index_for(context.decision)
             : context.decision.coordinate.interval_index;
         sample_open_trade_extremes(
@@ -411,7 +430,7 @@ void source::PineStrategyHost::on_native_bar(
     // The lots carry chart-bar indices wherever on_native_applied re-stamps
     // them, so the entry-bar tests below read the chart bar there. Under the
     // magnifier the slippage mask keeps the kernel index it has always read.
-    const bool aggregated = aggregates_input_bars(native_state());
+    const bool aggregated = detail::aggregates_input_bars(native_state());
     const int sample_index = scheduler_.bar_magnifier_enabled() || aggregated
         ? scheduler_.source_bar_index_for(context)
         : context.coordinate.interval_index;
@@ -484,7 +503,7 @@ void source::PineStrategyHost::on_native_applied(
     // fill opened and the rows it closed carry the chart bar instead, as
     // ab9714be's aggregation loops booked them (lane F1 extended this from
     // the magnifier to every aggregated chart).
-    const bool aggregated = aggregates_input_bars(native_state());
+    const bool aggregated = detail::aggregates_input_bars(native_state());
     if (scheduler_.bar_magnifier_enabled() || aggregated) {
         const int source_index = scheduler_.source_bar_index_for(context);
         for (auto& lot : pyramid_entries_) {
@@ -836,7 +855,7 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
     // is the one the adapter opened last. Under the magnifier the test keeps
     // the kernel index it has always read.
     int exit_bar_index = facts.exit_bar_index;
-    if (!scheduler_.bar_magnifier_enabled() && aggregates_input_bars(native_state())) {
+    if (!scheduler_.bar_magnifier_enabled() && detail::aggregates_input_bars(native_state())) {
         NativeDecisionContext current{};
         current.script_bar_open_ms = adapter_.last_broker_open_ms_;
         exit_bar_index = scheduler_.source_bar_index_for(current);

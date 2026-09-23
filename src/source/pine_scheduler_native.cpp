@@ -9,18 +9,15 @@
 
 namespace pineforge::source {
 
-namespace {
+namespace detail {
 
 // A chart whose script bar aggregates several input bars, as run_begin's
 // needs_aggregation reads it: the kernel's interval index is then the INPUT bar
-// a script bucket opens on, where the host's lots carry the chart bar.
-bool aggregates_input_bars(const NativeStateView& state) {
-    if (!state.spec || state.spec->timeframe_undetected) return false;
-    const int ratio = tf_ratio(state.spec->input_tf, state.spec->script_tf);
-    return ratio > 1 || ratio == -1;
-}
+// a script bucket opens on, where the host's lots carry the chart bar. Defined
+// once, beside the host's callbacks that ask it too (pine_strategy_host.cpp).
+bool aggregates_input_bars(const NativeStateView& state);
 
-}  // namespace
+}  // namespace detail
 
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     RetainedBegin next;
@@ -646,7 +643,7 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     // the bucket opens on, in bar_index_: the entry-bar mask reads the chart
     // bar there. Under the magnifier it keeps the index it has always read.
     const int extremes_index = !retained_.bar_magnifier
-            && aggregates_input_bars(host.native_state())
+            && detail::aggregates_input_bars(host.native_state())
         ? source_bar_index_for(context) : host.bar_index_;
     sample_open_trade_extremes(
         host.pyramid_entries_, host.position_side_, extremes_index, extremes_bar);

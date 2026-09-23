@@ -943,6 +943,10 @@ list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
 # same arithmetic, swept against gmtime_r through the host. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
+# R5 lane PERF-P5611 (P6): whether a Pine chart aggregates input bars, the
+# one definition's equal-literal answer judged against tf_ratio over every
+# admitted literal pair. Source-bound.
+list(APPEND TEST_SOURCES test_aggregates_input_bars_literals)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
