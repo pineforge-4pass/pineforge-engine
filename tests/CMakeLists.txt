@@ -1050,6 +1050,14 @@ list(APPEND TEST_SOURCES test_native_definition_index)
 # roster positions that carry units, against the whole-roster walks, bit for
 # bit, over randomized Pine command streams (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_purge_index)
+# R5 lane PERF-P7: the consumed-leg index exit() reads (exit legs by origin and
+# leg kind, folded over the retained placement table) against the walk of the
+# whole exit family, bit for bit, over randomized Pine command streams
+# (differential); and the cost of both lookups staying linear in the bars --
+# 4x bars must cost < 5x -- for applied reversals and per-origin brackets
+# (scaling). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_exit_leg_index)
+list(APPEND TEST_SOURCES test_adapter_lookup_index_scaling)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

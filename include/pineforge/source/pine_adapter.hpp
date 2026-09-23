@@ -567,6 +567,11 @@ public:
     std::size_t size() const noexcept { return items_.size(); }
     const_iterator begin() const noexcept { return items_.begin(); }
     const_iterator end() const noexcept { return items_.end(); }
+    // How many members carry `incarnation`. Allocation-free.
+    std::size_t count(std::uint64_t incarnation) const noexcept {
+        const auto found = counts_.find(incarnation);
+        return found == counts_.end() ? 0 : found->second;
+    }
 
     // Erases every member equal to one of `doomed`, keeping the order of the
     // rest: the same result as erase(remove_if(find in doomed)).
@@ -1231,6 +1236,13 @@ private:
     LookupIndex* lookup_index(bool create = true) const noexcept;
     // Whether any origin the cohort ever accepted is an opening on that side.
     bool cohort_opened_on_side(const CohortFacts&, bool is_long) const noexcept;
+    // Whether a leg of that kind the (exit id, from_entry) family placed for
+    // that origin was consumed: a member of the family neither working nor
+    // suspended.
+    bool origin_leg_consumed(std::uint64_t family_key, PineOrderFamily,
+                             const native_order::RequestHandle& origin) const noexcept;
+    // Whether an immediate strategy.close was placed on that bar.
+    bool immediate_close_placed_on(std::int32_t bar) const noexcept;
     void cancel_bracket_origin(native_order::RequestHandle);
     void cancel_bracket_siblings(native_order::RequestHandle);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);

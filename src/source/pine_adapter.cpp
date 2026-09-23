@@ -1077,10 +1077,114 @@ struct PineExecutionAdapter::LookupIndex final : NativeHostCache {
     std::uint64_t answers = 0;
     std::unordered_map<const CohortFacts*, CohortSides> cohort_sides;
 
+    // Over the placement table, which retains every row by incarnation:
+    // exit legs by the origin they are bound to and their leg kind, and
+    // immediate closes by the bar they were placed on. A row's family,
+    // `immediately` and projection_created_bar are never written after it is
+    // remembered; its bracket_origin is, exactly once, from zero to the
+    // parent whose fill binds it (on_applied), and only while the leg is
+    // working. So a row is filed where it will stay when it is folded, except
+    // a working leg still bound to origin zero, which waits in `unbound`
+    // until it is bound (then it is filed) or stops working (a handle that
+    // stops working never works again, so it is never bound). The table
+    // mostly grows at its high water, but a row can also fill a slot below
+    // it (an anchored leg adopted at its parent's fill): empty slots passed
+    // over are kept in `holes`, and the table's own row count says how many
+    // of them have filled since. Each lookup verifies every row it reads.
+    std::size_t slots_folded = 0;
+    std::size_t rows_folded = 0;
+    std::vector<std::uint64_t> holes;
+    std::vector<std::uint64_t> unbound;
+    std::array<std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>, 3> legs_by_origin;
+    std::unordered_map<std::int32_t, std::vector<std::uint64_t>> immediate_closes_by_bar;
+
     std::uint64_t answered() const noexcept override { return answers; }
 
     void clear() noexcept {
         cohort_sides.clear();
+        clear_rows();
+    }
+
+    void clear_rows() noexcept {
+        slots_folded = 0;
+        rows_folded = 0;
+        holes.clear();
+        unbound.clear();
+        for (auto& legs : legs_by_origin) legs.clear();
+        immediate_closes_by_bar.clear();
+    }
+
+    static bool exit_leg(PineOrderFamily family) noexcept {
+        return family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
+            || family == PineOrderFamily::ExitTrail;
+    }
+
+    static bool working(const std::vector<native_order::RequestHandle>& live,
+                        std::uint64_t incarnation) noexcept {
+        return std::any_of(live.begin(), live.end(),
+            [&](const native_order::RequestHandle& handle) {
+                return handle.incarnation == incarnation;
+            });
+    }
+
+    // The rows bound to `origin` of that leg kind, or null.
+    const std::vector<std::uint64_t>* legs_of(PineOrderFamily family,
+                                              std::uint64_t origin) const noexcept {
+        const auto& legs = legs_by_origin[static_cast<std::size_t>(family)
+            - static_cast<std::size_t>(PineOrderFamily::ExitLimit)];
+        const auto found = legs.find(origin);
+        return found == legs.end() ? nullptr : &found->second;
+    }
+
+    void fold(std::uint64_t incarnation, const PlacementSnapshot& row,
+              const std::vector<native_order::RequestHandle>& live) {
+        if (exit_leg(row.family)) {
+            if (row.bracket_origin.incarnation != 0) {
+                legs_by_origin[static_cast<std::size_t>(row.family)
+                    - static_cast<std::size_t>(PineOrderFamily::ExitLimit)]
+                    [row.bracket_origin.incarnation].push_back(incarnation);
+            } else if (working(live, incarnation)) {
+                unbound.push_back(incarnation);
+            }
+        } else if (row.family == PineOrderFamily::Close && row.immediately) {
+            immediate_closes_by_bar[row.projection_created_bar].push_back(incarnation);
+        }
+    }
+
+    // Brings the row index up to the table. May throw std::bad_alloc; every
+    // step leaves the index consistent, so a later sync resumes it.
+    void sync_rows(const PlacementTable& table,
+                   const std::vector<native_order::RequestHandle>& live) {
+        if (table.size() < rows_folded || table.high_water() < slots_folded) clear_rows();
+        for (std::size_t i = 0; i < unbound.size();) {
+            const auto found = table.find(unbound[i]);
+            if (found != table.end() && found->second.bracket_origin.incarnation != 0) {
+                fold(unbound[i], found->second, live);
+            } else if (found != table.end() && working(live, unbound[i])) {
+                ++i;
+                continue;
+            }
+            unbound.erase(unbound.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+        while (slots_folded < table.high_water()) {
+            const std::uint64_t incarnation = slots_folded + 1;
+            const auto found = table.find(incarnation);
+            if (found == table.end()) {
+                holes.push_back(incarnation);
+            } else {
+                fold(incarnation, found->second, live);
+                ++rows_folded;
+            }
+            ++slots_folded;
+        }
+        // Late rows are recent: look for them from the newest hole back.
+        for (std::size_t i = holes.size(); rows_folded < table.size() && i-- > 0;) {
+            const auto found = table.find(holes[i]);
+            if (found == table.end()) continue;
+            fold(holes[i], found->second, live);
+            ++rows_folded;
+            holes.erase(holes.begin() + static_cast<std::ptrdiff_t>(i));
+        }
     }
 };
 
@@ -1132,6 +1236,86 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
         const bool opened = is_long ? sides.opened_long : sides.opened_short;
         assert(opened == walk());
         return opened;
+    } catch (const std::bad_alloc&) {
+        return walk();
+    }
+}
+
+bool PineExecutionAdapter::origin_leg_consumed(
+        std::uint64_t family_key, PineOrderFamily family,
+        const native_order::RequestHandle& origin) const noexcept {
+    const auto members = bracket_families_.find(family_key);
+    if (members == bracket_families_.end()) return false;
+    const auto consumed = [&](std::uint64_t incarnation) {
+        const auto found = placement_.find(incarnation);
+        if (found == placement_.end()) return false;
+        const auto& prior = found->second;
+        return prior.family == family && prior.bracket_origin == origin
+            && !prior.legs.dormant()
+            && std::none_of(live_handles_.begin(), live_handles_.end(),
+                [&](const native_order::RequestHandle& live) {
+                    return live.incarnation == incarnation;
+                });
+    };
+    // The walk: every leg the family ever placed.
+    const auto walk = [&] {
+        return std::any_of(members->second.begin(), members->second.end(),
+            [&](const native_order::RequestHandle& handle) {
+                return consumed(handle.incarnation);
+            });
+    };
+    LookupIndex* index = LookupIndex::exit_leg(family) ? lookup_index() : nullptr;
+    if (!index) return walk();
+    try {
+        index->sync_rows(placement_, live_handles_);
+        // Only a row bound to this origin, of this leg kind, can satisfy
+        // `consumed`; the family is the walk's set, so a candidate counts
+        // only while the family holds it.
+        bool answer = false;
+        if (const auto* legs = index->legs_of(family, origin.incarnation)) {
+            for (const auto incarnation : *legs) {
+                if (members->second.count(incarnation) != 0 && consumed(incarnation)) {
+                    answer = true;
+                    break;
+                }
+            }
+        }
+        ++index->answers;
+        assert(answer == walk());
+        return answer;
+    } catch (const std::bad_alloc&) {
+        return walk();
+    }
+}
+
+bool PineExecutionAdapter::immediate_close_placed_on(std::int32_t bar) const noexcept {
+    const auto placed = [&](const PlacementSnapshot& row) {
+        return row.family == PineOrderFamily::Close && row.immediately
+            && row.projection_created_bar == bar;
+    };
+    // The walk: every row the run retained.
+    const auto walk = [&] {
+        return std::any_of(placement_.begin(), placement_.end(),
+            [&](const auto& row) { return placed(row.second); });
+    };
+    LookupIndex* index = lookup_index();
+    if (!index) return walk();
+    try {
+        index->sync_rows(placement_, live_handles_);
+        bool answer = false;
+        if (const auto closes = index->immediate_closes_by_bar.find(bar);
+            closes != index->immediate_closes_by_bar.end()) {
+            for (const auto incarnation : closes->second) {
+                const auto found = placement_.find(incarnation);
+                if (found != placement_.end() && placed(found->second)) {
+                    answer = true;
+                    break;
+                }
+            }
+        }
+        ++index->answers;
+        assert(answer == walk());
+        return answer;
     } catch (const std::bad_alloc&) {
         return walk();
     }
@@ -7800,13 +7984,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                                 && candidate->second.opening;
                         });
                     if (competing_opening) return false;
-                    const bool direct_partial = point && std::any_of(
-                        placement_.begin(), placement_.end(), [&](const auto& row) {
-                            return row.second.family == PineOrderFamily::Close
-                                && row.second.immediately
-                                && row.second.projection_created_bar
-                                    == point->decision.coordinate.interval_index;
-                        });
+                    const bool direct_partial = point && immediate_close_placed_on(
+                        point->decision.coordinate.interval_index);
                     return !direct_partial;
                 };
                 if ((wrong_stop || wrong_limit)
@@ -8081,25 +8260,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool origin_opened = found != cohorts_by_id_.end()
                 && std::find(found->second.opened.begin(), found->second.opened.end(), origin)
                     != found->second.opened.end();
-            // The consumed-leg scan walks every leg this (exit, from_entry)
-            // family ever placed, so it runs only when it decides the skip: a
-            // bracket reissued on every bar keeps its live leg and never
-            // reaches it.
+            // The consumed-leg lookup decides the skip only: a bracket
+            // reissued on every bar keeps its live leg and never reaches it.
             const auto consumed_origin_leg = [&] {
-                const auto family_it = bracket_families_.find(family_key);
-                return family_it != bracket_families_.end()
-                    && std::any_of(family_it->second.begin(), family_it->second.end(),
-                        [&](const auto& handle) {
-                            const auto found_p = placement_.find(handle.incarnation);
-                            if (found_p == placement_.end()) return false;
-                            const auto& prior = found_p->second;
-                            return prior.family == family && prior.bracket_origin == origin
-                                && !prior.legs.dormant()
-                                && std::none_of(live_handles_.begin(), live_handles_.end(),
-                                    [&](const native_order::RequestHandle& live) {
-                                        return live.incarnation == handle.incarnation;
-                                    });
-                        });
+                return origin_leg_consumed(family_key, family, origin);
             };
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)
                 && (!origin_opened || consumed_origin_leg())) {
