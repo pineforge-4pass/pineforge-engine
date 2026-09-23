@@ -596,6 +596,42 @@ CancelledEvent make_cancelled(uint64_t ordinal, const LiveRequest& live, CancelR
     return event;
 }
 
+// Whether a handle can name a request of this run at all.
+inline bool names_run(const RequestHandle& handle, const RunIdentity& run) noexcept {
+    return handle.incarnation != 0 && handle.run.run_number != 0
+        && !handle.run.session_key.empty() && handle.run == run;
+}
+
+// Where the live row carrying `incarnation` stands, or live.size() when no
+// row does. The working book is in strictly increasing incarnation order, so
+// a long book is bisected down to a short run and the run is walked up to the
+// first row not older than the one asked for (R5 lane PERF-K3).
+// WorkingRequestCore::commit keeps that order: a push and an erase-push
+// append a row born under a fresh incarnation, which usable_incarnation makes
+// larger than every one the run issued before; an erase keeps the rest in
+// order; an update rewrites a row in place under its own handle.
+inline std::size_t live_position(const std::vector<LiveRequest>& live,
+                                 uint64_t incarnation) noexcept {
+    constexpr std::size_t kWalk = 16;
+    std::size_t first = 0;
+    std::size_t count = live.size();
+    while (count > kWalk) {
+        const std::size_t half = count / 2;
+        if (live[first + half].handle().incarnation < incarnation) {
+            first += half + 1;
+            count -= half + 1;
+        } else {
+            count = half;
+        }
+    }
+    for (std::size_t i = first; i < live.size(); ++i) {
+        const uint64_t row = live[i].handle().incarnation;
+        if (row < incarnation) continue;
+        return row == incarnation ? i : live.size();
+    }
+    return live.size();
+}
+
 }  // namespace
 
 struct PreparedSubmit::Impl {
@@ -865,23 +901,19 @@ PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
 
 WorkingRequestCore::TargetKind WorkingRequestCore::classify(
         const RequestHandle& handle, std::size_t* live_index) const {
-    if (handle.incarnation == 0 || handle.run.run_number == 0 || handle.run.session_key.empty()
-        || handle.run != identity_) {
-        return TargetKind::InvalidHandle;
-    }
-    for (std::size_t i = 0; i < live_.size(); ++i) {
-        if (live_[i].handle().incarnation == handle.incarnation) {
-            if (live_index) *live_index = i;
-            return TargetKind::Live;
-        }
-    }
-    return TargetKind::NotWorking;
+    if (!names_run(handle, identity_)) return TargetKind::InvalidHandle;
+    const std::size_t index = live_position(live_, handle.incarnation);
+    if (index == live_.size()) return TargetKind::NotWorking;
+    if (live_index) *live_index = index;
+    return TargetKind::Live;
 }
 
+// classify's lookup without the call to classify: every lookup the consumer
+// makes passes through here.
 const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) const {
-    std::size_t index = 0;
-    if (classify(handle, &index) != TargetKind::Live) return nullptr;
-    return &live_[index];
+    if (!names_run(handle, identity_)) return nullptr;
+    const std::size_t index = live_position(live_, handle.incarnation);
+    return index == live_.size() ? nullptr : &live_[index];
 }
 
 const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
