@@ -27,6 +27,11 @@
 // night, a canonical stream crossing one, and a stream of prints with quiet
 // slots, a session close and a partial final slot.
 //
+// One more check is relational, not pinned: a host reconfigured from
+// America/New_York to Asia/Tokyo mid-life must see, bar for bar, exactly the
+// intervals and session-day facts a fresh Tokyo host sees -- the calendar the
+// kernel resolved before must not answer for the one it was given.
+//
 // Portability. The continuation digest folds the zone's tzdata CONTENT (lane
 // E23), which differs between machines that agree on every rule this witness
 // reads, so it is not pinned here; the byte-identity battery compares it on
@@ -476,6 +481,56 @@ Observed tick_stream() {
     return finish(host);
 }
 
+// The calendar-derived facts of every bar, without the event ordinals and the
+// decision floor a reused host carries over from its earlier runs.
+struct Facts final : NativeStrategyHost {
+    Fold fold;
+    std::uint64_t bars = 0;
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        ++bars;
+        fold.bar(bar);
+        fold.interval(context.input_interval);
+        fold.interval(context.script_interval);
+        fold.i64(context.coordinate.open_ms);
+        fold.i64(context.coordinate.eligible_open_ms);
+        fold.i64(context.coordinate.last_traded_close_ms);
+        fold.i64(context.coordinate.next_period_open_ms);
+        fold.i64(context.coordinate.next_input_open_ms);
+        fold.flag(context.in_session);
+        fold.flag(context.opens_session_day);
+        fold.flag(context.closes_session_day);
+        fold.flag(context.closes_session_day_open_ended);
+        fold.i64(context.sub_bar_open_ms);
+        fold.i64(context.script_bar_open_ms);
+    }
+};
+
+void a_reconfigured_calendar_answers_for_itself() {
+    const auto bars = ladder(kNyMon0930Est, 5 * kMinute, 600);
+    auto new_york = spec_for("k1-swap", "America/New_York", "0930-1600:23456", "5", "5");
+    auto tokyo = spec_for("k1-swap", "Asia/Tokyo", "0900-1130,1230-1500", "5", "5");
+    tokyo.identity.run_number = 2;
+
+    Facts reused;
+    CHECK(reused.configure_native(new_york).status == NativeSetupStatus::Applied);
+    reused.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(reused.last_error().empty());
+    reused.fold = Fold{};
+    reused.bars = 0;
+    CHECK(reused.configure_native(tokyo).status == NativeSetupStatus::Applied);
+    reused.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(reused.last_error().empty());
+
+    Facts fresh;
+    CHECK(fresh.configure_native(tokyo).status == NativeSetupStatus::Applied);
+    fresh.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(fresh.last_error().empty());
+
+    CHECK(fresh.bars == bars.size());
+    CHECK(reused.bars == fresh.bars);
+    CHECK(reused.fold.h == fresh.fold.h);
+}
+
 const Scenario kScenarios[] = {
     {"utc_year_end", utc_year_end},
     {"ny_masked_dst", ny_masked_dst},
@@ -573,9 +628,10 @@ int main() {
         }
         CHECK(same);
     }
+    a_reconfigured_calendar_answers_for_itself();
     if (failures == 0) {
-        std::printf("test_native_calendar_hash_witness: %d checks, %zu scenarios ok\n", checks,
-                    kCount);
+        std::printf("test_native_calendar_hash_witness: %d checks, %zu scenarios ok, a "
+                    "reconfigured calendar answers for itself\n", checks, kCount);
     }
     return failures == 0 ? 0 : 1;
 #endif
