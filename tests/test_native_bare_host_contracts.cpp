@@ -527,10 +527,15 @@ void owned_excursion_is_recorded_verbatim() {
 // bars over 25 000 path bars: 6.3 s recording on, 0.08 s off). The digests are
 // now taken once per staged spec. The witness is the price of the reads, in
 // process CPU time and best of three as tests/test_native_continuation_digest_tail.cpp
-// measures: 2 000 bars read every bar must cost under three times the same run
-// read once (about 1.3x once the digests are cached, about 40x while every read
-// re-walked 10 000 path bars), and the value, which may not move: every-bar
-// reads and a single read end on one digest.
+// measures: 2 000 bars read every bar must cost under twenty times the same
+// run read once, and the value, which may not move: every-bar reads and a
+// single read end on one digest. Since the digests were cached each read costs
+// the same (about 2.5 us on an Apple M4, Release); the run it is compared with
+// got cheaper. At fc7aad62 the ratio was 1.2-1.5x over a read-once run of about
+// 24 ms; lanes PERF-K24 (lower-feed lookup) and PERF-K1 (calendar memo) cut that
+// run to about 2.2 ms, and the ratio is 3.3-3.5x (1.6x in Debug). A fold that
+// re-walks the 10 000 path bars at every read measured about 40x when this row
+// was written and 440-460x on the INT17 tree.
 struct LowerPathReader final : NativeStrategyHost {
     bool read_each_bar = false;
     std::uint64_t last_read = 0;
@@ -583,7 +588,10 @@ void continuation_read_is_linear_in_the_feed() {
     const double ratio = every_bar.seconds / std::max(once.seconds, 1e-6);
     std::printf("  2000 bars over a lower-timeframe path: continuation read every bar %.4f s,"
                 " read once %.4f s, ratio %.2f\n", every_bar.seconds, once.seconds, ratio);
-    CHECK(ratio < 3.0);
+    // expectation corrected: ratio < 3.0 -> ratio < 20.0, because K24 and K1
+    // made the read-once run about 11x cheaper while each read costs what it
+    // did (see above); the quadratic re-walk this guards against is 440x+.
+    CHECK(ratio < 20.0);
     CHECK(every_bar.digest == once.digest);
 }
 
