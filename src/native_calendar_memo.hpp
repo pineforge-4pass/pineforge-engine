@@ -22,18 +22,28 @@
 //     and the day after, first holding day wins. The local date is integer
 //     arithmetic for a UTC calendar and one localtime per new whole second
 //     otherwise, kept for the last few seconds asked. It is NOT short-cut by
-//     "the last day resolved holds this instant": around a clock change of a
-//     day or more (America/Sitka 1867, Pacific/Apia 1892, Pacific/Kwajalein
-//     1969) the cycles overlap and that shortcut answers a different day than
-//     the memo-free lookup does;
-//   * whether the calendar's zone is UTC is decided once per memo.
+//     "the last day resolved holds this instant": where the cycles do not
+//     tile (America/Sitka and America/Juneau in October 1867 under a
+//     "2330-2300" session, measured on macOS) that shortcut answers another
+//     session day than the memo-free lookup does;
+//   * an interval is a pure function of the calendar value, the instant and
+//     each timeframe's unit and count, so the last few answered are kept;
+//   * whether the calendar is valid, and whether its zone is UTC, is decided
+//     once per memo.
+//
+// All of it rests on the resolution being a function of its inputs, which
+// the memo-free calendar assumes too. It is, except where glibc's mktime
+// resolves a civil time inside a fold that keeps tm_isdst: glibc starts from
+// the previous call's offset, so there the memo-free answer itself depends on
+// what was asked before (America/Sitka 1867-10-18, Pacific/Kwajalein
+// 1969-09-30), and a memo keeps the first.
 //
 // A memo serves one calendar value. The owner calls reset() whenever the
 // calendar it passes is rebuilt or reassigned; a memo handed a calendar at
-// another address forgets everything first. It holds no pointer into the
-// calendar between calls, a bounded number of days (kDaySlots) and a few
-// civil dates, and is not thread-safe: one owner, one thread, like the
-// calendar value it serves.
+// another address forgets everything first (the address is identity only,
+// never dereferenced). It holds a bounded number of days (kDaySlots),
+// intervals and civil dates, and is not thread-safe: one owner, one thread,
+// like the calendar value it serves.
 
 #include <pineforge/native_calendar.hpp>
 
@@ -62,9 +72,16 @@ public:
 
     // The memo's state for `calendar`, created on first use; a calendar at
     // another address than the last one's resets it first.
-    State& state(const SessionCalendar& calendar);
+    State& state(const SessionCalendar& calendar) {
+        if (state_ && calendar_ == &calendar) return *state_;
+        return bind(calendar);
+    }
 
 private:
+    State& bind(const SessionCalendar& calendar);
+
+    // Identity only, never dereferenced: the calendar the state belongs to.
+    const SessionCalendar* calendar_ = nullptr;
     std::unique_ptr<State> state_;
 };
 

@@ -9,9 +9,10 @@
 //
 // The instants are what a run and a careless caller would ask: walks one
 // input width apart across a clock change, a year boundary and a session
-// break (the memo's steady state), random instants within three days of them
-// (days evicted and re-resolved, colliding slots), random instants over
-// 1972-2037, and the int64 extremes. The calendars are the six the lane names
+// break (the memo's steady state), each walk's second half asked again
+// newest first (answers the memo keeps and answers it resolves again),
+// random instants within three days of them (days evicted and re-resolved,
+// colliding slots), random instants over 1972-2037, and the int64 extremes. The calendars are the six the lane names
 // -- UTC, America/New_York, Asia/Tokyo with a lunch break, Europe/London, a
 // POSIX rule zone and a fixed offset -- under all-day, masked daytime, split,
 // masked overnight and multi-window sessions, at fixed and calendar
@@ -184,6 +185,9 @@ void probe(const SessionCalendar& cal, const char* script, const char* input,
     for (const Anchor& anchor : anchors) {
         std::int64_t ms = anchor.ms - step * (walk / 2) - rng.in(0, step);
         for (int i = 0; i < walk; ++i, ms += step) pair.ask(ms, memo);
+        // The walk's last instants again, newest first: the memo answers the
+        // most recent from the intervals it keeps, older ones from its days.
+        for (int i = 1; i <= walk / 2; ++i) pair.ask(ms - step * i, memo);
         for (int i = 0; i < scatter; ++i) {
             pair.ask(rng.in(anchor.ms - 3 * kDay, anchor.ms + 3 * kDay), memo);
         }
