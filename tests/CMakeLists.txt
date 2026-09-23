@@ -883,6 +883,10 @@ list(APPEND TEST_SOURCES test_adapter_continuation_view)
 # before the projection check was trimmed. Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_projection_witness)
+# R5 PERF-P23: the consumer's per-run caches of the callback plumbing against
+# the lookups they replace, over randomized hosts, specs and lifecycles.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_callback_caches)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

@@ -1435,7 +1435,11 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render(engine, "native prepare_native_begin cannot reenter");
         return false;
     }
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    // The run's one downcast: every callback site reads it back through
+    // native_host().
+    downcast_engine_ = &engine;
+    downcast_host_ = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = downcast_host_;
     if (!host) return true;
     preparing_begin_ = true;
     try {
@@ -2352,7 +2356,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
     // keeps no excursion model of its own for this run.
-    if (auto* excursion_owner = dynamic_cast<NativeStrategyHost*>(&engine)) {
+    if (auto* excursion_owner = native_host(engine)) {
         if (excursion_owner->owns_lot_excursions()) {
             engine.lot_excursion_hook_ =
                 [excursion_owner](const ClosedLotExcursionFacts& facts) {
@@ -2446,7 +2450,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host's and are never mistaken for the kernel's tail. This run's
     // declaration is registered after the callback (below).
     clear_timeframe_subscriptions(engine);
-    if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
+    if (auto* host = native_host(engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
         try {
@@ -3124,7 +3128,7 @@ double NativeExecutionConsumer::margin_equity(const BacktestEngine& engine,
 bool NativeExecutionConsumer::margin_check_admitted(
         const BacktestEngine& engine, NativeMarginCheckKind kind,
         const native_order::MatchCursor& cursor, double mark) const {
-    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+    const auto* host = native_host(engine);
     if (!host) return true;
     NativeMarginCheckPoint point;
     point.kind = kind;
@@ -3194,7 +3198,7 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
     const double unit_margin = mark * point_value * fx * *fraction;
     double equity = margin_equity(engine, mark, fx);
     double required = held * unit_margin;
-    const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+    const auto* host = native_host(engine);
     // The host's money rule, BEFORE the breach test. The kernel still owns
     // the mechanism; the two numbers it compares are where brokers differ, so
     // a host may raise a call this kernel would not make or veto one it
@@ -3988,7 +3992,7 @@ void NativeExecutionConsumer::drain_after_applied(
         // resolve_execution_terms and the arm below is not installed.
         native_order::ArmContext arm;
         if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;
-        auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+        auto* host = native_host(engine);
         if (host) {
             arm.resolve_level = [this, &engine, host, &applied](
                     const native_order::LiveRequest& leg,
@@ -4740,7 +4744,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
         native_order::ExecutionTerms terms;
         try {
-            auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+            auto* host = native_host(engine);
             if (!host) throw std::logic_error("native terms require a native host");
             terms = host->resolve_execution_terms(terms_facts);
         } catch (const std::exception& e) {
@@ -5016,7 +5020,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         NativePrecommitVerdict verdict = NativePrecommitVerdict::Admit;
         if (view.settlement_readiness == execution::Status::Applied) {
             try {
-                auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+                auto* host = native_host(engine);
                 if (!host) throw std::logic_error("native precommit requires a native host");
                 verdict = host->validate_execution_precommit(view);
             } catch (const std::exception& e) {
@@ -6004,7 +6008,7 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     };
     {
         PreviewSeal seal(consuming_request_);
-        const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+        const auto* host = native_host(engine);
         if (!host) throw std::logic_error("native terms require a native host");
         terms = host->resolve_execution_terms(facts);
     }
@@ -6307,7 +6311,7 @@ void NativeExecutionConsumer::enter_point_frame(
 void NativeExecutionConsumer::invoke_recalculation(
         BacktestEngine& engine, const Bar& bar, NativeCalculationReason reason,
         const native_order::ExecutionAppliedEvent* cause) {
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) {
         in_callback_ = false;
         callback_phase_ = CallbackPhase::None;
@@ -6363,7 +6367,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
         BacktestEngine& engine, const Bar& sub, const NativeDriverPoint& point) {
     if (failed()) return;
     if (in_callback_ || consuming_request_ || draining_notifications_) return;
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) return;
     enter_point_frame(engine, point_frame_view(point), CallbackPhase::Tick);
     const uint64_t ordinal = callback_context_.coordinate.ordinal;
@@ -6412,7 +6416,7 @@ void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t o
 void NativeExecutionConsumer::invoke_applied_callback(
         BacktestEngine& engine, const AppliedNotification& notification) {
     try {
-        auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+        auto* host = native_host(engine);
         if (!host) throw std::logic_error("native notification requires native host");
         // Owning event and frame values survive submit/replace and further
         // synchronous executions reallocating the append-only history/queue.
@@ -6512,7 +6516,7 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
 
 void NativeExecutionConsumer::invoke_bar_open_callback(
         BacktestEngine& engine, const Bar& bar, const NativeDriverPoint& point) {
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) return;
     callback_context_.coordinate = point.coordinate;
     callback_context_.decision_floor_ms = decision_floor();
@@ -6587,7 +6591,7 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
 
 bool NativeExecutionConsumer::invoke_input_callback(
         BacktestEngine& engine, const Bar& bar, const NativeInputContext& context) {
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) return true;
     input_callback_context_ = context;
     input_callback_bar_ = bar;
@@ -6623,7 +6627,7 @@ bool NativeExecutionConsumer::invoke_input_callback(
 
 bool NativeExecutionConsumer::invoke_tick_callback(
         BacktestEngine& engine, const Bar& bar, const NativeTickContext& context) {
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) return true;
     NativeTickContext presented = context;
     presented.decision.decision_floor_ms = decision_floor();
@@ -6685,7 +6689,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
 
 void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar& bar,
                                               const NativeCoordinate& coordinate) {
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (!host) return;
     callback_context_.coordinate = coordinate;
     callback_context_.decision_floor_ms = decision_floor_ms_;
@@ -7594,7 +7598,7 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         auxiliary_appended_digest_ = 1469598103934665603ULL;
     }
     if (spec.subscriptions.empty()) return true;
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (host == nullptr) {
         fail(engine, NativeFailure{NativeFailureCode::Contract,
                                    NativeFailureOperation::Begin});
@@ -8124,7 +8128,7 @@ bool NativeExecutionConsumer::deliver_timeframe_bar(
         NativeCompletionKind completion) {
     // The pull accessor answers with this bucket for the whole callback.
     subscription.latest = bucket;
-    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    auto* host = native_host(engine);
     if (host == nullptr) return true;
     NativeTimeframeBarContext context;
     context.subscription = subscription.index;

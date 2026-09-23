@@ -125,6 +125,19 @@ public:
     std::optional<double> sized_units_preview(const native_order::Sized& sized, double price,
                                               double equity, double fx) const;
     NativeRiskState risk_state() const;
+    // The engine's NativeStrategyHost view, dynamic_cast's own answer: taken
+    // once per public begin (prepare_public_begin) for the engine that owns
+    // this consumer, whose dynamic type is fixed for the consumer's whole
+    // life, and read back by every callback site. Any other engine is
+    // answered by dynamic_cast directly.
+    NativeStrategyHost* native_host(BacktestEngine& engine) const noexcept {
+        return &engine == downcast_engine_ ? downcast_host_
+                                           : dynamic_cast<NativeStrategyHost*>(&engine);
+    }
+    const NativeStrategyHost* native_host(const BacktestEngine& engine) const noexcept {
+        return &engine == downcast_engine_ ? downcast_host_
+                                           : dynamic_cast<const NativeStrategyHost*>(&engine);
+    }
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     uint64_t event_high_water() const noexcept;
     uint64_t terminal_receipt_high_water() const noexcept {
@@ -718,6 +731,10 @@ private:
     void note_terminal_events(const native_order::EventRange& events) noexcept;
 
     NativeLifecycle state_{NativeUnconfigured{}};
+    // native_host()'s answer for the engine the last public begin named.
+    // Derived, never folded.
+    const BacktestEngine* downcast_engine_ = nullptr;
+    NativeStrategyHost* downcast_host_ = nullptr;
     uint64_t consumed_high_water_ = 0;
     std::string bound_session_key_;
     native_order::WorkingRequestCore requests_{{"unbound", 1}};
