@@ -10643,8 +10643,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // ab9714be engine.hpp:1207-1210 + 1264-1266: a fill at a raw bar or
         // waypoint print books floor(p / mintick + 0.5) * mintick.  Keep that
         // binary64 form unless it lies past the immutable limit the generic
-        // kernel checks (native_execution_consumer.cpp:2862-2875); there the
-        // decimal grid form, since source_bar_fill_tick returns an on-grid
+        // kernel checks (consume_matched_request's InvalidTerms refusal); there
+        // the decimal grid form, since source_bar_fill_tick returns an on-grid
         // n * mintick unchanged.
         const double owner_form = nearest_tick(price, staged_.syminfo.mintick);
         std::optional<double> level;
