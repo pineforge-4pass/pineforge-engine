@@ -252,9 +252,15 @@ it folds the order core's two counters and running digests of its group-effect
 receipts, its cohort receipts and a compact record (kind and reason) of every
 committed event; and the broker fingerprint `pineforge-broker-state/v19` folds
 the closed rows as their count and a running digest, each row once it is final,
-instead of every row at every read. `native_run_spec_digest` keeps its
-byte-wise FNV-1a and its values. The values the tree pins were re-pinned once,
-each marked "expectation corrected".
+instead of every row at every read. A row is final once the applied
+notification of the execution that booked it has returned; a host that changes
+a final row names the first one through
+`NativeStrategyHost::native_closed_rows_amended`, a C++-only member of the v19
+host (a C host never writes a closed row). The latched continuation is taken
+at once again: R5 lane PERF-P1's deferred view saved the v18 log folds, which
+v19 no longer makes, and no value moves with it. `native_run_spec_digest`
+keeps its byte-wise FNV-1a and its values. The values the tree pins were
+re-pinned once, each marked "expectation corrected".
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v6`.
 Terms receipts, attempted terms, deferred

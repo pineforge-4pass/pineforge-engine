@@ -468,7 +468,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2581-2631`), under the same legality rule; see *Driving the
+(`native_c_api.h:2583-2633`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v6`
@@ -1768,7 +1768,7 @@ says otherwise, and the C spellings are in
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
 | `native_decision_floor()` (`native_host.hpp:1267`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
 | `native_consumed_high_water()` (`native_host.hpp:1272`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
-| `native_continuation_hash()` | the consumer's continuation identity: the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
+| `native_continuation_hash()` | the consumer's continuation identity: a fold of its live state (*What the continuation and the broker-state hash fold*), the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:685` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
 
@@ -1806,7 +1806,7 @@ bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:1382`). The kernel resolves each session day once through
+(`native_c_api.h:1384`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -1869,7 +1869,9 @@ The per-bar **broker-state hash** is a row of that same report, so
 always had — `set_broker_state_hash_recording(true)`
 (`engine.hpp:2091`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
-`broker_state_hash()` over the lots and the closed rows. With the switch on,
+`broker_state_hash()` over the lots and the closed rows (since v19 a row costs
+the live state, not the run's length: the closed rows enter through a running
+digest). With the switch on,
 one row follows each point, after the extremes that point just folded
 (`record_script_report_point`, `native_execution_consumer.cpp:7541`), so
 
@@ -2049,6 +2051,60 @@ struct RegimeHost : pineforge::NativeStrategyHost {
   final and the stream hash. Without it the C host's broker-state hash is the
   kernel's own fold. The per-bar rows need no hook and are available to a C
   host as described above.
+
+### What the continuation and the broker-state hash fold
+
+Both digests fold **state**, not history (the v19 value epoch, R5 lane V19-A:
+`native-consumer/v9`, `pineforge-broker-state/v19`, stream fingerprint 19).
+
+- `native_continuation_hash()` folds what a resume continues from: the three
+  semantic versions; the lifecycle and its phase; the bound session, the
+  decision floor and the callback context; the current execution frame and the
+  queued notifications; the driver's cursors, its script and forming bars and
+  its statistics; the declared series' cursors and an auxiliary feed's
+  appended rows (their count and digest); the applied spec as one digest,
+  taken once per spec and run generation, and the calculation-timing, margin
+  and risk state a spec opts into; the live request table and the cohort
+  rosters; and the order core's two counters, its last committed ordinal and
+  incarnation. What the core carries forward
+  beyond its live tables folds as three running digests, each record folded
+  once when it commits: the group-effect receipts, the cohort receipts, and a
+  compact record of every committed event — its kind and reason — which keeps
+  visible a difference that leaves no other trace, such as a Cancelled
+  receipt's reason (the host's own cancel against an owner's). The command
+  history, the driver log and the account log are **not** folded: they are
+  readbacks of how the run got there. So equal state answers an equal value,
+  two command histories that reach one state answer one value, and a read costs
+  the live state whatever the run's length. The fold takes one
+  multiply-xorshift per 64-bit word; a string folds as its length, then its
+  bytes eight at a time. `native_run_spec_digest(spec)` keeps its byte-wise
+  FNV-1a and its values.
+- `broker_state_hash()` folds that continuation, the position and its lots,
+  the realized sums and the equity extremes as before, and the closed rows as
+  their count and a running digest of each row's entry and exit time, entry
+  and exit price, quantity and P&L, folded once per row. A row is **final**
+  once the applied notification of the execution that booked it has
+  returned; the host may amend it inside that notification, and a read before
+  then folds the row without freezing it. A host that changes a final row —
+  the Pine adapter reorders a bar's trailing same-bar bracket exits after
+  their notifications — names the first row it changed through
+  `NativeStrategyHost::native_closed_rows_amended(first_row)` before the next
+  read, and the rows fold again from there. Rows removed from the end need no
+  name: the kernel only appends, so a read over fewer rows, or a booking below
+  the final mark, forgets them. Debug builds re-fold every digested row at each
+  run's end and abort on a final row changed without a name. A C host never
+  writes a closed row and has nothing to name.
+- `stream_state_hash()` leads with fingerprint version 19 and the
+  broker-state hash above.
+- The continuation a run's final `broker_state_hash()` folds is latched at
+  the last script point and taken at once (R5 lane PERF-P1 had latched a view
+  folded on first read; with no history in the fold there is nothing a view
+  saves).
+
+The witness is `tests/test_native_state_continuation.cpp` (kernel-only):
+every folded member moves the value and restoring it restores the value; two
+histories, one state, one value; the Cancelled reason still differs; per-bar
+recorded broker hashes cost linear time; and the closed-row finality rule.
 
 ## Calendar, session, timeframes, warmup
 
@@ -2676,7 +2732,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`native_c_api.h:37-39`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2531`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2533`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the

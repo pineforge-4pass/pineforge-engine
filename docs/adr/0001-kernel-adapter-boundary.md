@@ -179,7 +179,7 @@ summary of it.
   measured equal on macOS/arm64 and Linux/aarch64 at tzdata 2026c).
   `broker_state_hash()` (`engine.hpp:1994`)
   folds that hash with position and lot state under the pinned domain
-  `pineforge-broker-state/v19` (`engine_state_hash.cpp:32`), the closed rows as their count and
+  `pineforge-broker-state/v19` (`engine_state_hash.cpp:33`), the closed rows as their count and
   a running digest each final row folds into once; it is the one exported to C
   (`c_abi.cpp:442`). A host folds its **own** durable state into it through
   `hash_host_extension` (`engine.hpp:401`), whose deprecated spelling
@@ -301,7 +301,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `execution::CloseCause` off the row, compares no string, and answers `3` for a *kernel*
   liquidation as readily as for the adapter's. What is live is one pair of hashed Pine-shaped
   lot flags: `skip_entry_bar_high` / `skip_entry_bar_low` (`engine.hpp:149`), hashed
-  (`skip_entry_bar_high` `src/engine_state_hash.cpp:65`) and, since R5 lane E6, set by no host at
+  (`skip_entry_bar_high` `src/engine_state_hash.cpp:66`) and, since R5 lane E6, set by no host at
   all: the excursion owner declares where its fill sat (`declare_opened_lot_entry_bar_mask`
   `pine_strategy_host.cpp:559`) and the kernel derives the pair — the intrabar-fill excursion
   mask. Rule 5 is now scoped to that pair's storage; the comment residue it also covered was
@@ -324,9 +324,9 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `src/c_abi.cpp` implements the **57** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **39** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
-  callback table (`strategy_native_host_create_v1` `native_c_api.h:2490`), runs a batch
-  (`strategy_native_run_v1` `native_c_api.h:2503`), and **submits, replaces, cancels and
-  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:2531`), `_replace_v1`
+  callback table (`strategy_native_host_create_v1` `native_c_api.h:2492`), runs a batch
+  (`strategy_native_run_v1` `native_c_api.h:2505`), and **submits, replaces, cancels and
+  executes** orders — `strategy_native_submit_v1` (`native_c_api.h:2533`), `_replace_v1`
   (`:1449`), `_cancel_v1` (`:1456`), `_cancel_all_v1` (`:1460`), `_cancel_where_v1` (`:1481`),
   `_execute_current_v1` (`:1502`) — under the kernel's own legality rule. Streaming needs no new
   symbol: the whole `strategy_stream_*` family takes that handle unchanged. The header's
@@ -573,24 +573,24 @@ number names its symbol on this tree.
 
 | C++ hook | C route | witness in `tests/test_native_c_api.c` |
 |---|---|---|
-| `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2077`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
-| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2866`), reading a SIZED request's own sizing block | the sizing-query scenario |
-| `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2427`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
-| `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2436`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
-| `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2443`) | the anchored-level scenario |
-| `hash_host_extension` | `on_hash_extension` (`native_c_api.h:2454`): a 64-bit digest folded after the kernel's own bytes | the hash-extension scenario |
+| `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2079`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
+| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2868`), reading a SIZED request's own sizing block | the sizing-query scenario |
+| `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2429`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
+| `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2438`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
+| `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2445`) | the anchored-level scenario |
+| `hash_host_extension` | `on_hash_extension` (`native_c_api.h:2456`): a 64-bit digest folded after the kernel's own bytes | the hash-extension scenario |
 
 **What stays as it is, and why.**
 
 | surface | ruling | reason |
 |---|---|---|
-| `cancel_all` (`native_host.hpp:1203`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2597`). |
-| `cohort_add` (`native_host.hpp:1221`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`receipts` `native_execution_consumer.cpp:865`), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
-| `native_sized_units` (`native_host.hpp:1250`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:2838`). |
-| `pf_native_working_v1` without the leg's anchor or owner relation (E13 f4) | **carried** | The C++ host reads them off `NativeWorkingRequest::definition`, so the C readout's relation tail carries them: `anchor` (`native_c_api.h:1593`) through `arm_scope`, the request as the kernel holds it now (an armed leg reads ABSOLUTE with its installed level). |
+| `cancel_all` (`native_host.hpp:1203`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2599`). |
+| `cohort_add` (`native_host.hpp:1221`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`hash_cohort_receipt` `native_execution_consumer.cpp:871`, since v19 once, at the enrolment, into the running digest the continuation carries), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
+| `native_sized_units` (`native_host.hpp:1250`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:2840`). |
+| `pf_native_working_v1` without the leg's anchor or owner relation (E13 f4) | **carried** | The C++ host reads them off `NativeWorkingRequest::definition`, so the C readout's relation tail carries them: `anchor` (`native_c_api.h:1595`) through `arm_scope`, the request as the kernel holds it now (an armed leg reads ABSOLUTE with its installed level). |
 | `hash_source_extension` (`engine.hpp:407`) | **C++-only** | The deprecated spelling of `hash_host_extension`, kept so an existing C++ subclass compiles and folds unchanged. A C host has only ever had the current spelling, `on_hash_extension`. |
-| `NativeReportPolicy::KernelRecordedAtHostMarks` (`native_run_spec.hpp:63`) | **C++-only** (lane E22's ruling, restated) | Under it the host names each report point from inside its own callbacks, and the C table has no call that marks one: a C host could only declare a series nobody records. `pf_native_report_policy_e` (`native_c_api.h:640`) leaves its value unnamed, and the enum guard holds that exclusion. |
-| `strategy_set_path_order` (`pineforge.h:917`) clamps an out-of-range mode to AUTO | **retained** | A `void` ABI v4 setter cannot answer a refusal. Its values are now documented as `pf_native_path_order_e`'s (`native_c_api.h:848`); a C host that wants an unknown word refused declares `path_order` in `pf_native_run_spec_ext_v1`, which answers `PF_NATIVE_E_TAG`. |
+| `NativeReportPolicy::KernelRecordedAtHostMarks` (`native_run_spec.hpp:63`) | **C++-only** (lane E22's ruling, restated) | Under it the host names each report point from inside its own callbacks, and the C table has no call that marks one: a C host could only declare a series nobody records. `pf_native_report_policy_e` (`native_c_api.h:642`) leaves its value unnamed, and the enum guard holds that exclusion. |
+| `strategy_set_path_order` (`pineforge.h:917`) clamps an out-of-range mode to AUTO | **retained** | A `void` ABI v4 setter cannot answer a refusal. Its values are now documented as `pf_native_path_order_e`'s (`native_c_api.h:850`); a C host that wants an unknown word refused declares `path_order` in `pf_native_run_spec_ext_v1`, which answers `PF_NATIVE_E_TAG`. |
 | the enumerated `int32` fields of `pf_pending_order_v1_t` (`strategy_pending_order_get` `pineforge.h:1011`) | **no C names in the header; generator-owned** | The mirror is generated from the Pine source host's resting-order record by `scripts/gen_pending_order_mirror.py` (held by its `--check` source guard) and self-described at run time by `strategy_pending_order_layout`. Its enumerated fields are the source layer's order vocabulary, not a kernel enumeration. A C name for them belongs in that generator, which owns the struct, so that it cannot drift from the mirror — never hand-written beside it. |
 
 ## TradingView-calibrated kernel mechanisms (rule 2's own account)

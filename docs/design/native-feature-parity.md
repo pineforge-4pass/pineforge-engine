@@ -22,7 +22,7 @@ Most status differences are row granularity (one input folds two features into o
 | # | Ruling |
 |---|---|
 | R5-1 | **Classification.** Generic execution feature → kernel native API. TradingView quirk → adapter. Mixed feature → kernel gets the generic mechanism with a policy knob, the adapter selects the TV policy, the bare-host default is the plain generic behaviour. |
-| R5-2 | **Brackets are not a new kernel object.** `WaitForApplied{RequestHandle parent}` (native_order.hpp:410-412) and `waiting_children(parent)` (native_order.hpp:1689, *fresh*) exist; L7 delivers a builder/toolkit over them plus relative anchors and the missing offsets. Size M. |
+| R5-2 | **Brackets are not a new kernel object.** `WaitForApplied{RequestHandle parent}` (native_order.hpp:410-412) and `waiting_children(parent)` (native_order.hpp:1710, *fresh*) exist; L7 delivers a builder/toolkit over them plus relative anchors and the missing offsets. Size M. |
 | R5-3 | **Price grid is its own kernel lane (L8).** Quantity grid is native already; the price grid (booked fill on the tick, optional quantized trigger test) is generic and missing. TV's exact half-tick rule stays in the adapter on top. |
 | R5-4 | **Close reservations split.** Fractional reduce + reservation against sibling exits → kernel, inside the sizing lane. Callsite batching, two-call provenance, the POOC population predicate → adapter. |
 | R5-5 | **Calc-timing is v1.** Sub-bar hook + callback chronology contract; the adapter keeps its current path (zero drift). |
@@ -173,7 +173,7 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 | OT2 | Symbol info, sessions, calendars, timezones (`timezone` pine_adapter.cpp:1517-1518, `chart_timezone` pine_adapter.cpp:1558-1560) | **yes** — spec fields `ticker` native_run_spec.hpp:538-548; `parse_session` native_calendar.hpp:173-419; intervals on every decision context `input_interval` market_driver.hpp:117-118 | K | — | F:J2 O:G-5 | — |
 | OT3 | Indicators, series, math, matrix, map, string utils | **yes** — `ta.hpp` includes only `na/series/window_sum` `window_sum` ta.hpp:2-8 | K | L11 (naming only) | F:J3 | (single-source row) TV-calibrated numerics → §2.ii b |
 | OT4 | Cooperative abort | **yes** — `request_abort` engine.hpp:2122, `NativeAbortReporting` native_run_spec.hpp:41-44 | K | — | F:J4 | (single-source) |
-| OT5 | C-level run configuration, stream, FX curve, contract probe | **yes** — `strategy_configure_native_v1` c_abi.cpp:834, FX curve c_abi.cpp:834, probe c_abi.cpp:834, stream `strategy_stream_begin` c_abi.cpp:562 **Extended:** `pf_native_run_spec_ext_v1`'s policy tail now carries `intrabar`, `path_order`, `abort_reporting` and the slot-label / feed-tolerance policies (`PF_NATIVE_SPEC_EXT_INTRABAR`, `PF_NATIVE_SPEC_EXT_FEED_POLICY`), so nothing of `NativeRunSpec` but `identity` is unreachable from C (`tests/test_native_c_api.c`). | K | — | O:J4 | The v1 C spec `pf_native_run_spec_v1` pineforge.h:524 omitted `intrabar`, `path_order` and `abort_reporting`; they now travel in the extension's policy tail, `pf_native_abort_reporting_e` native_c_api.h:855 among them (F §2.iii) |
+| OT5 | C-level run configuration, stream, FX curve, contract probe | **yes** — `strategy_configure_native_v1` c_abi.cpp:834, FX curve c_abi.cpp:834, probe c_abi.cpp:834, stream `strategy_stream_begin` c_abi.cpp:562 **Extended:** `pf_native_run_spec_ext_v1`'s policy tail now carries `intrabar`, `path_order`, `abort_reporting` and the slot-label / feed-tolerance policies (`PF_NATIVE_SPEC_EXT_INTRABAR`, `PF_NATIVE_SPEC_EXT_FEED_POLICY`), so nothing of `NativeRunSpec` but `identity` is unreachable from C (`tests/test_native_c_api.c`). | K | — | O:J4 | The v1 C spec `pf_native_run_spec_v1` pineforge.h:524 omitted `intrabar`, `path_order` and `abort_reporting`; they now travel in the extension's policy tail, `pf_native_abort_reporting_e` native_c_api.h:857 among them (F §2.iii) |
 | OT6 | C-level order submission + strategy callbacks | **no** — none of the 57 `PF_API` symbols; then listed as a refusal on native-engine.md **Closed:** `strategy_native_host_create_v1` takes a C callback table and `strategy_native_submit_v1` / `_replace_v1` / `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1` / `_execute_current_v1` command the same kernel under the same legality rule; the 32 symbols are a second, disjoint inventory beside the 57 codegen-facing ones (`tests/test_native_c_api.c`, `tests/test_native_c_api_frozen_header.cpp`). | K | L13 | F:J6 O:J5 | R5-7: post-v1. S covers it in its §2.3 without a row. |
 | OT7 | *(quirk)* Pine language state: series, barstate / session flags, position-view freezing (`PineLanguageState` pine_language_state.hpp:12-68; `publish_series` pine_scheduler_native.cpp:207-242, `chart_index` pine_scheduler_native.cpp:509-621) | n/a | A | — | S:R1 | (single-source) **Closed (E25, lane E20's finding 2; E26, E25's findings 1 and 3):** `session.islastbar` reads one script bar ahead on every driving path: the chart timeframe's next retained bar, an aggregated chart's next bucket (a scheduler lookahead, deleted when the rule moved into the kernel), the calendar for the live tail's bar and for every bar of a stream, warmup included — a stream continues past its replay, so only a batch run's final bar reads "last" from having no successor. Since R4 slice C an aggregated or realtime bar read every in-session bar as last. **What TradingView does:** it ends a session at the session DAY — the flag belongs to the last chart bar whose successor belongs to another session day, in session or not, and `session.isfirstbar` is its dual, the bar after a session's last one. The ordinal is `internal::session_trading_day_index` timeframe.hpp:145, the exchange-timezone day rolling at the symbol's day stamp (09:30 ET on NYSE RTH, midnight on 24x7, 17:00 ET on a 1700-1700 forex session), not local midnight; the unmerged form, since a fused holiday daily bar still holds two intraday sessions. The three `lab tv` tapes (`tests/fixtures/session_islastbar`) give that rule bar for bar with no disagreement, and the engine now holds 255/255 NYSE:F last bars, 255/255 first bars and 370/370 ETH last bars on the chart-timeframe AND the aggregated path (it held 1, 0 and 1 before). Early closes come with it: the three NYSE:F half days flag 12:45 ET without a holiday calendar, because the next bar is the next session day's. **Generic since R5 lane F5:** the kernel computes that reading for every host — `NativeDecisionContext::in_session` market_driver.hpp:154 and the facts after it (`opens_session_day`, `closes_session_day`, `closes_session_day_open_ended`), in C the session bytes of `pf_native_decision_v1` native_c_api.h:1382 — from the run's own calendar and input (`present_session_day` native_execution_consumer.cpp:7031), so a bare host reproduces the tapes flag for flag (`tests/test_native_session_day_facts.cpp`, kernel-only). The adapter computes no rule of its own: `scheduler_update_session_state` pine_strategy_host.cpp:1759 selects the kernel's facts into the three flags, which are `PineStrategyHost` members now (`session_ismarket_` pine_strategy_host.hpp:848; `BacktestEngine` holds no Pine session state), and only its live-probe tail reads the open-ended close at its batch's final bar (`tests/test_session_day_facts_adapter.cpp`). Selecting the kernel also ended a calc_on_order_fills defect of the adapter's lookahead, which read two bars ahead on a bar a fill recalculation had already published (a fill on a day's second-to-last bar flagged that bar last and the day's real last bar first). **Ruled, not open:** a bar with nothing held after it — a stream's bar, a live-tail bar — steps the calendar one width on, so it cannot see an early close the session string does not declare (ADR-0001, "Session-day facts at a bar with nothing held after it"). **Closed (F1):** a `calc_on_order_fills` recalculation reads the flags of the bar it runs on, not the previous bar's (the kernel presents the current bar's facts on that recalculation), and the close callback after it no longer looks one retained bar too far ahead (§3.8, AG3). |
 | OT8 | *(quirk)* Live-tail / probe-suppress harness flags (`realtime_tail_` pine_strategy_host.cpp:277-279) | n/a — **contained since N14** (the flags were `BacktestEngine` members until then; now `source::PineStrategyHost` state behind two kernel virtual seams, §2.ii q) | A | N14 | F:J7 S:C5 | parity-campaign tooling |
@@ -266,7 +266,7 @@ PF_API int pf_native_events_v1(pf_strategy_t, uint64_t after_ordinal, pf_native_
 | Hardening | Tagged, size-prefixed PODs; `struct_size` + version; unknown-tag refusal; never cast the C request to a C++ variant; a C fixture compiles against the frozen previous header. S puts the API in a separate header `include/pineforge/native_c_api.h` | S |
 | SOP | Every symbol goes into `src/c_abi.cpp`, `pineforge.h`, `EXPECTED_RUNTIME` + both counts (check_c_abi_runtime.py:19-79), the README table and the Python harnesses, or all CI matrix jobs fail at the "C ABI runtime source check" step (`CLAUDE.md`) | F O S |
 | Not in v1 of the C API | `resolve_execution_terms` / `validate_execution_precommit` are the adapter's seam; a C host that needs sizing uses `Sized` (F). O offers an optional `resolve_terms` callback: deferred | F O |
-| Open | Naming: F and O use `pf_native_*`; S uses `strategy_native_*`, which matches the existing runtime symbols. The v1 C spec `pf_native_run_spec_v1` pineforge.h:524 omitted `intrabar`, `path_order` and `abort_reporting`; the extension's policy tail carries all three now (`pf_native_abort_reporting_e` native_c_api.h:855) | F S |
+| Open | Naming: F and O use `pf_native_*`; S uses `strategy_native_*`, which matches the existing runtime symbols. The v1 C spec `pf_native_run_spec_v1` pineforge.h:524 omitted `intrabar`, `path_order` and `abort_reporting`; the extension's policy tail carries all three now (`pf_native_abort_reporting_e` native_c_api.h:857) | F S |
 
 Depends on L7 (working view), L3 (so `Sized` is in v1 of the C request) and the epoch batch.
 
@@ -292,7 +292,7 @@ Depends on L7 (working view), L3 (so `Sized` is in v1 of the C request) and the 
 ### 2.v Promote the examples (L10)
 
 - Move `runner/examples/native_market_strategy.cpp` and `native_selected_strategy.cpp` to a top-level `examples/native/`, built by `PINEFORGE_BUILD_EXAMPLES` (today "none yet" and guarding nothing CMakeLists.txt:37; the examples build only under `PINEFORGE_BUILD_LIVE_RUNNER` CMakeLists.txt:427-428, with `native_market_example` runner/CMakeLists.txt:45). Link the kernel target (S), or `PineForge::pineforge` during migration (O) — no SQLite / curl / OpenSSL (runner/CMakeLists.txt:1-4).
-- Build (1) standalone executables with a `main()` that runs batch + stream on embedded bars (the guide already contains that `main` native-engine.md:2720-2787) and (2) the same MODULE targets the runner tests load; keep the C-ABI shims so the live runner can still `dlopen` them (F, O, S).
+- Build (1) standalone executables with a `main()` that runs batch + stream on embedded bars (the guide already contains that `main` native-engine.md:2787-2854) and (2) the same MODULE targets the runner tests load; keep the C-ABI shims so the live runner can still `dlopen` them (F, O, S).
 - Update the three places that pin the paths: runner/CMakeLists.txt:37-45, check_native_include_independence.py:36-39, the tests at runner/CMakeLists.txt:98-128.
 - Add a minimal "hello, kernel" host (~60 lines, no C ABI — O) and one example per v1 feature lane as it lands; each doubles as that lane's twin host (F).
 - Add `include/pineforge/native_module.hpp` with `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` to replace the ~70 hand-written `extern "C"` lines per example (F, single-source).
@@ -412,7 +412,7 @@ closure markers and `scripts/check_design_inventory.py`).
 | L9 | `NativeRiskLimits`, `NativeRiskEvent`, `MatchRejectReason::RiskLimit` → A.8 | `risk` unset for the adapter; its ledger (pine_adapter.hpp:650-675) untouched — **retained after measurement, audit lane N12; native-only by ruling, audit lane P6: §3.6.1** | risk probes: same halt bar (F); each limit + the day-boundary basis (O); breach, forced close, cancellation, next-day reset (S) |
 | L10 | `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` (§2.v) | build-only | the examples run in ctest; the independence checker compiles the relocated examples |
 | L11 | — (renames / moves, §2.ii a-i) | rename / move only; hashed enumerator values pinned; sweep unchanged | — |
-| L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (the `"pineforge-broker-state/v17"` literal of that wave, since moved to `"pineforge-broker-state/v19"` engine_state_hash.cpp:32 and pinned to one occurrence by check_broker_state_hash_coverage.py:223) | trades identical, hashes re-baselined once | <!-- verified HEAD -->
+| L12 | — (§2.ii j-m) | **not neutral**: coordinated sweep, waiver updates, hash-domain plan (the `"pineforge-broker-state/v17"` literal of that wave, since moved to `"pineforge-broker-state/v19"` engine_state_hash.cpp:33 and pinned to one occurrence by check_broker_state_hash_coverage.py:223) | trades identical, hashes re-baselined once | <!-- verified HEAD -->
 | L13 | `pf_native_*` symbols (§2.iii) | additive symbols; `check_c_abi_runtime.py` exits 0 | a pure-C twin of the market example reproduces the C++ trade rows (O) and the event-history hash (F); C test: submit a market, replace a limit, cancel a child, read the Applied event (S) |
 
 ### 3.4 Input dependency notes against the R5-11 order
@@ -840,7 +840,7 @@ tree**, so all four `if (!std::isnan(fold_exit_trail_peak_))` carries
 (engine_execution.cpp:483/:493, the former adapter loop, the shared producer)
 are inert. The shared producer keeps the carry so it folds exactly what the
 kernel's settling path folds; removing the member is an epoch question (it is
-hashed at engine_state_hash.cpp:71) and is left to a lane that budgets one.
+hashed at engine_state_hash.cpp:72) and is left to a lane that budgets one.
 
 **Acceptance evidence.** `tests/test_adapter_range_end_relower.cpp`: 12
 checks, the adapter half reproduced bit for bit against the `b8e7976e`
@@ -902,7 +902,7 @@ row C).
 | # | cost | measured on `fd785928` | ruling |
 |---|---|---|---|
 | **A** | the Pine adapter's recording fold: O(retained history) per row | ×3.92 to ×4.02 per doubling — 9.26 s at 800 bars of order-and-cancel, 19.5 s at 2,688 bars of re-issue — against at most 0.015 s with recording off | **open**: blocked on storage and a write barrier outside lane F9's files; no epoch needed; value witness pinned |
-| **B** | the kernel recorder's closed-row walk: O(closed rows) per row | ×2.61 rising to ×3.64 per doubling with trades (0.80 s at 24,000 bars and 1,200 closed rows) against ×1.94 to ×2.08 without | **ruled**: retained, cost documented |
+| **B** | the kernel recorder's closed-row walk: O(closed rows) per row | ×2.61 rising to ×3.64 per doubling with trades (0.80 s at 24,000 bars and 1,200 closed rows) against ×1.94 to ×2.08 without | **ruled**: retained, cost documented. **Resolved** by the v19 value epoch (R5 lane V19-A): each closed row folds once, into a running digest |
 | **C** | the terminal continuation capture (E24 STOP1) | 0.048 to 0.052 s, 23 to 24 % of the 43,008-bar gated replay | **revised** by R5 lane PERF-P1 (supervisor ruling): latched as a view, folded on first read; no value moves. **Eager again** since R5 lane V19-A: the v19 fold is the live state alone, so a view saves nothing |
 
 **A. The adapter's recording fold.** `PineExecutionAdapter::hash_state`
@@ -941,7 +941,7 @@ moving a single value, but not from inside lane F9's files:
    byte chain, with no mismatch.
 2. **The transforms need a home.** A row's transform, or a composed
    segment's, has to outlive the call. The fold is const; the sink is created
-   per call (engine_state_hash.cpp:31); and none of `PlacementTable`
+   per call (engine_state_hash.cpp:32); and none of `PlacementTable`
    pine_adapter.hpp:318, `admission::Journal` market_admission.hpp:188 or
    `PineScheduler` has a member it could keep one in. Adding one is a header
    change in `include/pineforge/source/`, outside this lane.
@@ -991,8 +991,8 @@ receipts of older rows (first at each cancel or re-price), and a
 consumed-prefix cache that stops at 16 bars (row 16 in all six scenarios).
 
 **B. The kernel recorder's closed rows.**
-`broker_state_hash_from_execution_hash` engine_state_hash.cpp:29 folds six
-fields of every closed row (`trades_` engine_state_hash.cpp:107-112) at every
+`broker_state_hash_from_execution_hash` engine_state_hash.cpp:30 folds six
+fields of every closed row (`trades_` engine_state_hash.cpp:112-113) at every
 recorded row, so the recorder costs O(closed rows) per row. The audit's bare
 host — one round trip per 20 bars, one request accepted and cancelled per bar
 — from 1,500 to 24,000 bars and 75 to 1,200 closed rows: recording 0.0087 /
@@ -1025,11 +1025,20 @@ decision: `pineforge-broker-state/v19` folds the closed rows as their count and
 a running digest the heap-owned execution consumer keeps
 (`NativeExecutionConsumer::closed_rows_digest`), so no `BacktestEngine` member
 moved for it. The contract is explicit: a row is final once the applied
-notification of the execution that booked it has returned -- the Pine host's
-amendments (the aggregated exit date among them) all land inside
-`on_native_applied` -- and a read folds the rows past that mark into its answer
-without keeping them. Debug builds re-fold the digested rows at every run's
-end.
+notification of the execution that booked it has returned, and a read folds
+the rows past that mark into its answer without keeping them. The Pine host's
+amendments of a folded field (the aggregated exit date among them) land inside
+`on_native_applied`, but one writer the census above missed changes final
+rows: the same-bar exit order (`sort_same_bar_exit_trades`) reorders a bar's
+trailing bracket exits by command sequence at the next script point, after
+their notifications have returned. It now names the first row it moved through
+`NativeStrategyHost::native_closed_rows_amended`, and the digest folds the rows
+again from there; rows removed from the end (a test host's `trades_.clear()`)
+are found without a name, because the kernel only appends. Debug builds
+re-fold the digested rows at every run's end and abort on an unnamed change,
+which is how the reorder was found. Recording now costs linear time: four times
+the bars cost 3.8 times the CPU with a round trip every ten bars
+(`tests/test_native_state_continuation.cpp`, part 6; the base 14.4 times).
 
 **C. The terminal continuation capture (E24 STOP1).** A Pine run's scalar
 `broker_state_hash()` folds the continuation as it stood at the run's last
