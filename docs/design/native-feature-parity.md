@@ -895,14 +895,15 @@ continuation's own logs fold by their tail and left a STOP bucket; both final
 audits (Opus F9, Codex A3-8) carried it forward. Each cost it holds is
 measured here on `fd785928` (process CPU, best of 3 to 5, host load 7 to 26)
 and ruled. None of them touches a run with recording off: that path latches the
-scalar once per run, and its values are what they were (since R5 lane PERF-P1
-that latch is a view folded on first read, row C).
+scalar once per run, and its values are what they were (R5 lane PERF-P1 made
+that latch a view folded on first read, and R5 lane V19-A made it eager again,
+row C).
 
 | # | cost | measured on `fd785928` | ruling |
 |---|---|---|---|
 | **A** | the Pine adapter's recording fold: O(retained history) per row | ×3.92 to ×4.02 per doubling — 9.26 s at 800 bars of order-and-cancel, 19.5 s at 2,688 bars of re-issue — against at most 0.015 s with recording off | **open**: blocked on storage and a write barrier outside lane F9's files; no epoch needed; value witness pinned |
 | **B** | the kernel recorder's closed-row walk: O(closed rows) per row | ×2.61 rising to ×3.64 per doubling with trades (0.80 s at 24,000 bars and 1,200 closed rows) against ×1.94 to ×2.08 without | **ruled**: retained, cost documented |
-| **C** | the terminal continuation capture (E24 STOP1) | 0.048 to 0.052 s, 23 to 24 % of the 43,008-bar gated replay | **revised** by R5 lane PERF-P1 (supervisor ruling): latched as a view, folded on first read; no value moves |
+| **C** | the terminal continuation capture (E24 STOP1) | 0.048 to 0.052 s, 23 to 24 % of the 43,008-bar gated replay | **revised** by R5 lane PERF-P1 (supervisor ruling): latched as a view, folded on first read; no value moves. **Eager again** since R5 lane V19-A: the v19 fold is the live state alone, so a view saves nothing |
 
 **A. The adapter's recording fold.** `PineExecutionAdapter::hash_state`
 pine_state_hash.cpp:236 folds, at every row, every placement snapshot the run
@@ -1060,31 +1061,28 @@ not owner rulings; the owner's red line is hash values, and a view keeps every
 one of them by construction. PERF0-P measured the capture at a fifth of every
 Pine run — about 56 ns per driver point, four points a bar — paid although
 neither the benchmark, the C report nor the corpus sweep reads the scalar.
-`capture_script_continuation_hash` pine_strategy_host.cpp:346-360 now latches
-a view (`capture_continuation_view` native_execution_consumer.cpp:1903-1927)
-unless a recorded row needs the value at once. The view is
-`continuation_hash()`'s own fold run into a recording sink (`FnvRecord`
-native_execution_consumer.cpp:128): the bytes the fold would consume, with the
-command history's and the driver log's digests left as holes at the logs'
-lengths. The first read (`latched_continuation`
-native_execution_consumer.cpp:1937, from both `broker_state_hash_projection`
-overrides) carries both digests to exactly those lengths and folds the bytes
-around them. It is exact because both logs only grow within a run, and two
-rules keep it so: `continuation_hash()` folds a pending view before it moves
-the digests (`fold_continuation_view` native_execution_consumer.cpp:1888), and
-`begin_ready` drops a view before it clears the logs (`drop_continuation_view`
-native_execution_consumer.cpp:2378). A recorded row and a KernelRecorded
-report point still fold at once, and a reader pays the skipped fold once, at
-its first read. The witnesses are value for value:
-`tests/test_native_continuation_view.cpp` (a bare host, three spellings of one
-latch) and `tests/test_adapter_continuation_view.cpp` (every Pine capture
-site) assert eager == deferred at every read and pin the values of `fc7aad62`;
-PERF0-P's fingerprint sweep (100 public slots, magnifier off and on) and
-PERF0-K's 132-configuration battery are identical before and after. Measured
+Lane PERF-P1 (commits d8ca1389 and ba99eca1) latched a view unless a recorded
+row needed the value at once: `continuation_hash()`'s own fold run into a
+recording sink, the bytes the fold would consume, with the command history's
+and the driver log's digests left as holes at the logs' lengths, folded on the
+first read. It was exact because both logs only grow within a run. Measured
 (process CPU, interleaved): the gated replay 0.2618 → 0.2029 s on macOS
 (7.71–9.08× → 6.58–7.19× of ab9714be, load 36–41) and 0.4054 → 0.3606 s on
 spark (12.87× → 11.45×); the Pine benchmark 0.84× on spark, the median of the
 14 shared probes and of the 100 public slots, magnifier off and on.
+
+**Revised again by R5 lane V19-A: the capture is eager.** The v19 continuation
+(`native-consumer/v9`) folds the consumer's live state alone — no command
+history, driver log or account log — so what a view would record is as many
+words as the fold mixes, one multiply-xorshift each, and deferring them saves
+nothing a reader does not pay back. `capture_script_continuation_hash` takes
+the value at once again, as it did before PERF-P1, and the view, its recording
+sink and the `defer_continuation_views` switch are deleted
+(ADR-0001, "Kernel state the adapter sets"). No value moves:
+`tests/test_native_continuation_view.cpp` and
+`tests/test_adapter_continuation_view.cpp` keep their scenarios and their pins,
+which lane V19-A re-pinned once for v19 before the revert, and read them
+unchanged after it.
 
 ---
 

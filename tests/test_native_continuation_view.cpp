@@ -1,51 +1,38 @@
-// R5 lane PERF-P1: the latched continuation, taken as a VIEW and folded on
-// first read, answers the eager capture's value at every read.
+// R5 lane PERF-P1, reverted to an eager latch by lane V19-A: the latched
+// continuation, read for read, at every point that could separate a latch
+// from the live fold.
 //
 // A host latches the continuation at a script point (the engine's
 // last_script_continuation_* snapshot), and broker_state_hash() folds that
-// latch for as long as it stands. Until this lane the latch was one full
-// continuation fold, taken at once; for a Pine run that fold is the whole
-// driver log (four points a bar) and the whole command history, a fifth of
-// the run, paid by every run although nothing on the benchmark or report path
-// reads it. NativeExecutionConsumer::capture_continuation_view records the
-// bytes the fold would consume instead, with the history and driver digests
-// left as holes at the logs' lengths, and the first read folds them.
-//
-// Nothing about the value may move, so the witness is equality, read for
-// read, between three spellings of one latch on one bare host:
-//   Base      the host latches native_continuation_hash() itself -- the only
-//             spelling the base library has, and the pins' provenance;
-//   Eager     the consumer's view, folded at capture
-//             (defer_continuation_views(false): the eager capture a view
-//             reproduces);
-//   Deferred  the consumer's view, folded when first read (the default).
-// The reads cover what could separate them: a read long after the capture,
-// with the logs grown underneath (the digests fold only their tail); a live
-// native_continuation_hash() between the capture and the read, which carries
-// the digests past the view's lengths, so the view has to be folded first
-// (materialise before advance); a read after Completed; a KernelRecorded
-// report point that rewrites the latch after a capture; an abort; a stream's
-// warmup and realtime legs; a begin that is refused before it resets
-// anything, which must leave the view readable; and the next begin of a
-// reused host, which drops the view before it clears the logs (drop at
-// begin). The Deferred leg also shows the fold was really skipped: the view
-// is still pending when the run returns.
+// latch for as long as it stands. Lane PERF-P1 took the latch as a VIEW -- the
+// bytes the fold would consume, the history and driver digests left as holes
+// at the logs' lengths -- and folded it on first read, because the v18 fold
+// was the whole driver log and command history. Since v19
+// (native-consumer/v9) the fold is the consumer's live state alone, so a view
+// records as many words as the fold mixes, and the latch is taken at once
+// again. The scenarios stay, pinning the latch where a view once had to be
+// careful: a read long after the capture, with the logs grown underneath; a
+// live native_continuation_hash() between the capture and the read; a read
+// after Completed; a KernelRecorded report point that rewrites the latch after
+// a capture; an abort; a stream's warmup and realtime legs; a begin that is
+// refused before it resets anything; and the next begin of a reused host.
+// Each scenario runs twice, and both runs read the pins.
 //
 // Portability. The spec's zone is the fixed offset "UTC+0", which the
 // resolver answers from its definition alone, so no tzdata file enters the
 // digest (E23) and the pins hold on every host.
 //
-// Provenance of the pinned data: this TU compiled unchanged against the base
-// library (engine main fc7aad62) with -DPINEFORGE_P1_HARVEST, which runs the
-// Base spelling only and prints the observed reads as the initializers
-// below. Rebuild them the same way; never edit one by hand.
+// Provenance of the pinned data: this TU with -DPINEFORGE_P1_HARVEST, which
+// prints the observed reads as the initializers below. PERF-P1 harvested
+// them on engine main fc7aad62; lane V19-A re-pinned them once, and each
+// array's note gives the old and the new value. Rebuild them the same way;
+// never edit one by hand.
 //
-// Fail-before (fc7aad62), first diagnostic without the harvest switch:
+// Fail-before of PERF-P1 (fc7aad62), first diagnostic without the harvest
+// switch, kept as the row's history:
 //   tests/test_native_continuation_view.cpp:102:20: error: no member named
 //   'defer_continuation_views' in 'pineforge::NativeExecutionConsumer'
 #include <pineforge/native_host.hpp>
-
-#include "../src/native_execution_consumer.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -66,17 +53,6 @@ int checks = 0;
     }                                                                          \
 } while (0)
 
-enum class Capture { Base, Eager, Deferred };
-
-const char* name_of(Capture capture) {
-    switch (capture) {
-    case Capture::Base: return "Base";
-    case Capture::Eager: return "Eager";
-    case Capture::Deferred: return "Deferred";
-    }
-    return "?";
-}
-
 bool at(const std::vector<int>& bars, int bar) {
     for (const int b : bars) if (b == bar) return true;
     return false;
@@ -88,7 +64,6 @@ bool at(const std::vector<int>& bars, int bar) {
 // receipts), a stop that stays working (the live table), and the driver log
 // under all of it.
 struct ViewHost final : NativeStrategyHost {
-    Capture capture = Capture::Deferred;
     std::vector<int> latch_at;       // latch at the end of these bars' callbacks
     std::vector<int> read_latch_at;  // broker_state_hash(), which folds the latch
     std::vector<int> read_live_at;   // native_continuation_hash(), which folds now
@@ -97,44 +72,12 @@ struct ViewHost final : NativeStrategyHost {
     int bar = 0;
     no::CohortHandle cohort{};
 
-    explicit ViewHost(Capture mode) : capture(mode) {
-#ifndef PINEFORGE_P1_HARVEST
-        consumer().defer_continuation_views(mode != Capture::Eager);
-#endif
-    }
-
-    // How often a live read found the view pending. Since v19 a live read
-    // leaves it pending: the fold has no log digests to carry past it.
-    int materialised = 0;
-
     void on_native_run_begin() override {
         bar = 0;
         cohort = cohort_open();
-#ifndef PINEFORGE_P1_HARVEST
-        // Drop at begin: this begin has cleared the logs, so no view of the
-        // previous run's latch may survive it -- a pending one would be
-        // folded here against the wrong logs.
-        constexpr std::uint64_t kNoView = 0x9e3779b97f4a7c15ull;
-        CHECK(consumer().latched_continuation(kNoView) == kNoView);
-#endif
     }
 
-    void read_live() {
-#ifndef PINEFORGE_P1_HARVEST
-        const bool pending = view_pending();
-#endif
-        reads.push_back(native_continuation_hash());
-#ifndef PINEFORGE_P1_HARVEST
-        // expectation corrected: the live fold folded a pending view on its
-        // way (!view_pending()) -> it leaves the view pending, because v19
-        // folds live state only (native-consumer/v9): there is no log digest
-        // the live read could carry past the view's lengths.
-        if (pending) {
-            ++materialised;
-            CHECK(view_pending());
-        }
-#endif
-    }
+    void read_live() { reads.push_back(native_continuation_hash()); }
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         auto rest = no::Request{no::Transact{1.0}, "rest", ""};
@@ -159,13 +102,6 @@ struct ViewHost final : NativeStrategyHost {
     }
 
     void latch() {
-#ifndef PINEFORGE_P1_HARVEST
-        if (capture != Capture::Base) {
-            consumer().capture_continuation_view();
-            last_script_continuation_valid_ = true;
-            return;
-        }
-#endif
         last_script_continuation_hash_ = native_continuation_hash();
         last_script_continuation_valid_ = true;
     }
@@ -175,13 +111,6 @@ struct ViewHost final : NativeStrategyHost {
         read_live();
         reads.push_back(broker_state_hash());
     }
-
-#ifndef PINEFORGE_P1_HARVEST
-    bool view_pending() { return consumer().continuation_view_pending(); }
-#endif
-
-private:
-    NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
 };
 
 NativeRunSpec view_spec(std::uint64_t run_number,
@@ -237,29 +166,22 @@ bool configure(ViewHost& host, std::uint64_t run_number,
     return setup.status == NativeSetupStatus::Applied;
 }
 
-std::vector<std::uint64_t> batch(Capture mode, bool* pending_after_run = nullptr,
-                                 int* materialised = nullptr) {
-    ViewHost host(mode);
+std::vector<std::uint64_t> batch() {
+    ViewHost host;
     batch_schedule(host);
     if (!configure(host, 1)) return {};
     const auto bars = tape(kBars);
     host.run(bars.data(), kBars);
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-#ifndef PINEFORGE_P1_HARVEST
-    if (pending_after_run) *pending_after_run = host.view_pending();
-#else
-    (void)pending_after_run;
-#endif
     host.read_now();
-    if (materialised) *materialised = host.materialised;
     return host.reads;
 }
 
 // KernelRecorded: the consumer latches at every report point, after the
-// callback that latched a view, so the view must give way to it.
-std::vector<std::uint64_t> kernel_recorded(Capture mode) {
-    ViewHost host(mode);
+// callback that latched, so its latch replaces the host's.
+std::vector<std::uint64_t> kernel_recorded() {
+    ViewHost host;
     batch_schedule(host);
     host.read_latch_at = {11, 15, 31, 35};
     if (!configure(host, 1, NativeReportPolicy::KernelRecorded)) return {};
@@ -271,8 +193,8 @@ std::vector<std::uint64_t> kernel_recorded(Capture mode) {
 }
 
 // An abort after a latch: the run stops at its next bar, the latch stands.
-std::vector<std::uint64_t> aborted(Capture mode) {
-    ViewHost host(mode);
+std::vector<std::uint64_t> aborted() {
+    ViewHost host;
     host.latch_at = {20};
     host.read_live_at = {22};
     host.abort_at = 25;
@@ -284,8 +206,8 @@ std::vector<std::uint64_t> aborted(Capture mode) {
 }
 
 // A stream: latches in the warmup and at realtime bars, reads between pushes.
-std::vector<std::uint64_t> stream(Capture mode) {
-    ViewHost host(mode);
+std::vector<std::uint64_t> stream() {
+    ViewHost host;
     host.latch_at = {15, 21, 22, 23, 26, 29, 33};
     host.read_live_at = {24};
     host.read_latch_at = {18, 30};
@@ -303,11 +225,10 @@ std::vector<std::uint64_t> stream(Capture mode) {
     return host.reads;
 }
 
-// One host, three runs. The first run's view is left unread: the second
-// begin drops it before it clears the logs the view names, and the second
+// One host, three runs. The first run's latch is left unread and the second
 // run reads a fresh latch. The third run follows a read of the second's.
-std::vector<std::uint64_t> reused(Capture mode) {
-    ViewHost host(mode);
+std::vector<std::uint64_t> reused() {
+    ViewHost host;
     batch_schedule(host);
     const auto bars = tape(kBars);
     if (!configure(host, 1)) return {};
@@ -328,11 +249,10 @@ std::vector<std::uint64_t> reused(Capture mode) {
 }
 
 // A begin refused before it resets anything -- the next run's bars fail
-// preflight -- leaves the run's latch standing, so its unread view has to
-// read after the refusal, the live fold first. The same staged spec then
-// begins over valid bars.
-std::vector<std::uint64_t> refused(Capture mode) {
-    ViewHost host(mode);
+// preflight -- leaves the run's latch standing, read after the refusal, the
+// live fold first. The same staged spec then begins over valid bars.
+std::vector<std::uint64_t> refused() {
+    ViewHost host;
     batch_schedule(host);
     host.read_latch_at.clear();
     host.read_live_at.clear();
@@ -355,13 +275,11 @@ std::vector<std::uint64_t> refused(Capture mode) {
 
 struct Scenario {
     const char* name;
-    std::vector<std::uint64_t> (*run)(Capture);
+    std::vector<std::uint64_t> (*run)();
 };
 
-std::vector<std::uint64_t> batch_reads(Capture mode) { return batch(mode); }
-
 const Scenario kScenarios[] = {
-    {"batch", batch_reads},
+    {"batch", batch},
     {"kernel_recorded", kernel_recorded},
     {"aborted", aborted},
     {"stream", stream},
@@ -568,14 +486,14 @@ std::size_t distinct(const Pinned& pinned) {
     return count;
 }
 
-// The first read that moved, so a failing view names the point.
-void same_reads(const char* scenario, Capture mode, const std::vector<std::uint64_t>& got,
+// The first read that moved, so a failing latch names the point.
+void same_reads(const char* scenario, int leg, const std::vector<std::uint64_t>& got,
                 const std::uint64_t* want, std::size_t want_len) {
     CHECK(got.size() == want_len);
     for (std::size_t i = 0; i < got.size() && i < want_len; ++i) {
         if (got[i] != want[i]) {
-            std::fprintf(stderr, "%s %s read[%zu]: observed %llu, want %llu\n", scenario,
-                         name_of(mode), i, static_cast<unsigned long long>(got[i]),
+            std::fprintf(stderr, "%s run %d read[%zu]: observed %llu, want %llu\n", scenario,
+                         leg, i, static_cast<unsigned long long>(got[i]),
                          static_cast<unsigned long long>(want[i]));
             CHECK(got[i] == want[i]);
             return;
@@ -588,31 +506,14 @@ void same_reads(const char* scenario, Capture mode, const std::vector<std::uint6
 
 int main() {
 #ifdef PINEFORGE_P1_HARVEST
-    for (const auto& scenario : kScenarios) emit(scenario.name, scenario.run(Capture::Base));
+    for (const auto& scenario : kScenarios) emit(scenario.name, scenario.run());
     return 0;
 #else
     for (std::size_t s = 0; s < std::size(kScenarios); ++s) {
         const auto& scenario = kScenarios[s];
-        const auto base = scenario.run(Capture::Base);
-        const auto eager = scenario.run(Capture::Eager);
-        const auto deferred = scenario.run(Capture::Deferred);
-        // The core: the deferred view answers the eager capture at every read.
-        same_reads(scenario.name, Capture::Deferred, deferred, eager.data(), eager.size());
-        same_reads(scenario.name, Capture::Eager, eager, base.data(), base.size());
-        // And the values are the base library's, read for read.
-        same_reads(scenario.name, Capture::Deferred, deferred, kPinned[s].reads, kPinned[s].len);
+        for (int leg = 1; leg <= 2; ++leg)
+            same_reads(scenario.name, leg, scenario.run(), kPinned[s].reads, kPinned[s].len);
     }
-    // The fold is really deferred: a Deferred run returns with its view
-    // pending, an Eager one with nothing left to fold; and the Deferred run's
-    // live read at bar 12 found the bar-10 view pending and folded it first.
-    bool pending = false;
-    int materialised = 0;
-    batch(Capture::Deferred, &pending, &materialised);
-    CHECK(pending);
-    CHECK(materialised == 1);
-    batch(Capture::Eager, &pending, &materialised);
-    CHECK(!pending);
-    CHECK(materialised == 0);
     // The pins are non-trivial: each scenario reads at least three values.
     for (const auto& pinned : kPinned) CHECK(distinct(pinned) >= 3);
     if (failures == 0)

@@ -1,44 +1,41 @@
-// R5 lane PERF-P1: a Pine run's terminal continuation, latched as a view and
-// folded on first read, answers the eager capture's value at every read.
+// R5 lane PERF-P1, reverted to an eager latch by lane V19-A: a Pine run's
+// terminal continuation at every capture site, read for read.
 //
 // PineStrategyHost::capture_script_continuation_hash latches the
 // continuation at the run's last script point -- the last batch bar, a
 // leftover input after an aggregated chart's last bucket, every realtime bar
 // of a stream -- so that broker_state_hash() is one value with recording on
-// or off. That latch was one full fold, taken whether or not anything read
-// it; it now is a view of the fold (NativeExecutionConsumer::
-// capture_continuation_view) unless a recorded row needs the value at once.
+// or off. Lane PERF-P1 took that latch as a view of the fold, folded on first
+// read, because the v18 fold was the whole driver log and command history.
+// Since v19 (native-consumer/v9) the fold is the consumer's live state alone,
+// so a view records as many words as the fold mixes, and the capture is
+// eager again.
 //
-// The witness runs every scenario twice, on hosts that differ only in the
-// consumer's defer_continuation_views switch -- off, the view is folded at
-// capture, which is the eager capture itself -- and asserts that every read
-// agrees: reads from inside the script (the live fold and the latch), after
+// The witness runs every scenario twice and asserts that both runs read the
+// pins: reads from inside the script (the live fold and the latch), after
 // Completed, after the next begin of a reused host, after a refused begin and
 // after an abort; the recorded rows too, under recording. The drivings cover
 // every capture site: chart timeframe, bar magnifier, an aggregated chart
 // with leftover input (with and without the magnifier), calc_on_order_fills,
 // recording on, a stream's warmup and realtime legs, and a stream that aborts.
-// The Deferred values are also pinned against the base library, and a
-// Deferred batch run returns with its view still pending: the fold it used to
-// pay was not paid.
 //
 // Portability. The syminfo zone is the fixed offset "UTC+0", which the
 // resolver answers from its definition alone, so no tzdata file enters the
 // continuation (E23) and the pins hold on every host. Every price is an exact
 // binary fraction on the 0.25 tick.
 //
-// Provenance of the pinned data: this TU compiled unchanged against the base
-// library (engine main fc7aad62) with -DPINEFORGE_P1_HARVEST, which runs the
-// base library's (eager) capture only and prints the observed values as the
-// initializers below. Rebuild them the same way; never edit one by hand.
+// Provenance of the pinned data: this TU with -DPINEFORGE_P1_HARVEST, which
+// prints the observed values as the initializers below. PERF-P1 harvested
+// them on engine main fc7aad62; lane V19-A re-pinned them once, and each
+// array's note gives the old and the new values. Rebuild them the same way;
+// never edit one by hand.
 //
-// Fail-before (fc7aad62), first diagnostic without the harvest switch:
+// Fail-before of PERF-P1 (fc7aad62), first diagnostic without the harvest
+// switch, kept as the row's history:
 //   tests/test_adapter_continuation_view.cpp:106:20: error: no member named
 //   'defer_continuation_views' in 'pineforge::NativeExecutionConsumer'
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
-
-#include "../src/native_execution_consumer.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -78,7 +75,6 @@ std::vector<Bar> tape(int count, int from = 0) {
 }
 
 struct Options {
-    bool deferred = true;
     bool recording = false;
     bool coof = false;
 };
@@ -102,9 +98,6 @@ public:
         config.calc_on_order_fills = options.coof;
         configure_pine_strategy(config);
         set_broker_state_hash_recording(options.recording);
-#ifndef PINEFORGE_P1_HARVEST
-        consumer().defer_continuation_views(options.deferred);
-#endif
     }
 
     std::vector<int> read_latch_at;
@@ -139,13 +132,6 @@ public:
         reads.push_back(static_cast<std::uint64_t>(report.trades_len));
         BacktestEngine::free_report(&report);
     }
-
-#ifndef PINEFORGE_P1_HARVEST
-    bool view_pending() { return consumer().continuation_view_pending(); }
-
-private:
-    NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
-#endif
 };
 
 constexpr int kBars = 64;
@@ -203,8 +189,7 @@ std::vector<std::uint64_t> coof(const Options& options) {
     return chart(with);
 }
 
-// Recording on: the rows need the value at once, so the capture is eager in
-// both legs; the scalar and every row still agree.
+// Recording on: the scalar and every row agree.
 std::vector<std::uint64_t> recording(const Options& options) {
     Options with = options;
     with.recording = true;
@@ -219,7 +204,7 @@ std::vector<std::uint64_t> recording(const Options& options) {
 }
 
 // A stream latches at every realtime bar: the reads between pushes and from
-// inside the script read views, some after a live fold moved past them.
+// inside the script read the latch, some after a live fold.
 std::vector<std::uint64_t> stream(const Options& options, int abort_at) {
     ViewStrategy host(options);
     host.read_live_at = {36, 45};
@@ -254,7 +239,7 @@ std::vector<std::uint64_t> aborted(const Options& options) {
     return host.reads;
 }
 
-// One host: a batch whose latch is never read (the next begin drops it), a
+// One host: a batch whose latch is never read (the next begin resets it), a
 // batch read after Completed, then a stream on the same host.
 std::vector<std::uint64_t> reused(const Options& options) {
     ViewStrategy host(options);
@@ -276,9 +261,8 @@ std::vector<std::uint64_t> reused(const Options& options) {
     return host.reads;
 }
 
-// A begin refused before it resets anything leaves the latch standing: the
-// unread view reads after the refusal, the live fold first; then the host
-// runs again.
+// A begin refused before it resets anything leaves the latch standing: it
+// reads after the refusal, the live fold first; then the host runs again.
 std::vector<std::uint64_t> refused(const Options& options) {
     ViewStrategy host(options);
     const auto bars = tape(kBars);
@@ -842,7 +826,7 @@ std::size_t distinct(const Pinned& pinned) {
     return count;
 }
 
-// The first read that moved, so a failing view names the point.
+// The first read that moved, so a failing latch names the point.
 void same_reads(const char* scenario, const char* leg, const std::vector<std::uint64_t>& got,
                 const std::uint64_t* want, std::size_t want_len) {
     CHECK(got.size() == want_len);
@@ -865,30 +849,12 @@ int main() {
     for (const auto& scenario : kScenarios) emit(scenario.name, scenario.run(Options{}));
     return 0;
 #else
-    Options eager_leg;
-    eager_leg.deferred = false;
     for (std::size_t s = 0; s < std::size(kScenarios); ++s) {
         const auto& scenario = kScenarios[s];
-        const auto eager = scenario.run(eager_leg);
-        const auto deferred = scenario.run(Options{});
-        // The core: the deferred view answers the eager capture at every read.
-        same_reads(scenario.name, "Deferred-vs-Eager", deferred, eager.data(), eager.size());
-        // And the values are the base library's, read for read.
-        same_reads(scenario.name, "Deferred-vs-pin", deferred, kPinned[s].reads, kPinned[s].len);
-    }
-    // The fold is really deferred: after a batch run the view is still
-    // pending, and a read folds it; the eager leg has nothing left to fold.
-    {
-        ViewStrategy deferred(Options{});
-        const auto bars = tape(kBars);
-        deferred.run(bars.data(), kBars);
-        CHECK(deferred.view_pending());
-        deferred.read_now();
-        CHECK(!deferred.view_pending());
-        ViewStrategy eager(eager_leg);
-        eager.run(bars.data(), kBars);
-        CHECK(!eager.view_pending());
-        CHECK(eager.broker_state_hash() == deferred.broker_state_hash());
+        same_reads(scenario.name, "run 1", scenario.run(Options{}), kPinned[s].reads,
+                   kPinned[s].len);
+        same_reads(scenario.name, "run 2", scenario.run(Options{}), kPinned[s].reads,
+                   kPinned[s].len);
     }
     // The pins are non-trivial: each scenario reads at least three values.
     for (const auto& pinned : kPinned) CHECK(distinct(pinned) >= 3);

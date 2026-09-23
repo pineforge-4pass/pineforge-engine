@@ -32,21 +32,6 @@ public:
     bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
                                           const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
-    // The continuation a host latches at a script point (the engine's
-    // last_script_continuation_* snapshot), taken as a VIEW of the fold and
-    // folded when it is first read (R5 lane PERF-P1). Since v19 a view is the
-    // words the fold would mix, in fold order -- the live state at the
-    // capture -- and a read mixes them, which is the value continuation_hash()
-    // answered at the capture. begin_ready drops a view of the run it ends.
-    void capture_continuation_view() noexcept;
-    void drop_continuation_view() const noexcept;
-    bool continuation_view_pending() const noexcept;
-    // The latched continuation: the view's value when the host latched one,
-    // else `eager`, the value the host latched itself.
-    uint64_t latched_continuation(uint64_t eager) const noexcept;
-    // Off, a capture folds at once: the eager capture a view reproduces,
-    // kept as the witness's reference (tests/test_native_continuation_view.cpp).
-    void defer_continuation_views(bool defer) noexcept { defer_continuation_views_ = defer; }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -1332,22 +1317,6 @@ private:
     // The digest after each digested row, so an amendment (closed_rows_amended)
     // rewinds to the row before it in O(1): one word per closed row.
     mutable std::vector<std::uint64_t> closed_row_prefix_;
-    // R5 lane PERF-P1: the latched continuation, as a view (see
-    // capture_continuation_view). Derived, never folded; one per consumer,
-    // its buffer reused by the next capture.
-    struct ContinuationView {
-        // Recording only inside capture_continuation_view, while
-        // continuation_hash() records the view instead of folding.
-        enum class State : std::uint8_t { None, Recording, Pending, Folded };
-        State state = State::None;
-        std::vector<uint64_t> words;
-        uint64_t run_number = 0;
-        bool complete = false;
-        uint64_t value = 0;
-    };
-    mutable ContinuationView continuation_view_{};
-    bool defer_continuation_views_ = true;
-    uint64_t fold_continuation_view() const noexcept;
     // A host-owned margin verdict is part of the continuation only when the
     // generic spec actually exposes an initial-margin gate.  Source specs do
     // not set that gate, preserving their established fingerprint while the

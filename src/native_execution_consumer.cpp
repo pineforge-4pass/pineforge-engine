@@ -57,18 +57,6 @@ constexpr uint64_t kFnvPowers[9] = {
 #define PINEFORGE_FNV_SCALAR_FOLD 1
 #endif
 
-// A continuation view's buffer grows here, out of the fold's way, and never
-// throws: a buffer that cannot grow ends the recording and the capture folds.
-bool reserve_view_words(std::vector<uint64_t>& out) noexcept {
-    if (out.size() == out.max_size()) return false;
-    try {
-        out.reserve(std::max({out.size() + 1, out.capacity() * 2, size_t{512}}));
-    } catch (...) {
-        return false;
-    }
-    return true;
-}
-
 // FNV-1a 64 over the canonical bytes of each value: the run-spec digest's fold
 // (native_run_spec_digest, the portable spec identity). The continuation no
 // longer folds through it since v19 (StateFold below).
@@ -127,9 +115,8 @@ struct Fnv {
 // string is its length, then its bytes eight at a time, the last word
 // zero-padded. Every step is a bijection of the accumulator for a fixed word,
 // and of the word for a fixed accumulator, so two folds of one length that
-// differ in a single word never collide. WordSink spells every value as words
-// once, for both sinks below, so the words a view records are the words the
-// fold mixes by construction.
+// differ in a single word never collide. WordSink spells every value as
+// words; StateFold mixes them.
 template <class Sink>
 struct WordSink {
     void bytes(const void* p, size_t n) noexcept {
@@ -171,27 +158,6 @@ struct StateFold : WordSink<StateFold> {
         h ^= w;
         h *= 0x9E3779B97F4A7C15ULL;
         h ^= h >> 32;
-    }
-};
-
-// R5 lane PERF-P1: the sink a continuation view is recorded into
-// (NativeExecutionConsumer::capture_continuation_view): the words a StateFold
-// would mix, in order, appended instead of mixed. It is a type of its own, and
-// the hash helpers below take either sink, so the fold every other caller runs
-// is compiled exactly as it would be alone. A buffer that cannot grow latches
-// `failed`, and the capture folds at once.
-struct StateRecord : WordSink<StateRecord> {
-    explicit StateRecord(std::vector<uint64_t>& words) noexcept : out(words) {}
-    std::vector<uint64_t>& out;
-    uint64_t run_base = 0;
-    bool failed = false;
-    void word(uint64_t w) noexcept {
-        if (failed) return;
-        if (out.size() == out.capacity() && !reserve_view_words(out)) {
-            failed = true;
-            return;
-        }
-        out.push_back(w);
     }
 };
 
@@ -1505,235 +1471,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // committed event (hash_event_record), which keeps visible a difference
     // that leaves no other trace, such as a Cancelled receipt's reason. The
     // spec folds as a digest taken once per applied spec and run
-    // (spec_digest). The fold, for either sink (R5 lane PERF-P1): a StateFold
-    // mixes it now; a StateRecord records the words it would mix into the
-    // view being captured.
-    const auto fold = [this](auto& f) noexcept {
-        f.run_base = requests_.identity().run_number;
-        f.s(kNativeConsumerSemanticVersion);
-        f.s(kNativeDriverSemanticVersion);
-        f.s(kNativeCalendarSemanticVersion);
-        f.u(static_cast<uint64_t>(state_.index()));
-        if (const auto* running = std::get_if<NativeRunning>(&state_)) {
-            f.u(static_cast<uint64_t>(running->phase));
-        }
-        if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
-            f.u(static_cast<uint64_t>(completed->completion));
-        }
-        if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
-            hash_failure(f, failed_state->failure);
-        }
-        f.s(bound_session_key_);
-        f.i(decision_floor_ms_);
-        f.b(has_floor_);
-        f.u(next_timeline_ordinal_);
-        f.b(in_callback_);
-        f.u(static_cast<uint64_t>(callback_phase_));
-        f.b(preparing_begin_);
-        f.b(input_callback_context_.has_value());
-        if (input_callback_context_) hash_input_context(f, *input_callback_context_);
-        f.b(input_callback_bar_.has_value());
-        if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
-        f.b(tick_callback_context_.has_value());
-        if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
-        f.b(tick_callback_bar_.has_value());
-        if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
-        hash_coordinate(f, callback_context_.coordinate);
-        f.i(callback_context_.decision_floor_ms);
-        hash_interval(f, callback_context_.input_interval);
-        hash_interval(f, callback_context_.script_interval);
-        f.i(callback_context_.sub_index);
-        f.i(callback_context_.sub_count);
-        f.b(callback_context_.is_terminal_sub_bar);
-        f.i(callback_context_.sub_bar_open_ms);
-        f.i(callback_context_.script_bar_open_ms);
-        hash_driver_statistics(f, callback_context_.driver_statistics);
-        // The four session-day facts are not folded, here or in the frames and
-        // notifications below: each is a function of the label and calendar this
-        // digest already folds and of the run's input around the bar (R5 lane F5,
-        // present_session_day), so folding them would move every established
-        // continuation value for nothing it does not already identify.
-        f.b(consuming_request_);
-        f.b(draining_notifications_);
-        f.b(current_frame_.has_value());
-        if (current_frame_) {
-            hash_current_point(f, current_frame_->point);
-            f.u(current_frame_->acceptance_cutoff);
-        }
-        f.u(pre_open_birth_point_ordinal_);
-        f.i(pre_open_birth_time_ms_);
-        f.u(pre_open_births_.size());
-        for (const auto& handle : pre_open_births_) hash_handle(f, handle);
-        f.u(applied_notifications_.size() - notification_head_);
-        for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
-            const auto& notification = applied_notifications_[i];
-            f.u(notification.history_index);
-            f.u(notification.ordinal);
-            hash_current_point(f, notification.point);
-            // Conditional: only a kernel-originated fill carries a margin receipt,
-            // so a host-only queue folds exactly what it folded before L4.
-            if (notification.margin_call_index) {
-                f.u(1);
-                f.u(*notification.margin_call_index);
-            }
-        }
-        f.b(processing_input_);
-        f.u(static_cast<uint64_t>(input_mode_));
-        f.i(next_interval_index_);
-        // Declared higher-timeframe series carry their own delivery cursors, and
-        // a stream's warmup boundary is where its live phase starts -- neither is
-        // recoverable from the input count alone. Folded only for a run that
-        // declares a series, so every spec without one keeps the pre-subscription
-        // continuation identity (the same rule hash_spec's digest follows).
-        if (!subscriptions_.empty()) {
-            f.i(subscription_warmup_inputs_);
-            for (const auto& subscription : subscriptions_) {
-                f.u(subscription.index);
-                f.b(subscription.lookahead);
-                f.b(subscription.latest.has_value());
-                if (subscription.latest) hash_bar(f, *subscription.latest);
-                f.i(subscription.bucket_first_index);
-                f.i(subscription.bucket_first_ms);
-                f.u(subscription.projected_bars.size());
-                f.u(subscription.projected_cursor);
-                // Only a series built from the auxiliary feed has a feed cursor;
-                // a series built from the input folds exactly what it did.
-                if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
-            }
-        }
-        // Bars a realtime stream appended to its declared auxiliary feed are
-        // durable input no spec digest covers. Folded only for a run that
-        // declares a feed.
-        if (auxiliary_tf_) {
-            f.u(auxiliary_appended_.size());
-            f.u(auxiliary_appended_digest_);
-        }
-        if (const auto* spec = spec_ptr()) {
-            f.u(spec_digest(*spec, f.run_base));
-            // L5: the recalculation cadence is durable decision state only for a
-            // spec that opted into it. Folding it conditionally keeps a default
-            // run's continuation identity byte-identical to the pre-lane tree.
-            if (calc_timing_on(*spec)) {
-                f.u(recalc_epoch_);
-                f.u(recalc_epoch_count_);
-                f.u(recalculations_);
-                f.u(recalculations_skipped_);
-                f.b(partial_has_);
-                if (partial_has_) {
-                    hash_bar(f, partial_);
-                    f.i(partial_script_open_ms_);
-                }
-            }
-        }
-        f.b(staged_ingress_fx_);
-        f.b(staged_fx_curve_.has_value());
-        if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
-        hash_tz_identity(f, tz_identity_);
-        f.s(requests_.identity().session_key);
-        f.u(requests_.live().size());
-        for (const auto& live : requests_.live()) {
-            hash_definition(f, live.definition);
-            hash_remaining(f, live.remaining);
-            hash_authority(f, live.authority);
-            hash_trigger_state(f, live.trigger_state);
-            hash_allowance(f, live.allowance);
-            hash_pending(f, live.pending);
-            // L3b: a placement-time sizing measurement is durable decision state
-            // only for the request that froze one. Folding it conditionally keeps
-            // every pre-lane request table byte-identical.
-            if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
-            if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
-            if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
-        }
-        // The host-maintained roster is durable matching authority.  Fold it
-        // immediately after the request table so a membership-only change cannot
-        // share a continuation identity with an otherwise identical run.
-        hash_cohorts(f, requests_);
-        f.u(cohort_receipts_.count);
-        f.u(cohort_receipts_.h);
-        // The order core's durable state beyond its tables: the two counters a
-        // later command must exceed, the group-effect receipts a later drain
-        // consults, and the committed events' compact records.
-        f.u(requests_.last_ordinal());
-        f.u(requests_.last_incarnation());
-        f.u(group_receipts_.count);
-        f.u(group_receipts_.h);
-        f.u(event_records_.count);
-        f.u(event_records_.h);
-        f.b(current_input_open_.has_value());
-        if (current_input_open_) f.i(*current_input_open_);
-        f.b(observed_input_cursor_.has_value());
-        if (observed_input_cursor_) f.i(*observed_input_cursor_);
-        f.b(next_tradable_synthesis_cursor_.has_value());
-        if (next_tradable_synthesis_cursor_) f.i(*next_tradable_synthesis_cursor_);
-        f.b(last_accepted_input_.has_value());
-        if (last_accepted_input_) hash_interval(f, *last_accepted_input_);
-        f.b(last_observed_slot_open_.has_value());
-        if (last_observed_slot_open_) f.i(*last_observed_slot_open_);
-        f.b(last_finalized_input_.has_value());
-        if (last_finalized_input_) hash_interval(f, *last_finalized_input_);
-        f.b(has_tick_sequence_);
-        f.u(last_tick_sequence_);
-        f.i(script_.key);
-        f.b(script_.has_data);
-        f.b(script_.sealed);
-        hash_interval(f, script_.interval);
-        hash_bar(f, script_.agg);
-        f.i(script_.first_open_ms);
-        f.i(script_.first_source_time_ms);
-        f.i(script_.latest_close_ms);
-        f.i(script_.first_index);
-        f.i(script_.last_index);
-        f.b(script_.modeled_ohlc);
-        f.b(has_forming_);
-        if (has_forming_) hash_bar(f, forming_);
-        f.b(has_last_price_);
-        f.d(last_price_);
-        f.i(last_print_time_ms_);
-        hash_driver_statistics(f, driver_statistics_);
-        f.u(static_cast<uint64_t>(pairing_.pairing));
-        f.i(pairing_.group_factor);
-        if (precommit_digest_.count != 0) {
-            f.u(precommit_digest_.count);
-            f.u(precommit_digest_.h);
-        }
-        // L4 durable liquidation state. It exists only under a declared margin
-        // model, and folds only there, so no pre-L4 continuation identity moves.
-        if (margin_model() != nullptr) {
-            f.b(margin_liquidation_.has_value());
-            if (margin_liquidation_) {
-                hash_handle(f, margin_liquidation_->handle);
-                f.d(margin_liquidation_->level);
-                f.d(margin_liquidation_->units);
-            }
-            f.b(has_margin_path_);
-            if (has_margin_path_) {
-                hash_bar(f, margin_path_bar_);
-                f.b(margin_path_high_first_);
-            }
-            f.u(margin_point_ordinal_);
-            f.u(margin_point_calls_);
-        }
-        // L9 durable risk ledger. It exists only under declared risk limits, and
-        // folds only there, so no pre-L9 continuation identity moves.
-        if (risk_limits() != nullptr) {
-            f.b(risk_.has_day);
-            if (risk_.has_day) f.i(risk_.day_ordinal);
-            f.u(risk_.fills_today);
-            f.u(risk_.consecutive_loss_days);
-            f.b(risk_.has_peak);
-            if (risk_.has_peak) f.d(risk_.peak_equity);
-            f.d(risk_.day_open_equity);
-            f.d(risk_.day_open_realized);
-            f.b(risk_.run_block.has_value());
-            if (risk_.run_block) f.u(static_cast<uint64_t>(*risk_.run_block));
-            f.b(risk_.day_block.has_value());
-            if (risk_.day_block) {
-                f.u(static_cast<uint64_t>(*risk_.day_block));
-                f.i(risk_.day_block_day);
-            }
-        }
-    };
+    // (spec_digest).
 #ifndef NDEBUG
     // Debug builds hold the running digests to the rows they cover: every
     // committed event, group-effect receipt and cohort receipt is folded.
@@ -1743,79 +1481,232 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         std::abort();
     }
 #endif
-    if (continuation_view_.state == ContinuationView::State::Recording) {
-        StateRecord record{continuation_view_.words};
-        fold(record);
-        continuation_view_.complete = !record.failed;
-        return 0;
-    }
     StateFold f;
-    fold(f);
-    return f.h;
-}
-
-// R5 lane PERF-P1. A Pine run latches the continuation at its last script
-// point and nothing on the benchmark or report path ever reads it. A view
-// records the words of the fold instead of mixing them, and the first reader
-// mixes them; no one else does. Since v19 the fold is the live state alone,
-// so a view is the words that state spells. A buffer that cannot grow falls
-// back to folding at once, so the value never depends on memory.
-void NativeExecutionConsumer::capture_continuation_view() noexcept {
-    auto& view = continuation_view_;
-    view.state = ContinuationView::State::None;
-    view.words.clear();
-    if (defer_continuation_views_) {
-        view.run_number = requests_.identity().run_number;
-        view.state = ContinuationView::State::Recording;
-        (void)continuation_hash();
-        view.state = ContinuationView::State::None;
-        if (view.complete) {
-#ifndef NDEBUG
-            // Debug builds prove every view against the eager fold it
-            // replaces, then leave it pending, so a later read still folds it.
-            const uint64_t eager = continuation_hash();
-            if (fold_continuation_view() != eager) std::abort();
-#endif
-            view.state = ContinuationView::State::Pending;
-            return;
+    f.run_base = requests_.identity().run_number;
+    f.s(kNativeConsumerSemanticVersion);
+    f.s(kNativeDriverSemanticVersion);
+    f.s(kNativeCalendarSemanticVersion);
+    f.u(static_cast<uint64_t>(state_.index()));
+    if (const auto* running = std::get_if<NativeRunning>(&state_)) {
+        f.u(static_cast<uint64_t>(running->phase));
+    }
+    if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
+        f.u(static_cast<uint64_t>(completed->completion));
+    }
+    if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
+        hash_failure(f, failed_state->failure);
+    }
+    f.s(bound_session_key_);
+    f.i(decision_floor_ms_);
+    f.b(has_floor_);
+    f.u(next_timeline_ordinal_);
+    f.b(in_callback_);
+    f.u(static_cast<uint64_t>(callback_phase_));
+    f.b(preparing_begin_);
+    f.b(input_callback_context_.has_value());
+    if (input_callback_context_) hash_input_context(f, *input_callback_context_);
+    f.b(input_callback_bar_.has_value());
+    if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
+    f.b(tick_callback_context_.has_value());
+    if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
+    f.b(tick_callback_bar_.has_value());
+    if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
+    hash_coordinate(f, callback_context_.coordinate);
+    f.i(callback_context_.decision_floor_ms);
+    hash_interval(f, callback_context_.input_interval);
+    hash_interval(f, callback_context_.script_interval);
+    f.i(callback_context_.sub_index);
+    f.i(callback_context_.sub_count);
+    f.b(callback_context_.is_terminal_sub_bar);
+    f.i(callback_context_.sub_bar_open_ms);
+    f.i(callback_context_.script_bar_open_ms);
+    hash_driver_statistics(f, callback_context_.driver_statistics);
+    // The four session-day facts are not folded, here or in the frames and
+    // notifications below: each is a function of the label and calendar this
+    // digest already folds and of the run's input around the bar (R5 lane F5,
+    // present_session_day), so folding them would move every established
+    // continuation value for nothing it does not already identify.
+    f.b(consuming_request_);
+    f.b(draining_notifications_);
+    f.b(current_frame_.has_value());
+    if (current_frame_) {
+        hash_current_point(f, current_frame_->point);
+        f.u(current_frame_->acceptance_cutoff);
+    }
+    f.u(pre_open_birth_point_ordinal_);
+    f.i(pre_open_birth_time_ms_);
+    f.u(pre_open_births_.size());
+    for (const auto& handle : pre_open_births_) hash_handle(f, handle);
+    f.u(applied_notifications_.size() - notification_head_);
+    for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
+        const auto& notification = applied_notifications_[i];
+        f.u(notification.history_index);
+        f.u(notification.ordinal);
+        hash_current_point(f, notification.point);
+        // Conditional: only a kernel-originated fill carries a margin receipt,
+        // so a host-only queue folds exactly what it folded before L4.
+        if (notification.margin_call_index) {
+            f.u(1);
+            f.u(*notification.margin_call_index);
         }
-        view.words.clear();
     }
-    view.value = continuation_hash();
-    view.state = ContinuationView::State::Folded;
-}
-
-void NativeExecutionConsumer::drop_continuation_view() const noexcept {
-    continuation_view_.state = ContinuationView::State::None;
-}
-
-bool NativeExecutionConsumer::continuation_view_pending() const noexcept {
-    return continuation_view_.state == ContinuationView::State::Pending;
-}
-
-uint64_t NativeExecutionConsumer::latched_continuation(uint64_t eager) const noexcept {
-    switch (continuation_view_.state) {
-    case ContinuationView::State::None:
-    case ContinuationView::State::Recording: return eager;
-    case ContinuationView::State::Pending: return fold_continuation_view();
-    case ContinuationView::State::Folded: return continuation_view_.value;
+    f.b(processing_input_);
+    f.u(static_cast<uint64_t>(input_mode_));
+    f.i(next_interval_index_);
+    // Declared higher-timeframe series carry their own delivery cursors, and
+    // a stream's warmup boundary is where its live phase starts -- neither is
+    // recoverable from the input count alone. Folded only for a run that
+    // declares a series, so every spec without one keeps the pre-subscription
+    // continuation identity (the same rule hash_spec's digest follows).
+    if (!subscriptions_.empty()) {
+        f.i(subscription_warmup_inputs_);
+        for (const auto& subscription : subscriptions_) {
+            f.u(subscription.index);
+            f.b(subscription.lookahead);
+            f.b(subscription.latest.has_value());
+            if (subscription.latest) hash_bar(f, *subscription.latest);
+            f.i(subscription.bucket_first_index);
+            f.i(subscription.bucket_first_ms);
+            f.u(subscription.projected_bars.size());
+            f.u(subscription.projected_cursor);
+            // Only a series built from the auxiliary feed has a feed cursor;
+            // a series built from the input folds exactly what it did.
+            if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
+        }
     }
-    return eager;
-}
-
-// The view's value: the recorded words, mixed in order.
-uint64_t NativeExecutionConsumer::fold_continuation_view() const noexcept {
-    auto& view = continuation_view_;
-#ifndef NDEBUG
-    // Debug builds hold the invariant that makes a view foldable: it is of
-    // this run.
-    if (view.run_number != requests_.identity().run_number) std::abort();
-#endif
-    StateFold f;
-    for (const uint64_t w : view.words) f.word(w);
-    view.value = f.h;
-    view.state = ContinuationView::State::Folded;
-    return view.value;
+    // Bars a realtime stream appended to its declared auxiliary feed are
+    // durable input no spec digest covers. Folded only for a run that
+    // declares a feed.
+    if (auxiliary_tf_) {
+        f.u(auxiliary_appended_.size());
+        f.u(auxiliary_appended_digest_);
+    }
+    if (const auto* spec = spec_ptr()) {
+        f.u(spec_digest(*spec, f.run_base));
+        // L5: the recalculation cadence is durable decision state only for a
+        // spec that opted into it. Folding it conditionally keeps a default
+        // run's continuation identity byte-identical to the pre-lane tree.
+        if (calc_timing_on(*spec)) {
+            f.u(recalc_epoch_);
+            f.u(recalc_epoch_count_);
+            f.u(recalculations_);
+            f.u(recalculations_skipped_);
+            f.b(partial_has_);
+            if (partial_has_) {
+                hash_bar(f, partial_);
+                f.i(partial_script_open_ms_);
+            }
+        }
+    }
+    f.b(staged_ingress_fx_);
+    f.b(staged_fx_curve_.has_value());
+    if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
+    hash_tz_identity(f, tz_identity_);
+    f.s(requests_.identity().session_key);
+    f.u(requests_.live().size());
+    for (const auto& live : requests_.live()) {
+        hash_definition(f, live.definition);
+        hash_remaining(f, live.remaining);
+        hash_authority(f, live.authority);
+        hash_trigger_state(f, live.trigger_state);
+        hash_allowance(f, live.allowance);
+        hash_pending(f, live.pending);
+        // L3b: a placement-time sizing measurement is durable decision state
+        // only for the request that froze one. Folding it conditionally keeps
+        // every pre-lane request table byte-identical.
+        if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
+        if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
+        if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
+    }
+    // The host-maintained roster is durable matching authority.  Fold it
+    // immediately after the request table so a membership-only change cannot
+    // share a continuation identity with an otherwise identical run.
+    hash_cohorts(f, requests_);
+    f.u(cohort_receipts_.count);
+    f.u(cohort_receipts_.h);
+    // The order core's durable state beyond its tables: the two counters a
+    // later command must exceed, the group-effect receipts a later drain
+    // consults, and the committed events' compact records.
+    f.u(requests_.last_ordinal());
+    f.u(requests_.last_incarnation());
+    f.u(group_receipts_.count);
+    f.u(group_receipts_.h);
+    f.u(event_records_.count);
+    f.u(event_records_.h);
+    f.b(current_input_open_.has_value());
+    if (current_input_open_) f.i(*current_input_open_);
+    f.b(observed_input_cursor_.has_value());
+    if (observed_input_cursor_) f.i(*observed_input_cursor_);
+    f.b(next_tradable_synthesis_cursor_.has_value());
+    if (next_tradable_synthesis_cursor_) f.i(*next_tradable_synthesis_cursor_);
+    f.b(last_accepted_input_.has_value());
+    if (last_accepted_input_) hash_interval(f, *last_accepted_input_);
+    f.b(last_observed_slot_open_.has_value());
+    if (last_observed_slot_open_) f.i(*last_observed_slot_open_);
+    f.b(last_finalized_input_.has_value());
+    if (last_finalized_input_) hash_interval(f, *last_finalized_input_);
+    f.b(has_tick_sequence_);
+    f.u(last_tick_sequence_);
+    f.i(script_.key);
+    f.b(script_.has_data);
+    f.b(script_.sealed);
+    hash_interval(f, script_.interval);
+    hash_bar(f, script_.agg);
+    f.i(script_.first_open_ms);
+    f.i(script_.first_source_time_ms);
+    f.i(script_.latest_close_ms);
+    f.i(script_.first_index);
+    f.i(script_.last_index);
+    f.b(script_.modeled_ohlc);
+    f.b(has_forming_);
+    if (has_forming_) hash_bar(f, forming_);
+    f.b(has_last_price_);
+    f.d(last_price_);
+    f.i(last_print_time_ms_);
+    hash_driver_statistics(f, driver_statistics_);
+    f.u(static_cast<uint64_t>(pairing_.pairing));
+    f.i(pairing_.group_factor);
+    if (precommit_digest_.count != 0) {
+        f.u(precommit_digest_.count);
+        f.u(precommit_digest_.h);
+    }
+    // L4 durable liquidation state. It exists only under a declared margin
+    // model, and folds only there, so no pre-L4 continuation identity moves.
+    if (margin_model() != nullptr) {
+        f.b(margin_liquidation_.has_value());
+        if (margin_liquidation_) {
+            hash_handle(f, margin_liquidation_->handle);
+            f.d(margin_liquidation_->level);
+            f.d(margin_liquidation_->units);
+        }
+        f.b(has_margin_path_);
+        if (has_margin_path_) {
+            hash_bar(f, margin_path_bar_);
+            f.b(margin_path_high_first_);
+        }
+        f.u(margin_point_ordinal_);
+        f.u(margin_point_calls_);
+    }
+    // L9 durable risk ledger. It exists only under declared risk limits, and
+    // folds only there, so no pre-L9 continuation identity moves.
+    if (risk_limits() != nullptr) {
+        f.b(risk_.has_day);
+        if (risk_.has_day) f.i(risk_.day_ordinal);
+        f.u(risk_.fills_today);
+        f.u(risk_.consecutive_loss_days);
+        f.b(risk_.has_peak);
+        if (risk_.has_peak) f.d(risk_.peak_equity);
+        f.d(risk_.day_open_equity);
+        f.d(risk_.day_open_realized);
+        f.b(risk_.run_block.has_value());
+        if (risk_.run_block) f.u(static_cast<uint64_t>(*risk_.run_block));
+        f.b(risk_.day_block.has_value());
+        if (risk_.day_block) {
+            f.u(static_cast<uint64_t>(*risk_.day_block));
+            f.i(risk_.day_block_day);
+        }
+    }
+    return f.h;
 }
 
 // The spec folds as one word: its digest, taken once per applied spec and run
@@ -2238,8 +2129,6 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native timezone identity cannot be derived from its zone data");
         return false;
     }
-    // The run's latch dies here and its logs below: a view of it goes first.
-    drop_continuation_view();
     engine.reset_run_state();
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
@@ -7387,7 +7276,6 @@ void NativeExecutionConsumer::record_script_report_point(
         engine.update_equity_extremes();
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
     engine.record_equity_point(script_open_ms);
-    drop_continuation_view();
     engine.last_script_continuation_hash_ = continuation_hash();
     engine.last_script_continuation_valid_ = true;
     if (engine.broker_state_hash_recording_) {
@@ -10111,8 +9999,7 @@ void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
 // a different fold than the last recorded row.
 std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     const std::uint64_t execution = last_script_continuation_valid_
-        ? NativeExecutionConsumer::bound(*this)
-              .latched_continuation(last_script_continuation_hash_)
+        ? last_script_continuation_hash_
         : NativeExecutionConsumer::bound(*this).continuation_hash();
     return broker_state_hash_from_execution_hash(execution);
 }
