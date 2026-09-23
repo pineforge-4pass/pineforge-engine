@@ -83,7 +83,25 @@ public:
 
     NativeSetupResult configure(BacktestEngine& engine, const NativeRunSpec& spec);
     NativeFxCurveSetupResult configure_fx_curve(const NativeFxCurve& curve);
-    NativeStateView view() const;
+    // One named result, so the view is built in the caller's slot.
+    NativeStateView view() const {
+        NativeStateView v;
+        v.consumed_high_water = consumed_high_water_;
+        v.decision_floor_ms = decision_floor();
+        // running_spec_ is non-null exactly while state_ holds NativeRunning
+        // (see cache_running_policy), whose spec it points at: the view the
+        // lifecycle probe builds for that alternative, without walking the
+        // variant first.
+        if (running_spec_) {
+            v.kind = NativeLifecycleKind::Running;
+            v.spec = running_spec_;
+            v.phase = std::get_if<NativeRunning>(&state_)->phase;
+        } else {
+            probe_lifecycle(v);
+        }
+        return v;
+    }
+    void probe_lifecycle(NativeStateView& v) const;
     // The leg order this run walks over `bar`: the declared
     // NativeRunSpec::path_order, and the open-proximity rule under Auto or
     // before a spec is configured. It is the order the confirmed-bar driver
@@ -111,7 +129,11 @@ public:
                     native_order::RequestHandle origin);
     void cohort_remove(BacktestEngine& engine, native_order::CohortHandle cohort,
                        native_order::RequestHandle origin);
-    std::optional<NativeCurrentPointView> current_execution_point() const;
+    std::optional<NativeCurrentPointView> current_execution_point() const {
+        if (!in_callback_ || !current_frame_ || !std::holds_alternative<NativeRunning>(state_))
+            return std::nullopt;
+        return current_frame_->point;
+    }
     std::optional<NativeTrailState> trail_state(
         const BacktestEngine& engine, const native_order::RequestHandle& target) const;
     NativeCurrentExecutionPreview inspect_current_execution(
@@ -578,16 +600,43 @@ private:
     // R4-D L10z review fix 4: the interval lookup cache is per-consumer state,
     // not per-thread state. Two engines sharing a thread have independent
     // calendars/timeframes, so a timestamp-keyed cache must not be shared.
+    //
+    // R5 lane PERF-L1: each kind also keeps the answer its slot held before
+    // the slot's last replacement (`prior`). A bar asks for its own interval
+    // around a lookahead to the next bar's (present_session_day), which used
+    // to evict it, so canonical labels resolved the calendar six times a bar
+    // for three instants. A lookup that misses the slot takes the prior's
+    // answer when it is for the same instant -- the value a fresh resolution
+    // gives, since nothing a resolution reads changes between two begins,
+    // which clear the cache -- and the slot itself is written exactly as it
+    // always was. `held` marks a slot that holds an answer rather than the
+    // empty mark, so only answers are ever demoted.
     struct IntervalCache {
+        struct Prior {
+            bool held = false;
+            std::int64_t ts = 0;
+            std::optional<native_calendar::NativeInterval> interval;
+        };
         std::int64_t input_ts = std::numeric_limits<std::int64_t>::min();
         std::optional<native_calendar::NativeInterval> input_interval;
         std::int64_t script_ts = std::numeric_limits<std::int64_t>::min();
         std::optional<native_calendar::NativeInterval> script_interval;
+        bool input_held = false;
+        bool script_held = false;
+        Prior input_prior;
+        Prior script_prior;
         void clear() noexcept {
             input_ts = std::numeric_limits<std::int64_t>::min();
             input_interval.reset();
             script_ts = std::numeric_limits<std::int64_t>::min();
             script_interval.reset();
+            input_held = false;
+            script_held = false;
+            forget_priors();
+        }
+        void forget_priors() noexcept {
+            input_prior.held = false;
+            script_prior.held = false;
         }
     };
 
@@ -608,12 +657,42 @@ private:
     double ladder_tick() const;
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
-    bool has_undetected_timeframe() const noexcept;
-    bool legacy_tolerant_slot_labels() const noexcept;
-    bool uses_raw_label_partition() const noexcept;
-    static native_calendar::NativeInterval timestamp_partition(std::int64_t timestamp) noexcept;
-    std::optional<native_calendar::NativeInterval> input_interval_at(std::int64_t timestamp) const;
-    std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const;
+    // The label policy: the running run's cached answers inline, the spec's
+    // otherwise (cache_running_policy).
+    bool has_undetected_timeframe() const noexcept {
+        return running_spec_ ? running_undetected_ : spec_undetected_timeframe();
+    }
+    bool legacy_tolerant_slot_labels() const noexcept {
+        return running_spec_ ? running_tolerant_labels_ : spec_tolerant_slot_labels();
+    }
+    bool uses_raw_label_partition() const noexcept {
+        return running_spec_ ? running_raw_labels_ : spec_raw_label_partition();
+    }
+    bool spec_undetected_timeframe() const noexcept;
+    bool spec_tolerant_slot_labels() const noexcept;
+    bool spec_raw_label_partition() const noexcept;
+    static native_calendar::NativeInterval timestamp_partition(std::int64_t timestamp) noexcept {
+        // No duration is available in this state. Each boundary is the
+        // current bar timestamp, so no inferred aggregation or clock grid is
+        // introduced.
+        return {timestamp, timestamp, timestamp, timestamp, timestamp};
+    }
+    // The interval of an instant: the slot's answer when it is for this
+    // instant, a raw partition, else a resolution -- inline up to the last.
+    std::optional<native_calendar::NativeInterval> input_interval_at(std::int64_t timestamp) const {
+        if (interval_cache_.input_ts == timestamp) return interval_cache_.input_interval;
+        if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+        return input_interval_resolved(timestamp);
+    }
+    std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const {
+        if (interval_cache_.script_ts == timestamp) return interval_cache_.script_interval;
+        if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+        return script_interval_resolved(timestamp);
+    }
+    std::optional<native_calendar::NativeInterval> input_interval_resolved(
+        std::int64_t timestamp) const;
+    std::optional<native_calendar::NativeInterval> script_interval_resolved(
+        std::int64_t timestamp) const;
     bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;
@@ -688,7 +767,21 @@ private:
         bool in_session = false;
         std::optional<int64_t> ordinal;
     };
-    SessionPoint session_point(int64_t ms) const;
+    // Through the memo of the last two instants answered (session_points_):
+    // a bar's label is asked again as the next bar's "before", and the label
+    // after it is the next bar's own (R5 lane PERF-L1).
+    SessionPoint session_point(int64_t ms) const {
+        for (const auto& entry : session_points_) {
+            if (entry.held && entry.ms == ms) return entry.point;
+        }
+        return session_point_resolved(ms);
+    }
+    SessionPoint session_point_resolved(int64_t ms) const;
+    struct SessionPointMemo {
+        bool held = false;
+        int64_t ms = 0;
+        SessionPoint point;
+    };
     std::optional<int64_t> pumped_script_label(int index) const;
     int64_t script_width_ms() const noexcept;
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
@@ -764,7 +857,13 @@ private:
     bool invoke_tick_callback(BacktestEngine& engine, const Bar& bar,
                               const NativeTickContext& context);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
-    uint64_t take_ordinal(BacktestEngine& engine);
+    uint64_t take_ordinal(BacktestEngine&) {
+        const uint64_t ordinal = next_timeline_ordinal_;
+        if (ordinal == 0 || ordinal == std::numeric_limits<uint64_t>::max()) exhaust_ordinals();
+        ++next_timeline_ordinal_;
+        return ordinal;
+    }
+    [[noreturn]] static void exhaust_ordinals();
     void raise_floor(int64_t t);
     native_order::DriverEligibilityClass classify_driver(
             const NativeDriverPoint& point, bool continuous) const noexcept;
@@ -1092,10 +1191,18 @@ private:
     // run's bars fall in are resolved once, not once per lookup. A memo over
     // calendar_ alone, rebuilt whenever calendar_ is. Derived, never folded.
     mutable native_calendar::SessionDayMemo calendar_memo_;
-    // Forget both memos: called wherever calendar_ is rebuilt.
+    // The last two session points answered (session_point). Derived, never
+    // folded; a point whose resolution threw is never held.
+    mutable std::array<SessionPointMemo, 2> session_points_{};
+    mutable std::size_t session_point_next_ = 0;
+    // Forget every memo over the calendar and the lookups it keys: called
+    // wherever calendar_ is rebuilt.
     void reset_calendar_memos() const noexcept {
         session_day_memo_.reset();
         calendar_memo_.reset();
+        session_points_ = {};
+        session_point_next_ = 0;
+        interval_cache_.forget_priors();
     }
     Bar forming_{};
     bool has_forming_ = false;

@@ -1539,19 +1539,7 @@ bool NativeExecutionConsumer::commands_allowed() const {
     return running->phase == NativeRunPhase::Realtime;
 }
 
-NativeStateView NativeExecutionConsumer::view() const {
-    NativeStateView v;
-    v.consumed_high_water = consumed_high_water_;
-    v.decision_floor_ms = decision_floor();
-    // running_spec_ is non-null exactly while state_ holds NativeRunning (see
-    // cache_running_policy), whose spec it points at: the view the probe
-    // below builds for that alternative, without walking the variant first.
-    if (running_spec_) {
-        v.kind = NativeLifecycleKind::Running;
-        v.spec = running_spec_;
-        v.phase = std::get_if<NativeRunning>(&state_)->phase;
-        return v;
-    }
+void NativeExecutionConsumer::probe_lifecycle(NativeStateView& v) const {
     v.spec = spec_ptr();
     if (std::holds_alternative<NativeUnconfigured>(state_)) {
         v.kind = NativeLifecycleKind::Unconfigured;
@@ -1571,7 +1559,6 @@ NativeStateView NativeExecutionConsumer::view() const {
         v.failure = f->failure;
         if (f->spec) v.spec = &*f->spec;
     }
-    return v;
 }
 
 void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
@@ -2008,20 +1995,17 @@ bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
     return true;
 }
 
-bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
-    if (running_spec_) return running_undetected_;
+bool NativeExecutionConsumer::spec_undetected_timeframe() const noexcept {
     const auto* spec = spec_ptr();
     return spec && spec->timeframe_undetected;
 }
 
-bool NativeExecutionConsumer::legacy_tolerant_slot_labels() const noexcept {
-    if (running_spec_) return running_tolerant_labels_;
+bool NativeExecutionConsumer::spec_tolerant_slot_labels() const noexcept {
     const auto* spec = spec_ptr();
     return spec && spec->slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
 }
 
-bool NativeExecutionConsumer::uses_raw_label_partition() const noexcept {
-    if (running_spec_) return running_raw_labels_;
+bool NativeExecutionConsumer::spec_raw_label_partition() const noexcept {
     return has_undetected_timeframe()
         || (legacy_tolerant_slot_labels()
             && pairing_.pairing == native_calendar::TimeframePairing::Passthrough);
@@ -2038,36 +2022,40 @@ void NativeExecutionConsumer::cache_running_policy() noexcept {
     running_spec_ = &running->spec;
 }
 
-native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
-        std::int64_t timestamp) noexcept {
-    // No duration is available in this state. Each boundary is the current
-    // bar timestamp, so no inferred aggregation or clock grid is introduced.
-    return {timestamp, timestamp, timestamp, timestamp, timestamp};
-}
-
+// A lookup the slot missed: the prior's answer when it is for this instant,
+// else a resolution; either way the slot takes the answer as it always did,
+// and the answer the slot held becomes the prior (IntervalCache).
 std::optional<native_calendar::NativeInterval>
-NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
-    if (interval_cache_.input_ts == timestamp) {
-        return interval_cache_.input_interval;
+NativeExecutionConsumer::input_interval_resolved(std::int64_t timestamp) const {
+    auto& cache = interval_cache_;
+    std::optional<native_calendar::NativeInterval> interval;
+    if (cache.input_prior.held && cache.input_prior.ts == timestamp) {
+        interval = cache.input_prior.interval;
+    } else {
+        interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp, calendar_memo_);
+        if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
     }
-    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp, calendar_memo_);
-    if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
-    interval_cache_.input_ts = timestamp;
-    interval_cache_.input_interval = interval;
+    if (cache.input_held) cache.input_prior = {true, cache.input_ts, cache.input_interval};
+    cache.input_ts = timestamp;
+    cache.input_interval = interval;
+    cache.input_held = true;
     return interval;
 }
 
 std::optional<native_calendar::NativeInterval>
-NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
-    if (interval_cache_.script_ts == timestamp) {
-        return interval_cache_.script_interval;
+NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const {
+    auto& cache = interval_cache_;
+    std::optional<native_calendar::NativeInterval> interval;
+    if (cache.script_prior.held && cache.script_prior.ts == timestamp) {
+        interval = cache.script_prior.interval;
+    } else {
+        interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp, calendar_memo_);
+        if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
     }
-    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
-    auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp, calendar_memo_);
-    if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
-    interval_cache_.script_ts = timestamp;
-    interval_cache_.script_interval = interval;
+    if (cache.script_held) cache.script_prior = {true, cache.script_ts, cache.script_interval};
+    cache.script_ts = timestamp;
+    cache.script_interval = interval;
+    cache.script_held = true;
     return interval;
 }
 
@@ -2655,13 +2643,8 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     return false;
 }
 
-uint64_t NativeExecutionConsumer::take_ordinal(BacktestEngine&) {
-    const uint64_t ordinal = next_timeline_ordinal_;
-    if (ordinal == 0 || ordinal == std::numeric_limits<uint64_t>::max()) {
-        throw std::overflow_error("native timeline ordinal exhausted");
-    }
-    ++next_timeline_ordinal_;
-    return ordinal;
+void NativeExecutionConsumer::exhaust_ordinals() {
+    throw std::overflow_error("native timeline ordinal exhausted");
 }
 
 void NativeExecutionConsumer::raise_floor(int64_t t) {
@@ -6113,12 +6096,6 @@ void NativeExecutionConsumer::match_path(
     }
 }
 
-std::optional<NativeCurrentPointView> NativeExecutionConsumer::current_execution_point() const {
-    if (!in_callback_ || !current_frame_ || !std::holds_alternative<NativeRunning>(state_))
-        return std::nullopt;
-    return current_frame_->point;
-}
-
 std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
         const BacktestEngine& engine, const native_order::RequestHandle& target) const {
     const auto* live = requests_.find_live(target);
@@ -7155,18 +7132,33 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
 // session day last read: consecutive bars share a day, so a day is resolved
 // once. A day the calendar cannot key is no session at all, exactly as
 // native_calendar::in_session answers it.
-NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point(int64_t ms) const {
+NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point_resolved(
+        int64_t ms) const {
+    SessionPoint point;
     try {
         if (!session_day_memo_ || !session_day_memo_->holds(ms)) {
             auto day = native_calendar::session_day_at(calendar_, ms, calendar_memo_);
-            if (!day) return {};
-            if (!day->holds(ms)) return {day->in_session_at(ms), day->ordinal};
-            session_day_memo_ = std::move(day);
+            if (!day) {
+                point = {};
+            } else if (!day->holds(ms)) {
+                point = {day->in_session_at(ms), day->ordinal};
+            } else {
+                session_day_memo_ = std::move(day);
+                point = {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
+            }
+        } else {
+            point = {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
         }
-        return {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
     } catch (...) {
+        // Not held: the next ask resolves it again, as every ask used to.
         return {};
     }
+    auto& entry = session_points_[session_point_next_];
+    entry.held = true;
+    entry.ms = ms;
+    entry.point = point;
+    session_point_next_ ^= 1;
+    return point;
 }
 
 // The script bar an input of the pumped array belongs to, labelled exactly as
