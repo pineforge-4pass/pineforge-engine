@@ -2808,6 +2808,9 @@ PF_API int strategy_native_liquidation_price_v1(pf_strategy_t s, double* out);
  *  command on its quantity reads the number here before it submits.
  *  Observation only: it moves and freezes nothing.
  *
+ *  @param s       The host whose run spec sizes the request.
+ *  @param sized   The #PF_NATIVE_INTENT_SIZED request to size, borrowed for
+ *                 the call.
  *  @param price   The sizing price.
  *  @param equity  The marked equity an EQUITY_FRACTION basis is a share of.
  *  @param fx      The account rate the conversion divides by.
@@ -2909,6 +2912,10 @@ PF_API int strategy_native_append_auxiliary_bars_v1(pf_strategy_t s, const pf_ba
  *  #strategy_native_append_auxiliary_bars_v1 stays this call with both
  *  out-parameters NULL.
  *
+ *  @param s      The host this run is driving.
+ *  @param bars   @p n bars, strictly increasing and after the feed's last
+ *                bar, copied; NULL when @p n is 0.
+ *  @param n      Bar count; 0 appends nothing.
  *  @param error  Optional; receives a #pf_native_append_error_t whenever the
  *                kernel judged the call (#PF_NATIVE_APPEND_ERROR_NONE when
  *                appended).

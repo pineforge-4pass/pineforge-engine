@@ -532,7 +532,7 @@ number names its symbol on this tree.
 | C++ hook | C route | witness in `tests/test_native_c_api.c` |
 |---|---|---|
 | `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2040`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
-| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2822`), reading a SIZED request's own sizing block | the sizing-query scenario |
+| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:2825`), reading a SIZED request's own sizing block | the sizing-query scenario |
 | `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2390`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
 | `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2399`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
 | `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2406`) | the anchored-level scenario |

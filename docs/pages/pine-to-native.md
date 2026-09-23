@@ -111,7 +111,7 @@ the rest from the chart. A native host declares *everything* in one
 `NativeRunSpec` (native_run_spec.hpp:524) applied by `configure_native`
 (native_host.hpp:1137); a C host sends `pf_native_run_spec_v1`
 (pineforge.h:484) plus `pf_native_run_spec_ext_v1` (native_c_api.h:2125)
-through `strategy_configure_native_ext_v1` (native_c_api.h:2880). Setup is
+through `strategy_configure_native_ext_v1` (native_c_api.h:2883). Setup is
 atomic: `Ready` → begin → `Completed`, and an incomplete value is refused
 rather than defaulted.
 
@@ -513,7 +513,7 @@ close, a bracket leg, a liquidation, a risk flatten and the range end.
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `request.security()` | `NativeTimeframeSubscription` native_run_spec.hpp:484 in `subscriptions` native_run_spec.hpp:603, or `declare_timeframe_subscriptions` native_host.hpp:1077 inside `on_native_run_begin` native_host.hpp:853 | `strategy_native_declare_subscriptions_v1` native_c_api.h:2683 | `native_htf_strategy.cpp` | A subscription is a series instance: several may share one timeframe. Completed buckets arrive at `on_native_timeframe_bar` native_host.hpp:866 and the latest is pulled with `native_series_bar` native_host.hpp:1060. `authoritative_bars` native_run_spec.hpp:486 replace a completed bucket's OHLCV. The row's two delivery words are typed in C: `pf_native_lookahead_e` native_c_api.h:733 and `pf_native_gaps_e` native_c_api.h:744 (lane E7). The Pine adapter runs its own plain sites through these same subscriptions, ruled **adapter-hook** in ADR-0001's `subscriptions` row. |
-| `request.security_lower_tf()` | `NativeAuxiliaryFeed` native_run_spec.hpp:513 with `NativeSeriesSource::AuxiliaryFeed` native_run_spec.hpp:481 | `strategy_native_append_auxiliary_bars_v1` native_c_api.h:2901 | `native_auxiliary_feed_strategy.cpp` | Not the same shape: Pine returns an intrabar *array* per bar, the kernel gives you a finer *series* routed by time. A host that wants the raw sub-bars puts them in `IntrabarPath` native_run_spec.hpp:377 and reads `on_native_sub_bar` native_host.hpp:907 instead. |
+| `request.security_lower_tf()` | `NativeAuxiliaryFeed` native_run_spec.hpp:513 with `NativeSeriesSource::AuxiliaryFeed` native_run_spec.hpp:481 | `strategy_native_append_auxiliary_bars_v1` native_c_api.h:2904 | `native_auxiliary_feed_strategy.cpp` | Not the same shape: Pine returns an intrabar *array* per bar, the kernel gives you a finer *series* routed by time. A host that wants the raw sub-bars puts them in `IntrabarPath` native_run_spec.hpp:377 and reads `on_native_sub_bar` native_host.hpp:907 instead. |
 | `barmerge.gaps_off` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:488 set false | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_HOLD` native_c_api.h:745 | `native_htf_strategy.cpp` | The delivered bucket stands until the next delivery replaces it. |
 | `barmerge.gaps_on` | `NativeTimeframeSubscription::gaps` native_run_spec.hpp:488 set true | `pf_native_subscription_v1::gaps` = `PF_NATIVE_GAPS_CLEAR` native_c_api.h:747 | `native_htf_strategy.cpp` | The series is cleared on every input bar it delivers nothing on, so the pull answers empty — the native spelling of `na`. |
 | `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:487 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:734 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
@@ -602,7 +602,7 @@ The host is a `pf_native_callbacks_v1` native_c_api.h:2282 table handed to
 `strategy_native_host_create_v1` native_c_api.h:2453; the run is
 `pf_native_run_spec_v1` pineforge.h:484 plus `pf_native_run_spec_ext_v1`
 native_c_api.h:2125 through `strategy_configure_native_ext_v1`
-native_c_api.h:2880, and `strategy_native_run_v1` native_c_api.h:2466 drives
+native_c_api.h:2883, and `strategy_native_run_v1` native_c_api.h:2466 drives
 the bars into a `pf_report_t` pineforge.h:452.
 
 Three rules make the C door behave like the C++ one:
