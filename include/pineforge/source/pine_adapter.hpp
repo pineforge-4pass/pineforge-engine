@@ -1305,8 +1305,6 @@ private:
     void update_l4c_lifecycle(const native_order::ExecutionAppliedEvent&,
                               const NativeDecisionContext&);
     using ReceiptHighWaterReader = std::uint64_t (*)(const NativeStrategyHost&) noexcept;
-    void set_receipt_high_water_readers(ReceiptHighWaterReader event_reader,
-                                        ReceiptHighWaterReader terminal_reader) noexcept;
 
     // The consumer's terminal-receipt high water as observe_terminal_receipts
     // last read it, advanced only on a run without an intrabar path (it stays
@@ -1314,6 +1312,12 @@ private:
     // broker-state hash (pine_state_hash.cpp), so removing it would move
     // hash values.
     std::uint64_t terminal_receipt_cursor_ = 0;
+    // Retired (R5 lane PERF-L4): the receipt-reader binding PineStrategyHost
+    // installed at every begin, which since lane PERF-P4 only marked "this
+    // host is a PineStrategyHost". The readers ask the host's
+    // PineStrategyHost view instead, so nothing reads or writes these two
+    // slots; they keep this class's layout, which is part of
+    // PineStrategyHost's and so of the generated script's ABI.
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
     bool is_declined_market_reversal(

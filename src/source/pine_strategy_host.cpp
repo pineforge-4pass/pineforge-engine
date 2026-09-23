@@ -160,20 +160,6 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     host_mutation_guard_inert_ = true;
 }
 
-std::uint64_t source::PineStrategyHost::adapter_event_high_water(
-        const NativeStrategyHost& base) noexcept {
-    const auto& host = static_cast<const PineStrategyHost&>(base);
-    return as_native_consumer(const_cast<IExecutionConsumer&>(host.execution_consumer()))
-        .event_high_water();
-}
-
-std::uint64_t source::PineStrategyHost::adapter_terminal_receipt_high_water(
-        const NativeStrategyHost& base) noexcept {
-    const auto& host = static_cast<const PineStrategyHost&>(base);
-    return as_native_consumer(const_cast<IExecutionConsumer&>(host.execution_consumer()))
-        .terminal_receipt_high_water();
-}
-
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
     // Fold current source/generic state with the last script-point
     // continuation. Recording only controls whether the per-bar array is
@@ -304,8 +290,6 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
-    adapter_.set_receipt_high_water_readers(&PineStrategyHost::adapter_event_high_water,
-                                            &PineStrategyHost::adapter_terminal_receipt_high_water);
     if (args.n > 0 && static_cast<std::size_t>(args.n)
         <= std::numeric_limits<std::size_t>::max() / 4U) {
         as_native_consumer(execution_consumer()).reserve_driver_log(

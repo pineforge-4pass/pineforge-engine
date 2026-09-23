@@ -657,8 +657,6 @@ private:
     StagedConfiguration staged_configuration() const;
     static PineStrategyConfig apply_overrides(PineStrategyConfig,
                                               const StrategyOverrides&);
-    static std::uint64_t adapter_event_high_water(const NativeStrategyHost&) noexcept;
-    static std::uint64_t adapter_terminal_receipt_high_water(const NativeStrategyHost&) noexcept;
     std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
         return broker_fill_event_seq_;
     }
