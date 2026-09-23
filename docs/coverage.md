@@ -371,7 +371,11 @@ Oscillators / momentum (`src/ta_oscillators.cpp`): `RSI`, `Stoch`,
 `WPR`, `COG`, `TR`, `ATR`, `RCI`.
 
 Bands / channels / widths (`src/ta_volatility_trend.cpp`): `BB`, `KC`,
-`BBW`, `KCW`.
+`BBW`, `KCW`. `KC`'s middle band is the EMA of its source on every bar,
+`ta::EMA`'s value included on the first bar; its range is the true range
+against the previous bar's close (`na` where that close is, as `ta.tr` is),
+so the upper and lower bands, and `KCW`, are `na` until the range EMA has a
+value (`tests/test_ta_kc_basis.cpp`).
 
 Trend / pivots (`src/ta_volatility_trend.cpp`): `Supertrend(factor, atr_period)`,
 `DMI(di_length, adx_smoothing)`, `SAR(start, increment, maximum)`,

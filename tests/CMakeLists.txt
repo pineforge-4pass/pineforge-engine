@@ -1011,6 +1011,10 @@ list(APPEND TEST_SOURCES test_ta_anchored_vwap)
 # R5 lane TA1: ta::ALMA's floor input against TradingView's spelled-out ALMA.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_alma_floor)
+# R5 lane TA1: ta::KC's middle band is ta::EMA of its source on every bar and
+# its range is ta.tr(false), against TradingView's spelled-out f_kc / f_kcw.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_ta_kc_basis)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

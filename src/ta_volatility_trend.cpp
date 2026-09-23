@@ -545,19 +545,24 @@ KCResult KC::compute(double src, double high, double low, double close) {
 
     double mid = ema_.compute(src);
 
+    // The true range against the previous bar's close, na when that close is
+    // (ta.tr with handle_na = false): the current close is not an input.
     double span = na<double>();
-    if (!is_na(high) && !is_na(low) && !is_na(close) && !is_na(prev_close_)) {
+    if (!is_na(high) && !is_na(low) && !is_na(prev_close_)) {
         span = std::max(high - low,
                         std::max(std::abs(high - prev_close_), std::abs(low - prev_close_)));
     }
     double range_ema = range_ema_.compute(span);
     prev_close_ = close;
 
+    // The middle band is the basis alone -- the EMA of src on every bar,
+    // including the first, where the range EMA has no value yet. The bands
+    // exist where both do.
+    result.middle = mid;
     if (is_na(mid) || is_na(range_ema)) {
         return result;
     }
 
-    result.middle = mid;
     result.upper = mid + mult_ * range_ema;
     result.lower = mid - mult_ * range_ema;
     return result;
@@ -621,7 +626,9 @@ KCW::KCW(int length, double mult) : kc_(length, mult) {}
 
 double KCW::compute(double src, double high, double low, double close) {
     auto r = kc_.compute(src, high, low, close);
-    if (is_na(r.middle) || r.middle == 0) return na<double>();
+    // na wherever the bands are (the middle band alone has a value on the
+    // first bar), and where the middle is 0.
+    if (is_na(r.middle) || is_na(r.upper) || r.middle == 0) return na<double>();
     return (r.upper - r.lower) / r.middle;
 }
 
@@ -852,16 +859,16 @@ KCResult KC::recompute(double src, double high, double low, double close) {
 
     double mid = ema_.recompute(src);
     double span = na<double>();
-    if (!is_na(high) && !is_na(low) && !is_na(close) && !is_na(prev_close_)) {
+    if (!is_na(high) && !is_na(low) && !is_na(prev_close_)) {
         span = std::max(high - low,
                         std::max(std::abs(high - prev_close_), std::abs(low - prev_close_)));
     }
     double range_ema = range_ema_.recompute(span);
     prev_close_ = close;
 
+    result.middle = mid;
     if (is_na(mid) || is_na(range_ema)) return result;
 
-    result.middle = mid;
     result.upper = mid + mult_ * range_ema;
     result.lower = mid - mult_ * range_ema;
     return result;
@@ -900,7 +907,7 @@ double BBW::recompute(double src) {
 // --- KCW ---
 double KCW::recompute(double src, double high, double low, double close) {
     auto r = kc_.recompute(src, high, low, close);
-    if (is_na(r.middle) || r.middle == 0) return na<double>();
+    if (is_na(r.middle) || is_na(r.upper) || r.middle == 0) return na<double>();
     return (r.upper - r.lower) / r.middle;
 }
 

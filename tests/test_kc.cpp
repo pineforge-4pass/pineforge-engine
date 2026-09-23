@@ -70,7 +70,11 @@ static void test_kc_uses_ema_of_true_range() {
         prev_close = close[i];
 
         if (is_na(basis) || is_na(range)) {
-            CHECK(is_na(out.middle), "KC middle should be na during warmup");
+            // expectation corrected: middle na -> middle == EMA(src) (100 on
+            // bar 0), because the middle band is the basis ta.ema(src, length)
+            // alone (TradingView's f_kc returns basis there); only the bands
+            // wait for the range EMA (R5 lane TA1, item 5).
+            CHECK_EQ(out.middle, basis, "KC middle should equal EMA(src) during warmup");
             CHECK(is_na(out.upper), "KC upper should be na during warmup");
             CHECK(is_na(out.lower), "KC lower should be na during warmup");
             continue;
