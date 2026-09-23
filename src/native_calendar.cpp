@@ -1,8 +1,10 @@
 #include <pineforge/native_calendar.hpp>
 
+#include "native_calendar_memo.hpp"
 #include "timezone.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <climits>
@@ -1538,6 +1540,383 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
                                                   const Timeframe& tf,
                                                   int64_t ms) {
     return interval_containing(calendar, tf, tf, ms);
+}
+
+// ---------------------------------------------------------------------------
+// Caller-owned session-day memo (native_calendar_memo.hpp, R5 lane PERF-K1)
+// ---------------------------------------------------------------------------
+//
+// Every function below is its memo-free namesake above, statement for
+// statement, with the session days read through the memo: a day is resolved
+// by session_day_from_open itself on its first read and handed out by
+// address afterwards. An address stays valid until the next read of the same
+// memo, so a caller copies what it keeps across a second read.
+
+struct SessionDayMemo::State {
+    // session_day_from_open by the open date's day number, direct-mapped: the
+    // days one lookup reads -- a date and its neighbours, a month of trading
+    // dates -- never share a slot.
+    static constexpr std::size_t kDaySlots = 64;
+    // The local civil day of the last few whole seconds a zoned calendar was
+    // asked about.
+    static constexpr std::size_t kLocalSlots = 8;
+
+    struct DaySlot {
+        bool used = false;
+        int64_t open_day = 0;
+        std::optional<SessionDay> day;
+    };
+    struct LocalSlot {
+        bool used = false;
+        bool resolved = false;
+        int64_t seconds = 0;
+        int64_t local_day = 0;
+    };
+
+    // Identity only, never dereferenced: the calendar these days belong to.
+    const SessionCalendar* calendar = nullptr;
+    bool utc = false;
+    std::array<DaySlot, kDaySlots> days{};
+    std::array<LocalSlot, kLocalSlots> locals{};
+    std::size_t next_local = 0;
+};
+
+namespace {
+
+using MemoState = SessionDayMemo::State;
+
+// epoch_to_stamp_local's zoned branch, for a zone already known not to be UTC.
+bool epoch_to_stamp_zoned(int64_t ms, const std::string& tz, CivilStamp& out) {
+    int64_t secs = ms / 1000;
+    if (ms < 0 && ms % 1000 != 0) --secs;
+    const time_t t = static_cast<time_t>(secs);
+    if (static_cast<int64_t>(t) != secs) return false;
+    std::tm loc{};
+    {
+        tz_util::ScopedTimezone guard(tz);
+        if (localtime_r(&t, &loc) == nullptr) return false;
+    }
+    out.year = loc.tm_year + 1900;
+    out.month = loc.tm_mon + 1;
+    out.day = loc.tm_mday;
+    out.hour = loc.tm_hour;
+    out.minute = loc.tm_min;
+    out.second = loc.tm_sec;
+    return true;
+}
+
+// The day number of the civil date local_stamp(cal.timezone(), ms) reads.
+// UTC's is gmtime_r's date as integer arithmetic; a zone's is localtime_r's,
+// asked once per whole second and kept for the last kLocalSlots seconds.
+bool memo_local_day(const SessionCalendar& cal, int64_t ms, MemoState& m, int64_t& out) {
+    int64_t secs = ms / 1000;
+    if (ms < 0 && ms % 1000 != 0) --secs;
+    if (m.utc) {
+        const time_t t = static_cast<time_t>(secs);
+        if (static_cast<int64_t>(t) != secs) return false;
+        out = floor_div(secs, 86400);
+        return true;
+    }
+    for (const MemoState::LocalSlot& slot : m.locals) {
+        if (slot.used && slot.seconds == secs) {
+            out = slot.local_day;
+            return slot.resolved;
+        }
+    }
+    CivilStamp c{};
+    const bool resolved = epoch_to_stamp_zoned(ms, cal.timezone(), c);
+    const int64_t day = resolved ? days_from_civil(c.year, static_cast<unsigned>(c.month),
+                                                   static_cast<unsigned>(c.day))
+                                 : 0;
+    MemoState::LocalSlot& slot = m.locals[m.next_local];
+    m.next_local = (m.next_local + 1) % MemoState::kLocalSlots;
+    slot.used = true;
+    slot.resolved = resolved;
+    slot.seconds = secs;
+    slot.local_day = day;
+    out = day;
+    return resolved;
+}
+
+const SessionDay* memo_session_day_from_open(const SessionCalendar& cal,
+                                             int64_t open_day,
+                                             MemoState& m) {
+    MemoState::DaySlot& slot =
+        m.days[static_cast<std::uint64_t>(open_day) % MemoState::kDaySlots];
+    if (!slot.used || slot.open_day != open_day) {
+        // Resolved before the slot is touched, so a throw leaves it intact.
+        auto day = session_day_from_open(cal, civil_from_days(open_day));
+        slot.day = std::move(day);
+        slot.open_day = open_day;
+        slot.used = true;
+    }
+    return slot.day ? &*slot.day : nullptr;
+}
+
+const SessionDay* memo_session_day_with_trading(const SessionCalendar& cal,
+                                                const CivilDate& trading,
+                                                MemoState& m) {
+    const int64_t trading_day = days_from_civil(trading.year,
+                                                static_cast<unsigned>(trading.month),
+                                                static_cast<unsigned>(trading.day));
+    for (int off : {0, -1, 1, -2, 2}) {
+        const SessionDay* d = memo_session_day_from_open(cal, trading_day + off, m);
+        if (d && same_civil_date(d->trading_date, trading)) return d;
+    }
+    return nullptr;
+}
+
+const SessionDay* memo_session_day_containing(const SessionCalendar& cal,
+                                              int64_t ms,
+                                              MemoState& m) {
+    if (!cal.valid()) return nullptr;
+    int64_t local_day = 0;
+    if (!memo_local_day(cal, ms, m, local_day)) return nullptr;
+    const int64_t candidates[3] = {local_day, local_day - 1, local_day + 1};
+    for (int64_t open_day : candidates) {
+        const SessionDay* day = memo_session_day_from_open(cal, open_day, m);
+        if (!day) continue;
+        if (day->origin_ms <= ms && ms < day->next_origin_ms) return day;
+    }
+    return memo_session_day_from_open(cal, local_day, m);
+}
+
+std::optional<PeriodCore> memo_calendar_core(const SessionCalendar& cal,
+                                             TimeframeUnit unit,
+                                             int count,
+                                             int64_t ms,
+                                             MemoState& m) {
+    const SessionDay* day = memo_session_day_containing(cal, ms, m);
+    if (!day) return std::nullopt;
+    const CivilDate trading_date = day->trading_date;
+    const int64_t trading_days = days_from_civil(trading_date.year,
+                                                 static_cast<unsigned>(trading_date.month),
+                                                 static_cast<unsigned>(trading_date.day));
+    int64_t key = 0;
+    int64_t next_key = 0;
+    CivilDate first_trading;
+    CivilDate next_trading;
+    if (unit == TimeframeUnit::Day) {
+        key = floor_div(trading_days, count) * count;
+        next_key = key + count;
+        first_trading = civil_from_days(key);
+        next_trading = civil_from_days(next_key);
+    } else if (unit == TimeframeUnit::Week) {
+        const int dow_mon0 = (weekday_sun0(trading_date) + 6) % 7;
+        const int64_t monday_days = trading_days - dow_mon0;
+        const int64_t week_i = floor_div(monday_days - kWeekZeroMondayDays, 7);
+        key = floor_div(week_i, count) * count;
+        next_key = key + count;
+        first_trading = civil_from_days(kWeekZeroMondayDays + key * 7);
+        next_trading = civil_from_days(kWeekZeroMondayDays + next_key * 7);
+    } else if (unit == TimeframeUnit::Month) {
+        const int64_t month_i =
+            static_cast<int64_t>(trading_date.year) * 12 + (trading_date.month - 1);
+        key = floor_div(month_i, count) * count;
+        next_key = key + count;
+        int y = static_cast<int>(floor_div(key, 12));
+        int mo = static_cast<int>(key - static_cast<int64_t>(y) * 12) + 1;
+        first_trading = CivilDate{y, mo, 1};
+        int ny = static_cast<int>(floor_div(next_key, 12));
+        int nm = static_cast<int>(next_key - static_cast<int64_t>(ny) * 12) + 1;
+        next_trading = CivilDate{ny, nm, 1};
+    } else {
+        return std::nullopt;
+    }
+    const SessionDay* first = memo_session_day_with_trading(cal, first_trading, m);
+    const bool has_first = first != nullptr;
+    const int64_t first_origin = has_first ? first->origin_ms : 0;
+    const SessionDay* nxt = memo_session_day_with_trading(cal, next_trading, m);
+    if (!has_first || !nxt) return std::nullopt;
+    const int64_t next_origin = nxt->origin_ms;
+    int64_t last = first_origin;
+    int64_t eligible = first_origin;
+    bool any = false;
+    bool found_eligible = false;
+    const int64_t first_ord = days_from_civil(first_trading.year,
+                                              static_cast<unsigned>(first_trading.month),
+                                              static_cast<unsigned>(first_trading.day));
+    const int64_t next_ord = days_from_civil(next_trading.year,
+                                             static_cast<unsigned>(next_trading.month),
+                                             static_cast<unsigned>(next_trading.day));
+    for (int64_t ord = first_ord; ord < next_ord; ++ord) {
+        const CivilDate td = civil_from_days(ord);
+        const SessionDay* d = memo_session_day_with_trading(cal, td, m);
+        if (!d) continue;
+        for (const EpochSpan& s : d->spans) {
+            if (s.end_ms > s.start_ms) {
+                if (!found_eligible) {
+                    eligible = s.start_ms;
+                    found_eligible = true;
+                }
+                break;
+            }
+        }
+        if (found_eligible) break;
+    }
+    for (int64_t ord = next_ord - 1; ord >= first_ord; --ord) {
+        const CivilDate td = civil_from_days(ord);
+        const SessionDay* d = memo_session_day_with_trading(cal, td, m);
+        if (!d) continue;
+        if (d->last_traded_ms > d->origin_ms) {
+            last = d->last_traded_ms;
+            any = true;
+            break;
+        }
+    }
+    PeriodCore core;
+    core.open_ms = first_origin;
+    core.eligible_open_ms = found_eligible ? eligible : first_origin;
+    core.last_traded_close_ms = any ? last : first_origin;
+    core.next_period_open_ms = next_origin;
+    return core;
+}
+
+std::optional<PeriodCore> memo_fixed_core(const SessionCalendar& cal,
+                                          const Timeframe& tf,
+                                          int64_t ms,
+                                          MemoState& m) {
+    int64_t bucket = 0;
+    if (!tf.valid() || !mul_ok(tf.count(), unit_ms(tf.unit()), bucket) || bucket <= 0) {
+        return std::nullopt;
+    }
+    const SessionDay* day = memo_session_day_containing(cal, ms, m);
+    if (!day) return std::nullopt;
+    const int64_t elapsed = ms - day->origin_ms;
+    const int64_t idx = floor_div(elapsed, bucket);
+    int64_t offset = 0;
+    if (!mul_ok(idx, bucket, offset)) return std::nullopt;
+    int64_t open = 0;
+    if (!add_ok(day->origin_ms, offset, open)) return std::nullopt;
+    int64_t raw_end = 0;
+    if (!add_ok(open, bucket, raw_end)) return std::nullopt;
+    PeriodCore core;
+    core.open_ms = open;
+    core.last_traded_close_ms = overlap_end(day->spans, open, raw_end);
+    core.eligible_open_ms = first_overlap_open(open, raw_end, day->spans);
+    core.next_period_open_ms = raw_end;
+    return core;
+}
+
+std::optional<PeriodCore> memo_core_containing(const SessionCalendar& cal,
+                                               const Timeframe& tf,
+                                               int64_t ms,
+                                               MemoState& m) {
+    if (!cal.valid() || !tf.valid()) return std::nullopt;
+    if (tf.is_fixed()) return memo_fixed_core(cal, tf, ms, m);
+    return memo_calendar_core(cal, tf.unit(), tf.count(), ms, m);
+}
+
+std::optional<int64_t> memo_next_span_start_at_or_after(const SessionCalendar& cal,
+                                                        int64_t after,
+                                                        MemoState& m) {
+    const SessionDay* day0 = memo_session_day_containing(cal, after, m);
+    if (!day0) return std::nullopt;
+    const int64_t open_day = days_from_civil(day0->open_date.year,
+                                             static_cast<unsigned>(day0->open_date.month),
+                                             static_cast<unsigned>(day0->open_date.day));
+    for (int i = 0; i <= 800; ++i) {
+        const SessionDay* d = memo_session_day_from_open(cal, open_day + i, m);
+        if (!d) return std::nullopt;
+        for (const EpochSpan& s : d->spans) {
+            if (s.end_ms <= after) continue;
+            if (s.start_ms >= after) return s.start_ms;
+            return after;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<int64_t> memo_first_tradable_open(const SessionCalendar& cal,
+                                                const Timeframe& tf,
+                                                int64_t at_or_after,
+                                                MemoState& m) {
+    if (tf.is_fixed()) {
+        return memo_next_span_start_at_or_after(cal, at_or_after, m);
+    }
+    auto core = memo_core_containing(cal, tf, at_or_after, m);
+    if (!core) return std::nullopt;
+    int64_t t = at_or_after;
+    for (int i = 0; i < 800; ++i) {
+        auto n = memo_core_containing(cal, tf, t, m);
+        if (!n) return std::nullopt;
+        if (n->open_ms >= at_or_after && n->last_traded_close_ms > n->open_ms) {
+            return n->eligible_open_ms >= at_or_after ? n->eligible_open_ms : n->open_ms;
+        }
+        if (n->next_period_open_ms <= t) return std::nullopt;
+        t = n->next_period_open_ms;
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+SessionDayMemo::SessionDayMemo() noexcept = default;
+SessionDayMemo::~SessionDayMemo() = default;
+SessionDayMemo::SessionDayMemo(SessionDayMemo&&) noexcept = default;
+SessionDayMemo& SessionDayMemo::operator=(SessionDayMemo&&) noexcept = default;
+
+void SessionDayMemo::reset() noexcept { state_.reset(); }
+
+SessionDayMemo::State& SessionDayMemo::state(const SessionCalendar& calendar) {
+    if (!state_ || state_->calendar != &calendar) {
+        auto fresh = std::make_unique<State>();
+        fresh->calendar = &calendar;
+        fresh->utc = is_utc_zone(calendar.timezone());
+        state_ = std::move(fresh);
+    }
+    return *state_;
+}
+
+std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
+                                                  const Timeframe& script_tf,
+                                                  const Timeframe& input_tf,
+                                                  int64_t ms,
+                                                  SessionDayMemo& memo) {
+    if (!calendar.valid() || !script_tf.valid() || !input_tf.valid()) return std::nullopt;
+    MemoState& m = memo.state(calendar);
+    auto core = memo_core_containing(calendar, script_tf, ms, m);
+    if (!core) return std::nullopt;
+    auto next_in = memo_first_tradable_open(calendar, input_tf, core->last_traded_close_ms, m);
+    if (!next_in) return std::nullopt;
+    NativeInterval iv;
+    iv.open_ms = core->open_ms;
+    iv.eligible_open_ms = core->eligible_open_ms;
+    iv.last_traded_close_ms = core->last_traded_close_ms;
+    iv.next_period_open_ms = core->next_period_open_ms;
+    iv.next_input_open_ms = *next_in;
+    return iv;
+}
+
+std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
+                                                  const Timeframe& tf,
+                                                  int64_t ms,
+                                                  SessionDayMemo& memo) {
+    return interval_containing(calendar, tf, tf, ms, memo);
+}
+
+std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar,
+                                               int64_t ms,
+                                               SessionDayMemo& memo) {
+    if (!calendar.valid()) return std::nullopt;
+    const SessionDay* day = memo_session_day_containing(calendar, ms, memo.state(calendar));
+    if (!day) return std::nullopt;
+    NativeSessionDay out;
+    out.origin_ms = day->origin_ms;
+    out.next_origin_ms = day->next_origin_ms;
+    out.ordinal = days_from_civil(day->trading_date.year,
+                                  static_cast<unsigned>(day->trading_date.month),
+                                  static_cast<unsigned>(day->trading_date.day));
+    out.spans.reserve(day->spans.size());
+    for (const EpochSpan& span : day->spans) out.spans.emplace_back(span.start_ms, span.end_ms);
+    return out;
+}
+
+bool in_session(const SessionCalendar& calendar, int64_t ms, SessionDayMemo& memo) {
+    if (!calendar.valid()) return false;
+    const SessionDay* day = memo_session_day_containing(calendar, ms, memo.state(calendar));
+    if (!day) return false;
+    return ms_in_spans(day->spans, ms);
 }
 
 }  // inline namespace native_calendar_v2

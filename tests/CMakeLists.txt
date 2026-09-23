@@ -927,6 +927,11 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # rows), pinned on fc7aad62 -- the values the session-day memo must reproduce.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_calendar_hash_witness)
+# R5 PERF-K1: the session-day memo (src/native_calendar_memo.hpp) answers
+# interval_containing / session_day_at / in_session bit for bit as the
+# memo-free calendar does, over walks and random instants across clock
+# changes, year ends and session breaks in six zones. Source-free.
+list(APPEND TEST_SOURCES test_native_calendar_memo)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
