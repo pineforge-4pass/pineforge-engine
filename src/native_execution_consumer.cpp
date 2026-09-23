@@ -1341,6 +1341,7 @@ bool NativeExecutionConsumer::recoverable_abort() const noexcept {
 
 void NativeExecutionConsumer::latch_failure(NativeFailure failure) noexcept {
     if (std::holds_alternative<NativeFailed>(state_)) return;
+    leave_running();
     std::optional<NativeRunSpec> spec;
     if (auto* r = std::get_if<NativeReady>(&state_)) spec = std::move(r->spec);
     else if (auto* n = std::get_if<NativeRunning>(&state_)) spec = std::move(n->spec);
@@ -1515,6 +1516,7 @@ double NativeExecutionConsumer::ladder_tick() const {
 }
 
 const NativeRunSpec* NativeExecutionConsumer::spec_ptr() const {
+    if (running_spec_) return running_spec_;
     if (const auto* n = std::get_if<NativeRunning>(&state_)) return &n->spec;
     if (const auto* r = std::get_if<NativeReady>(&state_)) return &r->spec;
     if (const auto* c = std::get_if<NativeCompleted>(&state_)) return &c->spec;
@@ -1999,19 +2001,33 @@ bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
 }
 
 bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
+    if (running_spec_) return running_undetected_;
     const auto* spec = spec_ptr();
     return spec && spec->timeframe_undetected;
 }
 
 bool NativeExecutionConsumer::legacy_tolerant_slot_labels() const noexcept {
+    if (running_spec_) return running_tolerant_labels_;
     const auto* spec = spec_ptr();
     return spec && spec->slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
 }
 
 bool NativeExecutionConsumer::uses_raw_label_partition() const noexcept {
+    if (running_spec_) return running_raw_labels_;
     return has_undetected_timeframe()
         || (legacy_tolerant_slot_labels()
             && pairing_.pairing == native_calendar::TimeframePairing::Passthrough);
+}
+
+void NativeExecutionConsumer::cache_running_policy() noexcept {
+    // Derived by the probing path, with the cache still empty.
+    running_spec_ = nullptr;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    if (!running) return;
+    running_undetected_ = has_undetected_timeframe();
+    running_tolerant_labels_ = legacy_tolerant_slot_labels();
+    running_raw_labels_ = uses_raw_label_partition();
+    running_spec_ = &running->spec;
 }
 
 native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
@@ -2279,6 +2295,7 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     // provider begin, so it must survive that provider's configure call.
     if (!staged_ingress_fx_) staged_fx_curve_.reset();
     spec_bar_digests_.reset();
+    leave_running();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
     engine.last_error_.clear();
@@ -2442,6 +2459,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     begin_n_ = 0;
     begin_is_stream_ = false;
     state_ = NativeRunning{std::move(spec), phase};
+    cache_running_policy();
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     // The previous run's declared series are torn down BEFORE the host's
     // run-begin callback: whatever evaluator states that callback registers
@@ -8406,6 +8424,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
+        leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -8449,6 +8468,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
+        leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -8490,6 +8510,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         auto* running = std::get_if<NativeRunning>(&state_);
         if (!running) return;
         NativeRunSpec spec = running->spec;
+        leave_running();
         state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -9006,6 +9027,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
             render(engine, "native stream_end lost running state");
             return false;
         }
+        leave_running();
         NativeRunSpec spec = std::move(running->spec);
         state_.emplace<NativeCompleted>(NativeCompleted{std::move(spec), NativeCompletion::StreamEnded});
         engine.stream_phase_ = BacktestEngine::StreamPhase::IDLE;

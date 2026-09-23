@@ -735,6 +735,24 @@ private:
     // Derived, never folded.
     const BacktestEngine* downcast_engine_ = nullptr;
     NativeStrategyHost* downcast_host_ = nullptr;
+    // The running spec and the label policy the per-bar interval lookups
+    // read, taken once per begin_ready (cache_running_policy). Non-null
+    // exactly while state_ holds NativeRunning: that alternative's spec lives
+    // in place in state_, no in-run path writes the fields the policy is
+    // derived from (the begin-time declarations rewrite `subscriptions` and
+    // `auxiliary_feed` alone, and pairing_ is only written before Running),
+    // and every other write of state_ is preceded by leave_running(). While
+    // it is null, spec_ptr() and the three predicates probe as they always
+    // did. Derived, never folded.
+    const NativeRunSpec* running_spec_ = nullptr;
+    bool running_undetected_ = false;
+    bool running_tolerant_labels_ = false;
+    bool running_raw_labels_ = false;
+    void cache_running_policy() noexcept;
+    void leave_running() noexcept { running_spec_ = nullptr; }
+    // The caches beside the lookups they replace, compared bit for bit by
+    // tests/test_native_callback_caches.cpp.
+    friend struct NativeExecutionConsumerProbe;
     uint64_t consumed_high_water_ = 0;
     std::string bound_session_key_;
     native_order::WorkingRequestCore requests_{{"unbound", 1}};

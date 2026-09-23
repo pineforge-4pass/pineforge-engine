@@ -1,24 +1,33 @@
 // R5 lane PERF-P23: the callback plumbing's caches against the lookups they
 // replace, bit for bit.
 //
-// NativeExecutionConsumer used to re-derive, at every callback site, a fact
-// that does not change while the consumer lives: the engine's
-// NativeStrategyHost view, a dynamic_cast at 18 sites, now taken once per
-// public begin (native_host()). The cached answer must be dynamic_cast's at
-// every moment a host can observe. This witness drives randomized hosts --
-// two host classes, specs over timeframe pairings, label policies, undetected
-// timeframes, cadences and intrabar paths, and lifecycles through batch runs,
-// streams, refusals, cooperative aborts, callback exceptions and reuse -- and
-// compares, inside every host hook and around every public call, the cache
-// with dynamic_cast itself. It also asks one host's consumer about other
-// engines, native and not, which the cache must answer as dynamic_cast does.
+// NativeExecutionConsumer used to re-derive, at every callback site and every
+// per-bar lookup, facts that do not change while a run runs:
+//   (b) the engine's NativeStrategyHost view -- a dynamic_cast at 18 sites,
+//       now taken once per public begin (native_host());
+//   (c) the run spec -- a probe of the lifecycle variant (spec_ptr()) -- and
+//       the label policy the interval lookups read (has_undetected_timeframe,
+//       legacy_tolerant_slot_labels, uses_raw_label_partition), now taken
+//       once per begin_ready and held exactly while the run is Running.
+// Each cached answer must be the uncached one at every moment a host can
+// observe. This witness drives randomized hosts -- two host classes, specs
+// over timeframe pairings, label policies, undetected timeframes, cadences
+// and intrabar paths, and lifecycles through batch runs, streams, refusals,
+// cooperative aborts, callback exceptions and reuse -- and compares, inside
+// every host hook and around every public call, each cache with the lookup
+// it replaced: dynamic_cast itself, and the pre-lane variant probe and label
+// formulas restated verbatim below. It also asks one host's consumer about
+// other engines, native and not, which the cache must answer as dynamic_cast
+// does.
 //
-// Fail-before: at the lane's base the consumer has no native_host(), so this
-// TU does not compile there (the lane report records the first diagnostic).
+// Fail-before: at the lane's base the consumer has neither native_host() nor
+// the probe's friendship, so this TU does not compile there (the lane report
+// records the first diagnostic).
 //
 // Source-free: this TU runs in the kernel-only profile.
 #include "../src/native_execution_consumer.hpp"
 
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/native_host.hpp>
 
 #include <cstdint>
@@ -27,6 +36,51 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace pineforge {
+inline namespace engine_script_run_v18 {
+
+// The lane's caches beside the lookups they replaced. The reference_* bodies
+// are the pre-lane spec_ptr() and label predicates, verbatim, reading the
+// consumer's own lifecycle variant and pairing.
+struct NativeExecutionConsumerProbe {
+    static const NativeRunSpec* spec(const NativeExecutionConsumer& c) { return c.spec_ptr(); }
+    static bool undetected(const NativeExecutionConsumer& c) {
+        return c.has_undetected_timeframe();
+    }
+    static bool tolerant(const NativeExecutionConsumer& c) {
+        return c.legacy_tolerant_slot_labels();
+    }
+    static bool raw_labels(const NativeExecutionConsumer& c) {
+        return c.uses_raw_label_partition();
+    }
+
+    static const NativeRunSpec* reference_spec(const NativeExecutionConsumer& c) {
+        if (const auto* n = std::get_if<NativeRunning>(&c.state_)) return &n->spec;
+        if (const auto* r = std::get_if<NativeReady>(&c.state_)) return &r->spec;
+        if (const auto* d = std::get_if<NativeCompleted>(&c.state_)) return &d->spec;
+        if (const auto* f = std::get_if<NativeFailed>(&c.state_)) {
+            if (f->spec) return &*f->spec;
+        }
+        return nullptr;
+    }
+    static bool reference_undetected(const NativeExecutionConsumer& c) {
+        const auto* spec = reference_spec(c);
+        return spec && spec->timeframe_undetected;
+    }
+    static bool reference_tolerant(const NativeExecutionConsumer& c) {
+        const auto* spec = reference_spec(c);
+        return spec && spec->slot_label_policy == NativeSlotLabelPolicy::FeedTolerant;
+    }
+    static bool reference_raw_labels(const NativeExecutionConsumer& c) {
+        return reference_undetected(c)
+            || (reference_tolerant(c)
+                && c.pairing_.pairing == native_calendar::TimeframePairing::Passthrough);
+    }
+};
+
+}  // inline namespace engine_script_run_v18
+}  // namespace pineforge
 
 using namespace pineforge;
 namespace no = pineforge::native_order;
@@ -63,6 +117,8 @@ std::uint64_t comparisons = 0;
 constexpr std::int64_t kT0 = 1704067200000LL;  // 2024-01-01 00:00 UTC
 constexpr std::int64_t kMinute = 60000;
 
+using Probe = NativeExecutionConsumerProbe;
+
 // A non-native engine: the consumer's host view of it is null.
 struct PlainEngine final : BacktestEngine {
     PlainEngine() : BacktestEngine(NativeConsumerBindTag{}) {}
@@ -84,7 +140,7 @@ struct CacheHost : NativeStrategyHost {
 
     void verify(const char* where) const {
         const NativeExecutionConsumer& c = consumer();
-        // The host view, as a mutable engine, a const one, and for every
+        // (b) the host view, as a mutable engine, a const one, and for every
         // other engine this consumer is asked about.
         auto& self = const_cast<CacheHost&>(*this);
         BacktestEngine& engine = self;
@@ -98,6 +154,13 @@ struct CacheHost : NativeStrategyHost {
             SAME(where, c.native_host(const_other),
                  dynamic_cast<const NativeStrategyHost*>(&const_other));
         }
+        // (c) the spec and the label policy.
+        SAME(where, Probe::spec(c), Probe::reference_spec(c));
+        SAME(where, Probe::undetected(c), Probe::reference_undetected(c));
+        SAME(where, Probe::tolerant(c), Probe::reference_tolerant(c));
+        SAME(where, Probe::raw_labels(c), Probe::reference_raw_labels(c));
+        // And the public read the spec is observed through.
+        SAME(where, native_state().spec, Probe::reference_spec(c));
     }
 
     void hook(const char* where) {
