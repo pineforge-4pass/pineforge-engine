@@ -1068,6 +1068,19 @@ list(APPEND TEST_SOURCES test_adapter_purge_index)
 # (scaling). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_exit_leg_index)
 list(APPEND TEST_SOURCES test_adapter_lookup_index_scaling)
+# R5 lane PERF-L2: the fused settlement of a book of at most one lot against
+# the staged chain, bit for bit -- an admission table with each condition
+# flipped, randomized direct books through every fused-capable entry,
+# randomized matcher runs (fee forms, FX, margin, magnifier, streams, host-owned
+# excursions), K3's and L5's books -- and the counter witness that the common
+# case takes the one pass. Source-free, so it also runs in the kernel-only
+# profile.
+list(APPEND TEST_SOURCES test_native_fused_settlement)
+# R5 lane PERF-L2: a common-case fill is inspected, projected, previewed and
+# settled without a heap allocation on a warm engine (fails on 6976a808, where
+# each call staged into heap vectors). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
