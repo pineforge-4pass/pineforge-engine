@@ -9433,9 +9433,8 @@ native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& 
 
 native_order::DefinitionIndex::Publication
 NativeExecutionConsumer::publish_definition_index() const noexcept {
-    if (!definition_index_enabled_) return native_order::DefinitionIndex::Publication(nullptr);
-    definition_index_.sync(requests_);
-    return native_order::DefinitionIndex::Publication(&definition_index_);
+    return native_order::DefinitionIndex::Publication(
+        definition_index_enabled_ ? &definition_index_ : nullptr, requests_);
 }
 
 void NativeExecutionConsumer::cohort_add(

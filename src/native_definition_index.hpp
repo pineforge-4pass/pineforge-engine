@@ -26,10 +26,13 @@
 // scan (the caller's fallback), so its answer is the scan's by construction.
 //
 // The core reads it only while its owner publishes it around one call
-// (Publication: a thread-local pointer naming the core it indexes, restored
-// when the call returns), so a core the owner is not calling into, on any
-// thread, scans as before. One word per incarnation the history names, never
-// more words than the history has events plus a constant.
+// (Publication: a thread-local pair naming the index and the core it serves,
+// restored when the call returns), so any other core, on any thread, scans
+// as before. A
+// publication costs nothing more: the index folds the history lazily, when a
+// lookup first reaches it, so a call whose lookups all find working requests
+// never folds at all. One word per incarnation the history names, never more
+// words than the history has events plus a constant.
 
 #include <pineforge/native_order.hpp>
 
@@ -105,39 +108,49 @@ public:
     // How many lookups the index answered in place of the scan.
     std::uint64_t answered() const noexcept { return answered_; }
 
-    // Publishes an index to the core it indexes for the lifetime of this
+private:
+    // The index this thread has published, and the core it serves.
+    struct Published {
+        DefinitionIndex* index = nullptr;
+        const WorkingRequestCore* core = nullptr;
+    };
+    static Published& published() noexcept {
+        static thread_local Published current;
+        return current;
+    }
+
+public:
+    // Publishes `index` as the index of `core` for the lifetime of this
     // object, on this thread; a null index publishes nothing. Nests.
     class Publication {
     public:
-        explicit Publication(const DefinitionIndex* index) noexcept
+        Publication(DefinitionIndex* index, const WorkingRequestCore& core) noexcept
             : previous_(published()) {
-            published() = index;
+            published() = Published{index, index ? &core : nullptr};
         }
         ~Publication() { published() = previous_; }
         Publication(const Publication&) = delete;
         Publication& operator=(const Publication&) = delete;
 
     private:
-        const DefinitionIndex* previous_;
+        Published previous_;
     };
 
-    // The published index's answer for `handle` in `core`, or null when no
-    // index is published for that core or it cannot vouch for the answer.
+    // The answer of the index published for `core`, synced to its history
+    // first, or null when none is published for it or the index cannot vouch
+    // for the answer.
     static const RequestDefinition* published_lookup(const WorkingRequestCore& core,
                                                      const RequestHandle& handle) noexcept {
-        const DefinitionIndex* index = published();
-        return index ? index->find(core, handle) : nullptr;
+        const Published current = published();
+        if (!current.index || current.core != &core) return nullptr;
+        current.index->sync(core);
+        return current.index->find(core, handle);
     }
 
 private:
     static constexpr std::uint64_t kAccepted = 1;
     static constexpr std::uint64_t kPredecessor = 2;
     static constexpr std::uint64_t kSuccessor = 3;
-
-    static const DefinitionIndex*& published() noexcept {
-        static thread_local const DefinitionIndex* index = nullptr;
-        return index;
-    }
 
     void note(const RequestDefinition& definition, std::uint64_t kind) {
         const std::uint64_t incarnation = definition.handle.incarnation;

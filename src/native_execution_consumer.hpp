@@ -946,10 +946,11 @@ private:
     const native_order::TargetObservation* cached_cohort_target(
             const BacktestEngine& engine, const native_order::LiveRequest& live);
     void clear_cohort_target_cache() noexcept;
-    // Publishes definition_index_, synced to requests_'s history, to the core
-    // for the lifetime of the returned object: bind it around each core call
-    // that canonicalizes an origin or tests cohort membership. Publishes
-    // nothing while set_definition_index(false) holds.
+    // Publishes definition_index_ to the core for the lifetime of the
+    // returned object (it syncs to requests_'s history at its first lookup):
+    // bind it around each core call that canonicalizes an origin or tests
+    // cohort membership. Publishes nothing while set_definition_index(false)
+    // holds.
     native_order::DefinitionIndex::Publication publish_definition_index() const noexcept;
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
