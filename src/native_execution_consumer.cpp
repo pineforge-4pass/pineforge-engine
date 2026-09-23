@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -55,6 +56,18 @@ constexpr uint64_t kFnvPowers[9] = {
     && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define PINEFORGE_FNV_SCALAR_FOLD 1
 #endif
+
+// A continuation view's buffer grows here, out of the fold's way, and never
+// throws: a buffer that cannot grow ends the recording and the capture folds.
+bool reserve_view_bytes(std::vector<unsigned char>& out, size_t n) noexcept {
+    if (n > out.max_size() - out.size()) return false;
+    try {
+        out.reserve(std::max({out.size() + n, out.capacity() * 2, size_t{4096}}));
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
 
 struct Fnv {
     uint64_t h = 1469598103934665603ULL;
@@ -105,9 +118,56 @@ struct Fnv {
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
 
-void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept;
-void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept;
-void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandle>& handle) noexcept;
+// R5 lane PERF-P1: the sink a continuation view is recorded into
+// (NativeExecutionConsumer::capture_continuation_view). The same primitives
+// as Fnv, appending the bytes Fnv would fold -- in the order bytes() reads
+// them: a scalar's eight object bytes, a bool's one -- instead of folding
+// them. It is a type of its own, and the hash helpers below take either sink,
+// so the eager fold every other caller runs is compiled exactly as it was. A
+// buffer that cannot grow latches `failed`, and the capture folds at once.
+struct FnvRecord {
+    std::vector<unsigned char>& out;
+    uint64_t run_base = 0;
+    bool failed = false;
+    void bytes(const void* p, size_t n) noexcept {
+        if (failed) return;
+        if (out.capacity() - out.size() < n && !reserve_view_bytes(out, n)) {
+            failed = true;
+            return;
+        }
+        const auto* c = static_cast<const unsigned char*>(p);
+        out.insert(out.end(), c, c + n);
+    }
+    void scalar(uint64_t bits) noexcept { bytes(&bits, sizeof bits); }
+    void u(uint64_t v) noexcept { scalar(v); }
+    void i(int64_t v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
+    }
+    void d(double v) noexcept {
+        uint64_t bits = 0; std::memcpy(&bits, &v, sizeof bits); scalar(bits);
+    }
+    void b(bool v) noexcept { const unsigned char c = v ? 1 : 0; bytes(&c, 1); }
+    void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
+};
+
+// Folds recorded bytes exactly as bytes() would, eight at a time through
+// scalar(), which reads a word's object bytes in memory order and collapses
+// its zero runs: a view's replay costs what the fold it recorded would have.
+void fold_recorded(Fnv& f, const unsigned char* p, size_t n) noexcept {
+    for (; n >= sizeof(uint64_t); p += sizeof(uint64_t), n -= sizeof(uint64_t)) {
+        uint64_t word = 0;
+        std::memcpy(&word, p, sizeof word);
+        f.scalar(word);
+    }
+    f.bytes(p, n);
+}
+
+template <class F>
+void hash_coordinate(F& f, const NativeCoordinate& c) noexcept;
+template <class F>
+void hash_birth(F& f, const native_order::Birth& birth) noexcept;
+template <class F>
+void hash_optional_handle(F& f, const std::optional<native_order::RequestHandle>& handle) noexcept;
 
 // L8 price grid. Generic hosts opt in through the run spec; the kernel
 // otherwise keeps price_tick a pure slippage multiplier, so a spec that
@@ -178,7 +238,8 @@ bool calc_timing_on(const NativeRunSpec& spec) noexcept {
 // already taken of this same spec (NativeExecutionConsumer::spec_bar_digests).
 // The three local digests below answer them instead of re-walking the arrays,
 // so the fold itself is written, and folds, exactly as without a cache.
-void hash_spec(Fnv& f, const NativeRunSpec& spec,
+template <class F>
+void hash_spec(F& f, const NativeRunSpec& spec,
                const NativeExecutionConsumer::SpecBarDigests* cached = nullptr) noexcept {
     const auto native_intrabar_path_digest = [cached](const IntrabarPath& path) noexcept {
         return cached ? cached->intrabar : pineforge::native_intrabar_path_digest(path);
@@ -264,32 +325,38 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec,
     }
 }
 
-void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
+template <class F>
+void hash_handle(F& f, const native_order::RequestHandle& handle) noexcept {
     f.s(handle.run.session_key);
     f.u(handle.run.run_number - f.run_base);
     f.u(handle.incarnation);
 }
 
-void hash_cohort_handle(Fnv& f, native_order::CohortHandle handle) noexcept {
+template <class F>
+void hash_cohort_handle(F& f, native_order::CohortHandle handle) noexcept {
     f.u(handle.value);
 }
 
-void hash_event_id(Fnv& f, const native_order::EventId& id) noexcept {
+template <class F>
+void hash_event_id(F& f, const native_order::EventId& id) noexcept {
     f.s(id.run.session_key);
     f.u(id.run.run_number - f.run_base);
     f.u(id.ordinal);
 }
 
-void hash_cursor(Fnv& f, const native_order::MatchCursor& cursor) noexcept {
+template <class F>
+void hash_cursor(F& f, const native_order::MatchCursor& cursor) noexcept {
     hash_coordinate(f, cursor.point);
     f.d(cursor.t);
 }
 
-void hash_surface(Fnv& f, native_order::CommandSurface surface) noexcept {
+template <class F>
+void hash_surface(F& f, native_order::CommandSurface surface) noexcept {
     f.u(static_cast<uint64_t>(surface));
 }
 
-void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
+template <class F>
+void hash_intent(F& f, const native_order::OrderIntent& intent) noexcept {
     f.u(intent.index());
     std::visit([&](const auto& payload) {
         using T = std::decay_t<decltype(payload)>;
@@ -338,7 +405,8 @@ void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
     }, intent);
 }
 
-void hash_execution_terms(Fnv& f, const native_order::ExecutionTerms& terms) noexcept {
+template <class F>
+void hash_execution_terms(F& f, const native_order::ExecutionTerms& terms) noexcept {
     f.d(terms.resolved_price);
     f.b(terms.units.has_value());
     if (terms.units) f.d(*terms.units);
@@ -346,7 +414,8 @@ void hash_execution_terms(Fnv& f, const native_order::ExecutionTerms& terms) noe
     f.u(static_cast<uint64_t>(terms.grid_policy));
 }
 
-void hash_optional_execution_terms(Fnv& f,
+template <class F>
+void hash_optional_execution_terms(F& f,
                                    const std::optional<native_order::ExecutionTerms>& terms) noexcept {
     f.b(terms.has_value());
     if (terms) hash_execution_terms(f, *terms);
@@ -605,7 +674,8 @@ const native_order::HostSized* host_sized_intent(
     return std::get_if<native_order::HostSized>(&live.request().intent);
 }
 
-void hash_terms_input(Fnv& f, const native_order::TermsResolvedInput& input) noexcept {
+template <class F>
+void hash_terms_input(F& f, const native_order::TermsResolvedInput& input) noexcept {
     f.u(static_cast<uint64_t>(input.price_kind));
     f.b(input.shared_cursor_collision);
     f.d(input.raw_price);
@@ -613,7 +683,8 @@ void hash_terms_input(Fnv& f, const native_order::TermsResolvedInput& input) noe
     hash_execution_terms(f, input.terms);
 }
 
-void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
+template <class F>
+void hash_trigger(F& f, const native_order::Trigger& trigger) noexcept {
     f.u(trigger.index());
     if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
         f.d(limit->price);
@@ -643,12 +714,14 @@ void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
     }
 }
 
-void hash_capacity(Fnv& f, const native_order::Capacity& capacity) noexcept {
+template <class F>
+void hash_capacity(F& f, const native_order::Capacity& capacity) noexcept {
     f.u(capacity.index());
     if (const auto* budget = std::get_if<native_order::PointBudget>(&capacity)) f.d(budget->units);
 }
 
-void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
+template <class F>
+void hash_owner(F& f, const native_order::Owner& owner) noexcept {
     f.u(owner.index());
     std::visit([&](const auto& value) {
         using T = std::decay_t<decltype(value)>;
@@ -685,7 +758,8 @@ void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
     }, owner);
 }
 
-void hash_group(Fnv& f, const native_order::Group& group) noexcept {
+template <class F>
+void hash_group(F& f, const native_order::Group& group) noexcept {
     f.u(group.index());
     if (const auto* member = std::get_if<native_order::Member>(&group)) {
         f.u(member->group);
@@ -694,7 +768,8 @@ void hash_group(Fnv& f, const native_order::Group& group) noexcept {
     }
 }
 
-void hash_request(Fnv& f, const native_order::Request& request) noexcept {
+template <class F>
+void hash_request(F& f, const native_order::Request& request) noexcept {
     hash_intent(f, request.intent);
     f.s(request.label);
     f.s(request.comment);
@@ -714,19 +789,22 @@ void hash_request(Fnv& f, const native_order::Request& request) noexcept {
     }
 }
 
-void hash_remaining(Fnv& f, const native_order::Remaining& remaining) noexcept {
+template <class F>
+void hash_remaining(F& f, const native_order::Remaining& remaining) noexcept {
     f.u(remaining.index());
     if (const auto* units = std::get_if<native_order::RemainingUnits>(&remaining)) f.d(units->q);
 }
 
-void hash_remaining_projection(Fnv& f, const native_order::RemainingProjection& remaining) noexcept {
+template <class F>
+void hash_remaining_projection(F& f, const native_order::RemainingProjection& remaining) noexcept {
     f.u(remaining.index());
     if (const auto* units = std::get_if<native_order::RemainingProjectionUnits>(&remaining)) {
         f.d(units->q);
     }
 }
 
-void hash_authority(Fnv& f, const native_order::Authority& authority) noexcept {
+template <class F>
+void hash_authority(F& f, const native_order::Authority& authority) noexcept {
     f.u(authority.index());
     const auto hash_enrollment = [&](const native_order::Enrollment& enrollment) {
         f.u(enrollment.index());
@@ -775,7 +853,8 @@ void hash_authority(Fnv& f, const native_order::Authority& authority) noexcept {
     }, authority);
 }
 
-void hash_cohorts(Fnv& f, const native_order::WorkingRequestCore& requests) noexcept {
+template <class F>
+void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexcept {
     const auto& cohorts = requests.cohorts();
     f.u(cohorts.size());
     for (const auto& roster : cohorts) {
@@ -793,7 +872,8 @@ void hash_cohorts(Fnv& f, const native_order::WorkingRequestCore& requests) noex
     }
 }
 
-void hash_trigger_state(Fnv& f, const native_order::TriggerState& state) noexcept {
+template <class F>
+void hash_trigger_state(F& f, const native_order::TriggerState& state) noexcept {
     f.u(state.index());
     if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) f.d(track->best);
     if (const auto* active = std::get_if<native_order::TrailActive>(&state)) {
@@ -801,7 +881,8 @@ void hash_trigger_state(Fnv& f, const native_order::TriggerState& state) noexcep
     }
 }
 
-void hash_allowance(Fnv& f, const native_order::Allowance& allowance) noexcept {
+template <class F>
+void hash_allowance(F& f, const native_order::Allowance& allowance) noexcept {
     f.u(allowance.index());
     if (const auto* units = std::get_if<native_order::AllowanceUnits>(&allowance)) {
         f.u(units->point_ordinal);
@@ -816,7 +897,8 @@ void hash_allowance(Fnv& f, const native_order::Allowance& allowance) noexcept {
     }
 }
 
-void hash_pending(Fnv& f, const native_order::PendingAdjustments& pending) noexcept {
+template <class F>
+void hash_pending(F& f, const native_order::PendingAdjustments& pending) noexcept {
     f.u(pending.index());
     if (const auto* deferred = std::get_if<native_order::PendingDeferred>(&pending)) {
         f.d(deferred->total);
@@ -825,7 +907,8 @@ void hash_pending(Fnv& f, const native_order::PendingAdjustments& pending) noexc
     }
 }
 
-void hash_definition(Fnv& f, const native_order::DefinitionRef& definition) noexcept {
+template <class F>
+void hash_definition(F& f, const native_order::DefinitionRef& definition) noexcept {
     f.b(static_cast<bool>(definition));
     if (!definition) return;
     hash_handle(f, definition->handle);
@@ -840,7 +923,8 @@ void hash_definition(Fnv& f, const native_order::DefinitionRef& definition) noex
     }
 }
 
-void hash_scope(Fnv& f, const native_order::ExecutionScope& scope) noexcept {
+template <class F>
+void hash_scope(F& f, const native_order::ExecutionScope& scope) noexcept {
     f.u(scope.index());
     if (const auto* opening = std::get_if<execution::OpeningExposure>(&scope)) {
         f.u(opening->incarnation);
@@ -852,22 +936,26 @@ void hash_scope(Fnv& f, const native_order::ExecutionScope& scope) noexcept {
     }
 }
 
-void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept {
+template <class F>
+void hash_birth(F& f, const native_order::Birth& birth) noexcept {
     f.u(birth.acceptance_ordinal);
     f.i(birth.decision_time_lower_bound);
 }
 
-void hash_optional_request(Fnv& f, const std::optional<native_order::Request>& request) noexcept {
+template <class F>
+void hash_optional_request(F& f, const std::optional<native_order::Request>& request) noexcept {
     f.b(request.has_value());
     if (request) hash_request(f, *request);
 }
 
-void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandle>& handle) noexcept {
+template <class F>
+void hash_optional_handle(F& f, const std::optional<native_order::RequestHandle>& handle) noexcept {
     f.b(handle.has_value());
     if (handle) hash_handle(f, *handle);
 }
 
-void hash_failure(Fnv& f, const NativeFailure& failure) noexcept {
+template <class F>
+void hash_failure(F& f, const NativeFailure& failure) noexcept {
     f.u(static_cast<uint64_t>(failure.code));
     f.u(static_cast<uint64_t>(failure.operation));
     f.u(failure.ordinal);
@@ -879,7 +967,8 @@ void hash_failure(Fnv& f, const NativeFailure& failure) noexcept {
     f.d(failure.context.cursor.t);
 }
 
-void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept {
+template <class F>
+void hash_coordinate(F& f, const NativeCoordinate& c) noexcept {
     f.u(c.ordinal);
     f.i(c.interval_index);
     f.i(c.open_ms);
@@ -894,7 +983,8 @@ void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept {
     f.u(static_cast<uint64_t>(c.completion));
 }
 
-void hash_interval(Fnv& f, const native_calendar::NativeInterval& interval) noexcept {
+template <class F>
+void hash_interval(F& f, const native_calendar::NativeInterval& interval) noexcept {
     f.i(interval.open_ms);
     f.i(interval.eligible_open_ms);
     f.i(interval.last_traded_close_ms);
@@ -902,7 +992,8 @@ void hash_interval(Fnv& f, const native_calendar::NativeInterval& interval) noex
     f.i(interval.next_input_open_ms);
 }
 
-void hash_driver_statistics(Fnv& f, const NativeDriverStatistics& statistics) noexcept {
+template <class F>
+void hash_driver_statistics(F& f, const NativeDriverStatistics& statistics) noexcept {
     f.b(statistics.intrabar_path_enabled);
     f.i(statistics.sub_bars_per_script_bar);
     f.i(statistics.samples_per_sub_bar);
@@ -910,7 +1001,8 @@ void hash_driver_statistics(Fnv& f, const NativeDriverStatistics& statistics) no
     f.u(statistics.sample_ticks_processed);
 }
 
-void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
+template <class F>
+void hash_current_point(F& f, const NativeCurrentPointView& point) noexcept {
     hash_coordinate(f, point.decision.coordinate);
     f.i(point.decision.decision_floor_ms);
     hash_interval(f, point.decision.input_interval);
@@ -926,14 +1018,16 @@ void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
     f.u(point.quote_origin_ordinal);
 }
 
-void hash_input_context(Fnv& f, const NativeInputContext& context) noexcept {
+template <class F>
+void hash_input_context(F& f, const NativeInputContext& context) noexcept {
     hash_interval(f, context.input_interval);
     hash_interval(f, context.script_interval);
     f.i(context.input_index);
     f.b(context.completes_script_interval);
 }
 
-void hash_tick_context(Fnv& f, const NativeTickContext& context) noexcept {
+template <class F>
+void hash_tick_context(F& f, const NativeTickContext& context) noexcept {
     hash_coordinate(f, context.decision.coordinate);
     f.i(context.decision.decision_floor_ms);
     hash_interval(f, context.decision.input_interval);
@@ -947,12 +1041,14 @@ void hash_tick_context(Fnv& f, const NativeTickContext& context) noexcept {
     f.u(context.sequence);
 }
 
-void hash_bar(Fnv& f, const Bar& bar) noexcept {
+template <class F>
+void hash_bar(F& f, const Bar& bar) noexcept {
     f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
     f.i(bar.timestamp);
 }
 
-void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
+template <class F>
+void hash_command(F& f, const native_order::CommandEvent& event) noexcept {
     std::visit([&](const auto& payload) {
         using T = std::decay_t<decltype(payload)>;
         f.u(payload.ordinal);
@@ -1138,7 +1234,8 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
     }, event);
 }
 
-void hash_driver_point(Fnv& f, const NativeDriverPoint& point) noexcept {
+template <class F>
+void hash_driver_point(F& f, const NativeDriverPoint& point) noexcept {
     hash_coordinate(f, point.coordinate);
     f.d(point.raw_price);
     f.b(point.sequence.has_value());
@@ -1147,7 +1244,8 @@ void hash_driver_point(Fnv& f, const NativeDriverPoint& point) noexcept {
     f.b(point.excursion);
 }
 
-void hash_account_row(Fnv& f, const NativeAccountObservation& row) noexcept {
+template <class F>
+void hash_account_row(F& f, const NativeAccountObservation& row) noexcept {
     f.u(row.ordinal);
     f.i(row.effective_time_ms);
     f.d(row.marked_equity);
@@ -1163,8 +1261,9 @@ void hash_account_row(Fnv& f, const NativeAccountObservation& row) noexcept {
 // this fold ignores both, so one run digests the same value on every host
 // carrying the same tzdata release -- while a tzdata update that rewrites the
 // zone's rules still moves it, because then the run read different rules.
+template <class F>
 void hash_tz_identity(
-        Fnv& f, const std::optional<native_calendar::TimezoneIdentityDescriptor>& id) noexcept {
+        F& f, const std::optional<native_calendar::TimezoneIdentityDescriptor>& id) noexcept {
     f.b(id.has_value());
     if (!id) return;
     f.u(id->semantics_version);
@@ -1524,244 +1623,358 @@ const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar
 }
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
-    Fnv f;
-    f.run_base = requests_.identity().run_number;
-    f.s(kNativeConsumerSemanticVersion);
-    f.s(kNativeDriverSemanticVersion);
-    f.s(kNativeCalendarSemanticVersion);
-    f.u(static_cast<uint64_t>(state_.index()));
-    if (const auto* running = std::get_if<NativeRunning>(&state_)) {
-        f.u(static_cast<uint64_t>(running->phase));
-    }
-    if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
-        f.u(static_cast<uint64_t>(completed->completion));
-    }
-    if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
-        hash_failure(f, failed_state->failure);
-    }
-    f.s(bound_session_key_);
-    f.i(decision_floor_ms_);
-    f.b(has_floor_);
-    f.u(next_timeline_ordinal_);
-    f.b(in_callback_);
-    f.u(static_cast<uint64_t>(callback_phase_));
-    f.b(preparing_begin_);
-    f.b(input_callback_context_.has_value());
-    if (input_callback_context_) hash_input_context(f, *input_callback_context_);
-    f.b(input_callback_bar_.has_value());
-    if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
-    f.b(tick_callback_context_.has_value());
-    if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
-    f.b(tick_callback_bar_.has_value());
-    if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
-    hash_coordinate(f, callback_context_.coordinate);
-    f.i(callback_context_.decision_floor_ms);
-    hash_interval(f, callback_context_.input_interval);
-    hash_interval(f, callback_context_.script_interval);
-    f.i(callback_context_.sub_index);
-    f.i(callback_context_.sub_count);
-    f.b(callback_context_.is_terminal_sub_bar);
-    f.i(callback_context_.sub_bar_open_ms);
-    f.i(callback_context_.script_bar_open_ms);
-    hash_driver_statistics(f, callback_context_.driver_statistics);
-    // The four session-day facts are not folded, here or in the frames and
-    // notifications below: each is a function of the label and calendar this
-    // digest already folds and of the run's input around the bar (R5 lane F5,
-    // present_session_day), so folding them would move every established
-    // continuation value for nothing it does not already identify.
-    f.b(consuming_request_);
-    f.b(draining_notifications_);
-    f.b(current_frame_.has_value());
-    if (current_frame_) {
-        hash_current_point(f, current_frame_->point);
-        f.u(current_frame_->acceptance_cutoff);
-    }
-    f.u(pre_open_birth_point_ordinal_);
-    f.i(pre_open_birth_time_ms_);
-    f.u(pre_open_births_.size());
-    for (const auto& handle : pre_open_births_) hash_handle(f, handle);
-    f.u(applied_notifications_.size() - notification_head_);
-    for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
-        const auto& notification = applied_notifications_[i];
-        f.u(notification.history_index);
-        f.u(notification.ordinal);
-        hash_current_point(f, notification.point);
-        // Conditional: only a kernel-originated fill carries a margin receipt,
-        // so a host-only queue folds exactly what it folded before L4.
-        if (notification.margin_call_index) {
-            f.u(1);
-            f.u(*notification.margin_call_index);
+    // The fold, for either sink (R5 lane PERF-P1). An Fnv folds it now. A
+    // FnvRecord records the bytes an Fnv would fold into the view being
+    // captured, and leaves the two lazily folded digests behind as holes at
+    // their logs' lengths; the account digest is folded as each row is
+    // appended, so it is recorded like any other value.
+    const auto fold = [this](auto& f) noexcept {
+        constexpr bool recording = std::is_same_v<std::decay_t<decltype(f)>, FnvRecord>;
+        f.run_base = requests_.identity().run_number;
+        f.s(kNativeConsumerSemanticVersion);
+        f.s(kNativeDriverSemanticVersion);
+        f.s(kNativeCalendarSemanticVersion);
+        f.u(static_cast<uint64_t>(state_.index()));
+        if (const auto* running = std::get_if<NativeRunning>(&state_)) {
+            f.u(static_cast<uint64_t>(running->phase));
         }
-    }
-    f.b(processing_input_);
-    f.u(static_cast<uint64_t>(input_mode_));
-    f.i(next_interval_index_);
-    // Declared higher-timeframe series carry their own delivery cursors, and
-    // a stream's warmup boundary is where its live phase starts -- neither is
-    // recoverable from the input count alone. Folded only for a run that
-    // declares a series, so every spec without one keeps the pre-subscription
-    // continuation identity (the same rule hash_spec's digest follows).
-    if (!subscriptions_.empty()) {
-        f.i(subscription_warmup_inputs_);
-        for (const auto& subscription : subscriptions_) {
-            f.u(subscription.index);
-            f.b(subscription.lookahead);
-            f.b(subscription.latest.has_value());
-            if (subscription.latest) hash_bar(f, *subscription.latest);
-            f.i(subscription.bucket_first_index);
-            f.i(subscription.bucket_first_ms);
-            f.u(subscription.projected_bars.size());
-            f.u(subscription.projected_cursor);
-            // Only a series built from the auxiliary feed has a feed cursor;
-            // a series built from the input folds exactly what it did.
-            if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
+        if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
+            f.u(static_cast<uint64_t>(completed->completion));
         }
-    }
-    // Bars a realtime stream appended to its declared auxiliary feed are
-    // durable input no spec digest covers. Folded only for a run that
-    // declares a feed.
-    if (auxiliary_tf_) {
-        f.u(auxiliary_appended_.size());
-        f.u(auxiliary_appended_digest_);
-    }
-    if (const auto* spec = spec_ptr()) {
-        hash_spec(f, *spec, &spec_bar_digests(*spec));
-        // L5: the recalculation cadence is durable decision state only for a
-        // spec that opted into it. Folding it conditionally keeps a default
-        // run's continuation identity byte-identical to the pre-lane tree.
-        if (calc_timing_on(*spec)) {
-            f.u(recalc_epoch_);
-            f.u(recalc_epoch_count_);
-            f.u(recalculations_);
-            f.u(recalculations_skipped_);
-            f.b(partial_has_);
-            if (partial_has_) {
-                hash_bar(f, partial_);
-                f.i(partial_script_open_ms_);
+        if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
+            hash_failure(f, failed_state->failure);
+        }
+        f.s(bound_session_key_);
+        f.i(decision_floor_ms_);
+        f.b(has_floor_);
+        f.u(next_timeline_ordinal_);
+        f.b(in_callback_);
+        f.u(static_cast<uint64_t>(callback_phase_));
+        f.b(preparing_begin_);
+        f.b(input_callback_context_.has_value());
+        if (input_callback_context_) hash_input_context(f, *input_callback_context_);
+        f.b(input_callback_bar_.has_value());
+        if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
+        f.b(tick_callback_context_.has_value());
+        if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
+        f.b(tick_callback_bar_.has_value());
+        if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
+        hash_coordinate(f, callback_context_.coordinate);
+        f.i(callback_context_.decision_floor_ms);
+        hash_interval(f, callback_context_.input_interval);
+        hash_interval(f, callback_context_.script_interval);
+        f.i(callback_context_.sub_index);
+        f.i(callback_context_.sub_count);
+        f.b(callback_context_.is_terminal_sub_bar);
+        f.i(callback_context_.sub_bar_open_ms);
+        f.i(callback_context_.script_bar_open_ms);
+        hash_driver_statistics(f, callback_context_.driver_statistics);
+        // The four session-day facts are not folded, here or in the frames and
+        // notifications below: each is a function of the label and calendar this
+        // digest already folds and of the run's input around the bar (R5 lane F5,
+        // present_session_day), so folding them would move every established
+        // continuation value for nothing it does not already identify.
+        f.b(consuming_request_);
+        f.b(draining_notifications_);
+        f.b(current_frame_.has_value());
+        if (current_frame_) {
+            hash_current_point(f, current_frame_->point);
+            f.u(current_frame_->acceptance_cutoff);
+        }
+        f.u(pre_open_birth_point_ordinal_);
+        f.i(pre_open_birth_time_ms_);
+        f.u(pre_open_births_.size());
+        for (const auto& handle : pre_open_births_) hash_handle(f, handle);
+        f.u(applied_notifications_.size() - notification_head_);
+        for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
+            const auto& notification = applied_notifications_[i];
+            f.u(notification.history_index);
+            f.u(notification.ordinal);
+            hash_current_point(f, notification.point);
+            // Conditional: only a kernel-originated fill carries a margin receipt,
+            // so a host-only queue folds exactly what it folded before L4.
+            if (notification.margin_call_index) {
+                f.u(1);
+                f.u(*notification.margin_call_index);
             }
         }
-    }
-    f.b(staged_ingress_fx_);
-    f.b(staged_fx_curve_.has_value());
-    if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
-    hash_tz_identity(f, tz_identity_);
-    f.s(requests_.identity().session_key);
-    f.u(requests_.live().size());
-    for (const auto& live : requests_.live()) {
-        hash_definition(f, live.definition);
-        hash_remaining(f, live.remaining);
-        hash_authority(f, live.authority);
-        hash_trigger_state(f, live.trigger_state);
-        hash_allowance(f, live.allowance);
-        hash_pending(f, live.pending);
-        // L3b: a placement-time sizing measurement is durable decision state
-        // only for the request that froze one. Folding it conditionally keeps
-        // every pre-lane request table byte-identical.
-        if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
-        if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
-        if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
-    }
-    // The host-maintained roster is durable matching authority.  Fold it
-    // immediately after the request table so a membership-only change cannot
-    // share a continuation identity with an otherwise identical run.
-    hash_cohorts(f, requests_);
-    sync_history_digest();
-    // Both logs are append-only for the life of a run -- begin_ready is the
-    // only thing that clears them, and it resets these digests and rebinds
-    // the run identity in the same breath -- and each fold chains on the one
-    // before it. A digest that is behind therefore needs its TAIL folded,
-    // exactly as the command history's does; re-deriving the whole log at
-    // every query is the same chain at quadratic cost, which a host that
-    // reads the continuation once per bar pays in full (lane E24 measured
-    // 4x the bars costing 16x the CPU under broker-state-hash recording).
-    if (driver_digest_.count > driver_log_.size()) driver_digest_.reset();
-    for (std::size_t index = driver_digest_.count; index < driver_log_.size(); ++index) {
-        fold_driver_digest(driver_log_[index]);
-    }
-    if (account_digest_.count > account_log_.size()) account_digest_.reset();
-    for (std::size_t index = account_digest_.count; index < account_log_.size(); ++index) {
-        fold_account_digest(account_log_[index]);
-    }
-    f.u(history_digest_.count);
-    f.u(history_digest_.h);
-    f.b(current_input_open_.has_value());
-    if (current_input_open_) f.i(*current_input_open_);
-    f.b(observed_input_cursor_.has_value());
-    if (observed_input_cursor_) f.i(*observed_input_cursor_);
-    f.b(next_tradable_synthesis_cursor_.has_value());
-    if (next_tradable_synthesis_cursor_) f.i(*next_tradable_synthesis_cursor_);
-    f.b(last_accepted_input_.has_value());
-    if (last_accepted_input_) hash_interval(f, *last_accepted_input_);
-    f.b(last_observed_slot_open_.has_value());
-    if (last_observed_slot_open_) f.i(*last_observed_slot_open_);
-    f.b(last_finalized_input_.has_value());
-    if (last_finalized_input_) hash_interval(f, *last_finalized_input_);
-    f.b(has_tick_sequence_);
-    f.u(last_tick_sequence_);
-    f.i(script_.key);
-    f.b(script_.has_data);
-    f.b(script_.sealed);
-    hash_interval(f, script_.interval);
-    hash_bar(f, script_.agg);
-    f.i(script_.first_open_ms);
-    f.i(script_.first_source_time_ms);
-    f.i(script_.latest_close_ms);
-    f.i(script_.first_index);
-    f.i(script_.last_index);
-    f.b(script_.modeled_ohlc);
-    f.b(has_forming_);
-    if (has_forming_) hash_bar(f, forming_);
-    f.b(has_last_price_);
-    f.d(last_price_);
-    f.i(last_print_time_ms_);
-    hash_driver_statistics(f, driver_statistics_);
-    f.u(static_cast<uint64_t>(pairing_.pairing));
-    f.i(pairing_.group_factor);
-    f.u(driver_digest_.count);
-    f.u(driver_digest_.h);
-    f.u(account_digest_.count);
-    f.u(account_digest_.h);
-    if (precommit_digest_.count != 0) {
-        f.u(precommit_digest_.count);
-        f.u(precommit_digest_.h);
-    }
-    // L4 durable liquidation state. It exists only under a declared margin
-    // model, and folds only there, so no pre-L4 continuation identity moves.
-    if (margin_model() != nullptr) {
-        f.b(margin_liquidation_.has_value());
-        if (margin_liquidation_) {
-            hash_handle(f, margin_liquidation_->handle);
-            f.d(margin_liquidation_->level);
-            f.d(margin_liquidation_->units);
+        f.b(processing_input_);
+        f.u(static_cast<uint64_t>(input_mode_));
+        f.i(next_interval_index_);
+        // Declared higher-timeframe series carry their own delivery cursors, and
+        // a stream's warmup boundary is where its live phase starts -- neither is
+        // recoverable from the input count alone. Folded only for a run that
+        // declares a series, so every spec without one keeps the pre-subscription
+        // continuation identity (the same rule hash_spec's digest follows).
+        if (!subscriptions_.empty()) {
+            f.i(subscription_warmup_inputs_);
+            for (const auto& subscription : subscriptions_) {
+                f.u(subscription.index);
+                f.b(subscription.lookahead);
+                f.b(subscription.latest.has_value());
+                if (subscription.latest) hash_bar(f, *subscription.latest);
+                f.i(subscription.bucket_first_index);
+                f.i(subscription.bucket_first_ms);
+                f.u(subscription.projected_bars.size());
+                f.u(subscription.projected_cursor);
+                // Only a series built from the auxiliary feed has a feed cursor;
+                // a series built from the input folds exactly what it did.
+                if (subscription.auxiliary) f.u(subscription.auxiliary_cursor);
+            }
         }
-        f.b(has_margin_path_);
-        if (has_margin_path_) {
-            hash_bar(f, margin_path_bar_);
-            f.b(margin_path_high_first_);
+        // Bars a realtime stream appended to its declared auxiliary feed are
+        // durable input no spec digest covers. Folded only for a run that
+        // declares a feed.
+        if (auxiliary_tf_) {
+            f.u(auxiliary_appended_.size());
+            f.u(auxiliary_appended_digest_);
         }
-        f.u(margin_point_ordinal_);
-        f.u(margin_point_calls_);
-    }
-    // L9 durable risk ledger. It exists only under declared risk limits, and
-    // folds only there, so no pre-L9 continuation identity moves.
-    if (risk_limits() != nullptr) {
-        f.b(risk_.has_day);
-        if (risk_.has_day) f.i(risk_.day_ordinal);
-        f.u(risk_.fills_today);
-        f.u(risk_.consecutive_loss_days);
-        f.b(risk_.has_peak);
-        if (risk_.has_peak) f.d(risk_.peak_equity);
-        f.d(risk_.day_open_equity);
-        f.d(risk_.day_open_realized);
-        f.b(risk_.run_block.has_value());
-        if (risk_.run_block) f.u(static_cast<uint64_t>(*risk_.run_block));
-        f.b(risk_.day_block.has_value());
-        if (risk_.day_block) {
-            f.u(static_cast<uint64_t>(*risk_.day_block));
-            f.i(risk_.day_block_day);
+        if (const auto* spec = spec_ptr()) {
+            hash_spec(f, *spec, &spec_bar_digests(*spec));
+            // L5: the recalculation cadence is durable decision state only for a
+            // spec that opted into it. Folding it conditionally keeps a default
+            // run's continuation identity byte-identical to the pre-lane tree.
+            if (calc_timing_on(*spec)) {
+                f.u(recalc_epoch_);
+                f.u(recalc_epoch_count_);
+                f.u(recalculations_);
+                f.u(recalculations_skipped_);
+                f.b(partial_has_);
+                if (partial_has_) {
+                    hash_bar(f, partial_);
+                    f.i(partial_script_open_ms_);
+                }
+            }
         }
+        f.b(staged_ingress_fx_);
+        f.b(staged_fx_curve_.has_value());
+        if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
+        hash_tz_identity(f, tz_identity_);
+        f.s(requests_.identity().session_key);
+        f.u(requests_.live().size());
+        for (const auto& live : requests_.live()) {
+            hash_definition(f, live.definition);
+            hash_remaining(f, live.remaining);
+            hash_authority(f, live.authority);
+            hash_trigger_state(f, live.trigger_state);
+            hash_allowance(f, live.allowance);
+            hash_pending(f, live.pending);
+            // L3b: a placement-time sizing measurement is durable decision state
+            // only for the request that froze one. Folding it conditionally keeps
+            // every pre-lane request table byte-identical.
+            if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
+            if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
+            if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
+        }
+        // The host-maintained roster is durable matching authority.  Fold it
+        // immediately after the request table so a membership-only change cannot
+        // share a continuation identity with an otherwise identical run.
+        hash_cohorts(f, requests_);
+        // Both logs are append-only for the life of a run -- begin_ready is the
+        // only thing that clears them, and it resets these digests and rebinds
+        // the run identity in the same breath -- and each fold chains on the one
+        // before it. A digest that is behind therefore needs its TAIL folded,
+        // exactly as the command history's does; re-deriving the whole log at
+        // every query is the same chain at quadratic cost, which a host that
+        // reads the continuation once per bar pays in full (lane E24 measured
+        // 4x the bars costing 16x the CPU under broker-state-hash recording).
+        if constexpr (!recording) {
+            sync_history_digest(requests_.history().size());
+            sync_driver_digest(driver_log_.size());
+        }
+        if (account_digest_.count > account_log_.size()) account_digest_.reset();
+        for (std::size_t index = account_digest_.count; index < account_log_.size(); ++index) {
+            fold_account_digest(account_log_[index]);
+        }
+        if constexpr (recording) {
+            continuation_view_.history_count = requests_.history().size();
+            f.u(continuation_view_.history_count);
+            continuation_view_.history_hole = continuation_view_.bytes.size();
+        } else {
+            f.u(history_digest_.count);
+            f.u(history_digest_.h);
+        }
+        f.b(current_input_open_.has_value());
+        if (current_input_open_) f.i(*current_input_open_);
+        f.b(observed_input_cursor_.has_value());
+        if (observed_input_cursor_) f.i(*observed_input_cursor_);
+        f.b(next_tradable_synthesis_cursor_.has_value());
+        if (next_tradable_synthesis_cursor_) f.i(*next_tradable_synthesis_cursor_);
+        f.b(last_accepted_input_.has_value());
+        if (last_accepted_input_) hash_interval(f, *last_accepted_input_);
+        f.b(last_observed_slot_open_.has_value());
+        if (last_observed_slot_open_) f.i(*last_observed_slot_open_);
+        f.b(last_finalized_input_.has_value());
+        if (last_finalized_input_) hash_interval(f, *last_finalized_input_);
+        f.b(has_tick_sequence_);
+        f.u(last_tick_sequence_);
+        f.i(script_.key);
+        f.b(script_.has_data);
+        f.b(script_.sealed);
+        hash_interval(f, script_.interval);
+        hash_bar(f, script_.agg);
+        f.i(script_.first_open_ms);
+        f.i(script_.first_source_time_ms);
+        f.i(script_.latest_close_ms);
+        f.i(script_.first_index);
+        f.i(script_.last_index);
+        f.b(script_.modeled_ohlc);
+        f.b(has_forming_);
+        if (has_forming_) hash_bar(f, forming_);
+        f.b(has_last_price_);
+        f.d(last_price_);
+        f.i(last_print_time_ms_);
+        hash_driver_statistics(f, driver_statistics_);
+        f.u(static_cast<uint64_t>(pairing_.pairing));
+        f.i(pairing_.group_factor);
+        if constexpr (recording) {
+            continuation_view_.driver_count = driver_log_.size();
+            f.u(continuation_view_.driver_count);
+            continuation_view_.driver_hole = continuation_view_.bytes.size();
+        } else {
+            f.u(driver_digest_.count);
+            f.u(driver_digest_.h);
+        }
+        f.u(account_digest_.count);
+        f.u(account_digest_.h);
+        if (precommit_digest_.count != 0) {
+            f.u(precommit_digest_.count);
+            f.u(precommit_digest_.h);
+        }
+        // L4 durable liquidation state. It exists only under a declared margin
+        // model, and folds only there, so no pre-L4 continuation identity moves.
+        if (margin_model() != nullptr) {
+            f.b(margin_liquidation_.has_value());
+            if (margin_liquidation_) {
+                hash_handle(f, margin_liquidation_->handle);
+                f.d(margin_liquidation_->level);
+                f.d(margin_liquidation_->units);
+            }
+            f.b(has_margin_path_);
+            if (has_margin_path_) {
+                hash_bar(f, margin_path_bar_);
+                f.b(margin_path_high_first_);
+            }
+            f.u(margin_point_ordinal_);
+            f.u(margin_point_calls_);
+        }
+        // L9 durable risk ledger. It exists only under declared risk limits, and
+        // folds only there, so no pre-L9 continuation identity moves.
+        if (risk_limits() != nullptr) {
+            f.b(risk_.has_day);
+            if (risk_.has_day) f.i(risk_.day_ordinal);
+            f.u(risk_.fills_today);
+            f.u(risk_.consecutive_loss_days);
+            f.b(risk_.has_peak);
+            if (risk_.has_peak) f.d(risk_.peak_equity);
+            f.d(risk_.day_open_equity);
+            f.d(risk_.day_open_realized);
+            f.b(risk_.run_block.has_value());
+            if (risk_.run_block) f.u(static_cast<uint64_t>(*risk_.run_block));
+            f.b(risk_.day_block.has_value());
+            if (risk_.day_block) {
+                f.u(static_cast<uint64_t>(*risk_.day_block));
+                f.i(risk_.day_block_day);
+            }
+        }
+    };
+    if (continuation_view_.state == ContinuationView::State::Recording) {
+        FnvRecord record{continuation_view_.bytes};
+        fold(record);
+        continuation_view_.complete = !record.failed;
+        return 0;
     }
+    // A pending view names both digests at the lengths it was taken at, and
+    // this fold carries them to the logs' ends, where nothing can take them
+    // back: the view is folded first.
+    if (continuation_view_.state == ContinuationView::State::Pending) fold_continuation_view();
+    Fnv f;
+    fold(f);
     return f.h;
+}
+
+// R5 lane PERF-P1. A Pine run latches the continuation at its last script
+// point and nothing on the benchmark or report path ever reads it, yet that
+// one fold took a fifth of the run: every driver point (four a bar) and every
+// command event of the run folded into their digests at the end. A view
+// copies the bytes of the live state the fold reads -- the request table, the
+// cohort rosters and receipts, the frames and cursors -- and leaves the two
+// logs where they lie; the first reader pays the fold that was skipped, and
+// no one else does. A buffer that cannot grow falls back to folding at once,
+// so the value never depends on memory.
+void NativeExecutionConsumer::capture_continuation_view() noexcept {
+    auto& view = continuation_view_;
+    view.state = ContinuationView::State::None;
+    view.bytes.clear();
+    if (defer_continuation_views_) {
+        view.run_number = requests_.identity().run_number;
+        view.state = ContinuationView::State::Recording;
+        (void)continuation_hash();
+        view.state = ContinuationView::State::None;
+        if (view.complete) {
+#ifndef NDEBUG
+            // Debug builds prove every view against the eager fold it
+            // replaces. The fold leaves both digests at the view's lengths,
+            // so the view stays pending and a later read still folds it.
+            const uint64_t eager = continuation_hash();
+            if (fold_continuation_view() != eager) std::abort();
+#endif
+            view.state = ContinuationView::State::Pending;
+            return;
+        }
+        view.bytes.clear();
+    }
+    view.value = continuation_hash();
+    view.state = ContinuationView::State::Folded;
+}
+
+void NativeExecutionConsumer::drop_continuation_view() const noexcept {
+    continuation_view_.state = ContinuationView::State::None;
+}
+
+bool NativeExecutionConsumer::continuation_view_pending() const noexcept {
+    return continuation_view_.state == ContinuationView::State::Pending;
+}
+
+uint64_t NativeExecutionConsumer::latched_continuation(uint64_t eager) const noexcept {
+    switch (continuation_view_.state) {
+    case ContinuationView::State::None:
+    case ContinuationView::State::Recording: return eager;
+    case ContinuationView::State::Pending: return fold_continuation_view();
+    case ContinuationView::State::Folded: return continuation_view_.value;
+    }
+    return eager;
+}
+
+// The view's value: both digests carried to exactly the lengths it was taken
+// at -- from wherever they stand, which is never past them, since
+// continuation_hash() folds a pending view before it moves them -- then the
+// recorded bytes with the two digests in their holes.
+uint64_t NativeExecutionConsumer::fold_continuation_view() const noexcept {
+    auto& view = continuation_view_;
+#ifndef NDEBUG
+    // Debug builds hold the invariants that make a view foldable: it is of
+    // this run, its logs have only grown since, and neither digest is past it.
+    if (view.run_number != requests_.identity().run_number
+        || view.history_count > requests_.history().size()
+        || view.driver_count > driver_log_.size()
+        || history_digest_.count > view.history_count
+        || driver_digest_.count > view.driver_count) {
+        std::abort();
+    }
+#endif
+    sync_history_digest(view.history_count);
+    sync_driver_digest(view.driver_count);
+    const unsigned char* const bytes = view.bytes.data();
+    Fnv f;
+    fold_recorded(f, bytes, view.history_hole);
+    f.u(history_digest_.h);
+    fold_recorded(f, bytes + view.history_hole, view.driver_hole - view.history_hole);
+    f.u(driver_digest_.h);
+    fold_recorded(f, bytes + view.driver_hole, view.bytes.size() - view.driver_hole);
+    view.value = f.h;
+    view.state = ContinuationView::State::Folded;
+    return view.value;
 }
 
 bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
@@ -2103,6 +2316,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native timezone identity cannot be derived from its zone data");
         return false;
     }
+    // The run's latch dies here and its logs below: a view of it goes first.
+    drop_continuation_view();
     engine.reset_run_state();
     // RULING A48: one generic capability, wired once per run. A host that
     // declares ownership supplies the closing-row magnitudes; the kernel then
@@ -2394,18 +2609,27 @@ NativeCoordinate NativeExecutionConsumer::coordinate_from(
     return c;
 }
 
-void NativeExecutionConsumer::sync_history_digest() const noexcept {
+void NativeExecutionConsumer::sync_history_digest(std::size_t count) const noexcept {
     const auto& hist = requests_.history();
-    if (history_digest_.count > hist.size()) history_digest_.reset();
-    if (history_digest_.count == hist.size()) return;
+    count = std::min(count, hist.size());
+    if (history_digest_.count > count) history_digest_.reset();
+    if (history_digest_.count == count) return;
     Fnv f;
     f.run_base = requests_.identity().run_number;
     f.h = history_digest_.h;
-    for (std::size_t i = history_digest_.count; i < hist.size(); ++i) {
+    for (std::size_t i = history_digest_.count; i < count; ++i) {
         hash_command(f, hist[i]);
     }
     history_digest_.h = f.h;
-    history_digest_.count = hist.size();
+    history_digest_.count = count;
+}
+
+void NativeExecutionConsumer::sync_driver_digest(std::size_t count) const noexcept {
+    count = std::min(count, driver_log_.size());
+    if (driver_digest_.count > count) driver_digest_.reset();
+    for (std::size_t index = driver_digest_.count; index < count; ++index) {
+        fold_driver_digest(driver_log_[index]);
+    }
 }
 
 void NativeExecutionConsumer::fold_driver_digest(const NativeDriverPoint& point) const noexcept {
@@ -6997,6 +7221,7 @@ void NativeExecutionConsumer::record_script_report_point(
         engine.update_equity_extremes();
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
     engine.record_equity_point(script_open_ms);
+    drop_continuation_view();
     engine.last_script_continuation_hash_ = continuation_hash();
     engine.last_script_continuation_valid_ = true;
     if (engine.broker_state_hash_recording_) {
@@ -9503,7 +9728,8 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
 // a different fold than the last recorded row.
 std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     const std::uint64_t execution = last_script_continuation_valid_
-        ? last_script_continuation_hash_
+        ? as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+              .latched_continuation(last_script_continuation_hash_)
         : execution_consumer().continuation_hash();
     return broker_state_hash_from_execution_hash(execution);
 }

@@ -30,6 +30,25 @@ public:
     bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
                                           const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
+    // The continuation a host latches at a script point (the engine's
+    // last_script_continuation_* snapshot), taken as a VIEW of the fold and
+    // folded when it is first read (R5 lane PERF-P1). A view is the bytes the
+    // fold would consume, in fold order, with the command history's and the
+    // driver log's digests left as holes at the lengths those logs had; a
+    // read folds both digests to exactly those lengths and the bytes around
+    // them, which is the value continuation_hash() answered at the capture.
+    // Both logs only grow within a run, continuation_hash() folds a pending
+    // view before it carries the digests past it, and begin_ready drops one
+    // before it clears them.
+    void capture_continuation_view() noexcept;
+    void drop_continuation_view() const noexcept;
+    bool continuation_view_pending() const noexcept;
+    // The latched continuation: the view's value when the host latched one,
+    // else `eager`, the value the host latched itself.
+    uint64_t latched_continuation(uint64_t eager) const noexcept;
+    // Off, a capture folds at once: the eager capture a view reproduces,
+    // kept as the witness's reference (tests/test_native_continuation_view.cpp).
+    void defer_continuation_views(bool defer) noexcept { defer_continuation_views_ = defer; }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
@@ -683,7 +702,10 @@ private:
     bool finalize_observed_tick_slot(BacktestEngine& engine,
                                      const native_calendar::NativeInterval& interval,
                                      NativeCompletionKind kind);
-    void sync_history_digest() const noexcept;
+    // Carry a digest to exactly `count` rows of its log: the log's length for
+    // a fold, a view's captured length for a view.
+    void sync_history_digest(std::size_t count) const noexcept;
+    void sync_driver_digest(std::size_t count) const noexcept;
     void fold_driver_digest(const NativeDriverPoint& point) const noexcept;
     void fold_account_digest(const NativeAccountObservation& row) const noexcept;
     bool pre_open_birth_eligible(const native_order::RequestHandle&,
@@ -828,6 +850,26 @@ private:
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
     mutable AppendDigest account_digest_{};
+    // R5 lane PERF-P1: the latched continuation, as a view (see
+    // capture_continuation_view). Derived, never folded; one per consumer,
+    // its buffer reused by the next capture.
+    struct ContinuationView {
+        // Recording only inside capture_continuation_view, while
+        // continuation_hash() records the view instead of folding.
+        enum class State : std::uint8_t { None, Recording, Pending, Folded };
+        State state = State::None;
+        std::vector<unsigned char> bytes;
+        std::size_t history_hole = 0;
+        std::size_t driver_hole = 0;
+        std::size_t history_count = 0;
+        std::size_t driver_count = 0;
+        uint64_t run_number = 0;
+        bool complete = false;
+        uint64_t value = 0;
+    };
+    mutable ContinuationView continuation_view_{};
+    bool defer_continuation_views_ = true;
+    uint64_t fold_continuation_view() const noexcept;
     // A host-owned margin verdict is part of the continuation only when the
     // generic spec actually exposes an initial-margin gate.  Source specs do
     // not set that gate, preserving their established fingerprint while the

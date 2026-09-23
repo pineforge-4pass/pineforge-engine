@@ -870,6 +870,10 @@ list(APPEND TEST_SOURCES test_native_session_boundaries)
 # R5 F9: every recording-mode broker-state hash of six Pine scenarios, pinned
 # on fd785928 -- the values an incremental adapter fold must reproduce.
 list(APPEND TEST_SOURCES test_adapter_recording_hash_witness)
+# R5 PERF-P1: a latched continuation taken as a view and folded on first read
+# answers the eager capture's value at every read, pinned on fc7aad62. On a
+# bare host: source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_continuation_view)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
