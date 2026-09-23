@@ -19,7 +19,7 @@
 #include <variant>
 
 namespace pineforge {
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 namespace {
 
 template<class T>
@@ -10125,7 +10125,7 @@ std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     return broker_state_hash_from_execution_hash(execution);
 }
 
-}  // inline namespace engine_script_run_v18
+}  // inline namespace engine_script_run_v19
 
 // The portable run-spec digest lives here, in the one translation unit that
 // owns `hash_spec` (see its definition above, beside the continuation fold),

@@ -56,7 +56,7 @@ before using it for Pine behavior measurements; compilation alone is insufficien
 
 Rebuild every C++ consumer with matching current headers and archive. This lane
 moved the class namespace to `engine_script_run_v4` (since advanced to <!-- verified HEAD -->
-`engine_script_run_v18`); frozen v2/base38 and v3/f864 callers were its
+`engine_script_run_v19`); frozen v2/base38 and v3/f864 callers were its
 compile/link rejection controls. The broker fingerprint domain and the stream
 fingerprint version moved to 4 then, including priority attachment and
 configuration. Prior hashes are not comparable. Public C functions, PODs and ABI/API versions are unchanged;

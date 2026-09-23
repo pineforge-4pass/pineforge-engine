@@ -114,7 +114,7 @@ NOISE_STRINGS = [
 NOISE_NM = [
     "T pineforge::ta::ema_na_warmup_flag()",
     "s pineforge::ta::ema_na_warmup_flag()::flag",
-    "T pineforge::engine_script_run_v18::NativeStrategyHost::on_native_margin_call("
+    "T pineforge::engine_script_run_v19::NativeStrategyHost::on_native_margin_call("
     "pineforge::native_order::native_order_v6::MarginCallEvent const&)",
     "libpineforge_kernel.a(pending_order_mirror.cpp.o):",
 ]
@@ -122,7 +122,7 @@ NOISE_NM = [
 # reads, and which ADR-0001 rules by name (Mach-O and ELF spellings both).
 RULED_SYMINFO_STRINGS = ["_strategy_set_syminfo_type", "strategy_set_syminfo_type"]
 RULED_SYMINFO_NM = [
-    "T pineforge::engine_script_run_v18::BacktestEngine::set_syminfo_metadata("
+    "T pineforge::engine_script_run_v19::BacktestEngine::set_syminfo_metadata("
     "std::__1::basic_string<char> const&, double)",
     "T _strategy_set_syminfo_type",
 ]

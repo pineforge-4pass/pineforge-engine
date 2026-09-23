@@ -119,22 +119,25 @@ No release tag or VERSION value is rewritten by verification.
 The verifier fetches the pinned ABI commits `e60e571` (R2), `0e18690`
 (selected settlement, before exact reversal), `c3ed455` (native host v13),
 `f736676` (native host v14), `e7cdf052` (the frozen v15 source-layer base),
-and `ab9714b` (the frozen v16 adapter-lowering base) without tags only when
-each object is missing. It builds all six
+`ab9714b` (the frozen v16 adapter-lowering base) and `fc7aad6` (the frozen v18
+base of the v19 value epoch) without tags only when each object is missing.
+It builds all seven
 prepared static libraries with tests disabled, or validates and reuses
 their matching prepared receipts under `settlement-abi-base/`,
-`settlement-abi-prior/`, `native-abi-v13/`, `native-abi-v14/`, and
-`native-abi-v15-frozen/`, and `native-abi-v16-frozen/`. Compiler,
+`settlement-abi-prior/`, `native-abi-v13/`, `native-abi-v14/`,
+`native-abi-v15-frozen/`, `native-abi-v16-frozen/`, and
+`native-abi-v18-frozen/`. Compiler,
 configuration and version-source mismatches refuse reuse without deleting the old evidence.
 Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
-CTest authenticates all six prepared receipts against their actual archive and
+CTest authenticates all seven prepared receipts against their actual archive and
 header bytes. The executing settlement, script-host, and aggregate controls
-use the authenticated `host-ab9714b` v16 archive plus the live v17 archive:
-v16 callers link to v16, v17 callers link to v17, and both cross-epoch
+use the authenticated `host-fc7aad6` v18 archive plus the live v19 archive:
+v18 callers link to v18, v19 callers link to v19, and both cross-epoch
 directions must fail at link time with the expected epoch-qualified symbol.
 No ABI caller executable is run. The older receipts remain authenticated
-historical evidence; they are not presented as a live v13/v14/v15 link matrix.
+historical evidence; they are not presented as a live v13/v14/v15/v16 link
+matrix. The v16 archive is also the runtime budget's frozen baseline.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
 
@@ -185,12 +188,12 @@ Outside `ci_verify.py`, a build tree configured with
 the one in `CLAUDE.md` included -- registers the four receipt-gated rows
 (`test_script_cpp_abi`, `test_settlement_cpp_abi`,
 `test_aggregate_cpp_versions_runtime`, `test_l4g_runtime_budget`)
-`--skip-if-receipt-missing`. Until the six providers are prepared in that tree,
+`--skip-if-receipt-missing`. Until the seven providers are prepared in that tree,
 each exits 77, and CTest counts a skipped row as passed: `100% tests passed`
 does not include them. `scripts/check_abi_receipt_skips.py --build-dir <dir>`
 names every receipt-gated row that will skip (or, registered
 `--require-receipts`, fail) and exits 1 when there is one. With `--prepare` it
-first prepares the six providers into the tree with the argv `ci_verify.py`
+first prepares the seven providers into the tree with the argv `ci_verify.py`
 uses (`ReceiptRecipe` in `scripts/test_ci_verify.py` holds the two equal):
 it fetches a missing pinned commit, reuses a matching provider and refuses a
 mismatched one without deleting it, so a tree prepared this way is one

@@ -257,7 +257,8 @@ class Preparation(unittest.TestCase):
                                     for role in skips.PROVIDER_ROLES])
         self.assertEqual([Path(argv[argv.index('--output') + 1]).name for argv in prepares],
                          ['settlement-abi-base', 'settlement-abi-prior', 'native-abi-v13',
-                          'native-abi-v14', 'native-abi-v15-frozen', 'native-abi-v16-frozen'])
+                          'native-abi-v14', 'native-abi-v15-frozen', 'native-abi-v16-frozen',
+                          'native-abi-v18-frozen'])
 
     def test_a_missing_pinned_object_is_fetched_first(self):
         commit = PROVIDERS['v14']['commit']
@@ -282,7 +283,8 @@ class Preparation(unittest.TestCase):
         self.assertIn('v13: refused', out)
         self.assertFalse(any(PROVIDERS['v13']['commit'] in argv and '--tree' in argv
                              for argv in calls))
-        self.assertEqual(sum('--output' in argv for argv in calls), 5)
+        # The other six providers are prepared; the refused one is not.
+        self.assertEqual(sum('--output' in argv for argv in calls), 6)
 
 
 if __name__ == '__main__':

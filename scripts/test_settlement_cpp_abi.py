@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class SettlementAbi(unittest.TestCase):
     def test_current_include_tree(self):
         result = checker.verify(ROOT / "include")
-        self.assertEqual(result["transition"]["to"], "engine_script_run_v18")
+        self.assertEqual(result["transition"]["to"], "engine_script_run_v19")
 
     def test_retired_header_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -48,7 +48,19 @@ class SettlementAbi(unittest.TestCase):
     def test_unknown_pair_kind_is_refused(self) -> None:
         from cpp_abi_pairing import _source
         with self.assertRaises(PairingError):
-            _source("engine_script_run_v18", "unknown")
+            _source("engine_script_run_v19", "unknown")
+
+    def test_v18_capability_macro_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            include = root / "include"
+            shutil.copytree(ROOT / "include", include)
+            path = include / "pineforge/native_host.hpp"
+            path.write_text(path.read_text().replace(
+                "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1",
+                "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1", 1))
+            with self.assertRaises(RuntimeError):
+                checker.verify(include)
 
     def test_missing_tick_hook_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -63,7 +75,7 @@ class SettlementAbi(unittest.TestCase):
 
     def test_missing_host_hash_extension_is_refused(self):
         # N5: the generic hash extension and the deprecated spelling it
-        # forwards to are both v18 BacktestEngine virtuals.
+        # forwards to are both v19 BacktestEngine virtuals.
         for name in ("hash_host_extension", "hash_source_extension"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)

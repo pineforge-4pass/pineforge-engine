@@ -131,13 +131,13 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
     def test_no_source_symbol_is_whitelisted(self):
         # The rich begin bridge takes `const void*`, so even the override
         # pointer no longer names the source layer anywhere in the kernel.
-        neutral = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
+        neutral = ("U pineforge::engine_script_run_v19::BacktestEngine::run_rich("
                    "pineforge::Bar const*, void const*)")
         self.assertEqual(forbidden_symbol_lines(neutral), [])
         self.assertEqual(forbidden_symbol_lines(
             "U pineforge::source::PineStrategyHost::run()"),
             ["U pineforge::source::PineStrategyHost::run()"])
-        overrides = ("U pineforge::engine_script_run_v18::BacktestEngine::run_rich("
+        overrides = ("U pineforge::engine_script_run_v19::BacktestEngine::run_rich("
                      "pineforge::Bar const*, pineforge::source::StrategyOverrides const*)")
         self.assertEqual(forbidden_symbol_lines(overrides), [overrides])
 

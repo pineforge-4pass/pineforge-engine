@@ -7,7 +7,7 @@ test_aggregate_cpp_versions_runtime and test_l4g_runtime_budget. Each reads the
 receipts of ABI providers prepared inside the build tree. A tree configured
 with PINEFORGE_REQUIRE_ABI_RECEIPTS=OFF -- the default, so every plain
 configure, CLAUDE.md's included -- registers them --skip-if-receipt-missing:
-until the six providers are prepared there, each exits 77, and CTest counts a
+until the seven providers are prepared there, each exits 77, and CTest counts a
 skipped row as passed, so it still prints "100% tests passed".
 scripts/ci_verify.py prepares its providers itself and configures the option
 ON, where a missing receipt fails the row; this script needs neither.
@@ -17,7 +17,7 @@ receipt-gated row that will skip -- or, registered --require-receipts, fail --
 for a missing input receipt. test_l4g_runtime_budget also reads the tree's
 compile_commands.json once its receipt exists, so a tree configured without
 CMAKE_EXPORT_COMPILE_COMMANDS=ON is named too. --prepare first prepares the
-six providers into the tree with the argv ci_verify uses, reusing a matching
+seven providers into the tree with the argv ci_verify uses, reusing a matching
 prepared provider and refusing, without deleting it, one that does not match.
 
 Exit status: 0 when every receipt-gated row runs (or none is registered), 1
@@ -38,8 +38,8 @@ from typing import Callable
 
 from prepare_settlement_cpp_abi_base import PROVIDERS, ROOT, reusable_prepared_base
 
-# The six providers, in the order scripts/ci_verify.py prepares them.
-PROVIDER_ROLES = ('e60', '0e', 'v13', 'v14', 'v15-frozen', 'v16-frozen')
+# The seven providers, in the order scripts/ci_verify.py prepares them.
+PROVIDER_ROLES = ('e60', '0e', 'v13', 'v14', 'v15-frozen', 'v16-frozen', 'v18-frozen')
 MODES = {'--skip-if-receipt-missing': 'skip', '--require-receipts': 'require'}
 # An input receipt: --base-receipt, --v16-frozen-receipt, ...; a bare
 # --receipt names the row's own output.
@@ -119,7 +119,7 @@ def report(rows: list[GatedRow], build_dir: Path, shown_dir: str) -> int:
     print(f'{len(idle)} of {len(rows)} receipt-gated rows do not run. CTest counts a skipped '
           'row as passed, so its "100% tests passed" leaves them out.')
     if any(row.missing for row in rows):
-        print('Prepare the six ABI providers in this build tree (once per tree), then re-run '
+        print('Prepare the seven ABI providers in this build tree (once per tree), then re-run '
               'ctest:\n  python3 scripts/check_abi_receipt_skips.py --build-dir '
               f'{shlex.quote(shown_dir)} --prepare')
     if any(row.database is not None for row in rows):
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--build-dir', type=Path, required=True)
     parser.add_argument('--prepare', action='store_true',
-                        help='first prepare the six ABI providers into the build tree, '
+                        help='first prepare the seven ABI providers into the build tree, '
                              'as scripts/ci_verify.py does')
     parser.add_argument('--jobs', type=int, default=4, help='build jobs per provider')
     parser.add_argument('--ctest', default='ctest')
@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     prepared = True
     if args.prepare:
-        print(f'check_abi_receipt_skips: preparing the six ABI providers in {args.build_dir}',
+        print(f'check_abi_receipt_skips: preparing the seven ABI providers in {args.build_dir}',
               flush=True)
         prepared = prepare(ROOT, build_dir, args.jobs)
     try:

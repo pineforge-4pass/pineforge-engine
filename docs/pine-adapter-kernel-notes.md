@@ -134,7 +134,7 @@ because the next grid point is above that input. Other scales stay unchanged.
 ## 2. `strategy.close`: the per-entry-id ledger and same-bar batching
 
 Was `include/pineforge/engine.hpp:503-565`, next to storage that is the
-adapter's since the `engine_script_run_v18` relocation
+adapter's since the `engine_script_run_v18` relocation <!-- verified HEAD -->
 (`PineStrategyHost::id_unclosed_qty_` and the same-bar close batches, see
 `tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json`).
 

@@ -334,7 +334,7 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 // The fold broker_state_hash() is built on: FNV-1a over a canonical byte
 // spelling of each value (-0.0 folds as 0.0, every NaN as one quiet NaN, a
 // string as its length then its bytes). It is a public, complete type because
@@ -2134,5 +2134,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v18
+} // inline namespace engine_script_run_v19
 } // namespace pineforge

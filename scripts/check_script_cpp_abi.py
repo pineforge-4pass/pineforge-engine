@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile/link the generated source-host ABI against frozen v16 and live v18."""
+"""Compile/link the generated source-host ABI against frozen v18 and live v19."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v18_pair
+from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_frozen_pair
 
 
 def verify_source_shape(include: Path) -> None:
@@ -29,7 +29,7 @@ def main() -> int:
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--include", type=Path, required=True)
     parser.add_argument("--generated-include", type=Path, required=True)
-    parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
+    parser.add_argument("--v18-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path, required=True)
     receipt_mode = parser.add_mutually_exclusive_group()
@@ -38,18 +38,18 @@ def main() -> int:
     args = parser.parse_args()
     try:
         mode = enforce_receipt_mode(
-            (args.v16_frozen_receipt,), skip=args.skip_if_receipt_missing,
+            (args.v18_frozen_receipt,), skip=args.skip_if_receipt_missing,
             require=args.require_receipts, label="script C++ ABI")
         if mode is not None:
             return mode
         verify_source_shape(args.include)
-        result = execute_v16_v18_pair(
+        result = execute_frozen_pair(
             compiler=args.compiler,
             extra_flags=args.extra_flag,
             current_library=args.library,
             current_include=args.include,
             generated_include=args.generated_include,
-            v16_receipt=args.v16_frozen_receipt,
+            frozen_receipt=args.v18_frozen_receipt,
             kind="script",
             artifact_directory=args.receipt.parent,
         )
@@ -57,7 +57,7 @@ def main() -> int:
         raise SystemExit("script C++ ABI: " + str(error))
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print("script C++ ABI: source-host v16/v18 acceptance and bidirectional rejection pairs passed")
+    print("script C++ ABI: source-host v18/v19 acceptance and bidirectional rejection pairs passed")
     return 0
 
 

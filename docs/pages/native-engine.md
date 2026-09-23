@@ -499,7 +499,7 @@ durable request state and is folded into the identities whether or not it
 mattered. Pinned from a bare host, both sides, in
 `tests/test_native_limit_fill_through.cpp`.
 
-At host epoch `engine_script_run_v18` (`native_host.hpp:20`), general requests
+At host epoch `engine_script_run_v19` (`native_host.hpp:20`), general requests
 also support explicit
 `native_order::ReverseTo{signed_units}` and `HostSized`. A `HostSized{Open,
 Side}` request binds its units at a matching candidate through the host's
@@ -2849,7 +2849,7 @@ Empty timeframe strings are also valid (`run(bars, n)` and
 ## Terms, reversal, precommit, FX curve
 
 The two const host hooks are present at the current host epoch,
-`engine_script_run_v18` (`native_host.hpp:20`).
+`engine_script_run_v19` (`native_host.hpp:20`).
 `resolve_execution_terms` sees read-only
 candidate facts and returns a resolved price plus units only for an unresolved
 `HostSized` request. Its default is the identity price with no units. A

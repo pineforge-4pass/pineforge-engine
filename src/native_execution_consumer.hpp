@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -1370,5 +1370,5 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
     return static_cast<NativeExecutionConsumer&>(consumer);
 }
 
-}  // inline namespace engine_script_run_v18
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge

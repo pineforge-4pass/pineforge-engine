@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18
+#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19
 #error "L1 requires the v17 native host surface"
 #endif
 

@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18
+#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19
 #error "L1g sampled-point witnesses require the v17 native host surface"
 #endif
 

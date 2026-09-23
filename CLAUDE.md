@@ -24,9 +24,9 @@ python3 scripts/check_abi_receipt_skips.py --build-dir build   # must exit 0
 
 > **Receipt-gated rows skip silently:** `test_script_cpp_abi`,
 > `test_settlement_cpp_abi`, `test_aggregate_cpp_versions_runtime` and
-> `test_l4g_runtime_budget` read six historical ABI providers prepared inside
+> `test_l4g_runtime_budget` read seven historical ABI providers prepared inside
 > the build dir. Without them each row SKIPS (exit 77) and ctest still prints
-> `100% tests passed`. `--prepare` builds the six (15-45 s each, once per
+> `100% tests passed`. `--prepare` builds the seven (15-45 s each, once per
 > build dir, same argv as `ci_verify.py`; fetches a missing pinned commit;
 > reuses a matching provider, refuses a mismatched one without deleting it —
 > use a fresh build dir after changing compiler or flags). The call after

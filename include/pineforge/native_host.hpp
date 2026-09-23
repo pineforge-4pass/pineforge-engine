@@ -17,7 +17,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 
 /// Where a host stands. Read it off native_state().kind; nothing else reports it.
 /// Unconfigured is a fresh host, Ready a staged spec, Running a consumed begin
@@ -815,7 +815,7 @@ enum class NativeCalculationReason : std::uint8_t {
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1
 /// The public native host: an abstract subclass of BacktestEngine with no
 /// PineScript on it. Subclass it, override on_native_bar (the only pure-virtual),
 /// configure_native(spec), then run() or the stream_* family. Noncopyable and
@@ -1292,5 +1292,5 @@ protected:
     std::uint64_t broker_state_hash_projection() const override;
 };
 
-}  // inline namespace engine_script_run_v18
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge

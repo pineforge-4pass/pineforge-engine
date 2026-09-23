@@ -22,7 +22,7 @@ from check_native_cpp_versions import FILES, check as check_native_versions
 from check_aggregate_cpp_versions import clean
 from prepare_settlement_cpp_abi_base import (
     V14_COMMIT, V14_TREE, V15_FROZEN_COMMIT, V15_FROZEN_TREE,
-    V16_FROZEN_COMMIT, V16_FROZEN_TREE,
+    V16_FROZEN_COMMIT, V16_FROZEN_TREE, V18_FROZEN_COMMIT, V18_FROZEN_TREE,
     authenticate_headers, extract_tar,
 )
 
@@ -50,6 +50,9 @@ V15_FROZEN_HEADERS_SHA256 = "189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35
 V15_FROZEN_ENGINE_EPOCH = "engine_script_run_v15"
 V16_FROZEN_HEADERS_SHA256 = "1a1ab85239ce1bca9022f879ecc0e88c2ee0af719c74cdfe9d8e9d5aaada8d98"
 V16_FROZEN_ENGINE_EPOCH = "engine_script_run_v16"
+V18_FROZEN_HEADERS_SHA256 = "91f93ac68ff072b2e1977fe748a29f2ae47901fb76e13461d90b91b66229de1b"
+V18_FROZEN_ENGINE_EPOCH = "engine_script_run_v18"
+CURRENT_ENGINE_EPOCH = "engine_script_run_v19"
 CURRENT_TERMS_SURFACE_READY = True
 CURRENT_RESULT_DIAGNOSTIC = "R4B_CURRENT_RESULT_ALTERNATIVES"
 
@@ -190,10 +193,10 @@ int main(int argc, char** argv) {
 CURRENT_EXECUTION_V15_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 #include <variant>
-using H = pineforge::engine_script_run_v18::NativeStrategyHost;
-using C = pineforge::engine_script_run_v18::NativeCurrentExecution;
-using P = pineforge::engine_script_run_v18::NativeCurrentExecutionPreview;
-using R = pineforge::engine_script_run_v18::NativeCurrentExecutionResult;
+using H = pineforge::engine_script_run_v19::NativeStrategyHost;
+using C = pineforge::engine_script_run_v19::NativeCurrentExecution;
+using P = pineforge::engine_script_run_v19::NativeCurrentExecutionPreview;
+using R = pineforge::engine_script_run_v19::NativeCurrentExecutionResult;
 using T = pineforge::native_order::ExecutionTerms;
 static_assert(std::variant_size_v<R> == 5, "R4B_CURRENT_RESULT_ALTERNATIVES");
 static_assert(std::is_same_v<std::variant_alternative_t<4, R>,
@@ -232,9 +235,9 @@ int main(int argc, char** argv) {
 NATIVE_FX_CURVE_CALLER = '''#include <pineforge/native_fx_curve.hpp>
 #include <pineforge/native_host.hpp>
 #include <type_traits>
-using H = pineforge::engine_script_run_v18::NativeStrategyHost;
+using H = pineforge::engine_script_run_v19::NativeStrategyHost;
 using V = pineforge::NativeFxCurveValidation;
-using S = pineforge::engine_script_run_v18::NativeFxCurveSetupResult;
+using S = pineforge::engine_script_run_v19::NativeFxCurveSetupResult;
 static_assert(std::is_same_v<V, pineforge::native_fx_curve_v1::NativeFxCurveValidation>);
 static_assert(std::is_same_v<decltype(V::error), pineforge::NativeFxCurveError>);
 static_assert(std::is_same_v<decltype(V::index), std::size_t>);
@@ -251,8 +254,8 @@ int main(int argc, char** argv) {
 NATIVE_TICK_CALLER = '''#include <pineforge/native_host.hpp>
 #include <cstdint>
 #include <type_traits>
-using H = pineforge::engine_script_run_v18::NativeStrategyHost;
-using T = pineforge::engine_script_run_v18::NativeTickContext;
+using H = pineforge::engine_script_run_v19::NativeStrategyHost;
+using T = pineforge::engine_script_run_v19::NativeTickContext;
 static_assert(std::is_same_v<decltype(T::decision), pineforge::NativeDecisionContext>);
 static_assert(std::is_same_v<decltype(T::sequence), std::uint64_t>);
 struct TickHost final : H {
@@ -268,8 +271,8 @@ NATIVE_TRAIL_STATE_CALLER = '''#include <pineforge/native_host.hpp>
 #include <cstdint>
 #include <optional>
 #include <type_traits>
-using H = pineforge::engine_script_run_v18::NativeStrategyHost;
-using S = pineforge::engine_script_run_v18::NativeTrailState;
+using H = pineforge::engine_script_run_v19::NativeStrategyHost;
+using S = pineforge::engine_script_run_v19::NativeTrailState;
 static_assert(std::is_same_v<decltype(S::activated), bool>);
 static_assert(std::is_same_v<decltype(S::best_price), double>);
 static_assert(std::is_same_v<decltype(S::current_level), double>);
@@ -327,7 +330,8 @@ def current_order_namespace(text: str) -> str:
 
 
 def render_current_execution_caller(epoch: str) -> str:
-    if epoch not in (V14_ENGINE_EPOCH, "engine_script_run_v16", "engine_script_run_v18"):
+    if epoch not in (V14_ENGINE_EPOCH, "engine_script_run_v16", "engine_script_run_v18",
+                     CURRENT_ENGINE_EPOCH):
         raise RuntimeError("current-execution caller requires a current-execution provider")
     return CURRENT_EXECUTION_CALLER.replace("ENGINE_EPOCH", epoch)
 
@@ -343,24 +347,32 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
     controls = (
         ("v14_current_execution_shape_agnostic_compile", "compile", True,
          "CURRENT_EXECUTION_CALLER", V14_ENGINE_EPOCH),
-        ("v18_current_execution_surface_compile", "compile", ready,
-         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v18"),
-        ("v18_current_result_missing_cancelled_compile_reject", "compile_rejection", ready,
-         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v18"),
-        ("v18_native_fx_curve_surface_compile", "compile", ready,
-         "NATIVE_FX_CURVE_CALLER", "engine_script_run_v18"),
-        ("v18_native_tick_surface_compile", "compile", ready,
-         "NATIVE_TICK_CALLER", "engine_script_run_v18"),
-        ("v18_native_trail_state_surface_compile", "compile", ready,
-         "NATIVE_TRAIL_STATE_CALLER", "engine_script_run_v18"),
-        ("v18_to_v16_frozen_current_execution_compile_reject", "compile_rejection", ready,
+        ("v19_current_execution_surface_compile", "compile", ready,
+         "CURRENT_EXECUTION_V15_CALLER", CURRENT_ENGINE_EPOCH),
+        ("v19_current_result_missing_cancelled_compile_reject", "compile_rejection", ready,
+         "CURRENT_EXECUTION_V15_CALLER", CURRENT_ENGINE_EPOCH),
+        ("v19_native_fx_curve_surface_compile", "compile", ready,
+         "NATIVE_FX_CURVE_CALLER", CURRENT_ENGINE_EPOCH),
+        ("v19_native_tick_surface_compile", "compile", ready,
+         "NATIVE_TICK_CALLER", CURRENT_ENGINE_EPOCH),
+        ("v19_native_trail_state_surface_compile", "compile", ready,
+         "NATIVE_TRAIL_STATE_CALLER", CURRENT_ENGINE_EPOCH),
+        ("v19_to_v16_frozen_current_execution_compile_reject", "compile_rejection", ready,
          "CURRENT_EXECUTION_V15_CALLER", V16_FROZEN_ENGINE_EPOCH),
-        ("v18_to_v16_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
+        ("v19_to_v16_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
          "NATIVE_FX_CURVE_CALLER", V16_FROZEN_ENGINE_EPOCH),
-        ("v18_to_v16_frozen_native_tick_compile_reject", "compile_rejection", ready,
+        ("v19_to_v16_frozen_native_tick_compile_reject", "compile_rejection", ready,
          "NATIVE_TICK_CALLER", V16_FROZEN_ENGINE_EPOCH),
-        ("v18_to_v16_frozen_native_trail_state_compile_reject", "compile_rejection", ready,
+        ("v19_to_v16_frozen_native_trail_state_compile_reject", "compile_rejection", ready,
          "NATIVE_TRAIL_STATE_CALLER", V16_FROZEN_ENGINE_EPOCH),
+        ("v19_to_v18_frozen_current_execution_compile_reject", "compile_rejection", ready,
+         "CURRENT_EXECUTION_V15_CALLER", V18_FROZEN_ENGINE_EPOCH),
+        ("v19_to_v18_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
+         "NATIVE_FX_CURVE_CALLER", V18_FROZEN_ENGINE_EPOCH),
+        ("v19_to_v18_frozen_native_tick_compile_reject", "compile_rejection", ready,
+         "NATIVE_TICK_CALLER", V18_FROZEN_ENGINE_EPOCH),
+        ("v19_to_v18_frozen_native_trail_state_compile_reject", "compile_rejection", ready,
+         "NATIVE_TRAIL_STATE_CALLER", V18_FROZEN_ENGINE_EPOCH),
     )
     return [{"name": name, "kind": kind, "applicable": bool(applicable),
              "status": "required" if applicable else "pending_surface",
@@ -403,6 +415,13 @@ def authenticate_v16_frozen_fixture(fixture: Path, destination: Path) -> dict:
         fixture, destination, archive_sha256=V16_FROZEN_HEADERS_SHA256,
         commit=V16_FROZEN_COMMIT, tree=V16_FROZEN_TREE,
         epoch=V16_FROZEN_ENGINE_EPOCH, label="v16")
+
+
+def authenticate_v18_frozen_fixture(fixture: Path, destination: Path) -> dict:
+    return authenticate_host_fixture(
+        fixture, destination, archive_sha256=V18_FROZEN_HEADERS_SHA256,
+        commit=V18_FROZEN_COMMIT, tree=V18_FROZEN_TREE,
+        epoch=V18_FROZEN_ENGINE_EPOCH, label="v18")
 
 
 def remove_current_result_cancelled(text: str) -> str:
@@ -643,7 +662,7 @@ def main() -> int:
         ("abi_accept_coordinate(pineforge::NativeCoordinate",
          "abi_accept_coordinate(pineforge::native_driver_v5::NativeCoordinate"),
         ("pineforge::engine_script_run_v12::NativeStrategyHost::native_events(",
-         "pineforge::engine_script_run_v18::NativeStrategyHost::native_events("),
+         "pineforge::engine_script_run_v19::NativeStrategyHost::native_events("),
     )
     for old, new in controls:
         if old in new:
@@ -665,7 +684,7 @@ def main() -> int:
             "native_calendar": "pineforge::native_calendar::native_calendar_v2",
             "native_run_spec": "pineforge::native_run_spec_v3",
             "native_driver": "pineforge::native_driver_v5",
-            "native_host": "pineforge::engine_script_run_v18",
+            "native_host": "pineforge::" + CURRENT_ENGINE_EPOCH,
         },
         "executable_runs": 0,
         "compiles": [],
@@ -775,6 +794,19 @@ def main() -> int:
             "files": v16_frozen_manifest["files"],
             "provider_epoch": V16_FROZEN_ENGINE_EPOCH,
         }
+        v18_frozen_name = "host-fc7aad6"
+        v18_frozen_destination = root / v18_frozen_name
+        v18_frozen_manifest = authenticate_v18_frozen_fixture(
+            FIXTURE / v18_frozen_name, v18_frozen_destination)
+        v18_frozen_include = v18_frozen_destination / "include"
+        receipt["fixtures"][v18_frozen_name] = {
+            "source_commit": v18_frozen_manifest["commit"],
+            "source_tree": v18_frozen_manifest["tree"],
+            "archive_sha256": V18_FROZEN_HEADERS_SHA256,
+            "manifest_sha256": sha256((FIXTURE / v18_frozen_name / "manifest.json").read_bytes()),
+            "files": v18_frozen_manifest["files"],
+            "provider_epoch": V18_FROZEN_ENGINE_EPOCH,
+        }
 
         def compile_object(name, source, include_path, extra_source_dir=None):
             path = root / (name + ".cpp")
@@ -882,50 +914,64 @@ def main() -> int:
         current_coordinate_provider = compile_object(
             "current_coordinate_provider", COORDINATE_PROVIDER, include)
         current_host = compile_object("current_host_caller",
-                                      render_host_caller(HOST_CALLER, "engine_script_run_v18"), include)
+                                      render_host_caller(HOST_CALLER, CURRENT_ENGINE_EPOCH), include)
         current_host_events = compile_object("current_host_events_caller",
-                                             render_host_caller(HOST_EVENTS_CALLER, "engine_script_run_v18"), include)
+                                             render_host_caller(HOST_EVENTS_CALLER, CURRENT_ENGINE_EPOCH), include)
         current_execution = compile_object("current_execution_caller",
-                                           render_current_execution_caller("engine_script_run_v18"), include)
-        # These callers are compiled against the authenticated v16 closure.
-        # The executable settlement/script/aggregate controls then link the
-        # real v16 archive with v16 callers (accept) and v18 callers (reject)
-        # in both directions; this compile-only guard does not claim linkage.
+                                           render_current_execution_caller(CURRENT_ENGINE_EPOCH), include)
+        # These callers are compiled against the authenticated v16 and v18
+        # closures. The executable settlement/script/aggregate controls then
+        # link the real v18 archive with v18 callers (accept) and v19 callers
+        # (reject) in both directions; this compile-only guard does not claim
+        # linkage.
         compile_object("v16_frozen_host_caller",
                        render_host_caller(HOST_CALLER, V16_FROZEN_ENGINE_EPOCH), v16_frozen_include)
         compile_object("v16_frozen_current_execution_caller",
                        render_current_execution_caller("engine_script_run_v16"), v16_frozen_include)
+        compile_object("v18_frozen_host_caller",
+                       render_host_caller(HOST_CALLER, V18_FROZEN_ENGINE_EPOCH), v18_frozen_include)
+        compile_object("v18_frozen_current_execution_caller",
+                       render_current_execution_caller(V18_FROZEN_ENGINE_EPOCH), v18_frozen_include)
         compile_object("v14_current_execution_shape_agnostic_compile",
                        render_current_execution_caller(V14_ENGINE_EPOCH), v14_include)
         current_surface = current_fx_curve = current_tick = current_trail_state = None
         if CURRENT_TERMS_SURFACE_READY:
-            current_surface = compile_object("v18_current_execution_surface_compile",
+            current_surface = compile_object("v19_current_execution_surface_compile",
                                              CURRENT_EXECUTION_V15_CALLER, include)
-            current_fx_curve = compile_object("v18_native_fx_curve_surface_compile",
+            current_fx_curve = compile_object("v19_native_fx_curve_surface_compile",
                                               NATIVE_FX_CURVE_CALLER, include)
-            current_tick = compile_object("v18_native_tick_surface_compile",
+            current_tick = compile_object("v19_native_tick_surface_compile",
                                           NATIVE_TICK_CALLER, include)
-            current_trail_state = compile_object("v18_native_trail_state_surface_compile",
+            current_trail_state = compile_object("v19_native_trail_state_surface_compile",
                                                  NATIVE_TRAIL_STATE_CALLER, include)
-            for name, source in (
-                ("v18_to_v16_frozen_current_execution_compile_reject",
-                 CURRENT_EXECUTION_V15_CALLER),
-                ("v18_to_v16_frozen_native_fx_curve_compile_reject",
-                 NATIVE_FX_CURVE_CALLER),
-                ("v18_to_v16_frozen_native_tick_compile_reject",
-                 NATIVE_TICK_CALLER),
-                ("v18_to_v16_frozen_native_trail_state_compile_reject",
-                 NATIVE_TRAIL_STATE_CALLER),
+            for name, source, frozen_label, frozen_include in (
+                ("v19_to_v16_frozen_current_execution_compile_reject",
+                 CURRENT_EXECUTION_V15_CALLER, "v16", v16_frozen_include),
+                ("v19_to_v16_frozen_native_fx_curve_compile_reject",
+                 NATIVE_FX_CURVE_CALLER, "v16", v16_frozen_include),
+                ("v19_to_v16_frozen_native_tick_compile_reject",
+                 NATIVE_TICK_CALLER, "v16", v16_frozen_include),
+                ("v19_to_v16_frozen_native_trail_state_compile_reject",
+                 NATIVE_TRAIL_STATE_CALLER, "v16", v16_frozen_include),
+                ("v19_to_v18_frozen_current_execution_compile_reject",
+                 CURRENT_EXECUTION_V15_CALLER, "v18", v18_frozen_include),
+                ("v19_to_v18_frozen_native_fx_curve_compile_reject",
+                 NATIVE_FX_CURVE_CALLER, "v18", v18_frozen_include),
+                ("v19_to_v18_frozen_native_tick_compile_reject",
+                 NATIVE_TICK_CALLER, "v18", v18_frozen_include),
+                ("v19_to_v18_frozen_native_trail_state_compile_reject",
+                 NATIVE_TRAIL_STATE_CALLER, "v18", v18_frozen_include),
             ):
                 path = root / (name + ".cpp")
                 path.write_text(source)
                 compiled = subprocess.run(
-                    [*common, "-I", str(v16_frozen_include), "-I", args.generated_include,
+                    [*common, "-I", str(frozen_include), "-I", args.generated_include,
                      "-c", str(path), "-o", str(root / (name + ".o"))],
                     capture_output=True, text=True, timeout=90)
                 diagnostic = diagnostic_text(compiled)
-                if compiled.returncode == 0 or "engine_script_run_v18" not in diagnostic:
-                    raise RuntimeError(name + " did not reject the v16-frozen provider:\n" + diagnostic)
+                if compiled.returncode == 0 or CURRENT_ENGINE_EPOCH not in diagnostic:
+                    raise RuntimeError(name + " did not reject the " + frozen_label
+                                       + "-frozen provider:\n" + diagnostic)
                 receipt["compile_rejections"].append({
                     "name": name, "outcome": "expected_compile_rejection",
                     "exit": compiled.returncode, "diagnostics": diagnostic,
@@ -938,7 +984,7 @@ def main() -> int:
             original_header = mutated_host.read_bytes()
             mutated_host.write_bytes(remove_current_result_cancelled(original_header.decode()).encode())
             receipt["compile_rejections"].append(expect_compile_rejection(
-                "v18_current_result_missing_cancelled_compile_reject",
+                "v19_current_result_missing_cancelled_compile_reject",
                 CURRENT_EXECUTION_V15_CALLER, mutated_include, compiler_flags=common,
                 generated_include=args.generated_include, scratch=root,
                 original_header_sha256=sha256(original_header)))
@@ -1041,9 +1087,9 @@ def main() -> int:
         link("current_host_events_to_current_library", [current_host_events], library)
         link("current_execution_to_current_library", [current_execution], library)
         if CURRENT_TERMS_SURFACE_READY:
-            link("v18_current_execution_surface_to_current_library", [current_surface], library)
-            link("v18_native_fx_curve_to_current_library", [current_fx_curve], library)
-            link("v18_native_trail_state_to_current_library", [current_trail_state], library)
+            link("v19_current_execution_surface_to_current_library", [current_surface], library)
+            link("v19_native_fx_curve_to_current_library", [current_fx_curve], library)
+            link("v19_native_trail_state_to_current_library", [current_trail_state], library)
         link("current_coordinate_to_current_provider",
              [current_coordinate], current_coordinate_provider)
 
@@ -1089,7 +1135,7 @@ def main() -> int:
         link("current_spec_to_old_symbol_control", [current_spec], old_spec_symbols,
              "pineforge::native_run_spec_v3::validate_native_run_spec(")
         link("current_host_events_to_old_symbols", [current_host_events], old_host_events_symbols,
-             "pineforge::engine_script_run_v18::NativeStrategyHost::native_events(")
+             "pineforge::engine_script_run_v19::NativeStrategyHost::native_events(")
         link("current_bar_to_old_object", [current_bar], old_bar_obj,
              "pineforge::native_driver_v5::native_bar_structurally_valid(")
         link("current_coordinate_to_old_provider", [current_coordinate], old_coordinate_provider,

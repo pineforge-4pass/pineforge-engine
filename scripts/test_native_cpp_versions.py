@@ -209,7 +209,7 @@ class NativeVersions(unittest.TestCase):
                 self.reject(FILES[10], before, after)
 
     def test_anchored_level_hook_is_pinned_and_consulted(self):
-        # R5 L7b: the arm hook is a v18 answering virtual over an exact
+        # R5 L7b: the arm hook is a v19 answering virtual over an exact
         # read-only view, the core carries the resolver as a value, and the
         # consumer consults it at the arm.
         for before, after in (
@@ -402,9 +402,9 @@ class NativeVersions(unittest.TestCase):
             (FILES[5], "native_run_spec_v3", "native_run_spec_v1"),
             (FILES[6], "native_driver_v5", "native_driver_v2"),
             (FILES[7], "native_driver_v5", "native_driver_v3"),
-            (FILES[8], "engine_script_run_v18", "engine_script_run_v12"),
-            (FILES[9], "engine_script_run_v18", "engine_script_run_v12"),
-            (FILES[10], "engine_script_run_v18", "engine_script_run_v12"),
+            (FILES[8], "engine_script_run_v19", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v19", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v19", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
@@ -415,7 +415,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
-            (FILES[8], "engine_script_run_v18"),
+            (FILES[8], "engine_script_run_v19"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -428,7 +428,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v3"),
             (FILES[6], "native_driver_v5"),
-            (FILES[8], "engine_script_run_v18"),
+            (FILES[8], "engine_script_run_v19"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -440,7 +440,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[0], "native_order_v6", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v18", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v19", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -567,7 +567,7 @@ class NativeVersions(unittest.TestCase):
             DRIVER_FORWARD,
             "inline namespace native_run_spec_v3 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v18(self):
+    def test_host_public_values_cannot_leave_v19(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
         self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
@@ -689,15 +689,19 @@ class NativeVersions(unittest.TestCase):
         self.assertIn('trail_state', NATIVE_TRAIL_STATE_CALLER)
         controls = {row['name']: row for row in control_applicability()}
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
-        for name in ('v18_current_execution_surface_compile',
-                     'v18_current_result_missing_cancelled_compile_reject',
-                     'v18_native_fx_curve_surface_compile',
-                     'v18_native_tick_surface_compile',
-                     'v18_native_trail_state_surface_compile',
-                     'v18_to_v16_frozen_current_execution_compile_reject',
-                     'v18_to_v16_frozen_native_fx_curve_compile_reject',
-                     'v18_to_v16_frozen_native_tick_compile_reject',
-                     'v18_to_v16_frozen_native_trail_state_compile_reject'):
+        for name in ('v19_current_execution_surface_compile',
+                     'v19_current_result_missing_cancelled_compile_reject',
+                     'v19_native_fx_curve_surface_compile',
+                     'v19_native_tick_surface_compile',
+                     'v19_native_trail_state_surface_compile',
+                     'v19_to_v16_frozen_current_execution_compile_reject',
+                     'v19_to_v16_frozen_native_fx_curve_compile_reject',
+                     'v19_to_v16_frozen_native_tick_compile_reject',
+                     'v19_to_v16_frozen_native_trail_state_compile_reject',
+                     'v19_to_v18_frozen_current_execution_compile_reject',
+                     'v19_to_v18_frozen_native_fx_curve_compile_reject',
+                     'v19_to_v18_frozen_native_tick_compile_reject',
+                     'v19_to_v18_frozen_native_trail_state_compile_reject'):
             self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):
@@ -853,11 +857,11 @@ class NativeVersions(unittest.TestCase):
     def test_current_execution_caller_is_rendered_per_provider(self):
         from check_native_cpp_abi import render_current_execution_caller
         v14 = render_current_execution_caller('engine_script_run_v14')
-        v16 = render_current_execution_caller('engine_script_run_v18')
+        v19 = render_current_execution_caller('engine_script_run_v19')
         self.assertIn('engine_script_run_v14', v14)
-        self.assertNotIn('engine_script_run_v18', v14)
-        self.assertIn('engine_script_run_v18', v16)
-        self.assertNotIn('engine_script_run_v14', v16)
+        self.assertNotIn('engine_script_run_v19', v14)
+        self.assertIn('engine_script_run_v19', v19)
+        self.assertNotIn('engine_script_run_v14', v19)
         with self.assertRaises(RuntimeError):
             render_current_execution_caller('engine_script_run_v13')
         with self.assertRaises(RuntimeError):

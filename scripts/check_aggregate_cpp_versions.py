@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed v18 ownership guard, with an optional real ABI pair control."""
+"""Fail-closed v19 ownership guard, with an optional real ABI pair control."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import re
 
-from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v18_pair
+from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_frozen_pair
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,10 +42,10 @@ def check(root: Path = ROOT) -> None:
     generic_hash = clean((root / "src/engine_state_hash.cpp").read_text())
     stream_hash = clean((root / "src/engine_stream.cpp").read_text())
     epochs = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", clean(engine))
-    if epochs != ["engine_script_run_v18"]:
-        raise ValueError("BacktestEngine requires engine_script_run_v18")
-    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1" not in native:
-        raise ValueError("native host capability must remain v18")
+    if epochs != ["engine_script_run_v19"]:
+        raise ValueError("BacktestEngine requires engine_script_run_v19")
+    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1" not in native:
+        raise ValueError("native host capability must remain v19")
     if "class PineStrategyHost : public NativeStrategyHost" not in (
             root / "include/pineforge/source/pine_strategy_host.hpp").read_text():
         raise ValueError("source host must remain native-bound")
@@ -62,7 +62,7 @@ def check(root: Path = ROOT) -> None:
     for name in ("hash_host_extension", "hash_source_extension"):
         if len(re.findall(r"\bvirtual\s+void\s+" + name
                           + r"\(BrokerStateHashSink&\)\s+const\s*;", engine_clean)) != 1:
-            raise ValueError(name + " must be a v18 BacktestEngine virtual")
+            raise ValueError(name + " must be a v19 BacktestEngine virtual")
     if len(re.findall(r"\bclass\s+BrokerStateHashSink\s*\{", engine_clean)) != 1:
         raise ValueError("BrokerStateHashSink must be a complete public type")
     if re.search(r"\bclass\s+BrokerStateHashSink\s*\{", clean(
@@ -117,7 +117,7 @@ def main() -> int:
     parser.add_argument("--library", type=Path)
     parser.add_argument("--include", type=Path)
     parser.add_argument("--generated-include", type=Path)
-    parser.add_argument("--v16-frozen-receipt", type=Path)
+    parser.add_argument("--v18-frozen-receipt", type=Path)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path)
     receipt_mode = parser.add_mutually_exclusive_group()
@@ -126,23 +126,23 @@ def main() -> int:
     args = parser.parse_args()
     try:
         mode = enforce_receipt_mode(
-            (args.v16_frozen_receipt,), skip=args.skip_if_receipt_missing,
+            (args.v18_frozen_receipt,), skip=args.skip_if_receipt_missing,
             require=args.require_receipts, label="aggregate C++ versions")
         if mode is not None:
             return mode
         check(args.include.resolve().parent if args.include else ROOT)
         requested = [args.compiler, args.library, args.include, args.generated_include,
-                     args.v16_frozen_receipt]
+                     args.v18_frozen_receipt]
         if any(value is not None for value in requested):
             if not all(value is not None for value in requested):
-                raise PairingError("runtime ABI control requires compiler, library, include, generated include, and v16 receipt")
-            result = execute_v16_v18_pair(
+                raise PairingError("runtime ABI control requires compiler, library, include, generated include, and v18 receipt")
+            result = execute_frozen_pair(
                 compiler=args.compiler,
                 extra_flags=args.extra_flag,
                 current_library=args.library,
                 current_include=args.include,
                 generated_include=args.generated_include,
-                v16_receipt=args.v16_frozen_receipt,
+                frozen_receipt=args.v18_frozen_receipt,
                 kind="native",
                 artifact_directory=args.receipt.parent if args.receipt else None,
             )
@@ -152,7 +152,7 @@ def main() -> int:
                 args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     except (PairingError, ValueError) as error:
         raise SystemExit("aggregate C++ versions: " + str(error))
-    print("aggregate v18 ownership" + (" and v16/v18 ABI pairs" if args.compiler else "") + " verified")
+    print("aggregate v19 ownership" + (" and v18/v19 ABI pairs" if args.compiler else "") + " verified")
     return 0
 
 

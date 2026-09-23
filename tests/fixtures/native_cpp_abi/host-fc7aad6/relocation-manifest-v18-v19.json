@@ -1,0 +1,26 @@
+{
+  "schema": "pineforge-epoch-relocation/v1",
+  "transition": {
+    "from": "engine_script_run_v18",
+    "to": "engine_script_run_v19"
+  },
+  "hostCapability": {
+    "from": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18",
+    "to": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19"
+  },
+  "removedStorage": [],
+  "addedStorage": [],
+  "addedValueMembers": [],
+  "addedVirtuals": [],
+  "removedVirtuals": [],
+  "rejectionPairs": [
+    [
+      "v18-frozen",
+      "v19-current"
+    ],
+    [
+      "v19-current",
+      "v18-frozen"
+    ]
+  ]
+}

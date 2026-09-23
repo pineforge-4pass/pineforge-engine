@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation controls for the aggregate v18 ownership and ABI pair guards."""
+"""Mutation controls for the aggregate v19 ownership and ABI pair guards."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,7 +29,7 @@ class AggregateVersions(unittest.TestCase):
     def test_epoch_mutation_rejects(self) -> None:
         root = self.copied_root()
         path = root / "include/pineforge/engine.hpp"
-        path.write_text(path.read_text().replace("engine_script_run_v18", "engine_script_run_v0", 1))
+        path.write_text(path.read_text().replace("engine_script_run_v19", "engine_script_run_v0", 1))
         with self.assertRaises(ValueError):
             checker.check(root)
 

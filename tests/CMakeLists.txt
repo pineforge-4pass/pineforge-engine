@@ -1179,7 +1179,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
                 --library $<TARGET_FILE:pineforge>
                 --include ${PROJECT_SOURCE_DIR}/include
                 --generated-include ${PROJECT_BINARY_DIR}/include
-                --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
+                --v18-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v18-frozen/receipt.json
                 --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
                 ${_pf_abi_receipt_mode}
                 ${_pf_script_cpp_abi_flags}
@@ -1239,6 +1239,9 @@ set(PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT
 set(PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT
     "${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json"
     CACHE FILEPATH "Prepared actual ab9714b frozen epoch 16 ABI provider receipt")
+set(PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT
+    "${PROJECT_BINARY_DIR}/native-abi-v18-frozen/receipt.json"
+    CACHE FILEPATH "Prepared actual fc7aad6 frozen epoch 18 ABI provider receipt")
 # Same pairing TU, against the frozen settlement providers.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME test_settlement_cpp_abi
@@ -1253,6 +1256,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
             --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
             --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+            --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
             --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
             ${_pf_abi_receipt_mode}
             ${_pf_script_cpp_abi_flags})
@@ -1270,7 +1274,7 @@ add_test(NAME test_settlement_cpp_abi_tooling
 add_test(NAME test_abi_receipt_skips
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_abi_receipt_skips.py
         --ctest ${CMAKE_CTEST_COMMAND})
-# Same pairing TU, for the v16/v17 ownership control.
+# Same pairing TU, for the v18/v19 ownership control.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME test_aggregate_cpp_versions_runtime
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
@@ -1278,7 +1282,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             --library $<TARGET_FILE:pineforge>
             --include ${PROJECT_SOURCE_DIR}/include
             --generated-include ${PROJECT_BINARY_DIR}/include
-            --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+            --v18-frozen-receipt ${PINEFORGE_NATIVE_ABI_V18_FROZEN_RECEIPT}
             --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
             ${_pf_abi_receipt_mode}
             ${_pf_script_cpp_abi_flags})

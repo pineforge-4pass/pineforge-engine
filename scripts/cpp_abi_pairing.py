@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared, compiler-backed controls for the frozen v16 / live v18 C++ boundary.
+"""Shared, compiler-backed controls for the frozen v18 / live v19 C++ boundary.
 
 The ABI checks deliberately compile callers against the headers that name each
 epoch, then link them only.  A caller binary is never executed: a successful
@@ -29,6 +29,11 @@ from prepare_settlement_cpp_abi_base import (
 ROOT = Path(__file__).resolve().parents[1]
 V16_EPOCH = "engine_script_run_v16"
 V18_EPOCH = "engine_script_run_v18"
+V19_EPOCH = "engine_script_run_v19"
+# The live epoch, and the frozen provider every receipt-gated pair links
+# against in both directions (tests/fixtures/native_cpp_abi/host-fc7aad6).
+CURRENT_EPOCH = V19_EPOCH
+ACTIVE_FROZEN_ROLE = "v18-frozen"
 
 
 class PairingError(RuntimeError):
@@ -86,44 +91,53 @@ def _archive_symbols(archive: Path) -> str:
     return result.stdout
 
 
-def load_frozen_v16(receipt_path: Path, destination: Path) -> FrozenProvider:
-    """Authenticate and unpack the actual L0 v16 archive named by its receipt."""
-    provider = PROVIDERS["v16-frozen"]
+def load_frozen_provider(role: str, receipt_path: Path, destination: Path) -> FrozenProvider:
+    """Authenticate and unpack the actual frozen archive `role` names by its receipt."""
+    provider = PROVIDERS[role]
+    epoch = provider["engine_epoch"]
+    label = "frozen " + epoch.rsplit("_", 1)[-1]
+    fixture = provider["manifest"].parent.name
     if not receipt_path.is_file():
-        raise PairingError("frozen v16 ABI receipt is missing: " + str(receipt_path))
+        raise PairingError(label + " ABI receipt is missing: " + str(receipt_path))
     try:
         data = json.loads(receipt_path.read_text())
     except json.JSONDecodeError as error:
-        raise PairingError("invalid frozen v16 ABI receipt: " + str(error)) from error
+        raise PairingError("invalid " + label + " ABI receipt: " + str(error)) from error
     if data.get("commit") != provider["commit"] or data.get("tree") != provider["tree"]:
-        raise PairingError("frozen ABI receipt does not identify host-ab9714b v16")
+        raise PairingError("frozen ABI receipt does not identify " + fixture + " "
+                           + epoch.rsplit("_", 1)[-1])
     for key in ("archive", "archiveSha256", "headers", "headersSha256"):
         if not data.get(key):
-            raise PairingError("frozen v16 ABI receipt omits " + key)
+            raise PairingError(label + " ABI receipt omits " + key)
     archive = _resolve(receipt_path, data["archive"])
     headers_tar = _resolve(receipt_path, data["headers"])
     if not archive.is_file() or not headers_tar.is_file():
-        raise PairingError("frozen v16 ABI receipt names missing archive/header artifacts")
+        raise PairingError(label + " ABI receipt names missing archive/header artifacts")
     if sha256(archive) != data["archiveSha256"] or sha256(headers_tar) != data["headersSha256"]:
-        raise PairingError("frozen v16 ABI artifact bytes do not match its receipt")
+        raise PairingError(label + " ABI artifact bytes do not match its receipt")
     if not archive.read_bytes().startswith(b"!<arch>\n"):
-        raise PairingError("frozen v16 provider is not a static archive")
+        raise PairingError(label + " provider is not a static archive")
     extract_tar(headers_tar.read_bytes(), destination)
     authenticate_headers(destination, provider["manifest"], commit=provider["commit"],
                          tree=provider["tree"])
     include = destination / "include"
-    if epoch_from_headers(include) != V16_EPOCH:
-        raise PairingError("authenticated frozen header closure is not v16")
-    if V16_EPOCH + "::BacktestEngine::broker_state_hash" not in _archive_symbols(archive):
-        raise PairingError("frozen v16 archive does not export its broker-state ABI witness")
+    if epoch_from_headers(include) != epoch:
+        raise PairingError("authenticated frozen header closure is not " + epoch)
+    if epoch + "::BacktestEngine::broker_state_hash" not in _archive_symbols(archive):
+        raise PairingError(label + " archive does not export its broker-state ABI witness")
     return FrozenProvider(archive=archive, headers_tar=headers_tar,
                           receipt=receipt_path, data=data)
+
+
+def load_frozen_v16(receipt_path: Path, destination: Path) -> FrozenProvider:
+    """The L0 v16 archive: the runtime-budget baseline (scripts/check_runtime_budget.py)."""
+    return load_frozen_provider("v16-frozen", receipt_path, destination)
 
 
 def audit_prepared_receipt(receipt_path: Path, label: str) -> dict:
     """Consume every historical CMake receipt with artifact-byte evidence.
 
-    Only host-ab9714b is the active v16/v18 pairing provider.  The older
+    Only host-fc7aad6 is the active v18/v19 pairing provider.  The older
     receipts remain historical input evidence, so accepting a CMake argument
     without reading its archive and header bytes would make the CTest command
     line misleading again.
@@ -236,45 +250,58 @@ def _link(compiler: str, flags: Iterable[str], name: str, object_file: Path, arc
     }
 
 
-def execute_v16_v18_pair(*, compiler: str, extra_flags: Iterable[str], current_library: Path,
-                          current_include: Path, generated_include: Path,
-                          v16_receipt: Path, kind: str, artifact_directory: Path | None = None) -> dict:
-    """Compile and link the two acceptance and two rejection pairings."""
+def execute_frozen_pair(*, compiler: str, extra_flags: Iterable[str], current_library: Path,
+                        current_include: Path, generated_include: Path, frozen_receipt: Path,
+                        kind: str, frozen_role: str = ACTIVE_FROZEN_ROLE,
+                        artifact_directory: Path | None = None) -> dict:
+    """Compile and link the two acceptance and two rejection pairings.
+
+    The live archive and the frozen one each accept a caller compiled against
+    their own headers and refuse the other's, in both directions.
+    """
+    frozen_epoch = PROVIDERS[frozen_role]["engine_epoch"]
+    frozen_tag = frozen_epoch.rsplit("_", 1)[-1]
+    current_tag = CURRENT_EPOCH.rsplit("_", 1)[-1]
     current_library = current_library.resolve()
     current_include = current_include.resolve()
     generated_include = generated_include.resolve()
     if not current_library.is_file():
         raise PairingError("current ABI library is missing: " + str(current_library))
-    if epoch_from_headers(current_include) != V18_EPOCH:
-        raise PairingError("current headers are not engine_script_run_v18")
-    if V18_EPOCH + "::BacktestEngine::broker_state_hash" not in _archive_symbols(current_library):
-        raise PairingError("current v18 archive does not export its broker-state ABI witness")
+    if epoch_from_headers(current_include) != CURRENT_EPOCH:
+        raise PairingError("current headers are not " + CURRENT_EPOCH)
+    if CURRENT_EPOCH + "::BacktestEngine::broker_state_hash" not in _archive_symbols(current_library):
+        raise PairingError("current " + current_tag
+                           + " archive does not export its broker-state ABI witness")
     flags = list(extra_flags)
     root_parent = artifact_directory if artifact_directory is not None else None
     if root_parent is not None:
         root_parent.mkdir(parents=True, exist_ok=True)
-        root = Path(tempfile.mkdtemp(prefix="v18-v16-" + kind + ".artifacts-", dir=root_parent))
+        root = Path(tempfile.mkdtemp(prefix=current_tag + "-" + frozen_tag + "-" + kind
+                                     + ".artifacts-", dir=root_parent))
         cleanup = None
     else:
-        cleanup = tempfile.TemporaryDirectory(prefix="pineforge-v16-v18-")
+        cleanup = tempfile.TemporaryDirectory(
+            prefix="pineforge-" + frozen_tag + "-" + current_tag + "-")
         root = Path(cleanup.name)
     try:
-        frozen_root = root / "frozen-v16"
-        frozen = load_frozen_v16(v16_receipt.resolve(), frozen_root)
+        frozen_root = root / ("frozen-" + frozen_tag)
+        frozen = load_frozen_provider(frozen_role, frozen_receipt.resolve(), frozen_root)
         frozen_include = frozen_root / "include"
-        v16_object, v16_compile = _compile(compiler, flags, kind + "_v16", _source(V16_EPOCH, kind),
-                                            frozen_include, generated_include, root)
-        v18_object, v18_compile = _compile(compiler, flags, kind + "_v18", _source(V18_EPOCH, kind),
-                                            current_include, generated_include, root)
+        frozen_object, frozen_compile = _compile(
+            compiler, flags, kind + "_" + frozen_tag, _source(frozen_epoch, kind),
+            frozen_include, generated_include, root)
+        current_object, current_compile = _compile(
+            compiler, flags, kind + "_" + current_tag, _source(CURRENT_EPOCH, kind),
+            current_include, generated_include, root)
         links = [
-            _link(compiler, flags, kind + "_v16_to_v16", v16_object, frozen.archive, "accept",
-                  V16_EPOCH, V16_EPOCH, root),
-            _link(compiler, flags, kind + "_v18_to_v18", v18_object, current_library, "accept",
-                  V18_EPOCH, V18_EPOCH, root),
-            _link(compiler, flags, kind + "_v16_to_v18_reject", v16_object, current_library, "reject",
-                  V16_EPOCH, V18_EPOCH, root),
-            _link(compiler, flags, kind + "_v18_to_v16_reject", v18_object, frozen.archive, "reject",
-                  V18_EPOCH, V16_EPOCH, root),
+            _link(compiler, flags, kind + "_" + frozen_tag + "_to_" + frozen_tag, frozen_object,
+                  frozen.archive, "accept", frozen_epoch, frozen_epoch, root),
+            _link(compiler, flags, kind + "_" + current_tag + "_to_" + current_tag, current_object,
+                  current_library, "accept", CURRENT_EPOCH, CURRENT_EPOCH, root),
+            _link(compiler, flags, kind + "_" + frozen_tag + "_to_" + current_tag + "_reject",
+                  frozen_object, current_library, "reject", frozen_epoch, CURRENT_EPOCH, root),
+            _link(compiler, flags, kind + "_" + current_tag + "_to_" + frozen_tag + "_reject",
+                  current_object, frozen.archive, "reject", CURRENT_EPOCH, frozen_epoch, root),
         ]
     finally:
         if cleanup is not None:
@@ -283,12 +310,13 @@ def execute_v16_v18_pair(*, compiler: str, extra_flags: Iterable[str], current_l
         "kind": kind,
         "artifactsDirectory": str(root),
         "frozenProvider": {
+            "role": frozen_role,
             "receipt": str(frozen.receipt),
             "archive": str(frozen.archive),
             "archiveSha256": sha256(frozen.archive),
             "headersSha256": sha256(frozen.headers_tar),
         },
-        "compiles": [v16_compile, v18_compile],
+        "compiles": [frozen_compile, current_compile],
         "links": links,
         "summary": {"accepted": 2, "rejected": 2, "executedBinaries": 0},
     }

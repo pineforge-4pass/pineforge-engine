@@ -117,24 +117,25 @@ notice:
 
 Rebuild generated and native C++ objects against matching engine headers and
 runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
-private consumer to `engine_script_run_v17`; R5 L6 advances the same three to <!-- verified HEAD -->
-`engine_script_run_v18` for the native higher-timeframe host surface
+private consumer to `engine_script_run_v17`; R5 L6 advanced the same three to <!-- verified HEAD -->
+`engine_script_run_v18` for the native higher-timeframe host surface <!-- verified HEAD -->
 (`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
 `native_liquidation_price`) R5 L5's calculation-timing surface
 (`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`) and R5
 L7b's anchored-leg hook (`resolve_anchored_level` over
 `NativeAnchoredLevelView`) and R5 N5's generic host hash extension
-(`BacktestEngine::hash_host_extension`, with `BrokerStateHashSink` now a
+(`BacktestEngine::hash_host_extension`, with `BrokerStateHashSink` a
 complete public type and `hash_source_extension` kept as the deprecated
-spelling the default forwards to), and the
-host capability macro
-is `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18`. N5 lands inside v18 rather than
-opening an epoch: v18 has not shipped in a release, its frozen predecessor is
-still `host-ab9714b` (v16), and the v16→v18 relocation manifest is the live
-transition it extends. It moves no fingerprint: a host that overrides nothing
-folds the same `"source:none"` marker, and the source host folds the same
-bytes through the generic hook. L3b removes the source compatibility
+spelling the default forwards to). N5 landed inside v18 rather than opening an
+epoch, and moved no fingerprint: a host that overrides nothing folds the same
+`"source:none"` marker, and the source host folds the same bytes through the
+generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
+`engine_script_run_v19`; the host capability macro is
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
+`host-fc7aad6`, the last epoch-18 `main` commit, and
+`relocation-manifest-v18-v19.json` beside it is the live transition: no host
+virtual is added or removed, and later v19 lanes change layouts inside v19. L3b removes the source compatibility
 order type; `pineforge-source-adapter/v3` hashes adapter and scheduler state
 instead. Native request/core/event values are `native_order_v6`, the private
 consumer identity is
@@ -150,19 +151,22 @@ so no established continuation hash moves.
 
 | Matrix role | Internal identity |
 | --- | --- |
-| Live engine/host library | `engine_script_run_v18` |
+| Live engine/host library | `engine_script_run_v19` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` | <!-- verified HEAD -->
 | `host-ab9714b` immutable provider | `engine_script_run_v16` | <!-- verified HEAD -->
+| `host-fc7aad6` immutable provider | `engine_script_run_v18` | <!-- verified HEAD -->
 | Source extension | `pineforge-source-adapter/v3` |
 
-The verifier prepares six immutable historical archives with the profile's
+The verifier prepares seven immutable historical archives with the profile's
 compiler/settings and authenticates every receipt against the real archive and
 header bytes. The active transition control is deliberately narrower and
-executable: callers compiled against `host-ab9714b` v16 link to its archive,
-callers compiled against live v18 link to the live archive, and both v16→v18
-and v18→v16 links must reject the exact epoch-qualified
+executable: callers compiled against `host-fc7aad6` v18 link to its archive,
+callers compiled against live v19 link to the live archive, and both v18→v19
+and v19→v18 links must reject the exact epoch-qualified
 `BacktestEngine::broker_state_hash` symbol. Settlement, script-host, and
-aggregate controls each exercise that pair; no caller executable is run.
+aggregate controls each exercise that pair; no caller executable is run. The
+`host-ab9714b` v16 archive stays the runtime-budget baseline
+(`scripts/check_runtime_budget.py`) and a historical input.
 
 For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
@@ -188,8 +192,8 @@ document `cc -std=c11`); strict C99 accepts the anonymous union with a
 `-Wc11-extensions` warning. Rulings of record: ADR-0001, "Deprecated public
 spellings".
 
-The relocation manifest remains a reviewed description of the v16→v18 source
-and host transition; it is not proof by itself. The proof is the authenticated
+The two relocation manifests remain reviewed descriptions of the v16→v18 source
+and host transition and of the v18→v19 one; neither is proof by itself. The proof is the authenticated
 archive/header input plus the acceptance/rejection links above. The frozen
 pending-row POD is checked separately. Preparation never overwrites an
 existing provider directory or substitutes a symbol stub for a real archive.

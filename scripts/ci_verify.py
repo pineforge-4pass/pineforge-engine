@@ -843,6 +843,7 @@ class Driver:
         self.abi_v14_action = 'not-started'
         self.abi_v15_frozen_action = 'not-started'
         self.abi_v16_frozen_action = 'not-started'
+        self.abi_v18_frozen_action = 'not-started'
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -875,6 +876,7 @@ class Driver:
             'abiV14': {'action': self.abi_v14_action},
             'abiV15Frozen': {'action': self.abi_v15_frozen_action},
             'abiV16Frozen': {'action': self.abi_v16_frozen_action},
+            'abiV18Frozen': {'action': self.abi_v18_frozen_action},
             'stages': self.stages,
             'failures': self.failures,
         }
@@ -886,6 +888,7 @@ class Driver:
         self.summary['abiV14'] = {'action': self.abi_v14_action}
         self.summary['abiV15Frozen'] = {'action': self.abi_v15_frozen_action}
         self.summary['abiV16Frozen'] = {'action': self.abi_v16_frozen_action}
+        self.summary['abiV18Frozen'] = {'action': self.abi_v18_frozen_action}
         self.summary['actualVersion'] = self.actual_version
         self.summary['stages'] = self.stages
         self.summary['failures'] = self.failures
@@ -1096,6 +1099,15 @@ class Driver:
                         '--header-manifest', str(manifest)],
             stage='abi-v16-frozen', fetch_stage='abi-v16-frozen-fetch')
 
+    def ensure_abi_v18_frozen(self) -> None:
+        provider = PROVIDERS['v18-frozen']
+        manifest = self.cfg.source / provider['manifest'].relative_to(ROOT)
+        self.abi_v18_frozen_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / provider['default_output'], provider['commit'], provider['tree'],
+            extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
+                        '--header-manifest', str(manifest)],
+            stage='abi-v18-frozen', fetch_stage='abi-v18-frozen-fetch')
+
     def ensure_prepared_provider(self, output: Path, commit: str, tree: str, *,
                                  extra_argv: list[str], stage: str, fetch_stage: str) -> str:
         prepare = [
@@ -1300,6 +1312,7 @@ class Driver:
             self.ensure_abi_v14()
             self.ensure_abi_v15_frozen()
             self.ensure_abi_v16_frozen()
+            self.ensure_abi_v18_frozen()
         else:
             # Every receipt-backed row pairs through a source::PineStrategyHost
             # TU, so the kernel-only build registers none of them.

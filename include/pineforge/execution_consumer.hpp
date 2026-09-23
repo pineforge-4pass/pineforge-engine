@@ -13,7 +13,7 @@ namespace pineforge {
 
 struct SymInfo;
 
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 
 class BacktestEngine;
 
@@ -68,5 +68,5 @@ public:
 
 std::unique_ptr<IExecutionConsumer> make_native_execution_consumer();
 
-}  // inline namespace engine_script_run_v18
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge

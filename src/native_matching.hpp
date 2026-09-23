@@ -11,7 +11,7 @@
 #include <optional>
 
 namespace pineforge {
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 namespace native_matching {
 
 struct GeometricHit {
@@ -390,5 +390,5 @@ inline std::optional<GeometricHit> trail_stop_hit(
 }
 
 }  // namespace native_matching
-}  // inline namespace engine_script_run_v18
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge

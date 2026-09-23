@@ -32,7 +32,17 @@ V15_FROZEN_COMMIT = 'e7cdf052fa44d4c98035804db7b8399d3a5a37b2'
 V15_FROZEN_TREE = 'dea028ca5664f78c055b1588820a4f7cce5b137f'
 V16_FROZEN_COMMIT = 'ab9714beccb62b796c122cf68986ec9e7dbf4a67'
 V16_FROZEN_TREE = '8c75db9858e63e019a31dd90230eff7f16ce24eb'
+V18_FROZEN_COMMIT = 'fc7aad6219e4ed752e290abb553b1c597acec2c3'
+V18_FROZEN_TREE = '41c5a16ce254f0a25064ddfc07e7a64f02a9bae1'
 PROVIDERS = {
+    # The v19 value epoch freezes the last epoch-18 main commit. It is the
+    # active rejection-pair provider of the live v19 archive (both
+    # directions); the v16 provider stays the runtime-budget baseline and a
+    # historical input.
+    'v18-frozen': {'commit': V18_FROZEN_COMMIT, 'tree': V18_FROZEN_TREE,
+                   'engine_epoch': 'engine_script_run_v18',
+                   'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json',
+                   'default_output': 'native-abi-v18-frozen', 'headers_name': 'headers.tar'},
     # L0 freezes the exact pre-v17 provider.  This is deliberately a
     # same-epoch role: the matrix must prove both frozen/live v16 directions
     # link before L1 changes any public version literal.

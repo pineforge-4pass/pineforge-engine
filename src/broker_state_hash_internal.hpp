@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v18 {
+inline namespace engine_script_run_v19 {
 
 // BrokerStateHashSink itself is public (engine.hpp): a host folds its own
 // state through it. What stays here are the kernel's own fold helpers.
@@ -47,5 +47,5 @@ inline void hash_str_set(BrokerStateHashSink& f, const std::unordered_set<std::s
     for (const auto& x : v) f.s(x);
 }
 
-} // inline namespace engine_script_run_v18
+} // inline namespace engine_script_run_v19
 } // namespace pineforge

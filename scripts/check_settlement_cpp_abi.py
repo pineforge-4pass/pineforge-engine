@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Audit the v18 surface and execute frozen-v16/live-v18 settlement ABI pairs.
+"""Audit the v19 surface and execute frozen-v18/live-v19 settlement ABI pairs.
 
 This is intentionally a compile/link control, never a JSON-to-JSON manifest
 comparison.  It consumes every historical receipt supplied by CMake and links
-the actual host-ab9714b archive in both stale directions, after checking the
-authenticated v16-to-v18 relocation manifest and retired surface.
+the actual host-fc7aad6 archive in both stale directions, after checking the
+authenticated v18-to-v19 relocation manifest, the retired surface the
+v16-to-v18 relocation removed, and the host hooks it added.
 """
 from __future__ import annotations
 
@@ -14,12 +15,15 @@ import re
 from pathlib import Path
 
 from cpp_abi_pairing import (
-    PairingError, audit_prepared_receipt, enforce_receipt_mode,
-    execute_v16_v18_pair,
+    CURRENT_EPOCH, PairingError, audit_prepared_receipt, enforce_receipt_mode,
+    execute_frozen_pair,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json"
+# The active transition, and the historical one whose retired surface and
+# added hooks the live tree must still show.
+MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-fc7aad6/relocation-manifest-v18-v19.json"
+V16_V18_MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v18.json"
 RETIRED_HEADER = "pineforge/source/pine_pending_intent.hpp"
 _OLD = "legacy"
 _RUN = _OLD + "_run_"
@@ -37,13 +41,25 @@ def verify(include: Path) -> dict:
     engine = (include / "pineforge/engine.hpp").read_text()
     native = (include / "pineforge/native_host.hpp").read_text()
     manifest = json.loads(MANIFEST.read_text())
-    if manifest.get("schema") != "pineforge-r4-d-relocation/v1":
-        raise RuntimeError("unexpected v16-v18 relocation schema")
+    if manifest.get("schema") != "pineforge-epoch-relocation/v1":
+        raise RuntimeError("unexpected v18-v19 relocation schema")
     if manifest.get("transition") != {
-            "from": "engine_script_run_v16", "to": "engine_script_run_v18"}:
-        raise RuntimeError("v16-v18 relocation transition drift")
-    if "inline namespace engine_script_run_v18" not in engine:
-        raise RuntimeError("current engine epoch is not v18")
+            "from": "engine_script_run_v18", "to": "engine_script_run_v19"}:
+        raise RuntimeError("v18-v19 relocation transition drift")
+    if "inline namespace " + CURRENT_EPOCH not in engine:
+        raise RuntimeError("current engine epoch is not v19")
+    capability = manifest.get("hostCapability") or {}
+    if capability != {"from": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18",
+                      "to": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19"}:
+        raise RuntimeError("v18-v19 host capability transition drift")
+    if "#define " + capability["to"] + " 1" not in native:
+        raise RuntimeError("current native host omits its v19 capability macro")
+    if capability["from"] in native:
+        raise RuntimeError("current native host still defines the v18 capability macro")
+    historical = json.loads(V16_V18_MANIFEST.read_text())
+    if historical.get("schema") != "pineforge-r4-d-relocation/v1" or historical.get(
+            "transition") != {"from": "engine_script_run_v16", "to": "engine_script_run_v18"}:
+        raise RuntimeError("historical v16-v18 relocation manifest drift")
     if (include / RETIRED_HEADER).exists():
         raise RuntimeError("retired source order header remains installed")
     present = [name for name in RETIRED_SEAMS if name in engine]
@@ -59,7 +75,7 @@ def verify(include: Path) -> dict:
         "resolve_margin_requirement", "margin_check_allowed",
         "resolve_anchored_level",
     }
-    declared = set(manifest.get("addedVirtuals", []))
+    declared = set(historical.get("addedVirtuals", []))
     if not (required_virtuals | required_answering_virtuals).issubset(declared):
         raise RuntimeError("relocation manifest omits a native hook")
     if not all("virtual void " + name in native for name in required_virtuals):
@@ -75,10 +91,14 @@ def verify(include: Path) -> dict:
     if not all("virtual void " + name + "(BrokerStateHashSink&) const;" in engine
                for name in required_engine_virtuals | {"hash_source_extension"}):
         raise RuntimeError("current engine omits a required hash extension hook")
+    for key in ("addedVirtuals", "removedVirtuals"):
+        if manifest.get(key) != []:
+            raise RuntimeError("v18-v19 relocation " + key + " drift: v19 moves no host hook")
     pairs = manifest.get("rejectionPairs")
-    if pairs != [["v16-frozen", "v18-current"], ["v18-current", "v16-frozen"]]:
-        raise RuntimeError("v16/v18 rejection pairs drift")
+    if pairs != [["v18-frozen", "v19-current"], ["v19-current", "v18-frozen"]]:
+        raise RuntimeError("v18/v19 rejection pairs drift")
     return {"transition": manifest["transition"], "rejectionPairs": pairs,
+            "addedStorage": manifest.get("addedStorage", []),
             "retiredHeader": RETIRED_HEADER}
 
 
@@ -91,22 +111,23 @@ def verify_pair(args: argparse.Namespace) -> dict:
         audit_prepared_receipt(args.v14_receipt, "native v14"),
         audit_prepared_receipt(args.v15_frozen_receipt, "frozen v15"),
         audit_prepared_receipt(args.v16_frozen_receipt, "frozen v16"),
+        audit_prepared_receipt(args.v18_frozen_receipt, "frozen v18"),
     ]
-    pair = execute_v16_v18_pair(
+    pair = execute_frozen_pair(
         compiler=args.compiler,
         extra_flags=args.extra_flag,
         current_library=args.library,
         current_include=args.include,
         generated_include=args.generated_include,
-        v16_receipt=args.v16_frozen_receipt,
+        frozen_receipt=args.v18_frozen_receipt,
         kind="native",
         artifact_directory=args.receipt.parent,
     )
     return {
         "schemaVersion": "pineforge-settlement-abi/v2",
-        "v16V18Surface": surface,
+        "v18V19Surface": surface,
         "historicalInputs": inputs,
-        "v16V18Pair": pair,
+        "v18V19Pair": pair,
         "summary": {
             "compiled": len(pair["compiles"]),
             "linked": sum(row["outcome"] == "linked" for row in pair["links"]),
@@ -128,6 +149,7 @@ def main() -> int:
     parser.add_argument("--v14-receipt", type=Path, required=True)
     parser.add_argument("--v15-frozen-receipt", type=Path, required=True)
     parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
+    parser.add_argument("--v18-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path, required=True)
     receipt_mode = parser.add_mutually_exclusive_group()
@@ -137,7 +159,8 @@ def main() -> int:
     try:
         mode = enforce_receipt_mode(
             (args.base_receipt, args.prior_receipt, args.v13_receipt,
-             args.v14_receipt, args.v15_frozen_receipt, args.v16_frozen_receipt),
+             args.v14_receipt, args.v15_frozen_receipt, args.v16_frozen_receipt,
+             args.v18_frozen_receipt),
             skip=args.skip_if_receipt_missing, require=args.require_receipts,
             label="settlement C++ ABI")
         if mode is not None:
@@ -149,7 +172,7 @@ def main() -> int:
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     summary = result["summary"]
     print(f"settlement C++ ABI: {summary['compiled']} callers compiled; "
-          f"{summary['linked']} positive links; {summary['rejected']} v16/v18 rejections; "
+          f"{summary['linked']} positive links; {summary['rejected']} v18/v19 rejections; "
           "no executable run")
     return 0
 
