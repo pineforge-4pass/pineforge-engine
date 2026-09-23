@@ -2158,6 +2158,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
+    events_acknowledged_ = false;
+    acknowledged_through_ = 0;
     next_timeline_ordinal_ = 1;
     decision_floor_ms_ = initial_floor_ms;
     has_floor_ = true;
@@ -9588,6 +9590,17 @@ uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
     return high;
 }
 
+void NativeExecutionConsumer::acknowledge_events(uint64_t through_ordinal) noexcept {
+    // Before its begin a run has no journal to acknowledge, and once it has
+    // ended no boundary is left to retire at: both are no-ops.
+    if (!std::holds_alternative<NativeRunning>(state_)) return;
+    // A host can only have read what exists; an acknowledgement past the high
+    // water must not reach the events that have not happened yet.
+    const uint64_t bounded = std::min(through_ordinal, event_high_water());
+    events_acknowledged_ = true;
+    acknowledged_through_ = std::max(acknowledged_through_, bounded);
+}
+
 // After every install: the terminal-receipt watermark over the events it
 // committed, then the v19 running digests the continuation folds -- each
 // committed event's compact record and each new group-effect receipt, folded
@@ -9991,6 +10004,14 @@ std::optional<double> NativeStrategyHost::native_liquidation_price() const {
 NativeRiskState NativeStrategyHost::native_risk_state() const {
     return NativeExecutionConsumer::bound(*this)
         .risk_state();
+}
+
+void NativeStrategyHost::native_acknowledge_events(uint64_t through_ordinal) {
+    as_native_consumer(execution_consumer()).acknowledge_events(through_ordinal);
+}
+
+uint64_t NativeStrategyHost::native_event_window_start() const {
+    return as_native_consumer(execution_consumer()).event_window_start();
 }
 
 std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t after_ordinal) const {

@@ -87,6 +87,7 @@ static void check_native_run(void) {
     pf_native_state_v1 state;
     pf_native_event_v1 events[16];
     double units = 0.0;
+    uint64_t window = 0;
     int written, i, applied = 0;
 
     memset(&host, 0, sizeof(host));
@@ -148,6 +149,20 @@ static void check_native_run(void) {
         }
     }
     CHECK(applied == 1, "the C99 entry did not fill as one satisfied execution");
+    /* V19-B: the journal window's two words. This caller read every event
+     * after the run; its spec predates the retention word, so nothing was
+     * dropped and the window starts at 1, and an acknowledgement after the
+     * run has ended records nothing and fails nothing. */
+    CHECK(strategy_native_event_window_v1(host.handle, &window) == PF_NATIVE_OK && window == 1u,
+          "the C99 window did not start at 1");
+    CHECK(strategy_native_acknowledge_events_v1(
+              host.handle, written > 0 ? events[written - 1].ordinal : 0u)
+              == PF_NATIVE_OK,
+          "the C99 acknowledgement was refused");
+    CHECK(strategy_native_event_window_v1(host.handle, NULL) == PF_NATIVE_E_ARGUMENT,
+          "a NULL window out-parameter was accepted");
+    CHECK(strategy_native_acknowledge_events_v1(NULL, 0u) == PF_NATIVE_E_HANDLE,
+          "a NULL handle's acknowledgement was accepted");
     CHECK(strategy_native_position_v1(host.handle, &units, NULL, NULL) == PF_NATIVE_OK
               && units == 1.0,
           "the C99 entry did not leave a long 1");

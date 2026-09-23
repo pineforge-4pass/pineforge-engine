@@ -226,6 +226,14 @@ public:
         return false;
     }
     uint64_t event_high_water() const noexcept;
+    // V19-B, the reader side of the journal window
+    // (NativeStrategyHost::native_acknowledge_events /
+    // native_event_window_start). acknowledge_events records that the host
+    // has read every event through `through_ordinal`: clamped to the event
+    // high water, never lowered, and nothing at all outside a running run.
+    // event_window_start is the oldest ordinal a read can still return.
+    void acknowledge_events(uint64_t through_ordinal) noexcept;
+    uint64_t event_window_start() const noexcept { return requests_.retired_through() + 1; }
     // The v19 broker-state hash's closed-row half (pineforge-broker-state/v19,
     // BacktestEngine::broker_state_hash_from_execution_hash): a running digest
     // of `rows`' six folded fields, each final row folded once. See the
@@ -1328,6 +1336,13 @@ private:
     // Derived receipt cursor: it can be reconstructed from the immutable
     // command history and only lets source projections skip empty polls.
     uint64_t terminal_receipt_high_water_ = 0;
+    // V19-B: whether the host acknowledged at least once this run, and the
+    // newest ordinal it acknowledged. Reader bookkeeping for the journal
+    // window -- it decides which retained events a later boundary retires and
+    // nothing else -- so, like the receipt watermark above, it is folded into
+    // nothing. Reset at begin.
+    bool events_acknowledged_ = false;
+    uint64_t acknowledged_through_ = 0;
     // L4: the resting kernel liquidation and the modeled script path it is
     // sized against. Both are folded into the continuation digest only when
     // the run spec declares a margin model.

@@ -1260,6 +1260,27 @@ public:
     /// Owning snapshots copied at query time. Later commands/reset do not
     /// invalidate already returned values.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
+    /// The host has read every event through `through_ordinal` (R5 lane V19-B).
+    /// Under NativeEventRetention::Window the kernel drops the acknowledged
+    /// command events at the next script-bar boundary -- never one its own live
+    /// state still reads -- and keeps every event above the acknowledgement for
+    /// a later read. The first call also marks the host as one that polls:
+    /// until a host acknowledges, the kernel treats it as served by its
+    /// callbacks alone and closes its window at every script-bar end, so a
+    /// polling host acknowledges at its run begin (0 is legal: "nothing read
+    /// yet"). An acknowledgement is never lowered by a later, smaller one; one
+    /// above the event high water acknowledges the high water, never events
+    /// that have not happened; and before a run begins, or once it has ended,
+    /// it records nothing (the next begin starts a new journal). Full and
+    /// Commands keep the whole journal whatever is acknowledged. C spelling:
+    /// strategy_native_acknowledge_events_v1.
+    void native_acknowledge_events(uint64_t through_ordinal);
+    /// The oldest ordinal a read can still return: every command event at or
+    /// above it is retained, and native_events(after) for an `after` below it
+    /// starts here, the events before it having been dropped by the window.
+    /// 1 while nothing was dropped, which is every run under Full or Commands.
+    /// C spelling: strategy_native_event_window_v1.
+    uint64_t native_event_window_start() const;
     /// The run's monotonic decision floor in epoch milliseconds — the same value
     /// NativeStateView::decision_floor_ms carries. Every request's birth is compared
     /// against this floor, not against a later lowered clock, and a refused preflight

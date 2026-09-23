@@ -171,7 +171,7 @@ report. Each is a CTest row: `ctest --test-dir build -R example_`.
 Hand the runtime a callback table and drive the kernel from any language with
 a C FFI — no C++ in your own code. The complete file is
 [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
-39 `strategy_native_*` functions are declared in
+41 `strategy_native_*` functions are declared in
 [`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
 summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
 
@@ -463,7 +463,7 @@ public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **39 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **41 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled

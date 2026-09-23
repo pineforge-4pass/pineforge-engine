@@ -325,6 +325,11 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
 }
 
 void source::PineStrategyHost::on_native_run_begin() {
+    // The adapter reads the command journal with its receipt cursor and
+    // acknowledges it as it moves (observe_terminal_receipts); acknowledging
+    // "nothing read yet" here marks this host as one that polls, so the
+    // kernel keeps every event above the cursor until the adapter has seen it.
+    native_acknowledge_events(0);
     source_bar_index_ = -1;
     source_last_bar_index_ = -1;
     source_callback_count_ = 0;

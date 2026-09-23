@@ -146,6 +146,8 @@
  *   [C]  native_liquidation_price          strategy_native_liquidation_price_v1
  *   [C]  native_risk_state                 strategy_native_risk_state_v1
  *   [C]  native_events                     strategy_native_events_v1
+ *   [C]  native_acknowledge_events         strategy_native_acknowledge_events_v1
+ *   [C]  native_event_window_start         strategy_native_event_window_v1
  *   [C]  native_decision_floor             pf_native_state_v1::decision_floor_ms
  *   [C]  native_consumed_high_water        pf_native_state_v1::consumed_high_water
  *   [C]  native_continuation_hash          strategy_native_continuation_hash_v1
@@ -2703,6 +2705,28 @@ PF_API int strategy_native_open_lot_get_v1(pf_strategy_t s, int index,
  *  @return The number written (>= 0), or a negative status. */
 PF_API int strategy_native_events_v1(pf_strategy_t s, uint64_t after_ordinal,
                                      pf_native_event_v1* out, int cap);
+
+/** The host has read every event through @p through_ordinal —
+ *  `native_acknowledge_events()`.
+ *
+ *  Under the Window event retention the kernel drops the acknowledged command
+ *  events at the next script-bar boundary and keeps every event above the
+ *  acknowledgement; the first call also marks the host as one that polls, so
+ *  a polling host calls it from `on_run_begin` (0 is legal). A later, smaller
+ *  acknowledgement never lowers an earlier one, one above the event high
+ *  water acknowledges the high water, and outside a running run the call
+ *  records nothing. The Full and Commands retentions keep the whole journal
+ *  whatever is acknowledged.
+ *  @return PF_NATIVE_OK, or a negative status for a bad handle. */
+PF_API int strategy_native_acknowledge_events_v1(pf_strategy_t s, uint64_t through_ordinal);
+
+/** The oldest ordinal a read can still return — `native_event_window_start()`
+ *  — written to @p out_first_ordinal: every command event at or above it is
+ *  retained, and #strategy_native_events_v1 with an `after_ordinal` below it
+ *  starts there. 1 while nothing was dropped.
+ *  @return PF_NATIVE_OK, PF_NATIVE_E_ARGUMENT for a NULL @p out_first_ordinal,
+ *  or another negative status. */
+PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_ordinal);
 
 /** Read the run's lifecycle and typed failure into @p out.
  *

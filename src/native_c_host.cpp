@@ -3715,6 +3715,25 @@ PF_API int strategy_native_margin_call_v1(pf_strategy_t s, uint64_t ordinal,
     });
 }
 
+PF_API int strategy_native_acknowledge_events_v1(pf_strategy_t s, uint64_t through_ordinal) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        host->native_acknowledge_events(through_ordinal);
+        return PF_NATIVE_OK;
+    });
+}
+
+PF_API int strategy_native_event_window_v1(pf_strategy_t s, uint64_t* out_first_ordinal) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out_first_ordinal) return PF_NATIVE_E_ARGUMENT;
+        *out_first_ordinal = host->native_event_window_start();
+        return PF_NATIVE_OK;
+    });
+}
+
 PF_API int strategy_native_continuation_hash_v1(pf_strategy_t s, uint64_t* out) {
     return guarded([&] {
         auto* host = host_of(s);

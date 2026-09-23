@@ -4297,6 +4297,10 @@ void PineExecutionAdapter::observe_terminal_receipts() {
         terminal_receipt_cursor_ = std::max(
             terminal_receipt_cursor_, *terminal_high_water);
     }
+    // Every command through the cursor is observed, and every later read the
+    // adapter makes starts above it (follows_same_bar_declined_reversal, the
+    // margin revival), so the kernel's journal window may retire it.
+    host.native_acknowledge_events(receipt_cursor_);
 }
 
 native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bool dynamic) const {

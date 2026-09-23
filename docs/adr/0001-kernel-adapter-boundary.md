@@ -323,7 +323,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 - **The C API trades.** Two disjoint runtime inventories, both pinned.
   `src/c_abi.cpp` implements the **57** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
-  **39** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
+  **41** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
   callback table (`strategy_native_host_create_v1` `native_c_api.h:2492`), runs a batch
   (`strategy_native_run_v1` `native_c_api.h:2505`), and **submits, replaces, cancels and
   executes** orders — `strategy_native_submit_v1` (`native_c_api.h:2533`), `_replace_v1`
