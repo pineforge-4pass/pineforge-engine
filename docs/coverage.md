@@ -375,7 +375,10 @@ Bands / channels / widths (`src/ta_volatility_trend.cpp`): `BB`, `KC`,
 `ta::EMA`'s value included on the first bar; its range is the true range
 against the previous bar's close (`na` where that close is, as `ta.tr` is),
 so the upper and lower bands, and `KCW`, are `na` until the range EMA has a
-value (`tests/test_ta_kc_basis.cpp`).
+value (`tests/test_ta_kc_basis.cpp`). `KC(length, mult, use_true_range =
+true)` and `KCW(length, mult, use_true_range = true)` take Pine's
+`useTrueRange`: `false` averages `high - low` instead, which has a value on
+the first bar (`PF_KC_HAS_USE_TRUE_RANGE`, `tests/test_ta_kc_range.cpp`).
 
 Trend / pivots (`src/ta_volatility_trend.cpp`): `Supertrend(factor, atr_period)`,
 `DMI(di_length, adx_smoothing)`, `SAR(start, increment, maximum)`,

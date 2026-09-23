@@ -793,8 +793,8 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.highest()` | fn | ✅ Runtime | `ta::Highest` class | bar-addressed ring (K = length + 1 slots by `bar_index`, per context — chart and each `request.security`): a call inside an `if` that does not run every bar keeps stale slots, skips never-written ones, na iff `bar_index < length - 1` (NYSE:F 1D pins 39/39, 30/30), read through a cached extremum with an implied bar — a call within `length` bars of the cached bar compares against the cache only and does not rescan the aliased slots (8 tapes, 696/696); every-bar callers unchanged |
 | `ta.highestbars()` | fn | ✅ Runtime | `ta::HighestBars` class | same ring as `ta.highest`; offset = slot distance of the extremum |
 | `ta.hma()` | fn | ✅ Runtime | `ta::HMA` class | |
-| `ta.kc()` | fn | ✅ Runtime | `ta::KC` class | middle band = `ta::EMA` of the source on every bar (first bar included); bands na until the true-range EMA has a value (R5 lane TA1) |
-| `ta.kcw()` | fn | ✅ Runtime | `ta::KCW` class | |
+| `ta.kc()` | fn | ✅ Runtime | `ta::KC` class | middle band = `ta::EMA` of the source on every bar (first bar included); bands na until the range EMA has a value; `useTrueRange` is the third constructor argument, `KC(length, mult, use_true_range)` (R5 lane TA1) |
+| `ta.kcw()` | fn | ✅ Runtime | `ta::KCW` class | `useTrueRange` is the third constructor argument, `KCW(length, mult, use_true_range)` (R5 lane TA1) |
 | `ta.linreg()` | fn | ✅ Runtime | `ta::Linreg` class | |
 | `ta.lowest()` | fn | ✅ Runtime | `ta::Lowest` class | same bar-addressed ring and cached extremum as `ta.highest` (mirror; the 696/696 alias tapes are `ta.lowest(low, 10)`) |
 | `ta.lowestbars()` | fn | ✅ Runtime | `ta::LowestBars` class | same ring as `ta.lowest`; offset = slot distance of the extremum |

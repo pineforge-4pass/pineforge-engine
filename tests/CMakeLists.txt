@@ -1015,6 +1015,9 @@ list(APPEND TEST_SOURCES test_ta_alma_floor)
 # its range is ta.tr(false), against TradingView's spelled-out f_kc / f_kcw.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_ta_kc_basis)
+# R5 lane TA1: ta::KC / ta::KCW's useTrueRange against f_kc / f_kcw.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_ta_kc_range)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

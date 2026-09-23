@@ -532,8 +532,18 @@ BBResult BB::compute(double src) {
 
 // --- KC (Keltner Channels) ---
 
-KC::KC(int length, double mult)
-    : mult_(mult), ema_(length), range_ema_(length) {}
+KC::KC(int length, double mult, bool use_true_range)
+    : mult_(mult), use_true_range_(use_true_range), ema_(length), range_ema_(length) {}
+
+// The range of the current bar: the true range against the previous bar's
+// close, na when that close is (ta.tr with handle_na = false) -- the current
+// close is not an input -- or high - low without the true range.
+double KC::range_of(double high, double low) const {
+    if (!use_true_range_) return high - low;
+    if (is_na(high) || is_na(low) || is_na(prev_close_)) return na<double>();
+    return std::max(high - low,
+                    std::max(std::abs(high - prev_close_), std::abs(low - prev_close_)));
+}
 
 KCResult KC::compute(double src, double high, double low, double close) {
     KCResult result;
@@ -544,15 +554,7 @@ KCResult KC::compute(double src, double high, double low, double close) {
     saved_prev_close_ = prev_close_;
 
     double mid = ema_.compute(src);
-
-    // The true range against the previous bar's close, na when that close is
-    // (ta.tr with handle_na = false): the current close is not an input.
-    double span = na<double>();
-    if (!is_na(high) && !is_na(low) && !is_na(prev_close_)) {
-        span = std::max(high - low,
-                        std::max(std::abs(high - prev_close_), std::abs(low - prev_close_)));
-    }
-    double range_ema = range_ema_.compute(span);
+    double range_ema = range_ema_.compute(range_of(high, low));
     prev_close_ = close;
 
     // The middle band is the basis alone -- the EMA of src on every bar,
@@ -622,7 +624,7 @@ double BBW::compute(double src) {
 // KCW (Keltner Channel Width)
 // ============================================================================
 
-KCW::KCW(int length, double mult) : kc_(length, mult) {}
+KCW::KCW(int length, double mult, bool use_true_range) : kc_(length, mult, use_true_range) {}
 
 double KCW::compute(double src, double high, double low, double close) {
     auto r = kc_.compute(src, high, low, close);
@@ -858,12 +860,7 @@ KCResult KC::recompute(double src, double high, double low, double close) {
     prev_close_ = saved_prev_close_;
 
     double mid = ema_.recompute(src);
-    double span = na<double>();
-    if (!is_na(high) && !is_na(low) && !is_na(prev_close_)) {
-        span = std::max(high - low,
-                        std::max(std::abs(high - prev_close_), std::abs(low - prev_close_)));
-    }
-    double range_ema = range_ema_.recompute(span);
+    double range_ema = range_ema_.recompute(range_of(high, low));
     prev_close_ = close;
 
     result.middle = mid;

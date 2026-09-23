@@ -544,15 +544,22 @@ struct KCResult {
     double lower;
 };
 
+// middle = EMA(src); the bands are middle +/- mult * EMA(range), where the
+// range is the true range against the previous bar's close (na where that
+// close is) or, with use_true_range = false, high - low. Omitting the flag is
+// the true range, value for value.
 class KC {
     double mult_;
+    bool use_true_range_;
     EMA ema_;
     EMA range_ema_;
     double prev_close_ = na<double>();
     double saved_prev_close_ = na<double>();
 
+    double range_of(double high, double low) const;
+
 public:
-    KC(int length, double mult);
+    KC(int length, double mult, bool use_true_range = true);
     KCResult compute(double src, double high, double low, double close);
     KCResult recompute(double src, double high, double low, double close);
 };
@@ -909,10 +916,14 @@ class KCW {
     KC kc_;
 
 public:
-    KCW(int length, double mult);
+    KCW(int length, double mult, bool use_true_range = true);
     double compute(double src, double high, double low, double close);
     double recompute(double src, double high, double low, double close);
 };
+
+// Feature macro: KC and KCW take the range choice (a third constructor
+// argument, use_true_range).
+#define PF_KC_HAS_USE_TRUE_RANGE 1
 
 // --- BarsSince ---
 
