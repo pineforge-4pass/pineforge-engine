@@ -222,6 +222,17 @@ public:
     // append reallocated. It stops at, and answers, the first true a visitor
     // returns. Driver points and account rows are never visited.
     std::size_t first_command_after(uint64_t after_ordinal) const noexcept;
+    // Whether a command event above `after_ordinal` is in the journal: the
+    // first test first_command_after makes, which answers the history's size
+    // exactly when it fails. A reader that only asks whether anything lies
+    // past its cursor asks this, in O(1), rather than comparing that search
+    // with a second one from the top (R5 lane D2-A).
+    bool has_command_after(uint64_t after_ordinal) const noexcept {
+        const auto& history = requests_.history();
+        return !history.empty()
+            && std::visit([](const auto& payload) { return payload.ordinal; }, history.back())
+                > after_ordinal;
+    }
     template <class Visit>
     bool visit_commands_after(uint64_t after_ordinal, Visit&& visit) const {
         const auto& history = requests_.history();

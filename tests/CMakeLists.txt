@@ -1109,6 +1109,11 @@ list(APPEND TEST_SOURCES test_native_direct_mutation)
 # one result vector (fails on 10f20197, several per fill). Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
+# R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
+# journal searches the Pine adapter's quiet receipt read compared, for every
+# kind of cursor, at every callback of windowed randomized runs
+# (differential). Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_command_after)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

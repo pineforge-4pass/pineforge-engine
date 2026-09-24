@@ -4906,8 +4906,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
     if (consumer) {
         const std::uint64_t high_water = consumer->event_high_water();
         const bool quiet = high_water <= receipt_cursor_
-            || consumer->first_command_after(receipt_cursor_)
-                   == consumer->first_command_after(std::numeric_limits<std::uint64_t>::max());
+            || !consumer->has_command_after(receipt_cursor_);
         if (detail::skip_quiet(detail::QuietHook::ReceiptRead, quiet)) {
             // No acknowledgement (V19-B's, at the end of the full read) is
             // needed: no command lies between the one the last full read
