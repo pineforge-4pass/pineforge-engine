@@ -374,7 +374,7 @@ the campaign's own anchor audit found that the first thing to rot:
 
 Two independent claimed-vs-actual audits ran after the L-series, each proposing
 lanes of its own. These are the ones that landed, with the last commit of each
-on `main` — `git log --grep 'lane <id>'` finds the rest of a lane's commits:
+on `main` — `git log --grep "lane <id>"` finds the rest of a lane's commits:
 
 | Lane | What it did | Landed |
 |---|---|---|
@@ -473,7 +473,7 @@ exists for: C++ hosts (`examples/native/native_price_grid_strategy.cpp`,
 #### 3.6.1 `risk` — the TradingView risk rules against `NativeRunSpec::risk` (lane N12: measured, retained)
 
 The independent R5 audit (§6, lane N12) found that no adapter run declares
-`spec.risk` (`rg 'spec\.risk|NativeRiskLimits' src/source/` = 0 hits) while
+`spec.risk` (`rg "spec\.risk|NativeRiskLimits" src/source/` = 0 hits) while
 `update_risk_state`, `SourceDayLedger`, `submit_intraday_loss_close` and the
 `compat/pine` intraday cap stay the live path, and that the only artefact was
 a twin (`tests/test_native_risk_limits.cpp` `twin_of_adapter_risk_halts`) that
@@ -545,7 +545,7 @@ kernel seeded in an uncommitted, env-gated experiment.
 stands (`project()` at pine_strategy_host.cpp:314, `configure_native` at :315,
 the `set_pine_risk_*` setters at :867-888, and corpus 442d497
 `corpus/validation/cap-risk-gates-allow-max-intraday-01`'s generated strategy still emits the
-three calls inside `on_source_bar`); `rg 'spec\.risk|NativeRiskLimits' src/source
+three calls inside `on_source_bar`); `rg "spec\.risk|NativeRiskLimits" src/source
 include/pineforge/source` is still empty; `test_adapter_risk_relower` still
 reads `62 checks, 0 failures`. Closing the divergence instead would take, in
 order: the transpiler hoisting constant risk statements into the constructor
@@ -718,7 +718,7 @@ mechanism that a re-lowering would delete: `source_trigger_threshold`
 the fill booked elsewhere (E7) — which is why re-lowering moves outcomes
 instead of preserving them.
 
-**Re-verified on main `b8e7976e`.** `rg 'spec\.price_grid|\.price_grid\b'
+**Re-verified on main `b8e7976e`.** `rg "spec\.price_grid|\.price_grid\b"
 src/source include/pineforge/source src/compat` is empty.
 `test_adapter_grid_relower` — the permanent witness: its section 4 pins
 TradingView's per-kind rule on boundary prints as a neutrality differential
