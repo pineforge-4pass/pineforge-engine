@@ -1960,6 +1960,7 @@ private:
         std::vector<std::int32_t> source_bars;
         std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
         std::vector<std::uint64_t> candidate_names;
+        std::vector<std::uint64_t> first_reissues;
         std::vector<std::uint64_t> doomed;
         void clear() noexcept {
             roots.clear();
@@ -1968,6 +1969,7 @@ private:
             source_bars.clear();
             candidates.clear();
             candidate_names.clear();
+            first_reissues.clear();
             doomed.clear();
         }
     };

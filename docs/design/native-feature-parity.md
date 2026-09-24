@@ -1012,6 +1012,26 @@ not (`tests/test_adapter_live_state_equivalence.cpp` holds each script's
 command events, pending orders, working requests, trades, equity and
 admission fields equal with every row retained and with rows erased).
 
+**Corrected at integration (INT21): K3 keeps one re-issue per candidate.** K3
+first pinned every current-cycle re-issue of a revival candidate at a later bar
+and another stop. When a trade closes and the script keeps calling
+`strategy.exit` every bar for entries that are not open, the legs placed on the
+cycle's first bar keep their lifecycle target and stay candidates (K1) to the
+end of the cycle, so every later re-issue was pinned: two rows per exit per bar
+for the rest of the cycle, each walked and compared by the sweep at every bar
+open. That is O(bars^2) in the cycle's length: scripts of this shape ran
+dozens of times slower than on the base, which keeps every row but walks none of
+them at a bar open. The revival's superseded test asks whether any such
+re-issue exists, and a re-issue's family, ids, placement bar and stop never
+change, so K3 now keeps the first one (the lowest incarnation) for each
+candidate and the rest are erased once nothing else holds them; no trade moves.
+`tests/test_adapter_live_state_scaling.cpp`'s third workload, a daily
+chart of that shape, holds it: 12 rows retained and a ×4 cost for four times the
+bars (4,000 to 16,000), where the uncorrected sweep retained 7,748 and 31,024
+rows and cost ×18.6.
+The tombstone audit counts that scan as the existence test it is: an erased row
+is a hit only when no retained row answers the test first.
+
 **The witness, pinned now.** `tests/test_adapter_recording_hash_witness.cpp`
 records every row, a read after every command and the final scalar of six
 scenarios — submit, replace, cancel, OCA, re-issue with a late bracket, trail —

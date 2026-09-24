@@ -1781,7 +1781,9 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     std::optional<PlacementSnapshot> marketable;
     native_order::RequestHandle marketable_handle{};
     // No erased row is a revival candidate (K1 keeps every lifecycle of the
-    // current cycle), nor supersedes one that is (K2, K3).
+    // current cycle), and no candidate's superseded answer rests on an erased
+    // row: K2 keeps every row that names it as its predecessor, K3 the first
+    // re-issue that supersedes it, and one supersessor answers the test.
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
         [&](std::uint64_t, const PlacementSnapshot& candidate) {
             return candidate.placement_cycle == current_position_cycle_
@@ -1796,19 +1798,23 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         }
         const auto inc = retained.first;
         const auto target_inc = candidate.legs.target().incarnation;
-        PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
-            [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
-                return peer.placement_cycle == current_position_cycle_
-                    && ((peer.projection_predecessor != 0
-                         && (peer.projection_predecessor == inc
-                             || peer.projection_predecessor == target_inc))
-                        || (incarnation > inc && peer.family == candidate.family
-                            && peer.source_id == candidate.source_id
-                            && peer.from_entry == candidate.from_entry
-                            && peer.placement_script_open_ms > candidate.placement_script_open_ms
-                            && !same_double_bits(peer.exit_levels.stop,
-                                                 candidate.exit_levels.stop)));
-            });
+        const auto supersedes = [&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
+            return peer.placement_cycle == current_position_cycle_
+                && ((peer.projection_predecessor != 0
+                     && (peer.projection_predecessor == inc
+                         || peer.projection_predecessor == target_inc))
+                    || (incarnation > inc && peer.family == candidate.family
+                        && peer.source_id == candidate.source_id
+                        && peer.from_entry == candidate.from_entry
+                        && peer.placement_script_open_ms > candidate.placement_script_open_ms
+                        && !same_double_bits(peer.exit_levels.stop,
+                                             candidate.exit_levels.stop)));
+        };
+        // The test below stops at the first supersessor it finds: an erased
+        // one only reaches it when no retained row answers first.
+        const bool answered = std::any_of(placement_.begin(), placement_.end(),
+            [&](const auto& peer) { return supersedes(peer.first, peer.second); });
+        if (!answered) PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_, supersedes);
     }
 #endif
     for (auto row : placement_) {
@@ -2650,8 +2656,13 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 //      and the pair hold rewrite lifecycles, and exit() asks whether an
 //      opened origin's leg was consumed;
 //   K2 a current-cycle row naming a revival candidate as its predecessor,
-//   K3 a current-cycle leg re-issuing a revival candidate at a later bar at
-//      another stop: the revival's superseded test;
+//   K3 the first current-cycle leg re-issuing a revival candidate at a later
+//      bar at another stop: the revival's superseded test asks whether ANY
+//      such re-issue exists, and a row's family, ids, placement bar and stop
+//      never change, so the lowest-incarnation one answers for every later
+//      one (pinning them all kept two rows per exit per bar through a flat
+//      cycle that re-issues its exits every bar, each walked at every bar
+//      open);
 //   K4 an immediate strategy.close placed on this bar or later
 //      (immediate_close_placed_on asks about the current bar);
 //   K5 an entry or raw order placed on the previous bar or later (the open
@@ -2878,6 +2889,31 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         candidate_names.push_back(value.legs.target().incarnation);
     }
     std::sort(candidate_names.begin(), candidate_names.end());
+    // K3: each candidate's first re-issue -- the lowest incarnation among the
+    // current-cycle rows the revival's superseded test would accept for it.
+    auto& first_reissues = sweep.first_reissues;
+    if (!candidates.empty()) {
+        constexpr std::uint64_t none = std::numeric_limits<std::uint64_t>::max();
+        first_reissues.assign(candidates.size(), none);
+        for (const auto& row : placement_) {
+            const auto& value = row.second;
+            if (value.placement_cycle != cycle || !exit_family(value.family)) continue;
+            for (std::size_t index = 0; index < candidates.size(); ++index) {
+                const auto& c = candidates[index];
+                if (row.first <= c.first || row.first >= first_reissues[index]) continue;
+                const PlacementSnapshot& q = *c.second;
+                if (q.family == value.family
+                    && q.placement_script_open_ms < value.placement_script_open_ms
+                    && !same_double_bits(q.exit_levels.stop, value.exit_levels.stop)
+                    && q.source_id == value.source_id && q.from_entry == value.from_entry) {
+                    first_reissues[index] = row.first;
+                }
+            }
+        }
+        first_reissues.erase(std::remove(first_reissues.begin(), first_reissues.end(), none),
+                             first_reissues.end());
+        std::sort(first_reissues.begin(), first_reissues.end());
+    }
 
     auto& doomed = sweep.doomed;
     for (const auto& row : placement_) {
@@ -2893,16 +2929,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                 continue;
             }
             // K3
-            if (exit_family(value.family)
-                && std::any_of(candidates.begin(), candidates.end(), [&](const auto& c) {
-                       const PlacementSnapshot& q = *c.second;
-                       return c.first < incarnation && q.family == value.family
-                           && q.source_id == value.source_id && q.from_entry == value.from_entry
-                           && q.placement_script_open_ms < value.placement_script_open_ms
-                           && !same_double_bits(q.exit_levels.stop, value.exit_levels.stop);
-                   })) {
-                continue;
-            }
+            if (exit_family(value.family) && contains(first_reissues, incarnation)) continue;
         }
         // K7
         if (value.family == PineOrderFamily::Entry && value.sequential_group != 0

@@ -31,9 +31,26 @@
 // 2.42 s for 1,000 bars and 37.86 s for 4,000 (ratio 15.64) and retained 1,999
 // and 7,999 rows; the churn 4.57 s and 73.21 s (16.03), 2,214 and 8,834 rows.
 //
+// A third workload, added at integration (INT21), holds the erasure's own
+// cost: a daily chart whose one trade closes early and whose two exits (one
+// for that entry, one for an entry that never opens) are re-issued every bar
+// for the rest of the run, so one flat position cycle spans the run. The legs
+// the cycle placed on its first bar keep their lifecycle target, so they stay
+// revival candidates (K1) to the end, and K3 pinned every later re-issue at
+// another stop: two rows per bar per exit, each walked and compared by the
+// sweep at every bar open -- O(bars^2), what timed seven population probes of
+// this shape out on Cloud Run. Its gate runs without recording: that is the
+// path a backtest takes, and the sweep is the cost it holds (recording also
+// folds each bracket family's working tail, which the cycle's first legs keep
+// from settling; that fold is O(tail) per read before and after, and less
+// than the base's whole-table fold). It runs four times the others' bars,
+// its two sizes timed in turn. Fail-before, this TU against INT21's f6e69e56
+// (macOS arm64, Release): 4,000 bars 0.2906 s, 16,000 bars 5.3903 s (ratio
+// 18.55), 7,748 and 31,024 rows retained.
+//
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
-// replay|churn <bars> [--no-recording]` runs one leg and prints its CPU time,
-// retained rows and ru_maxrss.
+// replay|churn|straddle <bars> [--no-recording]` runs one leg and prints its
+// CPU time, retained rows and ru_maxrss.
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <sys/resource.h>
@@ -72,15 +89,19 @@ int failures = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T = 1736121600000LL;
 
-enum class Workload { Replay, Churn };
+enum class Workload { Replay, Churn, Straddle };
 
 long triangle(int index, int period) {
     const int phase = index % (2 * period);
     return phase < period ? phase : 2 * period - phase;
 }
 
-// Quarter-tick prices (exact binary fractions) from two triangle waves.
-std::vector<Bar> tape(int count) {
+// Quarter-tick prices (exact binary fractions) from two triangle waves, one
+// bar per minute (or per day: the straddle's daily chart).
+constexpr std::int64_t kMinute = 60000;
+constexpr std::int64_t kDay = 86400000;
+
+std::vector<Bar> tape(int count, std::int64_t step = kMinute) {
     std::vector<Bar> bars;
     bars.reserve(static_cast<std::size_t>(count));
     const auto at = [](int index) {
@@ -91,7 +112,7 @@ std::vector<Bar> tape(int count) {
         const double close = at(index + 1);
         bars.push_back({open, (open > close ? open : close) + 0.5,
                         (open < close ? open : close) - 0.5, close, 1.0,
-                        T + static_cast<std::int64_t>(index) * 60000});
+                        T + static_cast<std::int64_t>(index) * step});
     }
     return bars;
 }
@@ -118,6 +139,18 @@ public:
             // tests/test_l4g_runtime_budget.cpp's replay, verbatim.
             if (i == 0) strategy_entry("L", true, kNa, kNa, 1.0);
             if (position > 0.0) strategy_exit("guard", "L", bar.close * 1.60, bar.close * 0.40);
+            return;
+        }
+        if (workload_ == Workload::Straddle) {
+            // One trade, then one flat position cycle for the rest of the run:
+            // the entry opens at bar 8 and its take-profit, a quarter above the
+            // close, fills within a few bars. Two exits are re-issued every bar
+            // from the first to the last, at a stop and a limit that move with
+            // the close: one for that entry, one for an entry that never opens.
+            (void)position;
+            if (i == 8) strategy_entry("L", true, kNa, kNa, 1.0);
+            strategy_exit("LX", "L", bar.close + 0.25, bar.close - 40.0);
+            strategy_exit("SX", "S", bar.close - 40.0, bar.close + 40.0);
             return;
         }
         // Position cycles, alternating sides: two quantity brackets per
@@ -188,10 +221,10 @@ int attempts() {
     return parsed > 0 ? parsed : 5;
 }
 
-Leg best_of(Workload workload, const std::vector<Bar>& bars) {
+Leg best_of(Workload workload, const std::vector<Bar>& bars, bool recording) {
     Leg best;
     for (int attempt = 0; attempt < attempts(); ++attempt) {
-        const Leg sample = replay(workload, bars);
+        const Leg sample = replay(workload, bars, recording);
         if (attempt == 0 || sample.seconds < best.seconds) best = sample;
     }
     return best;
@@ -203,23 +236,54 @@ constexpr double kShapeBound = 5.0;
 // current position cycle still reads, and the last bar's retirements.
 constexpr std::size_t kRowBound = 64;
 
-void cost_and_rows_are_live(Workload workload, const char* name) {
-    const int bars = gated() ? kBars : kBars / 4;
-    const std::vector<Bar> small_tape = tape(bars);
-    const std::vector<Bar> large_tape = tape(bars * 4);
-    const Leg small = best_of(workload, small_tape);
-    const Leg large = best_of(workload, large_tape);
+// The straddle's two sizes, timed in turn round after round (which goes first
+// alternates), each keeping its best round: its legs are milliseconds long, so
+// a load change between two blocks of rounds would land on one side only.
+void interleaved_best(Workload workload, const std::vector<Bar>& small_tape,
+                      const std::vector<Bar>& large_tape, bool recording, Leg& small,
+                      Leg& large) {
+    for (int attempt = 0; attempt < attempts(); ++attempt) {
+        const bool small_first = attempt % 2 == 0;
+        const Leg a = replay(workload, small_first ? small_tape : large_tape, recording);
+        const Leg b = replay(workload, small_first ? large_tape : small_tape, recording);
+        const Leg& s_leg = small_first ? a : b;
+        const Leg& l_leg = small_first ? b : a;
+        if (attempt == 0 || s_leg.seconds < small.seconds) small = s_leg;
+        if (attempt == 0 || l_leg.seconds < large.seconds) large = l_leg;
+    }
+}
+
+void cost_and_rows_are_live(Workload workload, const char* name, bool recording = true) {
+    // The straddle runs four times longer: its bars cost microseconds.
+    const int scale = workload == Workload::Straddle ? 4 : 1;
+    const int bars = (gated() ? kBars : kBars / 4) * scale;
+    const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
+    const std::vector<Bar> small_tape = tape(bars, step);
+    const std::vector<Bar> large_tape = tape(bars * 4, step);
+    Leg small;
+    Leg large;
+    if (workload == Workload::Straddle) {
+        interleaved_best(workload, small_tape, large_tape, recording, small, large);
+    } else {
+        small = best_of(workload, small_tape, recording);
+        large = best_of(workload, large_tape, recording);
+    }
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
-    std::printf("%s (recording): %d bars %.4fs (%d trades, %zu rows retained), "
+    std::printf("%s (%s): %d bars %.4fs (%d trades, %zu rows retained), "
                 "%d bars %.4fs (%d trades, %zu rows retained), ratio %.2f (bound %.1f), "
                 "rows bound %zu\n",
-                name, bars, small.seconds, small.trades, small.rows, bars * 4,
-                large.seconds, large.trades, large.rows, ratio, kShapeBound, kRowBound);
+                name, recording ? "recording" : "no recording", bars, small.seconds,
+                small.trades, small.rows, bars * 4, large.seconds, large.trades, large.rows,
+                ratio, kShapeBound, kRowBound);
     CHECK(small.seconds > 0.0);
     // The workloads did what they describe.
     if (workload == Workload::Churn) {
         CHECK(small.trades >= bars / 16);
         CHECK(large.trades >= 3 * small.trades);
+    }
+    if (workload == Workload::Straddle) {
+        CHECK(small.trades == 1);
+        CHECK(large.trades == 1);
     }
     // Memory: what the adapter retains does not grow with the run.
     CHECK(small.rows <= kRowBound);
@@ -228,15 +292,17 @@ void cost_and_rows_are_live(Workload workload, const char* name) {
         std::printf("  (ratio not gated: non-Release library)\n");
         return;
     }
-    if (workload == Workload::Replay) CHECK(ratio < kShapeBound);
+    if (workload != Workload::Churn) CHECK(ratio < kShapeBound);
 }
 
 int single_leg(const char* workload_name, const char* bars_text, bool recording) {
-    const Workload workload = std::strcmp(workload_name, "churn") == 0
-        ? Workload::Churn : Workload::Replay;
+    const Workload workload = std::strcmp(workload_name, "churn") == 0 ? Workload::Churn
+        : std::strcmp(workload_name, "straddle") == 0                 ? Workload::Straddle
+                                                                      : Workload::Replay;
     const int bars = std::atoi(bars_text);
     if (bars <= 0) return 2;
-    const Leg leg = replay(workload, tape(bars), recording);
+    const Leg leg = replay(workload, tape(bars, workload == Workload::Straddle ? kDay : kMinute),
+                           recording);
     struct rusage usage {};
     getrusage(RUSAGE_SELF, &usage);
     std::printf("leg %s bars=%d recording=%d cpu_seconds=%.6f trades=%d rows_retained=%zu "
@@ -249,12 +315,14 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
 } // namespace
 
 int main(int argc, char** argv) {
-    // --leg <replay|churn> <bars> [--no-recording]
+    // --leg <replay|churn|straddle> <bars> [--no-recording]
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--leg") == 0)
         return single_leg(argv[2], argv[3],
                           !(argc == 5 && std::strcmp(argv[4], "--no-recording") == 0));
     cost_and_rows_are_live(Workload::Replay, "exit re-issued every bar");
     cost_and_rows_are_live(Workload::Churn, "position cycles with brackets");
+    cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle",
+                           false);
     if (failures == 0) std::printf("test_adapter_live_state_scaling: ok\n");
     return failures == 0 ? 0 : 1;
 }
