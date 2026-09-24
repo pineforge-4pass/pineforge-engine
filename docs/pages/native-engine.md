@@ -41,6 +41,19 @@ the kernel's own answer: `resolve_execution_terms` (`native_host.hpp:926`),
 `closed_lot_excursion` (`native_host.hpp:1008`) and the hash seam
 `hash_host_extension`. Each is documented beside the feature it shapes.
 
+**Declaring a hook the host does not have.** Two of those defaults still cost
+the kernel work at every bar or fill. A host whose `on_native_bar_open` does
+nothing says so with `declare_native_bar_open_hook(false)`
+(`native_host.hpp:1027`), and one that keeps the default
+`validate_execution_precommit` with `declare_native_precommit_hook(false)`
+(`native_host.hpp:1035`). The kernel then makes no bar-open call, and neither
+consults the precommit hook nor builds the settlement preview it would have been
+shown, unless the host owns lot excursions, which that preview's closing rows
+consult. It keeps every effect of its own that the skipped call's boundary has,
+so a declaring host's run is its empty-hook run, value for value. A declaration
+stands, across runs, until the host makes another. A C host's callback table
+declares both (*Driving the kernel from C*).
+
 **Where to go from here.** *Lifecycle and run identity* → *NativeRunSpec*
 (price grid, feed policies, the intrabar path, validation) → *Native requests*
 (triggers, intents, owners, groups, brackets, trails) → *Close execution* →
@@ -3784,7 +3797,10 @@ non-market extras; the same request is `strategy_native_submit_v1` with
 `on_anchored_level`, the price and shape half of `resolve_execution_terms`
 `on_execution_terms`, `declare_auxiliary_feed`
 `strategy_native_declare_auxiliary_feed_v1` and `native_sized_units`
-`strategy_native_sized_units_v1`. `scripts/check_native_c_api_surface.py`
+`strategy_native_sized_units_v1`. A table that leaves `on_bar_open` or
+`on_precommit` out declares that hook absent when the host is created
+(`declare_native_bar_open_hook` / `declare_native_precommit_hook`, R5 lane
+D2-A), which moves no value. `scripts/check_native_c_api_surface.py`
 proves the block is exactly that class's public surface and runs as a source
 guard in every `ci_verify.py` profile, so the list cannot silently go stale;
 `scripts/test_check_native_c_api_surface.py` proves the guard can fail. A

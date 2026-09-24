@@ -174,6 +174,16 @@ For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
 
+R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
+without an epoch: `declare_native_bar_open_hook(bool)` and
+`declare_native_precommit_hook(bool)`, a host stating that it does not
+implement `on_native_bar_open` or `validate_execution_precommit`, so the kernel
+skips the work whose one reader is the missing hook. No virtual, data member or
+layout changes (the declaration is kept by the private consumer), no value
+moves -- a declaring host's run is its empty-hook run, value for value -- and
+no C symbol is added: a C host declares both from its `pf_native_callbacks_v1`,
+a table without `on_bar_open` or `on_precommit`.
+
 R5 gap lane P2c gives two TradingView-named public surfaces a generic primary
 spelling without an epoch, because an alias needs none.
 `pf_equity_stats_t::sharpe_tv` / `sortino_tv` are now
