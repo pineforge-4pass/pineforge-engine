@@ -10,6 +10,7 @@
 #include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
+#include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
 
 #include <algorithm>
@@ -837,13 +838,21 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 
 void PineExecutionAdapter::bind(NativeStrategyHost& host) noexcept { host_ = &host; }
 
+namespace {
+[[noreturn]] void refuse_unbound_adapter() {
+    throw std::logic_error("Pine execution adapter is not bound to a native host");
+}
+}  // namespace
+
+// The refusal is out of line so this check is a test and a load wherever it
+// inlines (R5 lane D2-C: the adapter reads its host through it at every read).
 NativeStrategyHost& PineExecutionAdapter::require_host() const {
-    if (!host_) throw std::logic_error("Pine execution adapter is not bound to a native host");
+    if (!host_) refuse_unbound_adapter();
     return *host_;
 }
 
 OrderBirth PineExecutionAdapter::capture_order_birth() const {
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     if (!point) return OrderBirth::direct_command(-1, require_host().native_decision_floor());
     const int bar = point->decision.coordinate.interval_index;
     const std::int64_t timestamp = point->decision.sub_bar_open_ms;
@@ -902,10 +911,10 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
         snapshot.legs.set_prices(prices);
     }
 
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0 || snapshot.projection_created_bar < 0) return;
     const int direction = physical.signed_units > 0.0 ? 1 : -1;
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     const Bar activation_bar = coof_script_bar_valid_ ? coof_script_bar_
                                                        : policy_script_bar_;
     const bool path_high_first = source_path_uses_high_first(activation_bar);
@@ -965,7 +974,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     context.scheduler = config_.calc_on_order_fills;
     context.magnifier = point && point->decision.sub_count > 1;
     context.process_on_close = config_.process_orders_on_close;
-    context.warmup = require_host().native_state().phase == NativeRunPhase::Warmup;
+    context.warmup = detail::run_state(require_host()).phase == NativeRunPhase::Warmup;
     context.stream_idle = !stream_mode_;
     context.after_first_open_fill = coof_recalc_active_ && !coof_first_open_
         && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
@@ -1173,9 +1182,9 @@ void PineExecutionAdapter::update_l4c_priority() {
         candidate.oca_type = snapshot.oca_type;
         candidates.push_back(std::move(candidate));
     }
-    const auto point = host.current_execution_point();
+    const auto point = detail::callback_point(host);
     const compat::pine::OrderPriorityContext context{
-        host.physical_position().signed_units == 0.0,
+        detail::run_position(host).signed_units == 0.0,
         config_.process_orders_on_close, config_.calc_on_order_fills,
         coof_recalc_active_, point && point->decision.sub_count > 1, false, true,
         point ? point->decision.coordinate.interval_index : -1};
@@ -1212,7 +1221,7 @@ void PineExecutionAdapter::update_l4c_lifecycle(
                                        cause, *completion};
         (void)snapshot.legs.apply(snapshot.legs.target(), action);
     }
-    if (require_host().physical_position().signed_units == 0.0) snapshot.leg_activation.unbind();
+    if (detail::run_position(require_host()).signed_units == 0.0) snapshot.leg_activation.unbind();
 }
 
 bool PineExecutionAdapter::is_declined_market_reversal(
@@ -1262,10 +1271,14 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
 // index itself), drops them at every run begin, and never reads them. They
 // are derived from state the adapter retains and hashes, folded into nothing,
 // and each lookup answers what the walk it replaces answers.
+// The kind of the cache below (pine_host_reads.hpp, R5 lane D2-C).
+const char detail::kPineRunCacheKind = 0;
+
 namespace {
 
-class AdapterLookupIndex final : public NativeHostCache {
+class AdapterLookupIndex final : public detail::PineRunCache {
 public:
+
     // Per cohort, over its origin roster: how many roster entries are folded,
     // and whether a folded origin is an opening on each side. The roster only
     // grows (every accepted opening is appended once, after its placement row
@@ -1281,8 +1294,6 @@ public:
         bool opened_short = false;
     };
 
-    const void* owner = nullptr;
-    std::uint64_t run = 0;
     std::uint64_t answers = 0;
     std::unordered_map<const void*, CohortSides> cohort_sides;
 
@@ -1423,7 +1434,9 @@ AdapterLookupIndex* adapter_lookup_index(IExecutionConsumer* consumer, const voi
                                          std::uint64_t run, bool create = true) noexcept {
     if (!consumer) return nullptr;
     auto& native = as_native_consumer(*consumer);
-    auto* index = dynamic_cast<AdapterLookupIndex*>(native.host_cache());
+    NativeHostCache* const cache = native.host_cache();
+    auto* index = cache && cache->kind() == &detail::kPineRunCacheKind
+        ? static_cast<AdapterLookupIndex*>(cache) : nullptr;
     if (index && index->owner == owner && index->run == run) return index;
     if (!create) return nullptr;
     try {
@@ -1478,11 +1491,22 @@ AdapterLookupIndex* parked_lookup_index(NativeStrategyHost* host, const void* ow
 
 } // namespace
 
+// R5 lane D2-C (pine_host_reads.hpp): the running spec's facts the host reads
+// every bar, taken once per run into the adapter's cache -- the P7 index, which
+// the run's first lookup would otherwise create. Only a running spec is fixed
+// for the run the cache belongs to.
+void detail::take_run_facts(NativeExecutionConsumer& consumer,
+                            const PineExecutionAdapter& adapter, std::uint64_t run) {
+    if (!consumer.running()) return;
+    if (auto* index = adapter_lookup_index(&consumer, &adapter, run))
+        index->aggregates_input_bars = aggregates_input_bars(consumer.state_spec());
+}
+
 IExecutionConsumer* PineExecutionAdapter::bound_consumer() const noexcept {
     auto* pine = pine_view(host_);
     if (!pine) return nullptr;
     try {
-        return &pine->execution_consumer();
+        return &detail::run_consumer(*pine);
     } catch (...) {
         return nullptr;
     }
@@ -1698,7 +1722,7 @@ void PineExecutionAdapter::suspend_brackets_for_reversal(
 
 void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
         const Bar& bar, const NativeDecisionContext& context) {
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0 || !finite_positive(bar.open)) return;
     const auto handles = live_handles_;
     for (const auto& handle : handles) {
@@ -1736,7 +1760,7 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
 }
 
 void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entry) {
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     if (!point) return;
     const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
@@ -1799,7 +1823,7 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
 void PineExecutionAdapter::revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     // A same-path declined reversal and its dormant bracket can both precede
     // this margin event before the next bar-open receipt sweep.  Apply the
@@ -2387,7 +2411,7 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
 PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     PineSizingSnapshot snapshot;
     const auto& host = require_host();
-    if (const auto point = host.current_execution_point()) {
+    if (const auto point = detail::callback_point(host)) {
         // The source broker captures its signal tuple at the tick-built close,
         // never at the raw sub-tick callback print.  Preserve that one basis
         // for frozen sizing, money-band admission and the paired FX fact.
@@ -2396,7 +2420,7 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
         snapshot.equity = percent_commission_live_equity(snapshot.mark);
     }
     snapshot.fx = staged_.account_fx;
-    if (const auto point = host.current_execution_point())
+    if (const auto point = detail::callback_point(host))
         snapshot.fx = active_staged_fx(point->decision.sub_bar_open_ms);
     return snapshot;
 }
@@ -2514,7 +2538,7 @@ bool PineExecutionAdapter::core_sizing_price_matches(
         const PineSizingSnapshot& sizing, bool is_long) const {
     const double tick = staged_.syminfo.mintick;
     if (!finite_positive(tick) || !finite_positive(sizing.price)) return false;
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     if (!point || !finite_positive(point->price)) return false;
     // The core freezes the quotient at the FX of the acceptance coordinate (a
     // script calculation's coordinate is the next bar's open); the source
@@ -2552,7 +2576,7 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
         || risk_.max_position_size > 0.0 || risk_.halted || cap.active()) {
         return false;
     }
-    const auto state = require_host().native_state();
+    const auto state = detail::run_state(require_host());
     const auto* inert = state.spec ? state.spec->intrabar.lower() : nullptr;
     const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()
         && inert->tf == state.spec->input_tf && inert->samples == 4
@@ -3052,7 +3076,7 @@ void PineExecutionAdapter::maybe_activate_short_seed_plan() {
 
 bool PineExecutionAdapter::short_seed_context_is_live() const noexcept {
     if (!host_) return false;
-    const auto physical = host_->physical_position();
+    const auto physical = detail::run_position(*host_);
     if (!(physical.signed_units < 0.0) || physical.lot_count != 1U) return false;
     const double held = std::abs(physical.signed_units);
     for (const auto& id : cohort_order_) {
@@ -3132,8 +3156,8 @@ bool PineExecutionAdapter::qualify_short_seed_plan(const ShortSeedPlan& plan) co
         && incarnations[0] + 1U == incarnations[1]
         && incarnations[1] != std::numeric_limits<std::uint64_t>::max()
         && incarnations[1] + 1U == incarnations[2];
-    const auto physical = host_->physical_position();
-    const auto point = host_->current_execution_point();
+    const auto physical = detail::run_position(*host_);
+    const auto point = detail::callback_point(*host_);
     const double open = point ? point->price : kNaN;
     const double tick = staged_.syminfo.mintick;
     const double admit = finite_positive(tick) ? nearest_tick(open, tick) : open;
@@ -3228,7 +3252,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
             snapshot.is_long ? native_order::Side::Long : native_order::Side::Short};
     }
-    const NativePhysicalPosition physical = host.physical_position();
+    const NativePhysicalPosition physical = detail::run_position(host);
     snapshot.projection_position_side = physical.signed_units > 0.0
         ? static_cast<std::int32_t>(PositionSide::LONG)
         : (physical.signed_units < 0.0 ? static_cast<std::int32_t>(PositionSide::SHORT)
@@ -3314,7 +3338,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         && !opening && !std::isfinite(snapshot.requested_qty)
         && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0);
     snapshot.pooc_global_full_exit_tracks_bound_adds = snapshot.pooc_global_full_exit_dynamic_qty;
-    if (const auto point = host.current_execution_point()) {
+    if (const auto point = detail::callback_point(host)) {
         // ab9714be src/source/pine_strategy_commands.cpp:481 and
         // src/source/pine_strategy_commands.cpp:1959 stamp an order's
         // created_bar at the bar of the source command, and a bracket leg the
@@ -3348,7 +3372,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         && last_margin_call_closed_units_ == 1.0
         && last_margin_call_remaining_units_ == std::abs(physical.signed_units)) {
         const auto* pine_host = pine_view(&host);
-        const auto state = host.native_state();
+        const auto state = detail::run_state(host);
         const bool magnifier = pine_host
             && pine_host->scheduler_.bar_magnifier_enabled();
         const double carried = last_margin_call_remaining_units_
@@ -3410,7 +3434,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         observed->prices = {snapshot.exit_levels.limit, snapshot.exit_levels.stop};
         observed->oca_name = snapshot.oca_name;
         observed->oca_type = snapshot.oca_type;
-        const auto native = host.native_state();
+        const auto native = detail::run_state(host);
         auto& configuration = observed->configuration;
         configuration.process_on_close = config_.process_orders_on_close;
         configuration.calc_on_fills = config_.calc_on_order_fills;
@@ -3827,7 +3851,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             || (coof_first_open_
                 && finite_positive(accepted_snapshot.forced_execution_price)))
         && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)
-        && host.current_execution_point()) {
+        && detail::callback_point(host)) {
         first_open_newborns_.push_back(*accepted);
     }
     return accepted;
@@ -4398,7 +4422,7 @@ void PineExecutionAdapter::apply_fx_open_margin_slice(
     const double prior = last_fx_rate_;
     last_fx_rate_ = rate;
     if (!std::isfinite(prior) || prior == rate) return;
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0
         || position_open_script_bar_ >= context.script_bar_open_ms) return;
     (void)submit_margin_call_slice(bar.open, context);
@@ -4426,7 +4450,7 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
     // whose rate moved between its signal and its fill): the same TradingView
     // money and slice at the fill, settled at the same current coordinate
     // before the next candidate (A31(b)).
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if ((position.signed_units > 0.0 ? config_.margin_long : config_.margin_short) != 100.0) {
         return;
     }
@@ -4442,7 +4466,7 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
     // adverse waypoint in the same bar.  This keeps the liquidation policy
     // entirely above the generic driver.
     if (!source_margin_call_enabled_
-        || require_host().physical_position().signed_units != 0.0
+        || detail::run_position(require_host()).signed_units != 0.0
         || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         || !finite_positive(staged_.syminfo.pointvalue)
         || !finite_positive(staged_.syminfo.mintick)
@@ -4945,8 +4969,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
     // A PineStrategyHost's command history is read in place, through its
     // consumer; any other host is read through native_events().
     auto* pine = pine_view(&host);
-    const NativeExecutionConsumer* consumer = pine
-        ? &as_native_consumer(pine->execution_consumer()) : nullptr;
+    const NativeExecutionConsumer* consumer = pine ? &detail::run_consumer(*pine) : nullptr;
     // Quiet: no command event above the cursor -- nothing at all above it,
     // or only driver points and account rows, which are never observed. This
     // is every read of a bar that issued no command. The read below would
@@ -4968,7 +4991,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             return;
         }
     }
-    const auto state = host.native_state();
+    const auto state = detail::run_state(host);
     const bool in_place = consumer != nullptr;
     // The terminal watermark is folded into the broker-state hash
     // (pine_state_hash.cpp) and has only ever advanced on a run without an
@@ -5208,10 +5231,10 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
         || risk_.max_cons_loss_days != 0 || cap.active()
         || context.coordinate.path_phase != NativePathPhase::Low
         || !policy_script_bar_valid_ || event.closed_units <= 0.0
-        || host_->physical_position().signed_units <= 0.0) {
+        || detail::run_position(*host_).signed_units <= 0.0) {
         return false;
     }
-    const auto state = host_->native_state();
+    const auto state = detail::run_state(*host_);
     if (state.spec && !state.spec->intrabar.is_none()) return false;
     const auto filled = placement_.find(event.handle().incarnation);
     if (filled == placement_.end()) return false;
@@ -5237,7 +5260,7 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
 
 bool PineExecutionAdapter::defer_coof_tail() const noexcept {
     if (!coof_recalc_active_ || coof_first_open_) return false;
-    const auto state = require_host().native_state();
+    const auto state = detail::run_state(require_host());
     if (state.spec && state.spec->intrabar.lower()) return false;
     const auto phase = coof_context_.coordinate.path_phase;
     if (phase == NativePathPhase::Close || phase == NativePathPhase::None)
@@ -5259,7 +5282,7 @@ bool PineExecutionAdapter::coof_fill_on_path_point() const noexcept {
 }
 
 bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexcept {
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     if (!point) return false;
     // ab9714be engine.hpp:1264-1266: an on-grid print books one ULP-exact
     // tick.  An OFF-grid waypoint books bar_fill_price(waypoint)
@@ -5278,8 +5301,7 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
 // already reads). The source layer asks rather than keeping a copy of the rule.
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
     auto* pine = pine_view(host_);
-    return pine != nullptr
-        && as_native_consumer(pine->execution_consumer()).path_high_first(bar);
+    return pine != nullptr && detail::run_consumer(*pine).path_high_first(bar);
 }
 
 bool PineExecutionAdapter::coof_current_fill_was_forced_waypoint() const noexcept {
@@ -5288,7 +5310,7 @@ bool PineExecutionAdapter::coof_current_fill_was_forced_waypoint() const noexcep
     // which it was born; advance from the forced waypoint rather than walking
     // back to that segment's endpoint (ab9714be pine_scheduler.cpp:398-619).
     if (!coof_recalc_active_) return false;
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     if (!point) return false;
     for (const auto& id : cohort_order_) {
         const auto cohort = cohorts_by_id_.find(id);
@@ -5320,10 +5342,10 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
     // point of the chart bar (lower-timeframe path, no waypoint).
     if (path_index) *path_index = -1;
     if (!coof_recalc_active_ || !coof_script_bar_valid_) return kNaN;
-    const auto state = require_host().native_state();
+    const auto state = detail::run_state(require_host());
     if (state.spec && state.spec->intrabar.lower()) {
         if (const auto* pine_host = pine_view(&require_host())) {
-            const auto point = require_host().current_execution_point();
+            const auto point = detail::callback_point(require_host());
             const auto next = pine_host->scheduler_.next_input_waypoint(
                 *pine_host, coof_context_, point ? point->price : kNaN);
             if (next) return *next;
@@ -5345,7 +5367,7 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
     const bool forced_waypoint = coof_current_fill_was_forced_waypoint();
     for (int index = 0; index < 4; ++index) {
         if (path_phase[index] != coof_context_.coordinate.path_phase) continue;
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         // ab9714be pine_fills.cpp:7962-7966 and pine_scheduler.cpp:548-563: a
         // fill at a waypoint POINT books bar_fill_price(waypoint), the
         // nearest-tick rounding of the raw OHLC price, so the applied price
@@ -5394,7 +5416,7 @@ bool PineExecutionAdapter::coof_remaining_recrosses(
     const bool forced_waypoint = coof_current_fill_was_forced_waypoint();
     for (int index = 0; index < 4; ++index) {
         if (path_phase[index] != coof_context_.coordinate.path_phase) continue;
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         int first = index + 1;
         if (index > 0 && point && finite_positive(point->price)
             && !source_same_point(point->price, path_price[index], staged_.syminfo.mintick)
@@ -5446,11 +5468,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const double normalized_qty = explicit_fixed
         ? floor_quantity_grid(std::abs(qty), staged_.quantity_grid) : qty;
     const double signed_target = is_long ? normalized_qty : -normalized_qty;
-    const double current = require_host().physical_position().signed_units;
-    const auto source_point = require_host().current_execution_point();
+    const double current = detail::run_position(require_host()).signed_units;
+    const auto source_point = detail::callback_point(require_host());
     double flat_pending_opposite_market_units = 0.0;
     if (!source_point
-        && require_host().native_state().kind == NativeLifecycleKind::Unconfigured) {
+        && detail::run_state(require_host()).kind == NativeLifecycleKind::Unconfigured) {
         // The historical source host allowed constructor-time commands to be
         // inspected before a run.  They have no native decision coordinate
         // yet, so retain only their source command projection; the native
@@ -5879,7 +5901,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         request.intent = native_order::Transact{is_long ? transaction : -transaction};
     }
     request.label = id; request.comment = comment;
-    const auto coof_native_state = require_host().native_state();
+    const auto coof_native_state = detail::run_state(require_host());
     const bool coof_lower_path = coof_native_state.spec
         && coof_native_state.spec->intrabar.lower();
     bool coof_market_next_open = false;
@@ -5925,7 +5947,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // fill advances to the following waypoint.
         int next_extreme_index = -1;
         const double next_extreme = coof_next_waypoint(&next_extreme_index);
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         coof_market_fill = source_bar_fill_tick(
             next_extreme, staged_.syminfo.mintick)
@@ -6059,7 +6081,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (finite_positive(coof_market_fill))
         snapshot.forced_execution_price = coof_market_fill;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && priced) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const double birth = point ? point->price : kNaN;
         const double waypoint = coof_next_waypoint();
         bool reached = false;
@@ -6345,7 +6367,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             return;
         }
     }
-    if (const auto point = require_host().current_execution_point()) {
+    if (const auto point = detail::callback_point(require_host())) {
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
         if (default_sized && reverses && !snapshot.replaced_opening) {
@@ -6402,7 +6424,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         };
         for (const auto& pending : pending_same_bar_commands_) inspect_pending(pending.snapshot);
         for (const auto& pending : pending_entries_) inspect_pending(pending.snapshot);
-        if (const auto point = require_host().current_execution_point()) {
+        if (const auto point = detail::callback_point(require_host())) {
             for (const auto& handle : live_handles_) {
                 const auto prior = placement_.find(handle.incarnation);
                 if (prior == placement_.end()
@@ -6428,7 +6450,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 ++same_side_pending;
             }
         }
-        if (const auto point = require_host().current_execution_point()) {
+        if (const auto point = detail::callback_point(require_host())) {
             for (const auto& handle : live_handles_) {
                 const auto prior = placement_.find(handle.incarnation);
                 if (prior == placement_.end()
@@ -6451,7 +6473,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             || (current == 0.0 && same_side_pending > 0);
         const std::size_t current_lots =
             (current != 0.0 && ((current > 0.0) == is_long))
-                ? require_host().physical_position().lot_count
+                ? detail::run_position(require_host()).lot_count
                 : 0U;
         // ab9714be pine_orders.cpp:737-740: add_to_pyramid_market rejects entry when position_entry_count_ >= pyramiding
         const std::size_t total_entries = current_lots + same_side_pending;
@@ -6576,7 +6598,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                     token->second.surviving_exit_incarnation;
             }
             snapshot.retained_parent_topology = true;
-            if (const auto point = require_host().current_execution_point()) {
+            if (const auto point = detail::callback_point(require_host())) {
                 snapshot.projection_created_bar = point->decision.coordinate.interval_index;
                 snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
             }
@@ -6725,7 +6747,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         const SourceId& id, const std::string& comment,
         std::uint64_t token, std::uint64_t) {
     constexpr double epsilon = 1e-10;
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     const int bar = point ? point->decision.coordinate.interval_index : -1;
     if (close_batch_bar_ != bar) {
         close_batch_bar_ = bar;
@@ -6760,7 +6782,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     if (same_id_reissue || replacement_can_reuse_own_claim)
         pending_reserved -= prior->target;
 
-    const double held = std::abs(require_host().physical_position().signed_units);
+    const double held = std::abs(detail::run_position(require_host()).signed_units);
     double persistent_other = close_reserved_other_units(id, token);
     if (prior && prior->first_ledger_consumed && prior->first_id != id) {
         double current_claim = 0.0;
@@ -6993,7 +7015,7 @@ void PineExecutionAdapter::flush_pending_closes() {
             }
         }
 
-        const auto physical = require_host().physical_position();
+        const auto physical = detail::run_position(require_host());
         // ab9714be pine_strategy_commands.cpp:694-696: strategy_close returns immediately when position is flat (<= kQtyEpsilon)
         if (std::abs(physical.signed_units) <= internal::kQtyEpsilon) continue;
         const double available = std::abs(physical.signed_units);
@@ -7079,7 +7101,7 @@ void PineExecutionAdapter::observe_close_policy(
         const PlacementSnapshot& snapshot) {
     if (snapshot.close_batch_calls == 0 || !(event.closed_units > 0.0)) return;
     const double remaining_position = std::abs(
-        require_host().physical_position().signed_units);
+        detail::run_position(require_host()).signed_units);
     // ab9714be pine_strategy_commands.cpp:1575: the reservation is bounded by
     // the binary64 position difference qty_before - position_qty_, not by the
     // settled close units; the two can differ by a few ULPs.
@@ -7167,7 +7189,7 @@ void PineExecutionAdapter::observe_close_policy(
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
                                  double qty_percent, bool immediately, std::uint64_t callsite_token) {
     if (intraday_loss_orders_blocked()) return;
-    if (const auto point = require_host().current_execution_point();
+    if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
         return;
     }
@@ -7176,9 +7198,9 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // entry-id cohort), and it retains its caller-supplied report comment.
     if (id.empty()) {
         // ab9714be pine_strategy_commands.cpp:694-696: strategy_close returns immediately when physical position is flat
-        if (require_host().physical_position().signed_units == 0.0) return;
+        if (detail::run_position(require_host()).signed_units == 0.0) return;
         const std::uint64_t command_ordinal = ++command_ordinal_;
-        if (const auto point = require_host().current_execution_point()) {
+        if (const auto point = detail::callback_point(require_host())) {
             close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
         }
         bool empty_entry = false;
@@ -7217,9 +7239,9 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         if (coof_recalc_active_ && !coof_first_open_ && !immediately
             && coof_script_bar_valid_) {
             const double next_extreme = coof_next_waypoint();
-            const auto point = require_host().current_execution_point();
+            const auto point = detail::callback_point(require_host());
             const double current_quote = point ? point->price : kNaN;
-            const bool buy = require_host().physical_position().signed_units < 0.0;
+            const bool buy = detail::run_position(require_host()).signed_units < 0.0;
             coof_close_all_fill = source_bar_fill_tick(
                 next_extreme, staged_.syminfo.mintick)
                 + (buy ? 1.0 : -1.0) * config_.slippage
@@ -7301,8 +7323,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             pending.preserved_by_close_all = *accepted;
             pending.preserved_close_all_bar = close->second.projection_created_bar;
         }
-        const double cur_pos = require_host().physical_position().signed_units;
-        const auto cur_pt = require_host().current_execution_point();
+        const double cur_pos = detail::run_position(require_host()).signed_units;
+        const auto cur_pt = detail::callback_point(require_host());
         if (cur_pos != 0.0 && cur_pt) {
             std::vector<native_order::RequestHandle> opposite_entries;
             for (const auto& handle : live_handles_) {
@@ -7391,7 +7413,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // would incorrectly make the close race an unsubmitted add.
     if (!config_.calc_on_order_fills && !config_.process_orders_on_close
         && !pending_entries_.empty()) {
-        const double live = require_host().physical_position().signed_units;
+        const double live = detail::run_position(require_host()).signed_units;
         const bool has_opposite = std::any_of(
             pending_entries_.begin(), pending_entries_.end(), [&](const PendingEntry& entry) {
                 return live != 0.0 && entry.snapshot.is_long != (live > 0.0);
@@ -7410,7 +7432,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     }
     double requested_percent = std::isnan(qty_percent) ? 100.0 : qty_percent;
     double effective_qty = qty;
-    const double current = require_host().physical_position().signed_units;
+    const double current = detail::run_position(require_host()).signed_units;
     if (config_.close_entries_rule_any && !immediately && std::isfinite(qty)) {
         const double matching = cohort_exposure_for(id);
         requested_percent = matching > 1e-10
@@ -7428,7 +7450,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     bool paired_reversal_whole_drop = false;
     std::optional<native_order::RequestHandle> paired_reversal_parent;
     if (default_fifo_close && current != 0.0) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         for (const auto& handle : live_handles_) {
             const auto pending = placement_.find(handle.incarnation);
             if (pending == placement_.end()) continue;
@@ -7472,7 +7494,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         }
     }
     if (immediately) {
-        const double current = require_host().physical_position().signed_units;
+        const double current = detail::run_position(require_host()).signed_units;
         if (current != 0.0) {
             pending_entries_.erase(std::remove_if(pending_entries_.begin(), pending_entries_.end(),
                 [&](const PendingEntry& entry) {
@@ -7493,11 +7515,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     double frozen_qty = effective_qty;
     if (std::isnan(effective_qty) && (!deferred_percentage || immediately || frozen_same_bar_close
                             || pooc_close_basis)) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const std::int64_t bar_key = point ? point->decision.script_bar_open_ms
                                            : require_host().native_decision_floor();
         const double source_basis = cohort_exposure_for(id);
-        const double fallback_basis = std::abs(require_host().physical_position().signed_units);
+        const double fallback_basis = std::abs(detail::run_position(require_host()).signed_units);
         const double script_basis = source_basis > 0.0 ? source_basis : fallback_basis;
         if (pooc_close_basis_count_ == 0 || bar_key != pooc_close_basis_last_bar_) {
             BrokerStateHashSink fold;
@@ -7619,7 +7641,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.sizing = sizing_snapshot();
         // ab9714be pine_orders.cpp:599-601: exit/close orders bind owner to active position_cycle_seq_
         snapshot.placement_cycle = current_position_cycle_;
-        if (const auto point = require_host().current_execution_point()) {
+        if (const auto point = detail::callback_point(require_host())) {
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
             snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
         }
@@ -7650,7 +7672,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     double coof_close_fill = kNaN;
     bool coof_close_next_open = false;
     if (coof_recalc_active_ && !coof_first_open_ && !immediately) {
-        const auto state = require_host().native_state();
+        const auto state = detail::run_state(require_host());
         const bool lower_path = state.spec && state.spec->intrabar.lower();
         if (!lower_path) {
             const bool high_first = source_path_uses_high_first(coof_script_bar_);
@@ -7667,7 +7689,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         && coof_script_bar_valid_) {
         int next_waypoint_index = -1;
         const double next_waypoint = coof_next_waypoint(&next_waypoint_index);
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         const bool buy = current < 0.0;
         coof_close_fill = source_bar_fill_tick(
@@ -7744,7 +7766,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     bool opposite_reversal_pair = false;
     if (all_in_percent && current != 0.0 && !staged_.quantity_grid) {
         const bool held_long = current > 0.0;
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const auto same_bar = [&](const PlacementSnapshot& candidate) {
             return candidate.opening && candidate.family == PineOrderFamily::Entry
                 && candidate.is_long != held_long
@@ -7775,7 +7797,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     }
     bool all_in_dependent_close = false;
     if (all_in_percent) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         if (point) {
             std::optional<native_order::RequestHandle> reentry;
             for (const auto& handle : live_handles_) {
@@ -7826,13 +7848,13 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         && !finite_positive(coof_close_fill)
         && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const double current_quote = point ? point->price : kNaN;
         const double next_waypoint = next_source_path_waypoint(
             coof_script_bar_, coof_context_.coordinate.path_phase, current_quote,
             source_path_uses_high_first(coof_script_bar_),
             staged_.syminfo.mintick, config_.slippage);
-        const bool buy = require_host().physical_position().signed_units < 0.0;
+        const bool buy = detail::run_position(require_host()).signed_units < 0.0;
         const double next_fill = nearest_tick(
             next_waypoint + (buy ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick,
@@ -7891,16 +7913,16 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 
 void PineExecutionAdapter::close_all() {
     if (intraday_loss_orders_blocked()) return;
-    if (require_host().physical_position().signed_units == 0.0) return;
-    if (const auto point = require_host().current_execution_point();
+    if (detail::run_position(require_host()).signed_units == 0.0) return;
+    if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
         return;
     }
-    if (const auto point = require_host().current_execution_point()) {
+    if (const auto point = detail::callback_point(require_host())) {
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
     }
     if (config_.calc_on_order_fills) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         const std::int64_t script_open = point ? point->decision.script_bar_open_ms
                                                : require_host().native_decision_floor();
         std::vector<native_order::RequestHandle> newborns;
@@ -7953,8 +7975,8 @@ void PineExecutionAdapter::close_all() {
         pending.preserved_by_close_all = *accepted;
         pending.preserved_close_all_bar = close->second.projection_created_bar;
     }
-    const double cur_pos = require_host().physical_position().signed_units;
-    const auto cur_pt = require_host().current_execution_point();
+    const double cur_pos = detail::run_position(require_host()).signed_units;
+    const auto cur_pt = detail::callback_point(require_host());
     if (cur_pos != 0.0 && cur_pt) {
         std::vector<native_order::RequestHandle> opposite_entries;
         for (const auto& handle : live_handles_) {
@@ -8019,7 +8041,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                                 double loss_ticks) {
     const double requested_qty_percent = qty_percent;
     if (intraday_loss_orders_blocked()) return;
-    if (const auto point = require_host().current_execution_point();
+    if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
         return;
     }
@@ -8064,7 +8086,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // the bracket just as the legacy source callback did.
     if (!pending_same_bar_commands_.empty()
         && config_.default_qty_type != static_cast<int>(QtyType::FIXED)
-        && require_host().physical_position().signed_units < 0.0) {
+        && detail::run_position(require_host()).signed_units < 0.0) {
         flush_pending_same_bar_commands();
     }
     if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -8084,7 +8106,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
 
     // Relative levels resolve against a live source cohort. The original tick
     // facts remain in the snapshot for deferred/observer projections.
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
     // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
     // itself explicitly partial against the live position (net of a same-bar
@@ -8425,7 +8447,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     double reserved_exit_qty = kNaN;
     double pending_parent_units = 0.0;
-    const auto reservation_point = require_host().current_execution_point();
+    const auto reservation_point = detail::callback_point(require_host());
     const auto observe_pending_parent = [&](const PlacementSnapshot& parent) {
         if (!reservation_point || !parent.opening
             || parent.family != PineOrderFamily::Entry
@@ -8458,7 +8480,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         exit_cancel_bracket(exit_id, from_entry, comment);
         return;
     }
-    const auto source_point = require_host().current_execution_point();
+    const auto source_point = detail::callback_point(require_host());
     const OrderBirth exit_birth = capture_order_birth();
     const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
         exit_birth, has_trail_request);
@@ -8493,9 +8515,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         double coof_stop_waypoint_price = kNaN;
         if (coof_recalc_active_ && !coof_first_open_ && historical_cascade
             && coof_script_bar_valid_) {
-            const auto native = require_host().native_state();
+            const auto native = detail::run_state(require_host());
             const bool ordinary_path = !native.spec || native.spec->intrabar.is_none();
-            const auto point = require_host().current_execution_point();
+            const auto point = detail::callback_point(require_host());
             if (ordinary_path && point && finite_positive(point->price)) {
                 const auto phase = coof_context_.coordinate.path_phase;
                 const double endpoint = next_source_path_waypoint(
@@ -8643,7 +8665,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             if (coof_recalc_active_ && !coof_first_open_ && historical_cascade
                 && family == PineOrderFamily::ExitStop
                 && finite_positive(stop_price)) {
-                const auto point = require_host().current_execution_point();
+                const auto point = detail::callback_point(require_host());
                 const double birth = point ? point->price : kNaN;
                 const double waypoint = coof_next_waypoint();
                 const bool long_position = physical.signed_units > 0.0;
@@ -8657,7 +8679,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                             * staged_.syminfo.mintick;
                 }
             }
-            const double source_position = std::abs(require_host().physical_position().signed_units);
+            const double source_position = std::abs(detail::run_position(require_host()).signed_units);
             if (std::isfinite(reserved_exit_qty)) {
                 snapshot.projection_remaining_qty = reserved_exit_qty;
                 const bool foreign_pending_opening = std::any_of(
@@ -8742,7 +8764,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             if (defer_marketable_coof_stop) {
                 if (broker_open_epoch_ == std::numeric_limits<std::uint64_t>::max())
                     throw std::overflow_error("source delayed market epoch exhausted");
-                if (const auto point = require_host().current_execution_point()) {
+                if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar =
                         point->decision.coordinate.interval_index;
                     snapshot.placement_script_open_ms =
@@ -8758,7 +8780,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 return;
             }
             if (coof_recalc_active_ && physical.signed_units != 0.0) {
-                const auto point = require_host().current_execution_point();
+                const auto point = detail::callback_point(require_host());
                 const double birth = point ? point->price : kNaN;
                 const bool long_position = physical.signed_units > 0.0;
                 const bool wrong_stop = family == PineOrderFamily::ExitStop
@@ -8816,7 +8838,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     return;
                 }
             }
-            const auto native = require_host().native_state();
+            const auto native = detail::run_state(require_host());
             const bool stage_chart_tick_scope = config_.calc_on_order_fills
                 && !config_.process_orders_on_close
                 && coof_recalc_active_ && !defer_coof_tail()
@@ -8853,7 +8875,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 snapshot.projection_predecessor = predecessor;
                 snapshot.source_sequence = queued->snapshot.source_sequence;
                 snapshot.defer_until_post_parent_calculation = true;
-                if (const auto point = require_host().current_execution_point()) {
+                if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar =
                         point->decision.coordinate.interval_index;
                     snapshot.projection_position_side =
@@ -8895,7 +8917,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // (src/source/pine_strategy_commands.cpp:2627-2648).
             const auto existing_leg = live_by_source_key_.find(key_for(replacement_key));
             if (!defer_for_same_bar_priority
-                && require_host().physical_position().signed_units == 0.0) {
+                && detail::run_position(require_host()).signed_units == 0.0) {
                 const auto matches_parent = [&](const PlacementSnapshot& row) {
                     return row.opening && row.family == PineOrderFamily::Entry
                         && (snapshot.from_entry.empty()
@@ -8939,7 +8961,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     (void)require_host().cancel(predecessor);
                     retire(predecessor);
                 }
-                if (const auto point = require_host().current_execution_point()) {
+                if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar = point->decision.coordinate.interval_index;
                     snapshot.projection_created_bar_pinned = true;
                     snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
@@ -9153,7 +9175,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // ab9714be pine_fills.cpp:4592-4593: exit direction uses physical position side or exit intent direction
             const bool buy_close = physical.signed_units != 0.0
                 ? physical.signed_units < 0.0 : exit_is_buy;
-            const auto point = require_host().current_execution_point();
+            const auto point = detail::callback_point(require_host());
             // The placement print is tested on the quantized path like every
             // later one: a close whose tick is the activation has reached it.
             const bool already_reached = point
@@ -9248,8 +9270,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || std::floor(source_trail_offset) == 0.0);
     if (!trail_one_shot && exit_at_activation_trail && !finite_positive(stop_price)
         && finite_positive(trail_price)) {
-        if (const auto point = require_host().current_execution_point()) {
-            const bool long_side = require_host().physical_position().signed_units > 0.0;
+        if (const auto point = detail::callback_point(require_host())) {
+            const bool long_side = detail::run_position(require_host()).signed_units > 0.0;
             const bool already_armed = source_trail_reached_at(
                 point->price, trail_price, tick, !long_side);
             if (already_armed) {
@@ -9404,8 +9426,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         snapshot.qty_percent = qty_percent;
         snapshot.command_sequence = command_sequence;
         snapshot.source_sequence = ++source_sequence_;
-        snapshot.projection_created_bar = require_host().current_execution_point()
-            ? require_host().current_execution_point()->decision.coordinate.interval_index : -1;
+        snapshot.projection_created_bar = detail::callback_point(require_host())
+            ? detail::callback_point(require_host())->decision.coordinate.interval_index : -1;
         snapshot.projection_position_side = physical.signed_units > 0.0
             ? static_cast<std::int32_t>(PositionSide::LONG)
             : (physical.signed_units < 0.0
@@ -9432,13 +9454,13 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
     // its parent entry first: a leg the pass visits while the position is still
     // flat is skipped there (src/source/pine_fills.cpp:7461-7468) and only
     // revisited later, which on this route is the flush below the body.
-    const auto point = require_host().current_execution_point();
+    const auto point = detail::callback_point(require_host());
     // A parent that filled in the open phase sat in phase 0 with the open-tick
     // marketables, so the pass walked it ahead of every priced bracket of the
     // bar. A parent that filled later on the path shares the bracket's phase,
     // and there only the book's creation order decides.
     const bool parent_walked_after_leg
-        = point.has_value()
+        = point != nullptr
           && position_open_bar_index_
               == point->decision.coordinate.interval_index
           && position_open_phase_ != NativePathPhase::Open;
@@ -9692,7 +9714,7 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
             && std::isfinite(competing_level)
             && nearest_tick(competing_level, staged_.syminfo.mintick) == competing_level;
         if (competing_chart_tick && !competing_level_on_grid) {
-            const bool exit_is_buy = require_host().physical_position().signed_units < 0.0;
+            const bool exit_is_buy = detail::run_position(require_host()).signed_units < 0.0;
             const bool upward = leg.snapshot.family == PineOrderFamily::ExitLimit
                 ? !exit_is_buy : exit_is_buy;
             const double source_level = competing_level;
@@ -9764,7 +9786,7 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                 // pending parent (pine_fills.cpp:431-437,
                 // pine_orders.cpp:507-527): it waits here for that parent.
                 const bool no_open_lot = cohort->second.opened.empty()
-                    || require_host().physical_position().signed_units == 0.0;
+                    || detail::run_position(require_host()).signed_units == 0.0;
                 const auto live = no_open_lot
                     ? live_origin_positions(cohort->second) : std::vector<std::size_t>{};
                 retained_parent_pending = std::any_of(live.begin(), live.end(),
@@ -9831,14 +9853,14 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                         : (parent->second.is_long ? bar_high >= level
                                                   : bar_low <= level);
                     const double fill_price
-                        = require_host().physical_position().average_price;
+                        = detail::run_position(require_host()).average_price;
                     const bool right_side = is_stop_leg
                         || (parent->second.is_long ? level >= fill_price
                                                    : level <= fill_price);
                     execute_after_calculation = parent_before_child && touched && right_side;
                     if (execute_after_calculation) {
                         const double units = std::abs(
-                            require_host().physical_position().signed_units);
+                            detail::run_position(require_host()).signed_units);
                         leg.snapshot.post_parent_calc_level_fill = true;
                         leg.snapshot.forced_execution_price = level;
                         leg.snapshot.immediately = true;
@@ -10083,7 +10105,7 @@ void PineExecutionAdapter::flush_pending_entries() {
         for (std::size_t index = 0; index < queued.size(); ++index) {
             ordered.push_back({queued[index].snapshot.is_long ? 1 : 2, index, true});
         }
-        const double queued_position = require_host().physical_position().signed_units;
+        const double queued_position = detail::run_position(require_host()).signed_units;
         for (std::size_t index = 0; index < brackets.size(); ++index) {
             const auto& snapshot = brackets[index].snapshot;
             int rank = 4;
@@ -10132,7 +10154,7 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
     pending_same_bar_close_qty_ = 0.0;
     if (queued.empty()) return;
 
-    const double batch_start = require_host().physical_position().signed_units;
+    const double batch_start = detail::run_position(require_host()).signed_units;
     const auto apply_known_reversal_gap = [&](const auto& accepted) {
         if (!accepted || batch_start == 0.0
             || config_.default_qty_type
@@ -10145,7 +10167,7 @@ void PineExecutionAdapter::flush_pending_same_bar_commands() {
             || ((batch_start > 0.0) == placed->second.is_long)) {
             return;
         }
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         auto* pine_host = pine_view(&require_host());
         if (!point || !pine_host) return;
         const auto next = pine_host->scheduler_.next_source_bar(
@@ -10979,7 +11001,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                                  double limit_price, double stop_price,
                                  const std::string& oca_name, int oca_type) {
     if (intraday_loss_orders_blocked()) return;
-    if (const auto point = require_host().current_execution_point();
+    if (const auto point = detail::callback_point(require_host());
         point && cap_placement_denied(point->decision)) {
         return;
     }
@@ -10993,7 +11015,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         flush_pending_entries();
     }
     if (id == "__close__") {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         std::vector<native_order::RequestHandle> replaced_close_all;
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
@@ -11055,7 +11077,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     }
     request.trigger = trigger_for(native_limit, native_stop);
     if (coof_recalc_active_ && coof_first_open_) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         if (point && finite_positive(limit_price)
             && (is_long ? limit_price >= point->price
                         : limit_price <= point->price)) {
@@ -11064,7 +11086,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         }
     }
     if (std::holds_alternative<native_order::Market>(request.trigger)) {
-        const auto point = require_host().current_execution_point();
+        const auto point = detail::callback_point(require_host());
         if (coof_recalc_active_ && !coof_first_open_) {
             const double next_waypoint = coof_next_waypoint();
             const double current_quote = point ? point->price : kNaN;
@@ -11170,7 +11192,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     if (delay_after_default_pair) {
         if (broker_open_epoch_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("source delayed market epoch exhausted");
-        if (const auto point = require_host().current_execution_point()) {
+        if (const auto point = detail::callback_point(require_host())) {
             snapshot.projection_created_bar = point->decision.coordinate.interval_index;
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
             snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
@@ -11232,7 +11254,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         (source.family == PineOrderFamily::ExitTrail || zero_trail_sibling_stop)
         && std::isfinite(source.exit_levels.trail_offset)
         && std::floor(source.exit_levels.trail_offset) == 0.0;
-    const auto host_state = require_host().native_state();
+    const auto host_state = detail::run_state(require_host());
     const bool sampled_one_price_gap = host_state.spec
         && !host_state.spec->intrabar.is_none()
         && facts.cursor.point.provenance == NativePriceProvenance::ModeledOHLCOpen
@@ -12150,7 +12172,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     break;
                 }
             }
-            const auto state = require_host().native_state();
+            const auto state = detail::run_state(require_host());
             const auto* pine_host = pine_view(&require_host());
             const bool magnifier = pine_host
                 && pine_host->scheduler_.bar_magnifier_enabled();
@@ -12239,7 +12261,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 // ordinary admitted fill even when rounded signal cost ties.
                 && nearest_tick(result.resolved_price, staged_.syminfo.mintick)
                     == source.sizing.price;
-            const auto native_state = require_host().native_state();
+            const auto native_state = detail::run_state(require_host());
             const bool pooc_flat_money = config_.process_orders_on_close
                 && source.projection_position_side
                     == static_cast<std::int32_t>(PositionSide::FLAT)
@@ -12485,7 +12507,7 @@ bool PineExecutionAdapter::source_kernel_liquidation(
 }
 
 bool PineExecutionAdapter::has_pending_market_exit(int current_bar) const noexcept {
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return false;
     const bool is_long = physical.signed_units > 0.0;
     for (const auto& handle : live_handles_) {
@@ -12520,11 +12542,11 @@ bool PineExecutionAdapter::carried_long_money_precedes_priced_exit(
         const NativePrecommitView& view, double held_units) const {
     // ab9714be pine_fills.cpp:164-218: the scheduler, account and single-lot
     // book facts, then the one pending order of that book.
-    const auto state = require_host().native_state();
+    const auto state = detail::run_state(require_host());
     const double tick = staged_.syminfo.mintick;
     if (config_.process_orders_on_close || config_.calc_on_order_fills
         || stream_mode_ || (state.spec && !state.spec->intrabar.is_none())
-        || !(held_units > 1.0) || require_host().physical_position().lot_count != 1
+        || !(held_units > 1.0) || detail::run_position(require_host()).lot_count != 1
         || config_.commission_value != 0.0 || config_.slippage != 0
         || std::abs(config_.margin_long - 100.0) > 1e-12
         || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
@@ -12598,7 +12620,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         }();
         const auto& source = snapshot != placement_.end() ? snapshot->second
                                                           : kKernelLiquidation;
-        const auto physical = require_host().physical_position();
+        const auto physical = detail::run_position(require_host());
         // ab9714be pine_scheduler.cpp:257-278: process_margin_call runs after
         // update_per_trade_extremes sampled the script bar into every lot that
         // is still open, so the residual it splits off inherits that complete
@@ -12816,7 +12838,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && transfer->close_fill == cap_latest_fill_;
         if (!inherited) return NativePrecommitVerdict::Refuse;
     }
-    const auto physical_now = require_host().physical_position();
+    const auto physical_now = detail::run_position(require_host());
     if (source.family == PineOrderFamily::Entry && config_.pyramiding == 0
         && view.account.would_open && physical_now.signed_units != 0.0
         && ((physical_now.signed_units > 0.0) == source.is_long)) {
@@ -12836,7 +12858,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // and the slipped signal threshold.  This is the source host's complete
     // margin decision for the candidate; a genuine post-fill shortfall is
     // admitted and becomes the observable opening-margin event.
-    const auto native_state = require_host().native_state();
+    const auto native_state = detail::run_state(require_host());
     const bool pooc_default_all_in = !std::isfinite(source.requested_qty)
         && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config_.default_qty_value == 100.0
@@ -12894,7 +12916,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     if (source.family == PineOrderFamily::Entry && source.affordability_policy_active) {
         const double margin_pct = source.is_long ? config_.margin_long : config_.margin_short;
         const double fx = active_staged_fx(view.cursor.point.effective_time_ms);
-        const auto physical = require_host().physical_position();
+        const auto physical = detail::run_position(require_host());
         // ab9714be pine_fills.cpp:5560-5622: an ordinary explicit fixed
         // MARKET opening at fractional-lot resolution first passes the
         // rounded-money signal-cost and affordable-price checks.  This is a
@@ -13070,7 +13092,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     const bool variable_default = config_.default_qty_type != static_cast<int>(QtyType::FIXED);
     if (variable_default && !source.frozen_market_instruction && config_.pyramiding > 0
         && view.inspected_closed_units == 0.0
-        && require_host().physical_position().lot_count
+        && detail::run_position(require_host()).lot_count
             >= static_cast<std::size_t>(config_.pyramiding)) {
         return NativePrecommitVerdict::Refuse;
     }
@@ -13089,7 +13111,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         if (!std::isfinite(frozen_required) || !std::isfinite(source.sizing.equity)) {
             return NativePrecommitVerdict::Refuse;
         }
-        const auto state = require_host().native_state();
+        const auto state = detail::run_state(require_host());
         const bool live_slippage_changed = state.spec
             && config_.slippage != static_cast<int>(state.spec->slippage_ticks);
         const bool placement_sized_stop = source.family == PineOrderFamily::Entry
@@ -13108,7 +13130,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         const double active_fx = active_staged_fx(view.cursor.point.effective_time_ms);
         if (active_fx == source.sizing.fx) {
             const double fill_required = view.account.resulting_abs_notional * fraction;
-            const auto physical = require_host().physical_position();
+            const auto physical = detail::run_position(require_host());
             const bool reversal = physical.signed_units != 0.0
                 && ((physical.signed_units > 0.0) != source.is_long);
             const bool variable_batch = source.frozen_market_instruction
@@ -13168,7 +13190,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     break;
                 }
             }
-            const auto native_state = require_host().native_state();
+            const auto native_state = detail::run_state(require_host());
             const bool magnified = native_state.spec
                 && !native_state.spec->intrabar.is_none();
             const bool price_gap_scope = source.family == PineOrderFamily::Entry
@@ -13347,7 +13369,7 @@ compat::pine::CapClock PineExecutionAdapter::cap_clock(
 
 compat::pine::Calculation PineExecutionAdapter::cap_calculation(
         const NativeDecisionContext& context) const {
-    const auto state = require_host().native_state();
+    const auto state = detail::run_state(require_host());
     const auto* pine_host = pine_view(&require_host());
     const bool magnifier = pine_host
         ? pine_host->scheduler_.bar_magnifier_enabled()
@@ -13369,7 +13391,7 @@ compat::pine::MatchedAttempt PineExecutionAdapter::cap_attempt(
                 || finite_positive(snapshot.exit_levels.stop))
             ? compat::pine::OrderKind::Entry : compat::pine::OrderKind::Market;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     compat::pine::Side side = position.signed_units > 0.0
         ? compat::pine::Side::Long
         : (position.signed_units < 0.0 ? compat::pine::Side::Short
@@ -13476,7 +13498,7 @@ bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const noexc
 PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_money(
         double mark_price, std::int64_t sub_bar_open_ms) const {
     SourceMarginMoney money;
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units < 0.0) {
         // ab9714be pine_fills.cpp: a short's checkpoint marks on the chart
         // tick, while the slice still rests at the raw waypoint.
@@ -13699,7 +13721,7 @@ std::optional<double> PineExecutionAdapter::resolve_margin_call_units(
 bool PineExecutionAdapter::submit_margin_call_slice(
         double mark_price, const NativeDecisionContext& context,
         bool opening_checkpoint) {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     const auto money = source_margin_money(mark_price, context.sub_bar_open_ms);
     mark_price = money.mark;
     if (!money.valid) return false;
@@ -13728,7 +13750,7 @@ bool PineExecutionAdapter::submit_margin_call_slice(
 bool PineExecutionAdapter::submit_margin_call_units(
         double mark_price, const NativeDecisionContext& context, double units,
         bool force_execution_price) {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     const double held = std::abs(position.signed_units);
     if (!(units > 0.0) || !std::isfinite(units) || !(held > 0.0)
         || !finite_positive(mark_price)) {
@@ -13786,7 +13808,7 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
                 || last_margin_call_script_bar_ == context.script_bar_open_ms))) {
         return false;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (!source_margin_call_enabled_ || stream_mode_
         || position.signed_units <= 0.0 || position.lot_count != 1
         || std::abs(config_.margin_long - 100.0) > 1e-12
@@ -13899,7 +13921,7 @@ bool PineExecutionAdapter::slipped_pooc_opening_money_scope(
     // process_orders_on_close MARKET entry with positive slippage is the sole
     // owner of the deferred opening-money check. Recover the retired lot
     // provenance from durable cohort and placement receipts.
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     const auto grid = staged_.quantity_grid;
     if (!source_margin_call_enabled_ || stream_mode_
         || !config_.process_orders_on_close || config_.slippage <= 0
@@ -13970,7 +13992,7 @@ bool PineExecutionAdapter::submit_slipped_pooc_opening_money_call(
         || last_margin_call_script_bar_ == context.script_bar_open_ms) {
         return false;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     const double exact_value = position.signed_units * bar.open
         * staged_.syminfo.pointvalue;
     const double equity = require_host().native_marked_equity(bar.open);
@@ -14003,7 +14025,7 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
                 || last_margin_call_script_bar_ == context.script_bar_open_ms))) {
         return false;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (!source_margin_call_enabled_ || config_.calc_on_order_fills || stream_mode_
         || position.signed_units <= 1.0 || position.lot_count != 1
         || std::abs(config_.margin_long - 100.0) > 1e-12
@@ -14173,7 +14195,7 @@ bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
                 || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0))) {
         return false;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (!config_.process_orders_on_close || config_.calc_on_order_fills
         || stream_mode_ || position.signed_units >= 0.0 || position.lot_count != 1
         || position_open_script_bar_ >= bar.timestamp
@@ -14238,7 +14260,7 @@ bool PineExecutionAdapter::defer_rounded_pooc_short_margin_until_close(
 
 bool PineExecutionAdapter::schedule_margin_call_path(
         const Bar& bar, const NativeDecisionContext& context) {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return false;
     if (config_.process_orders_on_close) {
         const bool competing_entry = std::any_of(
@@ -14327,7 +14349,7 @@ bool PineExecutionAdapter::schedule_margin_call_path(
 }
 
 bool PineExecutionAdapter::declined_reversal_at_open(const Bar& bar) const {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return false;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -14356,7 +14378,7 @@ bool PineExecutionAdapter::declined_reversal_at_open(const Bar& bar) const {
 
 void PineExecutionAdapter::defer_declined_reversal_exits_at_adverse(
         const Bar& bar, const NativeDecisionContext&, bool margin_scheduled) {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return;
     const double adverse = position.signed_units > 0.0 ? bar.low : bar.high;
     if (!finite_positive(adverse)) return;
@@ -14474,7 +14496,7 @@ void PineExecutionAdapter::defer_declined_reversal_exits_at_adverse(
 bool PineExecutionAdapter::submit_intraday_loss_close(
         double mark_price, const NativeDecisionContext& context, bool execute_current) {
     if (!intraday_loss_breached(mark_price)
-        || require_host().physical_position().signed_units == 0.0) {
+        || detail::run_position(require_host()).signed_units == 0.0) {
         return false;
     }
     native_order::Request request;
@@ -14505,7 +14527,7 @@ bool PineExecutionAdapter::submit_intraday_loss_close(
 
 void PineExecutionAdapter::schedule_intraday_loss_path(
         const Bar& bar, const NativeDecisionContext& context) {
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return;
     const double adverse = position.signed_units > 0.0 ? bar.low : bar.high;
     if (!finite_positive(adverse) || adverse == bar.open) return;
@@ -14517,7 +14539,7 @@ void PineExecutionAdapter::schedule_intraday_loss_path(
 void PineExecutionAdapter::execute_due_cap_close(const NativeDecisionContext& context) {
     const auto due = cap.due_cause();
     if (!due || context.coordinate.interval_index <= due->trigger_bar
-        || require_host().physical_position().signed_units == 0.0) {
+        || detail::run_position(require_host()).signed_units == 0.0) {
         return;
     }
     native_order::Request request;
@@ -14536,7 +14558,7 @@ void PineExecutionAdapter::execute_due_cap_close(const NativeDecisionContext& co
 }
 
 void PineExecutionAdapter::execute_cap_close_now(const compat::pine::CloseNow& close) {
-    if (require_host().physical_position().signed_units == 0.0) {
+    if (detail::run_position(require_host()).signed_units == 0.0) {
         cap.after_immediate_close_attempt();
         return;
     }
@@ -14547,7 +14569,7 @@ void PineExecutionAdapter::execute_cap_close_now(const compat::pine::CloseNow& c
     snapshot.family = PineOrderFamily::CloseAll;
     snapshot.source_id = "__intraday_cap_close__";
     snapshot.comment = close.request.comment;
-    const bool closing_long = require_host().physical_position().signed_units > 0.0;
+    const bool closing_long = detail::run_position(require_host()).signed_units > 0.0;
     snapshot.forced_execution_price = nearest_tick(
         close.price + (closing_long ? -1.0 : 1.0) * config_.slippage * staged_.syminfo.mintick,
         staged_.syminfo.mintick);
@@ -14571,7 +14593,7 @@ void PineExecutionAdapter::observe_intraday_cap(
     if (snapshot.family == PineOrderFamily::Close
         || snapshot.family == PineOrderFamily::CloseAll) {
         const bool full = event.closed_units > 0.0
-            && require_host().physical_position().signed_units == 0.0;
+            && detail::run_position(require_host()).signed_units == 0.0;
         const bool observe_close = cap.direct_close_routing(calculation, full)
             == compat::pine::DirectCloseRouting::Observe;
         const bool ordinary_full_close = full && calculation.process_on_close
@@ -14689,7 +14711,7 @@ void PineExecutionAdapter::observe_intraday_cap(
     cap.outcome(primary_fill_applied ? compat::pine::FillOutcome::Committed
                                      : compat::pine::FillOutcome::NoEffect,
                 origin);
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
     if (const auto* pine_host = pine_view(&require_host())) {
         if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
@@ -14730,7 +14752,7 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
         return;
     }
     cap.outcome(compat::pine::FillOutcome::NoEffect, origin);
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
     if (const auto* pine_host = pine_view(&require_host())) {
         if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
@@ -14741,7 +14763,7 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
                                        : compat::pine::Side::Flat),
         current_position_cycle_,
         {context.coordinate.path_phase == NativePathPhase::None ? prices.close
-                                                                 : require_host().current_execution_point()->price,
+                                                                 : detail::callback_point(require_host())->price,
          prices.open, prices.high, prices.low});
     if (const auto* now = std::get_if<compat::pine::CloseNow>(&decision)) {
         execute_cap_close_now(*now);
@@ -14775,7 +14797,7 @@ void PineExecutionAdapter::record_market_review(
     admission::ReviewEvent review;
     review.receipt = {allocation.sequence(), checkpoint, bar, 0};
     review.open_price = policy_script_bar_valid_ ? policy_script_bar_.open : kNaN;
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     review.position_side = physical.signed_units > 0.0
         ? static_cast<int>(PositionSide::LONG)
         : (physical.signed_units < 0.0 ? static_cast<int>(PositionSide::SHORT)
@@ -14874,7 +14896,7 @@ void PineExecutionAdapter::refresh_pending_sizing_after_margin(
 
 void PineExecutionAdapter::apply_open_market_admission(
         const NativeDecisionContext& context) {
-    const bool began_flat = require_host().physical_position().signed_units == 0.0;
+    const bool began_flat = detail::run_position(require_host()).signed_units == 0.0;
     const int source_bar = context.coordinate.interval_index - 1;
     struct Candidate {
         native_order::RequestHandle handle;
@@ -15041,7 +15063,7 @@ void PineExecutionAdapter::apply_open_market_admission(
 void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
     if (config_.calc_on_order_fills || stream_mode_)
         return;
-    if (require_host().physical_position().signed_units != 0.0) return;
+    if (detail::run_position(require_host()).signed_units != 0.0) return;
     const bool high_first = source_path_uses_high_first(bar);
     // ab9714be pine_fills.cpp:3687-3860 is not gated on process_orders_on_close.
     // Under POOC the fill point of a marketable order is the bar close
@@ -15162,7 +15184,7 @@ void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
         // bar and keeps resting. Re-arm the original stop for the next bar
         // instead of filling it at the deferred price (L9d).
         const bool throttled_reopen =
-            require_host().physical_position().signed_units == 0.0
+            detail::run_position(require_host()).signed_units == 0.0
             && entry_openings_this_interval_ > 0;
         if (throttled_reopen) {
             request.trigger = native_order::Stop{row.snapshot.exit_levels.stop};
@@ -15182,7 +15204,7 @@ void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
 
 void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
         const Bar& bar, const NativeDecisionContext& context, bool defer_trails) {
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const int source_bar = context.coordinate.interval_index - 1;
     bool opposite_market = false;
@@ -15432,7 +15454,7 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         || stream_mode_ || coof_recalc_active_ || context.sub_index != 0) {
         return;
     }
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const bool long_position = physical.signed_units > 0.0;
     const auto pure_market_add = [&](const PlacementSnapshot& add,
@@ -15781,7 +15803,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             ++touched_stop_entries;
     }
     if (!skip_quiet(QuietHook::DualEntryPath, touched_stop_entries < 2)
-        && !config_.calc_on_order_fills && require_host().physical_position().signed_units == 0.0) {
+        && !config_.calc_on_order_fills && detail::run_position(require_host()).signed_units == 0.0) {
         std::vector<const PlacementSnapshot*> stops;
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
@@ -15823,7 +15845,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
         close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_open_script_bar_ = context.script_bar_open_ms;
-    pooc_open_basis_ = std::abs(require_host().physical_position().signed_units);
+    pooc_open_basis_ = std::abs(detail::run_position(require_host()).signed_units);
     day_ledger_.current_day = chart_day_key(context.sub_bar_open_ms);
     if (day_ledger_.intraday_loss_day != day_ledger_.current_day) {
         day_ledger_.intraday_loss_day = day_ledger_.current_day;
@@ -15835,7 +15857,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         execute_due_cap_close(context);
     apply_fx_open_margin_slice(bar, context);
     (void)submit_slipped_pooc_opening_money_call(bar, context);
-    const auto opening_position = require_host().physical_position();
+    const auto opening_position = detail::run_position(require_host());
     const bool long_full_margin = opening_position.signed_units > 0.0
         && std::abs(config_.margin_long - 100.0) < 1e-12;
     bool marketable_limit_at_open = false;
@@ -15967,7 +15989,7 @@ void PineExecutionAdapter::on_tick(
 void PineExecutionAdapter::rearm_throttled_reopens() {
     auto queued = std::move(throttled_reopen_rearm_);
     throttled_reopen_rearm_.clear();
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     for (auto& snapshot : queued) {
         native_order::Request request;
         if (snapshot.deferred_cohort || !std::isfinite(snapshot.requested_qty)) {
@@ -16025,7 +16047,7 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         || stream_mode_ || coof_recalc_active_) {
         return;
     }
-    if (require_host().physical_position().signed_units != 0.0) return;
+    if (detail::run_position(require_host()).signed_units != 0.0) return;
     const double raw_close = bar.close;
     if (!finite_positive(raw_close)) return;
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> marketable;
@@ -16049,7 +16071,7 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     for (auto& candidate : marketable) {
         // An earlier fill of this pass leaves the book non-flat; the owner's
         // later rows are then ordinary pending orders again.
-        if (require_host().physical_position().signed_units != 0.0) break;
+        if (detail::run_position(require_host()).signed_units != 0.0) break;
         const auto& row = candidate.second;
         const bool host_sized = row.deferred_cohort
             || row.qty_type == static_cast<int>(QtyType::CASH)
@@ -16093,7 +16115,7 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         || stream_mode_ || coof_recalc_active_) {
         return;
     }
-    const auto physical = require_host().physical_position();
+    const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const bool closing_long = physical.signed_units > 0.0;
     const double raw_close = bar.close;
@@ -16228,7 +16250,7 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         // reduction instead is refused off-grid, and the sub-lot remainder it
         // strands is what the 1x-margin path later fragments.
         const double live_held_units =
-            std::abs(require_host().physical_position().signed_units);
+            std::abs(detail::run_position(require_host()).signed_units);
         const bool covers_live_book = live_held_units > 0.0
             && units >= live_held_units - internal::kQtyEpsilon;
         cancel_bracket_siblings(selected.handle);
@@ -16349,7 +16371,7 @@ void PineExecutionAdapter::on_bar_close(
             && !(config_.process_orders_on_close && !config_.calc_on_order_fills))) {
         return;
     }
-    const auto position = require_host().physical_position();
+    const auto position = detail::run_position(require_host());
     // ab9714be pine_scheduler.cpp:262-283: in the non-POOC pass, process_margin_call
     // runs after invoke_chart_on_bar. A commissioned explicit-qty 1x short's
     // adverse-extreme checkpoint therefore lands here, post-script, after the
@@ -16491,7 +16513,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         }
     }
     if (placement_snapshot && event.closed_units > 0.0
-        && require_host().physical_position().signed_units == 0.0
+        && detail::run_position(require_host()).signed_units == 0.0
         && (placement_snapshot->family == PineOrderFamily::Close
             || placement_snapshot->family == PineOrderFamily::CloseAll
             || placement_snapshot->family == PineOrderFamily::Order)) {
@@ -16560,7 +16582,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // (pine_fills.cpp:7667-7675).  Only a bracket the script placed behind
         // this same close, for the close's own paired reversal, is reached by
         // the legacy queue walk after that entry filled and stays armed.
-        if (require_host().physical_position().signed_units == 0.0)
+        if (detail::run_position(require_host()).signed_units == 0.0)
             retire_in_position_exits_at_flat(/*preserve_pending_parents=*/true,
                                              /*dormant_rows_only=*/false,
                                              &*placement_snapshot);
@@ -16691,7 +16713,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (!throttled_reopen_rearm_.empty())
             rearm_throttled_reopens();
     }
-    const double live_position = require_host().physical_position().signed_units;
+    const double live_position = detail::run_position(require_host()).signed_units;
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
     const bool flipped_position = current_position_sign_ != 0 && next_sign != 0
         && current_position_sign_ != next_sign;
@@ -17164,7 +17186,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // after its close-only placement, while its original cycle remains the
         // sole live long lot.  Snapshot mutation at an Applied boundary is a
         // pinned P5 write boundary.
-        const auto physical = require_host().physical_position();
+        const auto physical = detail::run_position(require_host());
         std::uint64_t sole_live_entry_incarnation = 0;
         std::size_t live_entry_count = 0;
         for (const auto& id : cohort_order_) {
@@ -17235,7 +17257,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 == nearest_tick(policy_script_bar_.close, staged_.syminfo.mintick);
         last_margin_call_closed_units_ = event.closed_units;
         last_margin_call_remaining_units_ = std::abs(physical.signed_units);
-        const auto state = require_host().native_state();
+        const auto state = detail::run_state(require_host());
         const auto* pine_host = pine_view(&require_host());
         const bool magnifier = pine_host
             && pine_host->scheduler_.bar_magnifier_enabled();
@@ -17306,7 +17328,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // boundary to be observable.
     if (placement_snapshot && placement_snapshot->opening) {
         const double physical_exposure =
-            std::abs(require_host().physical_position().signed_units);
+            std::abs(detail::run_position(require_host()).signed_units);
         for (const auto& id : cohort_order_) {
             const double exposure = cohort_exposure_for(id);
             const bool paired_source_transaction =
@@ -17332,8 +17354,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0
-        && require_host().physical_position().signed_units != 0.0) {
-        const auto physical = require_host().physical_position();
+        && detail::run_position(require_host()).signed_units != 0.0) {
+        const auto physical = detail::run_position(require_host());
         auto revival = std::find_if(
             pending_margin_revivals_.begin(), pending_margin_revivals_.end(),
             [&](const PendingMarginRevival& pending) {
@@ -17386,7 +17408,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    if (require_host().physical_position().signed_units == 0.0) {
+    if (detail::run_position(require_host()).signed_units == 0.0) {
         std::vector<SourceId> exit_owners;
         const auto collect_owner = [&](const PlacementSnapshot& candidate) {
             const bool exit = candidate.family == PineOrderFamily::ExitLimit
@@ -17520,7 +17542,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (placement_snapshot->family == PineOrderFamily::Margin
             && event.closed_units > 0.0) {
             last_margin_call_script_bar_ = context.script_bar_open_ms;
-            const auto after_margin = require_host().physical_position();
+            const auto after_margin = detail::run_position(require_host());
             const bool one_x_long = after_margin.signed_units > 0.0
                 && std::abs(config_.margin_long - 100.0) < 1e-12;
             if (context.coordinate.path_phase == NativePathPhase::Open
@@ -17542,7 +17564,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // Last of this bar's close market fills: run the deferred
             // carried-POOC-short checkpoint on the post-fill book.
             pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
-            const auto after_fill = require_host().physical_position();
+            const auto after_fill = detail::run_position(require_host());
             if (after_fill.signed_units < 0.0
                 && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
                 && position_open_script_bar_ != context.script_bar_open_ms
@@ -17562,7 +17584,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (preclose_intraday_loss) {
         risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
         risk_.intraday_cancel_pending = true;
-        if (require_host().physical_position().signed_units != 0.0) {
+        if (detail::run_position(require_host()).signed_units != 0.0) {
             native_order::Request request;
             request.intent = native_order::Flatten{};
             request.comment = kIntradayLossComment;
@@ -17592,12 +17614,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // adapter can issue the generic reduction synchronously without a
         // second matching loop.
         const bool commissioned_short_opening =
-            require_host().physical_position().signed_units < 0.0
+            detail::run_position(require_host()).signed_units < 0.0
             && config_.margin_short == 100.0
             && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
             && config_.commission_value > 0.0
             && finite_positive(placement_snapshot->requested_qty);
-        const auto opened_position = require_host().physical_position();
+        const auto opened_position = detail::run_position(require_host());
         const double opening_margin = opened_position.signed_units < 0.0
             ? config_.margin_short : config_.margin_long;
         const bool full_margin_opening = opened_position.signed_units != 0.0
@@ -17742,7 +17764,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Close
         && context.coordinate.path_phase == NativePathPhase::Open
-        && require_host().physical_position().signed_units != 0.0
+        && detail::run_position(require_host()).signed_units != 0.0
         && policy_script_bar_valid_ && !config_.process_orders_on_close
         && staged_.account_fx_effective_from_ms.empty()) {
         // The retired ordinary scheduler settled old MARKET closes before its
@@ -17780,7 +17802,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // (pine_scheduler.cpp:177-183).  A path slice still live here was sized on
         // the pre-exit position, so re-size it from the reduced book.  The
         // 1x-long TV-money slice keeps its own scheduler.
-        const auto after_exit = require_host().physical_position();
+        const auto after_exit = detail::run_position(require_host());
         const bool one_x_long = after_exit.signed_units > 0.0
             && std::abs(config_.margin_long - 100.0) < 1e-12;
         std::vector<native_order::RequestHandle> stale_margin_requests;
@@ -17825,7 +17847,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail)
         && !placement_snapshot->from_entry.empty()
-        && require_host().physical_position().signed_units != 0.0
+        && detail::run_position(require_host()).signed_units != 0.0
         && current_position_cycle_ > 0) {
         auto* pine = pine_view(&require_host());
         const auto cohort = cohorts_by_id_.find(placement_snapshot->from_entry);
@@ -17833,7 +17855,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // The lots carry the chart bar wherever the host re-stamps them
             // (PineStrategyHost::on_native_applied): under the magnifier and,
             // since lane F1, on every aggregated chart.
-            const auto state = pine->native_state();
+            const auto state = detail::run_state(*pine);
             const int ratio = state.spec && !state.spec->timeframe_undetected
                 ? tf_ratio(state.spec->input_tf, state.spec->script_tf) : 1;
             const int bar = pine->scheduler_.bar_magnifier_enabled() || ratio > 1 || ratio == -1
@@ -18240,7 +18262,7 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
     *partition = -1;
     if (!snapshot.opening) return 1;
 
-    const auto physical = owner_->require_host().physical_position();
+    const auto physical = detail::run_position(owner_->require_host());
     const bool opposite = physical.signed_units != 0.0
         && ((physical.signed_units > 0.0) != snapshot.is_long);
     bool kernel_close_only = false;
@@ -18362,7 +18384,7 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     if (!owner_->projected_pending_at(index, row, handle) || !row) return -1;
     const auto& snapshot = *row;
     const double tick = owner_->staged_.syminfo.mintick;
-    const auto physical = owner_->require_host().physical_position();
+    const auto physical = detail::run_position(owner_->require_host());
     const bool long_side = physical.signed_units > 0.0;
     const double entry = owner_->require_host().position_avg_price();
     *stop = snapshot.exit_levels.stop;

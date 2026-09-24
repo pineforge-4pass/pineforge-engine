@@ -1175,6 +1175,20 @@ list(APPEND TEST_SOURCES test_native_runtime_ambient)
 # against thread-local storage at every write, line for line (differential).
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_runtime_ambient)
+# R5 lane D2-C: the consumer's in-place reads (the run's lifecycle, spec and
+# phase, the callback's point, the book, the bound consumer) against
+# NativeStrategyHost's accessors at every callback of K3's books and PERF-L2's
+# hosts, in the policy hooks, after a current execution and in every
+# lifecycle state (differential). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_in_place_reads)
+# R5 lane D2-C: the Pine layer's in-place reads (src/source/pine_host_reads.hpp)
+# against the host's accessors in every script bar, request.security
+# evaluation and script preparation of the D2-C scenarios, and the running
+# spec's fact kept once per run in the adapter's host cache against its
+# computation; each scenario with and without the host cache, transcripts
+# identical and the kept fact answering (differential). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_in_place_reads)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

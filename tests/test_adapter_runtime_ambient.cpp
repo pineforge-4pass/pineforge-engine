@@ -32,33 +32,24 @@
 // Fail-before: at the lane's base the consumer has no set_runtime_ambient,
 // so this TU does not compile there (the lane report records the first
 // diagnostic).
-#include <pineforge/pineforge.h>
 #include <pineforge/session_time.hpp>
-#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include "../src/native_execution_consumer.hpp"
 #include "../src/runtime_ambient.hpp"
-#include "test_o_close_pct_day_anchor_data.hpp"
+#include "pine_d2c_scenarios_fixture.hpp"
 
 #include <cinttypes>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <functional>
-#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
-#ifndef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-#error "the runtime-ambient witness drives the auxiliary request.security feed"
-#endif
-
 namespace {
 using namespace pineforge;
+using namespace d2c_scenarios;
 
 int failures = 0;
 long checks = 0;
@@ -70,85 +61,13 @@ long checks = 0;
     }                                                                          \
 } while (0)
 
-constexpr std::int64_t kT0 = 1736121600000LL;  // a UTC midnight
-constexpr std::int64_t kMinute = 60000;
-constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
-
-std::string bits(double value) {
-    std::uint64_t out = 0;
-    std::memcpy(&out, &value, sizeof out);
-    char text[20];
-    std::snprintf(text, sizeof text, "%016" PRIx64, out);
-    return text;
-}
-
-// A wave in quarter ticks, one bar per `step` minutes.
-std::vector<Bar> wave(int count, int step, double base = 100.0) {
-    std::vector<Bar> bars;
-    for (int i = 0; i < count; ++i) {
-        const int phase = i % 12;
-        const int triangle = phase < 6 ? phase : 12 - phase;
-        const double p = base + 0.75 * triangle + 0.25 * (i % 5) + 0.5 * ((i / 40) % 3);
-        bars.push_back({p, p + 0.75, p - 0.5, p + 0.25, 1.0 + (i % 7),
-                        kT0 + static_cast<std::int64_t>(i) * step * kMinute});
-    }
-    return bars;
-}
-
-template <std::size_t N>
-std::vector<Bar> vec(const Bar (&bars)[N]) {
-    return std::vector<Bar>(bars, bars + N);
-}
-
-struct Site {
-    int id = 0;
-    std::string tf;
-    bool lookahead = false;
-    bool lower_array = false;
-};
-
-struct Scenario {
-    std::string name;
-    std::vector<Bar> bars;
-    std::string input_tf;
-    std::string script_tf;
-    bool magnifier = false;
-    std::string timezone = "UTC";
-    std::string session = "24x7";
-    std::string type;
-    source::PineStrategyConfig config{};
-    std::vector<std::pair<std::string, double>> metadata;
-    std::vector<Site> sites;
-    std::vector<Bar> daily;   // native "D" feed: the chart's day partition
-    std::vector<Bar> aux;     // auxiliary request.security feed
-    std::string aux_tf;
-    bool suppress_tail = false;
-    int stream_warmup = 0;    // > 0: stream these bars' tail
-};
-
-source::PineStrategyConfig base_config() {
-    source::PineStrategyConfig config;
-    config.initial_capital = 100000.0;
-    config.default_qty_type = static_cast<int>(QtyType::FIXED);
-    config.default_qty_value = 1.0;
-    config.pyramiding = 2;
-    config.commission_type = static_cast<int>(CommissionType::PERCENT);
-    config.commission_value = 0.05;
-    return config;
-}
-
 // A generated-strategy-shaped host whose body reads the runtime state.
 class AmbientPineHost final : public source::PineStrategyHost {
 public:
     explicit AmbientPineHost(const Scenario& scenario) : scenario_(scenario) {
         attach_pine_execution_adapter();
-        set_syminfo_timezone(scenario.timezone);
-        set_syminfo_session(scenario.session);
-        if (!scenario.type.empty()) set_syminfo_type(scenario.type);
-        set_syminfo_mintick(0.25);
         configure_pine_strategy(scenario.config);
-        for (const auto& [key, value] : scenario.metadata) set_syminfo_metadata(key, value);
-        if (scenario.suppress_tail) set_probe_suppress_tail_logic(true);
+        d2c_scenarios::configure(*this, scenario);
     }
 
     std::vector<std::string> lines;
@@ -194,11 +113,7 @@ public:
         lines.push_back(line);
         if (!fresh) return;
         // Orders, so fills, recalculations and applied callbacks happen.
-        const int phase = index % 12;
-        if (phase == 1) strategy_entry("L", true);
-        if (phase == 3) strategy_exit("XL", "L", bar.close + 1.0, bar.close - 1.0);
-        if (phase == 6) strategy_entry("S", false, kNa, bar.low - 0.25);
-        if (phase == 9) strategy_close_all();
+        place_orders(*this, index, bar);
     }
 
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
@@ -252,36 +167,11 @@ struct Result {
 Result run(const Scenario& scenario, bool block) {
     AmbientPineHost host(scenario);
     host.consumer().set_runtime_ambient(block);
-    if (!scenario.daily.empty()) {
-        CHECK(host.set_native_security_feed("D", scenario.daily.data(),
-                                            static_cast<int>(scenario.daily.size())));
-    }
-    if (!scenario.aux.empty()) {
-        CHECK(host.set_aux_security_feed(scenario.aux.data(),
-                                         static_cast<int>(scenario.aux.size()),
-                                         scenario.aux_tf));
-    }
-    const int n = static_cast<int>(scenario.bars.size());
-    if (scenario.stream_warmup > 0) {
-        CHECK(host.stream_begin(scenario.bars.data(), scenario.stream_warmup,
-                                scenario.input_tf, scenario.script_tf));
-        for (int i = scenario.stream_warmup; i < n; ++i)
-            CHECK(host.stream_push_bar(scenario.bars[static_cast<std::size_t>(i)]));
-        CHECK(host.stream_end());
-    } else {
-        host.run(scenario.bars.data(), n, scenario.input_tf, scenario.script_tf,
-                 scenario.magnifier, 4, MagnifierDistribution::ENDPOINTS);
-    }
+    CHECK(drive(host, scenario));
     Result result;
     result.error = host.last_error();
     result.lines = std::move(host.lines);
-    for (int i = 0; i < host.trade_count(); ++i) {
-        const Trade& trade = host.get_trade(i);
-        result.lines.push_back("trade " + std::to_string(trade.entry_time) + " "
-            + std::to_string(trade.exit_time) + " " + bits(trade.entry_price) + " "
-            + bits(trade.exit_price) + " " + bits(trade.qty) + " " + bits(trade.pnl) + " "
-            + trade.entry_id + " " + trade.exit_id);
-    }
+    trade_lines(host, result.lines);
     result.lines.push_back("broker " + std::to_string(host.broker_state_hash()));
     result.lines.push_back("continuation " + std::to_string(host.consumer().continuation_hash()));
     result.installs = host.consumer().runtime_ambient_installs();
@@ -290,82 +180,6 @@ Result run(const Scenario& scenario, bool block) {
     result.thread_default = !context.installed && context.bar_index == 0 && context.origin == 0
         && !ta::ema_na_warmup_flag() && active_native_day_partition() == nullptr;
     return result;
-}
-
-std::vector<Scenario> scenarios() {
-    std::vector<Scenario> out;
-    const std::vector<Bar> minutes = wave(420, 1);
-    {
-        Scenario s{"chart-kernel-site", minutes, "1", "1"};
-        s.config = base_config();
-        s.sites = {{0, "5"}};
-        out.push_back(s);
-        s.name = "chart-magnifier";
-        s.magnifier = true;
-        out.push_back(s);
-    }
-    {
-        Scenario s{"aggregated", minutes, "1", "5"};
-        s.config = base_config();
-        s.sites = {{0, "15"}};
-        out.push_back(s);
-        s.name = "aggregated-magnifier";
-        s.magnifier = true;
-        out.push_back(s);
-    }
-    {
-        Scenario s{"coof", minutes, "1", "1"};
-        s.config = base_config();
-        s.config.calc_on_order_fills = true;
-        s.sites = {{0, "5"}};
-        out.push_back(s);
-    }
-    {
-        Scenario s{"warmups", minutes, "1", "1"};
-        s.config = base_config();
-        s.metadata = {{"chart_ema_na_warmup", 1.0},
-                      {"security_range_start_na_warmup",
-                       static_cast<double>(kT0 + 30 * kMinute)}};
-        s.sites = {{0, "5"}};
-        out.push_back(s);
-    }
-    {
-        Scenario s{"host-driven-site", minutes, "1", "1"};
-        s.config = base_config();
-        s.sites = {{0, "5", true}, {1, "10"}};
-        out.push_back(s);
-    }
-    {
-        Scenario s{"aux-lower-array", wave(90, 5), "5", "5"};
-        s.config = base_config();
-        s.aux = wave(460, 1, 100.25);
-        s.aux_tf = "1";
-        s.sites = {{0, "1", false, true}, {1, "1"}, {2, "1", true}};
-        out.push_back(s);
-    }
-    {
-        Scenario s{"daily-partition", vec(o_data::kNq15May), "15", "15"};
-        s.config = base_config();
-        s.timezone = "America/Chicago";
-        s.session = "1700-1600";
-        s.type = "futures";
-        s.daily = vec(o_data::kNq1DMay);
-        out.push_back(s);
-    }
-    {
-        Scenario s{"suppressed-tail", minutes, "1", "1"};
-        s.config = base_config();
-        s.suppress_tail = true;
-        s.sites = {{0, "5"}};
-        out.push_back(s);
-    }
-    {
-        Scenario s{"stream", minutes, "1", "1"};
-        s.config = base_config();
-        s.stream_warmup = 150;
-        out.push_back(s);
-    }
-    return out;
 }
 
 void block_matches_thread_local_storage() {

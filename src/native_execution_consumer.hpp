@@ -28,11 +28,20 @@ inline namespace engine_script_run_v19 {
 class NativeHostCache {
 public:
     NativeHostCache() = default;
+    // `kind` names the host's cache type, so the host recognizes its own
+    // cache with one comparison instead of a dynamic_cast (R5 lane D2-C: it
+    // reads one every bar). Any address the host owns will do; the consumer
+    // never reads it.
+    explicit NativeHostCache(const void* kind) noexcept : kind_(kind) {}
     NativeHostCache(const NativeHostCache&) = delete;
     NativeHostCache& operator=(const NativeHostCache&) = delete;
     virtual ~NativeHostCache() = default;
     // How many lookups the cache answered in place of the host's own scan.
     virtual std::uint64_t answered() const noexcept = 0;
+    const void* kind() const noexcept { return kind_; }
+
+private:
+    const void* kind_ = nullptr;
 };
 // The journal window's stress switch (NativeExecutionConsumer::
 // set_retire_every_point): a build compiled with
@@ -112,6 +121,21 @@ public:
         return v;
     }
     void probe_lifecycle(NativeStateView& v) const;
+    // view()'s kind, spec and phase, read in place (R5 lane D2-C): the
+    // running run's own fields, or the lifecycle probe's answer. A host that
+    // needs one field reads it here instead of building the whole view
+    // (NativeStrategyHost::native_state, out of line and by value). running()
+    // is the branch view() takes.
+    bool running() const noexcept { return running_spec_ != nullptr; }
+    NativeLifecycleKind state_kind() const {
+        return running_spec_ ? NativeLifecycleKind::Running : view().kind;
+    }
+    const NativeRunSpec* state_spec() const {
+        return running_spec_ ? running_spec_ : view().spec;
+    }
+    NativeRunPhase state_phase() const {
+        return running_spec_ ? std::get_if<NativeRunning>(&state_)->phase : view().phase;
+    }
     // The leg order this run walks over `bar`: the declared
     // NativeRunSpec::path_order, and the open-proximity rule under Auto or
     // before a spec is configured. It is the order the confirmed-bar driver
@@ -140,9 +164,17 @@ public:
     void cohort_remove(BacktestEngine& engine, native_order::CohortHandle cohort,
                        native_order::RequestHandle origin);
     std::optional<NativeCurrentPointView> current_execution_point() const {
+        if (const auto* point = current_point()) return *point;
+        return std::nullopt;
+    }
+    // The point current_execution_point() copies, read in place (R5 lane
+    // D2-C): the callback's frame, or null. It holds for the callback that
+    // asked -- a host's commands and current executions inside one callback
+    // leave its frame as it is -- and a caller reads it there.
+    const NativeCurrentPointView* current_point() const noexcept {
         if (!in_callback_ || !current_frame_ || !std::holds_alternative<NativeRunning>(state_))
-            return std::nullopt;
-        return current_frame_->point;
+            return nullptr;
+        return &current_frame_->point;
     }
     std::optional<NativeTrailState> trail_state(
         const BacktestEngine& engine, const native_order::RequestHandle& target) const;

@@ -6,6 +6,7 @@
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
 
 #include <algorithm>
@@ -129,17 +130,22 @@ namespace source::detail {
 // and a configured spec's literal passed native_calendar::parse_timeframe
 // ([1-9][0-9]*[SDWM]? or a bare D, W or M), so one of at most four characters
 // cannot overflow that int product and is negative only when it is monthly.
-// Every other pair keeps tf_ratio. One definition for both callers
-// (PineScheduler::recalculate declares it in pine_scheduler_native.cpp); the
-// linkage also lets tests/test_aggregates_input_bars_literals.cpp judge it
-// against tf_ratio. Not part of the installed API.
-bool aggregates_input_bars(const NativeStateView& state) {
-    if (!state.spec || state.spec->timeframe_undetected) return false;
-    const std::string& input = state.spec->input_tf;
-    const std::string& script = state.spec->script_tf;
+// Every other pair keeps tf_ratio. The host's and the scheduler's per-bar
+// callbacks read its answer for the running spec once per run
+// (run_aggregates_input_bars, pine_host_reads.hpp, R5 lane D2-C); the view
+// overload's linkage lets tests/test_aggregates_input_bars_literals.cpp judge
+// it against tf_ratio. Not part of the installed API.
+bool aggregates_input_bars(const NativeRunSpec* spec) {
+    if (!spec || spec->timeframe_undetected) return false;
+    const std::string& input = spec->input_tf;
+    const std::string& script = spec->script_tf;
     if (input == script && !script.empty() && script.size() <= 4) return script.back() == 'M';
     const int ratio = tf_ratio(input, script);
     return ratio > 1 || ratio == -1;
+}
+
+bool aggregates_input_bars(const NativeStateView& state) {
+    return aggregates_input_bars(state.spec);
 }
 
 }  // namespace source::detail
@@ -329,6 +335,9 @@ void source::PineStrategyHost::on_native_run_begin() {
     // "nothing read yet" here marks this host as one that polls, so the
     // kernel keeps every event above the cursor until the adapter has seen it.
     native_acknowledge_events(0);
+    // The spec facts the per-bar callbacks read, once for the run (R5 lane
+    // D2-C, pine_host_reads.hpp).
+    detail::take_run_facts(detail::run_consumer(*this), adapter_, adapter_.run_counter_);
     source_bar_index_ = -1;
     source_last_bar_index_ = -1;
     source_callback_count_ = 0;
@@ -360,7 +369,7 @@ void source::PineStrategyHost::capture_script_continuation_hash() {
 void source::PineStrategyHost::on_native_input(
         const Bar& bar, const NativeInputContext& context) {
     if (source_prepare_failed_) return;
-    if (native_state().phase == NativeRunPhase::Realtime)
+    if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
     scheduler_.input(bar, context, *this);
     // Aggregation can deliver leftover input after the last script callback.
@@ -372,14 +381,14 @@ void source::PineStrategyHost::on_native_input(
 void source::PineStrategyHost::on_native_tick(
         const Bar& tick, const NativeTickContext& context) {
     if (source_prepare_failed_) return;
-    if (native_state().phase == NativeRunPhase::Realtime)
+    if (detail::run_phase(*this) == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
     {
         // ab9714be pine_stream.cpp:298/:450 samples the excursion at every
         // realtime print (a price point: H == L == C == print). The lots carry
         // chart-bar indices wherever on_native_applied re-stamps them.
         const int sample_index = scheduler_.bar_magnifier_enabled()
-                || detail::aggregates_input_bars(native_state())
+                || detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_)
             ? scheduler_.source_bar_index_for(context.decision)
             : context.decision.coordinate.interval_index;
         sample_open_trade_extremes(
@@ -413,7 +422,7 @@ void source::PineStrategyHost::on_native_bar(
     // The lots carry chart-bar indices wherever on_native_applied re-stamps
     // them, so the entry-bar tests below read the chart bar there. Under the
     // magnifier the slippage mask keeps the kernel index it has always read.
-    const bool aggregated = detail::aggregates_input_bars(native_state());
+    const bool aggregated = detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_);
     const int sample_index = scheduler_.bar_magnifier_enabled() || aggregated
         ? scheduler_.source_bar_index_for(context)
         : context.coordinate.interval_index;
@@ -486,7 +495,7 @@ void source::PineStrategyHost::on_native_applied(
     // fill opened and the rows it closed carry the chart bar instead, as
     // ab9714be's aggregation loops booked them (lane F1 extended this from
     // the magnifier to every aggregated chart).
-    const bool aggregated = detail::aggregates_input_bars(native_state());
+    const bool aggregated = detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_);
     if (scheduler_.bar_magnifier_enabled() || aggregated) {
         const int source_index = scheduler_.source_bar_index_for(context);
         for (auto& lot : pyramid_entries_) {
@@ -760,7 +769,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
                && view.resolved_price > 0.0) {
         const double slip = config_.slippage * syminfo_.mintick;
         excursion_trail_raw_price_ = compat::pine::snap_trail_level_to_tick_grid(
-            physical_position().signed_units > 0.0 ? view.resolved_price + slip
+            detail::run_position(*this).signed_units > 0.0 ? view.resolved_price + slip
                                                    : view.resolved_price - slip,
             syminfo_.mintick);
     }
@@ -779,7 +788,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
                 excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
             } else {
                 const double slip = config_.slippage * syminfo_.mintick;
-                excursion_trail_raw_price_ = physical_position().signed_units > 0.0
+                excursion_trail_raw_price_ = detail::run_position(*this).signed_units > 0.0
                     ? view.resolved_price + slip : view.resolved_price - slip;
             }
         }
@@ -788,7 +797,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     // adapter precommit pass; start clean for every request.
     excursion_margin_prefix_ = false;
     excursion_margin_fill_only_ = false;
-    precommit_held_units_ = std::abs(physical_position().signed_units);
+    precommit_held_units_ = std::abs(detail::run_position(*this).signed_units);
     return adapter_.validate_precommit(view);
 }
 
@@ -838,7 +847,7 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
     // is the one the adapter opened last. Under the magnifier the test keeps
     // the kernel index it has always read.
     int exit_bar_index = facts.exit_bar_index;
-    if (!scheduler_.bar_magnifier_enabled() && detail::aggregates_input_bars(native_state())) {
+    if (!scheduler_.bar_magnifier_enabled() && detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_)) {
         NativeDecisionContext current{};
         current.script_bar_open_ms = adapter_.last_broker_open_ms_;
         exit_bar_index = scheduler_.source_bar_index_for(current);
@@ -884,8 +893,7 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
     // facts.entry_bar_{high,low}_masked on — one resolution for the mask and
     // for the arithmetic that completes it, so the two cannot disagree. Under
     // AUTO it is the open-proximity rule this read always returned here.
-    const bool path_high_first = as_native_consumer(
-        const_cast<IExecutionConsumer&>(execution_consumer())).path_high_first(current_bar_);
+    const bool path_high_first = detail::run_consumer(*this).path_high_first(current_bar_);
     if (excursion_margin_call_) {
         // ab9714be pine_risk.cpp:256-292: a margin-call liquidation at the
         // adverse extreme owns the rest of the bar. Which part of the bar it
@@ -1137,7 +1145,7 @@ const Series<double>& source::PineStrategyHost::source_input_series(
 }
 
 double source::PineStrategyHost::live_position_size() const {
-    return physical_position().signed_units;
+    return detail::run_position(*this).signed_units;
 }
 
 int source::PineStrategyHost::pending_order_count() const {
@@ -1549,8 +1557,8 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
 }
 
 bool source::PineStrategyHost::security_sites_kernel_routed() const noexcept {
-    const auto view = native_state();
-    return view.spec != nullptr && !view.spec->subscriptions.empty();
+    const NativeRunSpec* spec = detail::run_spec(*this);
+    return spec != nullptr && !spec->subscriptions.empty();
 }
 
 bool source::PineStrategyHost::declare_security_sites_to_kernel() {
@@ -1803,7 +1811,7 @@ void source::PineStrategyHost::scheduler_update_session_state() {
     // The scheduler's retained-input lookahead that fed the old rule is gone:
     // under calc_on_order_fills it read two bars ahead on a bar a fill
     // recalculation had already published (tests/test_session_day_facts_adapter.cpp).
-    const auto point = current_execution_point();
+    const NativeCurrentPointView* point = detail::callback_point(*this);
     if (!point) return;
     const NativeDecisionContext& facts = point->decision;
     session_ismarket_ = facts.in_session;
@@ -1823,12 +1831,12 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     if (advance_source_index || temporary_index) ++source_bar_index_;
     ++source_callback_count_;
     bar_index_ = source_bar_index_;
-    const auto lifecycle = native_state();
-    if (lifecycle.kind == NativeLifecycleKind::Running
-        && lifecycle.phase == NativeRunPhase::Warmup) {
+    const NativeLifecycleKind lifecycle = detail::run_kind(*this);
+    const NativeRunPhase phase = detail::run_phase(*this);
+    if (lifecycle == NativeLifecycleKind::Running && phase == NativeRunPhase::Warmup) {
         barstate_islast_ = false;
-    } else if (lifecycle.kind == NativeLifecycleKind::Running
-               && lifecycle.phase == NativeRunPhase::Realtime) {
+    } else if (lifecycle == NativeLifecycleKind::Running
+               && phase == NativeRunPhase::Realtime) {
         barstate_islast_ = true;
     } else {
         barstate_islast_ = source_bar_index_ == source_last_bar_index_;
@@ -1868,7 +1876,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     internal::AmbientEmaSeedingScope ema_scope(ambient, chart_ema_na_warmup_);
     internal::AmbientBarContextScope bar_scope(ambient, pine_bar_index(),
                                                scheduler_.bar_index_offset());
-    position_entry_count_ = physical_position().signed_units == 0.0
+    position_entry_count_ = detail::run_position(*this).signed_units == 0.0
         ? 0 : adapter_.source_entry_slot_count();
     on_source_bar(bar);
     // Handwritten/source-generated callbacks historically read and could
@@ -1941,8 +1949,7 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
 // kernel owns what a report point is — the extremes fold and the curve
 // append in engine.hpp — reached through the run spec's report policy.
 void source::PineStrategyHost::scheduler_mark_report_point(std::int64_t script_bar_ts) {
-    as_native_consumer(execution_consumer())
-        .mark_script_report_point(*this, script_bar_ts);
+    detail::run_consumer(*this).mark_script_report_point(*this, script_bar_ts);
 }
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {

@@ -3,21 +3,13 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/timeframe.hpp>
 
+#include "pine_host_reads.hpp"
+
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace pineforge::source {
-
-namespace detail {
-
-// A chart whose script bar aggregates several input bars, as run_begin's
-// needs_aggregation reads it: the kernel's interval index is then the INPUT bar
-// a script bucket opens on, where the host's lots carry the chart bar. Defined
-// once, beside the host's callbacks that ask it too (pine_strategy_host.cpp).
-bool aggregates_input_bars(const NativeStateView& state);
-
-}  // namespace detail
 
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     RetainedBegin next;
@@ -520,8 +512,8 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     // them (recalculate below) and its close reads the same answer (lane F1).
     // They are the kernel's session-day facts of the bar (lane F5), which
     // every callback of the bar carries alike.
-    if (const auto state = host.native_state(); state.spec
-        && !state.spec->timeframe_undetected && !had_coof_recalc) {
+    if (const NativeRunSpec* spec = detail::run_spec(host); spec
+        && !spec->timeframe_undetected && !had_coof_recalc) {
         host.scheduler_update_session_state();
     }
     const bool suppress_probe_tail = host.probe_suppress_tail_logic()
@@ -631,8 +623,8 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     // of the bar's fills. The first publication of the bar asks; the close
     // callback and later recalculations of the bar read the same answer
     // (lane F1).
-    if (const auto state = host.native_state(); state.spec
-        && !state.spec->timeframe_undetected
+    if (const NativeRunSpec* spec = detail::run_spec(host); spec
+        && !spec->timeframe_undetected
         && last_published_script_open_ms_ != context.script_bar_open_ms) {
         host.scheduler_update_session_state();
     }
@@ -654,7 +646,8 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     // the bucket opens on, in bar_index_: the entry-bar mask reads the chart
     // bar there. Under the magnifier it keeps the index it has always read.
     const int extremes_index = !retained_.bar_magnifier
-            && detail::aggregates_input_bars(host.native_state())
+            && detail::run_aggregates_input_bars(detail::run_consumer(host), &host.adapter_,
+                                                 host.adapter_.run_counter_)
         ? source_bar_index_for(context) : host.bar_index_;
     sample_open_trade_extremes(
         host.pyramid_entries_, host.position_side_, extremes_index, extremes_bar);
