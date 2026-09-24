@@ -1129,6 +1129,16 @@ list(APPEND TEST_SOURCES test_native_direct_mutation)
 # one result vector (fails on 10f20197, several per fill). Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
+# R5 lane V19-D: a replace that keeps its handle or carries a close's book
+# binding (ReplaceOptions::keep_handle / keep_binding) matches exactly what a
+# plain replace matches -- every fill, journal outcome, queue order, answer and
+# closed trade, entry incarnations included -- over randomized re-issue scripts
+# (reversals before and after the re-price, gaps, OCA siblings, trails,
+# brackets, cohorts, ties, fill-callback re-prices) on both core paths; the
+# directed rows pin each mechanism, and a continuation read every bar of a run
+# that keeps handles stays flat per bar at 4x the bars. Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_handle_stable_replace)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs
