@@ -183,7 +183,16 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All three are source-free. PERF-P7 adds four release-only rows (their TUs
 # reach the source layer -- see RELEASE_MIN_TESTS); FPC adds no row. 246
 # registered, 245 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 245
+# 249 run = those 245 plus the four TUs of INT20 (V19-B, PERF-L2) -- measured
+# on the integrated tree (ctest -N), not summed from the lanes' own bases:
+#   +2 V19-B   test_native_journal_window, test_native_event_retention
+#   +2 PERF-L2 test_native_fused_settlement,
+#              test_native_fused_settlement_allocations
+# All four are source-free, so they register in release too. INT20 retires no
+# row: test_native_definition_index stays, re-targeted at the core's chain
+# index. 250 registered, 249 run: the WebSocket row still skips on a system
+# libcurl.
+KERNEL_MIN_TESTS = 249
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -254,7 +263,10 @@ KERNEL_MIN_TESTS = 245
 #   +4 PERF-P7 test_adapter_lookup_index_witness, test_adapter_purge_index,
 #              test_adapter_exit_leg_index, test_adapter_lookup_index_scaling
 # No release row skips, so 631 registered is 631 run.
-RELEASE_MIN_TESTS = 631
+# 635 = those 631 plus the four INT20 rows KERNEL_MIN_TESTS lists above, which
+# register here too; neither lane adds a release-only row. No release row
+# skips, so 635 registered is 635 run.
+RELEASE_MIN_TESTS = 635
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
