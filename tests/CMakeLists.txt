@@ -1244,6 +1244,12 @@ list(APPEND TEST_SOURCES test_adapter_settlement_carry)
 # dust lot, on 8cf3be58). Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_crossing_transact)
+# R5 lane B-ENGINE: str_tostring and str_format_values render numbers by the
+# rule TradingView's tapes pin (the codegen formatter's, lane C6b) -- its
+# 42-case edge battery, every numeric string of the C6 exports, text-argument
+# MessageFormat, and the mintick mode byte-identical to 8cf3be58. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_str_number_format)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

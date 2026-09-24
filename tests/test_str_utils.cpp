@@ -127,26 +127,34 @@ void test_tostring() {
     CHECK_EQ(pine_str_tostring(1.236, "mintick", 0.01),
              "1.24", "mintick rounding up");
 
-    // percent
+    // percent. Expectation corrected: "12.34%" -> "0.12%", because lane
+    // B-ENGINE put the percent mode on TradingView's rule, which does not
+    // scale the value (str.tostring(1.2345, format.percent) is "1.23%" on
+    // the C6 tape).
     CHECK_EQ(pine_str_tostring(0.1234, "percent"),
-             "12.34%", "percent mode");
+             "0.12%", "percent mode");
 
-    // volume abbreviations
+    // volume abbreviations. Expectation corrected: "1.50M", "2.50K", "3.00B",
+    // "500.00" -> "1.5M", "2.5K", "3B", "500", because lane B-ENGINE put the
+    // volume mode on TradingView's rule: at most two fraction digits, no
+    // trailing zeros, none below a thousand ("2.5K", "1K" and "12" on the C6
+    // tape).
     CHECK_EQ(pine_str_tostring(1500000.0, "volume"),
-             "1.50M", "volume M suffix");
+             "1.5M", "volume M suffix");
 
     CHECK_EQ(pine_str_tostring(2500.0, "volume"),
-             "2.50K", "volume K suffix");
+             "2.5K", "volume K suffix");
 
     CHECK_EQ(pine_str_tostring(3000000000.0, "volume"),
-             "3.00B", "volume B suffix");
+             "3B", "volume B suffix");
 
     CHECK_EQ(pine_str_tostring(500.0, "volume"),
-             "500.00", "volume below 1K no suffix");
+             "500", "volume below 1K no suffix");
 
     // Default mode
     std::string def = pine_str_tostring(42.0);
     CHECK(def.find("42") != std::string::npos, "default mode contains value");
+    CHECK_EQ(def, "42", "default mode drops the fraction zeros");
 }
 
 int main() {
