@@ -1049,10 +1049,12 @@ list(APPEND TEST_SOURCES test_native_cohort_sliced_close)
 # recorded broker-state row, every read, every trade -- pinned on f71cd820
 # before the indexes existed. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_lookup_index_witness)
-# R5 lane PERF-P7 (P7a): the consumer's incarnation -> definition index
-# against the request core's backward history scan, bit for bit, over the
-# randomized books of test_native_match_row_reuse and replace chains joined to
-# a cohort at every re-issue (differential). Source-free, so it also runs in
+# R5 lane PERF-P7 (P7a), re-targeted by INT20 when V19-B's chain index took
+# the place of P7a's definition index: the request core's cohort receipts,
+# rosters and membership answers against an oracle folded over the whole
+# journal, and a twin whose journal retires at every script-bar boundary equal
+# to it, over the randomized books of test_native_match_row_reuse and replace
+# chains joined to a cohort at every re-issue. Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_definition_index)
 # R5 lane PERF-P7 (P7b): the per-cohort side index behind the applied-reversal

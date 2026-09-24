@@ -5,12 +5,8 @@
 // rounded anchor, a reached print and a quantized fill agree tick for tick.
 // The header is value-only geometry; it brings no host into the core.
 #include "native_matching.hpp"
-// The owner's incarnation index definition_for reads while it is published
-// (R5 lane PERF-P7, P7a); internal, and the core holds none of it.
-#include "native_definition_index.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <limits>

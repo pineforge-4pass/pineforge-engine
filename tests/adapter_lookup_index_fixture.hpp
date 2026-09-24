@@ -122,7 +122,6 @@ struct Outcome {
     int trades = 0;
     std::string error;
     std::uint64_t answered = 0;
-    std::uint64_t definitions_answered = 0;
     long commands = 0;
 };
 
@@ -168,7 +167,6 @@ public:
         configure_pine_strategy(pine);
         auto& consumer = as_native_consumer(execution_consumer());
         consumer.set_host_cache(indexed);
-        consumer.set_definition_index(indexed);
     }
 
     long commands = 0;
@@ -205,7 +203,6 @@ public:
         out.trades_digest = digest;
         const auto& consumer = as_native_consumer(execution_consumer());
         if (const auto* cache = consumer.host_cache()) out.answered = cache->answered();
-        out.definitions_answered = consumer.definition_index_answers();
         out.commands = commands;
         return out;
     }

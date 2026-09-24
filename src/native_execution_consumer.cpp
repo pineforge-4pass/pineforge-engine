@@ -2200,7 +2200,6 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host that keeps its own notion of the flag rewrites it in its callbacks.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
-    definition_index_.reset();
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -2655,7 +2654,6 @@ void NativeExecutionConsumer::read_target_into(
         if (!position) return;
         handles.clear();
         handles.reserve(engine.pyramid_entries_.size());
-        const auto published = publish_definition_index();
         for (const auto& lot : engine.pyramid_entries_) {
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
             if (requests_.cohort_contains(cohort->cohort, handle)) {
@@ -4459,7 +4457,6 @@ std::optional<double> NativeExecutionConsumer::placement_scope_units(
         if (!nonflat) return 0.0;
         std::vector<native_order::RequestHandle> handles;
         handles.reserve(engine.pyramid_entries_.size());
-        const auto published = publish_definition_index();
         for (const auto& lot : engine.pyramid_entries_) {
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
             if (requests_.cohort_contains(bind->cohort, handle)) handles.push_back(handle);
@@ -9540,12 +9537,6 @@ native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& 
     }
 }
 
-native_order::DefinitionIndex::Publication
-NativeExecutionConsumer::publish_definition_index() const noexcept {
-    return native_order::DefinitionIndex::Publication(
-        definition_index_enabled_ ? &definition_index_ : nullptr, requests_);
-}
-
 void NativeExecutionConsumer::cohort_add(
         BacktestEngine& engine, native_order::CohortHandle cohort,
         native_order::RequestHandle origin) {
@@ -9553,7 +9544,6 @@ void NativeExecutionConsumer::cohort_add(
         throw std::runtime_error("native cohort_add refused outside allowed phase");
     }
     try {
-        const auto published = publish_definition_index();
         requests_.cohort_add(cohort, std::move(origin));
         note_cohort_receipts();
         clear_cohort_target_cache();
@@ -9573,7 +9563,6 @@ void NativeExecutionConsumer::cohort_remove(
         throw std::runtime_error("native cohort_remove refused outside allowed phase");
     }
     try {
-        const auto published = publish_definition_index();
         requests_.cohort_remove(cohort, std::move(origin));
         note_cohort_receipts();
         clear_cohort_target_cache();

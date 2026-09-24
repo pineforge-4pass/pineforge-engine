@@ -4,7 +4,6 @@
 #include <pineforge/native_host.hpp>
 
 #include "native_calendar_memo.hpp"
-#include "native_definition_index.hpp"
 
 #include <array>
 #include <cstdint>
@@ -334,24 +333,10 @@ public:
     // hold the two equal bit for bit. No host reaches it.
     void set_point_guards(bool enabled) noexcept { point_guards_ = enabled; }
 
-    // The request core's definition lookups -- cohort_add's and
-    // cohort_remove's canonical walk, cohort_contains for a cohort-bound
-    // candidate -- are answered from this consumer's incarnation index while
-    // it publishes the index for those calls (R5 lane PERF-P7, P7a;
-    // native_definition_index.hpp), and the index answers exactly what the
-    // core's backward history scan does. It is on unless this turns it off,
-    // which leaves every lookup to the scan. The switch exists so
-    // tests/test_native_definition_index.cpp can hold the two equal bit for
-    // bit, definition_index_answers() counts what the index answered, and
-    // request_core() is that test's read of the core's cohort receipts and
-    // rosters; no host reaches any of them.
-    void set_definition_index(bool enabled) noexcept {
-        definition_index_enabled_ = enabled;
-        if (!enabled) definition_index_.reset();
-    }
-    std::uint64_t definition_index_answers() const noexcept {
-        return definition_index_.answered();
-    }
+    // The request core, read-only: tests/test_native_definition_index.cpp
+    // holds its cohort receipts, rosters and membership answers -- the chain
+    // index V19-B keeps in the core -- against an oracle folded over the whole
+    // journal. No host reaches it.
     const native_order::WorkingRequestCore& request_core() const noexcept { return requests_; }
 
     // The host's parked lookup cache (NativeHostCache), or null. A host adopts
@@ -985,12 +970,6 @@ private:
     const native_order::TargetObservation* cached_cohort_target(
             const BacktestEngine& engine, const native_order::LiveRequest& live);
     void clear_cohort_target_cache() noexcept;
-    // Publishes definition_index_ to the core for the lifetime of the
-    // returned object (it syncs to requests_'s history at its first lookup):
-    // bind it around each core call that canonicalizes an origin or tests
-    // cohort membership. Publishes nothing while set_definition_index(false)
-    // holds.
-    native_order::DefinitionIndex::Publication publish_definition_index() const noexcept;
     void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
                                       const native_order::RequestHandle& successor) noexcept;
     native_order::CommandContext make_command_context(
@@ -1514,14 +1493,6 @@ private:
     // set_point_guards. Like match_row_reuse_, a choice between two
     // computations of the same values, not run state.
     bool point_guards_ = true;
-    // R5 lane PERF-P7 (P7a): where the core's backward scan for a request
-    // that is no longer working stops, per incarnation, folded over
-    // requests_'s history (publish_definition_index). Derived from the
-    // history, reset with requests_, and read only through its verified
-    // lookups: never run state, folded into nothing. Declared last, with its
-    // switch, for the same reason as match_rows_.
-    mutable native_order::DefinitionIndex definition_index_;
-    bool definition_index_enabled_ = true;
     // The host's parked lookup cache (adopt_host_cache) and its switch.
     // Never read by the consumer, dropped at every run begin.
     std::unique_ptr<NativeHostCache> host_cache_;
