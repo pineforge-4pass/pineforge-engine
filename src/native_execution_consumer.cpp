@@ -3909,7 +3909,10 @@ void NativeExecutionConsumer::drain_after_applied(
             seeds.push_back({std::move(cause), parent});
         };
 
-        const auto recipients = requests_.group_recipients(applied);
+        // The three lists below are read into the consumer's scratch, one
+        // after another; each is consumed before the next is read.
+        auto& recipients = drain_handles_;
+        requests_.group_recipients(applied, recipients);
         for (const auto& recipient : recipients) {
             if (failed()) return;
             CoreStep step = direct_mutation_
@@ -3929,17 +3932,26 @@ void NativeExecutionConsumer::drain_after_applied(
             note_absent(recipient);
         }
 
-        const auto children = requests_.waiting_children(filler);
+        auto& children = drain_handles_;
+        requests_.waiting_children(filler, children);
         // The arm of an anchored leg reads the run's price tick (the ladder a
         // rounded anchor snaps to) exactly as acceptance does through
         // CommandContext::price_tick, and offers the host its one level
         // restatement; the core itself stays host-free and sees both as
         // values. A throwing hook latches CallbackException exactly like
-        // resolve_execution_terms and the arm below is not installed.
+        // resolve_execution_terms and the arm below is not installed. Only an
+        // anchored leg's arm reads either, so the hook is built only when a
+        // waiting child is anchored.
         native_order::ArmContext arm;
         if (const auto* spec = spec_ptr()) arm.price_tick = spec->price_tick;
         auto* host = native_host(engine);
-        if (host) {
+        const bool anchored_child = std::any_of(
+            children.begin(), children.end(), [this](const native_order::RequestHandle& child) {
+                const auto* waiting = requests_.find_live(child);
+                return waiting && std::holds_alternative<native_order::FromOwnerFill>(
+                                      waiting->request().anchor);
+            });
+        if (host && anchored_child) {
             arm.resolve_level = [this, &engine, host, &applied](
                     const native_order::LiveRequest& leg,
                     const native_order::ExecutionAppliedEvent& owner_fill,
@@ -4013,7 +4025,8 @@ void NativeExecutionConsumer::drain_after_applied(
             note_absent(child);
         }
 
-        const auto bound = requests_.bound_close_handles();
+        auto& bound = drain_handles_;
+        requests_.bound_close_handles(bound);
         for (const auto& handle : bound) {
             if (failed()) return;
             const auto* live = requests_.find_live(handle);

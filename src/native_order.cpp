@@ -1919,6 +1919,13 @@ bool WorkingRequestCore::evaluation_eligible(const LiveRequest& live,
 
 std::vector<RequestHandle> WorkingRequestCore::waiting_children(const RequestHandle& parent) const {
     std::vector<RequestHandle> handles;
+    waiting_children(parent, handles);
+    return handles;
+}
+
+void WorkingRequestCore::waiting_children(const RequestHandle& parent,
+                                          std::vector<RequestHandle>& handles) const {
+    handles.clear();
     for (const auto& live : live_) {
         if (const auto* wait = std::get_if<Wait>(&live.authority)) {
             if (wait->parent == parent) handles.push_back(live.handle());
@@ -1928,7 +1935,6 @@ std::vector<RequestHandle> WorkingRequestCore::waiting_children(const RequestHan
               [](const RequestHandle& a, const RequestHandle& b) {
                   return a.incarnation < b.incarnation;
               });
-    return handles;
 }
 
 bool WorkingRequestCore::has_waiting_children(const RequestHandle& parent) const noexcept {
@@ -1942,6 +1948,12 @@ bool WorkingRequestCore::has_waiting_children(const RequestHandle& parent) const
 
 std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
     std::vector<RequestHandle> handles;
+    bound_close_handles(handles);
+    return handles;
+}
+
+void WorkingRequestCore::bound_close_handles(std::vector<RequestHandle>& handles) const {
+    handles.clear();
     for (const auto& live : live_) {
         if (std::holds_alternative<BookClose>(live.authority)
             || std::holds_alternative<OpeningClose>(live.authority)
@@ -1953,18 +1965,24 @@ std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
               [](const RequestHandle& a, const RequestHandle& b) {
                   return a.incarnation < b.incarnation;
               });
-    return handles;
 }
 
 std::vector<RequestHandle> WorkingRequestCore::group_recipients(const EventId& applied) const {
     std::vector<RequestHandle> handles;
+    group_recipients(applied, handles);
+    return handles;
+}
+
+void WorkingRequestCore::group_recipients(const EventId& applied,
+                                          std::vector<RequestHandle>& handles) const {
+    handles.clear();
     const CommandEvent* event = event_at(applied);
     const auto* payload = event ? as_applied(*event) : nullptr;
-    if (!payload || !payload->definition) return handles;
+    if (!payload || !payload->definition) return;
     const auto* member = std::get_if<Member>(&payload->definition->request.group);
-    if (!member) return handles;
-    if (member->effect == GroupEffect::Cancel && !payload->terminal) return handles;
-    if (member->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) return handles;
+    if (!member) return;
+    if (member->effect == GroupEffect::Cancel && !payload->terminal) return;
+    if (member->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) return;
     for (const auto& live : live_) {
         const auto* other = std::get_if<Member>(&live.request().group);
         if (!other || other->group != member->group || other->cohort == member->cohort) continue;
@@ -1976,7 +1994,6 @@ std::vector<RequestHandle> WorkingRequestCore::group_recipients(const EventId& a
               [](const RequestHandle& a, const RequestHandle& b) {
                   return a.incarnation < b.incarnation;
               });
-    return handles;
 }
 
 PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
@@ -2307,11 +2324,12 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
     seal_direct(1, false, false, true);
     const std::size_t first = history_end();
     append_direct(std::move(replaced), true);
-    // commit's erase-push: the predecessor's row leaves, the successor's is
-    // born at the back (a fresh incarnation keeps the book in order).
-    if (live_index + 1 != live_.size()) {
-        std::rotate(live_.begin() + static_cast<std::ptrdiff_t>(live_index),
-                    live_.begin() + static_cast<std::ptrdiff_t>(live_index + 1), live_.end());
+    // commit's erase-push: the predecessor's row leaves, the rows after it
+    // move down one place, and the successor's is born at the back (a fresh
+    // incarnation keeps the book in order). The same book commit's rotation
+    // leaves, by one move per later row instead of a swap.
+    for (std::size_t index = live_index; index + 1 < live_.size(); ++index) {
+        live_[index] = std::move(live_[index + 1]);
     }
     live_.back() = std::move(live);
     last_incarnation_ = incarnation;

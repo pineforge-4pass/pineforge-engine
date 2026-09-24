@@ -1539,6 +1539,12 @@ private:
     // two computations of the same values, not run state; declared last so no
     // member the consumer reads at every point changes offset.
     bool direct_mutation_ = true;
+    // drain_after_applied's lists (the group recipients, the waiting
+    // children, the bound closes), read one after another into this scratch:
+    // capacity only between fills, never run state, folded into nothing. A
+    // drain runs inside the settlement of one fill, where no host command can
+    // start another.
+    std::vector<native_order::RequestHandle> drain_handles_;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

@@ -1760,6 +1760,11 @@ public:
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
     bool has_waiting_children(const RequestHandle& parent) const noexcept;
     std::vector<RequestHandle> bound_close_handles() const;
+    /// The same three lists written over `out`, whose capacity a caller that
+    /// keeps it reuses (R5 lane L3): the same handles in the same order.
+    void group_recipients(const EventId& applied, std::vector<RequestHandle>& out) const;
+    void waiting_children(const RequestHandle& parent, std::vector<RequestHandle>& out) const;
+    void bound_close_handles(std::vector<RequestHandle>& out) const;
 
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
                                                        const RequestHandle& recipient,
