@@ -2134,6 +2134,13 @@ private:
         std::vector<std::uint64_t> candidate_names;
         std::vector<std::uint64_t> first_reissues;
         std::vector<std::uint64_t> doomed;
+        // R5 lane V19-D: the legs K1's cycle clause alone holds, the ones of
+        // them the revival's superseded test already answers for, and what
+        // that test reads (predecessor names, exit legs of the cycle).
+        std::vector<std::uint64_t> held;
+        std::vector<std::uint64_t> released;
+        std::vector<std::uint64_t> predecessor_names;
+        std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> cycle_exits;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();
@@ -2143,6 +2150,10 @@ private:
             candidate_names.clear();
             first_reissues.clear();
             doomed.clear();
+            held.clear();
+            released.clear();
+            predecessor_names.clear();
+            cycle_exits.clear();
         }
     };
     RetiredRowScratch retired_row_scratch_;

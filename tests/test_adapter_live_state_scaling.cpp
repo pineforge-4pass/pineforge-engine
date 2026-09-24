@@ -48,18 +48,28 @@
 // (macOS arm64, Release): 4,000 bars 0.2906 s, 16,000 bars 5.3903 s (ratio
 // 18.55), 7,748 and 31,024 rows retained.
 //
-// R5 lane V19-D adds the straddle WITH recording, at 4,000 and 16,000 bars
-// timed in turn (INT21's residual, finding (c)): each read folded every
-// bracket family's working tail, and the cycle's first legs kept every later
-// member in it, erased or not -- 0.15 / 1.67 / 23.5 s at 1k / 4k / 16k bars.
-// BracketRoster now parks the erased members behind a retained one, so the
-// fold reads what is retained. Fail-before, this TU against the lane's base
-// 6c081f5d (spark aarch64, GCC 13, Release, the leg run alone with --leg):
-// 1.00 s at 4,000 bars and 13.98 s at 16,000 (ratio 14.0).
+// R5 lane V19-D adds two rows, each at 4,000 and 16,000 bars, their sizes
+// timed in turn:
+//   - the straddle WITH recording (INT21's residual, finding (c)): each read
+//     folded every bracket family's working tail, and the cycle's first legs
+//     kept every later member in it, erased or not -- 0.15 / 1.67 / 23.5 s at
+//     1k / 4k / 16k bars. BracketRoster now parks the erased members behind a
+//     retained one, so the fold reads what is retained;
+//   - a position held all run whose exit is cancelled and re-placed every bar
+//     at a moving level (INT21's finding (b)): a cancelled leg keeps its
+//     lifecycle target, so K1 held one row per bar for the whole cycle and
+//     the sweep walked them all at every bar open. K1 now releases a leg the
+//     revival's superseded test answers for.
+// Fail-before, this TU against the lane's base 6c081f5d (spark aarch64,
+// GCC 13, Release; the whole row timed out at 580 s, so each leg was run
+// alone with --leg): the straddle with recording took 1.00 s at 4,000 bars
+// and 13.98 s at 16,000 (ratio 14.0); the re-cancel 0.087 s and 0.887 s
+// without recording (ratio 10.3), retaining 7,999 and 31,999 rows, and with
+// recording 2.32 s at 1,000 bars and 36.75 s at 4,000.
 //
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
-// replay|churn|straddle <bars> [--no-recording]` runs one leg and prints its
-// CPU time, retained rows and ru_maxrss.
+// replay|churn|straddle|recancel <bars> [--no-recording]` runs one leg and
+// prints its CPU time, retained rows and ru_maxrss.
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <sys/resource.h>
@@ -98,7 +108,7 @@ int failures = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T = 1736121600000LL;
 
-enum class Workload { Replay, Churn, Straddle };
+enum class Workload { Replay, Churn, Straddle, Recancel };
 
 long triangle(int index, int period) {
     const int phase = index % (2 * period);
@@ -148,6 +158,16 @@ public:
             // tests/test_l4g_runtime_budget.cpp's replay, verbatim.
             if (i == 0) strategy_entry("L", true, kNa, kNa, 1.0);
             if (position > 0.0) strategy_exit("guard", "L", bar.close * 1.60, bar.close * 0.40);
+            return;
+        }
+        if (workload_ == Workload::Recancel) {
+            // The replay's position, its exit cancelled and re-placed at a
+            // moving level every bar: every cancelled leg keeps its target.
+            if (i == 0) strategy_entry("L", true, kNa, kNa, 1.0);
+            if (position > 0.0) {
+                strategy_cancel("X");
+                strategy_exit("X", "L", bar.close * 1.60, bar.close * 0.40);
+            }
             return;
         }
         if (workload_ == Workload::Straddle) {
@@ -263,8 +283,9 @@ void interleaved_best(Workload workload, const std::vector<Bar>& small_tape,
 }
 
 void cost_and_rows_are_live(Workload workload, const char* name, bool recording = true) {
-    // The straddle runs four times longer: its bars cost microseconds.
-    const bool short_bars = workload == Workload::Straddle;
+    // The straddle and the re-cancel run four times longer: their bars cost
+    // microseconds.
+    const bool short_bars = workload == Workload::Straddle || workload == Workload::Recancel;
     const int scale = short_bars ? 4 : 1;
     const int bars = (gated() ? kBars : kBars / 4) * scale;
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
@@ -295,6 +316,11 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         CHECK(small.trades == 1);
         CHECK(large.trades == 1);
     }
+    if (workload == Workload::Recancel) {
+        // The position is held to the end: no trade closes.
+        CHECK(small.trades == 0);
+        CHECK(large.trades == 0);
+    }
     // Memory: what the adapter retains does not grow with the run.
     CHECK(small.rows <= kRowBound);
     CHECK(large.rows <= kRowBound);
@@ -308,6 +334,7 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
 int single_leg(const char* workload_name, const char* bars_text, bool recording) {
     const Workload workload = std::strcmp(workload_name, "churn") == 0 ? Workload::Churn
         : std::strcmp(workload_name, "straddle") == 0                 ? Workload::Straddle
+        : std::strcmp(workload_name, "recancel") == 0                 ? Workload::Recancel
                                                                       : Workload::Replay;
     const int bars = std::atoi(bars_text);
     if (bars <= 0) return 2;
@@ -325,7 +352,7 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
 } // namespace
 
 int main(int argc, char** argv) {
-    // --leg <replay|churn|straddle> <bars> [--no-recording]
+    // --leg <replay|churn|straddle|recancel> <bars> [--no-recording]
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--leg") == 0)
         return single_leg(argv[2], argv[3],
                           !(argc == 5 && std::strcmp(argv[4], "--no-recording") == 0));
@@ -334,6 +361,8 @@ int main(int argc, char** argv) {
     cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle",
                            false);
     cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle");
+    cost_and_rows_are_live(Workload::Recancel, "an exit cancelled and re-placed every bar", false);
+    cost_and_rows_are_live(Workload::Recancel, "an exit cancelled and re-placed every bar");
     if (failures == 0) std::printf("test_adapter_live_state_scaling: ok\n");
     return failures == 0 ? 0 : 1;
 }

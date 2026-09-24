@@ -55,6 +55,7 @@
 #include "../src/source/pine_reissue_binding.hpp"
 #endif
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -112,13 +113,14 @@ struct Rng {
 
 double ticks(long count) { return static_cast<double>(count) * 0.25; }
 
-enum class Family { Reversals, Brackets, Chains };
+enum class Family { Reversals, Brackets, Chains, Revival };
 
 const char* family_name(Family family) {
     switch (family) {
     case Family::Reversals: return "reversals";
     case Family::Brackets: return "brackets";
     case Family::Chains: return "chains";
+    case Family::Revival: return "revival";
     }
     return "?";
 }
@@ -132,11 +134,17 @@ struct Config {
     bool process_on_close = false;
     bool calc_on_fills = false;
     int pyramiding = 1;
+    // Family::Revival (R5 lane V19-D, --margin-revival): 0 plays a seeded
+    // script, 1-4 a directed one on a fixed tape.
+    int variant = 0;
 };
 
 // Quarter-tick bars: a random walk with occasional gaps and, when the
 // configuration is leveraged, three slides of about a fifth of the price.
+std::vector<Bar> revival_tape(const Config& config);
+
 std::vector<Bar> make_tape(const Config& config) {
+    if (config.family == Family::Revival) return revival_tape(config);
     Rng rng(config.seed ^ 0x7A3F11C5D2E90B47ull);
     std::vector<Bar> bars;
     bars.reserve(static_cast<std::size_t>(config.bars));
@@ -166,6 +174,55 @@ std::vector<Bar> make_tape(const Config& config) {
     return bars;
 }
 
+// R5 lane V19-D: Family::Revival's tapes, daily bars at 0.01 ticks. The
+// directed variants play one fixed tape: the short fills at bar 2's open
+// (100.00), bar 3 gaps up (101.50) so the pair signalled at bar 2 is dropped
+// (all-in 99 x 101.50 > 9,880), bars 4-7 stay under every stop, and bar 8
+// rallies to 116.00, past the 112.50 at which the short's equity no longer
+// covers its margin. The seeded tapes walk in cents with gaps and rallies.
+std::vector<Bar> revival_tape(const Config& config) {
+    std::vector<Bar> bars;
+    const auto push = [&](double open, double high, double low, double close) {
+        Bar bar{};
+        bar.open = open;
+        bar.high = high;
+        bar.low = low;
+        bar.close = close;
+        bar.volume = 1.0;
+        bar.timestamp = T0 + static_cast<std::int64_t>(bars.size()) * 86400000;
+        bars.push_back(bar);
+    };
+    if (config.variant != 0) {
+        push(100.00, 100.20, 99.80, 100.00);
+        push(100.00, 100.20, 99.80, 100.00);
+        push(100.00, 100.50, 99.70, 100.50);
+        push(101.50, 103.00, 100.80, 102.00);
+        for (int index = 0; index < 4; ++index) push(102.00, 102.50, 101.50, 102.00);
+        push(102.00, 116.00, 101.80, 115.00);
+        push(115.00, 115.50, 114.50, 115.00);
+        push(115.00, 115.50, 114.50, 115.00);
+        return bars;
+    }
+    Rng rng(config.seed ^ 0x5EED0F0F1234ABCDull);
+    long cents = 10000;
+    for (int index = 0; index < config.bars; ++index) {
+        long open = cents;
+        if (rng.percent(10)) open += (rng.percent(60) ? 1 : -1) * rng.between(100, 300);
+        long drift = rng.between(-80, 80);
+        if (rng.percent(6)) drift = rng.between(600, 1400);
+        if (rng.percent(3)) drift = -rng.between(600, 1400);
+        long close = open + drift;
+        if (open < 3000) open = 3000;
+        if (close < 3000) close = 3000;
+        const long high = (open > close ? open : close) + rng.between(0, 60);
+        const long low = (open < close ? open : close) - rng.between(0, 60);
+        push(0.01 * static_cast<double>(open), 0.01 * static_cast<double>(high),
+             0.01 * static_cast<double>(low), 0.01 * static_cast<double>(close));
+        cents = close;
+    }
+    return bars;
+}
+
 struct Fold {
     std::uint64_t h = 1469598103934665603ull;
     void bytes(const void* data, std::size_t size) {
@@ -191,6 +248,19 @@ public:
     explicit ScriptHost(const Config& config) : config_(config), rng_(config.seed) {
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
+        if (config.family == Family::Revival) {
+            // tests/test_dropped_reversal_mc_first_l4c.cpp's broker: all-in
+            // default sizing, 1x margin both sides, margin calls on.
+            set_syminfo_mintick(0.01);
+            source::PineStrategyConfig pine;
+            pine.initial_capital = 10000.0;
+            pine.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            pine.default_qty_value = 100.0;
+            pine.pyramiding = 0;
+            configure_pine_strategy(pine);
+            set_margin_call_enabled(true);
+            return;
+        }
         set_syminfo_mintick(0.25);
         source::PineStrategyConfig pine;
         pine.initial_capital = config.margin ? 20000.0 : 1000000.0;
@@ -216,15 +286,47 @@ public:
     std::vector<std::uint64_t> spared;
     long close_bound = 0;
     long commands = 0;
+    // R5 lane V19-D (Family::Revival): margin calls seen, and per bar the
+    // exit legs the table holds -- (incarnation, placement bar, stop,
+    // dormant, restored by a margin revival) -- read after the callback.
+    struct Leg {
+        std::uint64_t incarnation = 0;
+        std::int32_t bar = 0;
+        double stop = 0.0;
+        bool dormant = false;
+        bool restored = false;
+        bool candidate = false;
+    };
+    long margin_calls = 0;
+    std::vector<long> margin_calls_by_bar;
+    std::vector<std::vector<Leg>> legs_by_bar;
 
     void on_source_bar(const Bar& bar) override {
         switch (config_.family) {
         case Family::Reversals: reversals(bar); break;
         case Family::Brackets: brackets(bar); break;
         case Family::Chains: chains(bar); break;
+        case Family::Revival: revival(bar); break;
         }
         transcript.push_back(observe());
         spared.push_back(last_spared_);
+        if (config_.family == Family::Revival) {
+            margin_calls_by_bar.push_back(margin_calls);
+            std::vector<Leg> legs;
+            for (const auto& row : adapter_.*access(PlacementTag{})) {
+                const auto& value = row.second;
+                if (value.family != source::PineOrderFamily::ExitStop) continue;
+                Leg leg;
+                leg.incarnation = row.first;
+                leg.bar = value.projection_created_bar;
+                leg.stop = value.exit_levels.stop;
+                leg.dormant = value.legs.dormant();
+                leg.restored = value.restored_after_margin;
+                leg.candidate = value.legs.target().incarnation != 0;
+                legs.push_back(leg);
+            }
+            legs_by_bar.push_back(std::move(legs));
+        }
     }
 
     // The run's final observable state: the last bar's readbacks, every
@@ -299,6 +401,7 @@ private:
             if (row.ordinal > event_cursor_) event_cursor_ = row.ordinal;
             if (!row.command) continue;
             fold_command(f, *row.command);
+            if (std::holds_alternative<native_order::MarginCallEvent>(*row.command)) ++margin_calls;
             if (std::holds_alternative<native_order::CloseBoundEvent>(*row.command)) {
                 ++close_bound;
             } else {
@@ -608,6 +711,81 @@ private:
         if (rng_.percent(3)) { ++commands; strategy_exit_cancel_bracket("rel", "CL"); }
     }
 
+    // R5 lane V19-D: a short whose stop exit a declined reversal pair holds
+    // dormant, a margin call on a later rally, and the exit cancelled and
+    // re-placed in between -- tests/test_dropped_reversal_mc_first_l4c.cpp's
+    // pair (an all-in long and strategy.close of the short, dropped at a gap
+    // open) and margin call, with the exit's history in front of the revival.
+    //   1 the exit placed with the entry (re-bound at the fill, no origin),
+    //     cancelled, re-placed on four later bars at other stops;
+    //   2 as 1, never re-placed: the revival restores the cancelled leg;
+    //   3 a quantity exit placed after the fill (bound to its origin, which
+    //     stays opened), cancelled, re-placed on four later bars at other
+    //     stops (each re-placement replacing the last);
+    //   4 as 3, never re-placed.
+    // 0 plays the same moves at seeded bars and levels, both sides.
+    void revival(const Bar& bar) {
+        const int i = pine_bar_index();
+        const double position = live_position_size();
+        if (config_.variant != 0) {
+            const bool quantity = config_.variant >= 3;
+            const bool again = config_.variant == 1 || config_.variant == 3;
+            const auto place = [&](double stop) {
+                ++commands;
+                if (quantity) strategy_exit("X", "S", kNa, stop, kNa, kNa, kNa, 100.0, {}, 80.0);
+                else strategy_exit("X", "S", kNa, stop);
+            };
+            if (i == 1) {
+                ++commands;
+                strategy_entry("S", false, kNa, kNa, 80.0);
+                if (!quantity) place(105.0);
+            }
+            if (i == 2) {
+                if (quantity) place(105.0);
+                commands += 2;
+                strategy_entry("L", true);
+                strategy_close("S", "Reverse to Long");
+            }
+            if (i == 4) { ++commands; strategy_cancel("X"); }
+            if (again && i >= 4 && i <= 7 && position < 0.0) place(125.0 + i);
+            return;
+        }
+        (void)bar;
+        const bool is_short = position < 0.0;
+        const char* id = is_short ? "S" : "L";
+        const double sign = is_short ? 1.0 : -1.0;
+        if (position == 0.0 && rng_.percent(40)) {
+            ++commands;
+            const bool sell = rng_.percent(70);
+            strategy_entry(sell ? "S" : "L", !sell, kNa, kNa,
+                           static_cast<double>(rng_.between(60, 90)));
+            if (rng_.percent(50)) {
+                ++commands;
+                const double stop = bar.close + (sell ? 1.0 : -1.0) * rng_.between(3, 9);
+                if (rng_.percent(50)) strategy_exit("X", sell ? "S" : "L", kNa, stop);
+                else strategy_exit("X", sell ? "S" : "L", kNa, stop, kNa, kNa, kNa, 100.0, {},
+                                   80.0);
+            }
+            return;
+        }
+        if (position == 0.0) return;
+        if (rng_.percent(12)) { ++commands; strategy_cancel("X"); }
+        if (rng_.percent(45)) {
+            ++commands;
+            // A few levels only, so a re-placement sometimes keeps the stop.
+            const double stop = bar.close + sign * static_cast<double>(4 + 2 * rng_.below(3));
+            if (rng_.percent(50)) strategy_exit("X", id, kNa, stop);
+            else strategy_exit("X", id, kNa, stop, kNa, kNa, kNa, 100.0, {}, 80.0);
+        }
+        if (rng_.percent(7)) {
+            commands += 2;
+            strategy_entry(is_short ? "L" : "S", is_short);
+            strategy_close(id, "Reverse");
+        }
+        if (rng_.percent(3)) { ++commands; strategy_exit_cancel_bracket("X", id); }
+        if (rng_.percent(2)) { ++commands; strategy_close_all(); }
+    }
+
     Config config_;
     Rng rng_;
     std::uint64_t event_cursor_ = 0;
@@ -626,6 +804,9 @@ struct Outcome {
     std::uint64_t placed = 0;
     std::uint64_t erased = 0;
     std::string error;
+    long margin_calls = 0;
+    std::vector<long> margin_calls_by_bar;
+    std::vector<std::vector<ScriptHost::Leg>> legs_by_bar;
 };
 
 Outcome run_script(const Config& config) {
@@ -654,6 +835,9 @@ Outcome run_script(const Config& config) {
     out.erased = source::detail::retired_rows_erased() - erased_before;
 #endif
     out.error = host.last_error();
+    out.margin_calls = host.margin_calls;
+    out.margin_calls_by_bar = host.margin_calls_by_bar;
+    out.legs_by_bar = host.legs_by_bar;
     return out;
 }
 
@@ -751,9 +935,163 @@ int reissue_binding_main() {
 }
 #endif
 
+#ifndef PINEFORGE_V19E_HARVEST
+// R5 lane V19-D witness: a margin revival reads the same legs whatever the
+// sweep erased (INT21's evidence gap for V19-E's K3 pin, and V19-D's K1
+// release).
+//
+// revive_brackets_after_margin restores the dormant exit legs of the current
+// position cycle unless a row of the cycle supersedes one (names it as its
+// predecessor, or re-places it at a later bar at another stop). K3 keeps the
+// first such re-placement of a candidate and lets the later ones go; K1 now
+// releases a candidate bound to no askable origin once one supersedes it.
+// Each Family::Revival run is played with the erasure on and with every row
+// retained: the transcripts (every command event, pending-order row, working
+// request, position, equity, trade, the equity curve and the admission
+// journal) must be equal. The directed variants hold what the revival saw:
+//   1 the reference revival skips the dormant leg for its re-placements; the
+//     erasing run released the leg itself (K1) and every re-placement but
+//     the live one before the margin call;
+//   2 and 4 nothing supersedes the leg: both runs restore it, and it closes
+//     the rest of the short at the margin-call price;
+//   3 the gap INT21 named: the erasing run holds the dormant leg (K1: its
+//     origin is opened) and its first re-placement (K3) while the second
+//     and third are erased, and the revival skips the leg as the reference
+//     does.
+// The seeded runs play the same moves on random tapes, both sides; across
+// them margin calls land, revivals restore legs, and dormant candidates the
+// reference still holds are gone from the erasing run.
+//
+// Fail-before, this mode against the lane's base 6c081f5d (spark aarch64,
+// GCC 13, Release; the TU's V19-D carry switch shimmed to a no-op): 2 of 115
+// checks fail, variant 1's leg_erased == nullptr and find(at_erased, 4,
+// 129.0) == nullptr -- V19-E's K1 held the superseded leg and K3 its first
+// re-placement. Every run matched its retaining twin there too: the K3 part
+// of the evidence holds on the base, as INT21 argued, and is now witnessed.
+int margin_revival_main() {
+    const auto find = [](const std::vector<ScriptHost::Leg>& legs, std::int32_t bar,
+                         double stop) -> const ScriptHost::Leg* {
+        for (const auto& leg : legs)
+            if (leg.bar == bar && leg.stop == stop) return &leg;
+        return nullptr;
+    };
+    const auto both = [](const Config& config, Outcome& erased, Outcome& kept) {
+        erased = run_script(config);
+        source::detail::set_retain_retired_rows(true);
+        kept = run_script(config);
+        source::detail::set_retain_retired_rows(false);
+        const bool same = erased.transcript == kept.transcript && erased.digest == kept.digest
+            && erased.error == kept.error && erased.trades == kept.trades;
+        if (!same) {
+            std::fprintf(stderr, "revival variant=%d seed=%llu: erasing run != retaining run\n",
+                         config.variant, static_cast<unsigned long long>(config.seed));
+        }
+        return same;
+    };
+    constexpr std::size_t kMarginBar = 8;
+    for (int variant = 1; variant <= 4; ++variant) {
+        Config config;
+        config.family = Family::Revival;
+        config.variant = variant;
+        Outcome erased;
+        Outcome kept;
+        CHECK(both(config, erased, kept));
+        CHECK(erased.error.empty());
+        // One margin call, on the rally bar.
+        CHECK(erased.margin_calls == 1);
+        CHECK(erased.margin_calls_by_bar.size() > kMarginBar);
+        if (erased.margin_calls_by_bar.size() <= kMarginBar) continue;
+        CHECK(erased.margin_calls_by_bar[kMarginBar - 1] == 0);
+        CHECK(erased.margin_calls_by_bar[kMarginBar] == 1);
+        const auto& at_erased = erased.legs_by_bar[kMarginBar];
+        const auto& at_kept = kept.legs_by_bar[kMarginBar];
+        // The leg the pair held dormant: placed on bar 2 at 105.
+        const ScriptHost::Leg* leg_kept = find(at_kept, 2, 105.0);
+        const ScriptHost::Leg* leg_erased = find(at_erased, 2, 105.0);
+        CHECK(leg_kept != nullptr);
+        if (!leg_kept) continue;
+        CHECK(leg_kept->candidate);
+        // Before the margin call both runs held it dormant.
+        const ScriptHost::Leg* before = find(kept.legs_by_bar[kMarginBar - 1], 2, 105.0);
+        CHECK(before && before->dormant);
+        if (variant == 1 || variant == 3) {
+            // Skipped: still dormant, never restored, and one trade (the
+            // margin call's).
+            CHECK(leg_kept->dormant && !leg_kept->restored);
+            CHECK(erased.trades == 1);
+            // The reference holds every re-placement.
+            for (int bar = 4; bar <= 7; ++bar) CHECK(find(at_kept, bar, 125.0 + bar) != nullptr);
+            // The erasing run: the second and third re-placements are gone,
+            // the live one is held.
+            CHECK(find(at_erased, 5, 130.0) == nullptr);
+            CHECK(find(at_erased, 6, 131.0) == nullptr);
+            CHECK(find(at_erased, 7, 132.0) != nullptr);
+        }
+        if (variant == 1) {
+            // K1 released the leg (no origin), and with it K3's pin.
+            CHECK(leg_erased == nullptr);
+            CHECK(find(at_erased, 4, 129.0) == nullptr);
+        }
+        if (variant == 3) {
+            // K1 keeps the leg (its origin is opened), K3 its first
+            // re-placement.
+            CHECK(leg_erased && leg_erased->dormant && !leg_erased->restored);
+            CHECK(find(at_erased, 4, 129.0) != nullptr);
+        }
+        if (variant == 2 || variant == 4) {
+            // Restored in both runs, and it closed the rest of the short.
+            CHECK(leg_kept->restored);
+            CHECK(leg_erased && leg_erased->restored);
+            CHECK(erased.trades == 2);
+        }
+    }
+    constexpr int kRevivalSeeds = 48;
+    long margin_calls = 0;
+    long restored = 0;
+    long released = 0;
+    long trades = 0;
+    for (int seed = 1; seed <= kRevivalSeeds; ++seed) {
+        Config config;
+        config.family = Family::Revival;
+        config.variant = 0;
+        config.seed = static_cast<std::uint64_t>(seed) * 7919u;
+        config.bars = 240;
+        Outcome erased;
+        Outcome kept;
+        CHECK(both(config, erased, kept));
+        margin_calls += kept.margin_calls;
+        trades += kept.trades;
+        std::vector<std::uint64_t> revived;
+        for (std::size_t bar = 0; bar < kept.legs_by_bar.size(); ++bar) {
+            for (const auto& leg : kept.legs_by_bar[bar]) {
+                if (leg.restored) revived.push_back(leg.incarnation);
+                if (!leg.candidate || !leg.dormant) continue;
+                const auto& held = erased.legs_by_bar[bar];
+                if (std::none_of(held.begin(), held.end(), [&](const ScriptHost::Leg& other) {
+                        return other.incarnation == leg.incarnation;
+                    })) {
+                    ++released;
+                }
+            }
+        }
+        std::sort(revived.begin(), revived.end());
+        restored += std::unique(revived.begin(), revived.end()) - revived.begin();
+    }
+    CHECK(margin_calls > kRevivalSeeds);
+    CHECK(restored > 0);
+    CHECK(released > 0);
+    std::printf("test_adapter_margin_revival_erasure: 4 directed runs, %d seeded (%ld trades, "
+                "%ld margin calls, %ld legs restored, %ld dormant-candidate bar-rows erased); "
+                "%d checks, %d failures\n",
+                kRevivalSeeds, trades, margin_calls, restored, released, checks, failures);
+    return failures == 0 ? 0 : 1;
+}
+#endif
+
 int main(int argc, char** argv) {
 #ifndef PINEFORGE_V19E_HARVEST
     if (argc > 1 && std::string(argv[1]) == "--reissue-binding") return reissue_binding_main();
+    if (argc > 1 && std::string(argv[1]) == "--margin-revival") return margin_revival_main();
 #else
     (void)argc;
     (void)argv;

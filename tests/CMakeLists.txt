@@ -2267,3 +2267,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_reissue_binding
              COMMAND test_adapter_live_state_equivalence --reissue-binding)
 endif()
+# R5 lane V19-D: a margin revival reads the same legs whatever the sweep
+# erased -- a short's exit held dormant by a dropped reversal pair,
+# cancelled and re-placed at other stops, then a margin call: the revival
+# skips it past an erased second re-placement (K3) or after K1 released it,
+# and restores it when nothing supersedes it, each run equal to its
+# every-row-retained twin; plus seeded runs of the same moves. Source-bound.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
+    add_test(NAME test_adapter_margin_revival_erasure
+             COMMAND test_adapter_live_state_equivalence --margin-revival)
+endif()
