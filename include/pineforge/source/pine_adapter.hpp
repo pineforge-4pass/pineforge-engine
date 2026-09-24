@@ -2141,13 +2141,23 @@ private:
         std::vector<std::uint64_t> candidate_names;
         std::vector<std::uint64_t> first_reissues;
         std::vector<std::uint64_t> doomed;
-        // R5 lane V19-D: the legs K1's cycle clause alone holds, the ones of
-        // them the revival's superseded test already answers for, and what
-        // that test reads (predecessor names, exit legs of the cycle).
-        std::vector<std::uint64_t> held;
+        // R5 lane V19-D: the legs K1's cycle clause alone holds (incarnation,
+        // row, the high water the superseded test has read them through,
+        // whether it answers for them), and those it answers for (sorted).
+        struct HeldLeg {
+            std::uint64_t incarnation = 0;
+            const PlacementSnapshot* row = nullptr;
+            std::uint64_t read_through = 0;
+            bool released = false;
+        };
+        std::vector<HeldLeg> held;
         std::vector<std::uint64_t> released;
-        std::vector<std::uint64_t> predecessor_names;
-        std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> cycle_exits;
+        // A memo that survives sweeps (clear() keeps it; a run begin empties
+        // it): per leg held at the last test, the table's high water it was
+        // found unsuperseded through. It answers what reading every row would:
+        // the fields the test reads never change once a row is placed, and a
+        // row that could supersede the leg is newer than every row it covers.
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> unsuperseded;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();
@@ -2159,8 +2169,6 @@ private:
             doomed.clear();
             held.clear();
             released.clear();
-            predecessor_names.clear();
-            cycle_exits.clear();
         }
     };
     RetiredRowScratch retired_row_scratch_;

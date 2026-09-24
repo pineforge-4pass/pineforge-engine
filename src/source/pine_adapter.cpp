@@ -2001,6 +2001,8 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 
 void PineExecutionAdapter::reset_for_run() {
     pine_view_host_ = nullptr;
+    // Incarnations start over with the run.
+    retired_row_scratch_.unsuperseded.clear();
     if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
         index->clear();
     admission_journal.reset();
@@ -2827,91 +2829,77 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     bool unpinned = false;
     for (const auto& row : placement_) {
         if (contains(askable_origins, row.first)) continue;
-        if (held_by_cycle(row.second)) held.push_back(row.first);
-        else if (!unpinned && !pinned_by_itself(row.second)) unpinned = true;
-    }
-    // Which of those the revival's superseded test answers for (the test as
-    // revive_brackets_after_margin runs it, over the rows retained now).
-    auto& released = sweep.released;
-    if (!held.empty()) {
-        auto& names = sweep.predecessor_names;
-        auto& exits = sweep.cycle_exits;
-        for (const auto& row : placement_) {
-            const auto& value = row.second;
-            if (value.placement_cycle != cycle) continue;
-            if (value.projection_predecessor != 0) names.push_back(value.projection_predecessor);
-            if (exit_family(value.family) && !value.from_entry.empty())
-                exits.emplace_back(row.first, &value);
+        if (held_by_cycle(row.second)) {
+            held.push_back({row.first, &row.second});
+        } else if (!pinned_by_itself(row.second)) {
+            unpinned = true;
+            break;
         }
-        std::sort(names.begin(), names.end());
-        const auto bits = [](double value) {
+    }
+    // Which of the held legs the revival's superseded test answers for: the
+    // test as revive_brackets_after_margin runs it, over the rows retained
+    // now. A row that names a leg (or its target) as its predecessor is newer
+    // than what it names, and a re-placement newer than the leg it
+    // re-places, so for each leg only the rows above its oldest name are
+    // read -- or above the high water the memo says it was read through.
+    auto& released = sweep.released;
+    auto& memo = sweep.unsuperseded;
+    const auto release_superseded = [&] {
+        if (held.empty()) return;
+        const std::uint64_t top = placement_.high_water();
+        std::uint64_t scan_from = std::numeric_limits<std::uint64_t>::max();
+        std::size_t cursor = 0;
+        for (auto& leg : held) {
+            while (cursor < memo.size() && memo[cursor].first < leg.incarnation) ++cursor;
+            if (cursor < memo.size() && memo[cursor].first == leg.incarnation) {
+                leg.read_through = memo[cursor].second;
+            } else {
+                const std::uint64_t target = leg.row->legs.target().incarnation;
+                leg.read_through = std::min(leg.incarnation, target) - 1;
+            }
+            scan_from = std::min(scan_from, leg.read_through);
+        }
+        // Every leg was read through the high water, and no row has been
+        // placed since: nothing new to read, and the memo stands.
+        if (scan_from >= top) return;
+        const auto stop_bits = [](double value) {
             std::uint64_t out = 0;
             std::memcpy(&out, &value, sizeof(out));
             return out;
         };
-        // By leg family, id and from_entry; each group newest first.
-        std::sort(exits.begin(), exits.end(), [](const auto& a, const auto& b) {
-            const PlacementSnapshot& x = *a.second;
-            const PlacementSnapshot& y = *b.second;
-            if (x.family != y.family)
-                return static_cast<int>(x.family) < static_cast<int>(y.family);
-            if (const int order = x.source_id.compare(y.source_id)) return order < 0;
-            if (const int order = x.from_entry.compare(y.from_entry)) return order < 0;
-            return a.first > b.first;
-        });
-        const auto same_group = [](const PlacementSnapshot& x, const PlacementSnapshot& y) {
-            return x.family == y.family && x.source_id == y.source_id
-                && x.from_entry == y.from_entry;
-        };
-        for (std::size_t begin = 0; begin < exits.size();) {
-            std::size_t end = begin + 1;
-            while (end < exits.size() && same_group(*exits[begin].second, *exits[end].second))
-                ++end;
-            // Over the group's rows newer than the one at hand: the latest
-            // script bar and the stop placed on it, and the latest bar among
-            // the rows at any other stop. A re-issue is newer, placed on a
-            // later bar, at another stop.
-            bool seen = false;
-            bool other = false;
-            std::int64_t top_open = 0;
-            std::int64_t other_open = 0;
-            std::uint64_t top_stop = 0;
-            for (std::size_t index = begin; index < end; ++index) {
-                const PlacementSnapshot& value = *exits[index].second;
-                const std::uint64_t stop = bits(value.exit_levels.stop);
-                const std::int64_t open = value.placement_script_open_ms;
-                const std::uint64_t incarnation = exits[index].first;
-                if (seen && contains(held, incarnation)) {
-                    const bool reissued = stop != top_stop ? top_open > open
-                                                           : other && other_open > open;
-                    const std::uint64_t target = value.legs.target().incarnation;
-                    if (reissued || contains(names, incarnation) || contains(names, target))
-                        released.push_back(incarnation);
-                } else if (contains(held, incarnation)
-                           && (contains(names, incarnation)
-                               || contains(names, value.legs.target().incarnation))) {
-                    released.push_back(incarnation);
-                }
-                if (!seen) {
-                    seen = true;
-                    top_open = open;
-                    top_stop = stop;
-                } else if (stop == top_stop) {
-                    if (open > top_open) top_open = open;
-                } else if (open > top_open) {
-                    other = true;
-                    other_open = top_open;
-                    top_open = open;
-                    top_stop = stop;
-                } else if (!other || open > other_open) {
-                    other = true;
-                    other_open = open;
+        const PlacementTable& rows = placement_;
+        for (auto it = rows.upper_bound(scan_from); it != rows.end(); ++it) {
+            const PlacementSnapshot& peer = it->second;
+            if (peer.placement_cycle != cycle) continue;
+            const bool reissue = exit_family(peer.family);
+            const std::uint64_t named = peer.projection_predecessor;
+            if (named == 0 && !reissue) continue;
+            for (auto& leg : held) {
+                if (leg.released || it->first <= leg.read_through) continue;
+                const PlacementSnapshot& own = *leg.row;
+                if (named != 0
+                    && (named == leg.incarnation || named == own.legs.target().incarnation)) {
+                    leg.released = true;
+                } else if (reissue && it->first > leg.incarnation && peer.family == own.family
+                           && peer.placement_script_open_ms > own.placement_script_open_ms
+                           && stop_bits(peer.exit_levels.stop) != stop_bits(own.exit_levels.stop)
+                           && peer.source_id == own.source_id
+                           && peer.from_entry == own.from_entry) {
+                    leg.released = true;
                 }
             }
-            begin = end;
         }
-        std::sort(released.begin(), released.end());
-    }
+        std::size_t kept = 0;
+        for (const auto& leg : held) kept += leg.released ? 0 : 1;
+        memo.resize(kept);
+        kept = 0;
+        for (const auto& leg : held) {
+            if (leg.released) released.push_back(leg.incarnation);
+            else memo[kept++] = {leg.incarnation, top};
+        }
+    };
+    // With every row walked, the held legs are all known.
+    if (!unpinned) release_superseded();
     // Most bars erase nothing: every retired row is held by a pin of its own
     // (a leg of the current position cycle, this bar's entries). Those bars
     // stop here, before the roots are gathered; the market-add marks, pruned
@@ -3061,17 +3049,25 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     std::sort(source_bars.begin(), source_bars.end());
     auto& candidates = sweep.candidates;
     auto& candidate_names = sweep.candidate_names;
+    // The pre-pass stopped at the first row nothing pins: the held legs are
+    // gathered here, beside the candidates they are part of.
+    if (unpinned) held.clear();
     for (const auto& row : placement_) {
         const auto& value = row.second;
         if (value.legs.target().incarnation == 0 || value.placement_cycle != cycle
             || !exit_family(value.family) || value.from_entry.empty()) {
             continue;
         }
+        if (unpinned && !contains(askable_origins, row.first)
+            && !contains(askable_origins, value.bracket_origin.incarnation)) {
+            held.push_back({row.first, &value});
+        }
         candidates.emplace_back(row.first, &value);
         candidate_names.push_back(row.first);
         candidate_names.push_back(value.legs.target().incarnation);
     }
     std::sort(candidate_names.begin(), candidate_names.end());
+    if (unpinned) release_superseded();
     // K3: each candidate's first re-issue -- the lowest incarnation among the
     // current-cycle rows the revival's superseded test would accept for it.
     auto& first_reissues = sweep.first_reissues;
@@ -3104,7 +3100,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         const auto& value = row.second;
         if (contains(roots, incarnation)) continue;
         // K1 (but for the legs it releases), K4, K5
-        if (pinned_by_itself(value) && !contains(released, incarnation)) continue;
+        if (pinned_by_itself(value) && (released.empty() || !contains(released, incarnation)))
+            continue;
         if (value.placement_cycle == cycle) {
             // K2
             if (value.projection_predecessor != 0
