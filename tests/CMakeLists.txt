@@ -1102,6 +1102,13 @@ list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 # flatten and current executions, under Window and Full). Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_direct_mutation)
+# R5 lane L3: on warm bare books a command allocates its definition and
+# nothing else, and the kernel's own work -- fills, their dependency drains,
+# the matcher's mutations, the journal's retirement -- nothing but the
+# calendar's session-day spans; a Full read of the whole record allocates its
+# one result vector (fails on 10f20197, several per fill). Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
