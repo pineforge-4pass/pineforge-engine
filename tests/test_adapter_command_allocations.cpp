@@ -286,6 +286,11 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::TrailReissue/false/true: rows_digest 0x88cc0cc66ad1062eull -> 0x56954a0db7786b71ull, final_hash 12308026923819682198ull -> 5779925080749936105ull
 //   Script::TrailReissue/true/false: rows_digest 0x44d64237cf2066ecull -> 0x09315718e551137full, final_hash 2164334703724393590ull -> 269689715775399305ull
 //   Script::TrailReissue/true/true: rows_digest 0x5397e85d70d98a2aull -> 0x5ef417ff409d6fadull, final_hash 1382406362180372336ull -> 3401687048604417982ull
+// expectation corrected (v19-D, 8 values), because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move; harvested with the TU's own switch on this tree (r5/v19-d):
+//   Script::EntryReissue/false/false: rows_digest 0xf3e42100cdc76867ull -> 0x4530d69ae4e1a298ull, final_hash 18427522613823696029ull -> 17005496595750190628ull
+//   Script::EntryReissue/false/true: rows_digest 0x1781a3542d87a7c9ull -> 0xf4677e5c1916337full, final_hash 5868802478351644387ull -> 9541687758077282854ull
+//   Script::EntryReissue/true/false: rows_digest 0x592d4b5617d2b6fcull -> 0x379d985d7c93b652ull, final_hash 11220719029914513450ull -> 7904694474988279479ull
+//   Script::EntryReissue/true/true: rows_digest 0x4afd65bc6d977d03ull -> 0x2fd97b436aac3c5dull, final_hash 12913321619721074841ull -> 8582209322861755784ull
 const Pin kPins[] = {
     {Script::ExitReissue, false, false, 0x378e8175f07c1d5dull, 60ull, 5455427604675993531ull, 0x584fc4b9ebbba609ull, 4},
     {Script::ExitReissue, false, true, 0x9d581c7efdf21626ull, 60ull, 5124001802418948517ull, 0x584fc4b9ebbba609ull, 4},
@@ -295,10 +300,10 @@ const Pin kPins[] = {
     {Script::FarReissue, false, true, 0x0bb13210fd7346c1ull, 60ull, 10717416948830322455ull, 0x7aac154ea6a8629aull, 4},
     {Script::FarReissue, true, false, 0xfa15c45dc0196e57ull, 60ull, 14180767476349608391ull, 0xfdb435b76f2571b6ull, 4},
     {Script::FarReissue, true, true, 0xdd4e85623e945fdaull, 60ull, 12801755778883560301ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::EntryReissue, false, false, 0xf3e42100cdc76867ull, 60ull, 18427522613823696029ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, false, true, 0x1781a3542d87a7c9ull, 60ull, 5868802478351644387ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::EntryReissue, true, false, 0x592d4b5617d2b6fcull, 60ull, 11220719029914513450ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, true, true, 0x4afd65bc6d977d03ull, 60ull, 12913321619721074841ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::EntryReissue, false, false, 0x4530d69ae4e1a298ull, 60ull, 17005496595750190628ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, false, true, 0xf4677e5c1916337full, 60ull, 9541687758077282854ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::EntryReissue, true, false, 0x379d985d7c93b652ull, 60ull, 7904694474988279479ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, true, true, 0x2fd97b436aac3c5dull, 60ull, 8582209322861755784ull, 0xdc986aa5f5cc536aull, 29},
     {Script::TrailReissue, false, false, 0x08a2398c615ddd5bull, 60ull, 8598862747086083069ull, 0xd64b560956c46b33ull, 3},
     {Script::TrailReissue, false, true, 0x56954a0db7786b71ull, 60ull, 5779925080749936105ull, 0x5241bc8c55a4a4a3ull, 3},
     {Script::TrailReissue, true, false, 0x09315718e551137full, 60ull, 269689715775399305ull, 0xcdcafa54f49f508aull, 3},

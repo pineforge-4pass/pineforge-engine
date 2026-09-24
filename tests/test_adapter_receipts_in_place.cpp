@@ -394,10 +394,15 @@ void emit(Scenario scenario, bool magnifier, const Observed& got) {
 //   12574080240533717359ull -> 901832621209212828ull
 //   6097535005695266030ull -> 13528996515355458594ull
 //   1945621519056434088ull -> 9684931586165891051ull
+// expectation corrected (v19-D, kDeclined_rows, 4 of 10 values), because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d):
+//   8953460019459984272ull -> 5719519402935312619ull
+//   901832621209212828ull -> 15813806343021779355ull
+//   13528996515355458594ull -> 3478712054363587307ull
+//   9684931586165891051ull -> 8064893742935713930ull
 constexpr std::uint64_t kDeclined_rows[] = {
     10471252865781374815ull, 7671906297724115341ull, 2234871632290885580ull, 11660583350044382565ull,
-    10795645000653949847ull, 3876877678934974053ull, 8953460019459984272ull, 901832621209212828ull,
-    13528996515355458594ull, 9684931586165891051ull,
+    10795645000653949847ull, 3876877678934974053ull, 5719519402935312619ull, 15813806343021779355ull,
+    3478712054363587307ull, 8064893742935713930ull,
 };
 constexpr std::uint64_t kDeclined_at_bar[] = {
     4ull, 0ull, 12ull, 9ull,
@@ -421,7 +426,8 @@ constexpr std::uint64_t kDeclined_folded[] = {
 };
 // expectation corrected: kDeclined_final 1667123404342696863ull -> 1945621519056434088ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kDeclined_final 1945621519056434088ull -> 9684931586165891051ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
-constexpr std::uint64_t kDeclined_final = 9684931586165891051ull;
+// expectation corrected (v19-D): kDeclined_final 9684931586165891051ull -> 8064893742935713930ull, because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d).
+constexpr std::uint64_t kDeclined_final = 8064893742935713930ull;
 constexpr Trade kDeclined_trades[] = {
     {1736121660000LL, 1736121960000LL, 100, 95, 100, 0},
 };
@@ -448,10 +454,15 @@ constexpr Trade kDeclined_trades[] = {
 //   12199814834755962046ull -> 13176393922301188696ull
 //   14521223441703630547ull -> 5693363764903822630ull
 //   6442860896266831741ull -> 13182614947071830947ull
+// expectation corrected (v19-D, kDeclinedMag_rows, 4 of 10 values), because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d):
+//   17301692639624276039ull -> 12629404118906576790ull
+//   13176393922301188696ull -> 11561237993722196187ull
+//   5693363764903822630ull -> 8752407783783115299ull
+//   13182614947071830947ull -> 13196624524101047406ull
 constexpr std::uint64_t kDeclinedMag_rows[] = {
     2386459447381651821ull, 6021168500418484266ull, 16446546055123594696ull, 9282458332898651101ull,
-    15456921776568509967ull, 9589349023649693661ull, 17301692639624276039ull, 13176393922301188696ull,
-    5693363764903822630ull, 13182614947071830947ull,
+    15456921776568509967ull, 9589349023649693661ull, 12629404118906576790ull, 11561237993722196187ull,
+    8752407783783115299ull, 13196624524101047406ull,
 };
 constexpr std::uint64_t kDeclinedMag_at_bar[] = {
     4ull, 0ull, 12ull, 0ull,
@@ -475,7 +486,8 @@ constexpr std::uint64_t kDeclinedMag_folded[] = {
 };
 // expectation corrected: kDeclinedMag_final 16277588925252464314ull -> 6442860896266831741ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kDeclinedMag_final 6442860896266831741ull -> 13182614947071830947ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
-constexpr std::uint64_t kDeclinedMag_final = 13182614947071830947ull;
+// expectation corrected (v19-D): kDeclinedMag_final 13182614947071830947ull -> 13196624524101047406ull, because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d).
+constexpr std::uint64_t kDeclinedMag_final = 13196624524101047406ull;
 constexpr Trade kDeclinedMag_trades[] = {
     {1736121660000LL, 1736121960000LL, 100, 95, 100, 0},
 };
@@ -737,17 +749,46 @@ constexpr Trade kCascadeMag_trades[] = {
 //   16414089404670494488ull -> 9088484067275656470ull
 //   2984278679623361172ull -> 11937924564662907819ull
 //   15408496303561531855ull -> 7215366721055711217ull
+// expectation corrected (v19-D, kBrackets_rows, 28 of 40 values), because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d):
+//   16302107181139381722ull -> 13567975051191501448ull
+//   11073935078124632822ull -> 7176477766377336287ull
+//   6509820274401670617ull -> 14704665947556605284ull
+//   12808134870016028653ull -> 2349824741170149922ull
+//   12922818780252687683ull -> 4447048162144867767ull
+//   5540434211183952058ull -> 4383713959049933942ull
+//   17372884883543544148ull -> 963865382596244388ull
+//   4458440122004238600ull -> 8291728019901913574ull
+//   4906307060214704524ull -> 11549289641401549142ull
+//   539100643123332448ull -> 6197162411608442270ull
+//   17897281496465220788ull -> 13970368985631889286ull
+//   6899239783095585150ull -> 2244340637825718596ull
+//   120086616464741494ull -> 4014491293609474968ull
+//   2311613447022880607ull -> 17710204879557390911ull
+//   16955448480744754862ull -> 4325432014176081106ull
+//   1159311057332895795ull -> 5076958827136290263ull
+//   3742824900740526962ull -> 16041380806474883206ull
+//   17966647797995324035ull -> 7151463586388941655ull
+//   5514998760284978445ull -> 12003189017867500329ull
+//   6213880116988350109ull -> 13568581922318463703ull
+//   7311426441934803793ull -> 17538111680233578939ull
+//   4767957879114898923ull -> 1502260751703873765ull
+//   17766099843733535304ull -> 501321500839750044ull
+//   7744375361093502469ull -> 10369076632468418401ull
+//   1502110319718444822ull -> 6084936684912175710ull
+//   9088484067275656470ull -> 6753420119756311418ull
+//   11937924564662907819ull -> 1593360149240348528ull
+//   7215366721055711217ull -> 13709538166202381782ull
 constexpr std::uint64_t kBrackets_rows[] = {
     4931640785442886345ull, 17478909815634119236ull, 15352487419733065212ull, 12654730253382767814ull,
-    189181168054283670ull, 12777030162683706874ull, 4366298018774171687ull, 16302107181139381722ull,
+    189181168054283670ull, 12777030162683706874ull, 4366298018774171687ull, 13567975051191501448ull,
     2490861395787358522ull, 6163669939419568773ull, 14839279797350066889ull, 11327888575643522147ull,
-    13772309817367178166ull, 11073935078124632822ull, 6509820274401670617ull, 12808134870016028653ull,
-    12922818780252687683ull, 5540434211183952058ull, 17372884883543544148ull, 4458440122004238600ull,
-    4906307060214704524ull, 539100643123332448ull, 17897281496465220788ull, 6899239783095585150ull,
-    120086616464741494ull, 2311613447022880607ull, 16955448480744754862ull, 1159311057332895795ull,
-    3742824900740526962ull, 17966647797995324035ull, 5514998760284978445ull, 6213880116988350109ull,
-    7311426441934803793ull, 4767957879114898923ull, 17766099843733535304ull, 7744375361093502469ull,
-    1502110319718444822ull, 9088484067275656470ull, 11937924564662907819ull, 7215366721055711217ull,
+    13772309817367178166ull, 7176477766377336287ull, 14704665947556605284ull, 2349824741170149922ull,
+    4447048162144867767ull, 4383713959049933942ull, 963865382596244388ull, 8291728019901913574ull,
+    11549289641401549142ull, 6197162411608442270ull, 13970368985631889286ull, 2244340637825718596ull,
+    4014491293609474968ull, 17710204879557390911ull, 4325432014176081106ull, 5076958827136290263ull,
+    16041380806474883206ull, 7151463586388941655ull, 12003189017867500329ull, 13568581922318463703ull,
+    17538111680233578939ull, 1502260751703873765ull, 501321500839750044ull, 10369076632468418401ull,
+    6084936684912175710ull, 6753420119756311418ull, 1593360149240348528ull, 13709538166202381782ull,
 };
 constexpr std::uint64_t kBrackets_at_bar[] = {
     4ull, 0ull, 25ull, 20ull,
@@ -816,7 +857,8 @@ constexpr std::uint64_t kBrackets_folded[] = {
 };
 // expectation corrected: kBrackets_final 12275462523833622145ull -> 15408496303561531855ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kBrackets_final 15408496303561531855ull -> 7215366721055711217ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
-constexpr std::uint64_t kBrackets_final = 7215366721055711217ull;
+// expectation corrected (v19-D): kBrackets_final 7215366721055711217ull -> 13709538166202381782ull, because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d).
+constexpr std::uint64_t kBrackets_final = 13709538166202381782ull;
 constexpr Trade kBrackets_trades[] = {
     {1736121660000LL, 1736121660000LL, 100.75, 101, 2, 0},
     {1736122020000LL, 1736122260000LL, 100.75, 102, 2, 0},
@@ -907,17 +949,46 @@ constexpr Trade kBrackets_trades[] = {
 //   11230894092276043958ull -> 13669172117143703422ull
 //   15687066908260860816ull -> 5803040722061771621ull
 //   16366316158039625809ull -> 10498718013143678943ull
+// expectation corrected (v19-D, kBracketsMag_rows, 28 of 40 values), because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d):
+//   6633703321685341395ull -> 11361883085123599477ull
+//   8058999920878049372ull -> 12091950803929664533ull
+//   14585381469692231775ull -> 13563671046532211882ull
+//   1138810438475977261ull -> 12001241435211789402ull
+//   260823923338859754ull -> 16774375451174745758ull
+//   688478973399870179ull -> 4224856795496726447ull
+//   650200918600910455ull -> 16977193853773916951ull
+//   12588212143642844613ull -> 12075224046164885783ull
+//   4094759726207491032ull -> 13164217118227363754ull
+//   13503618892702370984ull -> 12622146661531112630ull
+//   17750941632463851516ull -> 7736835571275902542ull
+//   15151194576654354422ull -> 14635256632315754316ull
+//   6825948494367863103ull -> 4064924431338044193ull
+//   17303881736078502733ull -> 3581813565948608081ull
+//   18179306564848873449ull -> 6489641499513072013ull
+//   771952960889069628ull -> 8318149665198121584ull
+//   16658405033057303029ull -> 4314907606986288281ull
+//   14621560559856470332ull -> 124222954004018752ull
+//   5398287334306475188ull -> 12885886306814112472ull
+//   4872986020265265668ull -> 10568636995920463418ull
+//   9997838899172977900ull -> 13435524033915440050ull
+//   6944843506869705438ull -> 15055255835012471428ull
+//   3332727370045095070ull -> 10282307508665938714ull
+//   5092799111316890531ull -> 2500841977660255815ull
+//   4451780574198029219ull -> 3687457776980188995ull
+//   13669172117143703422ull -> 17217996485244538122ull
+//   5803040722061771621ull -> 16847584222090599594ull
+//   10498718013143678943ull -> 17233175003301036440ull
 constexpr std::uint64_t kBracketsMag_rows[] = {
     357160593917001728ull, 1367088814885629166ull, 287323235851632294ull, 16045756699822731600ull,
-    13135689560889444372ull, 11854950712426707972ull, 7925187025432663817ull, 6633703321685341395ull,
+    13135689560889444372ull, 11854950712426707972ull, 7925187025432663817ull, 11361883085123599477ull,
     4104072211950622040ull, 7434875672168557443ull, 5786698095493413500ull, 16482929592882674954ull,
-    5269590940989060304ull, 8058999920878049372ull, 14585381469692231775ull, 1138810438475977261ull,
-    260823923338859754ull, 688478973399870179ull, 650200918600910455ull, 12588212143642844613ull,
-    4094759726207491032ull, 13503618892702370984ull, 17750941632463851516ull, 15151194576654354422ull,
-    6825948494367863103ull, 17303881736078502733ull, 18179306564848873449ull, 771952960889069628ull,
-    16658405033057303029ull, 14621560559856470332ull, 5398287334306475188ull, 4872986020265265668ull,
-    9997838899172977900ull, 6944843506869705438ull, 3332727370045095070ull, 5092799111316890531ull,
-    4451780574198029219ull, 13669172117143703422ull, 5803040722061771621ull, 10498718013143678943ull,
+    5269590940989060304ull, 12091950803929664533ull, 13563671046532211882ull, 12001241435211789402ull,
+    16774375451174745758ull, 4224856795496726447ull, 16977193853773916951ull, 12075224046164885783ull,
+    13164217118227363754ull, 12622146661531112630ull, 7736835571275902542ull, 14635256632315754316ull,
+    4064924431338044193ull, 3581813565948608081ull, 6489641499513072013ull, 8318149665198121584ull,
+    4314907606986288281ull, 124222954004018752ull, 12885886306814112472ull, 10568636995920463418ull,
+    13435524033915440050ull, 15055255835012471428ull, 10282307508665938714ull, 2500841977660255815ull,
+    3687457776980188995ull, 17217996485244538122ull, 16847584222090599594ull, 17233175003301036440ull,
 };
 constexpr std::uint64_t kBracketsMag_at_bar[] = {
     4ull, 0ull, 25ull, 0ull,
@@ -986,7 +1057,8 @@ constexpr std::uint64_t kBracketsMag_folded[] = {
 };
 // expectation corrected: kBracketsMag_final 4480275903615486608ull -> 16366316158039625809ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); receipt cursors and trades did not move.
 // expectation corrected (v19-E): kBracketsMag_final 16366316158039625809ull -> 10498718013143678943ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the receipt bars, folded counts and trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
-constexpr std::uint64_t kBracketsMag_final = 10498718013143678943ull;
+// expectation corrected (v19-D): kBracketsMag_final 10498718013143678943ull -> 17233175003301036440ull, because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the receipt bars, folded counts and trades did not move; harvested with the TU's own switch on this tree (r5/v19-d).
+constexpr std::uint64_t kBracketsMag_final = 17233175003301036440ull;
 constexpr Trade kBracketsMag_trades[] = {
     {1736121660000LL, 1736121660000LL, 100.75, 101.25, 2, 0},
     {1736122020000LL, 1736122260000LL, 100.75, 102, 2, 0},
