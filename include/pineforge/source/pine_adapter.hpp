@@ -538,10 +538,10 @@ public:
             node = std::make_unique<PlacementSnapshot>(std::forward<Args>(args)...);
         } else {
             // An erased row's node, reused: no allocation per placement in a
-            // run that retires as fast as it places.
-            *spare_.back() = PlacementSnapshot(std::forward<Args>(args)...);
+            // run that retires as fast as it places. Every field is assigned.
             node = std::move(spare_.back());
             spare_.pop_back();
+            overwrite(*node, std::forward<Args>(args)...);
         }
         PlacementSnapshot* row = node.get();
         // Named for the per-id index before it is placed, so a failed
@@ -579,10 +579,7 @@ public:
 #if PINEFORGE_PLACEMENT_AUDIT
         detail::placement_audit_erase(this, incarnation, std::move(*node));
 #else
-        if (spare_.size() < kSpareNodes) {
-            *node = PlacementSnapshot{};
-            spare_.push_back(std::move(node));
-        }
+        if (spare_.size() < kSpareNodes) spare_.push_back(std::move(node));
 #endif
         return true;
     }
@@ -628,6 +625,17 @@ private:
         std::unordered_map<std::string, std::uint64_t> by_from_entry;
     };
     using Minima = std::unordered_map<std::string, SequenceMinima>;
+
+    // A reused node takes its new row in one assignment.
+    static void overwrite(PlacementSnapshot& node, PlacementSnapshot&& row) {
+        node = std::move(row);
+    }
+    static void overwrite(PlacementSnapshot& node, PlacementSnapshot& row) { node = row; }
+    static void overwrite(PlacementSnapshot& node, const PlacementSnapshot& row) { node = row; }
+    template<class... Args>
+    static void overwrite(PlacementSnapshot& node, Args&&... args) {
+        node = PlacementSnapshot(std::forward<Args>(args)...);
+    }
 
     static void fold_sequence(Minima& index, const PlacementSnapshot& row) {
         auto& minima = index[row.source_id];
@@ -690,8 +698,9 @@ private:
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
     std::vector<SourceId> erased_foreign_ids_;
-    // Erased rows' nodes, emptied, for the next rows (not state: a node
-    // holds a default snapshot until it is placed again).
+    // Erased rows' nodes, for the next rows. Not state: a spare node still
+    // holds the row it was erased with, which nothing reads, until the next
+    // placement overwrites it.
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
@@ -1940,6 +1949,29 @@ private:
     // folds retained_.bar_magnifier; this copy is the host-kind-free query
     // for qualify_short_seed_plan.
     bool bar_magnifier_ = false;
+    // R5 lane V19-E: erase_retired_rows()'s working sets, kept so that a bar
+    // that erases nothing allocates nothing once they have grown (a quiet bar
+    // must not allocate: tests/test_adapter_quiet_bar.cpp). Not state: every
+    // sweep empties them first, and nothing survives a sweep in them.
+    struct RetiredRowScratch {
+        std::vector<std::uint64_t> roots;
+        std::vector<std::uint64_t> askable_origins;
+        std::vector<std::uint64_t> live_groups;
+        std::vector<std::int32_t> source_bars;
+        std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
+        std::vector<std::uint64_t> candidate_names;
+        std::vector<std::uint64_t> doomed;
+        void clear() noexcept {
+            roots.clear();
+            askable_origins.clear();
+            live_groups.clear();
+            source_bars.clear();
+            candidates.clear();
+            candidate_names.clear();
+            doomed.clear();
+        }
+    };
+    RetiredRowScratch retired_row_scratch_;
 };
 
 } // namespace pineforge::source

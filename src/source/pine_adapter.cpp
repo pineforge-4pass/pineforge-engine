@@ -13,6 +13,7 @@
 #include "pine_quiet_bar.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -2582,12 +2583,16 @@ void PineExecutionAdapter::retire(native_order::RequestHandle handle) noexcept {
 
 namespace detail {
 namespace {
-thread_local bool retain_rows = false;
-thread_local std::uint64_t rows_erased = 0;
+// Process-wide, not thread_local: a strategy module is dlopen'd, and every
+// thread_local it reads per bar is a dynamic TLS lookup.
+std::atomic<bool> retain_rows{false};
+std::atomic<std::uint64_t> rows_erased{0};
 } // namespace
-void set_retain_retired_rows(bool retain) noexcept { retain_rows = retain; }
-bool retain_retired_rows() noexcept { return retain_rows; }
-std::uint64_t retired_rows_erased() noexcept { return rows_erased; }
+void set_retain_retired_rows(bool retain) noexcept {
+    retain_rows.store(retain, std::memory_order_relaxed);
+}
+bool retain_retired_rows() noexcept { return retain_rows.load(std::memory_order_relaxed); }
+std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
 // Whether a row's leg lifecycle can still be read: the margin revival picks
@@ -2659,34 +2664,6 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // K1 leaves a leg of an ended cycle bound to an origin that can never open
 // again: the revival never picks an ended cycle, and origin_leg_consumed only
 // asks about opened origins, so its lifecycle is read by nobody.
-namespace {
-// The sweep's working sets, kept per thread so a bar that erases nothing
-// allocates nothing once they have grown (a quiet bar must not allocate:
-// tests/test_adapter_quiet_bar.cpp). Nothing survives a sweep in them.
-struct RetiredRowSweep {
-    std::vector<std::uint64_t> roots;
-    std::vector<std::uint64_t> askable_origins;
-    std::vector<std::uint64_t> live_groups;
-    std::vector<std::int32_t> source_bars;
-    std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
-    std::vector<std::uint64_t> candidate_names;
-    std::vector<std::uint64_t> doomed;
-    void clear() noexcept {
-        roots.clear();
-        askable_origins.clear();
-        live_groups.clear();
-        source_bars.clear();
-        candidates.clear();
-        candidate_names.clear();
-        doomed.clear();
-    }
-};
-RetiredRowSweep& retired_row_sweep() {
-    static thread_local RetiredRowSweep sweep;
-    return sweep;
-}
-} // namespace
-
 void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& context) {
     // The previous bars' trades are final: their exit phases fold once.
     for (; exit_phase_final_ < trade_exit_phase_.size(); ++exit_phase_final_) {
@@ -2696,15 +2673,61 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     if (detail::retain_retired_rows()) return;
     // Every live handle has a row; nothing beyond them means nothing retired.
     if (placement_.size() <= live_handles_.size()) return;
+    const int interval = context.coordinate.interval_index;
+    const std::int64_t cycle = current_position_cycle_;
+
+    auto& sweep = retired_row_scratch_;
+    sweep.clear();
+    const auto contains = [](const std::vector<std::uint64_t>& sorted, std::uint64_t value) {
+        return std::binary_search(sorted.begin(), sorted.end(), value);
+    };
+    const auto exit_family = [](PineOrderFamily family) {
+        return family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
+            || family == PineOrderFamily::ExitTrail;
+    };
+    // The origins a live leg or an opened entry answers for (K1, and the
+    // consumed-leg facts pruned below).
+    auto& askable_origins = sweep.askable_origins;
+    for (const auto& handle : live_handles_) askable_origins.push_back(handle.incarnation);
+    for (const auto& cohort : cohorts_by_id_) {
+        for (const auto& opening : cohort.second.opened)
+            askable_origins.push_back(opening.incarnation);
+    }
+    std::sort(askable_origins.begin(), askable_origins.end());
+    askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
+                          askable_origins.end());
+    // The pins a row's own fields decide, whatever else names it.
+    const auto pinned_by_itself = [&](const PlacementSnapshot& value) {
+        // K1
+        if (value.legs.target().incarnation != 0
+            && (value.placement_cycle >= cycle
+                || contains(askable_origins, value.bracket_origin.incarnation))) {
+            return true;
+        }
+        // K4
+        if (value.family == PineOrderFamily::Close && value.immediately
+            && value.projection_created_bar >= interval) {
+            return true;
+        }
+        // K5
+        return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
+            && value.projection_created_bar >= interval - 1;
+    };
+    // Most bars erase nothing: every retired row is held by a pin of its own
+    // (a leg of the current position cycle, this bar's entries). Those bars
+    // stop here, before the roots are gathered; the market-add marks, pruned
+    // against the roots, keep the full pass whenever there are any.
+    if (market_pyramid_adds_.empty()
+        && std::all_of(placement_.begin(), placement_.end(), [&](const auto& row) {
+               return contains(askable_origins, row.first) || pinned_by_itself(row.second);
+           })) {
+        return;
+    }
     // Only a host whose kernel can say what it still works erases a row.
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
     const auto& core = as_native_consumer(*consumer).request_core();
-    const int interval = context.coordinate.interval_index;
-    const std::int64_t cycle = current_position_cycle_;
 
-    auto& sweep = retired_row_sweep();
-    sweep.clear();
     auto& roots = sweep.roots;
     const auto root = [&](std::uint64_t incarnation) {
         if (incarnation != 0) roots.push_back(incarnation);
@@ -2746,15 +2769,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             }, command);
             return false;
         });
-    // The origins a live leg or an opened entry answers for (K1, and the
-    // consumed-leg facts pruned below).
-    auto& askable_origins = sweep.askable_origins;
-    for (const auto& handle : live_handles_) askable_origins.push_back(handle.incarnation);
     for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& opening : cohort.second.opened) {
-            root(opening.incarnation);
-            askable_origins.push_back(opening.incarnation);
-        }
+        for (const auto& opening : cohort.second.opened) root(opening.incarnation);
     }
     if (auto* pine = pine_view(host_)) {
         for (const auto& lot : pine->pyramid_entries_) root(lot.entry_incarnation);
@@ -2828,12 +2844,6 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         if (std::binary_search(roots.begin(), roots.end(), *mark)) ++mark;
         else mark = market_pyramid_adds_.erase(mark);
     }
-    std::sort(askable_origins.begin(), askable_origins.end());
-    askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
-                          askable_origins.end());
-    const auto contains = [](const std::vector<std::uint64_t>& sorted, std::uint64_t value) {
-        return std::binary_search(sorted.begin(), sorted.end(), value);
-    };
 
     // What the live rows contribute to the scan pins (K7, K8), and the
     // current-cycle revival candidates (K2, K3): rows with a leg lifecycle,
@@ -2848,10 +2858,6 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     }
     std::sort(live_groups.begin(), live_groups.end());
     std::sort(source_bars.begin(), source_bars.end());
-    const auto exit_family = [](PineOrderFamily family) {
-        return family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
-            || family == PineOrderFamily::ExitTrail;
-    };
     auto& candidates = sweep.candidates;
     auto& candidate_names = sweep.candidate_names;
     for (const auto& row : placement_) {
@@ -2871,12 +2877,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         const std::uint64_t incarnation = row.first;
         const auto& value = row.second;
         if (contains(roots, incarnation)) continue;
-        // K1
-        if (value.legs.target().incarnation != 0
-            && (value.placement_cycle >= cycle
-                || contains(askable_origins, value.bracket_origin.incarnation))) {
-            continue;
-        }
+        // K1, K4, K5
+        if (pinned_by_itself(value)) continue;
         if (value.placement_cycle == cycle) {
             // K2
             if (value.projection_predecessor != 0
@@ -2894,16 +2896,6 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                    })) {
                 continue;
             }
-        }
-        // K4
-        if (value.family == PineOrderFamily::Close && value.immediately
-            && value.projection_created_bar >= interval) {
-            continue;
-        }
-        // K5
-        if ((value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
-            && value.projection_created_bar >= interval - 1) {
-            continue;
         }
         // K7
         if (value.family == PineOrderFamily::Entry && value.sequential_group != 0
@@ -2951,7 +2943,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             }
         }
         placement_.erase(incarnation);
-        ++detail::rows_erased;
+        detail::rows_erased.fetch_add(1, std::memory_order_relaxed);
     }
     // Every family settles the members whose rows are gone, and keeps a
     // consumed-leg fact only while its origin is live or opened.

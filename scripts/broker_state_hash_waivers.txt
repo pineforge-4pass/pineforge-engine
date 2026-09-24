@@ -50,6 +50,7 @@ event_high_water_reader_ # Immutable callback binding to the host's native event
 terminal_receipt_high_water_reader_ # Immutable callback binding to the host's terminal-receipt watermark, not mutable broker state.
 source_pending_view_cache_ # Read-only test projection cache rebuilt from adapter state and never consumed by execution.
 bar_magnifier_ # install-time fact mirrored from the scheduler (retained_.bar_magnifier is already folded); not evolving broker state (L8h A41(5))
+retired_row_scratch_ # Per-sweep working sets of erase_retired_rows (R5 lane V19-E), emptied at the start of every sweep; no value survives a sweep or reaches a hash point.
 excursion_margin_call_ # Transient excursion-sampler cache; re-derived from the immutable placement snapshots at every precommit and cleared at the applied boundary.
 excursion_priced_fill_ # Transient excursion-sampler cache; re-derived from the immutable placement snapshots at every precommit and cleared at the applied boundary.
 excursion_range_end_projection_ # Report-only projection scope flag around range-end row building; it is false for every real settlement.

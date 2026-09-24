@@ -14,10 +14,11 @@
 
 namespace pineforge::source::detail {
 
-// While set, no placement row is erased (this thread only).
+// While set, no placement row is erased (process-wide: set it only around
+// single-threaded runs).
 void set_retain_retired_rows(bool retain) noexcept;
 bool retain_retired_rows() noexcept;
-// How many rows this thread's adapters have erased (a statistic).
+// How many rows the process's adapters have erased (a statistic).
 std::uint64_t retired_rows_erased() noexcept;
 
 }  // namespace pineforge::source::detail
