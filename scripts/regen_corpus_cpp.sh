@@ -35,7 +35,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-release@sha256:a69c3700e44868d9657697f43e3f3954a7ed8bde039b55b52ec901538720ac05}"
-CODEGEN_COMMIT="9f4f6be5a250f8f68877bd0a90aed1cc5ae2f69d"
+CODEGEN_COMMIT="f3285d79f476c029e9739599658b5de6296046bc"
 CODEGEN_REPO="${CODEGEN_REPO:-https://github.com/pineforge-4pass/pineforge-codegen-oss.git}"
 VERIFY="${VERIFY:-0}"
 
