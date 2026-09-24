@@ -2742,6 +2742,13 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // a cancel observe_terminal_receipts issued while it read (a bracket
     // origin's legs, a filled leg's siblings) commits past the high water it
     // read to -- and observing it reads the row of every request it names.
+    // V19-B's journal window still holds every one of them: the adapter
+    // acknowledges through the cursor and no further (at the end of
+    // observe_terminal_receipts; the quiet read raises the cursor without
+    // acknowledging), the cursor only rises within a run, and the kernel
+    // retires only what its host acknowledged -- so the window starts at or
+    // below the first ordinal above the cursor, and these roots miss none.
+    assert(as_native_consumer(*consumer).event_window_start() <= receipt_cursor_ + 1);
     as_native_consumer(*consumer).visit_commands_after(receipt_cursor_,
         [&](const native_order::CommandEvent& command) {
             std::visit([&](const auto& event) {
