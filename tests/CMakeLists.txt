@@ -1083,6 +1083,15 @@ list(APPEND TEST_SOURCES test_native_fused_settlement)
 # each call staged into heap vectors). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
+# R5 lane V19-E: the Pine adapter erases the placement row of a request that
+# no longer works once nothing can read it. Recording mode over N and 4N bars
+# costs < 5x and retains a live-bounded number of rows (scaling); randomized
+# Pine command scripts show the same transcript -- every command event, pending
+# order, working request, position, trade, equity point and admission field --
+# as on the lane's base and as with the erasure switched off (equivalence).
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
+list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1616,6 +1625,11 @@ add_test(NAME test_l4g_runtime_budget_mutations
 if(TARGET test_adapter_lookup_index_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     set_tests_properties(test_adapter_lookup_index_scaling PROPERTIES
         ENVIRONMENT "PINEFORGE_P7_SCALING_GATE=0")
+endif()
+# R5 lane V19-E: the same Release-only gate for the recording-mode ratio.
+if(TARGET test_adapter_live_state_scaling AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    set_tests_properties(test_adapter_live_state_scaling PROPERTIES
+        ENVIRONMENT "PINEFORGE_V19E_SCALING_GATE=0")
 endif()
 
 
