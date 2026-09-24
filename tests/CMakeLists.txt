@@ -1119,6 +1119,11 @@ list(APPEND TEST_SOURCES test_native_command_after)
 # short-cut took (differential). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_quiet_point)
+# R5 lane D2-A (PQ2): the magnifier sampler handed its leg order and keeping
+# no scratch between calls against the base routine, bit for bit, at every
+# sample count and distribution, and the declared order the consumer hands it
+# (differential). Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_magnifier_ordered_sampler)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

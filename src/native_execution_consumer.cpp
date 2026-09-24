@@ -483,23 +483,6 @@ bool path_uses_high_first(const Bar& bar, NativePathOrder order) noexcept {
     return false;
 }
 
-class NativePathOrderScope {
-public:
-    explicit NativePathOrderScope(NativePathOrder order)
-        : prior_(internal::path_order_override()) {
-        const int mode = order == NativePathOrder::HighFirst ? 1
-            : (order == NativePathOrder::LowFirst ? 2 : 0);
-        internal::set_path_order_override(mode);
-    }
-    ~NativePathOrderScope() { internal::set_path_order_override(prior_); }
-
-    NativePathOrderScope(const NativePathOrderScope&) = delete;
-    NativePathOrderScope& operator=(const NativePathOrderScope&) = delete;
-
-private:
-    int prior_ = 0;
-};
-
 bool remaining_path_coordinate(const NativeCoordinate& coordinate) noexcept {
     const bool continuous_provenance = coordinate.provenance == NativePriceProvenance::Confirmed
         || coordinate.provenance == NativePriceProvenance::ModeledOHLCClose;
@@ -7345,24 +7328,26 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         // sampler from include/pineforge/magnifier.hpp as ordered point
         // decisions. This reproduces the read-only consumption ordering at
         // src/source/pine_scheduler.cpp:806-960 without source policy here.
-        {
-            // The sampler still serves the byte-identical legacy route through
-            // its scoped internal order. Install this run's generic policy only
-            // while materializing the native driver's point sequence.
-            NativePathOrderScope path_scope(spec->path_order);
-            if (!distribution_samples || direct_sub_bar_corners) {
-                // A retained lower bar already supplies its four exact turning
-                // points. Continuous eligibility traverses those segments directly;
-                // likewise, a path containing several retained lower bars has no
-                // missing intrabar detail for a synthetic sampler to recover.
-                sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
-            } else if (volume_weighted) {
-                sample_price_path_volume_weighted(
-                    sub, sample_count, mean_volume, volume_weighted_min_samples,
-                    volume_weighted_max_samples, distribution, samples);
-            } else {
-                sample_price_path(sub, sample_count, distribution, samples);
-            }
+        // The sampler walks the sub-bar in this run's declared leg order,
+        // resolved as the confirmed walk resolves it and handed to it (R5
+        // lane D2-A). A configured spec's order is Auto, HighFirst or
+        // LowFirst, which path_uses_high_first answers exactly as the
+        // thread-local override the sampler used to read did.
+        const bool high_first = path_uses_high_first(sub, spec->path_order);
+        if (!distribution_samples || direct_sub_bar_corners) {
+            // A retained lower bar already supplies its four exact turning
+            // points. Continuous eligibility traverses those segments directly;
+            // likewise, a path containing several retained lower bars has no
+            // missing intrabar detail for a synthetic sampler to recover.
+            internal::sample_price_path_ordered(sub, high_first, 4,
+                                                MagnifierDistribution::ENDPOINTS, samples);
+        } else if (volume_weighted) {
+            internal::sample_price_path_volume_weighted_ordered(
+                sub, high_first, sample_count, mean_volume, volume_weighted_min_samples,
+                volume_weighted_max_samples, distribution, samples);
+        } else {
+            internal::sample_price_path_ordered(sub, high_first, sample_count, distribution,
+                                                samples);
         }
         if (samples.empty()) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});

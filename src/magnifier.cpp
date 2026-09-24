@@ -46,20 +46,19 @@ struct OhlcPathLegs {
     double total;
 };
 
-// Construct the 3-segment OHLC waypoint path. Uses TradingView-style first-leg
-// selection: O -> H -> L -> C when the open is closer to the high, otherwise
-// O -> L -> H -> C (ties low-first). Mirrors the order-fill path exactly so
-// magnifier sampling lines up with intra-bar fill resolution.
-OhlcPathLegs compute_ohlc_path_legs(const Bar& bar) {
+// Construct the 3-segment OHLC waypoint path in the leg order the caller
+// resolved: O -> H -> L -> C when `high_first`, otherwise O -> L -> H -> C.
+// The public sampler resolves it with TradingView-style first-leg selection
+// (internal::bar_path_uses_high_first: high first when the open is closer to
+// the high, ties low-first), which mirrors the order-fill path exactly so
+// magnifier sampling lines up with intra-bar fill resolution; the native
+// intrabar driver passes the order its run declares (NativeRunSpec::
+// path_order), so a forced order steers the sampling too.
+OhlcPathLegs compute_ohlc_path_legs(const Bar& bar, bool high_first) {
     OhlcPathLegs legs;
     legs.p0 = bar.open;
     legs.p3 = bar.close;
 
-    // ABI v4 live-runtime surface (task 4): route through the single AUTO
-    // rule (identical expression under AUTO, mode 0 -- no historical drift)
-    // so a forced strategy_set_path_order also steers magnifier sampling,
-    // not just fill-path resolution, when the bar magnifier is enabled.
-    bool high_first = internal::bar_path_uses_high_first(bar);
     if (high_first) {
         // Open nearer high: O -> H -> L -> C
         legs.p1 = bar.high;
@@ -81,6 +80,11 @@ OhlcPathLegs compute_ohlc_path_legs(const Bar& bar) {
 // boundary0 = len0/total, boundary1 = (len0+len1)/total, t=1 (C) — and fill
 // any remaining slots with uniform t-values, dedup'd against the mandatory
 // set. Falls back to plain uniform when the bar is degenerate (total==0).
+// `t_values` holds N values on entry and all N on return; the mandatory set
+// (at most four) lives on the stack and the uniform fill is written straight
+// into `t_values`, so no scratch outlives the call (R5 lane D2-A: these were
+// two thread_local vectors, a TLS-descriptor call per use in a dlopen'd
+// strategy). The arithmetic, the dedup and both sorts are the ones they fed.
 void fill_endpoints_t_values(std::vector<double>& t_values, int N,
                               double len0, double len1, double total) {
     if (total <= 0.0) {
@@ -93,25 +97,20 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
     double b1 = (len0 + len1) / total;
 
     // Collect mandatory points
-    // Scratch — fully assigned before read on every call.
-    static thread_local std::vector<double> mandatory;
-    mandatory.assign({0.0, b0, b1, 1.0});
+    double mandatory[4] = {0.0, b0, b1, 1.0};
     // Remove duplicates (e.g. if a segment has zero length)
-    std::sort(mandatory.begin(), mandatory.end());
-    mandatory.erase(std::unique(mandatory.begin(), mandatory.end(),
-        [](double a, double b) { return std::fabs(a - b) < kPathTimeEps; }),
-        mandatory.end());
+    std::sort(mandatory, mandatory + 4);
+    const int kept = static_cast<int>(std::unique(mandatory, mandatory + 4,
+        [](double a, double b) { return std::fabs(a - b) < kPathTimeEps; }) - mandatory);
 
-    if (N == static_cast<int>(mandatory.size())) {
+    if (N == kept) {
         // Exact match: use all mandatory points
-        t_values.resize(N);
         for (int i = 0; i < N; ++i)
             t_values[i] = mandatory[i];
         return;
     }
-    if (N < static_cast<int>(mandatory.size())) {
+    if (N < kept) {
         // Fewer samples than mandatory points — use evenly spaced
-        t_values.resize(N);
         t_values[0] = 0.0;
         t_values[N - 1] = 1.0;
         for (int i = 1; i < N - 1; ++i)
@@ -119,29 +118,26 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
         return;
     }
     // Start with mandatory, fill remaining with uniform
-    int remaining = N - static_cast<int>(mandatory.size());
-    // Scratch — fully assigned before read on every call.
-    static thread_local std::vector<double> all_t;
-    all_t = mandatory;
+    int remaining = N - kept;
+    int filled = 0;
+    for (; filled < kept; ++filled)
+        t_values[filled] = mandatory[filled];
     for (int i = 1; i <= remaining; ++i) {
         double t = static_cast<double>(i) / (remaining + 1);
         // Avoid duplicating mandatory points
         bool dup = false;
-        for (double m : mandatory) {
-            if (std::fabs(t - m) < kPathTimeEps) { dup = true; break; }
+        for (int m = 0; m < kept; ++m) {
+            if (std::fabs(t - mandatory[m]) < kPathTimeEps) { dup = true; break; }
         }
-        if (!dup) all_t.push_back(t);
+        if (!dup) t_values[filled++] = t;
     }
     // If we still need more (because some uniform pts coincided
     // with mandatory), fill with finer uniform
-    while (static_cast<int>(all_t.size()) < N) {
-        double t = static_cast<double>(all_t.size()) / (N + 1);
-        all_t.push_back(t);
+    while (filled < N) {
+        double t = static_cast<double>(filled) / (N + 1);
+        t_values[filled++] = t;
     }
-    std::sort(all_t.begin(), all_t.end());
-    // Trim to exactly N if over
-    all_t.resize(N);
-    t_values = all_t;
+    std::sort(t_values.begin(), t_values.end());
 }
 
 }  // namespace
@@ -157,16 +153,21 @@ std::vector<double> sample_price_path(const Bar& bar, int n_samples,
 
 void sample_price_path(const Bar& bar, int n_samples,
                        MagnifierDistribution dist, std::vector<double>& out) {
+    internal::sample_price_path_ordered(bar, internal::bar_path_uses_high_first(bar),
+                                        n_samples, dist, out);
+}
+
+void internal::sample_price_path_ordered(const Bar& bar, bool high_first, int n_samples,
+                                         MagnifierDistribution dist, std::vector<double>& out) {
     if (n_samples < 2) n_samples = 2;
 
-    OhlcPathLegs legs = compute_ohlc_path_legs(bar);
+    OhlcPathLegs legs = compute_ohlc_path_legs(bar, high_first);
 
-    // Generate t-values based on distribution
-    // Scratch — fully assigned before read on every call; thread_local for
-    // parallel multi-strategy harnesses.
-    static thread_local std::vector<double> t_values;
-    t_values.assign(n_samples, 0.0);
+    // Generate t-values based on distribution, into the caller's buffer
+    // (assign keeps its capacity); they are mapped to prices in place below.
     int N = n_samples;
+    out.assign(N, 0.0);
+    std::vector<double>& t_values = out;
 
     switch (dist) {
     case MagnifierDistribution::UNIFORM:
@@ -221,9 +222,7 @@ void sample_price_path(const Bar& bar, int n_samples,
     }
     }
 
-    // Map t-values to prices. Reuse the caller's buffer (clear keeps capacity).
-    out.clear();
-    out.resize(N);
+    // Map t-values to prices, each in its own slot.
     for (int i = 0; i < N; ++i)
         out[i] = path_at(t_values[i], legs.p0, legs.p1, legs.p2, legs.p3,
                          legs.len0, legs.len1, legs.len2, legs.total);
@@ -273,6 +272,15 @@ void sample_price_path_volume_weighted(const Bar& bar,
     int n = volume_weighted_sample_count(bar, base_samples, mean_volume,
                                          min_samples, max_samples);
     sample_price_path(bar, n, dist, out);
+}
+
+void internal::sample_price_path_volume_weighted_ordered(
+        const Bar& bar, bool high_first, int base_samples, double mean_volume,
+        int min_samples, int max_samples, MagnifierDistribution dist,
+        std::vector<double>& out) {
+    int n = volume_weighted_sample_count(bar, base_samples, mean_volume,
+                                         min_samples, max_samples);
+    sample_price_path_ordered(bar, high_first, n, dist, out);
 }
 
 } // namespace pineforge

@@ -184,8 +184,9 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.path_order));', '')
         self.reject(FILES[10], 'bool path_uses_high_first(',
                     'bool removed_path_uses_high_first(')
-        self.reject(FILES[10], 'class NativePathOrderScope {',
-                    'class RemovedNativePathOrderScope {')
+        # R5 D2-A: the intrabar sampler is handed the declared order.
+        self.reject(FILES[10], 'path_uses_high_first(sub, spec->path_order)',
+                    'path_uses_high_first(sub, NativePathOrder::Auto)')
 
     def test_anchored_leg_rounding_is_pinned_and_folded_when_set(self):
         # R5 L7b: the per-anchor rounding is a native_order_v7 member appended

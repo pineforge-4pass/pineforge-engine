@@ -1,10 +1,9 @@
 /*
  * engine_path_resolve.cpp — the generic half of the modeled OHLC path.
  *
- * A kernel TU needs exactly three things from the path: the forced path-order
- * override the native consumer installs while it samples an intrabar path, the
- * open-proximity rule that picks the first intrabar leg, and the first
- * position at which a level is touched on that path (engine_orders.cpp).  Everything else the file used to hold is
+ * A kernel TU needs exactly two things from the path: the open-proximity rule
+ * that picks the first intrabar leg, and the first position at which a level
+ * is touched on that path (engine_orders.cpp).  Everything else the file used to hold is
  * TradingView exit/entry resolution and now lives in
  * src/source/pine_path_resolve.cpp; the two halves are the same
  * `pineforge::internal` namespace and the same declarations in
@@ -21,25 +20,12 @@ namespace pineforge {
 namespace internal {
 
 
-namespace {
-// ABI v4 live-runtime surface (task 4): thread-local forced path order.
-// 0 AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. thread_local is sufficient because a
-// BacktestEngine handle is single-threaded per run. Its one installer is the
-// consumer's NativePathOrderScope (native_execution_consumer.cpp): it sets
-// the run's NativeRunSpec::path_order only while the intrabar driver
-// materializes a sample path (the sampler reads it through
-// bar_path_uses_high_first) and restores the prior value on every exit path,
-// so it is AUTO (0) everywhere else, every host callback included.
-thread_local int g_path_order_override = 0;
-}  // namespace
-
-void set_path_order_override(int mode) { g_path_order_override = mode; }
-
-int path_order_override() { return g_path_order_override; }
-
+// A declared leg order never reaches here: the consumer resolves it and hands
+// it to the intrabar sampler itself (internal::sample_price_path_ordered).
+// Until R5 lane D2-A a thread-local override, installed around the sampler
+// alone, carried it in; it was AUTO everywhere else, which is what this
+// answers.
 bool bar_path_uses_high_first(const Bar& bar) {
-    if (g_path_order_override == 1) return true;
-    if (g_path_order_override == 2) return false;
     // TradingView's broker emulator chooses the first intrabar leg from
     // the open's proximity to high vs low, not from candle color.
     return std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);

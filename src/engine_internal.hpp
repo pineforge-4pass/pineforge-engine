@@ -71,23 +71,15 @@ enum class DualEntryStopPathWinner : int {
 // ── Path-resolution helpers (defined in engine_path_resolve.cpp) ──
 
 
+// The open-proximity rule: O -> H -> L -> C when the open is nearer the high
+// (|H-O| < |O-L|), otherwise O -> L -> H -> C, ties low-first. A run that
+// declares a leg order (NativeRunSpec::path_order) is walked in it by the
+// consumer (NativeExecutionConsumer::path_high_first), which hands that order
+// to the intrabar sampler itself (sample_price_path_ordered below). Until R5
+// lane D2-A a thread-local override, installed around the sampler alone,
+// carried it in here; it was AUTO everywhere else, which is what this
+// answers.
 bool bar_path_uses_high_first(const Bar& bar);
-
-// ABI v4 live-runtime surface (task 4): force bar_path_uses_high_first's
-// verdict for the calling thread -- 0 AUTO (the real |H-O| vs |O-L| rule,
-// unchanged), 1 HIGH_FIRST, 2 LOW_FIRST. thread_local: a handle is
-// single-threaded per run. The one installer is NativePathOrderScope
-// (native_execution_consumer.cpp), which sets the run's
-// NativeRunSpec::path_order only while the intrabar driver materializes a
-// sample path; no host callback runs inside it, so a question a host asks
-// from a callback is answered in the run's order by the consumer
-// (NativeExecutionConsumer::path_high_first), not through this override.
-void set_path_order_override(int mode);
-
-// Current thread-local override value (see above). NativePathOrderScope
-// reads this before installing its own mode so it restores the prior value
-// on scope exit rather than hardcoding AUTO.
-int path_order_override();
 
 
 // Return earliest path position (segment index + [0..1] interpolation) where
@@ -121,6 +113,22 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
 // Same 4-waypoint path, but with the leg order chosen by the caller (so a
 // tick-quantized twin of a bar walks the raw bar's leg order).
 void fill_bar_path_points_ordered(const Bar& bar, bool high_first, double path[4]);
+
+
+// ── The magnifier sampler in a caller's leg order (defined in magnifier.cpp) ──
+// sample_price_path and sample_price_path_volume_weighted
+// (<pineforge/magnifier.hpp>) walk the open-proximity order; these forms walk
+// the order the caller resolved and give, bit for bit, what the public forms
+// give when bar_path_uses_high_first(bar) answers `high_first`. The native
+// intrabar driver samples through them in its run's declared order. Neither
+// keeps state between calls.
+void sample_price_path_ordered(const Bar& bar, bool high_first, int n_samples,
+                               MagnifierDistribution dist, std::vector<double>& out);
+void sample_price_path_volume_weighted_ordered(const Bar& bar, bool high_first,
+                                               int base_samples, double mean_volume,
+                                               int min_samples, int max_samples,
+                                               MagnifierDistribution dist,
+                                               std::vector<double>& out);
 
 
 // ── Finer-timeframe sub-bar synthesis (defined in engine_lower_tf.cpp) ──

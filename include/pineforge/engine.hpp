@@ -1973,8 +1973,8 @@ public:
     // caller passes mode=0. It only stores the mode: a native-bound source
     // provider projects it into NativeRunSpec::path_order at begin (a bare
     // native host declares that field itself), and the native driver walks
-    // the spec field; the sampler's thread-local override
-    // (internal::set_path_order_override) is installed by the consumer alone.
+    // the spec field, handing the declared order to the intrabar sampler
+    // itself (internal::sample_price_path_ordered).
     // Default AUTO (mode=0): every historical run stays byte-identical to
     // before this flag existed.
     void set_path_order(int mode) {

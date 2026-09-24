@@ -876,12 +876,10 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
     if (excursion_range_end_projection_) return owned;
     if (excursion_margin_call_ && excursion_margin_fill_only_) return owned;
     // Both folds below walk this bar's modeled path, so both need the leg
-    // order the RUN declares (NativeRunSpec::path_order), not the sampler's
-    // thread-local override: NativePathOrderScope installs that only while
-    // the intrabar driver materializes a sample path, never around a host
-    // callback, so a question asked here would always be answered AUTO
-    // (engine_internal.hpp, set_path_order_override). It is asked of the
-    // consumer, which is the same call
+    // order the RUN declares (NativeRunSpec::path_order), not the bare
+    // open-proximity rule (internal::bar_path_uses_high_first), which answers
+    // AUTO under every declared order. It is asked of the consumer, which is
+    // the same call
     // BacktestEngine::declare_opened_lot_entry_bar_mask derives
     // facts.entry_bar_{high,low}_masked on — one resolution for the mask and
     // for the arithmetic that completes it, so the two cannot disagree. Under

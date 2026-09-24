@@ -2,10 +2,11 @@
 // DECLARED leg order, the same one the kernel's entry-bar mask is derived on.
 //
 // E15 finding 1. `PineStrategyHost::closed_lot_excursion` asked
-// `internal::bar_path_uses_high_first`, which reads the sampler's thread-local
-// override. Only `NativePathOrderScope` installs that override, and never
-// around a host callback, so this arithmetic answered AUTO (the open-proximity
-// rule) under every declared `NativeRunSpec::path_order`. The kernel's
+// `internal::bar_path_uses_high_first`, which then read the sampler's
+// thread-local override. Only `NativePathOrderScope` installed that override
+// (both are gone since R5 lane D2-A: the sampler is handed the order), and
+// never around a host callback, so this arithmetic answered AUTO (the
+// open-proximity rule) under every declared `NativeRunSpec::path_order`. The kernel's
 // `BacktestEngine::declare_opened_lot_entry_bar_mask` had already been moved to
 // the declared order (E15), so a same-bar entry and exit under a forced order
 // combined a forced-frame mask with an AUTO-frame path position.
