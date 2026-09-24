@@ -5036,18 +5036,35 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         view.inspected_opened_units = inspect.opened_units;
         view.inspected_current_ticket = proposal.inspected_current_ticket;
         view.current = current;
-        if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
-            view.settlement_readiness = engine.preview_native_settlement_commit(
-                *reversal, candidate.fill, ctx, view.account, view.closed_row_pnl);
-        } else {
-            const auto action = narrow_action(candidate.physical);
-            view.settlement_readiness = engine.preview_native_settlement_commit(
-                action, candidate.fill, ctx, candidate.financial_scope,
-                candidate.selected ? &*candidate.selected : nullptr,
-                view.account, view.closed_row_pnl);
+        // A host that declared no precommit hook (declare_precommit_hook, R5
+        // lane D2-A) is not consulted: its verdict is the default Admit. The
+        // preview moves no state and is read by the hook alone, except that
+        // building its closing rows consults a host that owns lot excursions,
+        // so it is still built for such a host, which is asked exactly as
+        // often as before.
+        const bool consulted = precommit_hook_;
+        if (consulted || engine.lot_excursion_hook_) {
+            if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
+                view.settlement_readiness = engine.preview_native_settlement_commit(
+                    *reversal, candidate.fill, ctx, view.account, view.closed_row_pnl);
+            } else {
+                const auto action = narrow_action(candidate.physical);
+                view.settlement_readiness = engine.preview_native_settlement_commit(
+                    action, candidate.fill, ctx, candidate.financial_scope,
+                    candidate.selected ? &*candidate.selected : nullptr,
+                    view.account, view.closed_row_pnl);
+            }
         }
         NativePrecommitVerdict verdict = NativePrecommitVerdict::Admit;
-        if (view.settlement_readiness == execution::Status::Applied) {
+        if (!consulted) {
+            // The check that follows the hook stays, for every candidate: the
+            // preview's readiness is unknown here, and that the hook's call
+            // reached it only after an Applied preview shows only to a run
+            // whose abort another thread requests at this very point.
+            if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
+                return std::nullopt;
+            }
+        } else if (view.settlement_readiness == execution::Status::Applied) {
             try {
                 auto* host = native_host(engine);
                 if (!host) throw std::logic_error("native precommit requires a native host");
@@ -10082,6 +10099,10 @@ bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
 
 void NativeStrategyHost::declare_native_bar_open_hook(bool implemented) {
     as_native_consumer(execution_consumer()).declare_bar_open_hook(implemented);
+}
+
+void NativeStrategyHost::declare_native_precommit_hook(bool implemented) {
+    as_native_consumer(execution_consumer()).declare_precommit_hook(implemented);
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {

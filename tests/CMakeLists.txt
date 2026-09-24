@@ -1133,6 +1133,11 @@ list(APPEND TEST_SOURCES test_magnifier_endpoints4)
 # hook is empty, C hosts included (differential). Source-free, so it also runs
 # in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bar_open_hook)
+# R5 lane D2-A (PC): a host that declares no precommit hook against one whose
+# hook admits every view, excursion owners and C hosts included, and the
+# settlement previews each run builds (differential). Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_precommit_hook)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

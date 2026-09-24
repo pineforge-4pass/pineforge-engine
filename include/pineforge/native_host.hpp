@@ -933,9 +933,10 @@ public:
     /// and never during inspect_current_execution. Proceed takes the kernel's own
     /// path, Refuse records a nonfinancial HostPrecommit rejection, and
     /// AdmitWithHostMargin hands that one opening margin check to the host. The
-    /// default proceeds. No C spelling: its view is a deep C++ aggregate; a C host
-    /// gates an opening with PF_NATIVE_INTENT_SIZED's placement-time admission or
-    /// with on_margin_requirement.
+    /// default proceeds; a host that keeps it says so:
+    /// declare_native_precommit_hook(false). C spelling:
+    /// pf_native_callbacks_v1::on_precommit, the view flattened into
+    /// pf_native_precommit_view_v1.
     virtual NativePrecommitVerdict validate_execution_precommit(
             const NativePrecommitView&) const {
         return NativePrecommitVerdict::Admit;
@@ -1011,10 +1012,10 @@ public:
         return {};
     }
 
-    /// Whether this host implements on_native_bar_open (R5 lane D2-A). A host
-    /// that declares nothing implements it, which is every host written before
-    /// the declaration existed; a declaration stands, across runs, until the
-    /// host makes another. It moves no value: it lets the kernel skip work
+    /// Which of two optional hooks this host implements (R5 lane D2-A). A host
+    /// that declares nothing implements both, which is every host written before
+    /// the declarations existed; a declaration stands, across runs, until the
+    /// host makes another. Neither moves a value: each lets the kernel skip work
     /// whose only reader is a hook the host does not have.
     ///
     /// declare_native_bar_open_hook(false): on_native_bar_open does nothing, so
@@ -1024,6 +1025,14 @@ public:
     /// notifications -- so the run is the run of a host whose hook is empty. C
     /// spelling: a pf_native_callbacks_v1 without on_bar_open declares it.
     void declare_native_bar_open_hook(bool implemented);
+    /// declare_native_precommit_hook(false): validate_execution_precommit is the
+    /// default admission, so the kernel does not consult it, and builds the
+    /// settlement preview it would have been shown (prepare, then project) only
+    /// for a host that owns lot excursions, whose closed_lot_excursion every
+    /// closing row of that preview consults. The abort check that follows the
+    /// hook is kept. C spelling: a pf_native_callbacks_v1 without on_precommit
+    /// declares it.
+    void declare_native_precommit_hook(bool implemented);
 
     /// The bar so far at the current cursor, folded from the modeled points
     /// this script bar has already presented: open of its first point,

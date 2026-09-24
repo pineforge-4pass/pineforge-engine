@@ -946,11 +946,13 @@ def check_texts(files):
          "on_native_sub_bar"),
         (r'\bstd::optional\s*<\s*Bar\s*>\s+current_partial_bar\s*\(\s*\)\s*const\s*;',
          "current_partial_bar"),
-        # R5 D2-A: the hook declaration is the host telling the kernel what
-        # it implements -- never virtual, so it cannot become another
+        # R5 D2-A: the two hook declarations are the host telling the kernel
+        # what it implements -- never virtual, so neither can become another
         # overridable entry point.
         (r'(?<!virtual )void\s+declare_native_bar_open_hook\s*\(\s*bool\s+\w+\s*\)\s*;',
          "declare_native_bar_open_hook"),
+        (r'(?<!virtual )void\s+declare_native_precommit_hook\s*\(\s*bool\s+\w+\s*\)\s*;',
+         "declare_native_precommit_hook"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
@@ -991,7 +993,8 @@ def check_texts(files):
              "NativeStrategyHost::native_risk_state",
              "NativeStrategyHost::native_sized_units",
              "NativeStrategyHost::native_open_lots",
-             "NativeStrategyHost::declare_native_bar_open_hook"),
+             "NativeStrategyHost::declare_native_bar_open_hook",
+             "NativeStrategyHost::declare_native_precommit_hook"),
             "engine_script_run_v19", r'\bNAME\s*\(')
 
 

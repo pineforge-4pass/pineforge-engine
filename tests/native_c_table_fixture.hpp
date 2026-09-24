@@ -57,6 +57,7 @@ struct Outcome {
     long excursions = 0;
     std::uint64_t previews = 0;
     bool declared_bar_open = true;
+    bool declared_precommit = true;
     int rc = -1;
     bool completed = false;
 };
@@ -241,6 +242,7 @@ inline Outcome run(const k3_book::Tape& tape, std::uint64_t seed, Hooks hooks) {
         out.events_digest = census;
         const auto& consumer = NativeExecutionConsumer::bound(*host);
         out.declared_bar_open = consumer.has_bar_open_hook();
+        out.declared_precommit = consumer.has_precommit_hook();
     }
     strategy_native_host_free(state.handle);
     return state.outcome;

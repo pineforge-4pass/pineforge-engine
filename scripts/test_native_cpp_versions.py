@@ -190,7 +190,7 @@ class NativeVersions(unittest.TestCase):
 
     def test_hook_declarations_are_the_host_calling_the_kernel(self):
         # R5 D2-A: never virtual, and defined in the v19 epoch.
-        for name in ('declare_native_bar_open_hook',):
+        for name in ('declare_native_bar_open_hook', 'declare_native_precommit_hook'):
             with self.subTest(name=name):
                 self.reject(FILES[8], '    void ' + name + '(bool implemented);',
                             '    virtual void ' + name + '(bool implemented);')
