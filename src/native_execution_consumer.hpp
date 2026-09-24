@@ -1131,6 +1131,12 @@ private:
     bool install_execution(BacktestEngine& engine, native_order::PreparedExecution&& prepared,
                            const native_order::CommittedExecutionFacts& facts,
                            uint64_t ordinal);
+    // install_execution for the core's direct form (R5 lane L3): the second
+    // half of check_execution, after the settlement, failing the run exactly
+    // as an install that fails does.
+    bool apply_execution(BacktestEngine& engine, const native_order::RequestHandle& target,
+                         const native_order::ExecutionProposal& proposal,
+                         const native_order::CommittedExecutionFacts& facts, uint64_t ordinal);
     native_order::SubmitResult submit_with_surface(
             BacktestEngine& engine, const native_order::Request& request,
             native_order::CommandSurface surface);

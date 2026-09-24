@@ -1793,9 +1793,16 @@ public:
     /// the live row is updated where it stands and each event is appended
     /// once. A caller that installs what it prepares straight away uses these;
     /// the prepare/install pairs stay for a caller that holds a token across
-    /// other work (an execution across its host's precommit verdict, which is
-    /// why prepare_execution has no direct form), or that may decide not to
-    /// install (an anchored arm whose restatement hook failed).
+    /// other work, or that may decide not to install (an anchored arm whose
+    /// restatement hook failed). An execution's direct form comes in the two
+    /// halves its caller needs around the settlement it proposes:
+    /// check_execution makes prepare_execution's checks and its seal (the same
+    /// NoChange, PreparationError or exception, the same reservation and
+    /// epoch) and holds nothing; apply_execution, after the settlement, makes
+    /// them again and then does what install_execution does with the token
+    /// prepare_execution would have made. A caller changes nothing in the core
+    /// between the two; if the checks no longer pass, apply_execution answers
+    /// StalePreparation and writes nothing.
     CommandInstalled<SubmitResult> apply_submit(const Request& request,
                                                 const CommandContext& context,
                                                 uint64_t& next_order_incarnation,
@@ -1851,6 +1858,13 @@ public:
     Preparation<Installed> apply_parent_terminal(const EventId& terminal_or_replaced,
                                                  const RequestHandle& child,
                                                  uint64_t& next_timeline_ordinal);
+    Preparation<std::monostate> check_execution(const RequestHandle& target,
+                                                const ExecutionProposal& proposal,
+                                                uint64_t& next_timeline_ordinal);
+    InstallResult apply_execution(const RequestHandle& target,
+                                  const ExecutionProposal& proposal,
+                                  const CommittedExecutionFacts& facts,
+                                  uint64_t& next_timeline_ordinal);
 
     EligibilityFacts eligibility_facts(const LiveRequest& live,
                                        const EvaluationContext& context) const noexcept;
@@ -1972,6 +1986,23 @@ private:
     EventRange finish_direct(std::size_t first) noexcept;
     template <class Event>
     Installed end_direct(std::size_t live_index, Event&& event);
+    // What prepare_execution computes for its events and its retained row,
+    // as values: check_execution and apply_execution make the same checks
+    // through it (execution_values), so what apply_execution writes is what
+    // the token would have held.
+    struct ExecutionValues {
+        std::size_t live_index = 0;
+        uint64_t ordinal = 0;
+        double filled = 0.0;
+        bool flatten = false;
+        bool units_exhausted = false;
+        RemainingProjection remaining_after = RemainingProjectionUnits{};
+        Allowance allowance_after = AllowanceUnset{};
+        ExecutionScope scope = execution::Book{};
+    };
+    Preparation<ExecutionValues> execution_values(const RequestHandle& target,
+                                                  const ExecutionProposal& proposal,
+                                                  uint64_t& next_timeline_ordinal) const;
 
     RunIdentity identity_;
     std::shared_ptr<InstanceBinding> instance_;

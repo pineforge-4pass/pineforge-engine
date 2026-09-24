@@ -4046,6 +4046,462 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
     return commit(impl.terminal);
 }
 
+// prepare_execution's checks, as values (R5 lane L3): the same tests in the
+// same order, answering what the token's events and retained row are made of.
+Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_values(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        uint64_t& next_timeline_ordinal) const {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    if (std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining)
+        || std::holds_alternative<AllowanceDeferred>(live.allowance)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    if (std::holds_alternative<Wait>(live.authority)
+        || std::holds_alternative<UnboundBookClose>(live.authority)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    const bool birth_ok = point_eligible(live.birth(), proposal.cursor.point.ordinal,
+                                         proposal.cursor.point.effective_time_ms)
+        || (same_point_allowance(live.allowance, proposal.cursor.point.ordinal)
+            && proposal.cursor.point.effective_time_ms
+                >= live.birth().decision_time_lower_bound)
+        || (proposal.pre_open_birth_eligible
+            && std::holds_alternative<Market>(live.request().trigger)
+            && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
+            && proposal.cursor.point.path_phase == NativePathPhase::Open
+            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
+    if (!birth_ok) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    if (!fillable_state(live.trigger_state)) return NoChange{NoChangeReason::NotEligible};
+    const bool current = proposal.cursor.point.provenance == NativePriceProvenance::CurrentExecution;
+    if (current && !current_shape(live)) return NoChange{NoChangeReason::NotEligible};
+
+    const uint64_t point = proposal.cursor.point.ordinal;
+    double allowance_left = 0.0;
+    const bool has_units_allowance = std::holds_alternative<AllowanceUnits>(live.allowance);
+    const bool has_all_allowance = std::holds_alternative<AllowanceAllScope>(live.allowance);
+    if (has_units_allowance) {
+        const auto& units = std::get<AllowanceUnits>(live.allowance);
+        if (units.point_ordinal != point) return NoChange{NoChangeReason::NotEligible};
+        allowance_left = units.left;
+        if (!(allowance_left > 0.0) && !std::holds_alternative<RemainingFlattenAll>(live.remaining)) {
+            return NoChange{NoChangeReason::NotEligible};
+        }
+    } else if (has_all_allowance) {
+        if (std::get<AllowanceAllScope>(live.allowance).point_ordinal != point) {
+            return NoChange{NoChangeReason::NotEligible};
+        }
+    } else {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+
+    const bool flatten = as_flatten(live.request().intent) != nullptr;
+    const bool reduce = as_reduce(live.request().intent) != nullptr;
+    const auto* transact = as_transact(live.request().intent);
+    const auto* reverse_to = as_reverse_to(live.request().intent);
+    const auto* host_sized = as_host_sized(live.request().intent);
+    const auto* native_sized = as_sized(live.request().intent);
+    const bool plan_flatten = std::holds_alternative<execution::Flatten>(proposal.physical_action);
+    const auto* plan_reduce = std::get_if<order_action::Reduce>(&proposal.physical_action);
+    const auto* plan_transact = std::get_if<order_action::Transact>(&proposal.physical_action);
+    const auto* plan_reverse = std::get_if<execution::ReverseTo>(&proposal.physical_action);
+    double cap = flatten ? 0.0 : working_units(live.remaining);
+    if (has_units_allowance) cap = std::min(cap, allowance_left);
+
+    if (flatten) {
+        if (!plan_flatten) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (reduce) {
+        if (!plan_reduce || !finite_positive(plan_reduce->units) || plan_reduce->units > cap) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (transact) {
+        if (!plan_transact || !finite_nonzero(plan_transact->signed_units)
+            || ((plan_transact->signed_units > 0.0) != (transact->signed_units > 0.0))
+            || std::abs(plan_transact->signed_units) > cap) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (reverse_to) {
+        if (!plan_reverse || !finite_nonzero(plan_reverse->signed_units)
+            || plan_reverse->signed_units != reverse_to->signed_units) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (host_sized) {
+        if (host_sized->kind == HostSizedKind::Close) {
+            if (!plan_reduce || !finite_positive(plan_reduce->units) || plan_reduce->units > cap) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (host_sized->kind == HostSizedKind::Open && host_sized->side) {
+            const bool long_side = *host_sized->side == Side::Long;
+            if (plan_transact) {
+                if (!finite_nonzero(plan_transact->signed_units)
+                    || ((plan_transact->signed_units > 0.0) != long_side)
+                    || std::abs(plan_transact->signed_units) > cap) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_reverse) {
+                if (!finite_nonzero(plan_reverse->signed_units)
+                    || ((plan_reverse->signed_units > 0.0) != long_side)
+                    || !has_units_allowance
+                    || std::abs(plan_reverse->signed_units) != working_units(live.remaining)
+                    || std::abs(plan_reverse->signed_units) != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_reduce) {
+                if (!finite_positive(plan_reduce->units) || !has_units_allowance
+                    || plan_reduce->units != working_units(live.remaining)
+                    || plan_reduce->units != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_flatten) {
+                if (!has_units_allowance
+                    || working_units(live.remaining) != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (native_sized) {
+        // A kernel-sized opening settles as a signed book transaction on its
+        // declared side, or -- when the terms named one -- through the same
+        // ReverseTo / CloseOpposite shapes a HostSized{Open} may name, with the
+        // kernel's own units as the opening on that side.
+        const bool long_side = native_sized->side == Side::Long;
+        if (plan_transact) {
+            if (!finite_nonzero(plan_transact->signed_units)
+                || ((plan_transact->signed_units > 0.0) != long_side)
+                || std::abs(plan_transact->signed_units) > cap) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_reverse) {
+            if (!finite_nonzero(plan_reverse->signed_units)
+                || ((plan_reverse->signed_units > 0.0) != long_side)
+                || !has_units_allowance
+                || std::abs(plan_reverse->signed_units) != working_units(live.remaining)
+                || std::abs(plan_reverse->signed_units) != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_reduce) {
+            if (!finite_positive(plan_reduce->units) || !has_units_allowance
+                || plan_reduce->units != working_units(live.remaining)
+                || plan_reduce->units != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (plan_flatten) {
+            if (!has_units_allowance || working_units(live.remaining) != allowance_left) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    const bool opening_auth = std::holds_alternative<OpeningClose>(live.authority);
+    const auto* selected_auth = std::get_if<OpeningsClose>(&live.authority);
+    const auto* cohort_auth = std::get_if<CohortClose>(&live.authority);
+    ExecutionScope canonical_scope = proposal.scope;
+    if (opening_auth) {
+        const auto& close = std::get<OpeningClose>(live.authority);
+        const auto* scope = std::get_if<execution::OpeningExposure>(&proposal.scope);
+        if (!scope || scope->incarnation != close.opening.incarnation || scope->cycle != close.cycle) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+    } else if (selected_auth) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+            return PreparationError{*error, EventId{identity_, 0}, target};
+        }
+        if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
+            return PreparationError{CoreFailure::ObservationMismatch, EventId{identity_, 0}, target};
+        }
+        auto* scope = std::get_if<SelectedExposure>(&canonical_scope);
+        if (!scope || scope->cycle != selected_auth->cycle || live_count == 0
+            || scope->incarnations.size() != live_count) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::sort(scope->incarnations.begin(), scope->incarnations.end());
+        if (std::adjacent_find(scope->incarnations.begin(), scope->incarnations.end())
+            != scope->incarnations.end()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        for (const auto& observation : proposal.pre_target.openings) {
+            if (observation.has_live_matching_lot
+                && !std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
+                                        observation.queried_opening.incarnation)) {
+                return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+            }
+        }
+        if (proposal.inspected_opened_units != 0.0) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (cohort_auth) {
+        const auto* position = std::get_if<PositionNonflat>(&proposal.pre_target.current_position);
+        auto* scope = std::get_if<SelectedExposure>(&canonical_scope);
+        if (!position || position->cycle <= 0 || !scope || scope->cycle != position->cycle
+            || !same_position(proposal.pre_fill, proposal.pre_target.current_position)
+            || scope->incarnations.empty()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::sort(scope->incarnations.begin(), scope->incarnations.end());
+        if (std::adjacent_find(scope->incarnations.begin(), scope->incarnations.end())
+            != scope->incarnations.end()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::size_t live_count = 0;
+        for (const auto& observation : proposal.pre_target.openings) {
+            if (!cohort_contains(cohort_auth->cohort, observation.queried_opening)) {
+                return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+            }
+            if (!same_position(observation.current_position, proposal.pre_target.current_position)) {
+                return PreparationError{CoreFailure::ObservationMismatch, EventId{identity_, 0}, target};
+            }
+            if (observation.has_live_matching_lot) {
+                ++live_count;
+                if (!std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
+                                        observation.queried_opening.incarnation)) {
+                    return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+                }
+            }
+        }
+        if (live_count == 0 || scope->incarnations.size() != live_count
+            || proposal.inspected_opened_units != 0.0) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+    } else if (std::holds_alternative<BookTransaction>(live.authority)
+               || std::holds_alternative<ArmedTransaction>(live.authority)
+               || std::holds_alternative<BookClose>(live.authority)) {
+        if (!std::holds_alternative<execution::Book>(proposal.scope)) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+    } else {
+        return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+    }
+
+    const bool reversal_plan = plan_reverse != nullptr;
+    const bool host_open = host_sized && host_sized->kind == HostSizedKind::Open;
+    const bool whole_host_flatten = host_open && plan_flatten;
+    if ((reversal_plan || (host_open && !plan_transact))
+        && (!std::holds_alternative<BookTransaction>(live.authority)
+            || !std::holds_alternative<execution::Book>(canonical_scope))) {
+        return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+    }
+
+    if (!std::isfinite(proposal.inspected_closed_units) || proposal.inspected_closed_units < 0.0
+        || !std::isfinite(proposal.inspected_opened_units)
+        || !std::isfinite(proposal.resolved_price)
+        || (proposal.resolved_price <= 0.0
+            && !(current && proposal.inspected_opened_units == 0.0))) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    if (reversal_plan) {
+        if (!has_units_allowance || !finite_nonzero(plan_reverse->signed_units)
+            || ((proposal.inspected_opened_units > 0.0) != (plan_reverse->signed_units > 0.0))
+            || proposal.inspected_opened_units != plan_reverse->signed_units
+            || std::abs(proposal.inspected_opened_units) != working_units(live.remaining)
+            || std::abs(proposal.inspected_opened_units) != allowance_left) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    }
+    if (host_open && plan_reduce
+        && (proposal.inspected_opened_units != 0.0
+            || proposal.inspected_closed_units != plan_reduce->units)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    if (whole_host_flatten && proposal.inspected_opened_units != 0.0) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    double filled = proposal.inspected_closed_units;
+    if (plan_transact) {
+        if (!checked_add_positive(proposal.inspected_closed_units,
+                                  std::abs(proposal.inspected_opened_units), &filled)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+    } else if (reversal_plan) {
+        filled = proposal.inspected_closed_units + std::abs(proposal.inspected_opened_units);
+        if (!std::isfinite(filled)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+    }
+    if (!(filled > 0.0) || !std::isfinite(filled)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    const bool special_turnover = reversal_plan || whole_host_flatten;
+    if (!flatten && !special_turnover && filled > working_units(live.remaining)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    if (has_units_allowance && !special_turnover && filled > allowance_left) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    RemainingProjection remaining_after = RemainingProjectionUnits{};
+    if (flatten) remaining_after = RemainingProjectionFlattenAll{};
+    bool units_exhausted = flatten || special_turnover;
+    if (!flatten) {
+        if (special_turnover) {
+            remaining_after = RemainingProjectionUnits{0.0};
+        } else {
+            double after = 0.0;
+            if (!checked_sub_cap(working_units(live.remaining),
+                                 std::min(filled, working_units(live.remaining)),
+                                 &after, &units_exhausted)) {
+                if (filled != working_units(live.remaining)) {
+                    return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                            target};
+                }
+                units_exhausted = true;
+                after = 0.0;
+            }
+            remaining_after = RemainingProjectionUnits{after};
+        }
+    }
+
+    Allowance allowance_after = live.allowance;
+    if (has_units_allowance) {
+        auto units = std::get<AllowanceUnits>(live.allowance);
+        bool allow_ex = false;
+        double left = 0.0;
+        const double allowance_deduction = reversal_plan
+            ? std::abs(proposal.inspected_opened_units)
+            : (whole_host_flatten ? working_units(live.remaining) : filled);
+        if (allowance_deduction == units.left) {
+            units.left = 0.0;
+        } else if (!checked_sub_cap(units.left, allowance_deduction, &left, &allow_ex)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        } else {
+            units.left = left;
+        }
+        allowance_after = units;
+    }
+
+    ExecutionValues values;
+    values.live_index = live_index;
+    values.ordinal = usable_ordinal(next_timeline_ordinal);
+    values.filled = filled;
+    values.flatten = flatten;
+    values.units_exhausted = units_exhausted;
+    values.remaining_after = std::move(remaining_after);
+    values.allowance_after = std::move(allowance_after);
+    values.scope = std::move(canonical_scope);
+    return values;
+}
+
+Preparation<std::monostate> WorkingRequestCore::check_execution(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        uint64_t& next_timeline_ordinal) {
+    auto values = execution_values(target, proposal, next_timeline_ordinal);
+    if (const auto* none = std::get_if<NoChange>(&values)) return *none;
+    if (const auto* error = std::get_if<PreparationError>(&values)) return *error;
+    // prepare_execution's plan: begin_plan's checks, then seal_plan for the
+    // one event the install appends and no row push.
+    begin_direct();
+    seal_direct(1, false, false, false);
+    return std::monostate{};
+}
+
+InstallResult WorkingRequestCore::apply_execution(
+        const RequestHandle& target,
+        const ExecutionProposal& proposal,
+        const CommittedExecutionFacts& facts,
+        uint64_t& next_timeline_ordinal) {
+    auto computed = execution_values(target, proposal, next_timeline_ordinal);
+    auto* values = std::get_if<ExecutionValues>(&computed);
+    if (!values || epoch_ == std::numeric_limits<uint64_t>::max()) {
+        return InstallError::StalePreparation;
+    }
+    // install_execution's checks, in its order.
+    if (facts.result.status != execution::Status::Applied) return InstallError::WrongCoreOrRun;
+    if (facts.result.closed_units != proposal.inspected_closed_units
+        || facts.result.opened_units != proposal.inspected_opened_units
+        || facts.result.current_ticket != proposal.inspected_current_ticket) {
+        return InstallError::WrongCoreOrRun;
+    }
+    LiveRequest& live = live_[values->live_index];
+    const bool can_retain = !values->flatten && !values->units_exhausted;
+    bool retain = can_retain;
+    if (const auto* selected = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (observe_openings(facts.post_target, *selected, &live_count)) {
+            return InstallError::WrongCoreOrRun;
+        }
+        if (live_count == 0) retain = false;
+    }
+    if (retain) {
+        if (const auto* opening = std::get_if<OpeningClose>(&live.authority)) {
+            if (!opening_close_alive(facts.post_target, *opening)) retain = false;
+        }
+    }
+    if (retain) {
+        if (const auto* book = std::get_if<BookClose>(&live.authority)) {
+            if (!book_close_alive(facts.post_target, *book)) retain = false;
+        }
+    }
+
+    // The event the token would have held, stamped with the committed facts.
+    ExecutionAppliedEvent event;
+    event.ordinal = values->ordinal;
+    event.definition = live.definition;
+    event.raw_price = proposal.raw_price;
+    event.resolved_price = proposal.resolved_price;
+    event.current_ticket = proposal.inspected_current_ticket;
+    event.first_trade_index = facts.result.first_trade_index;
+    event.closed_trade_count = facts.result.closed_trade_count;
+    event.opened_lot_incarnation = facts.result.opened_lot_incarnation;
+    event.closed_units = proposal.inspected_closed_units;
+    event.opened_units = proposal.inspected_opened_units;
+    event.filled_working = values->filled;
+    event.remaining_before = project_remaining(live.remaining);
+    event.allowance_before = live.allowance;
+    event.allowance_after = values->allowance_after;
+    event.cycle_before = facts.cycle_before;
+    event.cycle_after = facts.cycle_after;
+    event.scope = std::move(values->scope);
+    fill_applied_cursor(event, proposal.cursor);
+    if (retain) {
+        event.terminal = false;
+        event.remaining_after = values->remaining_after;
+        event.terminal_reason = std::nullopt;
+    } else {
+        event.terminal = true;
+        event.remaining_after = values->flatten ? RemainingProjection{RemainingProjectionFlattenAll{}}
+                : (values->units_exhausted ? RemainingProjection{RemainingProjectionUnits{0.0}}
+                                           : values->remaining_after);
+        event.terminal_reason = values->flatten ? AppliedTerminalReason::Flattened
+                : (values->units_exhausted ? AppliedTerminalReason::WorkingUnitsSatisfied
+                                           : AppliedTerminalReason::TargetExhausted);
+    }
+    // check_execution sealed the reservation; this is commit's half.
+    const std::size_t first = history_end();
+    append_direct(std::move(event), false);
+    if (retain) {
+        live.remaining =
+                RemainingUnits{std::get<RemainingProjectionUnits>(values->remaining_after).q};
+        live.allowance = std::move(values->allowance_after);
+    } else {
+        live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(values->live_index));
+    }
+    return Installed{finish_direct(first)};
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         const EventId& applied,
         const RequestHandle& recipient,

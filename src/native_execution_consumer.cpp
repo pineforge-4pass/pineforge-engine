@@ -3751,6 +3751,22 @@ bool NativeExecutionConsumer::install_mutation(
     return true;
 }
 
+bool NativeExecutionConsumer::apply_execution(
+        BacktestEngine& engine, const native_order::RequestHandle& target,
+        const native_order::ExecutionProposal& proposal,
+        const native_order::CommittedExecutionFacts& facts, uint64_t ordinal) {
+    const auto result = requests_.apply_execution(target, proposal, facts, next_timeline_ordinal_);
+    if (const auto* err = std::get_if<native_order::InstallError>(&result)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Settlement, ordinal,
+                                   static_cast<uint32_t>(*err)});
+        render(engine, "native execution install failed after settlement");
+        return false;
+    }
+    note_install(std::get<native_order::Installed>(result).events);
+    return true;
+}
+
 void NativeExecutionConsumer::note_install(const native_order::EventRange& events) noexcept {
     note_committed_events(events);
     clear_cohort_target_cache();
@@ -4970,13 +4986,29 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         const int64_t cycle_before = engine.position_cycle_seq_;
         const double signed_units_before = position(engine).signed_units;
         const native_order::EventId applied_id{handle.run, next_timeline_ordinal_};
-        auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
-        if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
-            fail_preparation(engine, *error, NativeFailureOperation::Settlement);
-            return std::nullopt;
+        // The execution's direct form checks now and writes after the
+        // settlement; the pair holds a token across it.
+        std::optional<native_order::PreparedExecution> token;
+        bool ready = false;
+        if (direct_mutation_) {
+            auto checked = requests_.check_execution(handle, proposal, next_timeline_ordinal_);
+            if (const auto* error = std::get_if<native_order::PreparationError>(&checked)) {
+                fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+                return std::nullopt;
+            }
+            ready = std::holds_alternative<std::monostate>(checked);
+        } else {
+            auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
+            if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+                fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+                return std::nullopt;
+            }
+            if (auto* prepared_token = std::get_if<native_order::PreparedExecution>(&prepared)) {
+                token.emplace(std::move(*prepared_token));
+                ready = true;
+            }
         }
-        auto* token = std::get_if<native_order::PreparedExecution>(&prepared);
-        if (!token) {
+        if (!ready) {
             if (host_sized) {
                 fail(engine, NativeFailure{NativeFailureCode::Contract,
                                            NativeFailureOperation::Settlement, P});
@@ -5090,7 +5122,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         committed.cycle_after = engine.position_cycle_seq_;
         committed.post_target = std::move(candidate.target);
         committed.committed_action = candidate.physical;
-        if (!install_execution(engine, std::move(*token), committed, P)) return std::nullopt;
+        const bool installed = direct_mutation_
+            ? apply_execution(engine, handle, proposal, committed, P)
+            : install_execution(engine, std::move(*token), committed, P);
+        if (!installed) return std::nullopt;
         const auto& applied = std::get<native_order::ExecutionAppliedEvent>(
             requests_.history_at(notification.history_index));
         if (applied.ordinal != applied_id.ordinal || (current && !applied.terminal))
