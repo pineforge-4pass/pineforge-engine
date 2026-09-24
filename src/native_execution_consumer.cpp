@@ -3822,7 +3822,7 @@ bool NativeExecutionConsumer::install_execution(
 
 void NativeExecutionConsumer::drain_dependency_queue(
         BacktestEngine& engine,
-        std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds,
+        const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
         NativeFailureOperation operation) {
     if (failed() || seeds.empty()) return;
     try {
@@ -3894,14 +3894,15 @@ void NativeExecutionConsumer::drain_parent_terminal(
         render(engine, e.what());
         return;
     }
-    drain_dependency_queue(engine, std::move(seeds), operation);
+    drain_dependency_queue(engine, seeds, operation);
 }
 
 void NativeExecutionConsumer::drain_after_applied(
         BacktestEngine& engine, const native_order::EventId& applied,
         const native_order::RequestHandle& filler) {
     try {
-        std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
+        auto& seeds = drain_seeds_;
+        seeds.clear();
         auto note_absent = [&](const native_order::RequestHandle& parent) {
             if (requests_.find_live(parent) != nullptr || requests_.last_ordinal() == 0) return;
             native_order::EventId cause = applied;
@@ -4054,7 +4055,7 @@ void NativeExecutionConsumer::drain_after_applied(
         // already does for a single parent.
         if (seeds.empty() && !requests_.has_waiting_children(filler)) return;
         seeds.push_back({applied, filler});
-        drain_dependency_queue(engine, std::move(seeds), NativeFailureOperation::Settlement);
+        drain_dependency_queue(engine, seeds, NativeFailureOperation::Settlement);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Settlement, applied.ordinal});
@@ -5032,7 +5033,12 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         execution::PhysicalExecutionContext ctx;
         ctx.effective_time_ms = evaluation.cursor.point.effective_time_ms;
         ctx.interval_index = evaluation.cursor.point.interval_index;
-        NativePrecommitView view;
+        // The consumer's view, reused fill after fill (capacity only): every
+        // field is written here or by the preview below, as for a fresh one.
+        NativePrecommitView& view = precommit_view_;
+        view.account = execution::AccountEffectProjection{};
+        view.closed_row_pnl.clear();
+        view.settlement_readiness = execution::Status::Applied;
         view.target = handle;
         view.definition = live->definition;
         view.cursor = evaluation.cursor;

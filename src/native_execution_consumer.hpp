@@ -1151,7 +1151,7 @@ private:
                                NativeFailureOperation operation);
     void drain_dependency_queue(
             BacktestEngine& engine,
-            std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds,
+            const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
             NativeFailureOperation operation);
     void observe_trails(BacktestEngine& engine, const NativeDriverPoint& point,
                         const native_order::MatchCursor& cursor, bool continuous,
@@ -1545,6 +1545,15 @@ private:
     // drain runs inside the settlement of one fill, where no host command can
     // start another.
     std::vector<native_order::RequestHandle> drain_handles_;
+    // drain_after_applied's seeds for the dependency queue, the same kind of
+    // scratch: cleared where the drain starts, read by the queue it hands
+    // them to, capacity only between fills.
+    std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> drain_seeds_;
+    // consume_matched_request's precommit view, written whole for each fill
+    // and shown to the host only inside that fill's precommit call (which
+    // cannot start another fill), so its closed-row vector keeps capacity
+    // instead of being allocated at every closing fill.
+    NativePrecommitView precommit_view_;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
