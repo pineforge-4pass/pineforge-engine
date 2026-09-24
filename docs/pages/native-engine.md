@@ -1380,7 +1380,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:12790-12814`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:13532-13556`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
