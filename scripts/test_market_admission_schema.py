@@ -14,9 +14,12 @@ class AdmissionSchema(unittest.TestCase):
     def clone(self):
         directory = tempfile.TemporaryDirectory()
         root = Path(directory.name) / "repo"
+        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
+        # bytecode through a temporary file that can vanish between copytree's
+        # listing and its copy; bytecode is never source input to the clone.
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
             "build*", ".git", "corpus", "*.so", "*.a",
-            ".native-fx-introduced-*"))
+            ".native-fx-introduced-*", "__pycache__", "*.pyc"))
         return directory, root
 
     def test_current(self):

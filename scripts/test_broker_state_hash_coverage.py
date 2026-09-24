@@ -23,7 +23,10 @@ class Coverage(unittest.TestCase):
                 # The ABI checker creates this short-lived root sentinel
                 # while CTest runs guards in parallel. It is not source
                 # input to this isolated mutation clone.
-                ".native-fx-introduced-*"))
+                ".native-fx-introduced-*",
+                # Nor is bytecode, which a parallel Python guard writes
+                # through a temporary file that can vanish mid-copy.
+                "__pycache__", "*.pyc"))
             for relative, before, after in mutations:
                 path = root / relative
                 text = path.read_text()

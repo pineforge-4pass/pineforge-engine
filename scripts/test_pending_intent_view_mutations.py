@@ -18,8 +18,12 @@ class ProjectionCoverage(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="pf-intent-view-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
+        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
+        # bytecode through a temporary file that can vanish between copytree's
+        # listing and its copy; bytecode is never source input to the clone.
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so", ".native-fx-introduced-*", ".ccache"))
+            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so", ".native-fx-introduced-*", ".ccache",
+            "__pycache__", "*.pyc"))
         for relative, before, after in mutations:
             path = root / relative
             text = path.read_text()

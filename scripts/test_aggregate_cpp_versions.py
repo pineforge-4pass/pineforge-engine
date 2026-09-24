@@ -19,8 +19,12 @@ class AggregateVersions(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(prefix="pf-aggregate-versions-")
         self.addCleanup(directory.cleanup)
         root = Path(directory.name) / "repo"
+        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
+        # bytecode through a temporary file that can vanish between copytree's
+        # listing and its copy; bytecode is never source input to the clone.
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            "build*", ".git", "corpus", "*.so", "*.a", ".native-fx-introduced-*"))
+            "build*", ".git", "corpus", "*.so", "*.a", ".native-fx-introduced-*",
+            "__pycache__", "*.pyc"))
         return root
 
     def test_current_tree(self) -> None:
