@@ -4198,6 +4198,10 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             || consumer->first_command_after(receipt_cursor_)
                    == consumer->first_command_after(std::numeric_limits<std::uint64_t>::max());
         if (detail::skip_quiet(detail::QuietHook::ReceiptRead, quiet)) {
+            // No acknowledgement (V19-B's, at the end of the full read) is
+            // needed: no command lies between the one the last full read
+            // acknowledged and the cursor, so acknowledging the new cursor
+            // would let the journal window retire nothing more.
             receipt_cursor_ = std::max(receipt_cursor_, high_water);
             return;
         }
