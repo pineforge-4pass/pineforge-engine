@@ -209,7 +209,10 @@ public:
         ++bar_;
         observe_book();
         outcome.trace.push_back(native_continuation_hash());
-        if (!cohort_) cohort_ = cohort_open();
+        if (!cohort_) {
+            cohort_ = cohort_open();
+            after_command();
+        }
         const long ref = static_cast<long>(bar.close * 4.0);
         churn(ref);
         top_up(ref);
@@ -268,6 +271,13 @@ public:
         }
         outcome.events_digest = census;
     }
+
+protected:
+    // Called after every command this host issues (submit, replace, cancel and
+    // the roster commands), inside the callback that issued it. A no-op here;
+    // test_native_direct_mutation reads the core and the hashes there, so its
+    // two runs are compared command by command (R5 lane L3).
+    virtual void after_command() {}
 
 private:
     // The working book, as the host sees it; its order is the kernel's.
@@ -333,6 +343,7 @@ private:
 
     void place(const no::Request& request) {
         const auto result = submit(request);
+        after_command();
         if (result.handle) {
             ++outcome.accepted;
             handles_.push_back(*result.handle);
@@ -353,6 +364,7 @@ private:
             const no::RequestHandle target = handles_[at];
             if (rng_.percent(70)) {
                 const auto result = replace(target, random_request(ref));
+                after_command();
                 if (result.successor) {
                     ++outcome.replaced;
                     handles_[at] = *result.successor;
@@ -361,6 +373,7 @@ private:
                 }
             } else {
                 if (cancel(target).status == no::CancelStatus::Cancelled) ++outcome.cancelled;
+                after_command();
                 handles_.erase(handles_.begin() + static_cast<std::ptrdiff_t>(at));
             }
         }
@@ -390,6 +403,7 @@ private:
             no::Request entry{no::Transact{buy ? 1.0 : -1.0}, "k3-e", ""};
             if (rng_.percent(50)) entry.trigger = no::Limit{ticks(buy ? ref - 2 : ref + 2)};
             const auto parent = submit(entry);
+            after_command();
             if (parent.handle) {
                 ++outcome.accepted;
                 no::WaitForApplied wait;
@@ -418,6 +432,7 @@ private:
         if (cohort_ && !entries_.empty() && rng_.percent(20)) {
             const std::size_t at = static_cast<std::size_t>(rng_.below(static_cast<int>(entries_.size())));
             cohort_add(*cohort_, entries_[at]);
+            after_command();
         }
         if (cohort_ && rng_.percent(8)) {
             no::Request close{no::HostSized{no::HostSizedKind::Close, std::nullopt}, "k3-c", ""};

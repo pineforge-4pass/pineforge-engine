@@ -1092,6 +1092,16 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
+# R5 lane L3: the order core's direct forms (WorkingRequestCore::apply_*)
+# against the prepare/install pairs they stand for, bit for bit after every
+# command -- two bare cores over randomized command streams (answers,
+# exceptions, every event and live row, receipts, chain index, counters and
+# token staleness), and whole books on the consumer with the direct forms on
+# and off (K3's and L2's randomized hosts and a scripted host for anchored
+# legs, deferred reductions, retaining replaces, bound openings, the risk
+# flatten and current executions, under Window and Full). Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_direct_mutation)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
