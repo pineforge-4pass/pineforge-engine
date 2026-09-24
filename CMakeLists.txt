@@ -207,6 +207,23 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
         # `-ffp-contract=off` forces the compiler to round each * and + to
         # IEEE-754 double independently, matching the Pine reference.
         -ffp-contract=off
+        # Start every function on a 64-byte (cache-line) boundary. The per-bar
+        # Pine path is front-end bound (spark's Cortex-A725: 24-28 L1i refills
+        # per 1,000 instructions, 31-32 % of cycles stalled on fetch), so its
+        # speed hangs on where hot functions fall against cache lines and
+        # fetch blocks, which any edit before them moves: never-executed
+        # padding moved the 14 shared probes' cycles by a median 7.6-8.9 % (up
+        # to 12 %) at identical instruction counts. Aligned, a function's
+        # offset within its lines no longer depends on the code before it.
+        # Lane LAYOUT1, over 13 padded layouts: 1.4-1.8 % fewer cycles and a
+        # spread of 5.9-6.6 % instead of 7.5-9.0 %; the 100 public slots run
+        # 0.9 % / 3.1 % faster (magnifier off / on); x86-64 GCC simulates 8 %
+        # fewer L1i misses; Apple silicon is neutral. That narrows the layout
+        # lottery without ending it: one layout still lands a few percent
+        # either way. Defaults were 16 bytes (GCC) and 4 (Apple clang); code
+        # +3 %, no added instruction executes, no value moves. Library
+        # objects only; a consumer's own code keeps its compiler's default.
+        $<$<NOT:$<CONFIG:Debug>>:-falign-functions=64>
     )
 
     # The same rule travels to every consumer. A strategy translation unit
