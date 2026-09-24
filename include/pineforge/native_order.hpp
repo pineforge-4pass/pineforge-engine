@@ -1004,6 +1004,10 @@ struct ReplacedEvent {
     const RequestHandle& successor() const noexcept { return successor_definition->handle; }
     const Request& successor_request() const noexcept { return successor_definition->request; }
     const Birth& successor_birth() const noexcept { return successor_definition->birth; }
+    /// Whether the replace kept the handle (ReplaceOptions::keep_handle): the
+    /// successor definition is the same request re-priced, and only such a
+    /// definition carries a priority of its own.
+    bool kept_handle() const noexcept { return successor_definition->priority != 0; }
 };
 
 struct ReplaceRejectedEvent {
@@ -1991,9 +1995,14 @@ private:
     uint64_t usable_ordinal(uint64_t next) const;
     uint64_t usable_incarnation(uint64_t next) const;
     /// The working book's position of the request under `incarnation`, or
-    /// live_.size(): a search by queue order (the handle's own number, or
-    /// the one repriced_ names for it).
-    std::size_t live_position(uint64_t incarnation) const noexcept;
+    /// live_.size(), while repriced_ names a re-priced request: a search by
+    /// queue order (the priority repriced_ names, or the handle's own number).
+    std::size_t repriced_position(uint64_t incarnation) const noexcept;
+    /// refresh_allowance for an unbound close that carried a binding.
+    bool refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
+                              const TargetObservation& observation);
+    TargetKind classify_repriced(uint64_t incarnation, std::size_t* live_index) const noexcept;
+    const LiveRequest* find_repriced(uint64_t incarnation) const noexcept;
     /// Records that the request under `incarnation` now stands at
     /// `priority` (a keep_handle re-price), dropping the entries of requests
     /// that have left the book once they outnumber its rows. The caller has
@@ -2029,6 +2038,31 @@ private:
         uint64_t receipt_outcome = 0;
     };
     std::optional<InstallError> validate_plan(const MutationPlan& plan) const noexcept;
+    // prepare_replace / apply_replace past their checks, for a replace that
+    // keeps the handle or carries a binding (ReplaceOptions::keep_handle /
+    // keep_binding), and the successor row the two share.
+    PreparedReplace prepare_replace_kept(std::size_t live_index, const RequestHandle& staged_target,
+                                         Request&& staged, uint64_t ordinal, uint64_t incarnation,
+                                         const CommandContext& context, ReplaceOptions options,
+                                         MutationPlan&& plan);
+    // apply_replace's two instantiations: <false> is a plain replace,
+    // <true> (through apply_replace_kept, out of line) one with the options.
+    template <bool Kept>
+    CommandInstalled<ReplaceResult> apply_replace_as(const RequestHandle& target,
+                                                     const Request& request,
+                                                     const CommandContext& context,
+                                                     uint64_t& next_order_incarnation,
+                                                     uint64_t& next_timeline_ordinal,
+                                                     ReplaceOptions options);
+    CommandInstalled<ReplaceResult> apply_replace_kept(const RequestHandle& target,
+                                                       const Request& request,
+                                                       const CommandContext& context,
+                                                       uint64_t& next_order_incarnation,
+                                                       uint64_t& next_timeline_ordinal,
+                                                       ReplaceOptions options);
+    LiveRequest kept_successor(std::size_t live_index, const RequestHandle& staged_target,
+                               Request&& staged, uint64_t ordinal, uint64_t incarnation,
+                               const CommandContext& context, ReplaceOptions options) const;
     InstallResult commit(MutationPlan& plan) noexcept;
     MutationPlan begin_plan() const;
     void reserve_plan(const MutationPlan& plan);

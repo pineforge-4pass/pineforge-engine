@@ -1671,12 +1671,13 @@ private:
     // per replace (note_committed_events). Reset with the other digests.
     AppendDigest chain_roots_{};
     // V19-D: the issued incarnations' ranges that can no longer grow -- every
-    // range but the last -- folded once each as it closes
-    // (note_committed_events). A re-price that keeps its handle takes a
-    // number no handle is issued under, so issuance stops being one dense
-    // range; the continuation then folds this digest and the open range,
-    // not every range at every read. Reset with the other digests.
-    AppendDigest issued_ranges_{};
+    // range but the last -- folded once each, at the first continuation read
+    // after it closed. A re-price that keeps its handle takes a number no
+    // handle is issued under, so issuance stops being one dense range; the
+    // continuation then folds this digest and the open range, not every range
+    // at every read. A read-side memo of the core's own ranges (hence
+    // mutable), reset with the other digests.
+    mutable AppendDigest issued_ranges_{};
     // set_direct_mutation's switch. Like match_row_reuse_, a choice between
     // two computations of the same values, not run state; declared last so no
     // member the consumer reads at every point changes offset.

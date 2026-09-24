@@ -1666,6 +1666,20 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             || (issued.size() == 1 && issued.front().first == 1
                 && issued.front().second == requests_.last_incarnation());
         if (!dense) {
+            // The ranges closed since the last read fold into the running
+            // digest now, each once: only the last range still grows.
+            if (issued.size() > issued_ranges_.count + 1) {
+                StateFold ranges;
+                ranges.run_base = f.run_base;
+                ranges.h = issued_ranges_.h;
+                for (std::size_t index = issued_ranges_.count; index + 1 < issued.size();
+                     ++index) {
+                    ranges.u(issued[index].first);
+                    ranges.u(issued[index].second);
+                }
+                issued_ranges_.h = ranges.h;
+                issued_ranges_.count = issued.size() - 1;
+            }
             f.u(issued.size());
             f.u(issued_ranges_.h);
             f.u(issued.back().first);
@@ -9569,7 +9583,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     // pre-open birth recorded under it, belong to the definition it
     // replaced.
     const bool kept_handle = predicted_status == native_order::ReplaceStatus::Replaced
-        && ok.result.successor && *ok.result.successor == target;
+        && options.keep_handle;
     if (kept_handle) {
         match_provenance_.erase(
             std::remove_if(match_provenance_.begin(), match_provenance_.end(),
@@ -9991,7 +10005,7 @@ void NativeExecutionConsumer::note_committed_events(
         // handle was issued, and the index holds it once.
         if (const auto* replaced = std::get_if<native_order::ReplacedEvent>(&event)) {
             const auto& successor = replaced->successor_definition;
-            if (successor && successor->root && replaced->successor() != replaced->predecessor()) {
+            if (successor && successor->root && !replaced->kept_handle()) {
                 roots.u(successor->handle.incarnation);
                 roots.u(successor->root->incarnation);
                 ++root_count;
@@ -10002,19 +10016,6 @@ void NativeExecutionConsumer::note_committed_events(
     event_records_.count = requests_.history_end();
     chain_roots_.h = roots.h;
     chain_roots_.count = root_count;
-    // V19-D: the issued ranges that closed -- only the last one still grows.
-    const auto& issued = requests_.issued_incarnations();
-    if (issued.size() > issued_ranges_.count + 1) {
-        StateFold ranges;
-        ranges.run_base = records.run_base;
-        ranges.h = issued_ranges_.h;
-        for (std::size_t index = issued_ranges_.count; index + 1 < issued.size(); ++index) {
-            ranges.u(issued[index].first);
-            ranges.u(issued[index].second);
-        }
-        issued_ranges_.h = ranges.h;
-        issued_ranges_.count = issued.size() - 1;
-    }
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;
