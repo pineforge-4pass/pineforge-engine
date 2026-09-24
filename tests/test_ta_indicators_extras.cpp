@@ -991,10 +991,13 @@ static void test_pivot_point_levels() {
     CHECK(near(trad[4], P - (110.0 - 90.0))); // S2
     CHECK(near(trad[5], 110.0 + 2.0 * (P - 90.0))); // R3
     CHECK(near(trad[6], 90.0 - 2.0 * (110.0 - P))); // S3
-    CHECK(near(trad[7], P + 3.0 * (110.0 - 90.0))); // R4
-    CHECK(near(trad[8], P - 3.0 * (110.0 - 90.0))); // S4
-    CHECK(near(trad[9], P + 4.0 * (110.0 - 90.0))); // R5
-    CHECK(near(trad[10], P - 4.0 * (110.0 - 90.0))); // S5
+    // Expectation corrected: P +/- 3(H-L) and P +/- 4(H-L) -> the standard
+    // Traditional R4..S5, because lane B-ENGINE made the free function
+    // ta::PivotPointLevels' formulas (Classic's spacing was pinned here).
+    CHECK(near(trad[7], P * 3.0 + (110.0 - 3.0 * 90.0))); // R4
+    CHECK(near(trad[8], P * 3.0 - (3.0 * 110.0 - 90.0))); // S4
+    CHECK(near(trad[9], P * 4.0 + (110.0 - 4.0 * 90.0))); // R5
+    CHECK(near(trad[10], P * 4.0 - (4.0 * 110.0 - 90.0))); // S5
 
     auto fib = ta::pivot_point_levels("Fibonacci", 110.0, 90.0, 100.0);
     CHECK(fib.size() == 11);

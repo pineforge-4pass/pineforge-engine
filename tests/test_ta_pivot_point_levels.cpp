@@ -37,8 +37,9 @@
  * never / every bar / at random / late, na inputs, and compute -> recompute ->
  * recompute sequences; the Woodie + developing runtime error and the type
  * names; and the free function ta::pivot_point_levels, which today's lowering
- * calls with the previous bar's high, low and close, against the new form
- * anchored on every bar.
+ * calls with the previous bar's high, low and close, and its six-argument
+ * overload, which also takes that bar's open and this bar's, against the new
+ * form anchored on every bar.
  */
 
 #include <pineforge/na.hpp>
@@ -433,34 +434,141 @@ static void test_woodie_developing_and_names() {
 // The new form anchored on every bar (developing false) closes a one-bar
 // period on every bar -- the previous bar -- so it computes the same levels
 // wherever the free function spells the same formula as the reference, and
-// the reference's own values elsewhere. Pinned per slot: equal on every bar
-// for every slot of Fibonacci, Classic and Camarilla and for P, R1, S1, R2,
-// S2 of Traditional; the rest are counted and printed.
-static void test_free_function_equivalence() {
-    std::printf("test_free_function_equivalence\n");
-    const Feed f = make_feed(3000, 0x9e04ULL, false);
+// the reference's own values elsewhere. Pinned per slot, on the quarter-tick
+// feed and on a wide off-tick one: equal on every bar for every slot of
+// Traditional, Fibonacci, Classic and Camarilla (lane B-ENGINE put
+// Traditional's R3..S5 in the reference's operation order; on 8cf3be58 slots
+// 7..10 differed on both feeds and 5..6 on the wide one); Woodie and DM,
+// whose inputs this signature does not carry, are counted and printed. The
+// six-argument free function also takes the previous bar's open and this
+// bar's open, and equals the new form in every slot of every type.
+// A feed whose bars sit on no tick and whose high is up to forty times its
+// low: there the two operation orders of Traditional's R3 and S3 round
+// apart (on the quarter-tick feed above they never do; R3's need a low
+// under a quarter of the high).
+static Feed make_wide_feed(int n, uint64_t seed) {
+    Rng r(seed);
+    Feed f;
+    for (int i = 0; i < n; ++i) {
+        const double base = 10.0 + r.unit() * 990.0;
+        const double h = base * (1.0 + r.unit() * 3.0);
+        const double l = base * (0.1 + r.unit() * 0.9);
+        f.o.push_back(l + r.unit() * (h - l));
+        f.h.push_back(h);
+        f.l.push_back(l);
+        f.c.push_back(l + r.unit() * (h - l));
+    }
+    return f;
+}
+
+static void free_function_equivalence_on(const Feed& f, const char* feed) {
+    std::printf("  %s feed\n", feed);
     const int n = (int)f.o.size();
     for (int ty = 0; ty < 6; ++ty) {
         ta::PivotPointLevels p;
         int differ[11] = {0};
+        int differ_full[11] = {0};
         for (int t = 0; t < n; ++t) {
             const std::vector<double> got = p.compute(kTypes[ty], true, false, f.o[t], f.h[t], f.l[t], f.c[t]);
+            const double O = t ? f.o[t - 1] : na<double>();
             const double H = t ? f.h[t - 1] : na<double>();
             const double L = t ? f.l[t - 1] : na<double>();
             const double C = t ? f.c[t - 1] : na<double>();
             const std::vector<double> free_fn = ta::pivot_point_levels(kTypes[ty], H, L, C);
+            const std::vector<double> full_fn = ta::pivot_point_levels(kTypes[ty], O, H, L, C, f.o[t]);
             for (int i = 0; i < 11; ++i) if (!same(got[i], free_fn[i])) ++differ[i];
+            for (int i = 0; i < 11; ++i) if (!same(got[i], full_fn[i])) ++differ_full[i];
         }
         std::printf("  %-11s differing bars per slot [P R1 S1 R2 S2 R3 S3 R4 S4 R5 S5]:", kTypes[ty]);
         for (int i = 0; i < 11; ++i) std::printf(" %d", differ[i]);
+        std::printf("; six-argument:");
+        for (int i = 0; i < 11; ++i) std::printf(" %d", differ_full[i]);
         std::printf("\n");
         const std::string type = kTypes[ty];
         int must_equal = 0;
-        if (type == "Fibonacci" || type == "Classic" || type == "Camarilla") must_equal = 11;
-        if (type == "Traditional") must_equal = 5;
+        if (type == "Traditional" || type == "Fibonacci" || type == "Classic"
+            || type == "Camarilla") must_equal = 11;
         for (int i = 0; i < must_equal; ++i)
             CHECK(differ[i] == 0, "%s slot %d differs from the free function on %d bars",
                   kTypes[ty], i, differ[i]);
+        for (int i = 0; i < 11; ++i)
+            CHECK(differ_full[i] == 0,
+                  "%s slot %d differs from the six-argument free function on %d bars",
+                  kTypes[ty], i, differ_full[i]);
+    }
+}
+
+static void test_free_function_equivalence() {
+    std::printf("test_free_function_equivalence\n");
+    free_function_equivalence_on(make_feed(3000, 0x9e04ULL, false), "quarter-tick");
+    free_function_equivalence_on(make_wide_feed(3000, 0x51deULL), "wide off-tick");
+    // The six-argument form's na rule is the reference's: Woodie needs no
+    // close and DM no next open, and a missing input a formula reads leaves
+    // all eleven na.
+    const std::vector<double> woodie = ta::pivot_point_levels("Woodie", na<double>(), 2.0, 0.5,
+                                                              na<double>(), 1.25);
+    CHECK(!is_na(woodie[0]) && !is_na(woodie[8]) && is_na(woodie[9]),
+          "Woodie from high, low and the next open");
+    const std::vector<double> dm = ta::pivot_point_levels("DM", 1.0, 2.0, 0.5, 1.5, na<double>());
+    CHECK(!is_na(dm[0]) && !is_na(dm[2]) && is_na(dm[3]), "DM from the period alone");
+    const std::vector<double> dm_no_open = ta::pivot_point_levels("DM", na<double>(), 2.0, 0.5,
+                                                                  1.5, 1.25);
+    bool all_na = true;
+    for (double v : dm_no_open) all_na = all_na && is_na(v);
+    CHECK(all_na, "DM without the period's open is all na");
+    bool refused = false;
+    try {
+        (void)ta::pivot_point_levels("Demark", 1.0, 2.0, 0.5, 1.5, 1.25);
+    } catch (const std::invalid_argument&) {
+        refused = true;
+    }
+    CHECK(refused, "six-argument form refuses an unknown type name");
+}
+
+// Lane C7's TradingView export (codegen tests/fixtures/c7_tv_evidence, the
+// BINANCE:ETHUSDT.P 15-minute probe): the first period O=1821.59 H=1842.57
+// L=1816.64 C=1837.47, the next period opening at 1837.48, and every finite
+// level TradingView printed, cut to four decimals by the quantity field. The
+// six-argument free function reproduces each within that cut, and so does the
+// four-argument one for Traditional, Fibonacci, Classic and Camarilla.
+static void test_c7_tradingview_period() {
+    std::printf("test_c7_tradingview_period\n");
+    const double N = na<double>();
+    struct Tape {
+        const char* type;
+        double tv[11];
+    };
+    const Tape tapes[] = {
+        {"Traditional", {1832.2266, 1847.8133, 1821.8833, 1858.1566, 1806.2966, 1873.7433,
+                         1795.9533, 1889.3300, 1785.6100, 1904.9166, 1775.2666}},
+        {"Fibonacci", {1832.2266, 1842.1319, 1822.3214, 1848.2514, 1816.2019, 1858.1566,
+                       1806.2966, N, N, N, N}},
+        {"Woodie", {1833.5425, 1850.4450, 1824.5150, 1859.4725, 1807.6125, 1876.3750,
+                    1798.5850, 1902.3050, 1772.6550, N, N}},
+        {"Classic", {1832.2266, 1847.8133, 1821.8833, 1858.1566, 1806.2966, 1884.0866,
+                     1780.3666, 1910.0166, 1754.4366, N, N}},
+        {"DM", {1834.8125, 1852.9850, 1827.0550, N, N, N, N, N, N, N, N}},
+        {"Camarilla", {1832.2266, 1839.8469, 1835.0930, 1842.2238, 1832.7161, 1844.6007,
+                       1830.3392, 1851.7315, 1823.2085, 1863.6973, 1811.2426}},
+    };
+    const auto within_cut = [](double level, double tv) {
+        if (is_na(tv)) return is_na(level);
+        return !is_na(level) && std::fabs(level - tv) < 1.0e-4 + 1.0e-9;
+    };
+    for (const auto& tape : tapes) {
+        const std::string type = tape.type;
+        const std::vector<double> full =
+            ta::pivot_point_levels(type, 1821.59, 1842.57, 1816.64, 1837.47, 1837.48);
+        const std::vector<double> hlc = ta::pivot_point_levels(type, 1842.57, 1816.64, 1837.47);
+        const bool hlc_is_tv = type != "Woodie" && type != "DM";
+        for (int i = 0; i < 11; ++i) {
+            CHECK(within_cut(full[i], tape.tv[i]), "%s slot %d: %.6f against TradingView %.4f",
+                  tape.type, i, full[i], tape.tv[i]);
+            if (hlc_is_tv)
+                CHECK(within_cut(hlc[i], tape.tv[i]),
+                      "%s slot %d (four-argument): %.6f against TradingView %.4f", tape.type, i,
+                      hlc[i], tape.tv[i]);
+        }
     }
 }
 
@@ -470,6 +578,7 @@ int main() {
     test_recompute_sequences();
     test_woodie_developing_and_names();
     test_free_function_equivalence();
+    test_c7_tradingview_period();
     std::printf("test_ta_pivot_point_levels: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

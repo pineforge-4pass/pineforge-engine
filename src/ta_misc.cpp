@@ -328,6 +328,11 @@ double PercentileLinearInterpolation::recompute(double src, double percentage) {
 // pivot_point_levels (free function)
 // ============================================================================
 
+namespace {
+void pivot_levels_of(PivotLevelsType type, double o, double h, double l, double c,
+                     double next_open, double* out);
+} // namespace
+
 std::vector<double> pivot_point_levels(const std::string& method,
                                        double high, double low, double close) {
     // Codegen lowers `ta.pivot_point_levels(type, anchor)` to pass the
@@ -342,21 +347,9 @@ std::vector<double> pivot_point_levels(const std::string& method,
     out[0] = P;
 
     if (method == "Traditional") {
-        double S1 = 2.0 * P - high;
-        double R1 = 2.0 * P - low;
-        double S2 = P - (high - low);
-        double R2 = P + (high - low);
-        double S3 = low - 2.0 * (high - P);
-        double R3 = high + 2.0 * (P - low);
-        double S4 = P - 3.0 * (high - low);
-        double R4 = P + 3.0 * (high - low);
-        double S5 = P - 4.0 * (high - low);
-        double R5 = P + 4.0 * (high - low);
-        out[1] = R1; out[2] = S1;
-        out[3] = R2; out[4] = S2;
-        out[5] = R3; out[6] = S3;
-        out[7] = R4; out[8] = S4;
-        out[9] = R5; out[10] = S5;
+        // The anchored form's formulas, operation by operation.
+        pivot_levels_of(PivotLevelsType::Traditional, na<double>(), high, low, close,
+                        na<double>(), out.data());
         return out;
     }
     if (method == "Fibonacci") {
@@ -436,6 +429,13 @@ std::vector<double> pivot_point_levels(const std::string& method,
         return out;
     }
     // Unknown method: return P and leave absent levels as na.
+    return out;
+}
+
+std::vector<double> pivot_point_levels(const std::string& method, double open, double high,
+                                       double low, double close, double next_open) {
+    std::vector<double> out(11);
+    pivot_levels_of(pivot_levels_type(method), open, high, low, close, next_open, out.data());
     return out;
 }
 

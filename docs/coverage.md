@@ -444,9 +444,15 @@ documented 11-slot order:
 selected method are `na<double>()`. Current runtime inputs are
 `method, high, low, close`; the official Pine `anchor` / `developing`
 parameters are handled by the consumer compiler layer when present.
-Woodie pivots use this runtime's close-based fallback because the free
-function does not receive the period open required by TradingView's full
-Woodie formula.
+Traditional, Fibonacci, Classic and Camarilla are `PivotPointLevels`'
+formulas bit for bit. Woodie and DM keep a historical approximation for
+source compatibility, because this signature carries neither the next
+period's open that Woodie's pivot weights (it weights the close) nor the
+period's open that DM compares with the close (it branches on the close
+meeting the high or the low). The overload
+`pivot_point_levels(method, open, high, low, close, next_open)` takes both
+and computes every type exactly as `PivotPointLevels` does (R5 lane
+B-ENGINE).
 
 ### `PivotPointLevels` — pivot levels of an anchored period
 
@@ -469,9 +475,8 @@ standard definitions, operation by operation (Traditional `R3 = P * 2 + (H -
 2 * L)`, ..., `S5 = P * 4 - (4 * H - L)`; Woodie `P = (H + L + 2 * open) /
 4`, `R3 = H + 2 * (P - L)`, `R4 = R3 + (H - L)`; DM's `X` on the period's
 open against its close). Anchored on every bar with `developing = false` it
-equals the free function above for every level of Fibonacci, Classic and
-Camarilla and for P, R1, S1, R2 and S2 of Traditional; the free function's
-Traditional R3..S5, Woodie and DM formulas are its own
+equals the six-argument free function above for every level of every type,
+and the four-argument one for every type but Woodie and DM
 (`PF_PIVOT_LEVELS_HAS_ANCHOR`, `tests/test_ta_pivot_point_levels.cpp`).
 
 ## Math (`<pineforge/math.hpp>`)

@@ -823,8 +823,11 @@ void test_pivot_traditional() {
     double R1 = 2.0 * p - 90.0;
     CHECK(near(levels[2], S1), "Traditional S1");
     CHECK(near(levels[1], R1), "Traditional R1");
-    CHECK(near(levels[9], p + 4.0 * 20.0), "Traditional R5");
-    CHECK(near(levels[10], p - 4.0 * 20.0), "Traditional S5");
+    // Expectation corrected: p +/- 4 * 20 -> the standard Traditional R5 / S5,
+    // because lane B-ENGINE made the free function ta::PivotPointLevels'
+    // formulas.
+    CHECK(near(levels[9], p * 4.0 + (110.0 - 4.0 * 90.0)), "Traditional R5");
+    CHECK(near(levels[10], p * 4.0 - (4.0 * 110.0 - 90.0)), "Traditional S5");
     printf("OK\n");
 }
 

@@ -1284,8 +1284,29 @@ public:
 
 // --- pivot_point_levels (free function) ---
 
+// The 11 pivot levels [P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5] of one
+// period's high, low and close, na for the levels a type does not define and
+// all na for a missing input; an unknown name answers P alone. Traditional,
+// Fibonacci, Classic and Camarilla are PivotPointLevels' formulas bit for bit.
+// Woodie and DM are a historical approximation kept for source compatibility:
+// this signature carries neither the next period's open, which Woodie's pivot
+// weights (it weights the close, and spaces R3..S4 as Classic does), nor the
+// period's open, which DM compares with the close (it branches on the close
+// meeting the high or the low). The overload below takes both, and
+// ta::PivotPointLevels is the TradingView form.
 std::vector<double> pivot_point_levels(const std::string& method,
                                        double high, double low, double close);
+
+// The same 11 levels from the period's open, high, low and close and the open
+// of the period after it -- the period the levels are for -- for every type as
+// PivotPointLevels computes them: anchored on every bar with developing =
+// false, its levels on a bar are this overload's of the bar before (open,
+// high, low, close) and the bar's own open, bit for bit. Only Woodie reads
+// next_open and only DM reads open; a formula missing an input it reads leaves
+// all eleven na. The type by name: pivot_levels_type(), which throws
+// std::invalid_argument for any other.
+std::vector<double> pivot_point_levels(const std::string& method, double open, double high,
+                                       double low, double close, double next_open);
 
 // --- Pivot point levels of an anchored period ---
 
@@ -1326,10 +1347,9 @@ PivotLevelsType pivot_levels_type(const std::string& name);
 // L), R4 = R3 + (H - L); DM X = O == C ? H + L + 2 * C : C > O ? 2 * H + L +
 // C : 2 * L + H + C, P = X / 4, R1 = X / 2 - L, S1 = X / 2 - H; Camarilla R1 =
 // C + 1.1 * (H - L) / 12, ..., R5 = (H / L) * C (na on a zero low), S5 = C -
-// (R5 - C). Anchored on every bar with developing = false, this is the free
-// function above wherever that function spells the same formula (every level
-// of Fibonacci, Classic and Camarilla; P, R1, S1, R2 and S2 of Traditional);
-// the free function's Traditional R3..S5, Woodie and DM formulas differ.
+// (R5 - C). Anchored on every bar with developing = false, this is the
+// six-argument free function above for every type, and the four-argument one
+// for every type but Woodie and DM.
 // recompute() re-runs the current bar from the state its first compute()
 // found.
 class PivotPointLevels {

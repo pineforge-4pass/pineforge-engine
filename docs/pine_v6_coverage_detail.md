@@ -808,7 +808,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.percentile_linear_interpolation()` | fn | ✅ Runtime | `ta::PercentileLinearInterpolation` class | |
 | `ta.percentile_nearest_rank()` | fn | ✅ Runtime | `ta::PercentileNearestRank` class | |
 | `ta.percentrank()` | fn | ✅ Runtime | `ta::PercentRank` class | |
-| `ta.pivot_point_levels()` | fn | ✅ Runtime | Free function `ta::pivot_point_levels(method, high, low, close)`; with `anchor` / `developing`: `ta::PivotPointLevels` class | Free function: Woodie uses close-based fallback. `PivotPointLevels::compute(type, anchor, developing, open, high, low, close)` accumulates the anchored period, held or developing; Woodie + developing throws (R5 lane TA1) |
+| `ta.pivot_point_levels()` | fn | ✅ Runtime | Free function `ta::pivot_point_levels(method, high, low, close)`; with `anchor` / `developing`: `ta::PivotPointLevels` class | Free function: Traditional / Fibonacci / Classic / Camarilla equal `PivotPointLevels`; Woodie and DM keep a historical approximation, and `ta::pivot_point_levels(method, open, high, low, close, next_open)` computes every type as `PivotPointLevels` does (R5 lane B-ENGINE). `PivotPointLevels::compute(type, anchor, developing, open, high, low, close)` accumulates the anchored period, held or developing; Woodie + developing throws (R5 lane TA1) |
 | `ta.pivothigh()` | fn | ✅ Runtime | `ta::PivotHigh` class | |
 | `ta.pivotlow()` | fn | ✅ Runtime | `ta::PivotLow` class | |
 | `ta.range()` | fn | ✅ Runtime | `ta::Range` class | |
