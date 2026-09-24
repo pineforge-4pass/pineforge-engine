@@ -967,6 +967,13 @@ list(APPEND TEST_SOURCES test_utc_month_memo)
 # R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
 # same arithmetic, swept against gmtime_r through the host. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
+# R5 lane D2-D: the chart-day key keeps its UTC day with the consumer -- the
+# key at every bar of stepped, session-shaped, daily, weekly and monthly
+# sequences over the K1 zones across DST gaps, overlaps and year ends, every
+# civil-day boundary, and day-ledger runs under the intraday loss,
+# consecutive-loss-days and filled-orders rules, kept == computed at every
+# source callback. Source-bound.
+list(APPEND TEST_SOURCES test_chart_day_memo)
 # R5 lane PERF-P5611 (P6): whether a Pine chart aggregates input bars, the
 # one definition's equal-literal answer judged against tf_ratio over every
 # admitted literal pair. Source-bound.

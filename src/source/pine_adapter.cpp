@@ -1307,11 +1307,23 @@ public:
     std::array<std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>, 3> legs_by_origin;
     std::unordered_map<std::int32_t, std::vector<std::uint64_t>> immediate_closes_by_bar;
 
+    // R5 lane D2-D: chart_day_key's last day on a UTC chart -- the whole
+    // seconds [day_lo, day_hi) of one floor day inside the civil arithmetic's
+    // span, and the key they answer. That key is a function of the floor day
+    // alone, so every second of the range answers it. Empty until the first
+    // arithmetic read; never counted in `answers`.
+    std::int64_t day_lo = 1;
+    std::int64_t day_hi = 0;
+    std::int64_t day_key = 0;
+
     std::uint64_t answered() const noexcept override { return answers; }
 
     void clear() noexcept {
         cohort_sides.clear();
         clear_rows();
+        day_lo = 1;
+        day_hi = 0;
+        day_key = 0;
     }
 
     void clear_rows() noexcept {
@@ -1422,6 +1434,46 @@ AdapterLookupIndex* adapter_lookup_index(IExecutionConsumer* consumer, const voi
     } catch (const std::bad_alloc&) {
         return nullptr;
     }
+}
+
+// A fresh index for the adapter at `owner` in run `run`, adopted by `native`,
+// or null when it holds none. Out of line: the per-bar read below reaches it
+// once a run.
+[[gnu::noinline]] AdapterLookupIndex* adopt_lookup_index(NativeExecutionConsumer& native,
+                                                         const void* owner,
+                                                         std::uint64_t run) noexcept {
+    try {
+        auto fresh = std::make_unique<AdapterLookupIndex>();
+        fresh->owner = owner;
+        fresh->run = run;
+        return static_cast<AdapterLookupIndex*>(native.adopt_host_cache(std::move(fresh)));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// The same index, reached for a read made on every bar (R5 lane D2-D): the
+// consumer straight off the host's engine slot (NativeExecutionConsumer::
+// bound, which is what the host's own reads use) and the cache's exact type,
+// instead of the host's Pine view and a dynamic_cast, which cost about what
+// that read saves. AdapterLookupIndex is final, so the type test answers
+// exactly what adapter_lookup_index's dynamic_cast does, and the index it
+// finds or adopts is the one adapter_lookup_index answers for the same run.
+AdapterLookupIndex* parked_lookup_index(NativeStrategyHost* host, const void* owner,
+                                        std::uint64_t run) noexcept {
+    if (host == nullptr) return nullptr;
+    NativeExecutionConsumer* native = nullptr;
+    try {
+        native = &NativeExecutionConsumer::bound(*host);
+    } catch (...) {
+        return nullptr;
+    }
+    NativeHostCache* cache = native->host_cache();
+    if (cache != nullptr && typeid(*cache) == typeid(AdapterLookupIndex)) {
+        auto* index = static_cast<AdapterLookupIndex*>(cache);
+        if (index->owner == owner && index->run == run) return index;
+    }
+    return adopt_lookup_index(*native, owner, run);
 }
 
 } // namespace
@@ -13203,31 +13255,44 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     return NativePrecommitVerdict::AdmitWithHostMargin;
 }
 
-std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {
-    const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
+namespace {
+
+constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
+
+// chart_day_key on a UTC chart for a second `secs` inside the arithmetic's
+// span: gmtime_r's day and month by Howard Hinnant's civil_from_days on the
+// floor day. Everything below reads the floor day alone, so the day's seconds
+// all answer its key, and `index` (when there is one) keeps them with it.
+[[gnu::noinline]] std::int64_t civil_chart_day_key(AdapterLookupIndex* index,
+                                                   std::int64_t secs) noexcept {
+    const std::int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+    const std::int64_t z = days + 719468;
+    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const std::int64_t doe = z - era * 146097;
+    const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const std::int64_t mp = (5 * doy + 2) / 153;
+    const std::int64_t day = doy - (153 * mp + 2) / 5 + 1;
+    const std::int64_t month = mp < 10 ? mp + 3 : mp - 9;
+    const std::int64_t key = day * 100 + month;
+    if (index != nullptr) {
+        index->day_lo = std::max(days * 86400, -kChartDayCivilSpan + 1);
+        index->day_hi = std::min(days * 86400 + 86400, kChartDayCivilSpan);
+        index->day_key = key;
+    }
+    return key;
+}
+
+// chart_day_key's libc half, for a second the civil arithmetic does not answer:
+// localtime_r under a chart timezone, gmtime_r on a UTC chart, each falling
+// back to gmtime_r as it always did.
+[[gnu::noinline]] std::int64_t libc_chart_day_key(const std::string& timezone, bool utc_chart,
+                                                  std::time_t seconds) noexcept {
     std::tm fields{};
     const auto utc = [&]() {
         return ::gmtime_r(&seconds, &fields) != nullptr;
     };
-    const std::string& timezone = staged_.chart_timezone;
-    if (timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC") {
-        // gmtime_r's day and month without the libc call every bar paid:
-        // Howard Hinnant's civil_from_days on the floor day, exact for every
-        // second within +/-2^40 of the epoch. gmtime_r keeps the rest.
-        constexpr std::int64_t kCivilSpan = std::int64_t{1} << 40;
-        const std::int64_t secs = static_cast<std::int64_t>(seconds);
-        if (secs > -kCivilSpan && secs < kCivilSpan) {
-            const std::int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
-            const std::int64_t z = days + 719468;
-            const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-            const std::int64_t doe = z - era * 146097;
-            const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-            const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-            const std::int64_t mp = (5 * doy + 2) / 153;
-            const std::int64_t day = doy - (153 * mp + 2) / 5 + 1;
-            const std::int64_t month = mp < 10 ? mp + 3 : mp - 9;
-            return day * 100 + month;
-        }
+    if (utc_chart) {
         if (!utc()) return std::numeric_limits<std::int64_t>::min();
     } else {
         try {
@@ -13244,6 +13309,31 @@ std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) cons
     }
     return static_cast<std::int64_t>(fields.tm_mday) * 100
         + static_cast<std::int64_t>(fields.tm_mon + 1);
+}
+
+}  // namespace
+
+std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {
+    const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
+    const std::string& timezone = staged_.chart_timezone;
+    const bool utc_chart = timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC";
+    if (utc_chart) {
+        // gmtime_r's day and month without the libc call every bar paid:
+        // civil arithmetic on the floor day, exact for every second within
+        // +/-2^40 of the epoch. gmtime_r keeps the rest.
+        const std::int64_t secs = static_cast<std::int64_t>(seconds);
+        if (secs > -kChartDayCivilSpan && secs < kChartDayCivilSpan) {
+            // A second of the day last read here answers that day's key: the
+            // day is kept with the consumer that keeps this adapter's lookup
+            // state for the run (R5 lane D2-D). An unbound adapter, or a
+            // consumer that holds no cache, computes every read as it always did.
+            AdapterLookupIndex* index = parked_lookup_index(host_, this, run_counter_);
+            if (index != nullptr && index->day_lo <= secs && secs < index->day_hi)
+                return index->day_key;
+            return civil_chart_day_key(index, secs);
+        }
+    }
+    return libc_chart_day_key(timezone, utc_chart, seconds);
 }
 
 compat::pine::CapClock PineExecutionAdapter::cap_clock(
