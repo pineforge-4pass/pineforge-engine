@@ -958,6 +958,12 @@ list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
 # civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
+# R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
+# seconds -- the kept key against month_key_utc at every point of fixed-step,
+# session-shaped and random-order walks, the kept range against the civil
+# month, and compute_equity_stats bit for bit against the 6c081f5d walk.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_utc_month_memo)
 # R5 lane PERF-P5611 (P5): the adapter's chart-day key on a UTC chart by the
 # same arithmetic, swept against gmtime_r through the host. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)

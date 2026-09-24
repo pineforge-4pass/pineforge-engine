@@ -13,6 +13,7 @@
 #include <limits>
 #include <vector>
 
+#include "metrics_month_memo.hpp"
 #include "timezone.hpp"
 
 namespace pineforge {
@@ -90,6 +91,46 @@ int month_key_utc(int64_t ts_ms) {
     struct tm tb {};
     gmtime_r(&secs, &tb);
     return (tb.tm_year + 1900) * 12 + tb.tm_mon;
+}
+
+// R5 lane D2-D: the walk below keys every equity point, and consecutive points
+// share their month for weeks of bars, so the key is kept with the seconds of
+// its month. The range is the arithmetic's own civil month of the second's
+// floor day, clamped to the arithmetic's span; it is kept only once both of its
+// ends answer the key, and the key never decreases as the second increases (it
+// is the civil order), so every second between the ends answers it too. A
+// second outside the span is gmtime_r's and is never kept.
+int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
+    const int64_t secs = static_cast<int64_t>(static_cast<time_t>(ts_ms / 1000));
+    const int key = month_key_utc(ts_ms);
+    constexpr int64_t kCivilSpan = int64_t{1} << 40;
+    if (secs > -kCivilSpan && secs < kCivilSpan) {
+        const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+        const int64_t z = days + 719468;
+        const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+        const int64_t doe = z - era * 146097;
+        const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        const int64_t mp = (5 * doy + 2) / 153;
+        // The March-based year starts `doy` days back; its month mp starts at
+        // day (153 * mp + 2) / 5 of it, and its last month (February) runs to
+        // the year's end, 366 days on when the civil year holding that
+        // February -- yoe + 1 modulo 400 -- is a leap year.
+        const int64_t march_first = days - doy;
+        const int64_t civil = yoe + 1;
+        const bool leap = civil % 4 == 0 && (civil % 100 != 0 || civil % 400 == 0);
+        const int64_t next = mp < 11 ? march_first + (153 * (mp + 1) + 2) / 5
+                                     : march_first + (leap ? 366 : 365);
+        const int64_t lo = std::max((march_first + (153 * mp + 2) / 5) * 86400,
+                                    -kCivilSpan + 1);
+        const int64_t hi = std::min(next * 86400, kCivilSpan);
+        if (month_key_utc(lo * 1000) == key && month_key_utc((hi - 1) * 1000) == key) {
+            memo.lo = lo;
+            memo.hi = hi;
+            memo.key = key;
+        }
+    }
+    return key;
 }
 
 }  // namespace detail
@@ -234,8 +275,9 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     // --- Monthly-resampled Sharpe/Sortino (sharpe_monthly / sortino_monthly,
     // the TV-calibrated construction): last point of each chart-tz
     // (year,month) bucket; simple returns between consecutive month-ends.
-    // TODO(perf): decompose only at month boundaries (O(months)) instead
-    // of per point; shrinks the non-UTC critical section.
+    // A UTC chart decomposes only at month boundaries (the key is kept with
+    // its month's seconds, detail::month_key_utc); a chart timezone still
+    // calls localtime_r per point under the one guard.
     {
         std::vector<double> month_end;
         const bool utc = chart_tz.empty() || chart_tz == "UTC" || chart_tz == "Etc/UTC";
@@ -250,7 +292,8 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
             month_end.push_back(last_eq);
         };
         if (utc) {
-            walk(detail::month_key_utc);
+            detail::UtcMonthMemo memo;
+            walk([&memo](int64_t ts_ms) { return detail::month_key_utc(memo, ts_ms); });
         } else {
             tz_util::ScopedTimezone guard(chart_tz);   // ONE guard for the whole walk
             walk(month_key_local);
