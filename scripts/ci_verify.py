@@ -202,7 +202,17 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All eight are source-free, so they register in release too; LAYOUT1 adds
 # no row. 258 registered, 257 run: the WebSocket row still skips on a system
 # libcurl.
-KERNEL_MIN_TESTS = 257
+# 262 run = those 257 plus the five source-free TUs of INT23 (D2-D, D2-C,
+# V19-D) -- measured on the integrated tree (ctest -N), not summed from the
+# lanes' own bases:
+#   +1 D2-D  test_utc_month_memo
+#   +3 D2-C  test_native_runtime_ambient, test_native_in_place_reads,
+#            test_native_settlement_carry
+#   +1 V19-D test_native_handle_stable_replace
+# All five register in release too; the lanes' other rows reach the source
+# layer (see RELEASE_MIN_TESTS). 263 registered, 262 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 262
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -285,7 +295,16 @@ KERNEL_MIN_TESTS = 257
 # which register here too, counted with ctest -N on the integrated tree;
 # neither L3 nor D2-A adds a release-only row and LAYOUT1 adds no row. No
 # release row skips, so 645 registered is 645 run.
-RELEASE_MIN_TESTS = 645
+# 658 = those 645 plus the five INT23 rows KERNEL_MIN_TESTS lists above, which
+# register here too, and eight source-bound rows the kernel profile does not
+# build, counted with ctest -N on the integrated tree:
+#   +2 D2-D  test_chart_day_memo, test_publication_witness
+#   +3 D2-C  test_adapter_runtime_ambient, test_adapter_in_place_reads,
+#            test_adapter_settlement_carry
+#   +3 V19-D test_adapter_reissue_binding, test_bracket_roster_parking,
+#            test_adapter_margin_revival_erasure
+# No release row skips, so 658 registered is 658 run.
+RELEASE_MIN_TESTS = 658
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
