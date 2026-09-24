@@ -4039,9 +4039,10 @@ surface"); the short version:
   of its first `length` inputs (`EmaSeeding::SimpleAverage`, na for the
   warm-up window the way `RMA` and `SMA` warm up). A host names the seeding
   per instance, `ta::EMA ema(length, ta::EmaSeeding::SimpleAverage)`, and
-  touches no global. `ta::ema_na_warmup_flag()` is the thread-local ambient
-  default an instance that names no seeding latches on its first
-  `compute()`; the Pine adapter raises it around one evaluation context
+  touches no global. `ta::ema_na_warmup_flag()` is the calling thread's
+  ambient default (held in its runtime block: the thread's own, or the
+  running pump's while one runs) that an instance naming no seeding latches
+  on its first `compute()`; the Pine adapter raises it around one evaluation context
   under its opt-in run flags, the way any host may. It is ruled in the ADR as
   a generic ambient indicator option (a mechanism the vocabulary gate cannot
   see); nothing in the kernel raises it.
