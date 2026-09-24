@@ -174,7 +174,16 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +5 TA1 test_ta_anchored_vwap, test_ta_alma_floor, test_ta_kc_basis,
 #          test_ta_kc_range, test_ta_pivot_point_levels
 # 243 registered, 242 run.
-KERNEL_MIN_TESTS = 242
+# 245 run = those 242 plus the three TUs of INT19 (V19-A, K-COHORT, PERF-P7)
+# that this profile builds -- measured on the integrated tree (ctest -N), not
+# summed from the lanes' own bases:
+#   +1 V19-A    test_native_state_continuation
+#   +1 K-COHORT test_native_cohort_sliced_close
+#   +1 PERF-P7  test_native_definition_index
+# All three are source-free. PERF-P7 adds four release-only rows (their TUs
+# reach the source layer -- see RELEASE_MIN_TESTS); FPC adds no row. 246
+# registered, 245 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 245
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -239,7 +248,13 @@ KERNEL_MIN_TESTS = 242
 # No release row skips, so 619 registered is 619 run.
 # 624 = those 619 plus the five TA1 rows KERNEL_MIN_TESTS lists above, which
 # register here too. No release row skips, so 624 registered is 624 run.
-RELEASE_MIN_TESTS = 624
+# 631 = those 624 plus the seven rows of INT19: the three KERNEL_MIN_TESTS
+# lists above, which register here too, plus the four source-bound ones the
+# kernel profile does not build:
+#   +4 PERF-P7 test_adapter_lookup_index_witness, test_adapter_purge_index,
+#              test_adapter_exit_leg_index, test_adapter_lookup_index_scaling
+# No release row skips, so 631 registered is 631 run.
+RELEASE_MIN_TESTS = 631
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
