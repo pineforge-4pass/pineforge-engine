@@ -417,9 +417,11 @@ private:
             const double level = near(bar, 1, 10);
             const bool limit = rng_.percent(50);
             const bool oca = rng_.percent(40);
-            strategy_entry(buy ? long_id() : short_id(), buy, limit ? level : kNa,
-                           limit ? kNa : level, kNa, {}, oca ? group() : "",
-                           oca ? (rng_.percent(60) ? 1 : 2) : 0);
+            const char* id = buy ? long_id() : short_id();
+            const char* oca_name = oca ? group() : "";
+            const int oca_type = oca ? (rng_.percent(60) ? 1 : 2) : 0;
+            strategy_entry(id, buy, limit ? level : kNa, limit ? kNa : level, kNa, {}, oca_name,
+                           oca_type);
         }
         if (position != 0.0 && rng_.percent(45)) {
             ++commands;
@@ -444,15 +446,22 @@ private:
         }
         if (position != 0.0 && rng_.percent(8)) {
             ++commands;
-            if (rng_.percent(50)) strategy_close(any_id(), {}, 1.0);
-            else strategy_close(any_id(), {}, kNa, 50.0, rng_.percent(30));
+            if (rng_.percent(50)) {
+                strategy_close(any_id(), {}, 1.0);
+            } else {
+                const char* id = any_id();
+                const bool immediately = rng_.percent(30);
+                strategy_close(id, {}, kNa, 50.0, immediately);
+            }
         }
         if (rng_.percent(3)) { ++commands; strategy_close_all(); }
         if (rng_.percent(5)) { ++commands; strategy_cancel(any_id()); }
         if (rng_.percent(2)) { ++commands; strategy_cancel_all(); }
         if (rng_.percent(6)) {
             ++commands;
-            strategy_order("o", rng_.percent(50), 1.0, rng_.percent(50) ? near(bar, 1, 6) : kNa);
+            const bool buy = rng_.percent(50);
+            const double limit = rng_.percent(50) ? near(bar, 1, 6) : kNa;
+            strategy_order("o", buy, 1.0, limit);
         }
         if (rng_.percent(3)) { ++commands; strategy_exit_cancel_bracket("xl", "L"); }
     }
@@ -527,22 +536,26 @@ private:
         }
         if (rng_.percent(10)) {
             ++commands;
-            strategy_order(rng_.percent(50) ? "R1" : "R2", rng_.percent(50), 1.0,
-                           near(bar, 2, 8), kNa, "reduce", 2);
+            const char* id = rng_.percent(50) ? "R1" : "R2";
+            const bool buy = rng_.percent(50);
+            const double limit = near(bar, 2, 8);
+            strategy_order(id, buy, 1.0, limit, kNa, "reduce", 2);
         }
         if (position != 0.0) {
             const bool is_long = position > 0.0;
             const char* from = is_long ? "CL" : "CS";
             if (rng_.percent(50)) {
                 ++commands;
-                strategy_exit("rel", from, kNa, kNa, kNa, kNa, kNa, 100.0, {}, kNa, {},
-                              static_cast<double>(rng_.between(4, 16)),
-                              static_cast<double>(rng_.between(4, 16)));
+                const double profit = static_cast<double>(rng_.between(4, 16));
+                const double loss = static_cast<double>(rng_.between(4, 16));
+                strategy_exit("rel", from, kNa, kNa, kNa, kNa, kNa, 100.0, {}, kNa, {}, profit,
+                              loss);
             }
             if (rng_.percent(25)) {
                 ++commands;
-                strategy_exit("trail", from, kNa, kNa, static_cast<double>(rng_.between(2, 8)),
-                              static_cast<double>(rng_.between(1, 4)));
+                const double points = static_cast<double>(rng_.between(2, 8));
+                const double offset = static_cast<double>(rng_.between(1, 4));
+                strategy_exit("trail", from, kNa, kNa, points, offset);
             }
             if (rng_.percent(6)) {
                 ++commands;
