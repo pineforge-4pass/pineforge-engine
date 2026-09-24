@@ -600,6 +600,10 @@ struct Tally {
 
 void lifecycle(ReadsHost& host, std::mt19937_64& rng, Tally& tally) {
     host.rng = &rng;
+    // The event reads compared at every hook cover the whole record, as they
+    // did before V19-B's Window became the default: a readback choice alone,
+    // the spec and every decision are the profile's.
+    host.consumer().set_retention_override(NativeEventRetention::Full);
     host.verify(Outside);
     const Profile profile = static_cast<Profile>(rng() % kProfiles);
     const int runs = 1 + static_cast<int>(rng() % 3);

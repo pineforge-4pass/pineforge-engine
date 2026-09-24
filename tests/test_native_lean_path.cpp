@@ -461,6 +461,10 @@ Outcome run_shape(Shape shape, bool tolerant, NativeCalculationTrigger cadence,
     host.seed = seed;
 #ifndef PF_L1_HARVEST
     host.consumer().set_point_guards(guards);
+    // Witness 1 compares the event record a run ends with; read it back whole
+    // (V19-B's default Window keeps none of it by then). A readback choice
+    // alone: the spec, its digest and every pinned value are the default's.
+    host.consumer().set_retention_override(NativeEventRetention::Full);
 #else
     (void)guards;
 #endif

@@ -180,6 +180,8 @@ inline NativeRunSpec make_spec(const Config& config, const Tape& tape) {
     spec.price_tick = 0.25;
     spec.fee_kind = config.fee_kind;
     spec.fee_value = config.fee_value;
+    // finish() takes the whole event record once a run ends (V19-B).
+    spec.event_retention = NativeEventRetention::Full;
     if (config.quantize) spec.price_grid = NativePriceGrid::QuantizeFillsAndTriggers;
     if (config.calc_on_fills) spec.calculation = NativeCalculationTrigger::BarCloseAndFills;
     if (config.margin) {
