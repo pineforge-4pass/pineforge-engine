@@ -102,13 +102,20 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 //   row 3: trace 0x88bb7f0c78099bd9ull -> 0xb1e5c15a1dc0eec7ull, continuation 0x6e931e2c16175ca0ull -> 0x48fec45aca66f361ull, broker 0x5753960c39ddf98cull -> 0x2f71c68e8ba16e98ull
 //   row 4: trace 0xe7dec4f32115d208ull -> 0xae4b8cb389aa3517ull, continuation 0xae8cb267d59e252full -> 0x9dee6504b9ff28e3ull, broker 0x75f23324cad022c2ull -> 0x4c877db8ad75552aull
 //   row 5: trace 0x69ddfb8abe2dcab7ull -> 0xa2e515d9e6a92028ull, continuation 0xe6f6c6a8369fa746ull -> 0xde4f0d477a50d037ull, broker 0x6274841390938969ull -> 0xad01cca35d41947cull
+// expectation corrected (18 values), because v19-B folds three new states into the continuation -- the Full retention the k3 book fixture declares (into the spec digest), each replace successor's chain root, and each armed trail's arm ordinal -- and the trace digest folds the continuation read at every bar and every applied fill while the broker-state hash reads it; with those three folds masked the rows are main's again; trades, trade digest, events, event digest and the three counters did not move; harvested with -DPINEFORGE_L5_HARVEST against main 3eb2cb84 (reproduces every old pin), this tree and V19-B's tip bc749095 (byte-identical rows):
+//   row 0: trace 0x8852dd52b2c3124dull -> 0xdd9e87bdc6914dd1ull, continuation 0x68316c350be98cfbull -> 0x80ae17b22e291018ull, broker 0x90e94b9aec984bc5ull -> 0xc4976ba64466ea54ull
+//   row 1: trace 0xb5706e0ff07be4bdull -> 0x9357ba93afee02cbull, continuation 0x7f333242de11f484ull -> 0xfd9e640c63f97913ull, broker 0x6be1f81fcd8e9742ull -> 0x497fbb874818970eull
+//   row 2: trace 0x342d10bbfc2f8b23ull -> 0xea689c70123a3583ull, continuation 0x13f175c2885d3ec2ull -> 0x891d3ed17fa5cf91ull, broker 0x4bde7ffed1bfb107ull -> 0x92215cce5130a7faull
+//   row 3: trace 0xb1e5c15a1dc0eec7ull -> 0xbd398693fbb24cb2ull, continuation 0x48fec45aca66f361ull -> 0xad5d0efcb9c5967cull, broker 0x2f71c68e8ba16e98ull -> 0x27238a870ac857fcull
+//   row 4: trace 0xae4b8cb389aa3517ull -> 0x4b4999f299d0cdf3ull, continuation 0x9dee6504b9ff28e3ull -> 0xaa0755381473b53cull, broker 0x4c877db8ad75552aull -> 0x967cdded2c9e5e51ull
+//   row 5: trace 0xa2e515d9e6a92028ull -> 0x26b2fd0950cfaa95ull, continuation 0xde4f0d477a50d037ull -> 0xcde555440af68284ull, broker 0xad01cca35d41947cull -> 0x927c73b7c3989d27ull
 const Pin kPins[kScenarios] = {
-    {0x8852dd52b2c3124dull, 0x68316c350be98cfbull, 0x90e94b9aec984bc5ull, 343, 0xfc50af70e6fbd178ull, 3189, 0x50636c7134e712ddull, 681, 181, 470},
-    {0xb5706e0ff07be4bdull, 0x7f333242de11f484ull, 0x6be1f81fcd8e9742ull, 419, 0x035061384ce4a851ull, 5591, 0xef4765aaa4df6c96ull, 1315, 905, 598},
-    {0x342d10bbfc2f8b23ull, 0x13f175c2885d3ec2ull, 0x4bde7ffed1bfb107ull, 391, 0xad63f1fa3d34f58bull, 3234, 0xc28c69a705a28b32ull, 774, 123, 528},
-    {0xb1e5c15a1dc0eec7ull, 0x48fec45aca66f361ull, 0x2f71c68e8ba16e98ull, 794, 0x553432ba5afb0756ull, 8826, 0xc007afd9f1d0e5a0ull, 2211, 1214, 1050},
-    {0xae4b8cb389aa3517ull, 0x9dee6504b9ff28e3ull, 0x4c877db8ad75552aull, 366, 0x07b8afde66beb2bcull, 3116, 0xe793f91e55f5fa44ull, 666, 158, 500},
-    {0xa2e515d9e6a92028ull, 0xde4f0d477a50d037ull, 0xad01cca35d41947cull, 630, 0x419d9f6ff7266f85ull, 4772, 0xd9400e11c835ee59ull, 1231, 161, 846},
+    {0xdd9e87bdc6914dd1ull, 0x80ae17b22e291018ull, 0xc4976ba64466ea54ull, 343, 0xfc50af70e6fbd178ull, 3189, 0x50636c7134e712ddull, 681, 181, 470},
+    {0x9357ba93afee02cbull, 0xfd9e640c63f97913ull, 0x497fbb874818970eull, 419, 0x035061384ce4a851ull, 5591, 0xef4765aaa4df6c96ull, 1315, 905, 598},
+    {0xea689c70123a3583ull, 0x891d3ed17fa5cf91ull, 0x92215cce5130a7faull, 391, 0xad63f1fa3d34f58bull, 3234, 0xc28c69a705a28b32ull, 774, 123, 528},
+    {0xbd398693fbb24cb2ull, 0xad5d0efcb9c5967cull, 0x27238a870ac857fcull, 794, 0x553432ba5afb0756ull, 8826, 0xc007afd9f1d0e5a0ull, 2211, 1214, 1050},
+    {0x4b4999f299d0cdf3ull, 0xaa0755381473b53cull, 0x967cdded2c9e5e51ull, 366, 0x07b8afde66beb2bcull, 3116, 0xe793f91e55f5fa44ull, 666, 158, 500},
+    {0x26b2fd0950cfaa95ull, 0xcde555440af68284ull, 0x927c73b7c3989d27ull, 630, 0x419d9f6ff7266f85ull, 4772, 0xd9400e11c835ee59ull, 1231, 161, 846},
 };
 #endif
 
