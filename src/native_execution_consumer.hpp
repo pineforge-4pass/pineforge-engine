@@ -255,6 +255,13 @@ public:
     // event_window_start is the oldest ordinal a read can still return.
     void acknowledge_events(uint64_t through_ordinal) noexcept;
     uint64_t event_window_start() const noexcept { return requests_.retired_through() + 1; }
+    // NativeStrategyHost::declare_native_bar_open_hook (R5 lane D2-A): whether
+    // the host implements the bar-open hook. A capability of the host, not of
+    // a run, so it is kept across runs and folded into nothing: the kernel
+    // skips only work whose one reader is the missing hook, and the run is the
+    // one the host would get with an empty hook, value for value.
+    void declare_bar_open_hook(bool implemented) noexcept { bar_open_hook_ = implemented; }
+    bool has_bar_open_hook() const noexcept { return bar_open_hook_; }
     // The v19 broker-state hash's closed-row half (pineforge-broker-state/v19,
     // BacktestEngine::broker_state_hash_from_execution_hash): a running digest
     // of `rows`' six folded fields, each final row folded once. See the
@@ -1602,6 +1609,9 @@ private:
     // nothing.
     bool quiet_point_match_ = true;
     uint64_t quiet_points_ = 0;
+    // Whether the host implements the bar-open hook (declare_bar_open_hook):
+    // it does, until it declares otherwise.
+    bool bar_open_hook_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

@@ -1129,6 +1129,10 @@ list(APPEND TEST_SOURCES test_magnifier_ordered_sampler)
 # runs with the direct path on and off (differential). Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_magnifier_endpoints4)
+# R5 lane D2-A (PA): a host that declares no bar-open hook against one whose
+# hook is empty, C hosts included (differential). Source-free, so it also runs
+# in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_bar_open_hook)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

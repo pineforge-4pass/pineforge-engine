@@ -1340,7 +1340,12 @@ public:
      * fact left about which header the caller compiled -- which layout of a
      * PRESENTED struct it can read. */
     CCallbackHost(const pf_native_callbacks_v1& table, std::uint32_t caller_size)
-        : table_(table), caller_table_size_(caller_size) {}
+        : table_(table), caller_table_size_(caller_size) {
+        /* The table is this host's for its whole life, so what it leaves
+         * out is declared once: a missing on_bar_open is a bar-open hook
+         * that does nothing (R5 lane D2-A). */
+        declare_native_bar_open_hook(table_.on_bar_open != nullptr);
+    }
 
     const pf_native_callbacks_v1& table() const noexcept { return table_; }
 

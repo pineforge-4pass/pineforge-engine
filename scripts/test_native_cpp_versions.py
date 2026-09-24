@@ -188,6 +188,15 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'path_uses_high_first(sub, spec->path_order)',
                     'path_uses_high_first(sub, NativePathOrder::Auto)')
 
+    def test_hook_declarations_are_the_host_calling_the_kernel(self):
+        # R5 D2-A: never virtual, and defined in the v19 epoch.
+        for name in ('declare_native_bar_open_hook',):
+            with self.subTest(name=name):
+                self.reject(FILES[8], '    void ' + name + '(bool implemented);',
+                            '    virtual void ' + name + '(bool implemented);')
+                self.reject(FILES[10], 'void NativeStrategyHost::' + name + '(',
+                            'void NativeStrategyHost::removed_' + name + '(')
+
     def test_anchored_leg_rounding_is_pinned_and_folded_when_set(self):
         # R5 L7b: the per-anchor rounding is a native_order_v7 member appended
         # last with a Raw default, its enumerators are pinned, the arm reads

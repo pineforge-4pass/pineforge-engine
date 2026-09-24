@@ -85,6 +85,8 @@
  *   [C]  owns_lot_excursions               pf_native_callbacks_v1::on_lot_excursion -- installing it IS
  *                                          declaring ownership
  *   [C]  closed_lot_excursion              pf_native_callbacks_v1::on_lot_excursion
+ *   [C]  declare_native_bar_open_hook      pf_native_callbacks_v1::on_bar_open -- a table without it
+ *                                          declares none, once, when the host is created
  *   [C]  current_partial_bar               strategy_native_partial_bar_v1
  *   [C]  native_recalculation_count        strategy_native_recalculations_v1
  *   [C]  native_recalculations_skipped     strategy_native_recalculations_v1

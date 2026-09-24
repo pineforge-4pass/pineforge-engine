@@ -6765,6 +6765,20 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     if (callback_context_.script_bar_open_ms == 0) {
         callback_context_.script_bar_open_ms = point.coordinate.open_ms;
     }
+    // A host that declared no bar-open hook (declare_bar_open_hook, R5 lane
+    // D2-A) is not called. What the call leaves behind for the kernel is the
+    // kernel's own and is made here as the call would make it: the context
+    // above, the point's epoch, the complete bar at the point's instant (an
+    // OpenOnly view is restored to it after the call), no frame, and the
+    // boundary's abort check and drain -- exactly the state an empty hook
+    // returns, so no later value can tell the two apart.
+    if (!bar_open_hook_) {
+        open_point_epoch();
+        engine.current_bar_ = bar;
+        engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
+        finish_callback(engine, point.coordinate.ordinal);
+        return;
+    }
     // The frame is constructed where it lives, from its parts: one copy of the
     // context rather than three (R5 lane PERF-L1), every field what the
     // aggregate it replaces held.
@@ -10064,6 +10078,10 @@ NativeAuxiliaryAppendResult NativeStrategyHost::append_auxiliary_bars_result(con
 // The established spelling, kept exactly.
 bool NativeStrategyHost::append_auxiliary_bars(const Bar* bars, std::size_t n) {
     return append_auxiliary_bars_result(bars, n).status == NativeSetupStatus::Applied;
+}
+
+void NativeStrategyHost::declare_native_bar_open_hook(bool implemented) {
+    as_native_consumer(execution_consumer()).declare_bar_open_hook(implemented);
 }
 
 std::optional<Bar> NativeStrategyHost::current_partial_bar() const {

@@ -865,7 +865,8 @@ public:
     /// one input, oldest first.
     virtual void on_native_timeframe_bar(const Bar&, const NativeTimeframeBarContext&) {}
     /// Precedes the matching pass at the script bar's open decision point.
-    /// inspect_current_execution/execute_current are legal in this hook.
+    /// inspect_current_execution/execute_current are legal in this hook. A host
+    /// that has none says so: declare_native_bar_open_hook(false).
     virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}
     /// The current decision point remains valid for the complete callback.
     /// A host may therefore execute a command after its own script-body work
@@ -1009,6 +1010,20 @@ public:
             const ClosedLotExcursionFacts&) const {
         return {};
     }
+
+    /// Whether this host implements on_native_bar_open (R5 lane D2-A). A host
+    /// that declares nothing implements it, which is every host written before
+    /// the declaration existed; a declaration stands, across runs, until the
+    /// host makes another. It moves no value: it lets the kernel skip work
+    /// whose only reader is a hook the host does not have.
+    ///
+    /// declare_native_bar_open_hook(false): on_native_bar_open does nothing, so
+    /// the kernel does not call it. It keeps every effect of the call's boundary
+    /// that is its own -- the decision context, the point's epoch, the complete
+    /// bar at the point's instant, the abort check and the drain of the applied
+    /// notifications -- so the run is the run of a host whose hook is empty. C
+    /// spelling: a pf_native_callbacks_v1 without on_bar_open declares it.
+    void declare_native_bar_open_hook(bool implemented);
 
     /// The bar so far at the current cursor, folded from the modeled points
     /// this script bar has already presented: open of its first point,
