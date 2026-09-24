@@ -1782,6 +1782,76 @@ public:
                                                           const RequestHandle& child,
                                                           uint64_t& next_timeline_ordinal);
 
+    /// The direct forms (R5 lane L3). Each apply_* makes the checks of the
+    /// prepare_* it is named after, in the same order, and answers what that
+    /// prepare_* followed at once by its install answers: the same NoChange or
+    /// PreparationError, the same exception at the same point with nothing
+    /// changed, and otherwise the same events at the same absolute journal
+    /// positions, the same live rows, receipts, chain index and counters, and a
+    /// token prepared before it just as stale. What it does not do is stage:
+    /// no token, plan or row copy stands between the checks and the write --
+    /// the live row is updated where it stands and each event is appended
+    /// once. A caller that installs what it prepares straight away uses these;
+    /// the prepare/install pairs stay for a caller that holds a token across
+    /// other work (an execution across its host's precommit verdict, which is
+    /// why prepare_execution has no direct form), or that may decide not to
+    /// install (an anchored arm whose restatement hook failed).
+    CommandInstalled<SubmitResult> apply_submit(const Request& request,
+                                                const CommandContext& context,
+                                                uint64_t& next_order_incarnation,
+                                                uint64_t& next_timeline_ordinal,
+                                                RequestOrigin origin = RequestOrigin::Host);
+    CommandInstalled<ReplaceResult> apply_replace(const RequestHandle& target,
+                                                  const Request& request,
+                                                  const CommandContext& context,
+                                                  uint64_t& next_order_incarnation,
+                                                  uint64_t& next_timeline_ordinal,
+                                                  ReplaceOptions options = {});
+    CommandInstalled<CancelResult> apply_cancel(const RequestHandle& target,
+                                                uint64_t& next_timeline_ordinal,
+                                                CancelReason reason = CancelReason::User);
+    Preparation<Installed> apply_evaluation(const RequestHandle& target,
+                                            const EvaluationContext& context,
+                                            const TargetObservation& observation,
+                                            uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_trigger(const RequestHandle& target,
+                                         const TriggerTransition& transition,
+                                         DriverEligibilityClass driver_class,
+                                         uint64_t& next_timeline_ordinal,
+                                         std::optional<Side> cohort_side = std::nullopt,
+                                         const ActivationGrid& grid = {});
+    Preparation<Installed> apply_no_effect(const RequestHandle& target,
+                                           const EvaluationContext& context,
+                                           uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_match_rejected(const RequestHandle& target,
+                                                const EvaluationContext& context,
+                                                MatchRejectReason reason,
+                                                std::optional<ExecutionTerms> attempted_terms,
+                                                uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_terms(const RequestHandle& target,
+                                       const EvaluationContext& context,
+                                       const TermsResolvedInput& input,
+                                       uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_margin_call(const MarginCallEvent& event,
+                                             uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_risk_event(const NativeRiskEvent& event,
+                                            uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_group_effect(const EventId& applied,
+                                              const RequestHandle& recipient,
+                                              uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_owner_applied(const EventId& applied,
+                                               const RequestHandle& child,
+                                               const std::optional<OpeningObservation>& observation,
+                                               uint64_t& next_timeline_ordinal,
+                                               const ArmContext& arm = {});
+    Preparation<Installed> apply_bound_expiry(const EventId& physical_cause,
+                                              const RequestHandle& child,
+                                              const TargetObservation& observation,
+                                              uint64_t& next_timeline_ordinal);
+    Preparation<Installed> apply_parent_terminal(const EventId& terminal_or_replaced,
+                                                 const RequestHandle& child,
+                                                 uint64_t& next_timeline_ordinal);
+
     EligibilityFacts eligibility_facts(const LiveRequest& live,
                                        const EvaluationContext& context) const noexcept;
     bool evaluation_eligible(const LiveRequest& live,
@@ -1886,6 +1956,22 @@ private:
     void bind_plan(MutationPlan& plan) const;
     void seal_plan(MutationPlan& plan);
     PreparedMutation finish_mutation(MutationPlan plan);
+
+    // The direct forms' halves of a plan (R5 lane L3). begin_direct makes
+    // begin_plan's checks; seal_direct reserves what seal_plan would reserve
+    // for `events` events and the live change and takes the seal's epoch;
+    // append_direct appends one event exactly as commit does (the ordinal
+    // index row, the chain index for a command that consumes an incarnation,
+    // the last ordinal); finish_direct takes commit's epoch and answers the
+    // range. Nothing after seal_direct can throw.
+    void begin_direct() const;
+    void seal_direct(std::size_t events, bool push_live, bool add_receipt,
+                     bool consume_incarnation);
+    template <class Event>
+    void append_direct(Event&& event, bool consume_incarnation) noexcept;
+    EventRange finish_direct(std::size_t first) noexcept;
+    template <class Event>
+    Installed end_direct(std::size_t live_index, Event&& event);
 
     RunIdentity identity_;
     std::shared_ptr<InstanceBinding> instance_;

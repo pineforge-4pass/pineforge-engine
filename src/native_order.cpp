@@ -909,6 +909,62 @@ PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
     return PreparedMutation(std::move(impl));
 }
 
+// The direct forms (R5 lane L3) do what a plan's prepare and install do, in
+// the order they do it, without the plan: begin_plan's checks where the
+// prepare_* makes them, then seal_plan's reservation and epoch, then commit's
+// appends, row change, receipt and counters, then commit's epoch. Every event
+// is built before the seal, so whatever can throw has thrown before anything
+// is written, exactly as a prepare that throws leaves the core untouched.
+void WorkingRequestCore::begin_direct() const {
+    require_identity(identity_);
+    if (!instance_ || instance_->expired) {
+        throw std::invalid_argument(
+                "native run identity requires a nonempty session key and positive run number");
+    }
+    require_epoch_room();
+}
+
+void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool add_receipt,
+                                     bool consume_incarnation) {
+    require_epoch_room();
+    reserve_n(history_, events);
+    reserve_n(ordinal_index_, events);
+    if (push_live) reserve_n(live_, 1);
+    if (add_receipt) reserve_n(receipts_, 1);
+    if (consume_incarnation) {
+        reserve_n(issued_, 1);
+        reserve_n(successor_roots_, 1);
+    }
+    if (!bump_epoch()) {
+        throw std::overflow_error("native working-request epoch exhausted");
+    }
+}
+
+template <class Event>
+void WorkingRequestCore::append_direct(Event&& event, bool consume_incarnation) noexcept {
+    static_assert(!std::is_lvalue_reference_v<Event>, "an event is appended by move");
+    const uint64_t ordinal = event.ordinal;
+    history_.emplace_back(std::forward<Event>(event));
+    ordinal_index_.push_back({ordinal, history_end() - 1});
+    if (consume_incarnation) index_committed(history_.back());
+    last_ordinal_ = ordinal;
+}
+
+EventRange WorkingRequestCore::finish_direct(std::size_t first) noexcept {
+    bump_epoch();
+    return EventRange{first, history_end() - first};
+}
+
+// One event that ends a live request: sealed, appended, the row erased.
+template <class Event>
+Installed WorkingRequestCore::end_direct(std::size_t live_index, Event&& event) {
+    seal_direct(1, false, false, false);
+    const std::size_t first = history_end();
+    append_direct(std::forward<Event>(event), false);
+    live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+    return Installed{finish_direct(first)};
+}
+
 WorkingRequestCore::TargetKind WorkingRequestCore::classify(
         const RequestHandle& handle, std::size_t* live_index) const {
     if (!names_run(handle, identity_)) return TargetKind::InvalidHandle;
@@ -2112,6 +2168,187 @@ PreparedCancel WorkingRequestCore::prepare_cancel(const RequestHandle& target,
     return PreparedCancel(std::move(impl));
 }
 
+// The direct forms of the three commands: prepare_submit, prepare_replace and
+// prepare_cancel with their installs, check for check.
+CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
+        const Request& request, const CommandContext& context,
+        uint64_t& next_order_incarnation, uint64_t& next_timeline_ordinal,
+        RequestOrigin origin) {
+    require_identity(identity_);
+    require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    Request staged = request;
+    begin_direct();
+    auto reason = validate_request(staged, context, std::nullopt);
+    if (!reason) reason = resolve_tick_spellings(staged, context);
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    if (reason) {
+        RejectedEvent rejected{ordinal, std::move(staged), *reason, context.surface};
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(rejected), false);
+        return CommandInstalled<SubmitResult>{
+                SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason},
+                finish_direct(first)};
+    }
+    canonicalize_owner(staged);
+    const uint64_t incarnation = usable_incarnation(next_order_incarnation);
+    RequestHandle handle{identity_, incarnation};
+    Birth birth{ordinal, context.decision_time_ms};
+    auto definition = std::make_shared<RequestDefinition>(
+            RequestDefinition{handle, std::move(staged), birth, std::nullopt, origin});
+    LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
+    AcceptedEvent accepted;
+    accepted.ordinal = ordinal;
+    accepted.definition = std::move(definition);
+    accepted.surface = context.surface;
+    seal_direct(1, true, false, true);
+    const std::size_t first = history_end();
+    append_direct(std::move(accepted), true);
+    live_.push_back(std::move(live));
+    last_incarnation_ = incarnation;
+    return CommandInstalled<SubmitResult>{
+            SubmitResult{SubmitStatus::Accepted, ordinal, std::move(handle), std::nullopt},
+            finish_direct(first)};
+}
+
+CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
+        const RequestHandle& target, const Request& request, const CommandContext& context,
+        uint64_t& next_order_incarnation, uint64_t& next_timeline_ordinal,
+        ReplaceOptions options) {
+    require_identity(identity_);
+    require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
+    RequestHandle staged_target = target;
+    Request staged = request;
+    std::size_t live_index = 0;
+    const TargetKind kind = classify(staged_target, &live_index);
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    if (kind != TargetKind::Live) {
+        const ReplaceStatus status = kind == TargetKind::InvalidHandle
+                ? ReplaceStatus::InvalidHandle
+                : ReplaceStatus::NotWorking;
+        // Both events are built by moves alone, so the seal may come first.
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        if (kind == TargetKind::InvalidHandle) {
+            append_direct(InvalidHandleEvent{ordinal, std::move(staged_target), std::move(staged),
+                                             context.surface},
+                          false);
+        } else {
+            append_direct(NotWorkingEvent{ordinal, std::move(staged_target), std::move(staged),
+                                          context.surface},
+                          false);
+        }
+        return CommandInstalled<ReplaceResult>{
+                ReplaceResult{status, ordinal, std::nullopt, std::nullopt}, finish_direct(first)};
+    }
+    auto reason = validate_request(staged, context, staged_target);
+    if (!reason) reason = resolve_tick_spellings(staged, context);
+    // A retained trigger state only describes the trigger alternative it came
+    // from, and a retained trail best must still produce a representable
+    // level for the successor's offset on either side.
+    if (!reason && options.retain_trigger_state) {
+        const LiveRequest& predecessor = live_[live_index];
+        if (predecessor.request().trigger.index() != staged.trigger.index()) {
+            reason = RequestRejectReason::InvalidTrigger;
+        } else {
+            std::optional<double> best;
+            if (const auto* track = std::get_if<TrailTrack>(&predecessor.trigger_state)) {
+                best = track->best;
+            } else if (const auto* active = std::get_if<TrailActive>(&predecessor.trigger_state)) {
+                best = active->best_at_trigger;
+            }
+            const auto* trail = std::get_if<Trail>(&staged.trigger);
+            if (best && (!trail || !trail_level_ok(*best, trail->offset, true, nullptr)
+                         || !trail_level_ok(*best, trail->offset, false, nullptr))) {
+                reason = RequestRejectReason::InvalidTrigger;
+            }
+        }
+    }
+    if (reason) {
+        ReplaceRejectedEvent rejected;
+        rejected.ordinal = ordinal;
+        rejected.live_definition = live_[live_index].definition;
+        rejected.attempted = std::move(staged);
+        rejected.reason = *reason;
+        rejected.surface = context.surface;
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(rejected), false);
+        return CommandInstalled<ReplaceResult>{
+                ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason},
+                finish_direct(first)};
+    }
+    canonicalize_owner(staged);
+    const uint64_t incarnation = usable_incarnation(next_order_incarnation);
+    RequestHandle successor{identity_, incarnation};
+    Birth birth{ordinal, context.decision_time_ms};
+    auto definition = std::make_shared<RequestDefinition>(
+            RequestDefinition{successor, std::move(staged), birth, staged_target});
+    // The successor inherits its predecessor's chain root, so a cohort names
+    // the whole chain by its first handle without walking back through it.
+    {
+        const RequestDefinition& predecessor = *live_[live_index].definition;
+        definition->root = predecessor.root ? *predecessor.root : predecessor.handle;
+    }
+    LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
+    if (options.retain_trigger_state) {
+        live.trigger_state = live_[live_index].trigger_state;
+        // The retained ride is the predecessor's; the successor has armed
+        // nothing of its own, which is what its TrailArm ordinal says.
+        if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
+        if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+    }
+    ReplacedEvent replaced;
+    replaced.ordinal = ordinal;
+    replaced.predecessor_definition = live_[live_index].definition;
+    replaced.successor_definition = std::move(definition);
+    replaced.surface = context.surface;
+    seal_direct(1, false, false, true);
+    const std::size_t first = history_end();
+    append_direct(std::move(replaced), true);
+    // commit's erase-push: the predecessor's row leaves, the successor's is
+    // born at the back (a fresh incarnation keeps the book in order).
+    if (live_index + 1 != live_.size()) {
+        std::rotate(live_.begin() + static_cast<std::ptrdiff_t>(live_index),
+                    live_.begin() + static_cast<std::ptrdiff_t>(live_index + 1), live_.end());
+    }
+    live_.back() = std::move(live);
+    last_incarnation_ = incarnation;
+    return CommandInstalled<ReplaceResult>{
+            ReplaceResult{ReplaceStatus::Replaced, ordinal, std::move(successor), std::nullopt},
+            finish_direct(first)};
+}
+
+CommandInstalled<CancelResult> WorkingRequestCore::apply_cancel(
+        const RequestHandle& target, uint64_t& next_timeline_ordinal, CancelReason reason) {
+    require_identity(identity_);
+    RequestHandle staged_target = target;
+    std::size_t live_index = 0;
+    const TargetKind kind = classify(staged_target, &live_index);
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    if (kind != TargetKind::Live) {
+        const CancelStatus status = kind == TargetKind::InvalidHandle
+                ? CancelStatus::InvalidHandle
+                : CancelStatus::NotWorking;
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        if (kind == TargetKind::InvalidHandle) {
+            append_direct(InvalidHandleEvent{ordinal, std::move(staged_target), std::nullopt},
+                          false);
+        } else {
+            append_direct(NotWorkingEvent{ordinal, std::move(staged_target), std::nullopt}, false);
+        }
+        return CommandInstalled<CancelResult>{CancelResult{status, ordinal}, finish_direct(first)};
+    }
+    CancelledEvent cancelled =
+            make_cancelled(ordinal, live_[live_index], reason, EventId{identity_, ordinal});
+    return CommandInstalled<CancelResult>{
+            CancelResult{CancelStatus::Cancelled, ordinal},
+            end_direct(live_index, std::move(cancelled)).events};
+}
+
 InstalledCommand<SubmitResult> WorkingRequestCore::install_submit(PreparedSubmit&& prepared) noexcept {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto installed = commit(prepared.impl_->plan);
@@ -2440,6 +2677,108 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
     return finish_mutation(std::move(plan));
 }
 
+Preparation<Installed> WorkingRequestCore::apply_evaluation(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        const TargetObservation& observation,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    LiveRequest& live = live_[live_index];
+    if (std::holds_alternative<Wait>(live.authority)) {
+        return NoChange{NoChangeReason::StillWaiting};
+    }
+    const EligibilityFacts facts = eligibility_facts(live, context);
+    if (!facts.birth_ok || !facts.driver_ok) return NoChange{NoChangeReason::NotEligible};
+
+    if (std::holds_alternative<CohortClose>(live.authority)) {
+        bool has_live_member = false;
+        for (const auto& opening : observation.openings) {
+            has_live_member = has_live_member || opening.has_live_matching_lot;
+        }
+        if (!context.cohort_side || !has_live_member) {
+            return NoChange{NoChangeReason::StillWaiting};
+        }
+    }
+
+    if (std::holds_alternative<UnboundBookClose>(live.authority)) {
+        if (std::holds_alternative<PositionFlat>(observation.current_position)) {
+            const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+            begin_direct();
+            NoEffectEvent none;
+            none.ordinal = ordinal;
+            none.definition = live.definition;
+            none.remaining = project_remaining(live.remaining);
+            none.authority = live.authority;
+            none.cursor = context.cursor;
+            return end_direct(live_index, std::move(none));
+        }
+        const auto* nonflat = std::get_if<PositionNonflat>(&observation.current_position);
+        if (!nonflat || nonflat->cycle <= 0) {
+            return PreparationError{CoreFailure::MissingObservation, EventId{identity_, 0}, target};
+        }
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        begin_direct();
+        BookClose bound;
+        bound.cycle = nonflat->cycle;
+        bound.side = nonflat->side;
+        bound.binding_event = EventId{identity_, ordinal};
+        bound.binding_cursor = context.cursor;
+        CloseBoundEvent bound_event;
+        bound_event.ordinal = ordinal;
+        bound_event.definition = live.definition;
+        bound_event.cycle = bound.cycle;
+        bound_event.side = bound.side;
+        bound_event.cursor = context.cursor;
+        bound_event.before = live.authority;
+        bound_event.after = bound;
+        const Allowance allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(bound_event), false);
+        live.authority = std::move(bound);
+        live.allowance = allowance;
+        return Installed{finish_direct(first)};
+    }
+
+    const bool book_gone = std::holds_alternative<BookClose>(live.authority)
+        && !book_close_alive(observation, std::get<BookClose>(live.authority));
+    const bool opening_gone = std::holds_alternative<OpeningClose>(live.authority)
+        && !opening_close_alive(observation, std::get<OpeningClose>(live.authority));
+    if (book_gone || opening_gone) {
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        begin_direct();
+        return end_direct(live_index, make_cancelled(ordinal, live, CancelReason::OwnerGone,
+                                                     EventId{identity_, ordinal}));
+    }
+
+    if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(observation, *close, &live_count)) {
+            return PreparationError{*error, EventId{identity_, 0}, target};
+        }
+        if (live_count == 0) {
+            const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+            begin_direct();
+            return end_direct(live_index, make_cancelled(ordinal, live, CancelReason::OwnerGone,
+                                                         EventId{identity_, ordinal}));
+        }
+    }
+
+    if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    const Allowance allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+    begin_direct();
+    seal_direct(0, false, false, false);
+    const std::size_t first = history_end();
+    live.allowance = allowance;
+    return Installed{finish_direct(first)};
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         const RequestHandle& target,
         const TriggerTransition& transition,
@@ -2632,6 +2971,176 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                               trail_hit.reached_price, level, /*le=*/!is_buy, grid));
 }
 
+Preparation<Installed> WorkingRequestCore::apply_trigger(
+        const RequestHandle& target,
+        const TriggerTransition& transition,
+        DriverEligibilityClass driver_class,
+        uint64_t& next_timeline_ordinal,
+        std::optional<Side> cohort_side,
+        const ActivationGrid& activation_grid) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    LiveRequest& live = live_[live_index];
+    if (std::holds_alternative<Wait>(live.authority)
+        || std::holds_alternative<UnboundBookClose>(live.authority)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    const MatchCursor& cursor = transition_cursor(transition);
+    if (!trigger_cursor_eligible(live, cursor)
+        && !same_point_allowance(live.allowance, cursor.point.ordinal)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    if (!driver_class_matches_cursor(driver_class, cursor)
+        || !trigger_permits_driver(live.request().trigger, live.trigger_state,
+                                    driver_class, false)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    const bool is_buy = working_is_buy(live, cohort_side);
+    const native_matching::GridThreshold grid = matcher_grid(activation_grid);
+    const double ladder_tick = activation_grid.ladder_tick;
+    begin_direct();
+
+    auto emit_activated = [&](ActivationKind kind, TriggerState after, const MatchCursor& at,
+                              double price) -> Preparation<Installed> {
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        if (kind == ActivationKind::TrailArm) {
+            if (auto* track = std::get_if<TrailTrack>(&after)) track->activation_ordinal = ordinal;
+        }
+        ActivatedEvent activated;
+        activated.ordinal = ordinal;
+        activated.definition = live.definition;
+        activated.kind = kind;
+        activated.before = live.trigger_state;
+        activated.after = after;
+        activated.reached_price = price;
+        activated.cursor = at;
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(activated), false);
+        live.trigger_state = after;
+        return Installed{finish_direct(first)};
+    };
+
+    if (const auto* begin = std::get_if<BeginTrailTracking>(&transition)) {
+        if (!std::holds_alternative<TrailWaitArm>(live.trigger_state)) {
+            if (std::holds_alternative<TrailTrack>(live.trigger_state)) {
+                return NoChange{NoChangeReason::NoTransition};
+            }
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        if (!std::isfinite(begin->reached_price)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+        const auto* trail = std::get_if<Trail>(&live.request().trigger);
+        if (!trail || !trail_level_ok(begin->reached_price, trail->offset, is_buy, nullptr,
+                                      ladder_tick)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+        if (trail->arm_price
+            && !stop_price_reached(!is_buy, *trail->arm_price, begin->reached_price, grid)) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        const double arm_print = trail->arm_price
+            ? native_matching::grid_reached_print(begin->reached_price, *trail->arm_price,
+                                                  /*le=*/is_buy, grid)
+            : native_matching::grid_best_print(begin->reached_price, is_buy, grid);
+        double best = arm_print;
+        if (trail->best_seed) {
+            const double seed =
+                native_matching::grid_best_print(*trail->best_seed, is_buy, grid);
+            best = is_buy ? std::min(best, seed) : std::max(best, seed);
+        }
+        if (best != begin->reached_price
+            && !trail_level_ok(best, trail->offset, is_buy, nullptr, ladder_tick)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+        return emit_activated(ActivationKind::TrailArm, TrailTrack{best}, begin->cursor, arm_print);
+    }
+    if (const auto* extremum = std::get_if<ObserveTrailExtremum>(&transition)) {
+        auto* track = std::get_if<TrailTrack>(&live.trigger_state);
+        if (!track) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        const double print = native_matching::grid_best_print(extremum->reached_price, is_buy, grid);
+        const double next_best = is_buy ? std::min(track->best, print)
+                                        : std::max(track->best, print);
+        if (next_best == track->best) return NoChange{NoChangeReason::NoTransition};
+        const auto* trail = std::get_if<Trail>(&live.request().trigger);
+        if (!trail || !trail_level_ok(next_best, trail->offset, is_buy, nullptr,
+                                      ladder_tick)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+        seal_direct(0, false, false, false);
+        const std::size_t first = history_end();
+        track->best = next_best;
+        return Installed{finish_direct(first)};
+    }
+    if (const auto* stop = std::get_if<ActivateStop>(&transition)) {
+        if (!std::holds_alternative<StopIdle>(live.trigger_state)) {
+            if (std::holds_alternative<StopActive>(live.trigger_state)) {
+                return NoChange{NoChangeReason::NoTransition};
+            }
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        const auto* stop_px = std::get_if<Stop>(&live.request().trigger);
+        if (!stop_px || !stop_price_reached(is_buy, stop_px->price, stop->reached_price, grid)) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        return emit_activated(ActivationKind::Stop, StopActive{}, stop->cursor,
+                              native_matching::grid_reached_print(
+                                  stop->reached_price, stop_px->price, /*le=*/!is_buy, grid));
+    }
+    if (const auto* stop_limit = std::get_if<ActivateStopLimit>(&transition)) {
+        if (!std::holds_alternative<StopLimitPending>(live.trigger_state)) {
+            if (std::holds_alternative<StopLimitLive>(live.trigger_state)) {
+                return NoChange{NoChangeReason::NoTransition};
+            }
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        const auto* stop_limit_px = std::get_if<StopLimit>(&live.request().trigger);
+        if (!stop_limit_px
+            || !stop_price_reached(is_buy, stop_limit_px->stop, stop_limit->reached_price, grid)) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        return emit_activated(ActivationKind::StopLimit, StopLimitLive{}, stop_limit->cursor,
+                              native_matching::grid_reached_print(
+                                  stop_limit->reached_price, stop_limit_px->stop,
+                                  /*le=*/!is_buy, grid));
+    }
+    const auto& trail_hit = std::get<ActivateTrail>(transition);
+    const auto* track = std::get_if<TrailTrack>(&live.trigger_state);
+    if (!track) {
+        if (std::holds_alternative<TrailActive>(live.trigger_state)) {
+            return NoChange{NoChangeReason::NoTransition};
+        }
+        return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
+    }
+    const auto* trail = std::get_if<Trail>(&live.request().trigger);
+    double level = 0.0;
+    if (!trail || !trail_level_ok(track->best, trail->offset, is_buy, &level, ladder_tick)
+        || !stop_price_reached(is_buy, level, trail_hit.reached_price, grid)) {
+        return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
+    }
+    return emit_activated(ActivationKind::TrailTrigger,
+                          TrailActive{track->best, track->activation_ordinal}, trail_hit.cursor,
+                          native_matching::grid_reached_print(
+                              trail_hit.reached_price, level, /*le=*/!is_buy, grid));
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_no_effect(
         const RequestHandle& target,
         const EvaluationContext& context,
@@ -2721,6 +3230,86 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_risk_event(
     receipt.ordinal = ordinal;
     plan.events.emplace_back(std::move(receipt));
     return finish_mutation(std::move(plan));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_no_effect(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    NoEffectEvent none;
+    none.ordinal = ordinal;
+    none.definition = live.definition;
+    none.remaining = project_remaining(live.remaining);
+    none.authority = live.authority;
+    none.cursor = context.cursor;
+    return end_direct(live_index, std::move(none));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_match_rejected(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        MatchRejectReason reason,
+        std::optional<ExecutionTerms> attempted_terms,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    MatchRejectedEvent rejected;
+    rejected.ordinal = ordinal;
+    rejected.reason = reason;
+    rejected.definition = live.definition;
+    rejected.remaining = project_remaining(live.remaining);
+    rejected.authority = live.authority;
+    rejected.cursor = context.cursor;
+    rejected.attempted_terms = std::move(attempted_terms);
+    return end_direct(live_index, std::move(rejected));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_margin_call(
+        const MarginCallEvent& event, uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    if (!event.definition || event.definition->handle.run != identity_) {
+        return PreparationError{CoreFailure::InvalidProposal, event.applied,
+                                event.definition ? event.definition->handle : RequestHandle{}};
+    }
+    if (event.definition->origin == RequestOrigin::Host) {
+        return PreparationError{CoreFailure::InvalidProposal, event.applied,
+                                event.definition->handle};
+    }
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    MarginCallEvent receipt = event;
+    receipt.ordinal = ordinal;
+    seal_direct(1, false, false, false);
+    const std::size_t first = history_end();
+    append_direct(std::move(receipt), false);
+    return Installed{finish_direct(first)};
+}
+
+Preparation<Installed> WorkingRequestCore::apply_risk_event(
+        const NativeRiskEvent& event, uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    NativeRiskEvent receipt = event;
+    receipt.ordinal = ordinal;
+    seal_direct(1, false, false, false);
+    const std::size_t first = history_end();
+    append_direct(std::move(receipt), false);
+    return Installed{finish_direct(first)};
 }
 
 Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
@@ -2857,6 +3446,141 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
     plan.live_index = live_index;
     plan.live_row = std::move(updated);
     return finish_mutation(std::move(plan));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_terms(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        const TermsResolvedInput& input,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    LiveRequest& live = live_[live_index];
+    const bool deferred = std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining);
+    const bool has_units = input.terms.units.has_value();
+
+    if (!deferred) {
+        if (has_units || input.terms.shape != OpeningShape::Transact) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        begin_direct();
+        TermsResolvedEvent receipt;
+        receipt.ordinal = ordinal;
+        receipt.definition = live.definition;
+        receipt.cursor = context.cursor;
+        receipt.input = input;
+        receipt.remaining_before = project_remaining(live.remaining);
+        receipt.remaining_after = project_remaining(live.remaining);
+        receipt.allowance_after = live.allowance;
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(receipt), false);
+        return Installed{finish_direct(first)};
+    }
+
+    if (!has_units || !std::isfinite(*input.terms.units) || *input.terms.units < 0.0) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    const auto* sized = as_host_sized(live.request().intent);
+    const auto* native_sized = as_sized(live.request().intent);
+    const auto* scope_fraction = deferred_reduction(live.request().intent);
+    const bool opening_shapes = (sized && sized->kind == HostSizedKind::Open)
+        || native_sized != nullptr;
+    if ((!sized && !native_sized && !scope_fraction)
+        || (input.terms.shape != OpeningShape::Transact
+            && input.terms.shape != OpeningShape::ReverseTo
+            && input.terms.shape != OpeningShape::CloseOpposite)
+        || (!opening_shapes && input.terms.shape != OpeningShape::Transact)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    std::vector<EventId> prior_adjustment_ids;
+    double pending_total = 0.0;
+    if (!collect_pending_chain(live.pending, target, &prior_adjustment_ids, &pending_total)) {
+        return PreparationError{CoreFailure::ConflictingReceipt, EventId{identity_, 0}, target};
+    }
+
+    double deduction = 0.0;
+    double after = 0.0;
+    bool exhausted = false;
+    if (!effective_host_units(live.pending, *input.terms.units, &deduction, &after, &exhausted)) {
+        return PreparationError{CoreFailure::UnrepresentableReservation, EventId{identity_, 0},
+                                target};
+    }
+
+    const Allowance bound_allowance = initialize_allowance(
+        RemainingUnits{after}, live.request().capacity, context.cursor.point.ordinal);
+    if (input.terms.shape != OpeningShape::Transact) {
+        const auto* allowance = std::get_if<AllowanceUnits>(&bound_allowance);
+        if (!allowance || after > allowance->left) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    }
+
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    TermsResolvedEvent receipt;
+    receipt.ordinal = ordinal;
+    receipt.definition = live.definition;
+    receipt.cursor = context.cursor;
+    receipt.input = input;
+    receipt.prior_adjustment_ids = std::move(prior_adjustment_ids);
+    receipt.pending_total = pending_total;
+    receipt.effective_deduction = deduction;
+    receipt.remaining_before = project_remaining(live.remaining);
+    receipt.remaining_after = project_remaining(Remaining{RemainingUnits{after}});
+    receipt.allowance_after = bound_allowance;
+    begin_direct();
+
+    if (*input.terms.units == 0.0 || (after == 0.0 && deduction > 0.0)) {
+        const uint64_t terminal_ordinal = ordinal + 1;
+        if (terminal_ordinal == 0 || terminal_ordinal == std::numeric_limits<uint64_t>::max()
+            || terminal_ordinal <= last_ordinal_) {
+            throw std::invalid_argument("native timeline ordinal reused or regressed");
+        }
+        // The terminal reads the row as the receipt left it: bound to `after`
+        // units, the pending chain spent. Built from that copy, as the plan does.
+        LiveRequest updated = live;
+        updated.remaining = RemainingUnits{after};
+        updated.allowance = bound_allowance;
+        updated.pending = PendingNone{};
+        std::optional<NoEffectEvent> none;
+        std::optional<CancelledEvent> cancelled;
+        if (*input.terms.units == 0.0) {
+            none.emplace();
+            none->ordinal = terminal_ordinal;
+            none->definition = live.definition;
+            none->remaining = project_remaining(updated.remaining);
+            none->authority = updated.authority;
+            none->cursor = context.cursor;
+        } else {
+            cancelled.emplace(make_cancelled(terminal_ordinal, updated, CancelReason::Group,
+                                             EventId{identity_, ordinal}));
+        }
+        seal_direct(2, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(receipt), false);
+        if (none) {
+            append_direct(std::move(*none), false);
+        } else {
+            append_direct(std::move(*cancelled), false);
+        }
+        live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+        return Installed{finish_direct(first)};
+    }
+
+    (void) exhausted;
+    seal_direct(1, false, false, false);
+    const std::size_t first = history_end();
+    append_direct(std::move(receipt), false);
+    live.remaining = RemainingUnits{after};
+    live.allowance = bound_allowance;
+    live.pending = PendingNone{};
+    return Installed{finish_direct(first)};
 }
 
 Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
@@ -3472,6 +4196,161 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     return finish_mutation(std::move(plan));
 }
 
+Preparation<Installed> WorkingRequestCore::apply_group_effect(
+        const EventId& applied,
+        const RequestHandle& recipient,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    const CommandEvent* event = event_at(applied);
+    const auto* payload = event ? as_applied(*event) : nullptr;
+    if (!payload || !payload->definition) {
+        return PreparationError{CoreFailure::InvalidCause, applied, recipient};
+    }
+    const auto* member = std::get_if<Member>(&payload->definition->request.group);
+    if (!member) return NoChange{NoChangeReason::NoTransition};
+    if (member->effect == GroupEffect::Cancel && !payload->terminal) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    if (member->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    uint64_t seen = 0;
+    const ReceiptLookup lookup = receipt_lookup(applied, recipient, member->effect, &seen);
+    if (lookup == ReceiptLookup::Present) return NoChange{NoChangeReason::AlreadyApplied};
+    if (lookup == ReceiptLookup::Conflict) {
+        return PreparationError{CoreFailure::ConflictingReceipt, applied, recipient};
+    }
+    if (!receipts_.empty()) {
+        const auto& last = receipts_.back();
+        if (receipt_cmp(applied.ordinal, recipient.incarnation, member->effect, last.cause.ordinal,
+                        last.recipient.incarnation, last.effect)
+            < 0) {
+            return PreparationError{CoreFailure::InvalidCause, applied, recipient};
+        }
+    }
+    std::size_t live_index = 0;
+    if (classify(recipient, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    LiveRequest& live = live_[live_index];
+    const auto* other = std::get_if<Member>(&live.request().group);
+    if (!other || other->group != member->group || other->cohort == member->cohort
+        || live.birth().acceptance_ordinal >= payload->ordinal) {
+        return PreparationError{CoreFailure::InvalidCause, applied, recipient};
+    }
+    begin_direct();
+    const GroupEffect effect = member->effect;
+    const double filled_working = payload->filled_working;
+    // commit's receipt, after the events and the row change.
+    auto receipt = [&](uint64_t outcome) {
+        receipts_.push_back(ReceiptKey{applied, recipient, effect, outcome});
+    };
+    // One event that ends the recipient, with its receipt.
+    auto end_with_receipt = [&](auto&& ending, uint64_t outcome) -> Preparation<Installed> {
+        seal_direct(1, false, true, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(ending), false);
+        live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+        receipt(outcome);
+        return Installed{finish_direct(first)};
+    };
+
+    if (std::holds_alternative<RemainingUnbound>(live.remaining)
+        || std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining)) {
+        if (effect == GroupEffect::Cancel) {
+            const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+            return end_with_receipt(make_cancelled(ordinal, live, CancelReason::Group, applied),
+                                    ordinal);
+        }
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        PendingDeferred after;
+        PendingAdjustments before = live.pending;
+        if (const auto* pending = std::get_if<PendingDeferred>(&live.pending)) {
+            if (!checked_add_positive(pending->total, filled_working, &after.total)) {
+                return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
+            }
+            after.count = pending->count + 1;
+            after.tail_receipt = EventId{identity_, ordinal};
+        } else {
+            after.total = filled_working;
+            after.count = 1;
+            after.tail_receipt = EventId{identity_, ordinal};
+            if (!std::isfinite(after.total) || !(after.total > 0.0)) {
+                return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
+            }
+        }
+        DeferredGroupAdjustmentEvent deferred;
+        deferred.ordinal = ordinal;
+        deferred.definition = live.definition;
+        deferred.cause = applied;
+        deferred.recipient = recipient;
+        deferred.effect = GroupEffect::Reduce;
+        deferred.deferred_delta = filled_working;
+        deferred.pending_before = before;
+        deferred.pending_after = after;
+        if (const auto* pending = std::get_if<PendingDeferred>(&before)) {
+            deferred.previous_pending_receipt = pending->tail_receipt;
+        }
+        seal_direct(1, false, true, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(deferred), false);
+        live.pending = after;
+        receipt(ordinal);
+        return Installed{finish_direct(first)};
+    }
+
+    if (effect == GroupEffect::Cancel
+        || std::holds_alternative<RemainingFlattenAll>(live.remaining)) {
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        return end_with_receipt(make_cancelled(ordinal, live, CancelReason::Group, applied),
+                                ordinal);
+    }
+
+    const double before_q = working_units(live.remaining);
+    const double deduct = std::min(filled_working, before_q);
+    double after_q = 0.0;
+    bool exhausted = false;
+    if (!checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
+        return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
+    }
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    ReservationReducedEvent reduced;
+    reduced.ordinal = ordinal;
+    reduced.definition = live.definition;
+    reduced.cause = applied;
+    reduced.recipient = recipient;
+    reduced.effect = GroupEffect::Reduce;
+    reduced.requested_delta = filled_working;
+    reduced.actual_deduction = deduct;
+    reduced.before = RemainingUnits{before_q};
+    reduced.after = RemainingProjectionUnits{after_q};
+    if (exhausted) {
+        uint64_t cancel_ord = ordinal + 1;
+        if (cancel_ord == 0 || cancel_ord == std::numeric_limits<uint64_t>::max()
+            || cancel_ord <= last_ordinal_) {
+            throw std::invalid_argument("native timeline ordinal reused or regressed");
+        }
+        LiveRequest snapshot = live;
+        snapshot.remaining = RemainingUnits{before_q};
+        CancelledEvent cancelled =
+                make_cancelled(cancel_ord, snapshot, CancelReason::Group, applied);
+        seal_direct(2, false, true, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(reduced), false);
+        append_direct(std::move(cancelled), false);
+        live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+        receipt(ordinal);
+        return Installed{finish_direct(first)};
+    }
+    seal_direct(1, false, true, false);
+    const std::size_t first = history_end();
+    append_direct(std::move(reduced), false);
+    live.remaining = RemainingUnits{after_q};
+    receipt(ordinal);
+    return Installed{finish_direct(first)};
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         const EventId& applied,
         const RequestHandle& child,
@@ -3670,6 +4549,196 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     return finish_mutation(std::move(plan));
 }
 
+Preparation<Installed> WorkingRequestCore::apply_owner_applied(
+        const EventId& applied,
+        const RequestHandle& child,
+        const std::optional<OpeningObservation>& observation,
+        uint64_t& next_timeline_ordinal,
+        const ArmContext& arm) {
+    require_identity(identity_);
+    const CommandEvent* event = event_at(applied);
+    const auto* payload = event ? as_applied(*event) : nullptr;
+    if (!payload) return PreparationError{CoreFailure::InvalidCause, applied, child};
+    std::size_t live_index = 0;
+    if (classify(child, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    LiveRequest& live = live_[live_index];
+    const auto* wait = std::get_if<Wait>(&live.authority);
+    if (!wait || wait->parent != payload->handle()) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    if (payload->ordinal <= live.birth().acceptance_ordinal) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    const auto* host_close = as_host_sized(live.request().intent);
+    const bool closing = as_reduce(live.request().intent) || as_flatten(live.request().intent)
+        || (host_close && host_close->kind == HostSizedKind::Close);
+    const bool opened = payload->opened_units != 0.0;
+    if (closing && !opened && !payload->terminal) {
+        return NoChange{NoChangeReason::StillWaiting};
+    }
+    if (closing && !opened && payload->terminal) {
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        begin_direct();
+        return end_direct(live_index, make_cancelled(ordinal, live, CancelReason::UnsupportedRelation,
+                                                     applied));
+    }
+
+    begin_direct();
+    // An anchored leg receives its level from this fill, once, at the arm
+    // that binds it to the owner (prepare_owner_applied, step for step,
+    // the host's restatement included).
+    DefinitionRef armed_definition = live.definition;
+    const bool anchored = std::holds_alternative<FromOwnerFill>(live.request().anchor);
+    if (anchored) {
+        RequestDefinition materialized{live.definition->handle, live.request(),
+                                       live.definition->birth, live.definition->predecessor};
+        materialized.root = live.definition->root;
+        const bool leg_is_buy = closing ? !(payload->opened_units > 0.0)
+                                        : working_is_buy(live);
+        double level = 0.0;
+        if (!anchored_kernel_level(materialized.request, payload->resolved_price, arm.price_tick,
+                                   leg_is_buy, &level)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
+        }
+        if (arm.resolve_level) {
+            const auto& anchor = std::get<FromOwnerFill>(materialized.request.anchor);
+            const auto restated = arm.resolve_level(
+                    live, *payload, leg_is_buy ? Side::Long : Side::Short, anchor.offset, level);
+            if (restated) level = *restated;
+        }
+        if (!install_anchored_level(materialized.request, level)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
+        }
+        armed_definition = std::make_shared<RequestDefinition>(std::move(materialized));
+    }
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    if (!closing) {
+        ArmedTransaction armed;
+        armed.parent = wait->parent;
+        armed.cause = applied;
+        armed.cause_cursor = payload->cursor;
+        ArmedEvent armed_event;
+        armed_event.ordinal = ordinal;
+        armed_event.definition = armed_definition;
+        armed_event.before = live.authority;
+        armed_event.after = armed;
+        armed_event.enrollment = EnrollmentFromApplied{applied, payload->cursor};
+        seal_direct(1, false, false, false);
+        const std::size_t first = history_end();
+        append_direct(std::move(armed_event), false);
+        if (anchored) live.definition = std::move(armed_definition);
+        live.authority = std::move(armed);
+        return Installed{finish_direct(first)};
+    }
+
+    if (!observation) {
+        return PreparationError{CoreFailure::MissingObservation, applied, child};
+    }
+    const int64_t cycle = payload->cycle_after;
+    const Side side = side_from_opened(payload->opened_units);
+    if (!opening_alive(*observation, payload->handle(), cycle, &side)) {
+        return PreparationError{CoreFailure::ObservationMismatch, applied, child};
+    }
+
+    Remaining remaining = live.remaining;
+    std::optional<EventId> quantity_resolution;
+    std::optional<QuantityBoundEvent> bound;
+    const bool owner_opened =
+            as_reduce(live.request().intent) && is_owner_opened(*as_reduce(live.request().intent));
+    if (owner_opened) {
+        const double source = std::abs(payload->opened_units);
+        if (!finite_positive(source)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
+        }
+        std::vector<EventId> ids;
+        double pending_total = 0.0;
+        if (!collect_pending_chain(live.pending, child, &ids, &pending_total)) {
+            return PreparationError{CoreFailure::ConflictingReceipt, applied, child};
+        }
+        const double deduct = std::min(pending_total, source);
+        double after = source;
+        bool exhausted = deduct == source;
+        if (deduct > 0.0 && !exhausted) {
+            if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
+                return PreparationError{CoreFailure::UnrepresentableReservation, applied, child};
+            }
+        } else if (exhausted) {
+            after = 0.0;
+        }
+        bound.emplace();
+        bound->ordinal = ordinal;
+        bound->definition = live.definition;
+        bound->source = applied;
+        bound->source_units = source;
+        bound->prior_adjustment_ids = std::move(ids);
+        bound->pending_total = pending_total;
+        bound->effective_deduction = deduct;
+        bound->remaining = RemainingProjectionUnits{after};
+        quantity_resolution = EventId{identity_, ordinal};
+        if (exhausted) {
+            uint64_t cancel_ord = ordinal + 1;
+            if (cancel_ord <= last_ordinal_ || cancel_ord == 0) {
+                throw std::invalid_argument("native timeline ordinal reused or regressed");
+            }
+            CancelledEvent cancelled =
+                    make_cancelled(cancel_ord, live, CancelReason::Group, applied);
+            seal_direct(2, false, false, false);
+            const std::size_t first = history_end();
+            append_direct(std::move(*bound), false);
+            append_direct(std::move(cancelled), false);
+            live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+            return Installed{finish_direct(first)};
+        }
+        remaining = RemainingUnits{after};
+    }
+
+    const uint64_t arm_ord = owner_opened ? ordinal + 1 : ordinal;
+    if (owner_opened) {
+        if (arm_ord <= last_ordinal_ || arm_ord == 0) {
+            throw std::invalid_argument("native timeline ordinal reused or regressed");
+        }
+    }
+    const EnrollmentFromApplied enrollment{applied, payload->cursor};
+    Authority armed_authority;
+    const auto* waits = std::get_if<WaitForApplied>(&live.request().owner);
+    if (waits && waits->scope == NativeArmScope::Book) {
+        // The arm is the binding: the position this fill left, at its cursor.
+        BookClose book;
+        book.cycle = cycle;
+        book.side = side;
+        book.binding_event = EventId{identity_, arm_ord};
+        book.binding_cursor = payload->cursor;
+        armed_authority = book;
+    } else {
+        OpeningClose close;
+        close.opening = payload->handle();
+        close.cycle = cycle;
+        close.side = side;
+        close.enrollment = enrollment;
+        armed_authority = close;
+    }
+    ArmedEvent armed_event;
+    armed_event.ordinal = arm_ord;
+    armed_event.definition = armed_definition;
+    armed_event.before = live.authority;
+    armed_event.after = armed_authority;
+    armed_event.enrollment = enrollment;
+    armed_event.quantity_resolution = quantity_resolution;
+    seal_direct(owner_opened ? 2 : 1, false, false, false);
+    const std::size_t first = history_end();
+    if (bound) append_direct(std::move(*bound), false);
+    append_direct(std::move(armed_event), false);
+    if (anchored) live.definition = std::move(armed_definition);
+    if (owner_opened) {
+        live.pending = PendingNone{};
+        live.remaining = std::move(remaining);
+    }
+    live.authority = std::move(armed_authority);
+    return Installed{finish_direct(first)};
+}
+
 Preparation<PreparedMutation> WorkingRequestCore::prepare_bound_expiry(
         const EventId& physical_cause,
         const RequestHandle& child,
@@ -3742,6 +4811,75 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_parent_terminal(
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
     return finish_mutation(std::move(plan));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_bound_expiry(
+        const EventId& physical_cause,
+        const RequestHandle& child,
+        const TargetObservation& observation,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(child, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    bool gone = false;
+    if (const auto* close = std::get_if<BookClose>(&live.authority)) {
+        gone = !book_close_alive(observation, *close);
+    } else if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
+        gone = !opening_close_alive(observation, *close);
+    } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(observation, *close, &live_count)) {
+            return PreparationError{*error, physical_cause, child};
+        }
+        gone = live_count == 0;
+    } else {
+        return NoChange{NoChangeReason::NoTransition};
+    }
+    if (!gone) return NoChange{NoChangeReason::NoTransition};
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    return end_direct(live_index,
+                      make_cancelled(ordinal, live, CancelReason::OwnerGone, physical_cause));
+}
+
+Preparation<Installed> WorkingRequestCore::apply_parent_terminal(
+        const EventId& terminal_or_replaced,
+        const RequestHandle& child,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    const CommandEvent* event = event_at(terminal_or_replaced);
+    if (!event) {
+        return PreparationError{CoreFailure::InvalidCause, terminal_or_replaced, child};
+    }
+    std::size_t live_index = 0;
+    if (classify(child, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    const auto* wait = std::get_if<Wait>(&live.authority);
+    if (!wait) return NoChange{NoChangeReason::NoTransition};
+
+    bool parent_ended = false;
+    if (const auto* cancelled = std::get_if<CancelledEvent>(event)) {
+        parent_ended = cancelled->handle() == wait->parent;
+    } else if (const auto* replaced = std::get_if<ReplacedEvent>(event)) {
+        parent_ended = replaced->predecessor() == wait->parent;
+    } else if (const auto* none = std::get_if<NoEffectEvent>(event)) {
+        parent_ended = none->handle() == wait->parent;
+    } else if (const auto* rejected = std::get_if<MatchRejectedEvent>(event)) {
+        parent_ended = rejected->handle() == wait->parent;
+    } else if (const auto* applied = as_applied(*event)) {
+        parent_ended = applied->handle() == wait->parent && applied->terminal;
+    }
+    if (!parent_ended) return NoChange{NoChangeReason::NoTransition};
+
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    begin_direct();
+    return end_direct(live_index,
+                      make_cancelled(ordinal, live, CancelReason::OwnerGone, terminal_or_replaced));
 }
 
 static_assert(std::is_nothrow_move_constructible_v<PreparedSubmit>);

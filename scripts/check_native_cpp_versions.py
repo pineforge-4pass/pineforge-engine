@@ -276,8 +276,10 @@ def check_texts(files):
     if activation_grid != 'doubleprice_tick=0.0;boolhalf_up=true;doubleladder_tick=0.0;':
         raise ValueError(
             'ActivationGrid must keep {price_tick = 0.0, half_up = true, ladder_tick = 0.0}')
-    if len(re.findall(r'\bconst\s+ActivationGrid\s*&\s*grid\s*=\s*\{\s*\}\s*\)', order)) != 1:
-        raise ValueError('prepare_trigger must take a defaulted ActivationGrid last')
+    # R5 L3: prepare_trigger's direct form apply_trigger takes it the same way.
+    if len(re.findall(r'\bconst\s+ActivationGrid\s*&\s*grid\s*=\s*\{\s*\}\s*\)', order)) != 2:
+        raise ValueError(
+            'prepare_trigger and apply_trigger must each take a defaulted ActivationGrid last')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
             "native_order_v7", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
@@ -696,7 +698,7 @@ def check_texts(files):
     # trigger sites (the path matcher and the trail observer), and the grid is
     # active only under QuantizeFillsAndTriggers (grid_threshold's own gate).
     if consumer_src.count('activation_grid(*spec)') != 2:
-        raise ValueError('native consumer must hand activation_grid(*spec) to both prepare_trigger sites')
+        raise ValueError('native consumer must hand activation_grid(*spec) to both trigger sites')
     if 'const auto threshold = grid_threshold(spec);' not in consumer_src:
         raise ValueError('activation_grid must derive from grid_threshold, the matcher gate')
     if 'native_margin_model_digest(*spec.margin)' not in consumer_src:
