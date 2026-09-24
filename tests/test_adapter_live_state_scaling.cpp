@@ -48,6 +48,15 @@
 // (macOS arm64, Release): 4,000 bars 0.2906 s, 16,000 bars 5.3903 s (ratio
 // 18.55), 7,748 and 31,024 rows retained.
 //
+// R5 lane V19-D adds the straddle WITH recording, at 4,000 and 16,000 bars
+// timed in turn (INT21's residual, finding (c)): each read folded every
+// bracket family's working tail, and the cycle's first legs kept every later
+// member in it, erased or not -- 0.15 / 1.67 / 23.5 s at 1k / 4k / 16k bars.
+// BracketRoster now parks the erased members behind a retained one, so the
+// fold reads what is retained. Fail-before, this TU against the lane's base
+// 6c081f5d (spark aarch64, GCC 13, Release, the leg run alone with --leg):
+// 1.00 s at 4,000 bars and 13.98 s at 16,000 (ratio 14.0).
+//
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
 // replay|churn|straddle <bars> [--no-recording]` runs one leg and prints its
 // CPU time, retained rows and ru_maxrss.
@@ -255,14 +264,15 @@ void interleaved_best(Workload workload, const std::vector<Bar>& small_tape,
 
 void cost_and_rows_are_live(Workload workload, const char* name, bool recording = true) {
     // The straddle runs four times longer: its bars cost microseconds.
-    const int scale = workload == Workload::Straddle ? 4 : 1;
+    const bool short_bars = workload == Workload::Straddle;
+    const int scale = short_bars ? 4 : 1;
     const int bars = (gated() ? kBars : kBars / 4) * scale;
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
     const std::vector<Bar> small_tape = tape(bars, step);
     const std::vector<Bar> large_tape = tape(bars * 4, step);
     Leg small;
     Leg large;
-    if (workload == Workload::Straddle) {
+    if (short_bars) {
         interleaved_best(workload, small_tape, large_tape, recording, small, large);
     } else {
         small = best_of(workload, small_tape, recording);
@@ -323,6 +333,7 @@ int main(int argc, char** argv) {
     cost_and_rows_are_live(Workload::Churn, "position cycles with brackets");
     cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle",
                            false);
+    cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle");
     if (failures == 0) std::printf("test_adapter_live_state_scaling: ok\n");
     return failures == 0 ? 0 : 1;
 }

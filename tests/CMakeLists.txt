@@ -1112,6 +1112,12 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
+# R5 lane V19-D: a bracket family's roster parks the erased members behind a
+# retained one (the v4 fold reads what is retained): randomized append /
+# erase / settle / cancel streams against a plain model -- the same members
+# in order, the retained ones as the working tail, the model's fold words,
+# the same words whenever the settles came. Source-bound.
+list(APPEND TEST_SOURCES test_bracket_roster_parking)
 # R5 lane L3: the order core's direct forms (WorkingRequestCore::apply_*)
 # against the prepare/install pairs they stand for, bit for bit after every
 # command -- two bare cores over randomized command streams (answers,

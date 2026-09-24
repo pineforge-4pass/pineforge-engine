@@ -777,9 +777,60 @@ private:
 // answered the consumed-leg question for good; the (leg kind, origin) pair
 // it answered for is kept in consumed_ while that origin can still be asked
 // about.
+//
+// R5 lane V19-D: an erased member behind one whose row the table still holds
+// is parked the same way, in a run between the two handles it sits between
+// (Parked: its place, count, digest and varint deltas), so the handles left
+// are the members whose rows are retained. An early member a pin keeps (a
+// leg of the current position cycle) no longer holds every later member as a
+// handle, and the v4 fold, which reads the handles in full and each run as
+// its place, count and digest, costs what is retained, not what was placed.
 class BracketRoster {
+    static constexpr std::uint64_t kDigestBasis = 1469598103934665603ULL;
+    static std::uint64_t fold(std::uint64_t digest, std::uint64_t value) noexcept {
+        return (digest ^ value) * 1099511628211ULL;
+    }
+    static void put(std::vector<std::uint8_t>& bytes, std::uint64_t& last,
+                    std::uint64_t incarnation) {
+        const auto delta = static_cast<std::int64_t>(incarnation) - static_cast<std::int64_t>(last);
+        std::uint64_t zigzag = (static_cast<std::uint64_t>(delta) << 1)
+            ^ static_cast<std::uint64_t>(delta >> 63);
+        do {
+            std::uint8_t byte = static_cast<std::uint8_t>(zigzag & 0x7FU);
+            zigzag >>= 7;
+            if (zigzag) byte |= 0x80U;
+            bytes.push_back(byte);
+        } while (zigzag);
+        last = incarnation;
+    }
+    static std::uint64_t get(const std::vector<std::uint8_t>& bytes, std::size_t& offset,
+                             std::uint64_t previous) noexcept {
+        std::uint64_t zigzag = 0;
+        int shift = 0;
+        for (;;) {
+            const std::uint8_t byte = bytes[offset++];
+            zigzag |= static_cast<std::uint64_t>(byte & 0x7FU) << shift;
+            if (!(byte & 0x80U)) break;
+            shift += 7;
+        }
+        const auto delta = static_cast<std::int64_t>(zigzag >> 1)
+            ^ -static_cast<std::int64_t>(zigzag & 1U);
+        return static_cast<std::uint64_t>(static_cast<std::int64_t>(previous) + delta);
+    }
+
+    // Erased members between two retained ones: `at` handles of the working
+    // tail come before them.
+    struct Parked {
+        std::size_t at = 0;
+        std::size_t count = 0;
+        std::uint64_t last = 0;
+        std::uint64_t digest = kDigestBasis;
+        std::vector<std::uint8_t> bytes;
+    };
+
 public:
-    // Every member, settled prefix first, in roster order.
+    // Every member in roster order: the settled prefix, then the working tail
+    // with each parked run in its place.
     class const_iterator {
     public:
         using iterator_category = std::forward_iterator_tag;
@@ -802,7 +853,8 @@ public:
         }
         bool operator==(const const_iterator& other) const noexcept {
             return owner_ == other.owner_ && settled_ == other.settled_
-                && offset_ == other.offset_ && hot_ == other.hot_;
+                && offset_ == other.offset_ && hot_ == other.hot_ && run_ == other.run_
+                && in_run_ == other.in_run_ && run_offset_ == other.run_offset_;
         }
         bool operator!=(const const_iterator& other) const noexcept { return !(*this == other); }
 
@@ -813,31 +865,38 @@ public:
                 settled_ = owner->settled_count_;
                 offset_ = owner->settled_.size();
                 hot_ = owner->hot_.size();
+                run_ = owner->parked_.size();
                 return;
             }
             load();
         }
+        bool in_parked() const noexcept {
+            return run_ < owner_->parked_.size() && owner_->parked_[run_].at == hot_;
+        }
         void load() {
             if (settled_ < owner_->settled_count_) {
-                std::uint64_t zigzag = 0;
-                int shift = 0;
-                for (;;) {
-                    const std::uint8_t byte = owner_->settled_[offset_++];
-                    zigzag |= static_cast<std::uint64_t>(byte & 0x7FU) << shift;
-                    if (!(byte & 0x80U)) break;
-                    shift += 7;
-                }
-                const auto delta = static_cast<std::int64_t>(zigzag >> 1)
-                    ^ -static_cast<std::int64_t>(zigzag & 1U);
-                previous_ = static_cast<std::uint64_t>(static_cast<std::int64_t>(previous_) + delta);
+                previous_ = get(owner_->settled_, offset_, previous_);
                 current_ = native_order::RequestHandle{owner_->run_, previous_};
+            } else if (in_parked()) {
+                run_previous_ = get(owner_->parked_[run_].bytes, run_offset_, run_previous_);
+                current_ = native_order::RequestHandle{owner_->run_, run_previous_};
             } else if (hot_ < owner_->hot_.size()) {
                 current_ = owner_->hot_[hot_];
             }
         }
         void advance() {
-            if (settled_ < owner_->settled_count_) ++settled_;
-            else ++hot_;
+            if (settled_ < owner_->settled_count_) {
+                ++settled_;
+            } else if (in_parked()) {
+                if (++in_run_ == owner_->parked_[run_].count) {
+                    ++run_;
+                    in_run_ = 0;
+                    run_offset_ = 0;
+                    run_previous_ = 0;
+                }
+            } else {
+                ++hot_;
+            }
             load();
         }
 
@@ -845,7 +904,11 @@ public:
         std::size_t settled_ = 0;
         std::size_t offset_ = 0;
         std::size_t hot_ = 0;
+        std::size_t run_ = 0;
+        std::size_t in_run_ = 0;
+        std::size_t run_offset_ = 0;
         std::uint64_t previous_ = 0;
+        std::uint64_t run_previous_ = 0;
         native_order::RequestHandle current_{};
     };
 
@@ -861,10 +924,11 @@ public:
         for (const auto& handle : *this) out.push_back(handle);
         return out;
     }
-    // The members from the first one whose row is retained onward.
+    // The members whose rows the table still holds, in roster order, from the
+    // first one onward (V19-D parks the erased ones among them).
     const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
-    bool empty() const noexcept { return settled_count_ == 0 && hot_.empty(); }
-    std::size_t size() const noexcept { return settled_count_ + hot_.size(); }
+    bool empty() const noexcept { return settled_count_ == 0 && parked_.empty() && hot_.empty(); }
+    std::size_t size() const noexcept { return settled_count_ + parked_count_ + hot_.size(); }
     const_iterator begin() const { return const_iterator(this, false); }
     const_iterator end() const { return const_iterator(this, true); }
     // How many members of the working tail carry `incarnation`: every member
@@ -882,32 +946,69 @@ public:
 
     // R5 lane V19-E: moves the working tail's leading members whose rows
     // were erased into the settled prefix, each folded once into the running
-    // digest.
+    // digest. R5 lane V19-D: the parked runs before them join it too, and
+    // every later member whose row was erased is parked in place.
     template<class Erased>
     void settle(Erased&& erased) {
         std::size_t moved = 0;
-        for (; moved < hot_.size(); ++moved) {
+        std::size_t absorbed = 0;
+        for (;;) {
+            for (; absorbed < parked_.size() && parked_[absorbed].at == moved; ++absorbed)
+                absorb(parked_[absorbed]);
+            if (moved == hot_.size()) break;
             const auto& handle = hot_[moved];
-            if (!erased(handle.incarnation)) break;
-            if (settled_count_ == 0 && settled_.empty()) run_ = handle.run;
-            else if (!(handle.run == run_)) break;
-            const auto delta = static_cast<std::int64_t>(handle.incarnation)
-                - static_cast<std::int64_t>(settled_last_);
-            std::uint64_t zigzag = (static_cast<std::uint64_t>(delta) << 1)
-                ^ static_cast<std::uint64_t>(delta >> 63);
-            do {
-                std::uint8_t byte = static_cast<std::uint8_t>(zigzag & 0x7FU);
-                zigzag >>= 7;
-                if (zigzag) byte |= 0x80U;
-                settled_.push_back(byte);
-            } while (zigzag);
-            settled_last_ = handle.incarnation;
+            if (!erased(handle.incarnation) || !claims(handle)) break;
+            put(settled_, settled_last_, handle.incarnation);
             ++settled_count_;
-            settled_digest_ = (settled_digest_ ^ handle.incarnation) * 1099511628211ULL;
-            const auto found = counts_.find(handle.incarnation);
-            if (found != counts_.end() && --found->second == 0) counts_.erase(found);
+            settled_digest_ = fold(settled_digest_, handle.incarnation);
+            uncount(handle.incarnation);
+            ++moved;
         }
-        if (moved) hot_.erase(hot_.begin(), hot_.begin() + static_cast<std::ptrdiff_t>(moved));
+        // Anything behind the first member the table still holds to park?
+        bool interior = false;
+        for (std::size_t in = moved + 1; in < hot_.size() && !interior; ++in)
+            interior = erased(hot_[in].incarnation) && claims(hot_[in]);
+        if (!interior) {
+            if (moved) hot_.erase(hot_.begin(), hot_.begin() + static_cast<std::ptrdiff_t>(moved));
+            if (absorbed)
+                parked_.erase(parked_.begin(), parked_.begin() + static_cast<std::ptrdiff_t>(absorbed));
+            for (auto& run : parked_) run.at -= moved;
+            return;
+        }
+        // Rebuild the tail: the members kept as handles, and the runs between
+        // them, a run's old members before the ones it gains, adjacent runs
+        // merged.
+        std::vector<Parked> runs;
+        std::size_t next_run = absorbed;
+        std::size_t out = 0;
+        const auto place_runs_before = [&](std::size_t in) {
+            for (; next_run < parked_.size() && parked_[next_run].at == in; ++next_run) {
+                Parked& run = parked_[next_run];
+                if (!runs.empty() && runs.back().at == out) {
+                    join(runs.back(), run);
+                } else {
+                    run.at = out;
+                    runs.push_back(std::move(run));
+                }
+            }
+        };
+        for (std::size_t in = moved; in < hot_.size(); ++in) {
+            place_runs_before(in);
+            const native_order::RequestHandle handle = hot_[in];
+            if (in > moved && erased(handle.incarnation) && claims(handle)) {
+                if (runs.empty() || runs.back().at != out) {
+                    runs.emplace_back();
+                    runs.back().at = out;
+                }
+                park(runs.back(), handle.incarnation);
+                uncount(handle.incarnation);
+                continue;
+            }
+            hot_[out++] = handle;
+        }
+        place_runs_before(hot_.size());
+        hot_.resize(out);
+        parked_ = std::move(runs);
     }
     void record_consumed(std::uint8_t leg_kind, std::uint64_t origin) {
         const auto fact = std::make_pair(leg_kind, origin);
@@ -927,9 +1028,19 @@ public:
     const std::vector<std::pair<std::uint8_t, std::uint64_t>>& consumed_facts() const noexcept {
         return consumed_;
     }
-    // The settled prefix as the v4 extension fold reads it.
+    // The settled prefix as the v4 extension fold reads it: its count, and
+    // its running digest -- with every parked run's place, count and digest
+    // folded after it while any is parked (R5 lane V19-D).
     std::size_t settled_count() const noexcept { return settled_count_; }
-    std::uint64_t settled_digest() const noexcept { return settled_digest_; }
+    std::uint64_t settled_digest() const noexcept {
+        std::uint64_t digest = settled_digest_;
+        for (const auto& run : parked_) {
+            digest = fold(digest, run.at);
+            digest = fold(digest, run.count);
+            digest = fold(digest, run.digest);
+        }
+        return digest;
+    }
 
     // Erases every member equal to one of `doomed`, keeping the order of the
     // rest: the same result as erase(remove_if(find in doomed)). A doomed
@@ -952,8 +1063,14 @@ public:
             if (std::find(incarnations.begin(), incarnations.end(), hot_[first].incarnation)
                 != incarnations.end()) --sharing;
         }
+        // A parked run keeps its place among the handles that stay: its
+        // `at` counts the handles before it, and two runs no handle
+        // separates any more are one.
+        std::size_t run = 0;
+        while (run < parked_.size() && parked_[run].at <= first) ++run;
         std::size_t out = first;
         for (std::size_t in = first; in < hot_.size(); ++in) {
+            for (; run < parked_.size() && parked_[run].at == in; ++run) parked_[run].at = out;
             if (std::find(doomed.begin(), doomed.end(), hot_[in]) != doomed.end()) {
                 const auto found = counts_.find(hot_[in].incarnation);
                 if (--found->second == 0) counts_.erase(found);
@@ -962,20 +1079,75 @@ public:
             if (out != in) hot_[out] = hot_[in];
             ++out;
         }
+        for (; run < parked_.size(); ++run) parked_[run].at = out;
         hot_.resize(out);
+        for (std::size_t index = 1; index < parked_.size();) {
+            if (parked_[index].at == parked_[index - 1].at) {
+                join(parked_[index - 1], parked_[index]);
+                parked_.erase(parked_.begin() + static_cast<std::ptrdiff_t>(index));
+            } else {
+                ++index;
+            }
+        }
     }
 
 private:
+    // Whether a member of `handle`'s run identity can be kept as an
+    // incarnation: every settled and parked member shares one.
+    bool claims(const native_order::RequestHandle& handle) {
+        if (settled_count_ == 0 && parked_count_ == 0) {
+            run_ = handle.run;
+            return true;
+        }
+        return handle.run == run_;
+    }
+    void uncount(std::uint64_t incarnation) {
+        const auto found = counts_.find(incarnation);
+        if (found != counts_.end() && --found->second == 0) counts_.erase(found);
+    }
+    void park(Parked& run, std::uint64_t incarnation) {
+        put(run.bytes, run.last, incarnation);
+        ++run.count;
+        run.digest = fold(run.digest, incarnation);
+        ++parked_count_;
+    }
+    // Appends `from`'s members to `into`, in order.
+    void join(Parked& into, const Parked& from) {
+        std::size_t offset = 0;
+        std::uint64_t previous = 0;
+        for (std::size_t index = 0; index < from.count; ++index) {
+            previous = get(from.bytes, offset, previous);
+            put(into.bytes, into.last, previous);
+            into.digest = fold(into.digest, previous);
+        }
+        into.count += from.count;
+    }
+    // Moves a parked run's members to the end of the settled prefix.
+    void absorb(const Parked& run) {
+        std::size_t offset = 0;
+        std::uint64_t previous = 0;
+        for (std::size_t index = 0; index < run.count; ++index) {
+            previous = get(run.bytes, offset, previous);
+            put(settled_, settled_last_, previous);
+            settled_digest_ = fold(settled_digest_, previous);
+        }
+        settled_count_ += run.count;
+        parked_count_ -= run.count;
+    }
+
     // The settled prefix: incarnations of run_, as zigzag varint deltas.
     native_order::RunIdentity run_{};
     std::vector<std::uint8_t> settled_;
     std::uint64_t settled_last_ = 0;
     std::size_t settled_count_ = 0;
-    std::uint64_t settled_digest_ = 1469598103934665603ULL;
-    // The working tail.
+    std::uint64_t settled_digest_ = kDigestBasis;
+    // The working tail: handles, and the parked runs between them (run_'s
+    // incarnations too), in place order.
     std::vector<native_order::RequestHandle> hot_;
-    // Derived member multiplicity per incarnation over the working tail
-    // (never next-decision state).
+    std::vector<Parked> parked_;
+    std::size_t parked_count_ = 0;
+    // Derived member multiplicity per incarnation over the working tail's
+    // handles (never next-decision state).
     std::unordered_map<std::uint64_t, std::size_t> counts_;
     // (leg kind, origin) of the erased consumed members.
     std::vector<std::pair<std::uint8_t, std::uint64_t>> consumed_;
