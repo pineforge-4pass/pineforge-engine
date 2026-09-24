@@ -189,6 +189,7 @@ struct Totals {
     long thrown = 0;
     long stale_probes = 0;
     long executions = 0;
+    long executions_installed = 0;
     long events = 0;
     long retired = 0;
 };
@@ -866,9 +867,10 @@ private:
              });
     }
 
-    // An execution of a live request whose allowance is this point's, through
-    // the token both paths share: its only role here is to put applied fills,
-    // openings and closes into the journal for the steps that read them.
+    // An execution of a live request whose allowance is this point's: the
+    // token pair on the staged core, check_execution and apply_execution on
+    // the direct one. Beyond itself, it puts applied fills, openings and
+    // closes into the journal for the steps that read them.
     void execution() {
         std::vector<std::size_t> candidates;
         for (std::size_t index = 0; index < staged_.live().size(); ++index) {
@@ -880,7 +882,8 @@ private:
                 candidates.push_back(index);
             }
         }
-        if (candidates.empty()) return advance_point();
+        // Nothing allowed at this point yet: evaluate something at it first.
+        if (candidates.empty()) return rng_.percent(60) ? evaluation() : advance_point();
         const auto& live = staged_.live()[candidates[static_cast<std::size_t>(
                 rng_.below(static_cast<int>(candidates.size())))]];
         const no::RequestHandle target = live.handle();
@@ -960,16 +963,24 @@ private:
                  return answer(std::get<no::PreparationError>(prepared));
              },
              [&](no::WorkingRequestCore& core) {
+                 // The direct form's two halves around the settlement.
                  std::uint64_t o = ordinal;
-                 auto prepared = core.prepare_execution(target, proposal, o);
-                 if (auto* token = std::get_if<no::PreparedExecution>(&prepared)) {
-                     const auto result = core.install_execution(std::move(*token), facts);
+                 const auto checked = core.check_execution(target, proposal, o);
+                 if (std::holds_alternative<std::monostate>(checked)) {
+                     const auto result = core.apply_execution(target, proposal, facts, o);
                      if (const auto* error = std::get_if<no::InstallError>(&result)) return answer(*error);
                      return installed(std::get<no::Installed>(result).events);
                  }
-                 if (const auto* none = std::get_if<no::NoChange>(&prepared)) return answer(*none);
-                 return answer(std::get<no::PreparationError>(prepared));
+                 if (const auto* none = std::get_if<no::NoChange>(&checked)) return answer(*none);
+                 return answer(std::get<no::PreparationError>(checked));
              });
+        if (staged_.history_end() > executions_seen_
+            && staged_.history_end() > staged_.history_base()
+            && std::holds_alternative<no::ExecutionAppliedEvent>(
+                   staged_.history_at(staged_.history_end() - 1))) {
+            ++totals_.executions_installed;
+        }
+        executions_seen_ = staged_.history_end();
         if (closed > 0.0) ++rows_;
         if (opened != 0.0) {
             cycle_ = cycle_after;
@@ -1194,6 +1205,7 @@ private:
     no::Side side_ = no::Side::Long;
     long rows_ = 0;
     std::size_t seen_ = 0;
+    std::size_t executions_seen_ = 0;
     std::vector<no::EventId> all_events_;
     std::vector<no::EventId> applied_;
     std::vector<Opening> openings_;
@@ -1207,9 +1219,10 @@ void run_all() {
         script.run(400);
     }
     std::printf("core twins: 400 streams, %ld steps (%ld installed, %ld unchanged, %ld refused, "
-                "%ld thrown), %ld executions, %ld stale-token probes, %ld events; staged == direct\n",
+                "%ld thrown), %ld executions (%ld booked), %ld stale-token probes, %ld events; "
+                "staged == direct\n",
                 totals.steps, totals.installed, totals.no_change, totals.refused, totals.thrown,
-                totals.executions, totals.stale_probes, totals.events);
+                totals.executions, totals.executions_installed, totals.stale_probes, totals.events);
 }
 
 }  // namespace core_twins
