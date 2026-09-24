@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -31,13 +32,50 @@ from ci_verify import ROOT, source_guard_commands
 ACTIONLINT_VERSION = '1.7.12'
 
 
+def docs_workflow_findings(workflow: str) -> list[str]:
+    """Pin the PR build event and the deploy exclusion beside actionlint."""
+    findings = []
+    events = workflow.split('\non:\n', 1)
+    events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
+    if not re.search(r'^  pull_request:\s*(?:\{\})?\s*$', events, re.MULTILINE):
+        findings.append('docs.yml must build on pull_request')
+    deploy = workflow.split('      - name: Deploy to Cloudflare Pages\n', 1)
+    deploy = deploy[1].split('\n      - name:', 1)[0] if len(deploy) == 2 else ''
+    if not re.search(r"^        if: github\.event_name != 'pull_request'$",
+                     deploy, re.MULTILINE):
+        findings.append('docs.yml must skip deployment on pull_request')
+    return findings
+
+
+def docs_workflow_self_test(workflow: str) -> int:
+    if docs_workflow_findings(workflow):
+        print('docs workflow contract: current workflow fails')
+        return 1
+    no_pr = workflow.replace('  pull_request: {}\n', '', 1)
+    no_skip = workflow.replace("        if: github.event_name != 'pull_request'\n", '', 1)
+    if no_pr == workflow or no_skip == workflow:
+        print('docs workflow contract: could not form both mutations')
+        return 1
+    if not docs_workflow_findings(no_pr) or not docs_workflow_findings(no_skip):
+        print('docs workflow contract: a mutation escaped')
+        return 1
+    print('docs workflow contract: missing PR trigger and unguarded deploy both refused')
+    return 0
+
+
 def check_commands(source: Path) -> list[tuple]:
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
         ('workflow-lint', ['actionlint', '-color',
                            str(source / '.github/workflows/ci.yml'),
                            str(source / '.github/workflows/native-live.yml'),
-                           str(source / '.github/workflows/corpus-parity.yml')]),
+                           str(source / '.github/workflows/corpus-parity.yml'),
+                           str(source / '.github/workflows/docs.yml')]),
+        ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
+                                    '--check-docs-workflow']),
+        ('docs-workflow-contract-tests',
+         [sys.executable, str(source / 'scripts/ci_preflight.py'),
+          '--self-test-docs-workflow']),
         *source_guard_commands(source),
         ('source-guard-market-admission',
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
@@ -55,6 +93,15 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',
          [sys.executable, str(source / 'scripts/check_design_inventory.py')]),
+        ('detached-comments-tests',
+         [sys.executable, str(source / 'scripts/measure_detached_comments.py'),
+          '--self-test']),
+        ('detached-comments',
+         [sys.executable, str(source / 'scripts/measure_detached_comments.py'),
+          '--check-ceiling']),
+        ('native-tempdir-tests',
+         [sys.executable, str(source / 'scripts/check_native_cpp_versions.py'),
+          '--self-test-tempdir']),
         ('doc-anchors-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',
@@ -128,7 +175,19 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build-ci-preflight')
+    parser.add_argument('--check-docs-workflow', action='store_true')
+    parser.add_argument('--self-test-docs-workflow', action='store_true')
     args = parser.parse_args()
+    if args.check_docs_workflow or args.self_test_docs_workflow:
+        workflow = (ROOT / '.github/workflows/docs.yml').read_text()
+        if args.self_test_docs_workflow:
+            return docs_workflow_self_test(workflow)
+        findings = docs_workflow_findings(workflow)
+        for finding in findings:
+            print(finding)
+        if not findings:
+            print('docs workflow contract: PR builds and deploy exclusion ... OK')
+        return 1 if findings else 0
     # Pin the linter contract as well as its CI download. No optional lint lane.
     version_check = [sys.executable, '-c',
                      'import subprocess,sys; '

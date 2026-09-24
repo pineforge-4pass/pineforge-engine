@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0   # ci_verify runs the benchmark provenance CTest row
 
       - name: Set up Python
         uses: actions/setup-python@v5

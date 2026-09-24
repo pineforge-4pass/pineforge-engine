@@ -1405,6 +1405,15 @@ add_test(NAME test_ci_verify
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify.py)
 add_test(NAME test_ci_preflight
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py)
+# F10's source-only benchmark witnesses require the pinned Git history.
+add_test(NAME test_benchmark_harness
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s benchmarks/tests)
+add_test(NAME test_benchmark_provenance
+    COMMAND ${Python3_EXECUTABLE} benchmarks/check_provenance.py)
+set_tests_properties(test_benchmark_harness test_benchmark_provenance PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME test_docs_doxygen_retry
+    COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-retry)
 add_test(NAME test_twin_parity_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_twin_parity.py)
 

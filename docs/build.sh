@@ -10,6 +10,94 @@
 
 set -euo pipefail
 
+run_doxygen_with_retry() {
+    local attempt=1 status
+    while (( attempt <= 3 )); do
+        # A SIGBUS may leave a partial site and an old warning log behind.
+        rm -rf site
+        mkdir -p site
+        if doxygen "$CONFIG"; then
+            return 0
+        else
+            status=$?
+        fi
+        if (( status != 135 || attempt == 3 )); then
+            echo "==> Doxygen failed (exit $status, attempt $attempt/3)" >&2
+            return "$status"
+        fi
+        echo "==> Doxygen SIGBUS (exit 135, attempt $attempt/3); retrying" >&2
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+}
+
+self_test_doxygen_retry() {
+    local fixture result
+    fixture="$(mktemp -d "${TMPDIR:-/tmp}/pineforge-doxygen-retry.XXXXXX")"
+    if (
+        cd "$fixture"
+        CONFIG=fixture
+        test_calls=0
+        test_succeed_on=3
+        test_failure_code=135
+        doxygen() {
+            test_calls=$((test_calls + 1))
+            if (( test_calls < test_succeed_on )); then
+                return "$test_failure_code"
+            fi
+            mkdir -p site/html
+            : > site/html/index.html
+        }
+        run_doxygen_with_retry
+        if [[ "$test_calls" != 3 || ! -f site/html/index.html ]]; then
+            echo "==> FAIL: two SIGBUS exits did not recover on attempt three" >&2
+            exit 1
+        fi
+        test_calls=0
+        test_succeed_on=4
+        if run_doxygen_with_retry; then
+            echo "==> FAIL: a fourth attempt was accepted" >&2
+            exit 1
+        else
+            test_status=$?
+        fi
+        if [[ "$test_calls" != 3 || "$test_status" != 135 ]]; then
+            echo "==> FAIL: three SIGBUS exits did not stop after attempt three" >&2
+            exit 1
+        fi
+        test_calls=0
+        test_failure_code=2
+        if run_doxygen_with_retry; then
+            echo "==> FAIL: a non-SIGBUS failure was retried" >&2
+            exit 1
+        else
+            test_status=$?
+        fi
+        if [[ "$test_calls" != 1 || "$test_status" != 2 ]]; then
+            echo "==> FAIL: a non-SIGBUS exit did not stop immediately" >&2
+            exit 1
+        fi
+    ); then
+        result=0
+    else
+        result=$?
+    fi
+    rm -rf "$fixture"
+    if (( result == 0 )); then
+        echo "==> Doxygen retry self-test: two SIGBUS recover; third and non-SIGBUS fail ... OK"
+    fi
+    return "$result"
+}
+
+if [[ "${1:-}" == "--self-test-retry" && "$#" == 1 ]]; then
+    self_test_doxygen_retry
+    exit $?
+fi
+if (( $# != 0 )); then
+    echo "usage: docs/build.sh [--self-test-retry]" >&2
+    exit 2
+fi
+
 cd "$(dirname "$0")"
 
 DOXYGEN_AWESOME_VERSION="${DOXYGEN_AWESOME_VERSION:-v2.3.4}"
@@ -44,12 +132,10 @@ echo "==> Building docs for PineForge $VERSION"
 #
 # Through a config FILE, not `doxygen -`: doxygen 1.18 aborts with a bus error
 # on some configurations read from stdin, and the file form costs nothing.
-rm -rf site
-mkdir -p site
 CONFIG="$(mktemp "${TMPDIR:-/tmp}/pineforge-doxyfile.XXXXXX")"
 trap 'rm -f "$CONFIG"' EXIT
 { cat Doxyfile; echo "PROJECT_NUMBER = $VERSION"; } > "$CONFIG"
-doxygen "$CONFIG"
+run_doxygen_with_retry
 
 # 3b. The scoped warning gate (R5 lane L14-A).
 #

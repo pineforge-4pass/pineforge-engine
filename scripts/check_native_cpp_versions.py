@@ -2,6 +2,7 @@
 """Source-only native C++ ABI ownership guard; no compiler or engine runs."""
 from pathlib import Path
 import re
+import sys
 import tempfile
 
 from check_aggregate_cpp_versions import body, clean, standalone_scope
@@ -218,6 +219,45 @@ def check_fx_curve_introduced_at(manifests):
                              + NATIVE_FX_CURVE_NAMESPACE + ': ' + label)
 
 
+def historical_tempdir(root: Path):
+    """Keep provider extraction outside the repository being checked."""
+    temporary_root = Path(tempfile.gettempdir()).resolve()
+    repository = root.resolve()
+    if temporary_root == repository or repository in temporary_root.parents:
+        raise ValueError('system temporary directory is inside the repository')
+    return tempfile.TemporaryDirectory(prefix='pineforge-native-fx-introduced-',
+                                       dir=temporary_root)
+
+
+def self_test_tempdir() -> None:
+    """Exercise the real provider path against a stand-in repository."""
+    global extract_tar, authenticate_headers
+    with tempfile.TemporaryDirectory(prefix='pineforge-native-tempdir-test-') as fake:
+        root = Path(fake).resolve()
+        relative = Path('fixture/host-old/manifest.json')
+        provider_dir = root / relative.parent
+        provider_dir.mkdir(parents=True)
+        (provider_dir / 'headers.tar').write_bytes(b'fixture')
+        provider = {'engine_epoch': 'engine_script_run_v1',
+                    'manifest': ROOT / relative, 'headers_name': 'headers.tar',
+                    'commit': 'fixture', 'tree': 'fixture'}
+        original_extract, original_authenticate = extract_tar, authenticate_headers
+        def probe_extract(_data, destination):
+            location = Path(destination).resolve()
+            if root == location or root in location.parents:
+                raise ValueError('historical provider extraction entered the repository')
+            location.mkdir()
+        def probe_authenticate(_destination, _manifest, *, commit, tree):
+            return {'files': {}, 'commit': commit, 'tree': tree}
+        try:
+            extract_tar, authenticate_headers = probe_extract, probe_authenticate
+            manifests = authenticate_historical_host_manifests(root, {'fixture': provider})
+        finally:
+            extract_tar, authenticate_headers = original_extract, original_authenticate
+        if 'fixture' not in manifests:
+            raise ValueError('historical provider fixture did not execute')
+
+
 def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
     """Reuse older authenticated closures without injecting current-only values.
 
@@ -225,7 +265,7 @@ def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
     value predates its public owner.
     """
     manifests = {}
-    with tempfile.TemporaryDirectory(prefix='.native-fx-introduced-', dir=root) as temporary:
+    with historical_tempdir(root) as temporary:
         for label, provider in providers.items():
             # v15 is the old source-layer provider, frozen v16 is the
             # same-epoch L0 pairing control and frozen v18 is the v19 epoch's
@@ -1070,6 +1110,12 @@ def check(root=ROOT):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ['--self-test-tempdir']:
+        self_test_tempdir()
+        print('historical provider extraction stays outside the repository ... OK')
+        raise SystemExit(0)
+    if len(sys.argv) != 1:
+        raise SystemExit('usage: check_native_cpp_versions.py [--self-test-tempdir]')
     check()
     print("native_order identity v1 / values v7, native_calendar_v2, native_run_spec_v3, "
           "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v19 ownership verified")

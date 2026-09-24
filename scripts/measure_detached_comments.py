@@ -38,9 +38,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# B-DOCS lowers this to zero after removing the remaining detached comments.
+DETACHED_LINE_CEILING = 30
 KERNEL_SOURCE_BLOCK = re.compile(
     r"set\(PINEFORGE_KERNEL_SOURCES\s*(.*?)\)", re.DOTALL)
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:"([^"]+)"|<([^>]+)>)')
@@ -260,9 +265,30 @@ def self_test() -> int:
             failures += 1
         print(f"  {status} {name}"
               + ("" if got == want else f"\n       want {want} got {got}"))
-    print(f"measure_detached_comments self-test: {len(SELF_TESTS) - failures}"
+    # One additional detached line above today's ceiling must turn the CLI red.
+    fixture = (["int a;"] + ["// detached"] * (DETACHED_LINE_CEILING + 1)
+               + ["", "// attached", "int b;"])
+    with tempfile.TemporaryDirectory(prefix="pineforge-detached-test-") as directory:
+        path = Path(directory) / "one-extra.cpp"
+        path.write_text("\n".join(fixture) + "\n")
+        result = subprocess.run([sys.executable, __file__, '--check-ceiling',
+                                 str(path)], capture_output=True, text=True,
+                                check=False)
+        if (result.returncode != 1
+                or f"{DETACHED_LINE_CEILING + 1}/{DETACHED_LINE_CEILING}"
+                not in result.stdout):
+            failures += 1
+            print("  FAIL ceiling + one detached line: "
+                  f"exit {result.returncode}, output {result.stdout.strip()!r}")
+        else:
+            print("  ok   ceiling + one detached line is refused")
+    print(f"measure_detached_comments self-test: {len(SELF_TESTS) + 1 - failures}"
           f" passed, {failures} failed")
     return 1 if failures else 0
+
+
+def within_ceiling(total: int) -> bool:
+    return total <= DETACHED_LINE_CEILING
 
 
 def main() -> int:
@@ -273,6 +299,8 @@ def main() -> int:
                         help="print every detached block's line span")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--check-ceiling", action="store_true",
+                        help="fail when TOTAL exceeds the checked-in ceiling")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
@@ -295,6 +323,10 @@ def main() -> int:
                       f"  ({block['end'] - block['start'] + 1})")
     print(f"{total:6d}  TOTAL detached comment lines"
           f" in {len(paths)} files of the kernel compile closure")
+    if args.check_ceiling:
+        print(f"detached comment ceiling: {total}/{DETACHED_LINE_CEILING}"
+              + (" ... OK" if within_ceiling(total) else " ... FAIL"))
+        return 0 if within_ceiling(total) else 1
     return 0
 
 

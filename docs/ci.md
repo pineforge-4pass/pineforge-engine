@@ -36,6 +36,12 @@ refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure.
 
+The two source-only benchmark CTest rows run the 25 harness unit tests and
+`benchmarks/check_provenance.py`. The latter reads historical commits (including
+`933fe583`), so every checkout in `.github/workflows/ci.yml` fetches full Git
+history. A depth-1 checkout fails the provenance row even when the current
+benchmark files are correct.
+
 ## Profiles
 
 | Profile | Build | Additional coverage |
@@ -86,6 +92,11 @@ default build fails too; `debug` and `sanitizers` register a subset of the
 release rows. Raise the constant when a row lands, and pass `--min-tests N` to
 override it for one run (the flag gates any profile; `kernel` and `release`
 have a default).
+
+Preflight also runs the detached-comment census with a checked-in ceiling of
+30 lines. Its self-test adds one detached line above that ceiling and requires
+the gate to refuse it. After B-DOCS clears the census, set
+`DETACHED_LINE_CEILING = 0` in `scripts/measure_detached_comments.py`.
 
 Every compile of an `examples/native` source keeps `assert()` live: the
 `example_*` executables (`examples/native/CMakeLists.txt`) and the live
@@ -381,7 +392,9 @@ from the source alone — no build, no corpus — and are `ci_preflight` stages:
 fifth is a CTest row that compiles and runs the migration page's worked
 example, and the sixth is the documentation build, which runs after a merge
 (`.github/workflows/docs.yml` triggers on a push to `main`, a `v*` tag or a
-manual dispatch), never on a pull request.
+manual dispatch or a pull request). Pull requests build and upload the site;
+the Cloudflare Pages deploy step is guarded by
+`if: github.event_name != 'pull_request'`.
 
 `scripts/check_doc_anchors.py` checks every `file:line` citation the pages
 make: the file must resolve, the line must exist, and when a backticked symbol
@@ -489,7 +502,12 @@ bash docs/build.sh        # docs/site/html/index.html, exit 1 on a guarded warni
 CI pins Doxygen 1.13.2 (`.github/workflows/docs.yml`); the gate is a grep over
 the warning log rather than a Doxygen setting, so it behaves the same on any
 version. One version-specific note: 1.18 aborts when its configuration arrives
-on stdin, so `build.sh` writes a temporary config file.
+on stdin, so `build.sh` writes a temporary config file. The audit observed
+intermittent Doxygen SIGBUS exits (135) under memory pressure, twice in six
+runs. `build.sh` retries that exit up to three attempts, discarding each partial
+site and warning log; any other failure exits on its first attempt, and guarded
+warnings are still fatal. `--self-test-retry` pins both limits without running
+Doxygen.
 
 ## Failure evidence
 
