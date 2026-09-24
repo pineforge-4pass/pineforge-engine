@@ -11,6 +11,8 @@
 #include <pineforge/na.hpp>
 #include <pineforge/timeframe.hpp>
 
+#include "runtime_ambient.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -19,6 +21,28 @@
 #include <vector>
 
 namespace pineforge {
+namespace internal {
+
+// The library's per-thread runtime state (runtime_ambient.hpp). Defined here,
+// beside ta::bar_context, whose ring reads are its most frequent access.
+thread_local ThreadRuntimeAmbient tl_runtime_ambient;
+
+RuntimeAmbient* install_runtime_ambient(RuntimeAmbient& block) noexcept {
+    ThreadRuntimeAmbient& thread = tl_runtime_ambient;
+    RuntimeAmbient* const covered = thread.installed;
+    block = covered ? *covered : thread.own;
+    thread.installed = &block;
+    return covered;
+}
+
+void uninstall_runtime_ambient(RuntimeAmbient& block, RuntimeAmbient* covered) noexcept {
+    ThreadRuntimeAmbient& thread = tl_runtime_ambient;
+    (covered ? *covered : thread.own) = block;
+    thread.installed = covered;
+}
+
+}  // namespace internal
+
 namespace ta {
 
 
@@ -49,10 +73,11 @@ namespace ta {
 // the jayentriken BBWP ETH replay (593/593; the plain ring 587).
 
 BarContext& bar_context() {
-    // Thread-local so parallel in-process engines never cross-contaminate;
-    // default "not installed" keeps standalone objects on their own cadence.
-    static thread_local BarContext ctx;
-    return ctx;
+    // Per thread (internal::runtime_ambient: the thread's own block, or the
+    // one a running pump installed) so parallel in-process engines never
+    // cross-contaminate; default "not installed" keeps standalone objects on
+    // their own cadence.
+    return internal::runtime_ambient().bar_context;
 }
 
 BarContextScope::BarContextScope(long long bar_index, long long origin)

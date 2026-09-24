@@ -4,6 +4,7 @@
  */
 
 #include "../engine_internal.hpp"
+#include "../native_execution_consumer.hpp"
 
 #include <pineforge/ta.hpp>
 
@@ -329,14 +330,10 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
 
     security_calling_close_ms_ = 0;
 
-    struct SecurityNaWarmupScope {
-        bool previous;
-        explicit SecurityNaWarmupScope(bool enabled)
-            : previous(ta::ema_na_warmup_flag()) {
-            ta::ema_na_warmup_flag() = enabled;
-        }
-        ~SecurityNaWarmupScope() { ta::ema_na_warmup_flag() = previous; }
-    } warmup_scope(security_range_start_na_warmup_);
+    // On the pump's runtime block when it has one (R5 lane D2-C).
+    internal::AmbientEmaSeedingScope warmup_scope(
+        NativeExecutionConsumer::bound(*this).pump_ambient(),
+        security_range_start_na_warmup_);
 
     for (auto& state : security_eval_states_) {
         PineSecurityEvalState& pine = pine_security_state(state.sec_id);

@@ -4,6 +4,7 @@
 #include <pineforge/native_host.hpp>
 
 #include "native_calendar_memo.hpp"
+#include "runtime_ambient.hpp"
 
 #include <array>
 #include <cstdint>
@@ -372,6 +373,34 @@ public:
     // bit for bit and see the short-cut run; no host reaches either.
     void set_quiet_point_match(bool enabled) noexcept { quiet_point_match_ = enabled; }
     uint64_t quiet_points() const noexcept { return quiet_points_; }
+
+    // The library's per-thread runtime state (runtime_ambient.hpp) for the
+    // length of one pump (R5 lane D2-C). The first call inside a pump makes
+    // this consumer's block the calling thread's block in force, holding the
+    // values that were in force, and the outermost pump's end hands it back
+    // (PumpScope); outside a pump the answer is null. A host that sets the TA
+    // bar context, the EMA seeding default or the chart day partition around
+    // each calculation (internal::Ambient*Scope) then writes this block as
+    // plain memory instead of reaching thread-local storage at every write;
+    // every reader still finds the block through the thread, so it reads the
+    // values it read before. Library state, not run state: folded into nothing.
+    internal::RuntimeAmbient* pump_ambient() noexcept {
+        if (!projection_deferred_ || !runtime_ambient_enabled_) return nullptr;
+        if (!ambient_installed_) {
+            ambient_covered_ = internal::install_runtime_ambient(ambient_);
+            ambient_installed_ = true;
+            ++ambient_installs_;
+        }
+        return &ambient_;
+    }
+    // Off, pump_ambient answers null and every scope reaches the thread's
+    // state through the accessors, as before the block existed; the count is
+    // the pumps that installed the block this run (reset at every begin). Both
+    // exist so tests/test_native_runtime_ambient.cpp and
+    // tests/test_adapter_runtime_ambient.cpp can hold the two paths equal and
+    // see the block taken; no host reaches either.
+    void set_runtime_ambient(bool enabled) noexcept { runtime_ambient_enabled_ = enabled; }
+    uint64_t runtime_ambient_installs() const noexcept { return ambient_installs_; }
 
     // The request core, read-only: tests/test_native_definition_index.cpp
     // holds its cohort receipts, rosters and membership answers -- the chain
@@ -1256,18 +1285,28 @@ private:
     // one is open, check_abort_or_projection defers its projection compare to
     // the pump's boundaries -- before its first input and after its last -- and
     // a host that writes a projected field inside the pump fails there, with
-    // the pump's operation and ordinal 0. Derived call-stack state, never folded.
+    // the pump's operation and ordinal 0. The outermost pump's end also hands
+    // back the runtime block a call inside it installed (pump_ambient).
+    // Derived call-stack state, never folded.
     class PumpScope {
     public:
-        explicit PumpScope(bool& deferred) noexcept : deferred_(deferred), prior_(deferred) {
-            deferred_ = true;
+        explicit PumpScope(NativeExecutionConsumer& consumer) noexcept
+            : consumer_(consumer), prior_(consumer.projection_deferred_) {
+            consumer_.projection_deferred_ = true;
         }
-        ~PumpScope() { deferred_ = prior_; }
+        ~PumpScope() {
+            if (!prior_ && consumer_.ambient_installed_) {
+                internal::uninstall_runtime_ambient(consumer_.ambient_,
+                                                    consumer_.ambient_covered_);
+                consumer_.ambient_installed_ = false;
+            }
+            consumer_.projection_deferred_ = prior_;
+        }
         PumpScope(const PumpScope&) = delete;
         PumpScope& operator=(const PumpScope&) = delete;
 
     private:
-        bool& deferred_;
+        NativeExecutionConsumer& consumer_;
         bool prior_;
     };
     bool projection_deferred_ = false;
@@ -1616,6 +1655,14 @@ private:
     // declare_precommit_hook): both, until it declares otherwise.
     bool bar_open_hook_ = true;
     bool precommit_hook_ = true;
+    // pump_ambient's block, the block it covers while it is installed, and
+    // the switch and count (R5 lane D2-C). Library state held for one pump,
+    // never run state, folded into nothing.
+    internal::RuntimeAmbient ambient_{};
+    internal::RuntimeAmbient* ambient_covered_ = nullptr;
+    bool ambient_installed_ = false;
+    bool runtime_ambient_enabled_ = true;
+    uint64_t ambient_installs_ = 0;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

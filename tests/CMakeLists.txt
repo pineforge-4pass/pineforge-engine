@@ -1158,6 +1158,23 @@ list(APPEND TEST_SOURCES test_native_bar_open_hook)
 # settlement previews each run builds (differential). Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_precommit_hook)
+# R5 lane D2-C: the library's per-thread runtime state (the TA bar context,
+# the EMA seeding default, the chart day partition) written on the pump's
+# runtime block against thread-local storage at every write -- bare hosts
+# whose every callback opens the Pine publication's scopes over K3's books,
+# lower-timeframe sub-bars walked -- every value read and every outcome, the
+# thread's own state kept as a window, streams interleaved on one thread, a
+# nested run and two threads (differential). Source-free, so it also runs in
+# the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_runtime_ambient)
+# R5 lane D2-C: the Pine host's publications, its suppressed probe tail and
+# its request.security evaluations (host-driven, kernel-routed, the
+# auxiliary lower-timeframe array) set the chart day partition, the EMA
+# seeding default and the TA bar context on the pump's runtime block: every
+# value the script and its evaluators read, every trade and the final hashes
+# against thread-local storage at every write, line for line (differential).
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_runtime_ambient)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1921,6 +1938,7 @@ endif()
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)
+target_link_libraries(test_native_runtime_ambient PRIVATE Threads::Threads)
 
 # Pure-C sanity test for <pineforge/pineforge.h>. Compiled with the C
 # compiler so any C++-only syntax leaking into the public header

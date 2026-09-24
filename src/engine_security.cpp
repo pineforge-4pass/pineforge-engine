@@ -7,6 +7,7 @@
  */
 
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
 
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -71,8 +72,10 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
                                             int64_t bar_index) {
     state.ta_bar_index = bar_index;
     // The requested context starts at its own bar 0 (origin 0): its TA members
-    // warm up over the first `length` evaluated bars, exactly as before.
-    ta::BarContextScope bar_scope(static_cast<long long>(bar_index), 0);
+    // warm up over the first `length` evaluated bars, exactly as before. On the
+    // pump's runtime block when it has one (R5 lane D2-C).
+    AmbientBarContextScope bar_scope(NativeExecutionConsumer::bound(*this).pump_ambient(),
+                                     static_cast<long long>(bar_index), 0);
     evaluate_security(state.sec_id, bar, publish);
 }
 

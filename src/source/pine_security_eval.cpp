@@ -13,6 +13,7 @@
  */
 
 #include "../engine_internal.hpp"
+#include "../native_execution_consumer.hpp"
 
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -546,12 +547,10 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         return;
     }
     PineSecurityEvalState& pine = pine_security_state(state.sec_id);
-    struct SecurityNaWarmupScope {
-        bool prev_;
-        explicit SecurityNaWarmupScope(bool on)
-            : prev_(ta::ema_na_warmup_flag()) { ta::ema_na_warmup_flag() = on; }
-        ~SecurityNaWarmupScope() { ta::ema_na_warmup_flag() = prev_; }
-    } _na_warmup_scope(security_range_start_na_warmup_);
+    // On the pump's runtime block when it has one (R5 lane D2-C).
+    internal::AmbientEmaSeedingScope _na_warmup_scope(
+        NativeExecutionConsumer::bound(*this).pump_ambient(),
+        security_range_start_na_warmup_);
 
     // Heikin-Ashi same-symbol read: replace an aggregated bar's OHLC with its
     // HA candle before evaluating the security expression. The completed

@@ -1833,8 +1833,12 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     } else {
         barstate_islast_ = source_bar_index_ == source_last_bar_index_;
     }
-    NativeDayPartitionScope chart_day_partition(
-        chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
+    // The chart day partition, the EMA seeding default and the TA bar context
+    // this publication runs under, written on the pump's runtime block (R5
+    // lane D2-C: no thread-local access per bar; runtime_ambient.hpp).
+    internal::RuntimeAmbient* const ambient = NativeExecutionConsumer::bound(*this).pump_ambient();
+    internal::AmbientDayPartitionScope chart_day_partition(
+        ambient, chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     // A named-entry cancellation token has source-evaluation scope.  Clear a
     // prior callback before publishing receipts and entering this body.
     adapter_.begin_source_evaluation();
@@ -1861,15 +1865,9 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         adapter_.flush_pending_bracket_legs({}, /*post_calculation=*/false,
                                            /*pre_script_drain=*/true);
     }
-    struct ChartEmaNaWarmupScope {
-        bool previous;
-        explicit ChartEmaNaWarmupScope(bool enabled)
-            : previous(ta::ema_na_warmup_flag()) {
-            ta::ema_na_warmup_flag() = enabled;
-        }
-        ~ChartEmaNaWarmupScope() { ta::ema_na_warmup_flag() = previous; }
-    } ema_scope(chart_ema_na_warmup_);
-    ta::BarContextScope bar_scope(pine_bar_index(), scheduler_.bar_index_offset());
+    internal::AmbientEmaSeedingScope ema_scope(ambient, chart_ema_na_warmup_);
+    internal::AmbientBarContextScope bar_scope(ambient, pine_bar_index(),
+                                               scheduler_.bar_index_offset());
     position_entry_count_ = physical_position().signed_units == 0.0
         ? 0 : adapter_.source_entry_slot_count();
     on_source_bar(bar);
@@ -1923,7 +1921,8 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
     ++source_bar_index_;
     bar_index_ = source_bar_index_;
     barstate_islast_ = false;
-    NativeDayPartitionScope chart_day_partition(
+    internal::AmbientDayPartitionScope chart_day_partition(
+        NativeExecutionConsumer::bound(*this).pump_ambient(),
         chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     adapter_.begin_source_evaluation();
     adapter_.observe_terminal_receipts();

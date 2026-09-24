@@ -10,6 +10,8 @@
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 
+#include "runtime_ambient.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -201,13 +203,14 @@ namespace pineforge {
 namespace ta {
 
 // Ambient default seeding for EMA instances that name none (see
-// <pineforge/ta.hpp>). Thread-local so parallel in-process engines never
-// cross-contaminate. Default false → EmaSeeding::FirstValue, byte-identical
-// to the recursion before the option existed; a host raises it around the
-// evaluation context whose instances should latch EmaSeeding::SimpleAverage.
+// <pineforge/ta.hpp>). Per thread (internal::runtime_ambient: the thread's
+// own block, or the one a running pump installed) so parallel in-process
+// engines never cross-contaminate. Default false → EmaSeeding::FirstValue,
+// byte-identical to the recursion before the option existed; a host raises it
+// around the evaluation context whose instances should latch
+// EmaSeeding::SimpleAverage.
 bool& ema_na_warmup_flag() {
-    static thread_local bool flag = false;
-    return flag;
+    return internal::runtime_ambient().ema_na_warmup;
 }
 
 RMA::RMA(int length)

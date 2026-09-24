@@ -1,5 +1,6 @@
 #include <pineforge/timeframe.hpp>
 #include <pineforge/session_time.hpp>
+#include "runtime_ambient.hpp"
 #include <cctype>
 #include <ctime>
 #include <algorithm>
@@ -554,15 +555,14 @@ static int64_t session_day_stamp_real_ms(int64_t d, const std::string& tz,
 
 namespace {
 
-thread_local const NativeDayPartition* g_active_day_partition = nullptr;
-
 /// The active partition when it keys the very clock a caller asks about:
 /// tz and session equal to the partition's (the chart symbol's), so another
 /// symbol's request.security clock, and every run without an installed
-/// partition, read the nominal rules.
+/// partition, read the nominal rules. The active partition is the calling
+/// thread's (internal::runtime_ambient).
 const NativeDayPartition* matching_day_partition(const std::string& tz,
                                                  const std::string& session) {
-    const NativeDayPartition* p = g_active_day_partition;
+    const NativeDayPartition* p = internal::runtime_ambient().day_partition;
     if (p == nullptr || p->stamps.empty() || p->tz != tz || p->session != session) {
         return nullptr;
     }
@@ -585,13 +585,14 @@ int native_day_partition_index(const NativeDayPartition& p, int64_t ms) {
 }
 
 const NativeDayPartition* set_active_native_day_partition(const NativeDayPartition* p) {
-    const NativeDayPartition* prev = g_active_day_partition;
-    g_active_day_partition = (p != nullptr && !p->stamps.empty()) ? p : nullptr;
+    internal::RuntimeAmbient& ambient = internal::runtime_ambient();
+    const NativeDayPartition* prev = ambient.day_partition;
+    ambient.day_partition = internal::active_day_partition_value(p);
     return prev;
 }
 
 const NativeDayPartition* active_native_day_partition() {
-    return g_active_day_partition;
+    return internal::runtime_ambient().day_partition;
 }
 
 namespace internal {

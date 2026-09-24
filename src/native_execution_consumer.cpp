@@ -2264,6 +2264,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     recalculations_ = 0;
     recalculations_skipped_ = 0;
     quiet_points_ = 0;
+    ambient_installs_ = 0;
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
     input_callback_context_.reset();
@@ -8749,7 +8750,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
     // writes a projected field inside the pump fails at its end.
     if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
     {
-        PumpScope pump(projection_deferred_);
+        PumpScope pump(*this);
         for (int i = 0; i < n; ++i) {
             if (i != 0 && !check_abort(engine, NativeFailureOperation::Input)) return;
             if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
@@ -9003,7 +9004,7 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         {
             // One public input is one pump (V19-C): compared at its two ends.
-            PumpScope pump(projection_deferred_);
+            PumpScope pump(*this);
             if (!consume_confirmed_input(engine, bar, next_interval_index_, false)) return false;
         }
         select_input_mode(InputMode::ConfirmedBars);
@@ -9300,7 +9301,7 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
         if (!preflight_ticks(engine, &tick, 1)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         {
-            PumpScope pump(projection_deferred_);
+            PumpScope pump(*this);
             if (!deliver_tick(engine, tick)) return false;
         }
         return check_abort_or_projection(engine, NativeFailureOperation::Input);
@@ -9320,7 +9321,7 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
         if (!preflight_ticks(engine, ticks, n)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         {
-            PumpScope pump(projection_deferred_);
+            PumpScope pump(*this);
             for (int i = 0; i < n; ++i) {
                 if (!deliver_tick(engine, ticks[i])) return false;
                 if (!check_abort(engine, NativeFailureOperation::Input)) return false;
@@ -9356,7 +9357,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         select_input_mode(InputMode::ObservedTicks);
         {
-            PumpScope pump(projection_deferred_);
+            PumpScope pump(*this);
             if (has_last_price_ || has_forming_) {
                 processing_input_ = true;
                 const bool ok = finalize_elapsed_slots(engine, timestamp_ms);
@@ -9393,7 +9394,7 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
         if (finalize_partial_input_bar && has_forming_) {
-            PumpScope pump(projection_deferred_);
+            PumpScope pump(*this);
             auto forming_interval = native_calendar::interval_containing(
                 calendar_, input_tf_, forming_.timestamp, calendar_memo_);
             if (forming_interval) {
