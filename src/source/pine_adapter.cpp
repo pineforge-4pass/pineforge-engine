@@ -12,6 +12,7 @@
 #include "../timezone.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_quiet_bar.hpp"
+#include "pine_reissue_binding.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -2674,6 +2675,16 @@ void set_retain_retired_rows(bool retain) noexcept {
     retain_rows.store(retain, std::memory_order_relaxed);
 }
 bool retain_retired_rows() noexcept { return retain_rows.load(std::memory_order_relaxed); }
+namespace {
+// R5 lane V19-D: process-wide like retain_rows, and for the same reason.
+std::atomic<bool> carry_bindings{true};
+} // namespace
+void set_carry_reissue_bindings(bool carry) noexcept {
+    carry_bindings.store(carry, std::memory_order_relaxed);
+}
+bool carry_reissue_bindings() noexcept {
+    return carry_bindings.load(std::memory_order_relaxed);
+}
 std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
@@ -3641,7 +3652,17 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 if (std::isfinite(snapshot.sizing.price))
                     snapshot.retained_trail_best = snapshot.sizing.price;
             }
-            const auto result = host.replace(*existing_handle, request);
+            // R5 lane V19-D: the re-issue carries a close's book binding
+            // (ReplaceOptions::keep_binding). A leg the kernel bound to the
+            // position binds to it again at its next point with no
+            // CloseBoundEvent when the position has not moved, and exactly
+            // as before when it has; every other successor carries nothing.
+            // The handle is not kept: this table, the families and the
+            // pending-order rows name each placement by the incarnation its
+            // own command was issued.
+            native_order::ReplaceOptions reissue;
+            reissue.keep_binding = detail::carry_reissue_bindings();
+            const auto result = host.replace(*existing_handle, request, reissue);
             if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
                 // ab9714be pine_strategy_host.cpp:239-241 + 270-275: the flatten
                 // unbinds every exit's leg activation and the fresh open rebinds

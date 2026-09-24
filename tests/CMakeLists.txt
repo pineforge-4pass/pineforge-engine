@@ -2249,3 +2249,15 @@ test_trail_close_restart_no_fold_l4c
     test_zero_offset_trail_rides_l4c
     test_magnifier_real_bars_l4b
     test_streaming_l4d)
+
+# R5 lane V19-D: the adapter re-issues with a carried binding
+# (ReplaceOptions::keep_binding). The V19-E battery's randomized Pine scripts,
+# each run carrying and with plain re-issues: every transcript but its
+# CloseBoundEvents matches bar for bar -- command events with their ordinals,
+# pending-order rows, working requests, position, equity, trades, the equity
+# curve, the admission journal, the rows placed, erased and retained -- and
+# carrying spares CloseBoundEvents. Source-bound.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
+    add_test(NAME test_adapter_reissue_binding
+             COMMAND test_adapter_live_state_equivalence --reissue-binding)
+endif()

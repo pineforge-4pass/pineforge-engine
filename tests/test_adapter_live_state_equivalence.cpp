@@ -52,6 +52,7 @@
 
 #ifndef PINEFORGE_V19E_HARVEST
 #include "../src/source/pine_placement_retention.hpp"
+#include "../src/source/pine_reissue_binding.hpp"
 #endif
 
 #include <cstddef>
@@ -209,6 +210,11 @@ public:
     }
 
     std::vector<std::uint64_t> transcript;
+    // R5 lane V19-D: the same transcript with every CloseBoundEvent left out
+    // (a carried binding spares them, keeping every ordinal), and how many
+    // of them the run recorded.
+    std::vector<std::uint64_t> spared;
+    long close_bound = 0;
     long commands = 0;
 
     void on_source_bar(const Bar& bar) override {
@@ -218,15 +224,30 @@ public:
         case Family::Chains: chains(bar); break;
         }
         transcript.push_back(observe());
+        spared.push_back(last_spared_);
     }
 
     // The run's final observable state: the last bar's readbacks, every
     // closed trade, the equity curve and the market-admission journal.
     std::uint64_t finish() {
         Fold f;
+        Fold g;
         f.u(observe_final());
+        g.u(last_spared_);
         f.u(transcript.size());
         for (const auto value : transcript) f.u(value);
+        g.u(spared.size());
+        for (const auto value : spared) g.u(value);
+        finish_tail(g);
+        spared_digest = g.h;
+        finish_tail(f);
+        return f.h;
+    }
+    std::uint64_t spared_digest = 0;
+
+private:
+    template <class F>
+    void finish_tail(F& f) {
         f.s(last_error());
         f.u(static_cast<std::uint64_t>(trade_count()));
         for (int index = 0; index < trade_count(); ++index) {
@@ -249,9 +270,9 @@ public:
             else if (const auto* d = std::get_if<double>(&field.value)) f.d(*d);
             else f.s(std::get<std::string>(field.value));
         }
-        return f.h;
     }
 
+public:
     // observe() after the run: every readback but the events, whose tail a
     // retention window may already have retired.
     std::uint64_t observe_final() {
@@ -270,13 +291,29 @@ private:
     // Everything the run shows at this bar's source callback.
     std::uint64_t observe() {
         Fold f;
+        Fold g;
         // Every command event the kernel recorded since the last callback.
         // Only commands: driver and account rows are a retention choice of
         // the run, not a decision of the adapter.
         for (const auto& row : native_events(event_cursor_)) {
             if (row.ordinal > event_cursor_) event_cursor_ = row.ordinal;
-            if (row.command) fold_command(f, *row.command);
+            if (!row.command) continue;
+            fold_command(f, *row.command);
+            if (std::holds_alternative<native_order::CloseBoundEvent>(*row.command)) {
+                ++close_bound;
+            } else {
+                fold_command(g, *row.command);
+            }
         }
+        observe_tail(f);
+        observe_tail(g);
+        last_spared_ = g.h;
+        return f.h;
+    }
+
+    // observe()'s readbacks after the events.
+    template <class F>
+    void observe_tail(F& f) {
         const int pending = strategy_pending_orders_len(c_handle());
         f.i(pending);
         for (int index = 0; index < pending; ++index) {
@@ -299,7 +336,6 @@ private:
         f.d(live_current_equity());
         f.i(trade_count());
         f.i(pending_order_count());
-        return f.h;
     }
 
     static void fold_request(Fold& f, const native_order::Request& request) {
@@ -575,11 +611,15 @@ private:
     Config config_;
     Rng rng_;
     std::uint64_t event_cursor_ = 0;
+    std::uint64_t last_spared_ = 0;
 };
 
 struct Outcome {
     std::vector<std::uint64_t> transcript;
     std::uint64_t digest = 0;
+    std::vector<std::uint64_t> spared;
+    std::uint64_t spared_digest = 0;
+    long close_bound = 0;
     long commands = 0;
     int trades = 0;
     std::size_t retained = 0;
@@ -603,6 +643,9 @@ Outcome run_script(const Config& config) {
     Outcome out;
     out.digest = host.finish();
     out.transcript = host.transcript;
+    out.spared = host.spared;
+    out.spared_digest = host.spared_digest;
+    out.close_bound = host.close_bound;
     out.commands = host.commands;
     out.trades = host.trade_count();
     out.retained = host.retained_rows();
@@ -641,7 +684,80 @@ std::vector<Config> configurations() {
 
 } // namespace
 
-int main() {
+#ifndef PINEFORGE_V19E_HARVEST
+// R5 lane V19-D: the adapter re-issues with a carried binding
+// (ReplaceOptions::keep_binding). Every configuration runs carrying and with
+// every re-issue a plain replace, as before the lane: the transcripts with
+// the CloseBoundEvents left out must match bar for bar -- every other command
+// event with its ordinal, every pending-order row byte for byte, every working
+// request, the position, equity and counts, and at the end every trade, the
+// equity curve and the admission journal -- as must the rows the adapter
+// placed, erased and retained. Carrying must spare CloseBoundEvents.
+int reissue_binding_main() {
+    const auto battery = configurations();
+    long commands = 0;
+    long trades = 0;
+    long bound_plain = 0;
+    long bound_carried = 0;
+    int spared_configurations = 0;
+    for (const Config& config : battery) {
+        const Outcome carried = run_script(config);
+        source::detail::set_carry_reissue_bindings(false);
+        const Outcome plain = run_script(config);
+        source::detail::set_carry_reissue_bindings(true);
+        std::size_t first_difference = carried.spared.size();
+        for (std::size_t bar = 0; bar < carried.spared.size() && bar < plain.spared.size();
+             ++bar) {
+            if (carried.spared[bar] != plain.spared[bar]) {
+                first_difference = bar;
+                break;
+            }
+        }
+        const bool same = carried.spared == plain.spared
+            && carried.spared_digest == plain.spared_digest && carried.error == plain.error
+            && carried.trades == plain.trades && carried.placed == plain.placed
+            && carried.erased == plain.erased && carried.retained == plain.retained;
+        if (!same) {
+            std::fprintf(stderr, "%s seed=%llu magnifier=%d margin=%d pyramiding=%d pooc=%d "
+                         "coof=%d: carried != plain, first differing bar=%zu, rows placed "
+                         "%llu/%llu erased %llu/%llu retained %zu/%zu\n",
+                         family_name(config.family),
+                         static_cast<unsigned long long>(config.seed), config.magnifier ? 1 : 0,
+                         config.margin ? 1 : 0, config.pyramiding,
+                         config.process_on_close ? 1 : 0, config.calc_on_fills ? 1 : 0,
+                         first_difference, static_cast<unsigned long long>(carried.placed),
+                         static_cast<unsigned long long>(plain.placed),
+                         static_cast<unsigned long long>(carried.erased),
+                         static_cast<unsigned long long>(plain.erased), carried.retained,
+                         plain.retained);
+        }
+        CHECK(same);
+        CHECK(carried.close_bound <= plain.close_bound);
+        if (carried.close_bound < plain.close_bound) ++spared_configurations;
+        commands += carried.commands;
+        trades += carried.trades;
+        bound_plain += plain.close_bound;
+        bound_carried += carried.close_bound;
+    }
+    // Not vacuous: carried bindings spared CloseBoundEvents across the battery.
+    CHECK(bound_carried < bound_plain);
+    CHECK(spared_configurations > 10);
+    std::printf("test_adapter_reissue_binding: %zu configurations, %ld commands, %ld trades; "
+                "CloseBoundEvents %ld with plain re-issues, %ld carrying (%d configurations "
+                "spared some); %d checks, %d failures\n",
+                battery.size(), commands, trades, bound_plain, bound_carried,
+                spared_configurations, checks, failures);
+    return failures == 0 ? 0 : 1;
+}
+#endif
+
+int main(int argc, char** argv) {
+#ifndef PINEFORGE_V19E_HARVEST
+    if (argc > 1 && std::string(argv[1]) == "--reissue-binding") return reissue_binding_main();
+#else
+    (void)argc;
+    (void)argv;
+#endif
     const auto battery = configurations();
 #ifdef PINEFORGE_V19E_HARVEST
     std::printf("constexpr std::uint64_t kTranscriptDigests[] = {\n");
