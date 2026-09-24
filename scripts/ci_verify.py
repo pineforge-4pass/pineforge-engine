@@ -192,7 +192,17 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # row: test_native_definition_index stays, re-targeted at the core's chain
 # index. 250 registered, 249 run: the WebSocket row still skips on a system
 # libcurl.
-KERNEL_MIN_TESTS = 249
+# 257 run = those 249 plus the eight TUs of INT22 (L3, D2-A) -- measured on
+# the integrated tree (ctest -N), not summed from the lanes' own bases:
+#   +2 L3   test_native_direct_mutation,
+#           test_native_direct_mutation_allocations
+#   +6 D2-A test_native_command_after, test_native_quiet_point,
+#           test_magnifier_ordered_sampler, test_magnifier_endpoints4,
+#           test_native_bar_open_hook, test_native_precommit_hook
+# All eight are source-free, so they register in release too; LAYOUT1 adds
+# no row. 258 registered, 257 run: the WebSocket row still skips on a system
+# libcurl.
+KERNEL_MIN_TESTS = 257
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -271,7 +281,11 @@ KERNEL_MIN_TESTS = 249
 # release only and the kernel floor does not move (CORPUS2 adds no row):
 #   +2 V19-E test_adapter_live_state_equivalence, test_adapter_live_state_scaling
 # No release row skips, so 637 registered is 637 run.
-RELEASE_MIN_TESTS = 637
+# 645 = those 637 plus the eight INT22 rows KERNEL_MIN_TESTS lists above,
+# which register here too, counted with ctest -N on the integrated tree;
+# neither L3 nor D2-A adds a release-only row and LAYOUT1 adds no row. No
+# release row skips, so 645 registered is 645 run.
+RELEASE_MIN_TESTS = 645
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
