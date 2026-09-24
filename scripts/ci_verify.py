@@ -266,7 +266,12 @@ KERNEL_MIN_TESTS = 249
 # 635 = those 631 plus the four INT20 rows KERNEL_MIN_TESTS lists above, which
 # register here too; neither lane adds a release-only row. No release row
 # skips, so 635 registered is 635 run.
-RELEASE_MIN_TESTS = 635
+# 637 = those 635 plus V19-E's two rows (INT21), counted with ctest -N on the
+# integrated tree; their TUs reach the source layer, so they register in
+# release only and the kernel floor does not move (CORPUS2 adds no row):
+#   +2 V19-E test_adapter_live_state_equivalence, test_adapter_live_state_scaling
+# No release row skips, so 637 registered is 637 run.
+RELEASE_MIN_TESTS = 637
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
