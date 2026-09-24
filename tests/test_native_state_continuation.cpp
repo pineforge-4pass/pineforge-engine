@@ -24,9 +24,11 @@
 //      leave the same state, because every committed event folds a compact
 //      record of its kind and reason.
 //   6. Scaling. Kernel-recorded per-bar broker hashes cost linear time: four
-//      times the bars cost less than five times the CPU (the base walked every
-//      closed row at every row, quadratic). A continuation read costs the same
-//      at a quarter and at the whole of a run.
+//      times the bars cost less than eight times the CPU (linear is x4; the
+//      base walked every closed row at every row, quadratic, x16). A
+//      continuation read costs the same at a quarter and at the whole of a
+//      run: less than twice (the same is x1; a read that walked the history
+//      would be x4).
 //   7. Closed-row finality. A host may amend a booked row while the applied
 //      notification of the execution that booked it runs, and the digest takes
 //      the amended row; a read between the booking and that notification folds
@@ -731,27 +733,24 @@ void cancelled_reason_is_kept() {
 double cpu_seconds() { return static_cast<double>(std::clock()) / CLOCKS_PER_SEC; }
 
 // One bracket round trip every ten bars, a kernel-recorded report and the
-// per-bar broker hash recorded: the recording's cost per bar.
+// per-bar broker hash recorded: the recording's cost, one run.
 double recorded_seconds(int bars) {
-    double best = 1e30;
-    for (int round = 0; round < 3; ++round) {
-        Host host;
-        host.bar_script = [](Host& h, int bar) {
-            if (bar % 10 == 0) h.submit(no::Request{no::Transact{1.0}, "in", ""});
-            if (bar % 10 == 5) h.submit(no::Request{no::Flatten{}, "out", ""});
-        };
-        auto spec = base_spec();
-        spec.report_policy = NativeReportPolicy::KernelRecorded;
-        if (host.configure_native(spec).status != NativeSetupStatus::Applied) return 0.0;
-        host.set_broker_state_hash_recording(true);
-        const auto input = tape(bars);
-        const double start = cpu_seconds();
-        host.run(input.data(), bars);
-        best = std::min(best, cpu_seconds() - start);
-        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-        CHECK(host.rows().size() == static_cast<std::size_t>(bars / 10));
-    }
-    return best;
+    Host host;
+    host.bar_script = [](Host& h, int bar) {
+        if (bar % 10 == 0) h.submit(no::Request{no::Transact{1.0}, "in", ""});
+        if (bar % 10 == 5) h.submit(no::Request{no::Flatten{}, "out", ""});
+    };
+    auto spec = base_spec();
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+    if (host.configure_native(spec).status != NativeSetupStatus::Applied) return 0.0;
+    host.set_broker_state_hash_recording(true);
+    const auto input = tape(bars);
+    const double start = cpu_seconds();
+    host.run(input.data(), bars);
+    const double spent = cpu_seconds() - start;
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.rows().size() == static_cast<std::size_t>(bars / 10));
+    return spent;
 }
 
 // A continuation read at a bar, timed over many reads.
@@ -778,19 +777,52 @@ double read_seconds(int bars, int read_at) {
 }
 
 // 6. Scaling.
+//
+// The two sizes of each ratio are timed in turn, round after round (which
+// goes first alternates), and each keeps its best round. A runner whose load
+// moves while the section runs -- the rest of a ctest -j suite beside it --
+// slows the two sizes of one round alike, and the best of several rounds is
+// the one it slowed least; timing all of one size and then all of the other
+// let a load change land on one side only (x5.01 on a loaded Debug runner).
+// Each bound sits between the two shapes it tells apart, a factor of two
+// from each: linear recording is x4 for 4x the bars and the quadratic walk
+// V19-A removed x16, so x8; a live-state read is x1 at 4x the history and a
+// read that walked the history x4, so x2.
+constexpr int kScalingRounds = 5;
+
 void recording_and_reads_scale() {
-    const double quarter = recorded_seconds(5000);
-    const double whole = recorded_seconds(20000);
+    double quarter = 1e30;
+    double whole = 1e30;
+    double early = 1e30;
+    double late = 1e30;
+    for (int round = 0; round < kScalingRounds; ++round) {
+        if (round % 2 == 0) {
+            quarter = std::min(quarter, recorded_seconds(5000));
+            whole = std::min(whole, recorded_seconds(20000));
+        } else {
+            whole = std::min(whole, recorded_seconds(20000));
+            quarter = std::min(quarter, recorded_seconds(5000));
+        }
+    }
     const double ratio = quarter > 0.0 ? whole / quarter : 0.0;
-    std::printf("  kernel-recorded per-bar broker hashes: 5000 bars %.4f s, 20000 bars %.4f s "
-                "(x%.2f for 4x the bars)\n", quarter, whole, ratio);
+    std::printf("  kernel-recorded per-bar broker hashes, best of %d interleaved rounds: "
+                "5000 bars %.4f s, 20000 bars %.4f s (x%.2f for 4x the bars, bound x8)\n",
+                kScalingRounds, quarter, whole, ratio);
     CHECK(ratio > 0.0);
-    CHECK(ratio < 5.0);
-    const double early = read_seconds(10000, 2500);
-    const double late = read_seconds(10000, 9999);
+    CHECK(ratio < 8.0);
+    for (int round = 0; round < kScalingRounds; ++round) {
+        if (round % 2 == 0) {
+            early = std::min(early, read_seconds(10000, 2500));
+            late = std::min(late, read_seconds(10000, 9999));
+        } else {
+            late = std::min(late, read_seconds(10000, 9999));
+            early = std::min(early, read_seconds(10000, 2500));
+        }
+    }
     const double read_ratio = early > 0.0 ? late / early : 0.0;
-    std::printf("  continuation read, 2000 reads: at bar 2500 %.4f s, at bar 9999 %.4f s "
-                "(x%.2f)\n", early, late, read_ratio);
+    std::printf("  continuation read, 2000 reads, best of %d interleaved rounds: at bar 2500 "
+                "%.4f s, at bar 9999 %.4f s (x%.2f, bound x2)\n",
+                kScalingRounds, early, late, read_ratio);
     CHECK(read_ratio > 0.0);
     CHECK(read_ratio < 2.0);
 }
