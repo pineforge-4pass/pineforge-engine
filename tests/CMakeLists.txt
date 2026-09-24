@@ -1189,6 +1189,19 @@ list(APPEND TEST_SOURCES test_native_in_place_reads)
 # computation; each scenario with and without the host cache, transcripts
 # identical and the kept fact answering (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_in_place_reads)
+# R5 lane D2-C (stage once): a fill settled from the one-lot stage its
+# precommit preview took against the fill staged again -- PERF-L2's hosts
+# (partial closes, margin, account FX, excursion owners, streams), K3's books
+# with current executions, hooks that rewrite a quote input inside the pump,
+# a host that declares no hook -- every value, the settlement path counts and
+# the carried count (differential). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_settlement_carry)
+# R5 lane D2-C (stage once): the Pine host's fills over the D2-C scenarios
+# settled from their precommit preview's stage against staged again: every
+# script read, trade and hash line for line, and the carried count
+# (differential). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_settlement_carry)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

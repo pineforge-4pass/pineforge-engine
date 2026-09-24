@@ -433,6 +433,15 @@ public:
     // see the block taken; no host reaches either.
     void set_runtime_ambient(bool enabled) noexcept { runtime_ambient_enabled_ = enabled; }
     uint64_t runtime_ambient_installs() const noexcept { return ambient_installs_; }
+    // consume_matched_request's one-lot stage, carried from a fill's preview
+    // to its settlement (R5 lane D2-C: BacktestEngine::NativeSettlementStage::
+    // OneLot::preview_keeping / settle_kept). Off, every settlement stages its
+    // fill again, as before; the count is the settlements this run took from a
+    // carried stage (reset at every begin). Both exist so
+    // tests/test_native_settlement_carry.cpp can hold the two paths equal and
+    // see the carry taken; no host reaches either.
+    void set_settlement_carry(bool enabled) noexcept { settlement_carry_ = enabled; }
+    uint64_t carried_settlements() const noexcept { return carried_settlements_; }
 
     // The request core, read-only: tests/test_native_definition_index.cpp
     // holds its cohort receipts, rosters and membership answers -- the chain
@@ -1695,6 +1704,14 @@ private:
     bool ambient_installed_ = false;
     bool runtime_ambient_enabled_ = true;
     uint64_t ambient_installs_ = 0;
+    // The settlement carry's switch and count (set_settlement_carry), and its
+    // generation stamp: the fills this consumer has settled, advanced at each
+    // settlement, so a stage carried across a precommit call settles only
+    // when no fill settled inside the call. Library state, never run state,
+    // folded into nothing.
+    bool settlement_carry_ = true;
+    uint64_t carried_settlements_ = 0;
+    uint64_t settlement_generation_ = 0;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

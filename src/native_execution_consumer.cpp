@@ -1,5 +1,6 @@
 #include "native_execution_consumer.hpp"
 #include "engine_internal.hpp"
+#include "engine_settlement_stage.hpp"
 #include "native_matching.hpp"
 
 #include <pineforge/execution_close_scope.hpp>
@@ -2265,6 +2266,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     recalculations_skipped_ = 0;
     quiet_points_ = 0;
     ambient_installs_ = 0;
+    carried_settlements_ = 0;
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
     input_callback_context_.reset();
@@ -5043,17 +5045,27 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // building its closing rows consults a host that owns lot excursions,
         // so it is still built for such a host, which is asked exactly as
         // often as before.
+        //
+        // A preview's one-lot stage is kept for this fill's settlement (R5
+        // lane D2-C), stamped with the settlements so far: the settlement
+        // takes it only if no fill settled in between, and otherwise stages
+        // the fill again.
+        using OneLot = BacktestEngine::NativeSettlementStage::OneLot;
+        std::optional<OneLot> staged;
+        const uint64_t staged_generation = settlement_generation_;
         const bool consulted = precommit_hook_;
         if (consulted || engine.lot_excursion_hook_) {
+            std::optional<OneLot>* const keep = settlement_carry_ ? &staged : nullptr;
             if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
-                view.settlement_readiness = engine.preview_native_settlement_commit(
-                    *reversal, candidate.fill, ctx, view.account, view.closed_row_pnl);
+                view.settlement_readiness = OneLot::preview_keeping(
+                    engine, *reversal, candidate.fill, ctx, view.account, view.closed_row_pnl,
+                    keep);
             } else {
                 const auto action = narrow_action(candidate.physical);
-                view.settlement_readiness = engine.preview_native_settlement_commit(
-                    action, candidate.fill, ctx, candidate.financial_scope,
+                view.settlement_readiness = OneLot::preview_keeping(
+                    engine, action, candidate.fill, ctx, candidate.financial_scope,
                     candidate.selected ? &*candidate.selected : nullptr,
-                    view.account, view.closed_row_pnl);
+                    view.account, view.closed_row_pnl, keep);
             }
         }
         NativePrecommitVerdict verdict = NativePrecommitVerdict::Admit;
@@ -5124,7 +5136,13 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             notification.point.price = resolved_price;
             notification.point.quote_origin_ordinal = applied_id.ordinal;
         }
-        const auto settled = std::get_if<execution::ReverseTo>(&candidate.physical)
+        std::optional<execution::Result> carried;
+        if (staged && staged_generation == settlement_generation_) {
+            carried = staged->settle_kept(engine, candidate.fill, ctx);
+            if (carried) ++carried_settlements_;
+        }
+        const auto settled = carried ? *carried
+            : std::get_if<execution::ReverseTo>(&candidate.physical)
             ? engine.settle_native_reversal_at_v1(*std::get_if<execution::ReverseTo>(
                   &candidate.physical), candidate.fill, ctx)
             : candidate.selected
@@ -5132,6 +5150,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                     narrow_action(candidate.physical), candidate.fill, ctx, *candidate.selected)
                 : engine.settle_native_execution_scoped_at(
                     narrow_action(candidate.physical), candidate.fill, ctx, candidate.financial_scope);
+        ++settlement_generation_;
         if (settled.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                 NativeFailureOperation::Settlement, P, static_cast<uint32_t>(settled.status)});
