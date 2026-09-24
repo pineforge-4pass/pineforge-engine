@@ -1799,6 +1799,15 @@ public:
     bool refresh_allowance(const RequestHandle& target,
                            const EvaluationContext& context,
                            const TargetObservation& observation);
+    /// The same refresh, handed the run's timeline: an unbound close that
+    /// carried a binding the book still has (ReplaceOptions::keep_binding) is
+    /// bound here too, to the BookClose its CloseBoundEvent would install, and
+    /// takes that event's ordinal without recording it. The form above leaves
+    /// every unbound close to the evaluation.
+    bool refresh_allowance(const RequestHandle& target,
+                           const EvaluationContext& context,
+                           const TargetObservation& observation,
+                           uint64_t& next_timeline_ordinal);
     bool refresh_cohort_allowance(const RequestHandle& target,
                                   const EvaluationContext& context,
                                   const TargetObservation& observation);
@@ -1998,9 +2007,14 @@ private:
     /// live_.size(), while repriced_ names a re-priced request: a search by
     /// queue order (the priority repriced_ names, or the handle's own number).
     std::size_t repriced_position(uint64_t incarnation) const noexcept;
-    /// refresh_allowance for an unbound close that carried a binding.
+    /// refresh_allowance's body, and its bind for an unbound close that
+    /// carried a binding.
+    bool refresh_allowance(const RequestHandle& target, const EvaluationContext& context,
+                           const TargetObservation& observation,
+                           uint64_t* next_timeline_ordinal);
     bool refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
-                              const TargetObservation& observation);
+                              const TargetObservation& observation,
+                              uint64_t& next_timeline_ordinal);
     TargetKind classify_repriced(uint64_t incarnation, std::size_t* live_index) const noexcept;
     const LiveRequest* find_repriced(uint64_t incarnation) const noexcept;
     /// Records that the request under `incarnation` now stands at
@@ -2031,6 +2045,9 @@ private:
         LiveRequest live_row{};
         bool consume_incarnation = false;
         uint64_t incarnation_used = 0;
+        // An ordinal the mutation takes with no event: a kept binding's
+        // (ReplaceOptions::keep_binding). 0: none.
+        uint64_t skipped_ordinal = 0;
         bool add_receipt = false;
         EventId receipt_cause{};
         RequestHandle receipt_recipient{};

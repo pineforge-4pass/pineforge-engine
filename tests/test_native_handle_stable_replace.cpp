@@ -1,7 +1,7 @@
 // R5 lane V19-D witness: a replace that keeps the handle
 // (ReplaceOptions::keep_handle) or carries a close's book binding
 // (ReplaceOptions::keep_binding) changes what the run records, never what it
-// matches.
+// matches, nor any ordinal of its timeline.
 //
 // 1. The differential. One seeded bare host plays randomized re-issue scripts
 //    on gapped tapes -- exits of every closing intent (explicit units,
@@ -16,11 +16,13 @@
 //    callback. Every script runs under four option sets (a plain replace,
 //    keep_handle, keep_binding, both) and on the direct and the staged core
 //    paths. Across the four the run must match identically: every fill (the
-//    request that filled, its cursor, price and units, in order), every
-//    terminal and trigger event of the journal mapped to the host's slots,
-//    the book's queue order and the position every bar, the replace answers,
-//    and every closed trade field for field -- entry incarnations included,
-//    because a re-price takes the number a successor would have been issued.
+//    request that filled, its event and point ordinals, cursor, price and
+//    units, in order), every journal event with its ordinal mapped to the
+//    host's slots (CloseBoundEvents aside: a carried binding takes the
+//    ordinal of the event it spares, unrecorded), the book's queue order and
+//    the position every bar, the replace answers, and every closed trade
+//    field for field -- entry incarnations included, because a re-price takes
+//    the number a successor would have been issued.
 //    The two paths of one option set must match bit for bit, hashes too.
 //    A second pass re-prices openings with keep_handle too: their later fills
 //    carry the kept handle, so every trade field but the entry incarnation
@@ -213,6 +215,10 @@ public:
         const int slot = slot_of(event.handle());
         full_fold::Fold f;
         f.i(slot);
+        // A carried binding takes the ordinal its CloseBoundEvent would have,
+        // so every ordinal matches too.
+        f.u(event.ordinal);
+        f.u(event.cursor.point.ordinal);
         f.i(event.cursor.point.interval_index);
         f.i(event.cursor.point.effective_time_ms);
         f.e(event.cursor.point.path_phase);
@@ -537,6 +543,7 @@ private:
 void read_journal(const ReissueHost& host, Record& record) {
     const auto rows = host.native_events(0);
     auto cursor = [](full_fold::Fold& f, const no::MatchCursor& c) {
+        f.u(c.point.ordinal);
         f.i(c.point.interval_index);
         f.i(c.point.effective_time_ms);
         f.e(c.point.path_phase);
@@ -554,6 +561,7 @@ void read_journal(const ReissueHost& host, Record& record) {
         std::visit([&](const auto& event) {
             using E = std::decay_t<decltype(event)>;
             f.u(row.command->index());
+            f.u(event.ordinal);
             if constexpr (std::is_same_v<E, no::CloseBoundEvent>) {
                 keep = false;
                 ++record.close_bound;

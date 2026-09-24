@@ -1450,6 +1450,9 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
                                        plan.receipt_effect, plan.receipt_outcome});
     }
     if (plan.consume_incarnation) last_incarnation_ = plan.incarnation_used;
+    // A kept binding took the ordinal its CloseBoundEvent would have; the
+    // plan carries it with no event (prepare_evaluation).
+    if (plan.skipped_ordinal != 0) last_ordinal_ = plan.skipped_ordinal;
     plan.consumed = true;
     bump_epoch();
     return Installed{EventRange{first, count}};
@@ -1788,20 +1791,24 @@ std::optional<PositionNonflat> carried_binding(const LiveRequest& predecessor,
     return std::nullopt;
 }
 
-// Where an unbound close whose definition carries a binding (ReplaceOptions::
-// keep_binding) is evaluated against a book that still has that cycle and
-// side: the binding it carried, bound at this cursor and dated by the command
-// that carried it, with no event. The same cursor a CloseBoundEvent would
-// bind at, so a same-point continuation reads it alike. Nothing otherwise.
-std::optional<BookClose> kept_book_close(const LiveRequest& live, const PositionNonflat& book,
-                                         const EvaluationContext& context,
-                                         const RunIdentity& run) {
+// Whether an unbound close whose definition carries a binding
+// (ReplaceOptions::keep_binding) is evaluated against a book that still has
+// that cycle and side. Such a close binds with no event: to the BookClose a
+// CloseBoundEvent would install -- this cycle and side, this cursor, and the
+// ordinal that event would take, which the bind takes and leaves unrecorded
+// (kept_book_close) -- so the book, every later ordinal and a same-point
+// continuation read exactly as after the event.
+bool binds_kept(const LiveRequest& live, const PositionNonflat& book) noexcept {
     const auto& kept = live.definition->kept_binding;
-    if (!kept || kept->cycle != book.cycle || kept->side != book.side) return std::nullopt;
+    return kept && kept->cycle == book.cycle && kept->side == book.side;
+}
+
+BookClose kept_book_close(const PositionNonflat& book, const EvaluationContext& context,
+                          const RunIdentity& run, uint64_t ordinal) {
     BookClose bound;
     bound.cycle = book.cycle;
     bound.side = book.side;
-    bound.binding_event = EventId{run, live.birth().acceptance_ordinal};
+    bound.binding_event = EventId{run, ordinal};
     bound.binding_cursor = context.cursor;
     return bound;
 }
@@ -2739,6 +2746,18 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
 bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
         const TargetObservation& observation) {
+    return refresh_allowance(target, context, observation, nullptr);
+}
+
+bool WorkingRequestCore::refresh_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation, uint64_t& next_timeline_ordinal) {
+    return refresh_allowance(target, context, observation, &next_timeline_ordinal);
+}
+
+bool WorkingRequestCore::refresh_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation, uint64_t* next_timeline_ordinal) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) return false;
@@ -2761,12 +2780,12 @@ bool WorkingRequestCore::refresh_allowance(
         if (observe_openings(observation, *close, &live_count) || live_count == 0) return false;
     } else if (std::holds_alternative<UnboundBookClose>(live.authority)) {
         // An unbound close binds here only when it carried a binding the
-        // book still has (ReplaceOptions::keep_binding): with no event,
-        // exactly as prepare_evaluation binds it. Every other unbound close
-        // is left to the evaluation, which binds it with a CloseBoundEvent
-        // or ends it.
-        if (!live.definition->kept_binding) return false;
-        return refresh_kept_binding(live, context, observation);
+        // book still has (ReplaceOptions::keep_binding) and the caller hands
+        // the timeline its binding takes: with no event, exactly as
+        // prepare_evaluation binds it. Every other unbound close is left to
+        // the evaluation, which binds it with a CloseBoundEvent or ends it.
+        if (!next_timeline_ordinal || !live.definition->kept_binding) return false;
+        return refresh_kept_binding(live, context, observation, *next_timeline_ordinal);
     }
     if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
         return false;
@@ -2781,22 +2800,24 @@ bool WorkingRequestCore::refresh_allowance(
     return true;
 }
 
-// refresh_allowance's bind for an unbound close that carried a binding: the
-// same steps as its allowance refresh, and the kept BookClose installed.
+// refresh_allowance's bind for an unbound close that carried a binding the
+// book still has: the same steps as its allowance refresh, the kept BookClose
+// installed, and the ordinal its CloseBoundEvent would take taken, unrecorded.
 bool WorkingRequestCore::refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
-                                              const TargetObservation& observation) {
+                                              const TargetObservation& observation,
+                                              uint64_t& next_timeline_ordinal) {
     const auto* book = std::get_if<PositionNonflat>(&observation.current_position);
-    if (!book || book->cycle <= 0) return false;
-    auto kept = kept_book_close(live, *book, context, identity_);
-    if (!kept) return false;
+    if (!book || book->cycle <= 0 || !binds_kept(live, *book)) return false;
     if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
         return false;
     }
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     if (epoch_ > std::numeric_limits<uint64_t>::max() - 2U) {
         throw std::overflow_error("native working-request epoch exhausted");
     }
     live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
-    live.authority = std::move(*kept);
+    live.authority = kept_book_close(*book, context, identity_, ordinal);
+    last_ordinal_ = ordinal;
     if (!bump_epoch() || !bump_epoch()) {
         throw std::overflow_error("native working-request epoch exhausted");
     }
@@ -2890,16 +2911,16 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         if (!nonflat || nonflat->cycle <= 0) {
             return PreparationError{CoreFailure::MissingObservation, EventId{identity_, 0}, target};
         }
-        if (auto kept = live.definition->kept_binding
-                ? kept_book_close(live, *nonflat, context, identity_)
-                : std::nullopt) {
+        if (binds_kept(live, *nonflat)) {
+            const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
             MutationPlan plan = begin_plan();
             LiveRequest updated = live;
-            updated.authority = std::move(*kept);
+            updated.authority = kept_book_close(*nonflat, context, identity_, ordinal);
             updated.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
             plan.live_change = kLiveUpdate;
             plan.live_index = live_index;
             plan.live_row = std::move(updated);
+            plan.skipped_ordinal = ordinal;
             return finish_mutation(std::move(plan));
         }
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
@@ -3021,22 +3042,15 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
         if (!nonflat || nonflat->cycle <= 0) {
             return PreparationError{CoreFailure::MissingObservation, EventId{identity_, 0}, target};
         }
-        // A carried binding the book still has binds with no event (the
-        // allowance path's shape); any other binds with a CloseBoundEvent.
-        std::optional<BookClose> kept;
-        if (live.definition->kept_binding) kept = kept_book_close(live, *nonflat, context, identity_);
-        uint64_t ordinal = 0;
-        if (!kept) ordinal = usable_ordinal(next_timeline_ordinal);
+        // A carried binding the book still has binds to the BookClose the
+        // CloseBoundEvent would install and takes its ordinal, unrecorded
+        // (binds_kept); any other binds with the event.
+        const bool kept = binds_kept(live, *nonflat);
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         begin_direct();
-        BookClose bound;
+        BookClose bound = kept_book_close(*nonflat, context, identity_, ordinal);
         CloseBoundEvent bound_event;
-        if (kept) {
-            bound = std::move(*kept);
-        } else {
-            bound.cycle = nonflat->cycle;
-            bound.side = nonflat->side;
-            bound.binding_event = EventId{identity_, ordinal};
-            bound.binding_cursor = context.cursor;
+        if (!kept) {
             bound_event.ordinal = ordinal;
             bound_event.definition = live.definition;
             bound_event.cycle = bound.cycle;
@@ -3049,6 +3063,7 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
         seal_direct(kept ? 0 : 1, false, false, false);
         const std::size_t first = history_end();
         if (!kept) append_direct(std::move(bound_event), false);
+        else last_ordinal_ = ordinal;
         live.authority = std::move(bound);
         live.allowance = allowance;
         return Installed{finish_direct(first)};

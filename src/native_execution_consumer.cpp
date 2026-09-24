@@ -5940,7 +5940,12 @@ void NativeExecutionConsumer::match_path(
                     }
                 } else {
                     read_target_into(engine, live, match_target_, match_target_handles_);
-                    if (requests_.refresh_allowance(winner->handle, eval, match_target_)) {
+                    // Handed the timeline: an unbound close carrying a
+                    // binding the book still has binds here, taking an
+                    // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
+                    if (requests_.refresh_allowance(winner->handle, eval, match_target_,
+                                                    next_timeline_ordinal_)) {
+                        catch_up_timeline();
                         rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
