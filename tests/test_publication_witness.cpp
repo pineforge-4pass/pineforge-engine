@@ -42,7 +42,15 @@
 // statement of its own. Provenance: this TU compiled unchanged against the
 // 6c081f5d library with -DPINEFORGE_D2D_PUBLICATION_HARVEST; the harvest is
 // byte-identical with AppleClang on arm64 and GCC 13 on aarch64. Rebuild the
-// table that way; never edit a row by hand.
+// table that way; never edit a row by hand. Re-harvested once on the INT23
+// tree, which carries lane V19-D: its steps 6 and 7 change what the source
+// layer's fold (pineforge-source-adapter/v4) folds -- a bracket family's
+// erased members park behind a retained one, and K1 releases a leg the
+// revival's superseded test answers for -- so 31 of the 156 runs pin a new
+// digest. The same TU harvests the same table against V19-D's own library,
+// and its digest without the three hash inputs (that fold, the recorded
+// broker-state hash rows, the final hash) is the 6c081f5d harvest's in all
+// 156 runs, as are every count.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -735,7 +743,8 @@ void harvest() {
     std::printf("// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one\n"
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
                 "// recorded broker-state hash rows).\n"
-                "// Harvested on 6c081f5d: see the provenance note in the test. Generated --\n"
+                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23): see\n"
+                "// the provenance note in the test. Generated --\n"
                 "// never edit a row by hand.\n");
     std::printf("constexpr Pinned kPinned[] = {\n");
     for (const Scenario& s : battery()) {
