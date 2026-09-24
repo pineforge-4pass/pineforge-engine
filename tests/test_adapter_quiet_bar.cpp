@@ -38,13 +38,18 @@
 //
 // Portability of the pinned values: they fold one fixed execution hash
 // instead of the consumer's continuation (which folds tzdata content, as
-// test_adapter_recording_hash_witness.cpp notes), and every price sits on
-// the 0.25 tick. The transcript folds the real continuation: both of its
+// test_adapter_recording_hash_witness.cpp notes), every price sits on the
+// 0.25 tick, and the random strategies take each draw in a statement of its
+// own. The order in which a call's arguments are evaluated is unspecified:
+// GCC on x86-64 evaluates them right to left, Clang and GCC on aarch64 left
+// to right, so two draws in one argument list would give each compiler a
+// different battery. The transcript folds the real continuation: both of its
 // runs are on the same machine.
 //
 // Provenance of the pinned data: this TU, compiled unchanged against the
 // f71cd820 library with -DPINEFORGE_QUIET_BAR_HARVEST. Rebuild them the same
-// way; never edit one by hand.
+// way; never edit one by hand. The harvest is byte-identical with AppleClang
+// on arm64 and with GCC 13 on aarch64 and x86-64.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 #if defined(PINEFORGE_QUIET_BAR_WITNESS_PROBE)
@@ -659,6 +664,8 @@ Scenario random_scenario(std::uint64_t seed) {
         static const char* const kIds[] = {"L", "S", "A", "B"};
         static const char* const kExits[] = {"X", "Y"};
         const int commands = s.chance(55) ? 1 + s.below(3) : 0;
+        // One draw per statement, never two in one call's arguments (see the
+        // portability note at the top of this file).
         for (int k = 0; k < commands; ++k) {
             const char* id = kIds[s.below(4)];
             const bool is_long = s.chance(55);
@@ -673,20 +680,26 @@ Scenario random_scenario(std::uint64_t seed) {
             case 3:
                 h.strategy_entry(id, is_long, kNa, is_long ? bar.close + off : bar.close - off);
                 break;
-            case 4:
-                h.strategy_entry(id, is_long, kNa, kNa, 1.0 + s.below(3), "", s.chance(30) ? "g" : "",
-                                 s.chance(30) ? 1 + s.below(2) : 0);
+            case 4: {
+                const double qty = 1.0 + s.below(3);
+                const char* const oca = s.chance(30) ? "g" : "";
+                const int oca_type = s.chance(30) ? 1 + s.below(2) : 0;
+                h.strategy_entry(id, is_long, kNa, kNa, qty, "", oca, oca_type);
                 break;
+            }
             case 5: case 6: {
                 const double limit = s.chance(70) ? bar.close + off : kNa;
                 const double stop = s.chance(70) ? bar.close - off : kNa;
                 h.strategy_exit(kExits[s.below(2)], id, limit, stop);
                 break;
             }
-            case 7:
-                h.strategy_exit(kExits[s.below(2)], id, kNa, kNa, 4.0 + s.below(8),
-                                1.0 + s.below(4));
+            case 7: {
+                const char* const exit_id = kExits[s.below(2)];
+                const double trail_points = 4.0 + s.below(8);
+                const double trail_offset = 1.0 + s.below(4);
+                h.strategy_exit(exit_id, id, kNa, kNa, trail_points, trail_offset);
                 break;
+            }
             case 8:
                 if (s.chance(50)) h.strategy_close(id);
                 else h.strategy_close(id, "", kNa, 50.0);
@@ -699,10 +712,13 @@ Scenario random_scenario(std::uint64_t seed) {
                 if (s.chance(50)) h.strategy_cancel_all();
                 else h.strategy_exit(kExits[s.below(2)], "", bar.close + off, bar.close - off);
                 break;
-            default:
-                h.strategy_order(id, is_long, 1.0 + s.below(2),
-                                 s.chance(50) ? (is_long ? bar.close - off : bar.close + off) : kNa);
+            default: {
+                const double qty = 1.0 + s.below(2);
+                const double limit =
+                    s.chance(50) ? (is_long ? bar.close - off : bar.close + off) : kNa;
+                h.strategy_order(id, is_long, qty, limit);
                 break;
+            }
             }
         }
     };
