@@ -3170,28 +3170,35 @@ void NativeExecutionConsumer::withdraw_margin_liquidation(BacktestEngine& engine
     const auto handle = margin_liquidation_->handle;
     margin_liquidation_.reset();
     if (!requests_.find_live(handle)) return;
-    auto prepared = requests_.prepare_cancel(handle, next_timeline_ordinal_,
-                                             native_order::CancelReason::Superseded);
-    if (!prepared) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract,
-                                   NativeFailureOperation::Settlement});
-        render(engine, "native liquidation withdrawal produced no preparation");
-        return;
+    native_order::CommandInstalled<native_order::CancelResult> ok;
+    native_order::EventId predicted;
+    if (direct_mutation_) {
+        ok = requests_.apply_cancel(handle, next_timeline_ordinal_,
+                                    native_order::CancelReason::Superseded);
+        predicted = native_order::EventId{requests_.identity(), ok.result.event_ordinal};
+    } else {
+        auto prepared = requests_.prepare_cancel(handle, next_timeline_ordinal_,
+                                                 native_order::CancelReason::Superseded);
+        if (!prepared) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                       NativeFailureOperation::Settlement});
+            render(engine, "native liquidation withdrawal produced no preparation");
+            return;
+        }
+        predicted = prepared.predicted_event_id();
+        auto installed = requests_.install_cancel(std::move(prepared));
+        if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                       NativeFailureOperation::Settlement, predicted.ordinal,
+                                       static_cast<uint32_t>(*error)});
+            render(engine, "native liquidation withdrawal install failed");
+            return;
+        }
+        ok = std::move(std::get<native_order::CommandInstalled<native_order::CancelResult>>(
+                installed));
     }
-    const auto predicted = prepared.predicted_event_id();
-    const auto status = prepared.predicted().status;
-    auto installed = requests_.install_cancel(std::move(prepared));
-    if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
-                                   predicted.ordinal, static_cast<uint32_t>(*error)});
-        render(engine, "native liquidation withdrawal install failed");
-        return;
-    }
-    auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
-    note_committed_events(ok.events);
-    clear_cohort_target_cache();
-    catch_up_timeline();
-    if (status == native_order::CancelStatus::Cancelled) {
+    note_install(ok.events);
+    if (ok.result.status == native_order::CancelStatus::Cancelled) {
         drain_parent_terminal(engine, predicted, handle, NativeFailureOperation::Settlement);
     }
 }
@@ -3258,32 +3265,40 @@ bool NativeExecutionConsumer::kernel_submit_liquidation(
     ctx.quantity_grid = spec->quantity_grid;
     ctx.surface = native_order::CommandSurface::General;
     native_order::PreparedSubmit prepared;
+    native_order::CommandInstalled<native_order::SubmitResult> ok;
     try {
-        prepared = requests_.prepare_submit(request, ctx, engine.next_order_incarnation_,
-                                            next_timeline_ordinal_, origin);
+        if (direct_mutation_) {
+            ok = requests_.apply_submit(request, ctx, engine.next_order_incarnation_,
+                                        next_timeline_ordinal_, origin);
+        } else {
+            prepared = requests_.prepare_submit(request, ctx, engine.next_order_incarnation_,
+                                                next_timeline_ordinal_, origin);
+        }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                    NativeFailureOperation::Settlement});
         render(engine, e.what());
         return false;
     }
-    if (!prepared) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract,
-                                   NativeFailureOperation::Settlement});
-        render(engine, "native liquidation submit produced no preparation");
-        return false;
+    if (!direct_mutation_) {
+        if (!prepared) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                       NativeFailureOperation::Settlement});
+            render(engine, "native liquidation submit produced no preparation");
+            return false;
+        }
+        auto installed = requests_.install_submit(std::move(prepared));
+        if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                       NativeFailureOperation::Settlement, 0,
+                                       static_cast<uint32_t>(*error)});
+            render(engine, "native liquidation submit install failed");
+            return false;
+        }
+        ok = std::move(std::get<native_order::CommandInstalled<native_order::SubmitResult>>(
+                installed));
     }
-    auto installed = requests_.install_submit(std::move(prepared));
-    if (const auto* error = std::get_if<native_order::InstallError>(&installed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
-                                   0, static_cast<uint32_t>(*error)});
-        render(engine, "native liquidation submit install failed");
-        return false;
-    }
-    auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
-    note_committed_events(ok.events);
-    clear_cohort_target_cache();
-    catch_up_timeline();
+    note_install(ok.events);
     if (ok.result.status != native_order::SubmitStatus::Accepted || !ok.result.handle) {
         return false;
     }
@@ -3490,14 +3505,15 @@ std::optional<std::size_t> NativeExecutionConsumer::record_margin_call(
         margin_point_calls_ = 1;
     }
     const std::size_t index = requests_.history_end();
-    auto prepared = requests_.prepare_margin_call(event, next_timeline_ordinal_);
-    if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+    CoreStep step = direct_mutation_
+        ? core_step(requests_.apply_margin_call(event, next_timeline_ordinal_))
+        : core_step(requests_.prepare_margin_call(event, next_timeline_ordinal_));
+    if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
         fail_preparation(engine, *error, NativeFailureOperation::Settlement);
         return std::nullopt;
     }
-    auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
-    if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                       NativeFailureOperation::Settlement, applied.ordinal)) {
+    if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                     applied.ordinal)) {
         return std::nullopt;
     }
     return index;
@@ -3652,15 +3668,15 @@ void NativeExecutionConsumer::risk_fire(BacktestEngine& engine,
     event.observed = observed;
     event.day_ordinal = risk_.has_day ? risk_.day_ordinal : 0;
     event.cursor.point = point.decision.coordinate;
-    auto prepared = requests_.prepare_risk_event(event, next_timeline_ordinal_);
-    if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+    CoreStep step = direct_mutation_
+        ? core_step(requests_.apply_risk_event(event, next_timeline_ordinal_))
+        : core_step(requests_.prepare_risk_event(event, next_timeline_ordinal_));
+    if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
         fail_preparation(engine, *error, NativeFailureOperation::Settlement);
         return;
     }
-    auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
-    if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                       NativeFailureOperation::Settlement,
-                                       point.decision.coordinate.ordinal)) {
+    if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                     point.decision.coordinate.ordinal)) {
         return;
     }
     if (risk->action != NativeRiskAction::FlattenAndBlock) return;
@@ -3731,10 +3747,40 @@ bool NativeExecutionConsumer::install_mutation(
         render(engine, "native mutation install failed");
         return false;
     }
-    note_committed_events(std::get<native_order::Installed>(result).events);
+    note_install(std::get<native_order::Installed>(result).events);
+    return true;
+}
+
+void NativeExecutionConsumer::note_install(const native_order::EventRange& events) noexcept {
+    note_committed_events(events);
     clear_cohort_target_cache();
     catch_up_timeline();
-    return true;
+}
+
+NativeExecutionConsumer::CoreStep NativeExecutionConsumer::core_step(
+        native_order::Preparation<native_order::PreparedMutation>&& prepared) {
+    if (auto* token = std::get_if<native_order::PreparedMutation>(&prepared)) {
+        return std::move(*token);
+    }
+    if (const auto* none = std::get_if<native_order::NoChange>(&prepared)) return *none;
+    return std::get<native_order::PreparationError>(prepared);
+}
+
+NativeExecutionConsumer::CoreStep NativeExecutionConsumer::core_step(
+        native_order::Preparation<native_order::Installed>&& applied) {
+    if (const auto* done = std::get_if<native_order::Installed>(&applied)) return *done;
+    if (const auto* none = std::get_if<native_order::NoChange>(&applied)) return *none;
+    return std::get<native_order::PreparationError>(applied);
+}
+
+bool NativeExecutionConsumer::settle_step(BacktestEngine& engine, CoreStep&& step,
+                                          NativeFailureOperation operation, uint64_t ordinal) {
+    if (const auto* done = std::get_if<native_order::Installed>(&step)) {
+        note_install(done->events);
+        return true;
+    }
+    auto* token = std::get_if<native_order::PreparedMutation>(&step);
+    return token && install_mutation(engine, std::move(*token), operation, ordinal);
 }
 
 bool NativeExecutionConsumer::install_execution(
@@ -3754,9 +3800,7 @@ bool NativeExecutionConsumer::install_execution(
         render(engine, "native execution install failed after settlement");
         return false;
     }
-    note_committed_events(std::get<native_order::Installed>(result).events);
-    clear_cohort_target_cache();
-    catch_up_timeline();
+    note_install(std::get<native_order::Installed>(result).events);
     return true;
 }
 
@@ -3795,17 +3839,16 @@ void NativeExecutionConsumer::drain_dependency_queue(
         for (std::size_t i = 0; i < queue.size() && !failed(); ++i) {
             const native_order::EventId cause = queue[i].cause;
             const native_order::RequestHandle child = queue[i].child;
-            auto prep = requests_.prepare_parent_terminal(cause, child, next_timeline_ordinal_);
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            CoreStep step = direct_mutation_
+                ? core_step(requests_.apply_parent_terminal(cause, child, next_timeline_ordinal_))
+                : core_step(requests_.prepare_parent_terminal(cause, child,
+                                                              next_timeline_ordinal_));
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, operation);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation), operation,
-                                               cause.ordinal)) {
-                return;
-            }
+            if (std::holds_alternative<native_order::NoChange>(step)) continue;
+            if (!settle_step(engine, std::move(step), operation, cause.ordinal)) return;
             if (requests_.find_live(child) == nullptr && requests_.last_ordinal() != 0) {
                 native_order::EventId next_cause = cause;
                 next_cause.ordinal = requests_.last_ordinal();
@@ -3853,16 +3896,18 @@ void NativeExecutionConsumer::drain_after_applied(
         const auto recipients = requests_.group_recipients(applied);
         for (const auto& recipient : recipients) {
             if (failed()) return;
-            auto prep = requests_.prepare_group_effect(applied, recipient, next_timeline_ordinal_);
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            CoreStep step = direct_mutation_
+                ? core_step(requests_.apply_group_effect(applied, recipient,
+                                                         next_timeline_ordinal_))
+                : core_step(requests_.prepare_group_effect(applied, recipient,
+                                                           next_timeline_ordinal_));
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                               NativeFailureOperation::Settlement,
-                                               applied.ordinal)) {
+            if (std::holds_alternative<native_order::NoChange>(step)) continue;
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                             applied.ordinal)) {
                 return;
             }
             note_absent(recipient);
@@ -3922,18 +3967,31 @@ void NativeExecutionConsumer::drain_after_applied(
             if (requests_.find_live(child)) {
                 observation = read_opening(engine, filler, engine.position_cycle_seq_);
             }
-            auto prep = requests_.prepare_owner_applied(applied, child, observation,
-                                                        next_timeline_ordinal_, arm);
+            // An anchored leg's arm consults the host's restatement, and a
+            // hook that fails the run leaves the arm uninstalled: that arm is
+            // prepared, and installed only if the run is still going. Every
+            // other arm consults nothing and is applied at once.
+            const auto* waiting = requests_.find_live(child);
+            const bool restated = arm.resolve_level && waiting
+                && std::holds_alternative<native_order::FromOwnerFill>(
+                       waiting->request().anchor);
+            CoreStep step;
+            if (direct_mutation_ && !restated) {
+                step = core_step(requests_.apply_owner_applied(applied, child, observation,
+                                                               next_timeline_ordinal_, arm));
+            } else {
+                auto prep = requests_.prepare_owner_applied(applied, child, observation,
+                                                            next_timeline_ordinal_, arm);
+                step = core_step(std::move(prep));
+            }
             if (failed()) return;
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                               NativeFailureOperation::Settlement,
-                                               applied.ordinal)) {
+            if (std::holds_alternative<native_order::NoChange>(step)) continue;
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                             applied.ordinal)) {
                 return;
             }
             note_absent(child);
@@ -3944,17 +4002,18 @@ void NativeExecutionConsumer::drain_after_applied(
             if (failed()) return;
             const auto* live = requests_.find_live(handle);
             auto target = read_target(engine, live);
-            auto prep = requests_.prepare_bound_expiry(applied, handle, target,
-                                                       next_timeline_ordinal_);
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            CoreStep step = direct_mutation_
+                ? core_step(requests_.apply_bound_expiry(applied, handle, target,
+                                                         next_timeline_ordinal_))
+                : core_step(requests_.prepare_bound_expiry(applied, handle, target,
+                                                           next_timeline_ordinal_));
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                               NativeFailureOperation::Settlement,
-                                               applied.ordinal)) {
+            if (std::holds_alternative<native_order::NoChange>(step)) continue;
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                             applied.ordinal)) {
                 return;
             }
             note_absent(handle);
@@ -4013,27 +4072,31 @@ void NativeExecutionConsumer::observe_trails(
         if (!track) continue;
         const bool buy = scratch_request_is_buy(engine, *live);
         if (!native_matching::trail_best_improves(track->best, price, buy)) continue;
-        native_order::Preparation<native_order::PreparedMutation> prep;
+        CoreStep step;
         try {
-            prep = requests_.prepare_trigger(
-                handle, native_order::ObserveTrailExtremum{cursor, price},
-                evaluation.driver_class, next_timeline_ordinal_, evaluation.cohort_side,
-                activation_grid(*spec));
+            const native_order::TriggerTransition extremum =
+                native_order::ObserveTrailExtremum{cursor, price};
+            const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
+            step = direct_mutation_
+                ? core_step(requests_.apply_trigger(
+                      handle, extremum, evaluation.driver_class, next_timeline_ordinal_,
+                      evaluation.cohort_side, trigger_grid))
+                : core_step(requests_.prepare_trigger(
+                      handle, extremum, evaluation.driver_class, next_timeline_ordinal_,
+                      evaluation.cohort_side, trigger_grid));
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
             render(engine, e.what());
             return;
         }
-        if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+        if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
             fail_preparation(engine, *err, NativeFailureOperation::Settlement);
             return;
         }
-        if (std::holds_alternative<native_order::NoChange>(prep)) continue;
-        auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-        if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                           NativeFailureOperation::Settlement,
-                                           cursor.point.ordinal)) {
+        if (std::holds_alternative<native_order::NoChange>(step)) continue;
+        if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                         cursor.point.ordinal)) {
             return;
         }
     }
@@ -4600,17 +4663,27 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         auto terminal = [&](std::optional<native_order::MatchRejectReason> rejection,
                             std::optional<native_order::ExecutionTerms> attempted = std::nullopt)
                 -> std::optional<NativeCurrentExecutionResult> {
-            auto prep = rejection
-                ? requests_.prepare_match_rejected(
-                    handle, evaluation, *rejection, std::move(attempted), next_timeline_ordinal_)
-                : requests_.prepare_no_effect(handle, evaluation, next_timeline_ordinal_);
-            if (const auto* error = std::get_if<native_order::PreparationError>(&prep)) {
+            CoreStep step;
+            if (direct_mutation_) {
+                step = rejection
+                    ? core_step(requests_.apply_match_rejected(handle, evaluation, *rejection,
+                                                               std::move(attempted),
+                                                               next_timeline_ordinal_))
+                    : core_step(requests_.apply_no_effect(handle, evaluation,
+                                                          next_timeline_ordinal_));
+            } else {
+                step = rejection
+                    ? core_step(requests_.prepare_match_rejected(handle, evaluation, *rejection,
+                                                                 std::move(attempted),
+                                                                 next_timeline_ordinal_))
+                    : core_step(requests_.prepare_no_effect(handle, evaluation,
+                                                            next_timeline_ordinal_));
+            }
+            if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *error, NativeFailureOperation::Settlement);
                 return std::nullopt;
             }
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation) return std::nullopt;
-            if (!install_mutation(engine, std::move(*mutation), NativeFailureOperation::Settlement, P))
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P))
                 return std::nullopt;
             return terminal_from_history(engine, handle, NativeFailureOperation::Settlement);
         };
@@ -4833,21 +4906,22 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         terms_input.default_resolved_price = default_resolved_price;
         terms_input.terms = terms;
         if (unresolved || !identity) {
-            auto prepared = requests_.prepare_terms(handle, evaluation, terms_input,
-                                                    next_timeline_ordinal_);
-            if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+            CoreStep step = direct_mutation_
+                ? core_step(requests_.apply_terms(handle, evaluation, terms_input,
+                                                  next_timeline_ordinal_))
+                : core_step(requests_.prepare_terms(handle, evaluation, terms_input,
+                                                    next_timeline_ordinal_));
+            if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *error, NativeFailureOperation::Settlement);
                 return std::nullopt;
             }
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
-            if (!mutation) {
+            if (std::holds_alternative<native_order::NoChange>(step)) {
                 fail(engine, NativeFailure{NativeFailureCode::Contract,
                                            NativeFailureOperation::Settlement, P});
                 render(engine, "native terms preparation did not produce a mutation");
                 return std::nullopt;
             }
-            if (!install_mutation(engine, std::move(*mutation),
-                                  NativeFailureOperation::Settlement, P)) {
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
                 return std::nullopt;
             }
             live = requests_.find_live(handle);
@@ -5762,33 +5836,33 @@ void NativeExecutionConsumer::match_path(
                 render(engine, e.what());
                 return;
             }
-            native_order::Preparation<native_order::PreparedMutation> prep;
+            CoreStep step;
             try {
-                if (winner_target) {
-                    prep = requests_.prepare_evaluation(
-                        winner->handle, eval, *winner_target, next_timeline_ordinal_);
-                } else {
+                if (!winner_target) {
                     read_target_into(engine, live, match_target_, match_target_handles_);
-                    prep = requests_.prepare_evaluation(
-                        winner->handle, eval, match_target_, next_timeline_ordinal_);
                 }
+                const native_order::TargetObservation& observed =
+                    winner_target ? *winner_target : match_target_;
+                step = direct_mutation_
+                    ? core_step(requests_.apply_evaluation(
+                          winner->handle, eval, observed, next_timeline_ordinal_))
+                    : core_step(requests_.prepare_evaluation(
+                          winner->handle, eval, observed, next_timeline_ordinal_));
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
                 render(engine, e.what());
                 return;
             }
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) {
+            if (std::holds_alternative<native_order::NoChange>(step)) {
                 skip(skip_key(winner->incarnation, winner->kind));
                 continue;
             }
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                               NativeFailureOperation::Settlement, P)) {
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
                 return;
             }
             if (requests_.find_live(winner->handle) == nullptr && requests_.last_ordinal() != 0) {
@@ -5817,28 +5891,31 @@ void NativeExecutionConsumer::match_path(
             } else {
                 transition = native_order::ActivateTrail{path_cursor, winner->price};
             }
-            native_order::Preparation<native_order::PreparedMutation> prep;
+            CoreStep step;
             try {
-                prep = requests_.prepare_trigger(winner->handle, transition,
-                                                driver_class, next_timeline_ordinal_, eval.cohort_side,
-                                                activation_grid(*spec));
+                const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
+                step = direct_mutation_
+                    ? core_step(requests_.apply_trigger(winner->handle, transition, driver_class,
+                                                        next_timeline_ordinal_, eval.cohort_side,
+                                                        trigger_grid))
+                    : core_step(requests_.prepare_trigger(winner->handle, transition,
+                                                          driver_class, next_timeline_ordinal_,
+                                                          eval.cohort_side, trigger_grid));
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
                 render(engine, e.what());
                 return;
             }
-            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, NativeFailureOperation::Settlement);
                 return;
             }
-            if (std::holds_alternative<native_order::NoChange>(prep)) {
+            if (std::holds_alternative<native_order::NoChange>(step)) {
                 skip(skip_key(winner->incarnation, winner->kind));
                 continue;
             }
-            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
-            if (!mutation || !install_mutation(engine, std::move(*mutation),
-                                               NativeFailureOperation::Settlement, P)) {
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
                 return;
             }
             if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
@@ -6251,15 +6328,19 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         const auto* live = requests_.find_live(command.target);
         evaluation.cohort_side = live ? cohort_side(engine, *live) : std::nullopt;
         const auto history_before = requests_.history_end();
-        auto prep = requests_.prepare_evaluation(command.target, evaluation,
-            read_target(engine, live), next_timeline_ordinal_);
-        if (const auto* error = std::get_if<native_order::PreparationError>(&prep)) {
+        const auto target = read_target(engine, live);
+        CoreStep step = direct_mutation_
+            ? core_step(requests_.apply_evaluation(command.target, evaluation, target,
+                                                   next_timeline_ordinal_))
+            : core_step(requests_.prepare_evaluation(command.target, evaluation, target,
+                                                     next_timeline_ordinal_));
+        if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
             fail_preparation(engine, *error, NativeFailureOperation::Settlement);
             throw std::runtime_error("native current evaluation failed");
         }
-        if (auto* mutation = std::get_if<native_order::PreparedMutation>(&prep)) {
-            if (!install_mutation(engine, std::move(*mutation), NativeFailureOperation::Settlement,
-                                  point.coordinate.ordinal))
+        if (!std::holds_alternative<native_order::NoChange>(step)) {
+            if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement,
+                             point.coordinate.ordinal))
                 throw std::runtime_error("native current evaluation install failed");
         }
         live = requests_.find_live(command.target);
@@ -9278,31 +9359,38 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
     }
     native_order::CommandContext ctx;
     native_order::PreparedSubmit prepared;
+    native_order::CommandInstalled<native_order::SubmitResult> ok;
     try {
         ctx = make_command_context(engine, request, surface);
-        prepared = requests_.prepare_submit(
-            request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+        if (direct_mutation_) {
+            ok = requests_.apply_submit(
+                request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+        } else {
+            prepared = requests_.prepare_submit(
+                request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+        }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
         throw;
     }
-    if (!prepared) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
-        render(engine, "native submit produced no preparation");
-        throw std::runtime_error("native submit produced no preparation");
+    if (!direct_mutation_) {
+        if (!prepared) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+            render(engine, "native submit produced no preparation");
+            throw std::runtime_error("native submit produced no preparation");
+        }
+        auto installed = requests_.install_submit(std::move(prepared));
+        if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                       0, static_cast<uint32_t>(*err)});
+            render(engine, "native submit install failed");
+            throw std::runtime_error("native submit install failed");
+        }
+        ok = std::move(std::get<native_order::CommandInstalled<native_order::SubmitResult>>(
+                installed));
     }
-    auto installed = requests_.install_submit(std::move(prepared));
-    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
-                                   0, static_cast<uint32_t>(*err)});
-        render(engine, "native submit install failed");
-        throw std::runtime_error("native submit install failed");
-    }
-    auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
-    note_committed_events(ok.events);
-    clear_cohort_target_cache();
-    catch_up_timeline();
+    note_install(ok.events);
     if (ok.result.status == native_order::SubmitStatus::Accepted) {
         ++engine.next_order_incarnation_;
         if (ok.result.handle) record_pre_open_birth(request, *ok.result.handle);
@@ -9319,31 +9407,44 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     }
     native_order::CommandContext ctx;
     native_order::PreparedReplace prepared;
+    native_order::CommandInstalled<native_order::ReplaceResult> ok;
     try {
         ctx = make_command_context(engine, request, surface);
-        prepared = requests_.prepare_replace(
-            target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
-            options);
+        if (direct_mutation_) {
+            ok = requests_.apply_replace(
+                target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
+                options);
+        } else {
+            prepared = requests_.prepare_replace(
+                target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_,
+                options);
+        }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
         throw;
     }
-    if (!prepared) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
-        render(engine, "native replace produced no preparation");
-        throw std::runtime_error("native replace produced no preparation");
+    native_order::EventId predicted;
+    if (direct_mutation_) {
+        predicted = native_order::EventId{requests_.identity(), ok.result.event_ordinal};
+    } else {
+        if (!prepared) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+            render(engine, "native replace produced no preparation");
+            throw std::runtime_error("native replace produced no preparation");
+        }
+        predicted = prepared.predicted_event_id();
+        auto installed = requests_.install_replace(std::move(prepared));
+        if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                       predicted.ordinal, static_cast<uint32_t>(*err)});
+            render(engine, "native replace install failed");
+            throw std::runtime_error("native replace install failed");
+        }
+        ok = std::move(std::get<native_order::CommandInstalled<native_order::ReplaceResult>>(
+                installed));
     }
-    const native_order::EventId predicted = prepared.predicted_event_id();
-    const auto predicted_status = prepared.predicted().status;
-    auto installed = requests_.install_replace(std::move(prepared));
-    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
-                                   predicted.ordinal, static_cast<uint32_t>(*err)});
-        render(engine, "native replace install failed");
-        throw std::runtime_error("native replace install failed");
-    }
-    auto& ok = std::get<native_order::CommandInstalled<native_order::ReplaceResult>>(installed);
+    const auto predicted_status = ok.result.status;
     note_committed_events(ok.events);
     if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
         const auto* successor = requests_.find_live(*ok.result.successor);
@@ -9410,31 +9511,40 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         throw std::runtime_error("native cancel refused outside allowed phase");
     }
     native_order::PreparedCancel prepared;
+    native_order::CommandInstalled<native_order::CancelResult> ok;
     try {
-        prepared = requests_.prepare_cancel(target, next_timeline_ordinal_);
+        if (direct_mutation_) {
+            ok = requests_.apply_cancel(target, next_timeline_ordinal_);
+        } else {
+            prepared = requests_.prepare_cancel(target, next_timeline_ordinal_);
+        }
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
         throw;
     }
-    if (!prepared) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
-        render(engine, "native cancel produced no preparation");
-        throw std::runtime_error("native cancel produced no preparation");
+    native_order::EventId predicted;
+    if (direct_mutation_) {
+        predicted = native_order::EventId{requests_.identity(), ok.result.event_ordinal};
+    } else {
+        if (!prepared) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+            render(engine, "native cancel produced no preparation");
+            throw std::runtime_error("native cancel produced no preparation");
+        }
+        predicted = prepared.predicted_event_id();
+        auto installed = requests_.install_cancel(std::move(prepared));
+        if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                       predicted.ordinal, static_cast<uint32_t>(*err)});
+            render(engine, "native cancel install failed");
+            throw std::runtime_error("native cancel install failed");
+        }
+        ok = std::move(std::get<native_order::CommandInstalled<native_order::CancelResult>>(
+                installed));
     }
-    const auto predicted_status = prepared.predicted().status;
-    const native_order::EventId predicted = prepared.predicted_event_id();
-    auto installed = requests_.install_cancel(std::move(prepared));
-    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
-                                   predicted.ordinal, static_cast<uint32_t>(*err)});
-        render(engine, "native cancel install failed");
-        throw std::runtime_error("native cancel install failed");
-    }
-    auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
-    note_committed_events(ok.events);
-    clear_cohort_target_cache();
-    catch_up_timeline();
+    const auto predicted_status = ok.result.status;
+    note_install(ok.events);
     if (predicted_status == native_order::CancelStatus::Cancelled) {
         try {
             drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);

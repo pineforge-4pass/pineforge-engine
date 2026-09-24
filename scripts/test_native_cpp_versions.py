@@ -29,8 +29,9 @@ class NativeVersions(unittest.TestCase):
 
     def test_activation_grid_is_pinned_and_handed_to_the_core(self):
         # R5 L8b: the activation grid is a native_order_v7 value struct with
-        # inactive defaults, prepare_trigger takes it defaulted last, and the
-        # consumer hands it to both trigger sites from the matcher's own gate.
+        # inactive defaults, prepare_trigger (and, since R5 L3, its direct form
+        # apply_trigger) takes it defaulted last, and the consumer hands it to
+        # both trigger sites from the matcher's own gate.
         for before, after in (
             ('struct ActivationGrid {\n    double price_tick = 0.0;',
              'struct ActivationGrid {\n    double price_tick = 1.0;'),
@@ -41,7 +42,8 @@ class NativeVersions(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.reject(FILES[0], before, after)
         for before, after in (
-            ('                activation_grid(*spec));\n', '                {});\n'),
+            ('const native_order::ActivationGrid trigger_grid = activation_grid(*spec);',
+             'const native_order::ActivationGrid trigger_grid = {};'),
             ('const auto threshold = grid_threshold(spec);', 'const auto threshold = native_matching::GridThreshold{};'),
         ):
             with self.subTest(before=before, after=after):

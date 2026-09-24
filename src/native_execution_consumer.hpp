@@ -325,6 +325,15 @@ public:
     // two computations equal bit for bit; no host reaches it.
     void set_match_band_precheck(bool enabled) noexcept { match_band_precheck_ = enabled; }
 
+    // The request core's mutations are applied in place by its direct forms
+    // (WorkingRequestCore::apply_*, R5 lane L3) wherever the consumer used to
+    // install what it had just prepared. The direct forms are exact, so this
+    // is not a run-spec choice: it is on unless this turns it off, which
+    // restores every prepare/install pair. The switch exists so
+    // tests/test_native_direct_mutation.cpp can hold the two paths equal bit
+    // for bit; no host reaches it.
+    void set_direct_mutation(bool enabled) noexcept { direct_mutation_ = enabled; }
+
     // The per-point guards in front of drain_queued_notifications,
     // recalculate_at_modeled_point and the three margin check points skip
     // each body exactly where it would return on its first test (R5 lane
@@ -1104,6 +1113,21 @@ private:
     void catch_up_timeline() noexcept;
     bool install_mutation(BacktestEngine& engine, native_order::PreparedMutation&& prepared,
                           NativeFailureOperation operation, uint64_t ordinal);
+    // One request-core mutation as a call site received it (R5 lane L3):
+    // applied by a direct form (Installed), or prepared to be installed here
+    // (a token, with set_direct_mutation(false)), or neither. core_step
+    // takes either answer; settle_step finishes it the way install_mutation
+    // does -- a token is installed, an applied range is noted -- and answers
+    // false when the run failed.
+    using CoreStep = std::variant<native_order::Installed, native_order::PreparedMutation,
+                                  native_order::NoChange, native_order::PreparationError>;
+    static CoreStep core_step(native_order::Preparation<native_order::PreparedMutation>&& prepared);
+    static CoreStep core_step(native_order::Preparation<native_order::Installed>&& applied);
+    bool settle_step(BacktestEngine& engine, CoreStep&& step, NativeFailureOperation operation,
+                     uint64_t ordinal);
+    // What every install does once the core has committed: the committed
+    // events noted, the cohort target cache cleared, the timeline caught up.
+    void note_install(const native_order::EventRange& events) noexcept;
     bool install_execution(BacktestEngine& engine, native_order::PreparedExecution&& prepared,
                            const native_order::CommittedExecutionFacts& facts,
                            uint64_t ordinal);
@@ -1505,6 +1529,10 @@ private:
     // index records it -- durable cohort state the continuation folds once
     // per replace (note_committed_events). Reset with the other digests.
     AppendDigest chain_roots_{};
+    // set_direct_mutation's switch. Like match_row_reuse_, a choice between
+    // two computations of the same values, not run state; declared last so no
+    // member the consumer reads at every point changes offset.
+    bool direct_mutation_ = true;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
