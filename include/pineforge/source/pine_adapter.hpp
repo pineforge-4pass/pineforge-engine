@@ -2121,6 +2121,13 @@ private:
     // folds retained_.bar_magnifier; this copy is the host-kind-free query
     // for qualify_short_seed_plan.
     bool bar_magnifier_ = false;
+    // R5 lane V19-D: the bound host's PineStrategyHost view (pine_view_of),
+    // kept with the host it was taken from. It was a thread_local memo, and a
+    // strategy module is dlopen'd, where every thread_local read is a dynamic
+    // TLS lookup. Not state: a function of host_.
+    mutable const NativeStrategyHost* pine_view_host_ = nullptr;
+    mutable PineStrategyHost* pine_view_ = nullptr;
+    PineStrategyHost* pine_view_of(NativeStrategyHost* host) const noexcept;
     // R5 lane V19-E: erase_retired_rows()'s working sets, kept so that a bar
     // that erases nothing allocates nothing once they have grown (a quiet bar
     // must not allocate: tests/test_adapter_quiet_bar.cpp). Not state: every
