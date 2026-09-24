@@ -169,7 +169,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All eight are source-free. Lane L5 adds one release-only row and lane L4
 # three (their TUs reach the source layer -- see RELEASE_MIN_TESTS). 238
 # registered, 237 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 237
+# 242 run = those 237 plus the five source-free TUs of R5 lane TA1 (the TA
+# inputs TradingView has and the KC middle band on bar 0):
+#   +5 TA1 test_ta_anchored_vwap, test_ta_alma_floor, test_ta_kc_basis,
+#          test_ta_kc_range, test_ta_pivot_point_levels
+# 243 registered, 242 run.
+KERNEL_MIN_TESTS = 242
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -232,7 +237,9 @@ KERNEL_MIN_TESTS = 237
 #   +3 L4 test_adapter_quiet_bar, test_adapter_quiet_bar_probe,
 #         test_adapter_quiet_bar_differential
 # No release row skips, so 619 registered is 619 run.
-RELEASE_MIN_TESTS = 619
+# 624 = those 619 plus the five TA1 rows KERNEL_MIN_TESTS lists above, which
+# register here too. No release row skips, so 624 registered is 624 run.
+RELEASE_MIN_TESTS = 624
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
