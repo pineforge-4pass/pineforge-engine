@@ -549,6 +549,11 @@
 //   Random48/0/0: boundary 0x1f1f97e40e739c61ull -> 0xd305a0f9d0984075ull, final_hash 0xb4798af50cf3f648ull -> 0x840184ac798a5de2ull
 //   Random48/1/1: boundary 0x890a1e21d9208244ull -> 0x0630c1ad99e83057ull, rows 0x57fee585d5ff2aa6ull -> 0x37e26f78b1f4e325ull, final_hash 0xb95a18c6b589114dull -> 0x1969d9a52bdd51c2ull
 //   Random48/1/0: boundary 0x890a1e21d9208244ull -> 0x0630c1ad99e83057ull, final_hash 0xb95a18c6b589114dull -> 0x1969d9a52bdd51c2ull
+// expectation corrected (INT21 K3, 10 values), because K3 now keeps the first re-issue of each revival candidate instead of every one (INT21): more retired exit legs are erased, and the v4 fold reads the retained rows beside the erased-row count and digest; this host projects one fixed execution hash, so the continuation does not enter; the trades, the trade digest and the three counts did not move; harvested with its switch on this tree; the tree before the correction reproduces every old pin:
+//   CalcOnFills/0/1: boundary 0xfcdb5c78d844c1fdull -> 0xf4ba5f0c197f016eull, rows 0x8fce931c6789b396ull -> 0x06eeb2b1f4958e7aull, final_hash 0xfe5dc3ec475477d9ull -> 0xd27b26b32d137ec9ull
+//   CalcOnFills/0/0: boundary 0xfcdb5c78d844c1fdull -> 0xf4ba5f0c197f016eull, final_hash 0xfe5dc3ec475477d9ull -> 0xd27b26b32d137ec9ull
+//   CalcOnFills/1/1: boundary 0x8ae0abb767b7b0bbull -> 0xd69e36869ed8b309ull, rows 0x0b03280df257cee7ull -> 0xa48ec14c088a0fd9ull, final_hash 0xcd17129763baf911ull -> 0x18c7c13cfd36a5e9ull
+//   CalcOnFills/1/0: boundary 0x8ae0abb767b7b0bbull -> 0xd69e36869ed8b309ull, final_hash 0xcd17129763baf911ull -> 0x18c7c13cfd36a5e9ull
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0xc1c15d580d2b91ddull, 0x6f2ef9fb0f46bdb6ull, 0x47fe0d7eaf8e51e3ull, 0xfd89dcb68ffd9f6full, 40, 40, 0},
     {"Quiet", 0, 0, 0xc1c15d580d2b91ddull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0xfd89dcb68ffd9f6full, 40, 0, 0},
@@ -594,10 +599,10 @@ constexpr Pinned kPinned[] = {
     {"DeclinedReversal", 0, 0, 0x4261900d11067be0ull, 0x14650fb0739d0383ull, 0xc3448bef59024d51ull, 0xc97b9757bb1149e5ull, 24, 0, 1},
     {"DeclinedReversal", 1, 1, 0xae41af895aa1b10full, 0x79084294eee2429aull, 0xc3448bef59024d51ull, 0xb0669ffe8f0e2a01ull, 24, 24, 1},
     {"DeclinedReversal", 1, 0, 0xae41af895aa1b10full, 0x14650fb0739d0383ull, 0xc3448bef59024d51ull, 0xb0669ffe8f0e2a01ull, 24, 0, 1},
-    {"CalcOnFills", 0, 1, 0xfcdb5c78d844c1fdull, 0x8fce931c6789b396ull, 0x4603f8c446ca5c1eull, 0xfe5dc3ec475477d9ull, 57, 40, 10},
-    {"CalcOnFills", 0, 0, 0xfcdb5c78d844c1fdull, 0x14650fb0739d0383ull, 0x4603f8c446ca5c1eull, 0xfe5dc3ec475477d9ull, 57, 0, 10},
-    {"CalcOnFills", 1, 1, 0x8ae0abb767b7b0bbull, 0x0b03280df257cee7ull, 0x57aa00467e66c075ull, 0xcd17129763baf911ull, 54, 40, 8},
-    {"CalcOnFills", 1, 0, 0x8ae0abb767b7b0bbull, 0x14650fb0739d0383ull, 0x57aa00467e66c075ull, 0xcd17129763baf911ull, 54, 0, 8},
+    {"CalcOnFills", 0, 1, 0xf4ba5f0c197f016eull, 0x06eeb2b1f4958e7aull, 0x4603f8c446ca5c1eull, 0xd27b26b32d137ec9ull, 57, 40, 10},
+    {"CalcOnFills", 0, 0, 0xf4ba5f0c197f016eull, 0x14650fb0739d0383ull, 0x4603f8c446ca5c1eull, 0xd27b26b32d137ec9ull, 57, 0, 10},
+    {"CalcOnFills", 1, 1, 0xd69e36869ed8b309ull, 0xa48ec14c088a0fd9ull, 0x57aa00467e66c075ull, 0x18c7c13cfd36a5e9ull, 54, 40, 8},
+    {"CalcOnFills", 1, 0, 0xd69e36869ed8b309ull, 0x14650fb0739d0383ull, 0x57aa00467e66c075ull, 0x18c7c13cfd36a5e9ull, 54, 0, 8},
     {"CloseOrders", 0, 1, 0x11242155751e54f3ull, 0x49267a5dd6a221c1ull, 0x36ebbdb119ff2815ull, 0x2d39ec28cc86f100ull, 48, 48, 16},
     {"CloseOrders", 0, 0, 0x11242155751e54f3ull, 0x14650fb0739d0383ull, 0x36ebbdb119ff2815ull, 0x2d39ec28cc86f100ull, 48, 0, 16},
     {"CloseOrders", 1, 1, 0xb4ba8101e18b4baeull, 0x25941e4f7062f84bull, 0x8261dcdcaf8f5751ull, 0x6281f01aff005efeull, 48, 48, 16},
