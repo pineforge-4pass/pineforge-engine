@@ -1855,12 +1855,13 @@ void run_scripts() {
             CHECK(direct->last_error() == staged->last_error());
             CHECK(direct->native_state().kind == staged->native_state().kind);
             if (direct->native_state().kind != NativeLifecycleKind::Completed) {
-                // Both paths stop at the same refusal. The one this row meets
-                // is the kernel's own: prepare_execution's allowance check
-                // refuses a crossing Transact whose closed and opened parts
-                // sum, in binary64, one ulp above the units it was sized to
-                // (a fractional short met by a kernel-sized long). It is the
-                // same on either path and older than this lane.
+                // A run that stops does so on both paths at the same refusal.
+                // None stops today. Until lane B-ENGINE (K-ULP1) seed 8, shape
+                // 2 stopped at the kernel's own: prepare_execution refused a
+                // crossing Transact whose closed and opened parts summed, in
+                // binary64, one ulp above the units it was sized to (a
+                // fractional short met by a kernel-sized long). Such a fill is
+                // now charged exactly those units, and that run completes.
                 ++failed_runs;
                 const auto state = direct->native_state();
                 std::fprintf(stderr, "  script seed=%llu shape=%d stopped on both paths: %s "
@@ -1882,9 +1883,9 @@ void run_scripts() {
             trades += direct->trade_count();
         }
     }
-    // A bound, not a pin: a change that stopped more runs on both paths alike
-    // is still a change.
-    CHECK(failed_runs <= 2);
+    // Every scripted run completes, so a change that stopped one on both
+    // paths alike is still a change.
+    CHECK(failed_runs == 0);
     std::printf("scripted host: %ld runs (%ld stopped identically on both paths), %ld commands, "
                 "%ld snapshots, %ld trades; direct == staged\n",
                 runs, failed_runs, commands, snapshots, trades);

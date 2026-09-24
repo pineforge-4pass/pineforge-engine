@@ -1237,6 +1237,13 @@ list(APPEND TEST_SOURCES test_native_settlement_carry)
 # script read, trade and hash line for line, and the carried count
 # (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_settlement_carry)
+# R5 lane B-ENGINE (K-ULP1): a Transact that crosses a fractional position --
+# one lot or two, explicit, kernel-sized or host-sized, either side, C host
+# included -- completes with one lot and one terminal fill of exactly its
+# units, whichever way closed + opened rounds (it stopped, or left a 2^-49-unit
+# dust lot, on 8cf3be58). Source-free, so it also runs in the kernel-only
+# profile.
+list(APPEND TEST_SOURCES test_native_crossing_transact)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

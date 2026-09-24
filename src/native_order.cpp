@@ -131,6 +131,24 @@ bool checked_add_positive(double a, double b, double* out) noexcept {
     return true;
 }
 
+// The working units a Transact fill consumed. A fill that crosses the book
+// closes the opposite position and opens the rest on the plan's side, and the
+// settlement computes that rest in binary64 as the plan's units minus the
+// closed part (the FIFO split's `requested - closed`, taken as the opening).
+// Added back, closed + |opened| can round one ulp either side of the units, so
+// such a fill is charged exactly the plan's units. Every other fill keeps the
+// checked sum, which is exact when one part is zero.
+bool transact_filled_units(double plan_units, double closed, double opened,
+                           double* out) noexcept {
+    const double units = std::abs(plan_units);
+    if (closed > 0.0 && opened != 0.0 && closed < units
+        && std::abs(opened) == units - closed) {
+        *out = units;
+        return true;
+    }
+    return checked_add_positive(closed, std::abs(opened), out);
+}
+
 bool checked_sub_cap(double before, double deduct, double* after, bool* exhausted) noexcept {
     if (!std::isfinite(before) || !std::isfinite(deduct) || before <= 0.0 || deduct <= 0.0) {
         return false;
@@ -4200,8 +4218,9 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
 
     double filled = proposal.inspected_closed_units;
     if (plan_transact) {
-        if (!checked_add_positive(proposal.inspected_closed_units,
-                                  std::abs(proposal.inspected_opened_units), &filled)) {
+        if (!transact_filled_units(plan_transact->signed_units,
+                                   proposal.inspected_closed_units,
+                                   proposal.inspected_opened_units, &filled)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
@@ -4665,8 +4684,9 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
 
     double filled = proposal.inspected_closed_units;
     if (plan_transact) {
-        if (!checked_add_positive(proposal.inspected_closed_units,
-                                  std::abs(proposal.inspected_opened_units), &filled)) {
+        if (!transact_filled_units(plan_transact->signed_units,
+                                   proposal.inspected_closed_units,
+                                   proposal.inspected_opened_units, &filled)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }

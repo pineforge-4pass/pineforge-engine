@@ -3020,6 +3020,14 @@ ticket and one settlement cycle. A `HostSized{Open}` is sized once; later
 candidate rematches may re-resolve price but not size. `CloseOpposite` uses the
 existing whole-book Flatten path when it must close an absorbed roster.
 
+A `Transact` that crosses the book (it closes the opposite position and opens
+the rest on its own side) is charged exactly its units. The settlement
+computes the opening in binary64 as the units minus the closed part, and
+closed + |opened| can round one ulp either side of the units; the fill's
+`filled_working` is the request's units, so the one fill finishes it (R5 lane
+B-ENGINE). Before, a sum one ulp above stopped the run, and one ulp below left
+a 2^-49-unit remainder that a second fill opened as a dust lot.
+
 ### Sizing without a host override
 
 `native_order::Sized` is the sixth `OrderIntent`: an opening whose size the
