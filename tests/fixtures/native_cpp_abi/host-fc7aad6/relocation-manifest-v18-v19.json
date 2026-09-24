@@ -21,7 +21,11 @@
     "NativeRunSpecError::UnknownEventRetention",
     "RequestDefinition::root",
     "TrailTrack::activation_ordinal",
-    "TrailActive::activation_ordinal"
+    "TrailActive::activation_ordinal",
+    "RequestDefinition::priority",
+    "RequestDefinition::kept_binding",
+    "ReplaceOptions::keep_handle",
+    "ReplaceOptions::keep_binding"
   ],
   "addedVirtuals": [],
   "removedVirtuals": [],

@@ -1198,7 +1198,12 @@ public:
     /// stop — into the successor instead of restarting it. Predecessor and successor
     /// must hold the same trigger alternative, and a retained best must still produce
     /// a representable level; otherwise the replacement is rejected and the
-    /// predecessor stays live.
+    /// predecessor stays live. keep_handle re-prices the request in place: the
+    /// answer's successor is the target itself, its waiting children and roster
+    /// entries stay, and it ranks as the newest request, where a successor would.
+    /// keep_binding lets a close bound to the book keep that binding when the book
+    /// still has it at the successor's first evaluation, with no CloseBound event.
+    /// No C spelling: the C replace takes no options.
     native_order::ReplaceResult replace(const native_order::RequestHandle& target,
                                         const native_order::Request& request,
                                         native_order::ReplaceOptions options);

@@ -340,8 +340,34 @@ using TriggerAnchor = std::variant<Absolute, FromOwnerFill>;
 /// tracking trail's best, an already active stop) into the successor instead
 /// of restarting it; predecessor and successor must hold the same trigger
 /// alternative.
+///
+/// keep_handle re-prices the request in place: the new definition keeps the
+/// target's handle, and with it the request's lineage (its predecessor link
+/// and chain root) and its dependents -- a child waiting on it keeps waiting,
+/// a roster that names it keeps it -- where a plain replace retires the handle
+/// and issues a successor. Everything else is the replace: the same checks and
+/// refusals, a new immutable definition and birth, a fresh live row (remaining,
+/// allowance and trigger state restart unless retain_trigger_state keeps the
+/// last), and one ReplacedEvent, whose two definitions share the handle. The
+/// re-price takes the number of the run's request sequence a successor's
+/// incarnation would have taken, as the definition's priority
+/// (RequestDefinition::priority): matching ranks it the newest request, where a
+/// successor stands, and the requests after it are numbered as if the replace
+/// had issued a handle. No handle is issued under that number.
+///
+/// keep_binding carries a close's book binding across the replace. A successor
+/// that starts unbound (an Independent close) and whose predecessor was bound
+/// to the book, or carried such a binding itself, records the binding's cycle
+/// and side (RequestDefinition::kept_binding). Where the successor would bind,
+/// at its first evaluation, a book that still has that cycle and side binds it
+/// with no CloseBoundEvent; any other book binds it, or ends it, exactly as it
+/// does a successor that carried nothing. So the option changes the events a
+/// run records, never what it matches. Anywhere else it carries nothing.
+/// Either option may be given alone.
 struct ReplaceOptions {
     bool retain_trigger_state = false;
+    bool keep_handle = false;
+    bool keep_binding = false;
 };
 
 /// Take whatever the point allows, with no per-point cap. The default capacity,
@@ -618,7 +644,9 @@ struct TrailWaitArm {};
 /// this request's own TrailArm ActivatedEvent -- NativeTrailState's
 /// activation_ordinal, kept in state so it outlives the journal window -- and
 /// 0 for a successor that retained its predecessor's tracking
-/// (ReplaceOptions::retain_trigger_state), which never armed itself.
+/// (ReplaceOptions::retain_trigger_state), which never armed itself. A
+/// re-price that kept the handle (ReplaceOptions::keep_handle) keeps it: that
+/// same request armed.
 struct TrailTrack {
     double best = 0.0;
     uint64_t activation_ordinal = 0;
@@ -706,6 +734,21 @@ struct RequestDefinition {
     /// so it never needs the predecessor's journal events. Appended after
     /// `origin` for the same reason `origin` was.
     std::optional<RequestHandle> root;
+    /// Where the definition stands in the run's queue: the number of the
+    /// run's request sequence the command that placed it took. Matching
+    /// breaks a tie at one cursor oldest number first, and the working book
+    /// is held in this order (WorkingRequestCore::live). 0, as every accepted
+    /// request and replace successor has it, means the handle's incarnation,
+    /// the number its command took; a re-price that kept the handle
+    /// (ReplaceOptions::keep_handle) sets the number it took instead. Read it
+    /// through LiveRequest::priority. Appended after `root`, like it.
+    uint64_t priority = 0;
+    /// The book binding a replace carried forward (ReplaceOptions::
+    /// keep_binding): the cycle and side of the book its predecessor was bound
+    /// to. The request starts unbound, and at its first evaluation a live book
+    /// with this cycle and side binds it with no CloseBoundEvent. Empty for
+    /// every other definition.
+    std::optional<PositionNonflat> kept_binding;
 };
 using DefinitionRef = std::shared_ptr<const RequestDefinition>;
 
@@ -728,6 +771,11 @@ struct LiveRequest {
     const Birth& birth() const noexcept { return definition->birth; }
     const std::optional<RequestHandle>& predecessor() const noexcept {
         return definition->predecessor;
+    }
+    /// Its place in the queue (RequestDefinition::priority): the handle's
+    /// incarnation, unless a re-price kept the handle and took a later number.
+    uint64_t priority() const noexcept {
+        return definition->priority != 0 ? definition->priority : definition->handle.incarnation;
     }
 };
 
@@ -1587,6 +1635,9 @@ public:
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
+    /// The working book, in queue order: ascending LiveRequest::priority,
+    /// which is incarnation order until a re-price keeps a handle
+    /// (ReplaceOptions::keep_handle) and takes its request to the back.
     const std::vector<LiveRequest>& live() const noexcept { return live_; }
     /// The command journal's retained window, oldest first. Commits append at
     /// the back and retire_history drops a prefix, so the window holds the
@@ -1939,6 +1990,15 @@ private:
 
     uint64_t usable_ordinal(uint64_t next) const;
     uint64_t usable_incarnation(uint64_t next) const;
+    /// The working book's position of the request under `incarnation`, or
+    /// live_.size(): a search by queue order (the handle's own number, or
+    /// the one repriced_ names for it).
+    std::size_t live_position(uint64_t incarnation) const noexcept;
+    /// Records that the request under `incarnation` now stands at
+    /// `priority` (a keep_handle re-price), dropping the entries of requests
+    /// that have left the book once they outnumber its rows. The caller has
+    /// reserved one entry.
+    void note_repriced(uint64_t incarnation, uint64_t priority) noexcept;
     TargetKind classify(const RequestHandle& handle, std::size_t* live_index) const;
     bool bump_epoch() noexcept;
     void require_epoch_room() const;
@@ -2032,6 +2092,14 @@ private:
     // incarnation. Sixteen bytes per replace; nothing else grows with the run.
     std::vector<std::pair<uint64_t, uint64_t>> issued_;
     std::vector<std::pair<uint64_t, uint64_t>> successor_roots_;
+    // The requests a keep_handle re-price moved in the queue, ascending by
+    // incarnation: (incarnation, priority). The book is held by priority, so
+    // a handle lookup reads its priority here; a handle absent here is at its
+    // own incarnation. Derived from the book (each row's definition carries
+    // its priority), so nothing folds it; an entry outlives its request
+    // until the next re-price prunes it, and a lookup through it finds no
+    // row because no other request takes that priority.
+    std::vector<std::pair<uint64_t, uint64_t>> repriced_;
     struct ReceiptKey {
         EventId cause;
         RequestHandle recipient;

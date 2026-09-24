@@ -967,6 +967,18 @@ void hash_definition(F& f, const native_order::DefinitionRef& definition) noexce
     if (definition->origin != native_order::RequestOrigin::Host) {
         f.u(static_cast<uint64_t>(definition->origin));
     }
+    // V19-D: a re-price's place in the queue and a carried binding fold where
+    // a definition has them, each behind its own tag, so every definition a
+    // replace without those options made keeps the digest it had.
+    if (definition->priority != 0) {
+        f.u(0xD1D0'0001ULL);
+        f.u(definition->priority);
+    }
+    if (definition->kept_binding) {
+        f.u(0xD1D0'0002ULL);
+        f.i(definition->kept_binding->cycle);
+        f.u(static_cast<uint64_t>(definition->kept_binding->side));
+    }
 }
 
 template <class F>
@@ -1640,7 +1652,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // commit (note_committed_events); a run that never replaced folds
     // nothing. The issued incarnations are one dense range [1,
     // last_incarnation] under a consumer, which the counter above already
-    // folds, and fold here only where they are not.
+    // folds, and fold here only where they are not: where a re-price kept
+    // its handle and took a number no handle was issued under (R5 lane
+    // V19-D). Then the closed ranges fold as their running digest and the
+    // open one as itself, so a read costs the same at any length of run.
     if (chain_roots_.count != 0) {
         f.u(chain_roots_.count);
         f.u(chain_roots_.h);
@@ -1652,10 +1667,9 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
                 && issued.front().second == requests_.last_incarnation());
         if (!dense) {
             f.u(issued.size());
-            for (const auto& range : issued) {
-                f.u(range.first);
-                f.u(range.second);
-            }
+            f.u(issued_ranges_.h);
+            f.u(issued.back().first);
+            f.u(issued.back().second);
         }
     }
     f.b(current_input_open_.has_value());
@@ -2242,6 +2256,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     group_receipts_.reset();
     cohort_receipts_.reset();
     chain_roots_.reset();
+    issued_ranges_.reset();
     closed_rows_digest_ = BrokerStateHashSink{}.h;
     closed_rows_digested_ = 0;
     closed_rows_final_ = 0;
@@ -3817,18 +3832,23 @@ void NativeExecutionConsumer::drain_dependency_queue(
             uint64_t cause_ordinal = 0;
             native_order::EventId cause;
             native_order::RequestHandle child;
+            // The child's place in the queue when it was enqueued: a waiting
+            // child is live then, and the order is the book's.
+            uint64_t child_priority = 0;
         };
         std::vector<Item> queue;
         auto less_item = [](const Item& a, const Item& b) {
             if (a.cause_ordinal != b.cause_ordinal) return a.cause_ordinal < b.cause_ordinal;
-            return a.child.incarnation < b.child.incarnation;
+            return a.child_priority < b.child_priority;
         };
         auto enqueue_children = [&](const native_order::EventId& cause,
                                     const native_order::RequestHandle& parent,
                                     std::size_t sort_from) {
             auto children = requests_.waiting_children(parent);
             for (auto& child : children) {
-                queue.push_back(Item{cause.ordinal, cause, std::move(child)});
+                const auto* waiting = requests_.find_live(child);
+                const uint64_t priority = waiting ? waiting->priority() : child.incarnation;
+                queue.push_back(Item{cause.ordinal, cause, std::move(child), priority});
             }
             if (sort_from < queue.size()) {
                 std::sort(queue.begin() + static_cast<std::ptrdiff_t>(sort_from), queue.end(),
@@ -5550,13 +5570,15 @@ void NativeExecutionConsumer::match_path(
             && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
     };
 
-    // The (incarnation, kind) keys passed over at the current cursor: a set,
-    // kept as a sorted run in the consumer's scratch.
+    // The (priority, kind) keys passed over at the current cursor: a set,
+    // kept as a sorted run in the consumer's scratch. A request's priority
+    // names it once (a re-price that keeps its handle takes a new one, as a
+    // replace successor takes a new incarnation).
     auto& skipped = match_skipped_;
     skipped.clear();
     double skip_t = t_cursor;
-    auto skip_key = [](uint64_t incarnation, Kind kind) {
-        return std::pair<uint64_t, std::uint8_t>{incarnation, static_cast<std::uint8_t>(kind)};
+    auto skip_key = [](uint64_t priority, Kind kind) {
+        return std::pair<uint64_t, std::uint8_t>{priority, static_cast<std::uint8_t>(kind)};
     };
     auto is_skipped = [&](const std::pair<uint64_t, std::uint8_t>& key) {
         return std::binary_search(skipped.begin(), skipped.end(), key);
@@ -5598,9 +5620,11 @@ void NativeExecutionConsumer::match_path(
     // an unmoved cursor -- the same t, bit for bit, so the same cursor price
     // and path cursor -- the next scan differs from the last in that row only:
     //  - refresh_allowance writes the winner's allowance and the core's epoch
-    //    and nothing else. It moves no request, trigger state, roster,
-    //    position or pre-open birth and installs nothing, so the cohort
-    //    target cache is not cleared either.
+    //    and nothing else -- and, for an unbound close carrying a binding
+    //    the book still has (ReplaceOptions::keep_binding, R5 lane V19-D),
+    //    the winner's own authority, which no other row reads. It moves no
+    //    request, trigger state, roster, position or pre-open birth and
+    //    installs nothing, so the cohort target cache is not cleared either.
     //  - A row reads its own request (eligibility_facts, cause_floor,
     //    needs_evaluation, level_for, working_is_buy; none reads another
     //    request or the epoch), the unchanged cursor and engine, the cohort
@@ -5612,9 +5636,9 @@ void NativeExecutionConsumer::match_path(
     //    the loop head would drop nothing: every row it tests passed at the
     //    last head or was pushed since from the same state.
     // So after such a refresh only the winner is rescanned, and the next
-    // winner comes from the rows already built. Their incarnations are
+    // winner comes from the rows already built. Their priorities are
     // distinct (the book holds each request once) and every row's t is
-    // finite, so (t, incarnation) orders them totally and a heap on the
+    // finite, so (t, priority) orders them totally and a heap on the
     // scan's own comparison yields exactly the row the full rescan would
     // pick. Any other outcome -- a fill, a trigger, a mutation, a skip, a
     // moved cursor -- scans the whole book again. Rows are kept from four
@@ -5762,7 +5786,7 @@ void NativeExecutionConsumer::match_path(
                                         : native_matching::price_at(from_price, to_price, t_min)};
             Candidate row;
             row.handle = handle;
-            row.incarnation = handle.incarnation;
+            row.priority = live->priority();
             if (needs_evaluation(*live, facts)) {
                 erase_provenance_for(handle);
                 row.t = t_min;
@@ -5819,7 +5843,7 @@ void NativeExecutionConsumer::match_path(
                 erase_provenance_for(handle);
                 continue;
             }
-            if (is_skipped(skip_key(row.incarnation, row.kind))) {
+            if (is_skipped(skip_key(row.priority, row.kind))) {
                 erase_provenance_for(handle);
                 continue;
             }
@@ -5881,7 +5905,7 @@ void NativeExecutionConsumer::match_path(
                                          : scratch_cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
             && !eval.cohort_side) {
-            skip(skip_key(winner->incarnation, winner->kind));
+            skip(skip_key(winner->priority, winner->kind));
             continue;
         }
         if (winner->kind == Kind::Evaluate) {
@@ -5936,7 +5960,7 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (std::holds_alternative<native_order::NoChange>(step)) {
-                skip(skip_key(winner->incarnation, winner->kind));
+                skip(skip_key(winner->priority, winner->kind));
                 continue;
             }
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
@@ -5989,7 +6013,7 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (std::holds_alternative<native_order::NoChange>(step)) {
-                skip(skip_key(winner->incarnation, winner->kind));
+                skip(skip_key(winner->priority, winner->kind));
                 continue;
             }
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
@@ -6063,7 +6087,7 @@ void NativeExecutionConsumer::match_path(
                 && winner->shared_cursor_collision);
         consuming_request_ = false;
         if (failed()) return;
-        if (!outcome) skip(skip_key(winner->incarnation, winner->kind));
+        if (!outcome) skip(skip_key(winner->priority, winner->kind));
         drain_applied_notifications(engine);
     }
     if (continuous && t_cursor < 1.0 && !failed()) {
@@ -9539,6 +9563,21 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     }
     const auto predicted_status = ok.result.status;
     note_committed_events(ok.events);
+    // A re-price that kept the handle (R5 lane V19-D) is, to everything the
+    // consumer keys by handle, the successor a replace would have issued:
+    // what the matcher remembered about the request at this point, and a
+    // pre-open birth recorded under it, belong to the definition it
+    // replaced.
+    const bool kept_handle = predicted_status == native_order::ReplaceStatus::Replaced
+        && ok.result.successor && *ok.result.successor == target;
+    if (kept_handle) {
+        match_provenance_.erase(
+            std::remove_if(match_provenance_.begin(), match_provenance_.end(),
+                           [&](const MatchProvenance& row) { return row.handle == target; }),
+            match_provenance_.end());
+        pre_open_births_.erase(std::remove(pre_open_births_.begin(), pre_open_births_.end(), target),
+                               pre_open_births_.end());
+    }
     if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
         const auto* successor = requests_.find_live(*ok.result.successor);
         if (successor && std::holds_alternative<native_order::CohortClose>(successor->authority)) {
@@ -9555,18 +9594,24 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     }
     catch_up_timeline();
     if (predicted_status == native_order::ReplaceStatus::Replaced) {
+        // A re-price takes the number a successor would have been issued, so
+        // the counter moves either way.
         ++engine.next_order_incarnation_;
         if (ok.result.successor) record_pre_open_birth(request, *ok.result.successor);
-        try {
-            drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
-        } catch (const std::exception& e) {
-            fail(engine, NativeFailure{NativeFailureCode::Allocation,
-                                       NativeFailureOperation::Command, predicted.ordinal});
-            render(engine, e.what());
-            throw;
-        }
-        if (failed()) {
-            throw std::runtime_error("native replace dependency cleanup failed");
+        // The request a re-price kept is still the parent its waiting
+        // children wait on.
+        if (!kept_handle) {
+            try {
+                drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Command, predicted.ordinal});
+                render(engine, e.what());
+                throw;
+            }
+            if (failed()) {
+                throw std::runtime_error("native replace dependency cleanup failed");
+            }
         }
     }
     return std::move(ok.result);
@@ -9940,10 +9985,13 @@ void NativeExecutionConsumer::note_committed_events(
         hash_event_record(records, event);
         if (std::holds_alternative<native_order::ExecutionAppliedEvent>(event)) ++applied_events_;
         // v19-B: the chain index is durable cohort state, folded once per
-        // replace successor, at the replace that names its root.
+        // replace successor, at the replace that names its root. A re-price
+        // that kept its handle (R5 lane V19-D) adds no successor to the index
+        // and folds nothing: the pair it would name was folded when the
+        // handle was issued, and the index holds it once.
         if (const auto* replaced = std::get_if<native_order::ReplacedEvent>(&event)) {
             const auto& successor = replaced->successor_definition;
-            if (successor && successor->root) {
+            if (successor && successor->root && replaced->successor() != replaced->predecessor()) {
                 roots.u(successor->handle.incarnation);
                 roots.u(successor->root->incarnation);
                 ++root_count;
@@ -9954,6 +10002,19 @@ void NativeExecutionConsumer::note_committed_events(
     event_records_.count = requests_.history_end();
     chain_roots_.h = roots.h;
     chain_roots_.count = root_count;
+    // V19-D: the issued ranges that closed -- only the last one still grows.
+    const auto& issued = requests_.issued_incarnations();
+    if (issued.size() > issued_ranges_.count + 1) {
+        StateFold ranges;
+        ranges.run_base = records.run_base;
+        ranges.h = issued_ranges_.h;
+        for (std::size_t index = issued_ranges_.count; index + 1 < issued.size(); ++index) {
+            ranges.u(issued[index].first);
+            ranges.u(issued[index].second);
+        }
+        issued_ranges_.h = ranges.h;
+        issued_ranges_.count = issued.size() - 1;
+    }
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;

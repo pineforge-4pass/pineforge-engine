@@ -602,22 +602,24 @@ inline bool names_run(const RequestHandle& handle, const RunIdentity& run) noexc
         && !handle.run.session_key.empty() && handle.run == run;
 }
 
-// Where the live row carrying `incarnation` stands, or live.size() when no
-// row does. The working book is in strictly increasing incarnation order, so
-// a long book is bisected down to a short run and the run is walked up to the
-// first row not older than the one asked for (R5 lane PERF-K3).
-// WorkingRequestCore::commit keeps that order: a push and an erase-push
-// append a row born under a fresh incarnation, which usable_incarnation makes
-// larger than every one the run issued before; an erase keeps the rest in
-// order; an update rewrites a row in place under its own handle.
-inline std::size_t live_position(const std::vector<LiveRequest>& live,
-                                 uint64_t incarnation) noexcept {
+// Where the live row standing at `priority` is, or live.size() when no row
+// does. The working book is in strictly increasing priority order
+// (LiveRequest::priority), so a long book is bisected down to a short run and
+// the run is walked up to the first row not older than the one asked for
+// (R5 lane PERF-K3). WorkingRequestCore::commit and the direct forms keep that
+// order: a push and an erase-push append a row born under a fresh number of
+// the request sequence, which usable_incarnation makes larger than every one
+// the run took before; a keep_handle re-price takes such a number too and
+// moves its row to the back (R5 lane V19-D); an erase keeps the rest in
+// order; an update rewrites a row in place under its own priority.
+inline std::size_t book_position(const std::vector<LiveRequest>& live,
+                                 uint64_t priority) noexcept {
     constexpr std::size_t kWalk = 16;
     std::size_t first = 0;
     std::size_t count = live.size();
     while (count > kWalk) {
         const std::size_t half = count / 2;
-        if (live[first + half].handle().incarnation < incarnation) {
+        if (live[first + half].priority() < priority) {
             first += half + 1;
             count -= half + 1;
         } else {
@@ -625,14 +627,62 @@ inline std::size_t live_position(const std::vector<LiveRequest>& live,
         }
     }
     for (std::size_t i = first; i < live.size(); ++i) {
-        const uint64_t row = live[i].handle().incarnation;
-        if (row < incarnation) continue;
-        return row == incarnation ? i : live.size();
+        const uint64_t row = live[i].priority();
+        if (row < priority) continue;
+        return row == priority ? i : live.size();
     }
     return live.size();
 }
 
 }  // namespace
+
+std::size_t WorkingRequestCore::live_position(uint64_t incarnation) const noexcept {
+    // A request stands at its own incarnation until a re-price keeps its
+    // handle; those, and only those, are named in repriced_.
+    uint64_t priority = incarnation;
+    if (!repriced_.empty()) {
+        const auto it = std::lower_bound(
+                repriced_.begin(), repriced_.end(), incarnation,
+                [](const std::pair<uint64_t, uint64_t>& row, uint64_t value) {
+                    return row.first < value;
+                });
+        if (it != repriced_.end() && it->first == incarnation) priority = it->second;
+    }
+    const std::size_t index = book_position(live_, priority);
+    // The row found must be the request asked for. A re-price takes a number
+    // no handle is issued under, so the row at a handle's own incarnation is
+    // that handle's -- except when the "handle" names such a number itself,
+    // which is no request's handle and must answer NotWorking.
+    if (index != live_.size() && live_[index].handle().incarnation != incarnation) {
+        return live_.size();
+    }
+    return index;
+}
+
+void WorkingRequestCore::note_repriced(uint64_t incarnation, uint64_t priority) noexcept {
+    const auto it = std::lower_bound(
+            repriced_.begin(), repriced_.end(), incarnation,
+            [](const std::pair<uint64_t, uint64_t>& row, uint64_t value) {
+                return row.first < value;
+            });
+    if (it != repriced_.end() && it->first == incarnation) {
+        it->second = priority;
+        return;
+    }
+    repriced_.insert(it, {incarnation, priority});
+    // Prune the entries of requests that have left the book, once they
+    // outnumber the rows: amortized one lookup per re-price, and the table
+    // never holds more than twice the book.
+    if (repriced_.size() > 2 * live_.size() + 8) {
+        repriced_.erase(std::remove_if(repriced_.begin(), repriced_.end(),
+                                       [&](const std::pair<uint64_t, uint64_t>& row) {
+                                           const std::size_t at = book_position(live_, row.second);
+                                           return at == live_.size()
+                                               || live_[at].handle().incarnation != row.first;
+                                       }),
+                        repriced_.end());
+    }
+}
 
 struct PreparedSubmit::Impl {
     WorkingRequestCore::MutationPlan plan;
@@ -843,6 +893,7 @@ void WorkingRequestCore::clear_unbound() noexcept {
     retired_through_ = 0;
     issued_.clear();
     successor_roots_.clear();
+    repriced_.clear();
     receipts_.clear();
     next_cohort_handle_ = 1;
     cohorts_.clear();
@@ -899,6 +950,12 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
     if (plan.consume_incarnation) {
         reserve_n(issued_, 1);
         reserve_n(successor_roots_, 1);
+    }
+    // A re-price that kept its handle moves its row in the queue, which
+    // repriced_ records (note_repriced).
+    if (plan.live_change == kLiveErasePush && plan.live_row.definition
+        && plan.live_row.priority() != plan.live_row.handle().incarnation) {
+        reserve_n(repriced_, 1);
     }
 }
 
@@ -968,7 +1025,7 @@ Installed WorkingRequestCore::end_direct(std::size_t live_index, Event&& event) 
 WorkingRequestCore::TargetKind WorkingRequestCore::classify(
         const RequestHandle& handle, std::size_t* live_index) const {
     if (!names_run(handle, identity_)) return TargetKind::InvalidHandle;
-    const std::size_t index = live_position(live_, handle.incarnation);
+    const std::size_t index = live_position(handle.incarnation);
     if (index == live_.size()) return TargetKind::NotWorking;
     if (live_index) *live_index = index;
     return TargetKind::Live;
@@ -978,7 +1035,7 @@ WorkingRequestCore::TargetKind WorkingRequestCore::classify(
 // makes passes through here.
 const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) const {
     if (!names_run(handle, identity_)) return nullptr;
-    const std::size_t index = live_position(live_, handle.incarnation);
+    const std::size_t index = live_position(handle.incarnation);
     return index == live_.size() ? nullptr : &live_[index];
 }
 
@@ -1062,6 +1119,9 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
     if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
         definition = accepted->definition.get();
     } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+        // A re-price that kept its handle issued none: the number it took is
+        // its priority, and the chain it belongs to is unchanged.
+        if (replaced->successor() == replaced->predecessor()) return;
         definition = replaced->successor_definition.get();
     }
     if (!definition) return;
@@ -1351,6 +1411,8 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     } else if (plan.live_change == kLiveUpdate) {
         live_[plan.live_index] = std::move(plan.live_row);
     } else if (plan.live_change == kLiveErasePush) {
+        const uint64_t pushed_incarnation = plan.live_row.handle().incarnation;
+        const uint64_t pushed_priority = plan.live_row.priority();
         if (plan.live_index + 1 == live_.size()) {
             live_.back() = std::move(plan.live_row);
         } else {
@@ -1359,6 +1421,7 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
                         live_.end());
             live_.back() = std::move(plan.live_row);
         }
+        if (pushed_priority != pushed_incarnation) note_repriced(pushed_incarnation, pushed_priority);
     }
     if (plan.add_receipt) {
         receipts_.push_back(ReceiptKey{std::move(plan.receipt_cause), std::move(plan.receipt_recipient),
@@ -1393,6 +1456,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     retired_through_ = other.retired_through_;
     issued_ = std::move(other.issued_);
     successor_roots_ = std::move(other.successor_roots_);
+    repriced_ = std::move(other.repriced_);
     receipts_ = std::move(other.receipts_);
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
@@ -1417,6 +1481,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.retired_through_ = 0;
     other.issued_.clear();
     other.successor_roots_.clear();
+    other.repriced_.clear();
     other.receipts_.clear();
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
@@ -1684,6 +1749,42 @@ std::optional<RequestRejectReason> WorkingRequestCore::resolve_tick_spellings(
     return std::nullopt;
 }
 
+namespace {
+// The binding a keep_binding replace carries (ReplaceOptions::keep_binding):
+// the predecessor's book binding, or the one it still carries itself while it
+// is unbound, when the successor starts unbound -- the only authority a book
+// binding can later be given to. Nothing otherwise.
+std::optional<PositionNonflat> carried_binding(const LiveRequest& predecessor,
+                                               const LiveRequest& successor) noexcept {
+    if (!std::holds_alternative<UnboundBookClose>(successor.authority)) return std::nullopt;
+    if (const auto* close = std::get_if<BookClose>(&predecessor.authority)) {
+        return PositionNonflat{close->cycle, close->side};
+    }
+    if (std::holds_alternative<UnboundBookClose>(predecessor.authority)) {
+        return predecessor.definition->kept_binding;
+    }
+    return std::nullopt;
+}
+
+// Where an unbound close whose definition carries a binding (ReplaceOptions::
+// keep_binding) is evaluated against a book that still has that cycle and
+// side: the binding it carried, bound at this cursor and dated by the command
+// that carried it, with no event. The same cursor a CloseBoundEvent would
+// bind at, so a same-point continuation reads it alike. Nothing otherwise.
+std::optional<BookClose> kept_book_close(const LiveRequest& live, const PositionNonflat& book,
+                                         const EvaluationContext& context,
+                                         const RunIdentity& run) {
+    const auto& kept = live.definition->kept_binding;
+    if (!kept || kept->cycle != book.cycle || kept->side != book.side) return std::nullopt;
+    BookClose bound;
+    bound.cycle = book.cycle;
+    bound.side = book.side;
+    bound.binding_event = EventId{run, live.birth().acceptance_ordinal};
+    bound.binding_cursor = context.cursor;
+    return bound;
+}
+}  // namespace
+
 LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const CommandContext& context,
                                           EventId accepted) const {
     LiveRequest live;
@@ -1926,15 +2027,13 @@ std::vector<RequestHandle> WorkingRequestCore::waiting_children(const RequestHan
 void WorkingRequestCore::waiting_children(const RequestHandle& parent,
                                           std::vector<RequestHandle>& handles) const {
     handles.clear();
+    // The book is in queue order (live()), so the children come out oldest
+    // first by priority -- incarnation order, until a re-price keeps a handle.
     for (const auto& live : live_) {
         if (const auto* wait = std::get_if<Wait>(&live.authority)) {
             if (wait->parent == parent) handles.push_back(live.handle());
         }
     }
-    std::sort(handles.begin(), handles.end(),
-              [](const RequestHandle& a, const RequestHandle& b) {
-                  return a.incarnation < b.incarnation;
-              });
 }
 
 bool WorkingRequestCore::has_waiting_children(const RequestHandle& parent) const noexcept {
@@ -1954,6 +2053,7 @@ std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
 
 void WorkingRequestCore::bound_close_handles(std::vector<RequestHandle>& handles) const {
     handles.clear();
+    // In queue order, as the book holds them (waiting_children).
     for (const auto& live : live_) {
         if (std::holds_alternative<BookClose>(live.authority)
             || std::holds_alternative<OpeningClose>(live.authority)
@@ -1961,10 +2061,6 @@ void WorkingRequestCore::bound_close_handles(std::vector<RequestHandle>& handles
             handles.push_back(live.handle());
         }
     }
-    std::sort(handles.begin(), handles.end(),
-              [](const RequestHandle& a, const RequestHandle& b) {
-                  return a.incarnation < b.incarnation;
-              });
 }
 
 std::vector<RequestHandle> WorkingRequestCore::group_recipients(const EventId& applied) const {
@@ -1988,12 +2084,9 @@ void WorkingRequestCore::group_recipients(const EventId& applied,
         if (!other || other->group != member->group || other->cohort == member->cohort) continue;
         if (live.handle() == payload->handle()) continue;
         if (live.birth().acceptance_ordinal >= payload->ordinal) continue;
+        // In queue order, as the book holds them (waiting_children).
         handles.push_back(live.handle());
     }
-    std::sort(handles.begin(), handles.end(),
-              [](const RequestHandle& a, const RequestHandle& b) {
-                  return a.incarnation < b.incarnation;
-              });
 }
 
 PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
@@ -2114,24 +2207,37 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     canonicalize_owner(staged);
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
-    RequestHandle successor{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
-    auto definition = std::make_shared<RequestDefinition>(
-            RequestDefinition{successor, std::move(staged), birth, staged_target});
-    // The successor inherits its predecessor's chain root, so a cohort names
-    // the whole chain by its first handle without walking back through it.
-    {
-        const RequestDefinition& predecessor = *live_[live_index].definition;
+    const RequestDefinition& predecessor = *live_[live_index].definition;
+    // A re-price that keeps the handle (R5 lane V19-D) keeps the request's
+    // lineage and takes the number a successor would have been issued as its
+    // priority; a successor is issued that number and roots its chain at its
+    // predecessor's root, so a cohort names the whole chain by its first
+    // handle without walking back through it.
+    RequestHandle successor = options.keep_handle ? predecessor.handle
+                                                  : RequestHandle{identity_, incarnation};
+    auto definition = std::make_shared<RequestDefinition>(RequestDefinition{
+            successor, std::move(staged), birth,
+            options.keep_handle ? predecessor.predecessor
+                                : std::optional<RequestHandle>{staged_target}});
+    if (options.keep_handle) {
+        definition->root = predecessor.root;
+        definition->priority = incarnation;
+    } else {
         definition->root = predecessor.root ? *predecessor.root : predecessor.handle;
     }
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     if (options.retain_trigger_state) {
         live.trigger_state = retained;
-        // The retained ride is the predecessor's; the successor has armed
-        // nothing of its own, which is what its TrailArm ordinal says.
-        if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
-        if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+        // The retained ride is the predecessor's; a successor has armed
+        // nothing of its own, which is what its TrailArm ordinal says. A
+        // re-price that kept the handle is the request that armed.
+        if (!options.keep_handle) {
+            if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
+            if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+        }
     }
+    if (options.keep_binding) definition->kept_binding = carried_binding(live_[live_index], live);
     ReplacedEvent replaced;
     replaced.ordinal = ordinal;
     replaced.predecessor_definition = live_[live_index].definition;
@@ -2298,41 +2404,55 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
     }
     canonicalize_owner(staged);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
-    RequestHandle successor{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
-    auto definition = std::make_shared<RequestDefinition>(
-            RequestDefinition{successor, std::move(staged), birth, staged_target});
-    // The successor inherits its predecessor's chain root, so a cohort names
-    // the whole chain by its first handle without walking back through it.
-    {
-        const RequestDefinition& predecessor = *live_[live_index].definition;
+    const RequestDefinition& predecessor = *live_[live_index].definition;
+    // prepare_replace's successor, field for field: a re-price that keeps the
+    // handle keeps the request's lineage and takes the number as its
+    // priority; a successor is issued it and roots at its predecessor's root.
+    RequestHandle successor = options.keep_handle ? predecessor.handle
+                                                  : RequestHandle{identity_, incarnation};
+    auto definition = std::make_shared<RequestDefinition>(RequestDefinition{
+            successor, std::move(staged), birth,
+            options.keep_handle ? predecessor.predecessor
+                                : std::optional<RequestHandle>{staged_target}});
+    if (options.keep_handle) {
+        definition->root = predecessor.root;
+        definition->priority = incarnation;
+    } else {
         definition->root = predecessor.root ? *predecessor.root : predecessor.handle;
     }
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     if (options.retain_trigger_state) {
         live.trigger_state = live_[live_index].trigger_state;
-        // The retained ride is the predecessor's; the successor has armed
-        // nothing of its own, which is what its TrailArm ordinal says.
-        if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
-        if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+        // The retained ride is the predecessor's; a successor has armed
+        // nothing of its own, which is what its TrailArm ordinal says. A
+        // re-price that kept the handle is the request that armed.
+        if (!options.keep_handle) {
+            if (auto* track = std::get_if<TrailTrack>(&live.trigger_state)) track->activation_ordinal = 0;
+            if (auto* active = std::get_if<TrailActive>(&live.trigger_state)) active->activation_ordinal = 0;
+        }
     }
+    if (options.keep_binding) definition->kept_binding = carried_binding(live_[live_index], live);
     ReplacedEvent replaced;
     replaced.ordinal = ordinal;
     replaced.predecessor_definition = live_[live_index].definition;
     replaced.successor_definition = std::move(definition);
     replaced.surface = context.surface;
-    seal_direct(1, false, false, true);
+    if (options.keep_handle) reserve_n(repriced_, 1);
+    seal_direct(1, false, false, !options.keep_handle);
     const std::size_t first = history_end();
-    append_direct(std::move(replaced), true);
+    append_direct(std::move(replaced), !options.keep_handle);
     // commit's erase-push: the predecessor's row leaves, the rows after it
     // move down one place, and the successor's is born at the back (a fresh
-    // incarnation keeps the book in order). The same book commit's rotation
-    // leaves, by one move per later row instead of a swap.
+    // number of the request sequence keeps the book in order, and a re-price
+    // takes one too). The same book commit's rotation leaves, by one move
+    // per later row instead of a swap.
     for (std::size_t index = live_index; index + 1 < live_.size(); ++index) {
         live_[index] = std::move(live_[index + 1]);
     }
     live_.back() = std::move(live);
     last_incarnation_ = incarnation;
+    if (options.keep_handle) note_repriced(successor.incarnation, incarnation);
     return CommandInstalled<ReplaceResult>{
             ReplaceResult{ReplaceStatus::Replaced, ordinal, std::move(successor), std::nullopt},
             finish_direct(first)};
@@ -2516,8 +2636,16 @@ bool WorkingRequestCore::refresh_allowance(
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
         if (observe_openings(observation, *close, &live_count) || live_count == 0) return false;
-    } else if (std::holds_alternative<UnboundBookClose>(live.authority)) {
-        return false;
+    }
+    // An unbound close binds here only when it carried a binding the book
+    // still has (ReplaceOptions::keep_binding): with no event, exactly as
+    // prepare_evaluation binds it. Every other unbound close is left to the
+    // evaluation, which binds it with a CloseBoundEvent or ends it.
+    std::optional<BookClose> kept;
+    if (std::holds_alternative<UnboundBookClose>(live.authority)) {
+        const auto* book = std::get_if<PositionNonflat>(&observation.current_position);
+        if (book && book->cycle > 0) kept = kept_book_close(live, *book, context, identity_);
+        if (!kept) return false;
     }
     if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
         return false;
@@ -2526,6 +2654,7 @@ bool WorkingRequestCore::refresh_allowance(
         throw std::overflow_error("native working-request epoch exhausted");
     }
     live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+    if (kept) live.authority = std::move(*kept);
     if (!bump_epoch() || !bump_epoch()) {
         throw std::overflow_error("native working-request epoch exhausted");
     }
@@ -2618,6 +2747,16 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         const auto* nonflat = std::get_if<PositionNonflat>(&observation.current_position);
         if (!nonflat || nonflat->cycle <= 0) {
             return PreparationError{CoreFailure::MissingObservation, EventId{identity_, 0}, target};
+        }
+        if (auto kept = kept_book_close(live, *nonflat, context, identity_)) {
+            MutationPlan plan = begin_plan();
+            LiveRequest updated = live;
+            updated.authority = std::move(*kept);
+            updated.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+            plan.live_change = kLiveUpdate;
+            plan.live_index = live_index;
+            plan.live_row = std::move(updated);
+            return finish_mutation(std::move(plan));
         }
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         MutationPlan plan = begin_plan();
@@ -2737,6 +2876,15 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
         const auto* nonflat = std::get_if<PositionNonflat>(&observation.current_position);
         if (!nonflat || nonflat->cycle <= 0) {
             return PreparationError{CoreFailure::MissingObservation, EventId{identity_, 0}, target};
+        }
+        if (auto kept = kept_book_close(live, *nonflat, context, identity_)) {
+            const Allowance allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+            begin_direct();
+            seal_direct(0, false, false, false);
+            const std::size_t first = history_end();
+            live.authority = std::move(*kept);
+            live.allowance = allowance;
+            return Installed{finish_direct(first)};
         }
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         begin_direct();
@@ -4874,8 +5022,11 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         RequestDefinition materialized{live.definition->handle, live.request(),
                                        live.definition->birth, live.definition->predecessor};
         // The arm installs a level, not a new chain: a leg that replaced
-        // another keeps the root cohorts name it by.
+        // another keeps the root cohorts name it by, and its place in the
+        // queue.
         materialized.root = live.definition->root;
+        materialized.priority = live.definition->priority;
+        materialized.kept_binding = live.definition->kept_binding;
         // A closing leg trades against the lot this fill opened; a waiting
         // transaction has its own side. working_is_buy cannot answer for a
         // Wait authority, which has no bound scope yet.
@@ -5069,6 +5220,8 @@ Preparation<Installed> WorkingRequestCore::apply_owner_applied(
         RequestDefinition materialized{live.definition->handle, live.request(),
                                        live.definition->birth, live.definition->predecessor};
         materialized.root = live.definition->root;
+        materialized.priority = live.definition->priority;
+        materialized.kept_binding = live.definition->kept_binding;
         const bool leg_is_buy = closing ? !(payload->opened_units > 0.0)
                                         : working_is_buy(live);
         double level = 0.0;
@@ -5268,7 +5421,9 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_parent_terminal(
     if (const auto* cancelled = std::get_if<CancelledEvent>(event)) {
         parent_ended = cancelled->handle() == wait->parent;
     } else if (const auto* replaced = std::get_if<ReplacedEvent>(event)) {
-        parent_ended = replaced->predecessor() == wait->parent;
+        // A re-price that kept the handle leaves the parent working.
+        parent_ended = replaced->predecessor() == wait->parent
+            && replaced->successor() != replaced->predecessor();
     } else if (const auto* none = std::get_if<NoEffectEvent>(event)) {
         parent_ended = none->handle() == wait->parent;
     } else if (const auto* rejected = std::get_if<MatchRejectedEvent>(event)) {
@@ -5340,7 +5495,9 @@ Preparation<Installed> WorkingRequestCore::apply_parent_terminal(
     if (const auto* cancelled = std::get_if<CancelledEvent>(event)) {
         parent_ended = cancelled->handle() == wait->parent;
     } else if (const auto* replaced = std::get_if<ReplacedEvent>(event)) {
-        parent_ended = replaced->predecessor() == wait->parent;
+        // A re-price that kept the handle leaves the parent working.
+        parent_ended = replaced->predecessor() == wait->parent
+            && replaced->successor() != replaced->predecessor();
     } else if (const auto* none = std::get_if<NoEffectEvent>(event)) {
         parent_ended = none->handle() == wait->parent;
     } else if (const auto* rejected = std::get_if<MatchRejectedEvent>(event)) {

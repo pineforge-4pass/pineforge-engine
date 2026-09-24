@@ -6,11 +6,11 @@
 // this folds EVERYTHING a value holds: every alternative's every member,
 // optional presence, variant index, vector length and element, the full
 // match cursor and its coordinate, the definition behind every DefinitionRef
-// (handle, request, birth, predecessor, origin and chain root) and the run
-// behind every handle and event id. Two values that differ anywhere fold to
-// different words (up to the 64-bit fold), so the differential of
-// test_native_direct_mutation.cpp compares the staged and the direct order
-// core through it after every command.
+// (handle, request, birth, predecessor, origin, chain root, queue priority and
+// carried binding) and the run behind every handle and event id. Two values
+// that differ anywhere fold to different words (up to the 64-bit fold), so
+// the differential of test_native_direct_mutation.cpp compares the staged and
+// the direct order core through it after every command.
 //
 // Source-free.
 #pragma once
@@ -221,6 +221,13 @@ inline void fold(Fold& f, const no::RequestDefinition& definition) {
     fold_optional(f, definition.predecessor);
     f.e(definition.origin);
     fold_optional(f, definition.root);
+    // R5 lane V19-D: a re-price's queue priority and a carried book binding.
+    f.u(definition.priority);
+    f.b(definition.kept_binding.has_value());
+    if (definition.kept_binding) {
+        f.i(definition.kept_binding->cycle);
+        f.e(definition.kept_binding->side);
+    }
 }
 inline void fold(Fold& f, const no::DefinitionRef& definition) {
     f.b(static_cast<bool>(definition));

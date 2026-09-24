@@ -374,12 +374,23 @@ def check_texts(files):
             raise ValueError('ScopeFraction omits a pinned default: ' + pinned)
     # R5 V19-B: the chain root is appended after origin (every existing
     # aggregate initializer keeps its meaning), and a trail's arm ordinal is
-    # appended to both of its tracking states.
+    # appended to both of its tracking states. R5 V19-D appends the queue
+    # priority (0: the handle's incarnation) and the carried book binding
+    # after the root, for the same reason.
     definition = re.sub(r'\s+', '', body(order, r'struct\s+RequestDefinition\s*\{',
                                           'request definition'))
     if not definition.endswith('RequestOriginorigin=RequestOrigin::Host;'
-                               'std::optional<RequestHandle>root;'):
-        raise ValueError('RequestDefinition must end with origin, then the chain root')
+                               'std::optional<RequestHandle>root;'
+                               'uint64_tpriority=0;'
+                               'std::optional<PositionNonflat>kept_binding;'):
+        raise ValueError('RequestDefinition must end with origin, the chain root, the '
+                         'queue priority, then the kept binding')
+    options = re.sub(r'\s+', '', body(order, r'struct\s+ReplaceOptions\s*\{',
+                                       'replace options'))
+    if options != ('boolretain_trigger_state=false;boolkeep_handle=false;'
+                   'boolkeep_binding=false;'):
+        raise ValueError('ReplaceOptions must keep retain_trigger_state, then keep_handle '
+                         'and keep_binding, every one off by default')
     for state, first in (('TrailTrack', 'doublebest=0.0;'),
                          ('TrailActive', 'doublebest_at_trigger=0.0;')):
         shape = re.sub(r'\s+', '', body(order, r'struct\s+' + state + r'\s*\{', state))

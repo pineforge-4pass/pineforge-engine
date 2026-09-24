@@ -716,7 +716,9 @@ private:
     };
     struct MatchCandidate {
         native_order::RequestHandle handle;
-        uint64_t incarnation = 0;
+        // The request's place in the queue (LiveRequest::priority), which
+        // the tie between two rows at one cursor is broken by.
+        uint64_t priority = 0;
         double t = 0.0;
         double price = 0.0;
         MatchKind kind = MatchKind::Fill;
@@ -746,7 +748,8 @@ private:
     // whose top is the row the scan's own comparison, `precedes`, picks.
     //
     // A scan usually keeps its rows already in that order: the book is in
-    // incarnation order, and a book of requests awaiting their allowance
+    // queue order (native_order::WorkingRequestCore::live), and a book of
+    // requests awaiting their allowance
     // gives every row the cursor's own t. While the kept rows stay an
     // ascending run they are taken from its front instead (R5 lane PERF-L5):
     // `precedes` orders rows totally, so the front of an ascending run is the
@@ -755,11 +758,11 @@ private:
     class MatchRows {
     public:
         // The order match_path picks its winner in: the earliest cursor, then
-        // the oldest request, then the kind.
+        // the oldest request by its place in the queue, then the kind.
         static bool precedes(const MatchCandidate& row, const MatchCandidate& other) noexcept {
             return row.t < other.t
-                || (row.t == other.t && row.incarnation < other.incarnation)
-                || (row.t == other.t && row.incarnation == other.incarnation
+                || (row.t == other.t && row.priority < other.priority)
+                || (row.t == other.t && row.priority == other.priority
                     && static_cast<std::uint8_t>(row.kind)
                            < static_cast<std::uint8_t>(other.kind));
         }
@@ -1625,7 +1628,7 @@ private:
     bool match_row_reuse_ = true;
     // match_path's other per-call scratch (R5 lane PERF-L5): the pointers a
     // scan of more than eight live requests reads the book through, the
-    // provenance of the rows it built, and the (incarnation, kind) keys it
+    // provenance of the rows it built, and the (priority, kind) keys it
     // skips at the current cursor, kept sorted. Each is emptied where the
     // local it replaces was born, so between calls it is capacity only and a
     // warm matcher allocates nothing per point. match_path never re-enters
@@ -1667,6 +1670,13 @@ private:
     // index records it -- durable cohort state the continuation folds once
     // per replace (note_committed_events). Reset with the other digests.
     AppendDigest chain_roots_{};
+    // V19-D: the issued incarnations' ranges that can no longer grow -- every
+    // range but the last -- folded once each as it closes
+    // (note_committed_events). A re-price that keeps its handle takes a
+    // number no handle is issued under, so issuance stops being one dense
+    // range; the continuation then folds this digest and the open range,
+    // not every range at every read. Reset with the other digests.
+    AppendDigest issued_ranges_{};
     // set_direct_mutation's switch. Like match_row_reuse_, a choice between
     // two computations of the same values, not run state; declared last so no
     // member the consumer reads at every point changes offset.
