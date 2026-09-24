@@ -1,12 +1,52 @@
 #include "engine_internal.hpp"
 
 #include <pineforge/magnifier.hpp>
+#include <atomic>
 #include <cmath>
 #include <algorithm>
 
 namespace pineforge {
 
 using internal::kPathTimeEps;
+
+namespace {
+// The direct four-sample path's test switch and probe
+// (internal::set_direct_endpoints, internal::count_endpoint_paths; R5 lane
+// D2-A). A sampler call only reads the mode: the shipped one is 0, direct and
+// uncounted.
+constexpr unsigned kEndpointsGeneralOnly = 1u;
+constexpr unsigned kEndpointsCounting = 2u;
+std::atomic<unsigned> endpoint_path_mode{0u};
+std::atomic<std::uint64_t> endpoint_path_direct{0};
+std::atomic<std::uint64_t> endpoint_path_general{0};
+}  // namespace
+
+namespace internal {
+void set_direct_endpoints(bool enabled) noexcept {
+    if (enabled) {
+        endpoint_path_mode.fetch_and(~kEndpointsGeneralOnly, std::memory_order_relaxed);
+    } else {
+        endpoint_path_mode.fetch_or(kEndpointsGeneralOnly, std::memory_order_relaxed);
+    }
+}
+
+void count_endpoint_paths(bool enabled) noexcept {
+    if (!enabled) {
+        endpoint_path_mode.fetch_and(~kEndpointsCounting, std::memory_order_relaxed);
+        return;
+    }
+    endpoint_path_direct.store(0, std::memory_order_relaxed);
+    endpoint_path_general.store(0, std::memory_order_relaxed);
+    endpoint_path_mode.fetch_or(kEndpointsCounting, std::memory_order_relaxed);
+}
+
+EndpointPathCounts endpoint_path_counts() noexcept {
+    EndpointPathCounts counts;
+    counts.direct = endpoint_path_direct.load(std::memory_order_relaxed);
+    counts.general = endpoint_path_general.load(std::memory_order_relaxed);
+    return counts;
+}
+}  // namespace internal
 
 // ─── path_at ─────────────────────────────────────────────────────────────────
 
@@ -142,6 +182,36 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
 
 }  // namespace
 
+// ─── the direct four-sample ENDPOINTS path ───────────────────────────────────
+
+bool internal::sample_endpoints4(const Bar& bar, bool high_first, double out[4]) noexcept {
+    const OhlcPathLegs legs = compute_ohlc_path_legs(bar, high_first);
+    // fill_endpoints_t_values's own cases: a degenerate or non-finite path is
+    // not this one.
+    if (!(legs.total > 0.0) || !std::isfinite(legs.total)) return false;
+    // Its mandatory times {0, b0, b1, 1} are already ascending on a finite
+    // positive path -- 0 <= len0 <= len0 + len1 <= total, and rounding keeps
+    // that order -- so its sort leaves them in place, and its dedup removes
+    // one exactly when a neighbouring pair is closer than kPathTimeEps; then
+    // four samples are not the mandatory set, and the general routine
+    // serves the bar.
+    const double b0 = legs.len0 / legs.total;
+    const double b1 = (legs.len0 + legs.len1) / legs.total;
+    if (std::fabs(0.0 - b0) < kPathTimeEps || std::fabs(b0 - b1) < kPathTimeEps
+        || std::fabs(b1 - 1.0) < kPathTimeEps) {
+        return false;
+    }
+    // The four t-values mapped exactly as the general routine maps them, its
+    // two endpoints written as it overwrites them.
+    out[0] = legs.p0;
+    out[1] = path_at(b0, legs.p0, legs.p1, legs.p2, legs.p3,
+                     legs.len0, legs.len1, legs.len2, legs.total);
+    out[2] = path_at(b1, legs.p0, legs.p1, legs.p2, legs.p3,
+                     legs.len0, legs.len1, legs.len2, legs.total);
+    out[3] = legs.p3;
+    return true;
+}
+
 // ─── sample_price_path ───────────────────────────────────────────────────────
 
 std::vector<double> sample_price_path(const Bar& bar, int n_samples,
@@ -160,6 +230,24 @@ void sample_price_path(const Bar& bar, int n_samples,
 void internal::sample_price_path_ordered(const Bar& bar, bool high_first, int n_samples,
                                          MagnifierDistribution dist, std::vector<double>& out) {
     if (n_samples < 2) n_samples = 2;
+
+    // Four ENDPOINTS samples of a bar whose four turning times are distinct
+    // are the turning points themselves: taken directly, without the t-value
+    // pass below (R5 lane D2-A).
+    if (n_samples == 4 && dist == MagnifierDistribution::ENDPOINTS) {
+        const unsigned mode = endpoint_path_mode.load(std::memory_order_relaxed);
+        double four[4];
+        const bool direct = (mode & kEndpointsGeneralOnly) == 0
+            && sample_endpoints4(bar, high_first, four);
+        if (mode & kEndpointsCounting) {
+            (direct ? endpoint_path_direct : endpoint_path_general)
+                .fetch_add(1, std::memory_order_relaxed);
+        }
+        if (direct) {
+            out.assign(four, four + 4);
+            return;
+        }
+    }
 
     OhlcPathLegs legs = compute_ohlc_path_legs(bar, high_first);
 

@@ -130,6 +130,32 @@ void sample_price_path_volume_weighted_ordered(const Bar& bar, bool high_first,
                                                MagnifierDistribution dist,
                                                std::vector<double>& out);
 
+// The four ENDPOINTS samples of one bar -- the open, the two turning points
+// and the close -- computed directly (R5 lane D2-A): the same values, from
+// the same operations, as the general routine gives for four samples, without
+// its t-value pass. It answers false, writing nothing, for every bar whose
+// four turning times are not four distinct ones (a zero, non-finite or
+// zero-length leg), which the general routine serves.
+bool sample_endpoints4(const Bar& bar, bool high_first, double out[4]) noexcept;
+
+// sample_price_path_ordered takes sample_endpoints4 for every four-sample
+// ENDPOINTS call unless set_direct_endpoints(false) turns it off, which
+// restores the general routine for every call. The path is exact, so it is
+// not a run-spec choice: the switch and the counts exist so
+// tests/test_magnifier_endpoints4.cpp can hold the two computations equal bit
+// for bit and see which one ran. Both are process-wide and a sampler call
+// only reads them; no host reaches either.
+struct EndpointPathCounts {
+    std::uint64_t direct = 0;
+    std::uint64_t general = 0;
+};
+
+void set_direct_endpoints(bool enabled) noexcept;
+// Enabled, zeroes the counts and counts every later four-sample ENDPOINTS
+// call by the path it took; disabled, stops counting.
+void count_endpoint_paths(bool enabled) noexcept;
+EndpointPathCounts endpoint_path_counts() noexcept;
+
 
 // ── Finer-timeframe sub-bar synthesis (defined in engine_lower_tf.cpp) ──
 // Generic primitives: a fixed intraday timeframe parser, the integer

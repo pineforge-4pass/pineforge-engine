@@ -1124,6 +1124,11 @@ list(APPEND TEST_SOURCES test_native_quiet_point)
 # sample count and distribution, and the declared order the consumer hands it
 # (differential). Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_magnifier_ordered_sampler)
+# R5 lane D2-A (PQ2): the four-sample ENDPOINTS path computed directly against
+# the general and the base routine, bit for bit, the bars it declines, and
+# runs with the direct path on and off (differential). Source-free, so it also
+# runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_magnifier_endpoints4)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
