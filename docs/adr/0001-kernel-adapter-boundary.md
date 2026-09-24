@@ -200,9 +200,9 @@ kernel and own these quirks, each at its site:
   (`pine_adapter.cpp:12038`) to own the opening margin decision; `owns_lot_excursions() = true`
   (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:791`), so
   MFE/MAE are measured on TV tick-quantized prices; and `on_native_tick`
-  (`pine_strategy_host.cpp:368`) / `on_native_applied` (`pine_strategy_host.cpp:464`) for
+  (`pine_strategy_host.cpp:372`) / `on_native_applied` (`pine_strategy_host.cpp:468`) for
   `calc_on_order_fills` re-entry. `process_orders_on_close` becomes
-  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:1860-1861`);
+  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2134-2135`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:20`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
   (`pine_adapter.hpp:1224-1255`); the retained parent-before-child ordering of live handles — an
@@ -219,7 +219,7 @@ kernel and own these quirks, each at its site:
 - **Money arithmetic.** Ten-significant-digit half-up money (`source_money_round`
   `pine_adapter.cpp:440-446`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
 - **Close reservations.** `strategy.close` callsite batching, two-call provenance and the entry-id
-  ledger (`close_logical_units_` `pine_adapter.hpp:1443-1454`); the POOC reservation-growth population predicate
+  ledger (`close_logical_units_` `pine_adapter.hpp:1821-1832`); the POOC reservation-growth population predicate
   (`src/compat/pine/reservation_expansion.cpp:9-20`).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
@@ -293,7 +293,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   the lines 73-180 earlier drafts cited are and were live code (`ClosedLotExcursionFacts`,
   `PyramidEntry`, `Trade`, each with its own doc). The arithmetic is
   adapter-side (`source_money_round` `pine_adapter.cpp:440-446`). `strategy.close` batching and the entry-id ledger
-  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:1443-1454`) and
+  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:1821-1832`) and
   only names survive in comments. The TradingView margin-call toggle is **gone**: there is no
   `set_margin_call_enabled` in the tree, and what enables the model is the presence of
   `NativeRunSpec::margin`. So is the string-sentinel decoding of adapter-written comments:
@@ -303,7 +303,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   lot flags: `skip_entry_bar_high` / `skip_entry_bar_low` (`engine.hpp:149`), hashed
   (`skip_entry_bar_high` `src/engine_state_hash.cpp:66`) and, since R5 lane E6, set by no host at
   all: the excursion owner declares where its fill sat (`declare_opened_lot_entry_bar_mask`
-  `pine_strategy_host.cpp:553`) and the kernel derives the pair — the intrabar-fill excursion
+  `pine_strategy_host.cpp:557`) and the kernel derives the pair — the intrabar-fill excursion
   mask. Rule 5 is now scoped to that pair's storage; the comment residue it also covered was
   deleted by R5 lane E6 (Section A below).
 - **The wider coupling inventory, re-derived.** `docs/design/native-feature-parity.md` §2.ii

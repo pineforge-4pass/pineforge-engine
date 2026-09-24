@@ -138,8 +138,8 @@ generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
 virtual is added or removed, the request values move from `native_order_v6` <!-- verified HEAD -->
 to `native_order_v7` inside the epoch (R5 lane V19-B), and later v19 lanes change
 layouts inside v19. L3b removes the source compatibility
-order type; `pineforge-source-adapter/v3` hashes adapter and scheduler state
-instead. Native request/core/event values are `native_order_v7`, the private
+order type; the source extension hashes adapter and scheduler state instead
+(under `pineforge-source-adapter/v3`, advanced to v4 by R5 lane V19-E). <!-- verified HEAD --> Native request/core/event values are `native_order_v7`, the private
 consumer identity is
 `native-consumer/v9`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
@@ -157,7 +157,7 @@ so no established continuation hash moves.
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` | <!-- verified HEAD -->
 | `host-ab9714b` immutable provider | `engine_script_run_v16` | <!-- verified HEAD -->
 | `host-fc7aad6` immutable provider | `engine_script_run_v18` | <!-- verified HEAD -->
-| Source extension | `pineforge-source-adapter/v3` |
+| Source extension | `pineforge-source-adapter/v4` |
 
 The verifier prepares seven immutable historical archives with the profile's
 compiler/settings and authenticates every receipt against the real archive and
@@ -239,7 +239,7 @@ its own matching runtime; this check does not turn it into a v11 module.
 
 The current integrated representation uses generic broker fingerprint domain
 `pineforge-broker-state/v19` and stream fingerprint version 19; the source
-extension begins with `pineforge-source-adapter/v3`. Native consumer identity
+extension begins with `pineforge-source-adapter/v4`. Native consumer identity
 is `native-consumer/v9`, driver values own `native_driver_v5`, and run specs own
 `native_run_spec_v3`. R5 lane E23 bumped the consumer identity v7 -> v8: the
 continuation digest's *recipe* changed, because the timezone identity entered
@@ -277,6 +277,22 @@ so a caller built before the tail reads back the record it always did. The
 continuation folds the state the window made durable (the chain index, a
 trail's arm ordinal, the FX-roll check's two driver instants); the values
 that moved with it were re-pinned once more, each marked.
+R5 lane V19-E advances the source extension v3 -> v4, and the scheduler's
+sub-domain inside it `pineforge-pine-scheduler/v2` -> v3, and moves every Pine <!-- verified HEAD -->
+broker-state, recorded per-bar and host-extension value once, while no trade,
+equity point, event or readback moves: a read of the extension costs what is
+live, not what the run has placed. The adapter erases the placement row of a
+request that no longer works once no reader can reach it (at each bar open,
+after the terminal receipts are observed), and folds the rows it retains in
+incarnation order beside the table's high water, its erased-row count and a
+running digest of the erased rows' identities. The logs no decision reads
+back -- the dropped-close receipts, the calc-on-order-fills close bases, the
+exit phases of final trades, the admission journal's events, a bracket
+family's settled members, a cohort's origin roster -- and the scheduler's
+consumed input prefix fold as counts and running digests, each element once;
+the auxiliary request.security feed folds as the digest taken when it is set.
+The values the tree pins were re-pinned once more, each marked "expectation
+corrected ... because v19-E folds live adapter state".
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v7`.
 Terms receipts, attempted terms, deferred

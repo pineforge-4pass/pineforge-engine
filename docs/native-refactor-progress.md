@@ -139,7 +139,7 @@ R4-C's L1 baseline used `native_order_v5`, engine/host <!-- verified HEAD -->
 the source extension domain `pineforge-source-adapter/v2`; its native run-spec <!-- verified HEAD -->
 was v2. Each of those has moved since: the tree now declares `native_order_v7`,
 `engine_script_run_v19`, `native-consumer/v9`, `pineforge-broker-state/v19`,
-`pineforge-source-adapter/v3` and `native_run_spec_v3`. Unchanged since R4-C:
+`pineforge-source-adapter/v4` and `native_run_spec_v3`. Unchanged since R4-C:
 identity values `native_order_v1`, the calendar `native_calendar_v2`, the
 driver `native_driver_v5`, `PF_ABI_VERSION` 4, and the frozen ab9714b provider
 at v16 for the required bidirectional rejection pairs.

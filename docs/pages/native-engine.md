@@ -2707,7 +2707,7 @@ class Htf final : public pineforge::NativeStrategyHost {
 Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator and
 the Pine scheduler aggregate with (`TimeframeAggregator`
-`pine_scheduler_native.cpp:128`). What it does **not** give you is what a
+`pine_scheduler_native.cpp:139`). What it does **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
@@ -2769,7 +2769,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on stream/warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:273-276`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:277-280`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
@@ -3200,8 +3200,8 @@ Neither kind is emitted by the Pine adapter, which keeps resolving its own
 Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
 derives from `NativeStrategyHost`; handwritten native hosts also derive from
 `NativeStrategyHost`. The source adapter/scheduler hash domain is
-`kSourceAdapterDomain` `pine_adapter.hpp:38`
-(`"pineforge-source-adapter/v3"`), while the public C ABI remains version 4.
+`kSourceAdapterDomain` `pine_adapter.hpp:43`
+(`"pineforge-source-adapter/v4"`), while the public C ABI remains version 4.
 
 The ownership switch is complete: the compatibility loop and the source
 pending-order type are gone, and source commands lower into native requests.
