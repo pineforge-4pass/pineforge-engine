@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numeric>
 #include <string>
 #include <unordered_map>
@@ -37,6 +38,12 @@ RuntimeAmbient* install_runtime_ambient(RuntimeAmbient& block) noexcept {
 
 void uninstall_runtime_ambient(RuntimeAmbient& block, RuntimeAmbient* covered) noexcept {
     ThreadRuntimeAmbient& thread = tl_runtime_ambient;
+#ifndef NDEBUG
+    // Blocks leave in the reverse order they came: the block removed is the
+    // one in force on this thread (a nested pump has handed its own back).
+    // Debug builds hold that order; release builds pay nothing for it.
+    if (thread.installed != &block) std::abort();
+#endif
     (covered ? *covered : thread.own) = block;
     thread.installed = covered;
 }
