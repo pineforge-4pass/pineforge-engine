@@ -1775,6 +1775,17 @@ std::optional<RequestRejectReason> WorkingRequestCore::resolve_tick_spellings(
 }
 
 namespace {
+// Whether a request starts as an unbound book close (make_live's Independent
+// branch): the only authority a carried binding can be given to. A
+// keep_binding replace of any other request carries nothing, and takes the
+// plain path.
+bool starts_unbound_close(const Request& request) noexcept {
+    if (!std::holds_alternative<Independent>(request.owner)) return false;
+    if (as_transact(request.intent) || as_reverse_to(request.intent)) return false;
+    if (const auto* sized = as_host_sized(request.intent)) return sized->kind != HostSizedKind::Open;
+    return as_sized(request.intent) == nullptr;
+}
+
 // The binding a keep_binding replace carries (ReplaceOptions::keep_binding):
 // the predecessor's book binding, or the one it still carries itself while it
 // is unbound, when the successor starts unbound -- the only authority a book
@@ -2237,8 +2248,9 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     // A replace that keeps the handle or carries a binding (R5 lane V19-D)
-    // takes its own path; a plain one is the path below, unchanged.
-    if (options.keep_handle || options.keep_binding) {
+    // takes its own path; a plain one is the path below, unchanged -- as is
+    // a keep_binding replace of a request that cannot carry one.
+    if (options.keep_handle || (options.keep_binding && starts_unbound_close(staged))) {
         return prepare_replace_kept(live_index, staged_target, std::move(staged), ordinal,
                                     incarnation, context, options, std::move(plan));
     }
@@ -2572,7 +2584,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
         const RequestHandle& target, const Request& request, const CommandContext& context,
         uint64_t& next_order_incarnation, uint64_t& next_timeline_ordinal,
         ReplaceOptions options) {
-    if (options.keep_handle || options.keep_binding) {
+    if (options.keep_handle || (options.keep_binding && starts_unbound_close(request))) {
         return apply_replace_kept(target, request, context, next_order_incarnation,
                                   next_timeline_ordinal, options);
     }
