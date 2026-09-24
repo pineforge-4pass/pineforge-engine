@@ -921,6 +921,22 @@ trigger alternative, and a retained best must still produce a representable
 level for the successor's offset; otherwise the replacement is rejected and
 the predecessor stays live.
 
+Two more options change what a replacement consumes, never what it matches.
+`keep_handle` re-prices the request in place: the successor keeps the
+predecessor's handle, its place in the chain (no chain-root pair is folded
+again), its children and cohort members, and a trail's arm ordinal, and takes
+the number a plain successor would have taken as its priority -- queue ties
+still rank a re-priced request newest, and the next request is numbered as
+after a plain replace. `keep_binding` carries a close's book binding: at its
+next point the successor binds, with no `CloseBoundEvent`, to exactly the book
+close the event would have installed when the position has not moved (taking
+the timeline ordinal the event would have taken, so every later ordinal is the
+plain replace's), and binds as a plain successor does when it has. Either may
+be set alone; neither has a C spelling. The Pine adapter sets `keep_binding`
+on every re-issue: its placement table, bracket families and pending-order
+rows name each placement by the incarnation its command was issued, so it
+keeps plain handles.
+
 What the Pine adapter takes from this set is the tick spelling and the
 anchored child. A source `trail_offset` is a tick count, so `exit()` hands the
 kernel a `TrailTicks` and the acceptance path resolves it against the run's

@@ -202,7 +202,8 @@ reversal; and `PointBudget` native_order.hpp:353 caps how much of a request may
 fill at a single matching point, where Pine only ever uses the whole remaining
 quantity. Amending a live order is `replace` native_host.hpp:1185, which emits
 `ReplacedEvent` native_order.hpp:949 and can carry the predecessor's live
-trigger state forward through `ReplaceOptions` native_order.hpp:343. Its C
+trigger state forward through `ReplaceOptions` native_order.hpp:367 -- or keep
+its handle, or carry a close's book binding, from C++ only. Its C
 spelling is `strategy_native_replace_v1`, or `strategy_native_replace_ext_v1`
 when a rejection's `RequestRejectReason` native_order.hpp:773 matters.
 
