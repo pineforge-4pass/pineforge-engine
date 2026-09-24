@@ -2280,6 +2280,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     recalc_epoch_count_ = 0;
     recalculations_ = 0;
     recalculations_skipped_ = 0;
+    quiet_points_ = 0;
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
     input_callback_context_.reset();
@@ -4137,7 +4138,8 @@ void NativeExecutionConsumer::match_point(BacktestEngine& engine, const NativeDr
 }
 
 void NativeExecutionConsumer::match_discrete(BacktestEngine& engine, const NativeDriverPoint& point) {
-    match_path(engine, point, false, point.raw_price, point.raw_price);
+    if (!match_quiet_point(engine, point, false, point.raw_price))
+        match_path(engine, point, false, point.raw_price, point.raw_price);
     if (pre_open_birth_point_ordinal_ == point.coordinate.ordinal) {
         pre_open_birth_point_ordinal_ = 0;
         pre_open_birth_time_ms_ = 0;
@@ -4174,7 +4176,8 @@ void NativeExecutionConsumer::record_pre_open_birth(
 
 void NativeExecutionConsumer::match_segment(
         BacktestEngine& engine, const NativeDriverPoint& dest, double from_price) {
-    match_path(engine, dest, true, from_price, dest.raw_price);
+    if (!match_quiet_point(engine, dest, true, dest.raw_price))
+        match_path(engine, dest, true, from_price, dest.raw_price);
 }
 
 std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_openings(

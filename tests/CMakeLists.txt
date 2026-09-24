@@ -1114,6 +1114,11 @@ list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 # kind of cursor, at every callback of windowed randomized runs
 # (differential). Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_command_after)
+# R5 lane D2-A (PQ1): a driver point with nothing live matched in front of
+# match_path against match_path itself, bit for bit, and the points the
+# short-cut took (differential). Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_quiet_point)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

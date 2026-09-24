@@ -353,6 +353,16 @@ public:
     // hold the two equal bit for bit. No host reaches it.
     void set_point_guards(bool enabled) noexcept { point_guards_ = enabled; }
 
+    // A driver point with no live request is matched in front of match_path
+    // (match_quiet_point, R5 lane D2-A), which would open its epoch, apply its
+    // excursion and return. The short-cut is exact, so it is on unless this
+    // turns it off, which hands every point to match_path; quiet_points
+    // counts the points it matched this run. Both exist so
+    // tests/test_native_quiet_point.cpp can hold the two computations equal
+    // bit for bit and see the short-cut run; no host reaches either.
+    void set_quiet_point_match(bool enabled) noexcept { quiet_point_match_ = enabled; }
+    uint64_t quiet_points() const noexcept { return quiet_points_; }
+
     // The request core, read-only: tests/test_native_definition_index.cpp
     // holds its cohort receipts, rosters and membership answers -- the chain
     // index V19-B keeps in the core -- against an oracle folded over the whole
@@ -901,6 +911,27 @@ private:
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_discrete(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_segment(BacktestEngine& engine, const NativeDriverPoint& dest, double from_price);
+    // match_path's no-live-request branch, taken in front of the call (R5 lane
+    // D2-A): a point with nothing live has no trigger, allowance, trail,
+    // receipt or callback work, so matching it is opening its epoch and, on a
+    // segment, the one excursion the path applies to an open position. Every
+    // test match_path makes before that branch is made here first -- a failed
+    // run, a CurrentExecution point, no spec, an FX-roll check that could act
+    // -- and any one of them hands the point to match_path whole. Answers
+    // whether it matched the point.
+    bool match_quiet_point(BacktestEngine& engine, const NativeDriverPoint& point,
+                           bool continuous, double to_price) {
+        if (!quiet_point_match_ || !requests_.live().empty()
+            || point.coordinate.provenance == NativePriceProvenance::CurrentExecution
+            || (staged_fx_curve_ && margin_model() != nullptr) || failed()
+            || spec_ptr() == nullptr) {
+            return false;
+        }
+        ++quiet_points_;
+        open_point_epoch();
+        if (continuous) apply_excursion(engine, to_price);
+        return true;
+    }
     void match_path(BacktestEngine& engine, const NativeDriverPoint& point,
                     bool continuous, double from_price, double to_price);
     void apply_excursion(BacktestEngine& engine, double price);
@@ -1565,6 +1596,12 @@ private:
     // cannot start another fill), so its closed-row vector keeps capacity
     // instead of being allocated at every closing fill.
     NativePrecommitView precommit_view_;
+    // set_quiet_point_match's switch, a choice between two computations of
+    // the same values, and the points the short-cut matched this run (reset
+    // at every begin): a witness's probe, never read by the run, folded into
+    // nothing.
+    bool quiet_point_match_ = true;
+    uint64_t quiet_points_ = 0;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
