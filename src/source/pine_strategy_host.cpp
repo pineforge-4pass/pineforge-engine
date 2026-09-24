@@ -1681,6 +1681,26 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>&,
                                                             source::PineExecutionAdapter&);
 
+// sort_same_bar_exit_trades' first test, asked before the call (R5 lane D2-D):
+// its group grows past the last row only when the row before it is a bracket
+// exit of the same entry at the same exit time, as the last row is. Otherwise
+// the group is one row, the sort moves nothing and the call answers nullopt.
+// A quiet-bar gate (pine_quiet_bar.hpp): the ungated reference calls the sort
+// at every publication.
+static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexcept {
+#if PINEFORGE_PINE_QUIET_BAR_GATES
+    if (trades.size() < 2) return false;
+    const Trade& last = trades[trades.size() - 1];
+    const Trade& previous = trades[trades.size() - 2];
+    return previous.exit_from_bracket && last.exit_from_bracket
+        && previous.exit_time == last.exit_time && previous.entry_time == last.entry_time
+        && previous.entry_id == last.entry_id;
+#else
+    (void)trades;
+    return true;
+#endif
+}
+
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
@@ -1709,8 +1729,10 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     max_drawdown_ = 0.0;
     max_runup_ = 0.0;
     for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
-    if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
-        native_closed_rows_amended(*moved);
+    if (same_bar_exit_group_possible(trades_)) {
+        if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
+            native_closed_rows_amended(*moved);
+    }
     current_bar_ = saved;
 }
 
@@ -1818,8 +1840,10 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     adapter_.begin_source_evaluation();
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
-    if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
-        native_closed_rows_amended(*moved);
+    if (same_bar_exit_group_possible(trades_)) {
+        if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
+            native_closed_rows_amended(*moved);
+    }
     adapter_.observe_terminal_receipts();
     // ab9714be src/source/pine_scheduler.cpp:242,258: under
     // process_orders_on_close the orders that were already resting fill at step 1
@@ -1861,7 +1885,21 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     }
     if (!skip_quiet(QuietHook::PendingCloses, adapter_.close_batch_callsites_.empty()))
         adapter_.flush_pending_closes();
+#if PINEFORGE_PINE_QUIET_BAR_GATES
+    // flush_pending_entries' own quiet gate, asked here instead of behind the
+    // call (R5 lane D2-D): with nothing delayed, batched or held, the flush
+    // only resets the batch's close total. The gate is asked once either way,
+    // so the probe counts what it always counted.
+    if (adapter_.host_ != nullptr && adapter_.delayed_market_orders_.empty()
+        && adapter_.pending_same_bar_commands_.empty() && adapter_.pending_entries_.empty()) {
+        (void)skip_quiet(QuietHook::PendingEntries, true);
+        adapter_.pending_same_bar_close_qty_ = 0.0;
+    } else {
+        adapter_.flush_pending_entries();
+    }
+#else
     adapter_.flush_pending_entries();
+#endif
     if (!skip_quiet(QuietHook::BracketLegs, adapter_.pending_bracket_legs_.empty()))
         adapter_.flush_pending_bracket_legs();
     // After every command of this evaluation is in the kernel: a queued

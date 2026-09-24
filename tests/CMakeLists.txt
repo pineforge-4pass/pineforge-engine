@@ -974,6 +974,13 @@ list(APPEND TEST_SOURCES test_chart_day_key_arithmetic)
 # consecutive-loss-days and filled-orders rules, kept == computed at every
 # source callback. Source-bound.
 list(APPEND TEST_SOURCES test_chart_day_memo)
+# R5 lane D2-D: the host's source publication asks flush_pending_entries' and
+# the same-bar exit sort's first questions before calling them -- every
+# configuration field written by the script at seeded bars and by the host
+# between runs, entries queued behind closes, reversals, batches and fill
+# recalculations, and bracket legs filled together, pinned on 6c081f5d.
+# Source-bound.
+list(APPEND TEST_SOURCES test_publication_witness)
 # R5 lane PERF-P5611 (P6): whether a Pine chart aggregates input bars, the
 # one definition's equal-literal answer judged against tf_ratio over every
 # admitted literal pair. Source-bound.
