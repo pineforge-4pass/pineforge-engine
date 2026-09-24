@@ -56,6 +56,21 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
     return true;
 }
 
+void source::PineStrategyHost::refresh_aux_security_digest() noexcept {
+    BrokerStateHashSink f;
+    f.u(aux_security_bars_.size());
+    for (const auto& bar : aux_security_bars_) {
+        f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close);
+        f.d(bar.volume); f.i(bar.timestamp);
+    }
+    f.s(aux_security_input_tf_);
+    f.u(aux_security_chart_begin_.size());
+    for (const auto value : aux_security_chart_begin_) f.u(value);
+    f.u(aux_security_chart_end_.size());
+    for (const auto value : aux_security_chart_end_) f.u(value);
+    aux_security_digest_ = f.h;
+}
+
 bool source::PineStrategyHost::source_aux_security_feed_enabled() const {
     return !aux_security_bars_.empty();
 }
@@ -69,10 +84,17 @@ void source::PineStrategyHost::source_aux_security_input_view(
 void source::PineStrategyHost::clear_aux_security_chart_ranges() {
     aux_security_chart_begin_.clear();
     aux_security_chart_end_.clear();
+    refresh_aux_security_digest();
 }
 
 void source::PineStrategyHost::prepare_aux_security_chart_ranges(
         const Bar* chart_bars, int n_chart, const std::string& chart_tf) {
+    // However it leaves -- ranges prepared, none needed, or a refused feed --
+    // the digest follows what it left.
+    struct Refresh {
+        PineStrategyHost& host;
+        ~Refresh() { host.refresh_aux_security_digest(); }
+    } refresh{*this};
     clear_aux_security_chart_ranges();
     if (!aux_security_feed_enabled()) return;
     if (chart_bars == nullptr || n_chart <= 0) {

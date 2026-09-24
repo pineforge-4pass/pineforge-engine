@@ -25,9 +25,11 @@ def check(root: Path = ROOT) -> int:
     for name in required:
         if not re.search(r"\b(?:class|struct)\s+" + re.escape(name) + r"\s*\{", header):
             raise ValueError(name + " storage is missing")
+    # R5 lane V19-E: the v4 source extension folds the journal's events one at
+    # a time, each once, through the canonical per-event reflection.
     for token in (
         "void reflect(const Draft& value", "void reflect(const Event& value",
-        "void Journal::reflect", "admission_journal.reflect(\"journal\"",
+        "void Journal::reflect", "admission::reflect(events[admission_events_folded_]",
     ):
         if token not in (source + "\n" + adapter_hash):
             raise ValueError("admission reflection/hash fold is missing: " + token)

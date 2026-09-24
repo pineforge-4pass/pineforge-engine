@@ -91,6 +91,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.projection_over_pyramiding);
     f.b(value.projection_opposite_market_predecessor);
     f.u(value.projection_predecessor);
+    f.u(value.chain_origin_sequence);
     f.u(value.recreated_after_named_cancelled_entry_incarnation);
     f.u(value.named_cancel_surviving_exit_incarnation);
     f.b(value.retained_parent_topology);
@@ -263,7 +264,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& key : cohort_keys) {
         const auto& cohort = cohorts_by_id_.at(key);
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
-        hash_native_handle_vector(f, cohort.origins.members()); hash_native_handle_vector(f, cohort.opened);
+        // v4: the origin roster is append-only; its members fold once each,
+        // when appended (OriginRoster::digest).
+        f.u(cohort.origins.size()); f.u(cohort.origins.digest());
+        hash_native_handle_vector(f, cohort.opened);
+        f.u(cohort.erased_opening_sides);
         std::vector<std::uint64_t> live_origin_keys;
         live_origin_keys.reserve(cohort.live_units_by_origin.size());
         for (const auto& row : cohort.live_units_by_origin) live_origin_keys.push_back(row.first);
@@ -275,10 +280,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     f.u(cohort_order_.size());
     for (const auto& key : cohort_order_) f.s(key);
-    std::vector<std::uint64_t> placement_keys;
-    for (const auto& pair : placement_) placement_keys.push_back(pair.first);
-    std::sort(placement_keys.begin(), placement_keys.end()); f.u(placement_keys.size());
-    for (const auto key : placement_keys) { f.u(key); hash_placement(f, placement_.at(key)); }
+    // v4: the rows the table still holds, in incarnation order, and what the
+    // erased ones left: the high water, how many, and a running digest of
+    // their identities (PlacementTable::erased_digest).
+    f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
+    f.u(placement_.size());
+    for (const auto& row : placement_) { f.u(row.first); hash_placement(f, row.second); }
     std::vector<std::uint64_t> live_keys;
     for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
     std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
@@ -286,7 +293,15 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::vector<std::uint64_t> bracket_keys;
     for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
-    for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key).members()); }
+    for (const auto key : bracket_keys) {
+        // v4: the settled prefix as its count and running digest, the
+        // working tail in full, and the consumed legs of erased members.
+        const auto& family = bracket_families_.at(key);
+        f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
+        hash_native_handle_vector(f, family.working_tail());
+        f.u(family.consumed_facts().size());
+        for (const auto& fact : family.consumed_facts()) { f.u(fact.first); f.u(fact.second); }
+    }
     f.u(pending_bracket_legs_.size());
     for (const auto& leg : pending_bracket_legs_) {
         hash_native_request(f, leg.request); hash_placement(f, leg.snapshot);
@@ -366,19 +381,17 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // its historical fingerprint position and bytes without copying the
     // roster at every mutation boundary.
     hash_native_handle_vector(f, live_handles_);
-    f.u(dropped_close_receipts_.size());
-    for (const auto& receipt : dropped_close_receipts_) {
-        f.s(receipt.source_id); f.s(receipt.comment); f.d(receipt.qty);
-        f.d(receipt.qty_percent); f.b(receipt.immediately); f.u(receipt.callsite_token);
-        f.u(receipt.command_ordinal);
-    }
+    // v4: a log no decision reads, folded once per receipt when recorded.
+    f.u(dropped_close_count_); f.u(dropped_close_digest_);
     f.u(open_entry_fees_.size());
     for (const auto& fee : open_entry_fees_) {
         hash_native_handle(f, fee.opening); f.s(fee.source_id); f.d(fee.units);
         f.d(fee.nonpercent_fee);
     }
-    f.u(trade_exit_phase_.size());
-    for (const auto phase : trade_exit_phase_) f.u(phase);
+    // v4: the final prefix folded once, the current bar's tail in full.
+    f.u(trade_exit_phase_.size()); f.u(exit_phase_final_); f.u(exit_phase_digest_);
+    for (std::size_t index = exit_phase_final_; index < trade_exit_phase_.size(); ++index)
+        f.u(trade_exit_phase_[index]);
     std::vector<std::uint64_t> current_debit_ordinals;
     current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
     for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);
@@ -482,10 +495,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(coof_script_bar_.open); f.d(coof_script_bar_.high); f.d(coof_script_bar_.low);
     f.d(coof_script_bar_.close); f.d(coof_script_bar_.volume); f.i(coof_script_bar_.timestamp);
     f.b(coof_script_bar_valid_);
-    std::vector<std::int64_t> pooc_basis_keys;
-    for (const auto& pair : pooc_close_basis_by_script_bar_) pooc_basis_keys.push_back(pair.first);
-    std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
-    for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
+    // v4: a log no decision reads, folded once per new script bar.
+    f.u(pooc_close_basis_count_); f.i(pooc_close_basis_last_bar_); f.u(pooc_close_basis_digest_);
     f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
     f.d(last_fx_rate_); f.i(position_open_script_bar_); f.u(position_open_epoch_); f.i(position_open_bar_index_);
     f.u(static_cast<std::uint64_t>(position_open_phase_));
@@ -558,20 +569,77 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     f.u(cap.next_action()); f.b(priority.attached());
     f.b(priority.retained_parent_first());
-    admission_journal.reflect("journal", [&](const auto& field) { hash_admission_field(f, field); });
+    // v4: the journal's events as a running digest, each folded once, and its
+    // next sequence. Its outstanding allocations and active captures live
+    // inside one command and are empty at every hash point.
+    const auto& events = admission_journal.events();
+    if (admission_events_folded_ > events.size()
+        || (admission_events_folded_ != 0
+            && admission::sequence(events[admission_events_folded_ - 1])
+                != admission_events_last_)) {
+        admission_events_folded_ = 0;
+        admission_events_digest_ = 1469598103934665603ULL;
+    }
+    for (; admission_events_folded_ < events.size(); ++admission_events_folded_) {
+        BrokerStateHashSink event_fold;
+        event_fold.h = admission_events_digest_;
+        admission::reflect(events[admission_events_folded_], "event",
+            [&](const auto& field) { hash_admission_field(event_fold, field); });
+        admission_events_digest_ = event_fold.h;
+        admission_events_last_ = admission::sequence(events[admission_events_folded_]);
+    }
+    f.u(admission_journal.sequence_frontier());
+    f.u(admission_events_folded_); f.u(admission_events_digest_);
+}
+
+std::uint64_t source::PineExecutionAdapter::fold_dropped_close(
+        std::uint64_t digest, const DroppedCloseReceipt& receipt) noexcept {
+    BrokerStateHashSink f;
+    f.h = digest;
+    f.s(receipt.source_id); f.s(receipt.comment); f.d(receipt.qty);
+    f.d(receipt.qty_percent); f.b(receipt.immediately); f.u(receipt.callsite_token);
+    f.u(receipt.command_ordinal);
+    return f.h;
+}
+
+std::uint64_t source::PineExecutionAdapter::fold_exit_phase(std::uint64_t digest,
+                                                            std::uint8_t phase) noexcept {
+    BrokerStateHashSink f;
+    f.h = digest;
+    f.u(phase);
+    return f.h;
 }
 
 void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     // ab9714be test_live_state_hash_recording: a shorter run is a hash prefix
     // of the same longer feed.  Retained future input is provider transport,
     // not broker continuation state, so fold only the consumed source prefix.
+    // v3 (R5 lane V19-E): the consumed prefix as a running digest, each bar
+    // folded once, the first time a read passes it; a prefix run still reads
+    // like the full run up to its last bar.
     const std::size_t consumed = std::min(
         retained_.bars.size(), static_cast<std::size_t>(std::max(source_bar_count_, 0)));
-    f.s("pineforge-pine-scheduler/v2"); f.u(consumed);
-    for (std::size_t index = 0; index < consumed; ++index) {
-        const auto& bar = retained_.bars[index];
-        f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume); f.i(bar.timestamp);
-    }
+    f.s("pineforge-pine-scheduler/v3");
+    const auto extend = [](std::size_t& folded, std::uint64_t& digest, std::size_t upto,
+                           const auto& element) {
+        if (folded > upto) {
+            folded = 0;
+            digest = 1469598103934665603ULL;
+        }
+        for (; folded < upto; ++folded) {
+            BrokerStateHashSink g;
+            g.h = digest;
+            element(g, folded);
+            digest = g.h;
+        }
+    };
+    extend(consumed_bars_folded_, consumed_bars_digest_, consumed,
+        [&](BrokerStateHashSink& g, std::size_t index) {
+            const auto& bar = retained_.bars[index];
+            g.d(bar.open); g.d(bar.high); g.d(bar.low); g.d(bar.close); g.d(bar.volume);
+            g.i(bar.timestamp);
+        });
+    f.u(consumed); f.u(consumed_bars_digest_);
     f.s(retained_.input_tf); f.s(retained_.script_tf); f.b(retained_.bar_magnifier);
     f.i(retained_.magnifier_samples); f.i(static_cast<std::int64_t>(retained_.distribution));
     f.b(retained_.volume_weighted); f.i(retained_.volume_weighted_min_samples);
@@ -608,13 +676,15 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);
     const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
-    f.u(completion_prefix);
-    for (std::size_t index = 0; index < completion_prefix; ++index)
-        f.u(input_script_completes_[index]);
+    extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
+        [&](BrokerStateHashSink& g, std::size_t index) { g.u(input_script_completes_[index]); });
+    f.u(completion_prefix); f.u(consumed_completes_digest_);
     const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
-    f.u(boundary_prefix);
-    for (std::size_t index = 0; index < boundary_prefix; ++index)
-        f.u(input_script_boundary_completes_[index]);
+    extend(consumed_boundaries_folded_, consumed_boundaries_digest_, boundary_prefix,
+        [&](BrokerStateHashSink& g, std::size_t index) {
+            g.u(input_script_boundary_completes_[index]);
+        });
+    f.u(boundary_prefix); f.u(consumed_boundaries_digest_);
     f.b(uses_aux_security_feed_);
     f.d(deferred_boundary_input_.bar.open); f.d(deferred_boundary_input_.bar.high);
     f.d(deferred_boundary_input_.bar.low); f.d(deferred_boundary_input_.bar.close);
@@ -645,16 +715,13 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
     f.i(source_bar_index_); f.u(source_callback_count_);
     f.b(source_configuration_captured_); f.b(source_prepare_failed_);
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-    f.u(aux_security_bars_.size());
-    for (const auto& bar : aux_security_bars_) {
-        f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close);
-        f.d(bar.volume); f.i(bar.timestamp);
-    }
-    f.s(aux_security_input_tf_);
-    f.u(aux_security_chart_begin_.size());
-    for (const auto value : aux_security_chart_begin_) f.u(value);
-    f.u(aux_security_chart_end_.size());
-    for (const auto value : aux_security_chart_end_) f.u(value);
+    // v4: the auxiliary feed and its chart ranges never change during a run;
+    // their digest is taken when they are set (refresh_aux_security_digest:
+    // aux_security_bars_, aux_security_input_tf_, aux_security_chart_begin_,
+    // aux_security_chart_end_).
+    f.u(aux_security_bars_.size()); f.s(aux_security_input_tf_);
+    f.u(aux_security_chart_begin_.size()); f.u(aux_security_chart_end_.size());
+    f.u(aux_security_digest_);
 #endif
     // Per-site request.security semantics, in sec_id order. Folded under
     // their own domain and only when a site is registered, so a run without

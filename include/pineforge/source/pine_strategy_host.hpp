@@ -821,6 +821,11 @@ protected:
     std::string aux_security_input_tf_;
     std::vector<std::size_t> aux_security_chart_begin_;
     std::vector<std::size_t> aux_security_chart_end_;
+    // R5 lane V19-E: the four above as the v4 extension folds them, digested
+    // whenever they are set (never during a run): the fold reads one word
+    // instead of every auxiliary bar.
+    std::uint64_t aux_security_digest_ = 1469598103934665603ULL;
+    void refresh_aux_security_digest() noexcept;
 #endif
     // Per-sec_id request.security semantics (PineSecurityEvalState), keyed and
     // folded in sec_id order. An entry lives exactly as long as the kernel

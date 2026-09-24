@@ -221,7 +221,7 @@ def main(root: Path = ROOT) -> int:
         adapter_header = (root / "include/pineforge/source/pine_adapter.hpp").read_text()
         stream_hash = clean((root / "src/engine_stream.cpp").read_text())
         require_once(engine_hash, 'f.s("pineforge-broker-state/v19")', "generic hash domain")
-        require_once(adapter_header, 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"',
+        require_once(adapter_header, 'kSourceAdapterDomain[] = "pineforge-source-adapter/v4"',
                      "source hash domain")
         require_once(stream_hash, "integer(19); integer(broker_state_hash());",
                      "stream v19 fold")

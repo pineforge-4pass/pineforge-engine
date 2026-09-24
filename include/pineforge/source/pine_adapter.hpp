@@ -18,6 +18,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -35,7 +36,11 @@ using SourceId = std::string;
 class PineStrategyHost;
 class PineScheduler;
 
-inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v3";
+// R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
+// still holds, compact records of the erased ones, the pending queues -- and
+// running digests of its append-only logs, each element folded once, so the
+// extension costs what is live per read, not what the run has done.
+inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v4";
 
 // The adapter's forced-close vocabulary. These strings are TradingView report
 // shape, so they are written and read entirely inside the source layer: the
@@ -240,6 +245,12 @@ struct PlacementSnapshot {
     bool projection_over_pyramiding = false;
     bool projection_opposite_market_predecessor = false;
     std::uint64_t projection_predecessor = 0;
+    // The source_sequence of the oldest row reached by following
+    // projection_predecessor from this one (this row's own when it has
+    // none), fixed when the row is remembered. R5 lane V19-E: the chain's
+    // older rows may since have been erased, and this is what the terminal
+    // explicit-market policy read by walking them.
+    std::uint64_t chain_origin_sequence = 0;
     std::uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
     std::uint64_t named_cancel_surviving_exit_incarnation = 0;
     bool retained_parent_topology = false;
@@ -311,10 +322,47 @@ struct PlacementSnapshot {
     PineCancellationReceipt cancellation{};
 };
 
-// Source placement handles are monotonically allocated by the native core.
-// Retain their evidence in incarnation order rather than in a
-// node-per-row hash table: historical re-issued brackets then remain cheap to
-// append and lookup without changing the observable key/value collection.
+class PlacementTable;
+
+namespace detail {
+// R5 lane V19-E: the tombstone audit of the placement table. A build whose
+// every TU is compiled with -DPINEFORGE_PLACEMENT_AUDIT=1 (CMAKE_CXX_FLAGS)
+// keeps every erased row aside instead of freeing it, and records every read
+// that would have reached one: a lookup of an erased incarnation, and a
+// whole-table scan whose predicate an erased row satisfies. Readers see
+// exactly what an ordinary build sees; the audit only counts, and prints its
+// counts at exit (to $PINEFORGE_PLACEMENT_AUDIT_LOG, else stderr). One
+// process-wide record: audit single-threaded runs. Not installed API.
+void placement_audit_erase(const PlacementTable* table, std::uint64_t incarnation,
+                           PlacementSnapshot&& row);
+void placement_audit_forget(const PlacementTable* table) noexcept;
+void placement_audit_miss(const PlacementTable* table, std::uint64_t incarnation,
+                          unsigned line) noexcept;
+void placement_audit_scan_hit(const PlacementTable* table, std::uint64_t incarnation,
+                              unsigned line) noexcept;
+// The erased rows the audit keeps for `table`, ascending, or null.
+const std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>>*
+placement_audit_tombstones(const PlacementTable* table);
+} // namespace detail
+
+#ifndef PINEFORGE_PLACEMENT_AUDIT
+#define PINEFORGE_PLACEMENT_AUDIT 0
+#endif
+
+// Source placement evidence, keyed by the native request handle's
+// incarnation. Handles are monotonically allocated by the native core, so the
+// rows are held in incarnation order: a dense window of the recent
+// incarnations, indexed directly, and below it the few older rows that
+// outlived it. A row lives in a heap node of its own, so a reference to it
+// survives every insert and every erase of another row.
+//
+// R5 lane V19-E: a row is erased once the request it describes is no longer
+// working and nothing can read it again (PineExecutionAdapter::
+// erase_retired_rows), so the table holds what is live, not everything the
+// run ever placed. What later logic still consults of an erased row is kept
+// here in compact records -- the per-id command-sequence minima and the
+// non-margin source ids -- and by the adapter itself (bracket families,
+// cohorts). high_water() still names the largest incarnation ever inserted.
 class PlacementTable {
 public:
     template<bool IsConst>
@@ -340,16 +388,15 @@ public:
 
         Iterator() = default;
 
-        Reference operator*() const { return {static_cast<std::uint64_t>(index_ + 1U),
-                                               *owner_->slots_[index_]}; }
+        Reference operator*() const { return {key_, *row_}; }
         Reference* operator->() const {
-            reference_.emplace(static_cast<std::uint64_t>(index_ + 1U),
-                               *owner_->slots_[index_]);
+            reference_.emplace(key_, *row_);
             return &*reference_;
         }
         Iterator& operator++() {
-            ++index_;
-            skip_empty();
+            const auto next = owner_->next_after(key_);
+            key_ = next.first;
+            row_ = next.second;
             return *this;
         }
         Iterator operator++(int) {
@@ -358,142 +405,294 @@ public:
             return before;
         }
         bool operator==(const Iterator& other) const noexcept {
-            return owner_ == other.owner_ && index_ == other.index_;
+            return owner_ == other.owner_ && key_ == other.key_;
         }
         bool operator!=(const Iterator& other) const noexcept { return !(*this == other); }
 
     private:
         friend class PlacementTable;
-        Iterator(Owner* owner, std::size_t index) : owner_(owner), index_(index) { skip_empty(); }
-        void skip_empty() {
-            while (owner_ && index_ < owner_->slots_.size() && !owner_->slots_[index_]) ++index_;
-        }
+        Iterator(Owner* owner, std::uint64_t key, Snapshot* row)
+            : owner_(owner), key_(key), row_(row) {}
 
+        // The row is named by its incarnation and its node, never by a
+        // position, so an iterator stays valid across every insert and every
+        // erase of another row. key_ 0 is end().
         Owner* owner_ = nullptr;
-        std::size_t index_ = 0;
+        std::uint64_t key_ = 0;
+        Snapshot* row_ = nullptr;
         mutable std::optional<Reference> reference_;
     };
 
     using iterator = Iterator<false>;
     using const_iterator = Iterator<true>;
 
+    PlacementTable() = default;
+    PlacementTable(const PlacementTable&) = delete;
+    PlacementTable& operator=(const PlacementTable&) = delete;
+    PlacementTable(PlacementTable&&) noexcept = default;
+    PlacementTable& operator=(PlacementTable&&) noexcept = default;
+
     std::size_t size() const noexcept { return size_; }
-    std::size_t max_size() const noexcept { return slots_.max_size(); }
-    // Largest incarnation ever retained. Incarnations are monotone, so a
-    // handle above this mark at an observation time was unknown to every
-    // adapter collection populated before that observation.
-    std::uint64_t high_water() const noexcept {
-        return static_cast<std::uint64_t>(slots_.size());
+    std::size_t max_size() const noexcept { return window_.max_size(); }
+    // Largest incarnation ever inserted, erased rows included. Incarnations
+    // are monotone, so a handle above this mark at an observation time was
+    // unknown to every adapter collection populated before that observation.
+    std::uint64_t high_water() const noexcept { return high_water_; }
+    // Rows erased over the run (a statistic; nothing reads it back).
+    std::uint64_t erased_rows() const noexcept { return erased_rows_; }
+    // The window is reserved for the rows a run keeps live at once, not for
+    // every incarnation it will allocate: the table stays O(live).
+    void reserve(std::size_t count) {
+        window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
-    void reserve(std::size_t count) { slots_.reserve(count); }
     void clear() noexcept {
-        slots_.clear();
+        window_.clear();
+        head_ = 0;
+        base_ = 1;
+        window_rows_ = 0;
+        old_.clear();
         size_ = 0;
+        high_water_ = 0;
+        erased_rows_ = 0;
+        erased_digest_ = kFoldBasis;
         sequence_index_.clear();
-        sequence_indexed_slots_ = 0;
+        unfolded_.clear();
+        erased_minima_.clear();
+        erased_foreign_ids_.clear();
+#if PINEFORGE_PLACEMENT_AUDIT
+        detail::placement_audit_forget(this);
+#endif
     }
 
-    iterator begin() noexcept { return iterator(this, 0); }
-    iterator end() noexcept { return iterator(this, slots_.size()); }
-    const_iterator begin() const noexcept { return const_iterator(this, 0); }
-    const_iterator end() const noexcept { return const_iterator(this, slots_.size()); }
+    iterator begin() noexcept {
+        const auto first = next_after(0);
+        return iterator(this, first.first, first.second);
+    }
+    iterator end() noexcept { return iterator(this, 0, nullptr); }
+    const_iterator begin() const noexcept {
+        const auto first = next_after(0);
+        return const_iterator(this, first.first, first.second);
+    }
+    const_iterator end() const noexcept { return const_iterator(this, 0, nullptr); }
+    // The first row above `incarnation`.
+    const_iterator upper_bound(std::uint64_t incarnation) const noexcept {
+        const auto next = next_after(incarnation);
+        return const_iterator(this, next.first, next.second);
+    }
 
+#if PINEFORGE_PLACEMENT_AUDIT
+    iterator find(std::uint64_t incarnation, unsigned line = __builtin_LINE()) noexcept {
+        PlacementSnapshot* row = locate(incarnation);
+        if (!row) {
+            detail::placement_audit_miss(this, incarnation, line);
+            return end();
+        }
+        return iterator(this, incarnation, row);
+    }
+    const_iterator find(std::uint64_t incarnation,
+                        unsigned line = __builtin_LINE()) const noexcept {
+        const PlacementSnapshot* row = locate(incarnation);
+        if (!row) {
+            detail::placement_audit_miss(this, incarnation, line);
+            return end();
+        }
+        return const_iterator(this, incarnation, row);
+    }
+#else
     iterator find(std::uint64_t incarnation) noexcept {
-        if (incarnation == 0 || incarnation > slots_.size() || !slots_[incarnation - 1U]) return end();
-        return iterator(this, static_cast<std::size_t>(incarnation - 1U));
+        PlacementSnapshot* row = locate(incarnation);
+        return row ? iterator(this, incarnation, row) : end();
     }
     const_iterator find(std::uint64_t incarnation) const noexcept {
-        if (incarnation == 0 || incarnation > slots_.size() || !slots_[incarnation - 1U]) return end();
-        return const_iterator(this, static_cast<std::size_t>(incarnation - 1U));
+        const PlacementSnapshot* row = locate(incarnation);
+        return row ? const_iterator(this, incarnation, row) : end();
+    }
+#endif
+
+    // Whether a row is held, as a fact about the table rather than a read of
+    // the row (the tombstone audit does not count it).
+    bool contains(std::uint64_t incarnation) const noexcept {
+        return locate(incarnation) != nullptr;
     }
 
     PlacementSnapshot& at(std::uint64_t incarnation) {
-        const auto found = find(incarnation);
-        if (found == end()) throw std::out_of_range("source placement handle is absent");
-        return found->second;
+        PlacementSnapshot* row = locate(incarnation);
+        if (!row) throw std::out_of_range("source placement handle is absent");
+        return *row;
     }
     const PlacementSnapshot& at(std::uint64_t incarnation) const {
-        const auto found = find(incarnation);
-        if (found == end()) throw std::out_of_range("source placement handle is absent");
-        return found->second;
+        const PlacementSnapshot* row = locate(incarnation);
+        if (!row) throw std::out_of_range("source placement handle is absent");
+        return *row;
     }
 
     template<class... Args>
     std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) {
-        if (incarnation == 0 || incarnation > slots_.max_size()) {
+        if (incarnation == 0 || incarnation == std::numeric_limits<std::uint64_t>::max()) {
             throw std::length_error("source placement incarnation is out of range");
         }
-        const auto index = static_cast<std::size_t>(incarnation - 1U);
-        if (index >= slots_.size()) slots_.resize(index + 1U);
-        auto& slot = slots_[index];
-        if (slot) return {iterator(this, index), false};
-        slot.emplace(std::forward<Args>(args)...);
-        ++size_;
-        // A late handle filling a slot below the index watermark is folded
-        // now; the minima are order-independent.
-        if (index < sequence_indexed_slots_) {
-            try {
-                fold_sequence(*slot);
-            } catch (...) {
-                sequence_index_.clear();
-                sequence_indexed_slots_ = 0;
-                throw;
-            }
+        if (PlacementSnapshot* existing = locate(incarnation))
+            return {iterator(this, incarnation, existing), false};
+        std::unique_ptr<PlacementSnapshot> node;
+        if (spare_.empty()) {
+            node = std::make_unique<PlacementSnapshot>(std::forward<Args>(args)...);
+        } else {
+            // An erased row's node, reused: no allocation per placement in a
+            // run that retires as fast as it places.
+            *spare_.back() = PlacementSnapshot(std::forward<Args>(args)...);
+            node = std::move(spare_.back());
+            spare_.pop_back();
         }
-        return {iterator(this, index), true};
+        PlacementSnapshot* row = node.get();
+        // Named for the per-id index before it is placed, so a failed
+        // placement leaves both as they were.
+        unfolded_.push_back(incarnation);
+        try {
+            place(incarnation, std::move(node));
+        } catch (...) {
+            unfolded_.pop_back();
+            throw;
+        }
+        ++size_;
+        high_water_ = std::max(high_water_, incarnation);
+        return {iterator(this, incarnation, row), true};
     }
 
     // Replaces an existing row wholesale. Its identity fields may change, so
-    // the derived sequence index is rebuilt on the next lookup.
+    // the per-id index over the retained rows is rebuilt on the next lookup.
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
         at(incarnation) = std::move(snapshot);
         sequence_index_.clear();
-        sequence_indexed_slots_ = 0;
+        unfolded_.clear();
+        for (const auto& row : *this) unfolded_.push_back(row.first);
     }
 
-    // Smallest command_sequence among the rows whose source_id is `source_id`:
-    // over the rows bound to `from_entry` when any is, else over all of them;
-    // UINT64_MAX when no row carries the id. Equal to a full scan of the
-    // table, but served from a derived per-id index extended over the rows
-    // appended since the previous lookup, so a per-bar caller no longer pays
-    // O(rows) per call. The index relies on a stored row's source_id /
-    // from_entry / command_sequence never being written in place (only
-    // replace() rewrites a row); it is a pure lookup over the hashed rows,
-    // never next-decision state.
-    std::uint64_t command_sequence_for(const std::string& source_id,
-                                       const std::string& from_entry) const {
-        for (; sequence_indexed_slots_ < slots_.size(); ++sequence_indexed_slots_) {
-            const auto& slot = slots_[sequence_indexed_slots_];
-            if (slot) fold_sequence(*slot);
+    // Erases a row. The compact records keep what later logic reads of it:
+    // its command sequence under its (source_id, from_entry) and, for a
+    // non-margin row, its source id. Returns false when no row is there.
+    bool erase(std::uint64_t incarnation) {
+        std::unique_ptr<PlacementSnapshot> node = take(incarnation);
+        if (!node) return false;
+        remember_erased(*node);
+        --size_;
+        ++erased_rows_;
+#if PINEFORGE_PLACEMENT_AUDIT
+        detail::placement_audit_erase(this, incarnation, std::move(*node));
+#else
+        if (spare_.size() < kSpareNodes) {
+            *node = PlacementSnapshot{};
+            spare_.push_back(std::move(node));
         }
-        constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
-        const auto minima = sequence_index_.find(source_id);
-        if (minima == sequence_index_.end()) return absent;
-        const auto paired = minima->second.by_from_entry.find(from_entry);
-        if (paired != minima->second.by_from_entry.end() && paired->second != absent)
-            return paired->second;
-        return minima->second.any;
+#endif
+        return true;
     }
+
+    // Drops the window's empty prefix and, when the window has grown sparse
+    // (a long-lived row holding its front while the rows behind it were
+    // erased), moves its older rows below it, so the window stays about as
+    // long as what is live. Moves no node: every reference stays valid.
+    void compact();
+
+    // Smallest command_sequence among the rows ever inserted whose source_id
+    // is `source_id`: over the rows bound to `from_entry` when any is, else
+    // over all of them; UINT64_MAX when no row carried the id. The retained
+    // rows are folded into a per-id index the first lookup after they arrive
+    // (a row's source_id / from_entry / command_sequence is never written in
+    // place; only replace() rewrites a row, and it rebuilds the index), and
+    // an erased row was folded into the erased minima when it left.
+    std::uint64_t command_sequence_for(const std::string& source_id,
+                                       const std::string& from_entry) const;
+
+    // Whether an erased row that is not a margin close carried a source id
+    // other than `first` and `second`: what a scan for such a row over every
+    // placement ever made reads of the erased ones.
+    bool erased_non_margin_id_outside(const SourceId& first,
+                                      const SourceId& second) const noexcept {
+        for (const auto& id : erased_foreign_ids_)
+            if (id != first && id != second) return true;
+        return false;
+    }
+
+    // The v4 extension fold's view of the erased rows: how many, and a
+    // running digest of each one's identity (family, source id, from_entry,
+    // command sequence), folded once, when it left.
+    std::uint64_t erased_digest() const noexcept { return erased_digest_; }
 
 private:
+    static constexpr std::size_t kWindowReserve = 256;
+    static constexpr std::size_t kSpareNodes = 64;
+    static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
+
     struct SequenceMinima {
         std::uint64_t any = std::numeric_limits<std::uint64_t>::max();
         std::unordered_map<std::string, std::uint64_t> by_from_entry;
     };
+    using Minima = std::unordered_map<std::string, SequenceMinima>;
 
-    void fold_sequence(const PlacementSnapshot& row) const {
-        auto& minima = sequence_index_[row.source_id];
+    static void fold_sequence(Minima& index, const PlacementSnapshot& row) {
+        auto& minima = index[row.source_id];
         minima.any = std::min(minima.any, row.command_sequence);
         const auto inserted = minima.by_from_entry.emplace(row.from_entry, row.command_sequence);
         if (!inserted.second)
             inserted.first->second = std::min(inserted.first->second, row.command_sequence);
     }
 
-    std::vector<std::optional<PlacementSnapshot>> slots_;
+    PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
+        if (incarnation >= base_) {
+            const std::uint64_t offset = incarnation - base_;
+            if (offset < window_.size() - head_)
+                return window_[head_ + static_cast<std::size_t>(offset)].get();
+            return nullptr;
+        }
+        const auto found = std::lower_bound(old_.begin(), old_.end(), incarnation,
+            [](const auto& entry, std::uint64_t key) { return entry.first < key; });
+        return found != old_.end() && found->first == incarnation ? found->second.get()
+                                                                  : nullptr;
+    }
+
+    // The first row above `after` (0 = the first row), or {0, null}.
+    std::pair<std::uint64_t, PlacementSnapshot*> next_after(std::uint64_t after) const noexcept {
+        if (after < base_) {
+            const auto found = std::upper_bound(old_.begin(), old_.end(), after,
+                [](std::uint64_t key, const auto& entry) { return key < entry.first; });
+            if (found != old_.end()) return {found->first, found->second.get()};
+        }
+        std::size_t index = after < base_ ? head_
+            : head_ + static_cast<std::size_t>(after - base_) + 1U;
+        for (; index < window_.size(); ++index) {
+            if (window_[index])
+                return {base_ + static_cast<std::uint64_t>(index - head_), window_[index].get()};
+        }
+        return {0, nullptr};
+    }
+
+    void place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node);
+    std::unique_ptr<PlacementSnapshot> take(std::uint64_t incarnation) noexcept;
+    void remember_erased(const PlacementSnapshot& row);
+
+    // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
+    // rows below base_, ascending.
+    std::vector<std::unique_ptr<PlacementSnapshot>> window_;
+    std::size_t head_ = 0;
+    std::uint64_t base_ = 1;
+    std::size_t window_rows_ = 0;
+    std::vector<std::pair<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> old_;
     std::size_t size_ = 0;
-    // Derived lookup cache for command_sequence_for(); see there.
-    mutable std::unordered_map<std::string, SequenceMinima> sequence_index_;
-    mutable std::size_t sequence_indexed_slots_ = 0;
+    std::uint64_t high_water_ = 0;
+    std::uint64_t erased_rows_ = 0;
+    std::uint64_t erased_digest_ = kFoldBasis;
+    // command_sequence_for(): the per-id index over the retained rows,
+    // extended lazily over the rows inserted since the previous lookup
+    // (unfolded_), and the minima of the erased rows.
+    mutable Minima sequence_index_;
+    mutable std::vector<std::uint64_t> unfolded_;
+    Minima erased_minima_;
+    // Up to three distinct source ids of erased non-margin rows: as many as
+    // erased_non_margin_id_outside() can ever need.
+    std::vector<SourceId> erased_foreign_ids_;
+    // Erased rows' nodes, emptied, for the next rows (not state: a node
+    // holds a default snapshot until it is placed again).
+    std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
 // Append-only roster of the opening requests a source id ever accepted, in
@@ -516,8 +715,12 @@ public:
             positions.pop_back();
             throw;
         }
+        digest_ = (digest_ ^ handle.incarnation) * 1099511628211ULL;
     }
     const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
+    // R5 lane V19-E: a running digest of the members' incarnations, each
+    // folded once, when it was appended (the v4 extension fold's view).
+    std::uint64_t digest() const noexcept { return digest_; }
     const native_order::RequestHandle& operator[](std::size_t index) const { return items_[index]; }
     const native_order::RequestHandle& back() const { return items_.back(); }
     bool empty() const noexcept { return items_.empty(); }
@@ -546,35 +749,182 @@ private:
     std::vector<native_order::RequestHandle> items_;
     // Derived lookup over items_ (never next-decision state).
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> positions_;
+    std::uint64_t digest_ = 1469598103934665603ULL;
 };
 
 // Ordered member list of one source bracket family. Members are appended per
 // accepted leg and only removed when cancelled, so the list retains every
-// historical leg while removals target the few live ones near its tail. The
-// per-incarnation member count bounds a removal to the suffix that holds the
-// matching members.
+// historical leg while removals target the few live ones near its tail.
+//
+// R5 lane V19-E: the list is still every leg the family placed, in order --
+// strategy.exit's bracket cancel asks the kernel to cancel each of them, and a
+// leg that no longer works leaves a NotWorking receipt in the command history
+// -- but its settled prefix, the members whose placement rows were erased,
+// is kept as the members' incarnations, zigzag-varint deltas of one run
+// identity, about a byte each, beside a running digest of them. The members
+// from the first one whose row the table still holds onward stay as handles:
+// only they can be removed (a removal targets a live leg) or read (a
+// consumed-leg question reads a leg's row). A member whose row was erased
+// answered the consumed-leg question for good; the (leg kind, origin) pair
+// it answered for is kept in consumed_ while that origin can still be asked
+// about.
 class BracketRoster {
 public:
-    using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
+    // Every member, settled prefix first, in roster order.
+    class const_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = native_order::RequestHandle;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const native_order::RequestHandle*;
+        using reference = const native_order::RequestHandle&;
+
+        const_iterator() = default;
+        reference operator*() const { return current_; }
+        pointer operator->() const { return &current_; }
+        const_iterator& operator++() {
+            advance();
+            return *this;
+        }
+        const_iterator operator++(int) {
+            const_iterator before = *this;
+            advance();
+            return before;
+        }
+        bool operator==(const const_iterator& other) const noexcept {
+            return owner_ == other.owner_ && settled_ == other.settled_
+                && offset_ == other.offset_ && hot_ == other.hot_;
+        }
+        bool operator!=(const const_iterator& other) const noexcept { return !(*this == other); }
+
+    private:
+        friend class BracketRoster;
+        const_iterator(const BracketRoster* owner, bool at_end) : owner_(owner) {
+            if (at_end) {
+                settled_ = owner->settled_count_;
+                offset_ = owner->settled_.size();
+                hot_ = owner->hot_.size();
+                return;
+            }
+            load();
+        }
+        void load() {
+            if (settled_ < owner_->settled_count_) {
+                std::uint64_t zigzag = 0;
+                int shift = 0;
+                for (;;) {
+                    const std::uint8_t byte = owner_->settled_[offset_++];
+                    zigzag |= static_cast<std::uint64_t>(byte & 0x7FU) << shift;
+                    if (!(byte & 0x80U)) break;
+                    shift += 7;
+                }
+                const auto delta = static_cast<std::int64_t>(zigzag >> 1)
+                    ^ -static_cast<std::int64_t>(zigzag & 1U);
+                previous_ = static_cast<std::uint64_t>(static_cast<std::int64_t>(previous_) + delta);
+                current_ = native_order::RequestHandle{owner_->run_, previous_};
+            } else if (hot_ < owner_->hot_.size()) {
+                current_ = owner_->hot_[hot_];
+            }
+        }
+        void advance() {
+            if (settled_ < owner_->settled_count_) ++settled_;
+            else ++hot_;
+            load();
+        }
+
+        const BracketRoster* owner_ = nullptr;
+        std::size_t settled_ = 0;
+        std::size_t offset_ = 0;
+        std::size_t hot_ = 0;
+        std::uint64_t previous_ = 0;
+        native_order::RequestHandle current_{};
+    };
 
     void push_back(const native_order::RequestHandle& handle) {
         auto& count = counts_[handle.incarnation];
-        items_.push_back(handle);
+        hot_.push_back(handle);
         ++count;
     }
-    const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
-    bool empty() const noexcept { return items_.empty(); }
-    std::size_t size() const noexcept { return items_.size(); }
-    const_iterator begin() const noexcept { return items_.begin(); }
-    const_iterator end() const noexcept { return items_.end(); }
-    // How many members carry `incarnation`. Allocation-free.
+    // Every member, materialized (the bracket cancel's roster).
+    std::vector<native_order::RequestHandle> members() const {
+        std::vector<native_order::RequestHandle> out;
+        out.reserve(size());
+        for (const auto& handle : *this) out.push_back(handle);
+        return out;
+    }
+    // The members from the first one whose row is retained onward.
+    const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
+    bool empty() const noexcept { return settled_count_ == 0 && hot_.empty(); }
+    std::size_t size() const noexcept { return settled_count_ + hot_.size(); }
+    const_iterator begin() const { return const_iterator(this, false); }
+    const_iterator end() const { return const_iterator(this, true); }
+    // How many members of the working tail carry `incarnation`: every member
+    // whose placement row the table still holds. Allocation-free.
     std::size_t count(std::uint64_t incarnation) const noexcept {
         const auto found = counts_.find(incarnation);
         return found == counts_.end() ? 0 : found->second;
     }
+    // Whether `handle` is a member of the working tail (where every member
+    // whose row is retained is).
+    bool holds(const native_order::RequestHandle& handle) const noexcept {
+        if (count(handle.incarnation) == 0) return false;
+        return std::find(hot_.begin(), hot_.end(), handle) != hot_.end();
+    }
+
+    // R5 lane V19-E: moves the working tail's leading members whose rows
+    // were erased into the settled prefix, each folded once into the running
+    // digest.
+    template<class Erased>
+    void settle(Erased&& erased) {
+        std::size_t moved = 0;
+        for (; moved < hot_.size(); ++moved) {
+            const auto& handle = hot_[moved];
+            if (!erased(handle.incarnation)) break;
+            if (settled_count_ == 0 && settled_.empty()) run_ = handle.run;
+            else if (!(handle.run == run_)) break;
+            const auto delta = static_cast<std::int64_t>(handle.incarnation)
+                - static_cast<std::int64_t>(settled_last_);
+            std::uint64_t zigzag = (static_cast<std::uint64_t>(delta) << 1)
+                ^ static_cast<std::uint64_t>(delta >> 63);
+            do {
+                std::uint8_t byte = static_cast<std::uint8_t>(zigzag & 0x7FU);
+                zigzag >>= 7;
+                if (zigzag) byte |= 0x80U;
+                settled_.push_back(byte);
+            } while (zigzag);
+            settled_last_ = handle.incarnation;
+            ++settled_count_;
+            settled_digest_ = (settled_digest_ ^ handle.incarnation) * 1099511628211ULL;
+            const auto found = counts_.find(handle.incarnation);
+            if (found != counts_.end() && --found->second == 0) counts_.erase(found);
+        }
+        if (moved) hot_.erase(hot_.begin(), hot_.begin() + static_cast<std::ptrdiff_t>(moved));
+    }
+    void record_consumed(std::uint8_t leg_kind, std::uint64_t origin) {
+        const auto fact = std::make_pair(leg_kind, origin);
+        if (std::find(consumed_.begin(), consumed_.end(), fact) == consumed_.end())
+            consumed_.push_back(fact);
+    }
+    bool consumed(std::uint8_t leg_kind, std::uint64_t origin) const noexcept {
+        return std::find(consumed_.begin(), consumed_.end(),
+                         std::make_pair(leg_kind, origin)) != consumed_.end();
+    }
+    // Drops the facts whose origin can no longer be asked about.
+    template<class Keep>
+    void prune_consumed(Keep&& keep) {
+        consumed_.erase(std::remove_if(consumed_.begin(), consumed_.end(),
+            [&](const auto& fact) { return !keep(fact.second); }), consumed_.end());
+    }
+    const std::vector<std::pair<std::uint8_t, std::uint64_t>>& consumed_facts() const noexcept {
+        return consumed_;
+    }
+    // The settled prefix as the v4 extension fold reads it.
+    std::size_t settled_count() const noexcept { return settled_count_; }
+    std::uint64_t settled_digest() const noexcept { return settled_digest_; }
 
     // Erases every member equal to one of `doomed`, keeping the order of the
-    // rest: the same result as erase(remove_if(find in doomed)).
+    // rest: the same result as erase(remove_if(find in doomed)). A doomed
+    // member is a live leg, so it is in the working tail.
     void remove_all(const std::vector<native_order::RequestHandle>& doomed) {
         std::vector<std::uint64_t> incarnations;
         std::size_t sharing = 0;
@@ -587,29 +937,39 @@ public:
         }
         if (sharing == 0) return;
         // Lowest position holding a member that shares a doomed incarnation.
-        std::size_t first = items_.size();
+        std::size_t first = hot_.size();
         while (sharing > 0 && first > 0) {
             --first;
-            if (std::find(incarnations.begin(), incarnations.end(), items_[first].incarnation)
+            if (std::find(incarnations.begin(), incarnations.end(), hot_[first].incarnation)
                 != incarnations.end()) --sharing;
         }
         std::size_t out = first;
-        for (std::size_t in = first; in < items_.size(); ++in) {
-            if (std::find(doomed.begin(), doomed.end(), items_[in]) != doomed.end()) {
-                const auto found = counts_.find(items_[in].incarnation);
+        for (std::size_t in = first; in < hot_.size(); ++in) {
+            if (std::find(doomed.begin(), doomed.end(), hot_[in]) != doomed.end()) {
+                const auto found = counts_.find(hot_[in].incarnation);
                 if (--found->second == 0) counts_.erase(found);
                 continue;
             }
-            if (out != in) items_[out] = items_[in];
+            if (out != in) hot_[out] = hot_[in];
             ++out;
         }
-        items_.resize(out);
+        hot_.resize(out);
     }
 
 private:
-    std::vector<native_order::RequestHandle> items_;
-    // Derived member multiplicity per incarnation (never next-decision state).
+    // The settled prefix: incarnations of run_, as zigzag varint deltas.
+    native_order::RunIdentity run_{};
+    std::vector<std::uint8_t> settled_;
+    std::uint64_t settled_last_ = 0;
+    std::size_t settled_count_ = 0;
+    std::uint64_t settled_digest_ = 1469598103934665603ULL;
+    // The working tail.
+    std::vector<native_order::RequestHandle> hot_;
+    // Derived member multiplicity per incarnation over the working tail
+    // (never next-decision state).
     std::unordered_map<std::uint64_t, std::size_t> counts_;
+    // (leg kind, origin) of the erased consumed members.
+    std::vector<std::pair<std::uint8_t, std::uint64_t>> consumed_;
 };
 
 struct ShortSeedPlan {
@@ -985,6 +1345,11 @@ public:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
     void hash_state(BrokerStateHashSink&) const;
+    // The v4 folds of one dropped-close receipt and one exit phase, onto a
+    // running digest (pine_state_hash.cpp).
+    static std::uint64_t fold_dropped_close(std::uint64_t digest,
+                                            const DroppedCloseReceipt& receipt) noexcept;
+    static std::uint64_t fold_exit_phase(std::uint64_t digest, std::uint8_t phase) noexcept;
 
     // Retained for the untouched legacy source host. New fixture state is
     // represented by the private maps below rather than this carrier alone.
@@ -1007,6 +1372,10 @@ private:
         // reduce that cohort.
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
+        // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
+        // in `origins` whose placement rows were erased, so a question about
+        // every origin the cohort ever accepted still covers them.
+        std::uint8_t erased_opening_sides = 0;
     };
 
     struct PendingBracketLeg {
@@ -1148,6 +1517,13 @@ private:
         const SourceId& replacement_key = {});
     void remember(const native_order::RequestHandle&, PlacementSnapshot&&);
     void retire(native_order::RequestHandle) noexcept;
+    // R5 lane V19-E: erases the placement rows no reader can reach again
+    // (pine_adapter.cpp explains the rule); run at every bar open.
+    void erase_retired_rows(const NativeDecisionContext&);
+    bool lifecycle_readable(const PlacementSnapshot&) const noexcept;
+    // Writes one trade's exit phase, refolding when the write lands below the
+    // final mark.
+    void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
@@ -1429,7 +1805,11 @@ private:
     std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
-    std::vector<DroppedCloseReceipt> dropped_close_receipts_;
+    // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
+    // v4 keeps their count and a running digest, each folded once
+    // (fold_dropped_close, pine_state_hash.cpp).
+    std::uint64_t dropped_close_count_ = 0;
+    std::uint64_t dropped_close_digest_ = 1469598103934665603ULL;
     std::vector<OpenEntryFeeFact> open_entry_fees_;
     // Current executions settle synchronously, while their generic Applied
     // notification is delivered after the enclosing callback.  Record the
@@ -1471,7 +1851,12 @@ private:
     NativeDecisionContext coof_context_{};
     Bar coof_script_bar_{};
     bool coof_script_bar_valid_ = false;
-    std::unordered_map<std::int64_t, double> pooc_close_basis_by_script_bar_;
+    // R5 lane V19-E: the per-script-bar POOC close basis was a log no
+    // decision reads (the first basis each bar); v4 keeps the last bar key,
+    // the count and a running digest of the first basis of each new bar.
+    std::int64_t pooc_close_basis_last_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t pooc_close_basis_count_ = 0;
+    std::uint64_t pooc_close_basis_digest_ = 1469598103934665603ULL;
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -1537,6 +1922,19 @@ private:
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     std::vector<std::uint8_t> trade_exit_phase_;
+    // R5 lane V19-E: the exit phases of the trades before exit_phase_final_
+    // are final (a same-bar exit sort reorders only its own bar's rows) and
+    // folded once into exit_phase_digest_; a write below the mark refolds.
+    std::size_t exit_phase_final_ = 0;
+    std::uint64_t exit_phase_digest_ = 1469598103934665603ULL;
+    // R5 lane V19-E: the admission journal's events as the v4 fold reads them:
+    // a running digest over its first admission_events_folded_ events (the
+    // last of them carrying sequence admission_events_last_), extended over
+    // the events appended since, refolded when one arrived before them or one
+    // was removed.
+    mutable std::size_t admission_events_folded_ = 0;
+    mutable std::uint64_t admission_events_last_ = 0;
+    mutable std::uint64_t admission_events_digest_ = 1469598103934665603ULL;
     // @source-state end
     // Install-time magnifier fact from NativeBeginArgs. Scheduler already
     // folds retained_.bar_magnifier; this copy is the host-kind-free query

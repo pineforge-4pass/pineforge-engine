@@ -40,8 +40,8 @@ class AdmissionSchema(unittest.TestCase):
         try:
             path = root / "src/source/pine_state_hash.cpp"
             path.write_text(path.read_text().replace(
-                "admission_journal.reflect(\"journal\"",
-                "missing_journal.reflect(\"journal\"", 1))
+                "admission::reflect(events[admission_events_folded_]",
+                "admission::missing(events[admission_events_folded_]", 1))
             with self.assertRaises(ValueError):
                 checker.check(root)
         finally:

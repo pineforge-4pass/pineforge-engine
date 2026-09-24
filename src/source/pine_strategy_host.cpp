@@ -160,6 +160,10 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
     host_mutation_guard_inert_ = true;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // A fresh host folds its empty feed as one cleared at a run's end does.
+    refresh_aux_security_digest();
+#endif
 }
 
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {

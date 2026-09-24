@@ -31,6 +31,16 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     next.is_stream = args.is_stream; next.warmup_n = args.warmup_n;
     next.simple_run = args.simple_run;
     retained_ = std::move(next);
+    reset_consumed_digests();
+}
+
+void PineScheduler::reset_consumed_digests() noexcept {
+    consumed_bars_folded_ = 0;
+    consumed_bars_digest_ = 1469598103934665603ULL;
+    consumed_completes_folded_ = 0;
+    consumed_completes_digest_ = 1469598103934665603ULL;
+    consumed_boundaries_folded_ = 0;
+    consumed_boundaries_digest_ = 1469598103934665603ULL;
 }
 
 void PineScheduler::reset_language() {
@@ -58,6 +68,7 @@ void PineScheduler::reset_language() {
     input_script_boundary_completes_.clear();
     uses_aux_security_feed_ = false;
     deferred_boundary_input_ = {};
+    reset_consumed_digests();
 }
 
 void PineScheduler::snapshot_coof_script_state(PineStrategyHost& host) {

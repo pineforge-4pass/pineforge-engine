@@ -110,7 +110,7 @@ class Coverage(unittest.TestCase):
     def test_source_domain_is_pinned(self):
         result, output = self.check((
             ("include/pineforge/source/pine_adapter.hpp",
-             "pineforge-source-adapter/v3", "pineforge-source-adapter/v0"),))
+             "pineforge-source-adapter/v4", "pineforge-source-adapter/v0"),))
         self.assertEqual(result, 1, output)
 
     def test_security_domain_is_pinned(self):

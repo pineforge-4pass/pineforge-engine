@@ -130,6 +130,8 @@ private:
     void publish_series(const Bar&, PineStrategyHost&);
     void update_source_series(const Bar&);
     void reset_language();
+    // Restarts the consumed-prefix digests below (the retained input changed).
+    void reset_consumed_digests() noexcept;
     void snapshot_coof_script_state(PineStrategyHost&);
     void restore_coof_script_state(PineStrategyHost&);
     void commit_coof_script_state(PineStrategyHost&);
@@ -169,6 +171,16 @@ private:
     std::vector<unsigned char> input_script_boundary_completes_;
     bool uses_aux_security_feed_ = false;
     DeferredBoundaryInput deferred_boundary_input_{};
+    // R5 lane V19-E: running digests of the consumed input prefix -- the bars,
+    // their script completions and their boundary completions -- each element
+    // folded once, the first time the state hash reads past it (the v2
+    // scheduler fold re-read the whole prefix at every read).
+    mutable std::size_t consumed_bars_folded_ = 0;
+    mutable std::uint64_t consumed_bars_digest_ = 1469598103934665603ULL;
+    mutable std::size_t consumed_completes_folded_ = 0;
+    mutable std::uint64_t consumed_completes_digest_ = 1469598103934665603ULL;
+    mutable std::size_t consumed_boundaries_folded_ = 0;
+    mutable std::uint64_t consumed_boundaries_digest_ = 1469598103934665603ULL;
     // @source-state end
 };
 

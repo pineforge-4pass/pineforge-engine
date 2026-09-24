@@ -51,8 +51,9 @@ def check(root: Path = ROOT) -> None:
         raise ValueError("source host must remain native-bound")
     if (root / "include/pineforge/source/pine_pending_intent.hpp").exists():
         raise ValueError("retired source PendingOrder header is still installed")
-    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v3"' not in adapter:
-        raise ValueError("source adapter domain must remain v3")
+    # R5 lane V19-E: the source extension folds live adapter state (v4).
+    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v4"' not in adapter:
+        raise ValueError("source adapter domain must remain v4")
     # N5: the fold's host seam is generic. BacktestEngine declares
     # hash_host_extension beside the deprecated hash_source_extension spelling,
     # the projection calls the generic one only, its default forwards to the
