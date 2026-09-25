@@ -127,17 +127,14 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     const bool needs_aggregation = ratio > 1 || ratio == -1;
     input_script_completes_.assign(retained_.bars.size(), 1U);
     input_script_boundary_completes_.assign(retained_.bars.size(), 0U);
+    // Which input bars complete a script bar, and which complete the previous
+    // one on the next one's first bar, is the kernel's answer for the whole
+    // retained span (NativeExecutionConsumer::script_bucket_completions, R5
+    // lane B-ADAPTER): the scheduler asks before the first input arrives.
     if (needs_aggregation && state.spec) {
-        TimeframeAggregator preview(state.spec->script_tf, state.spec->input_tf,
-                                    state.spec->timezone, state.spec->session);
-        for (std::size_t i = 0; i < retained_.bars.size(); ++i) {
-            const AggregatedBar aggregate = preview.feed(retained_.bars[i]);
-            input_script_completes_[i] = aggregate.is_complete ? 1U : 0U;
-            input_script_boundary_completes_[i] = aggregate.is_complete
-                && tf_change(aggregate.bar.timestamp, retained_.bars[i].timestamp,
-                             state.spec->script_tf, state.spec->timezone,
-                             state.spec->session) ? 1U : 0U;
-        }
+        (void)detail::run_consumer(host).script_bucket_completions(
+            retained_.bars.data(), retained_.bars.size(), input_script_completes_,
+            input_script_boundary_completes_);
     }
     expected_source_bars_ = 0;
     for (const auto complete : input_script_completes_) {

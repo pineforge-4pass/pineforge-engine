@@ -5,6 +5,7 @@
 
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <algorithm>
 #include <array>
@@ -7671,6 +7672,25 @@ double NativeExecutionConsumer::append_open_position_report_rows(
         engine.range_end_trades_.push_back(std::move(row));
     }
     return marked;
+}
+
+bool NativeExecutionConsumer::script_bucket_completions(
+        const Bar* bars, std::size_t n, std::vector<unsigned char>& completes,
+        std::vector<unsigned char>& boundary_completes) const {
+    const auto* spec = spec_ptr();
+    if (!spec) return false;
+    completes.assign(n, 0U);
+    boundary_completes.assign(n, 0U);
+    TimeframeAggregator aggregator(spec->script_tf, spec->input_tf, spec->timezone,
+                                   spec->session);
+    for (std::size_t i = 0; i < n; ++i) {
+        const AggregatedBar aggregate = aggregator.feed(bars[i]);
+        completes[i] = aggregate.is_complete ? 1U : 0U;
+        boundary_completes[i] = aggregate.is_complete
+            && tf_change(aggregate.bar.timestamp, bars[i].timestamp, spec->script_tf,
+                         spec->timezone, spec->session) ? 1U : 0U;
+    }
+    return true;
 }
 
 // A position still open when the feed ends is reported as the rows a close at

@@ -1265,6 +1265,12 @@ list(APPEND TEST_SOURCES test_adapter_typed_entry_admission)
 # source-layer file writes the presented clock -- a stepped FX curve at seven
 # instants around the range end, plain and aggregated charts. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_range_end_fx)
+# R5 lane B-ADAPTER (item 4, M26): the kernel answers how an input span
+# aggregates into script bars before a run (the scheduler's preview), equal to
+# the preview the Pine scheduler ran on the K1 zones, across DST, on windowed
+# sessions and 1D/1W/1M; plus why the calendar's sealing is not that answer.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_script_bucket_completions)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

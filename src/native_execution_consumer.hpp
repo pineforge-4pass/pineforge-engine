@@ -365,6 +365,21 @@ public:
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index, double account_fx) const;
 
+    // How an input span aggregates into this run's script bars, asked before
+    // any of it is delivered: for each input bar, whether it completes a
+    // script-timeframe bucket (`completes`) and whether that completion is
+    // the previous bucket's, observed on this bucket's first bar
+    // (`boundary_completes`). The answer is the kernel's timeframe aggregator
+    // (TimeframeAggregator, the completion rules ADR-0001 rules generic) fed
+    // the span under the running spec's script and input timeframes, zone and
+    // session -- the bucketing the kernel's own timeframe subscriptions use,
+    // not the calendar's sealing instants, which may wait for a later
+    // tradable opening. Const: nothing about the run moves. False, with the
+    // vectors untouched, when no spec is configured.
+    bool script_bucket_completions(const Bar* bars, std::size_t n,
+                                   std::vector<unsigned char>& completes,
+                                   std::vector<unsigned char>& boundary_completes) const;
+
     // match_path reuses the candidate rows it scanned instead of rescanning
     // the whole working book after an allowance refresh (R5 lane PERF-K3).
     // The reuse is exact, so it is not a run-spec choice: it is on unless
