@@ -1257,6 +1257,12 @@ void replay_confirmed_bar(double sign) {
     CHECK(trail_b.incarnation == trail_a.incarnation);
 }
 
+// A one-unit point budget cannot move a 2^60-unit request's remaining units
+// (fl(2^60 - 1) is 2^60): the request core refuses the fill. Since R5 lane
+// K-ULP4 that is the request's typed refusal -- a MatchRejectedEvent with
+// MatchRejectReason::UnrepresentableQuantity -- and the run goes on; it failed
+// the run with SettlementFailure / NonrepresentableQuantity before. Both
+// replays refuse identically.
 void replay_failed_capacity(double sign) {
     Host a, b;
     const char* key = sign > 0 ? "P2-C8-L" : "P2-C8-S";
@@ -1264,20 +1270,16 @@ void replay_failed_capacity(double sign) {
     auto r = tx(sign * 0x1p60, "huge"); r.capacity = no::PointBudget{1};
     const auto ha = put(a, r), hb = put(b, r);
     same_hosts("accepted", a, b);
-    CHECK(!a.input(0, 100)); CHECK(!b.input(0, 100));
-    same_hosts("failed", a, b);
-    REQUIRE(a.native_state().kind == NativeLifecycleKind::Failed);
-    CHECK(a.native_state().failure.code == NativeFailureCode::SettlementFailure);
-    CHECK(a.native_state().failure.discriminator
-          == static_cast<uint32_t>(no::CoreFailure::NonrepresentableQuantity));
-    CHECK(native_failure_has_recipient(a.native_state().failure.context));
-    CHECK(a.native_state().failure.context.recipient.incarnation == ha.incarnation);
+    CHECK(a.input(0, 100)); CHECK(b.input(0, 100));
+    same_hosts("refused", a, b);
+    CHECK(a.native_state().kind != NativeLifecycleKind::Failed);
+    const auto rejected = events_of<no::MatchRejectedEvent>(a);
+    REQUIRE(rejected.size() == 1);
+    CHECK(rejected[0].handle().incarnation == ha.incarnation);
+    CHECK(rejected[0].reason == no::MatchRejectReason::UnrepresentableQuantity);
     CHECK(fills(a, ha).empty());
     CHECK(events_of<no::ExecutionAppliedEvent>(a).empty());
     same_d(a.physical_position().signed_units, 0);
-    failed_is_permanent(a, 1);
-    failed_is_permanent(b, 1);
-    same_hosts("refused", a, b);
     CHECK(hb.incarnation == ha.incarnation);
 }
 
@@ -1800,7 +1802,7 @@ int main() {
                  [&] { replay_owner_expiry_replace(sign); });
         run_case(sign > 0 ? "identical confirmed-bar long" : "identical confirmed-bar short",
                  [&] { replay_confirmed_bar(sign); });
-        run_case(sign > 0 ? "failed capacity prefix long" : "failed capacity prefix short",
+        run_case(sign > 0 ? "refused capacity prefix long" : "refused capacity prefix short",
                  [&] { replay_failed_capacity(sign); });
         run_case(sign > 0 ? "failed group prefix long" : "failed group prefix short",
                  [&] { replay_failed_group(sign); });

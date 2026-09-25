@@ -317,20 +317,28 @@ void failed_is_permanent(Host& h, int64_t next_offset, double price) {
     CHECK(h.physical_position().lot_count == position.lot_count);
 }
 
+// A one-unit point budget cannot move a 2^60-unit request's remaining units
+// (fl(2^60 - 1) is 2^60): the request core refuses the fill before anything is
+// written. Since R5 lane K-ULP4 that is the request's typed refusal -- a
+// MatchRejectedEvent with MatchRejectReason::UnrepresentableQuantity -- and the
+// run goes on; it failed the run with SettlementFailure /
+// NonrepresentableQuantity before.
 void capacity_progress_failure(double sign) {
     Host h; start(h, sign > 0 ? "C8-long" : "C8-short");
     auto r = tx(sign * 0x1p60); r.capacity = no::PointBudget{1};
     const auto handle = put(h,r);
-    CHECK(!h.input(0,100)); REQUIRE(h.native_state().kind == NativeLifecycleKind::Failed);
-    const auto failure = h.native_state().failure;
-    CHECK(failure.code == NativeFailureCode::SettlementFailure);
-    CHECK(failure.operation == NativeFailureOperation::Settlement);
-    CHECK(failure.discriminator == static_cast<uint32_t>(no::CoreFailure::NonrepresentableQuantity));
-    CHECK(native_failure_has_recipient(failure.context));
-    CHECK(failure.context.recipient.incarnation == handle.incarnation);
+    CHECK(h.input(0,100)); CHECK(h.native_state().kind != NativeLifecycleKind::Failed);
+    const auto rejected = events<no::MatchRejectedEvent>(h);
+    REQUIRE(rejected.size() == 1);
+    CHECK(rejected[0].handle().incarnation == handle.incarnation);
+    CHECK(rejected[0].reason == no::MatchRejectReason::UnrepresentableQuantity);
     CHECK(fills(h,handle).empty()); CHECK(events<no::ExecutionAppliedEvent>(h).empty());
     CHECK(h.trade_count() == 0); near(h.physical_position().signed_units,0);
-    near(h.native_marked_equity(100),10000); failed_is_permanent(h,1,100);
+    near(h.native_marked_equity(100),10000);
+    // The run goes on: the next request fills.
+    const auto next = put(h, tx(sign * 1.0));
+    CHECK(h.input(1,100));
+    CHECK(fills(h,next).size() == 1);
 }
 
 void check_group_failure(Host& h, const no::RequestHandle& filler,
@@ -425,7 +433,7 @@ int main() {
         run_case(sign>0?"OHLC long unrelated insertion":"OHLC short unrelated insertion",[&]{chronological_crossings(sign,true);});
         run_case(sign>0?"C9 long transaction first":"C9 short transaction first",[&]{flat_incarnation_order(sign,true);});
         run_case(sign>0?"C9 long close first":"C9 short close first",[&]{flat_incarnation_order(sign,false);});
-        run_case(sign>0?"C8 long precommit arithmetic failure":"C8 short precommit arithmetic failure",[&]{capacity_progress_failure(sign);});
+        run_case(sign>0?"C8 long precommit arithmetic refusal":"C8 short precommit arithmetic refusal",[&]{capacity_progress_failure(sign);});
         run_case(sign>0?"G5 long postcommit subtraction failure":"G5 short postcommit subtraction failure",[&]{group_subtraction_failure(sign);});
     }
     run_case("G5 pending 2^60 plus 1",[]{pending_addition_failure(false);});

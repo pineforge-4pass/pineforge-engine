@@ -27,7 +27,7 @@
     "ReplaceOptions::keep_handle",
     "ReplaceOptions::keep_binding",
     "MatchRejectReason::UnrepresentableQuantity",
-    "CommandContext::units_are_lot_quantity",
+    "CommandContext::units_are_scope_boundary",
     "NativeRunSpec::quantity_tolerance",
     "NativeRunSpecField::QuantityTolerance"
   ],

@@ -180,8 +180,8 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
 // the running sum closes whole with the close that reaches it. Each such end
 // is charged the request, as a split its rows cannot add up to is (above):
 //   - the lot the request ends in would keep at most t: it closes whole;
-//   - a rest of at most t is left after a whole lot, and the next member lot
-//     is larger than t: the walk ends before it, which is not touched; a next
+//   - a rest above zero and at most t is left after a whole lot, and the next
+//     member lot is larger than t: the walk ends before it, untouched; a next
 //     lot of at most t closes whole instead (the rule above), so a dust lot
 //     behind the boundary is taken, not left; after the scope's last lot the
 //     caller ends the walk the same way (finish_tolerant_walk);

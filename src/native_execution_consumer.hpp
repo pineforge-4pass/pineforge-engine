@@ -598,9 +598,15 @@ private:
     std::optional<double> resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
         const NativeExecutionTermsFacts& facts, bool* whole_scope = nullptr) const;
-    // Whether `units` is the binary64 quantity of one of the book's own lots,
-    // which the quantity grid admits as it stands (R5 lane K-ULP4).
-    static bool lot_quantity(const BacktestEngine& engine, double units) noexcept;
+    // Whether `units` is a FIFO boundary of the request's scope -- the binary64
+    // sum of the scope's lots, in book order, through one of them: the head
+    // lot's own size, a prefix, the whole scope. The scope is the book for an
+    // Independent request and the bound openings' lots for BindOpening /
+    // BindOpenings; any other owner has none here. The quantity grid admits
+    // such a Reduce as it stands (R5 lane K-ULP4).
+    static bool scope_boundary_units(const BacktestEngine& engine,
+                                     const native_order::Request& request,
+                                     double units) noexcept;
     double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units

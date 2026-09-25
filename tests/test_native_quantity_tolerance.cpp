@@ -29,8 +29,11 @@
 //                      closes it whole
 //   exact-control      a close exactly at a boundary, and one far from any
 //   still-refused      a request of at most t on a larger lot (zero is not a
-//                      boundary to snap to), and a rest above t a huge lot
-//                      absorbs: typed MatchRejected(UnrepresentableQuantity)
+//                      boundary to snap to), a rest above t a huge lot
+//                      absorbs, and a dust-only book closed by a far larger
+//                      request: typed MatchRejected(UnrepresentableQuantity)
+//   dust-head-small    a request of at most t on {2^-55, 2.9}: the dust lot's
+//                      boundary is the one within t, so only it closes
 //   spec               validation (NotFinitePositive on QuantityTolerance),
 //                      the digest pin, and the value folded when present
 //   c-host             the extension's quantity-tolerance tail, its mask
@@ -396,6 +399,21 @@ void settlement_cases() {
         const auto o = run_case({"exact-control-boundary",
             {{Step::Transact, 1.0}, {Step::Transact, 3.0}, {Step::Reduce, 1.0}}});
         filled(o, 2, 1.0, 0.0, 1.0, {1.0}, {3.0});
+    }
+    // A book of dust closed by a far larger request: the dust lot closes whole,
+    // but the rest 1.0 is far above t and the request's units cannot be moved
+    // by 2^-55 -- the request core's check, the same typed refusal as exact.
+    {
+        const auto o = run_case({"dust-only-book", {{Step::Transact, 0x1p-55}, {Step::Reduce, 1.0}}});
+        refused(o, 1, {0x1p-55});
+    }
+    // A request of at most t on a dust head: the dust lot's own boundary is
+    // within t of the request, so the close ends there and the 2.9 lot is not
+    // touched (a boundary, not zero).
+    {
+        const auto o = run_case({"dust-head-small-request",
+            {{Step::Transact, 0x1p-55}, {Step::Transact, 2.9}, {Step::Reduce, 1e-11}}});
+        filled(o, 2, 1e-11, 0.0, 1e-11, {0x1p-55}, {2.9});
     }
     // Zero is not a boundary: 2^-54 of a 2.9 lot cannot move the position.
     {

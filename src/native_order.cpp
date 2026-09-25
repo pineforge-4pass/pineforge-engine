@@ -1553,7 +1553,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (const auto* units = explicit_size(*reduce)) {
             if (!finite_positive(units->units)) return RequestRejectReason::InvalidQuantity;
             if (!on_optional_grid(units->units, context.quantity_grid)
-                && !context.units_are_lot_quantity) {
+                && !context.units_are_scope_boundary) {
                 return RequestRejectReason::OffGrid;
             }
         } else if (const auto* fraction = fraction_size(*reduce)) {
@@ -1591,8 +1591,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         }
     } else if (const auto* transact = as_transact(request.intent)) {
         if (!finite_nonzero(transact->signed_units)) return RequestRejectReason::InvalidQuantity;
-        if (!on_optional_grid(transact->signed_units, context.quantity_grid)
-            && !context.units_are_lot_quantity) {
+        if (!on_optional_grid(transact->signed_units, context.quantity_grid)) {
             return RequestRejectReason::OffGrid;
         }
     } else if (reverse_to) {

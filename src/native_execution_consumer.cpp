@@ -330,8 +330,10 @@ void hash_spec(F& f, const NativeRunSpec& spec,
         f.u(static_cast<uint64_t>(spec.event_retention));
     }
     // K-ULP4: the quantity tolerance folds only where a host declared one, so
-    // every spec that declares none keeps its digest.
+    // every spec that declares none keeps its digest; a tag word first, so the
+    // value's bits can never read as another optional fold's word.
     if (spec.quantity_tolerance) {
+        f.u(0x4b554c5034544f4cULL);  // "KULP4TOL"
         f.d(*spec.quantity_tolerance);
     }
 }
@@ -461,8 +463,8 @@ bool explicit_reduction_units_representable(double units, double exposure) noexc
 }
 
 // `own_quantity`: the answered units are the book's own -- a closing size equal
-// to one lot's binary64 quantity, or a fraction's whole scope -- which the
-// quantity grid admits as they stand (R5 lane K-ULP4).
+// to its scope's held total, or a fraction's whole scope -- which the quantity
+// grid admits as they stand (R5 lane K-ULP4).
 bool execution_terms_grid_representable(
         const native_order::ExecutionTerms& terms,
         const native_order::HostSized* host_sized, bool unresolved,
@@ -2820,19 +2822,13 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
     if (const auto* spec = spec_ptr()) {
         ctx.quantity_grid = spec->quantity_grid;
-        // A close of exactly one of the book's own lots is on the grid as it
-        // stands (CommandContext::units_are_lot_quantity; R5 lane K-ULP4).
+        // A Reduce whose units are a FIFO boundary of its scope is on the grid
+        // as it stands (CommandContext::units_are_scope_boundary; R5 lane K-ULP4).
         if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT) {
             if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
                 if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
-                    ctx.units_are_lot_quantity = lot_quantity(engine, units->units);
+                    ctx.units_are_scope_boundary = scope_boundary_units(engine, request, units->units);
                 }
-            } else if (const auto* transact = std::get_if<native_order::Transact>(
-                           &request.intent)) {
-                const bool closes = (engine.position_side_ == PositionSide::LONG)
-                    == (transact->signed_units < 0.0);
-                ctx.units_are_lot_quantity = closes
-                    && lot_quantity(engine, std::abs(transact->signed_units));
             }
         }
         // A Sized request freezes its sizing price here when it asked for the
@@ -4652,10 +4648,30 @@ bool NativeExecutionConsumer::admit_placement_units(
                                  nullptr);
 }
 
-bool NativeExecutionConsumer::lot_quantity(const BacktestEngine& engine,
-                                           double units) noexcept {
+bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
+                                                   const native_order::Request& request,
+                                                   double units) noexcept {
+    const auto* one = std::get_if<native_order::BindOpening>(&request.owner);
+    const auto* many = std::get_if<native_order::BindOpenings>(&request.owner);
+    if (!one && !many && !std::holds_alternative<native_order::Independent>(request.owner)) {
+        return false;
+    }
+    if ((one && one->cycle != engine.position_cycle_seq_)
+        || (many && many->cycle != engine.position_cycle_seq_)) {
+        return false;
+    }
+    double sum = 0.0;
     for (const auto& lot : engine.pyramid_entries_) {
-        if (lot.qty == units) return true;
+        const std::uint64_t incarnation = lot.entry_incarnation;
+        if (one && incarnation != one->opening.incarnation) continue;
+        if (many && std::none_of(many->openings.begin(), many->openings.end(),
+                                 [&](const native_order::RequestHandle& opening) {
+                                     return opening.incarnation == incarnation;
+                                 })) {
+            continue;
+        }
+        sum += lot.qty;
+        if (sum == units) return true;
     }
     return false;
 }
@@ -4905,11 +4921,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
-        const auto* grid_spec = spec_ptr();
-        const bool own_quantity = closing_size && terms.units && grid_spec
-            && grid_spec->quantity_grid
+        const bool own_quantity = closing_size && terms.units
             && ((whole_scope && kernel_units && *terms.units == *kernel_units)
-                || lot_quantity(engine, *terms.units));
+                || *terms.units == terms_facts.scope_exposure_units);
         if (!execution_terms_grid_representable(
                 terms, host_sized, unresolved, terms_facts.scope_exposure_units,
                 spec_ptr(), own_quantity)) {
@@ -5114,9 +5128,21 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // settlement; the pair holds a token across it.
         std::optional<native_order::PreparedExecution> token;
         bool ready = false;
+        // A fill the request's own units cannot absorb -- a scope of dust
+        // closed by a far larger request, whose remaining units the close
+        // cannot move -- is the same typed refusal, before anything is
+        // written: the request core checks and prepares without a mutation
+        // (R5 lane K-ULP4).
+        const auto unrepresentable = [](const native_order::PreparationError& error) {
+            return error.code == native_order::CoreFailure::NonrepresentableQuantity;
+        };
         if (direct_mutation_) {
             auto checked = requests_.check_execution(handle, proposal, next_timeline_ordinal_);
             if (const auto* error = std::get_if<native_order::PreparationError>(&checked)) {
+                if (unrepresentable(*error)) {
+                    return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
+                                    nonidentity_attempt);
+                }
                 fail_preparation(engine, *error, NativeFailureOperation::Settlement);
                 return std::nullopt;
             }
@@ -5124,6 +5150,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         } else {
             auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
             if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+                if (unrepresentable(*error)) {
+                    return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
+                                    nonidentity_attempt);
+                }
                 fail_preparation(engine, *error, NativeFailureOperation::Settlement);
                 return std::nullopt;
             }
@@ -6433,11 +6463,9 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
-    const auto* grid_spec = spec_ptr();
-    const bool own_quantity = closing_size && terms.units && grid_spec
-        && grid_spec->quantity_grid
+    const bool own_quantity = closing_size && terms.units
         && ((whole_scope && kernel_units && *terms.units == *kernel_units)
-            || lot_quantity(engine, *terms.units));
+            || *terms.units == facts.scope_exposure_units);
     if (!execution_terms_grid_representable(
             terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr(),
             own_quantity)) {

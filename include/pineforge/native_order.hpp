@@ -885,9 +885,12 @@ enum class MatchRejectReason : std::uint8_t {
     /// UnrepresentableQuantity: a close split binary64 cannot hold (a rest
     /// below half an ulp of the lot it ends in, a whole lot that cannot
     /// decrement the rest or move the running sum), a reduction or transaction
-    /// the position absorbs, or an opening the surviving book absorbs. The
-    /// request ends here, nothing moves, and the run goes on; the same request
-    /// stopped the whole run before R5 lane K-ULP4.
+    /// the position absorbs, or an opening the surviving book absorbs; or the
+    /// request core cannot take the fill off the request's own units
+    /// (CoreFailure::NonrepresentableQuantity: a scope of dust closed by a far
+    /// larger request, a point budget too small to move its remaining units).
+    /// The request ends here, nothing moves, and the run goes on; the same
+    /// request stopped the whole run before R5 lane K-ULP4.
     UnrepresentableQuantity = 10,
 };
 
@@ -1415,15 +1418,15 @@ struct CommandContext {
     std::optional<double> sizing_scope;
     std::optional<double> sizing_price;
     bool sizing_admissible = true;
-    /// The request's explicit close quantity -- a Reduce's ExplicitUnits, or
-    /// the units of a Transact against the book's side -- is the binary64
-    /// quantity of one of the book's own lots. Such a quantity is on the
+    /// A Reduce's ExplicitUnits are a FIFO boundary of its scope: the binary64
+    /// sum, in book order, of the scope's lots through one of them -- the head
+    /// lot's own size, a prefix, the whole scope. Such a quantity is on the
     /// quantity grid whatever the grid predicate answers: the grid admits the
-    /// quantities a host chooses, and a lot's size is the book's own, which
-    /// settlement arithmetic can move off any decimal grid (R5 lane K-ULP4).
-    /// The execution consumer measures it; appended last, like the members
-    /// above.
-    bool units_are_lot_quantity = false;
+    /// quantities a host chooses, and these are the book's own, which
+    /// settlement arithmetic can move off any decimal grid; closing them takes
+    /// whole lots and splits none (R5 lane K-ULP4). The execution consumer
+    /// measures it at submit; appended last, like the members above.
+    bool units_are_scope_boundary = false;
 };
 
 struct EvaluationContext {

@@ -50,9 +50,15 @@ ends THAT request with a terminal `MatchRejectedEvent` whose reason is
 the run goes on; the host submits again if it still wants the trade (R5 lane
 K-ULP4). Until then the consumer turned the same inspection into a durable
 `SettlementFailure` of the whole run -- lifecycle `Failed`, code 6,
-discriminator 5, "native settlement inspection failed". Every other status an
-inspection can answer (`InvalidBook`, `InvalidPrice`, `InvalidAccounting`, ...)
-is a broken book, price or account, and still stops the run.
+discriminator 5, "native settlement inspection failed". A fill the request's
+own units cannot absorb is the same typed refusal: the request core checks,
+before anything is written, that the fill can be taken off the request's
+remaining units and point budget, and a scope of dust closed by a far larger
+request (a bound opening holding `2^-55`, reduced by 1.0) or a one-unit budget
+on a `2^60`-unit request cannot (it stopped the run with code 6,
+discriminator 2). Every other status an inspection can answer (`InvalidBook`,
+`InvalidPrice`, `InvalidAccounting`, ...) is a broken book, price or account,
+and still stops the run.
 
 A close that spans lots and ends inside one of them is charged exactly its
 units. Every lot before the one it ends in closes whole, and C is the binary64
@@ -111,13 +117,16 @@ a `settlement_readiness` of `UnrepresentableQuantity`; and `Flatten` is never
 refused for a quantity. On a quantity grid (`NativeRunSpec::quantity_grid`) the
 book's own quantities are on the grid: a `ScopeFraction` whose product is its
 scope -- `fraction == 1` -- resolves to the scope's held total, which the grid
-does not floor, and a close of exactly one lot's binary64 quantity is admitted,
-at submit as a `Reduce` or a closing `Transact` and as a host-sized close's
-answered units (R5 lane K-ULP4). Before, such a fraction was floored onto the grid
-and closed up to a step short, left a dust lot, or found nothing to close, and
-the lot's own size was `OffGrid`. A close of a FIFO prefix's sum or of the
-held total of a multi-lot book is still gridded; `Flatten` and
-`ScopeFraction{1}` are its spellings.
+does not floor; a `Reduce` whose units are a FIFO boundary of its scope -- the
+binary64 sum, in book order, of the scope's lots through one of them: the head
+lot's own size, a prefix, the whole scope -- is admitted at submit and closes
+whole lots; and a host-sized close answered with its scope's held total is
+admitted at the candidate (R5 lane K-ULP4). Before, such a fraction was floored
+onto the grid and closed up to a step short, left a dust lot, or found nothing
+to close, and the book's own sizes were `OffGrid`. A `Transact` is still
+gridded (it can open), and so is a `Reduce` of a quantity that is no boundary
+of its scope: a later lot's size would be taken FIFO from the head lot and
+split it off the grid.
 
 ## Quantity tolerance
 
@@ -133,9 +142,10 @@ folds the value only when it is present. Under it:
   scope's lots through one of them -- ends at that boundary and is charged its
   request, as a split its rows cannot add up to is (K-ULP2). If the lot the
   request ends in would keep at most `t`, it closes whole; if a whole lot
-  leaves a rest of at most `t` and the next member lot is larger than `t`,
-  that lot is not touched; if the next lot is itself at most `t`, it closes
-  whole instead, so dust behind a boundary is taken rather than left. The
+  leaves a rest above zero and at most `t` and the next member lot is larger
+  than `t`, that lot is not touched; if the next lot is itself at most `t`, it
+  closes whole instead, so dust behind a boundary is taken rather than left (a
+  request exactly at a boundary still ends there, as the exact walk does). The
   scope's end is a boundary too: a `Reduce` or a crossing `Transact` at most
   `t` past the book closes the book and opens nothing. `{0.19999999999999996,
   2.9}` reduced by 0.2 closes the first lot, charged 0.2, and keeps 2.9.
@@ -146,9 +156,10 @@ folds the value only when it is present. Under it:
   same-side opening stays as it is, beside the new lot.
 - What no tolerance makes a quantity stays refused, typed as above: a rest
   below half an ulp of the first lot it meets (a request of at most `t` against
-  a larger lot -- zero is not a boundary to snap to), a rest above `t` that a
-  lot or the running sum absorbs, a reduction the position absorbs, and an
-  opening the book absorbs.
+  a larger lot -- zero is not a boundary to snap to; a dust lot's own boundary
+  is one), a rest above `t` that a lot or the running sum absorbs, a reduction
+  the position absorbs, an opening the book absorbs, and a book or scope of
+  dust closed by a far larger request, whose units the dust cannot move.
 
 The charge is the request: a snapped close's `closed_units` and
 `filled_working` are its units, and its rows add up to the boundary, at most

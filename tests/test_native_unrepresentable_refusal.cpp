@@ -12,8 +12,9 @@
 // failed", on ordinary decimal quantities (AUDIT4-opus kulp NF1 / NF2).
 //
 // On a quantity grid, the book's own quantities are on the grid: a fraction
-// whose product is its scope resolves to the scope, unfloored, and a close of
-// exactly one lot's binary64 size is admitted (NF3 / NF4).
+// whose product is its scope resolves to the scope, unfloored, and a Reduce of
+// a FIFO boundary of its scope -- the binary64 sum of the scope's lots through
+// one of them -- is admitted (NF3 / NF4).
 //
 //   survivor           open 1.5, Reduce 1.3, open 2.9: the book is
 //                      {fl(1.5 - 1.3), 2.9}; Reduce 0.2 needs 2^-54 of the
@@ -35,9 +36,16 @@
 //                      nothing to close), 0.19999999999999857 (closed one
 //                      step), {0.10000000000000142, 0.2} (left 2^-50 dust);
 //                      each now closes the book whole
-//   grid-own-lot       Reduce and Transact of a lot's own off-grid size: they
-//                      were OffGrid at submit; an off-grid quantity that is no
-//                      lot's size is still OffGrid
+//   grid-own-lot,      a Reduce of a FIFO boundary of its scope -- the head
+//   grid-boundaries,   lot's own off-grid size, a prefix, the whole book, a
+//   grid-bound-*       bound opening's lot -- was OffGrid at submit and now
+//                      closes whole lots; a Book-scope Reduce of a later lot's
+//                      size (it would split the head lot off-grid), any
+//                      Transact and any other off-grid quantity are still
+//                      OffGrid
+//   scoped-dust        a bound scope of 2^-55 closed by Reduce 1.0: the
+//                      request core cannot take 2^-55 off 1.0 -- the same
+//                      typed refusal (code 6, discriminator 2 on 91d65ad6)
 //   grid-after-dust    the AUDIT4 F5b/c/d continuations: open, an oversized
 //                      Reduce and a reversal after the whole-scope close
 //   controls           the lot's own size and the host's total, which close
@@ -46,9 +54,10 @@
 //
 // Fail-before: compiled against 91d65ad6 the TU stops at its first use of
 // MatchRejectReason::UnrepresentableQuantity (no such enumerator). With that
-// name spelled 10 it runs there and fails 84 of 292 checks: every refusal case
-// stops its run with code 6, discriminator 5, and every grid case keeps its
-// residual, its dust lot or its OffGrid refusal; only the controls pass.
+// name spelled 10 it runs there and fails 100 of 350 checks: every refusal
+// case stops its run with code 6, discriminator 5 (scoped-dust with
+// discriminator 2), and every grid case keeps its residual, its dust lot or
+// its OffGrid refusal; only the controls pass.
 // Source-free: the kernel-only profile registers the row.
 #include "../src/engine_internal.hpp"
 #include "../src/native_execution_consumer.hpp"
@@ -94,8 +103,9 @@ constexpr unsigned kUnrepresentable =
 const double kSurvivor = 1.5 - 1.3;   // 0x1.9999999999998p-3
 
 struct Step {
-    enum Kind { Transact, Reduce, Fraction, Flatten } kind = Transact;
+    enum Kind { Transact, Reduce, Fraction, Flatten, BoundReduce } kind = Transact;
     double value = 0.0;
+    int bind = -1;   // BoundReduce: the step whose opening the Reduce binds to
 };
 
 struct Case {
@@ -165,6 +175,7 @@ no::Request request_of(const Step& s) {
     case Step::Reduce: r.intent = no::Reduce{no::ExplicitUnits{s.value}}; break;
     case Step::Fraction: r.intent = no::Reduce{no::ScopeFraction{s.value}}; break;
     case Step::Flatten: r.intent = no::Flatten{}; break;
+    case Step::BoundReduce: r.intent = no::Reduce{no::ExplicitUnits{s.value}}; break;
     }
     r.label = "step";
     return r;
@@ -184,7 +195,14 @@ public:
         if (k > 0 && k - 1 < steps.size()) steps[k - 1].book = book();
         if (k >= case_.steps.size()) return;
         StepOutcome out;
-        const auto res = submit(request_of(case_.steps[k]));
+        auto request = request_of(case_.steps[k]);
+        const int bind = case_.steps[k].bind;
+        if (case_.steps[k].kind == Step::BoundReduce && bind >= 0
+            && static_cast<std::size_t>(bind) < handles.size() && handles[bind]) {
+            request.owner = no::BindOpening{*handles[bind], position_cycle_seq_};
+        }
+        const auto res = submit(request);
+        handles.push_back(res.handle);
         if (res.status != no::SubmitStatus::Accepted || !res.handle) {
             out.submit = res.reason ? static_cast<int>(*res.reason) : -2;
             incarnations.push_back(0);
@@ -223,6 +241,7 @@ public:
 
     std::vector<StepOutcome> steps;
     std::vector<std::uint64_t> incarnations;
+    std::vector<std::optional<no::RequestHandle>> handles;
     std::optional<ex::Status> preview;
     int current_kind = -1;
     unsigned current_reason = 0;
@@ -402,6 +421,7 @@ int c_on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1*) {
         r.intent_value = step.value;
         break;
     case Step::Flatten: r.intent = PF_NATIVE_INTENT_FLATTEN; break;
+    case Step::BoundReduce: return 1;   // the C cases bind nothing
     }
     std::uint64_t inc = 0;
     std::uint32_t reject = 0;
@@ -595,6 +615,21 @@ void refusal_cases() {
         refused(o, 1, {0x1p-55});
         filled(o, 2, 0x1p-55, 0.0, 0x1p-55, {});
     }
+    // A scope of dust closed by a far larger request: the stage caps the close
+    // to the scope's 2^-55, which settles, but the request's 1.0 cannot be
+    // moved by 2^-55 -- the request core's check, answered the same way
+    // (on 91d65ad6: code 6, discriminator 2, NonrepresentableQuantity).
+    {
+        const double dust = 0.2 - (0.3 - 0.1);
+        const auto o = run_case({"scoped-dust",
+            {{Step::Transact, 0.1}, {Step::Transact, 0.2}, {Step::Transact, 5.0},
+             {Step::Reduce, 0.3}, {Step::BoundReduce, 1.0, 1}, {Step::BoundReduce, dust, 1}}});
+        CHECK(dust == 0x1p-55);
+        filled(o, 3, 0.3, 0.0, 0.3, {dust, 5.0});
+        refused(o, 4, {dust, 5.0});
+        // The dust lot's own size closes it.
+        filled(o, 5, dust, 0.0, dust, {5.0});
+    }
     // execute_current answers the refusal as a MatchRejectedEvent (alternative 3
     // of NativeCurrentExecutionResult) and does not throw; the preview shows the
     // readiness first.
@@ -660,29 +695,59 @@ void grid_cases() {
              {Step::Fraction, 0.75}}, 0.1});
         filled(o, 3, 0.1, 0.0, 0.1, {left_b - 0.1});
     }
-    // A close of exactly one lot's own size is admitted on the grid, spelled
-    // Reduce or Transact; any other off-grid quantity is still OffGrid.
+    // A Reduce whose units are a FIFO boundary of its scope -- the head lot's
+    // own size, a prefix, the whole book -- is admitted on the grid and closes
+    // whole lots.
     {
         const auto o = run_case({"grid-own-lot",
             {{Step::Transact, 39.0}, {Step::Transact, 0.2}, {Step::Transact, -39.1},
              {Step::Reduce, left_a}}, 0.1});
         filled(o, 3, left_a, 0.0, left_a, {});
     }
+    // {fl(39 - 38.9), 0.2, 0.3}: the head lot's own size, then the prefix of
+    // the first two lots, each off the 0.1 grid.
     {
-        const auto o = run_case({"grid-own-lot-transact",
-            {{Step::Transact, 39.0}, {Step::Transact, 0.2}, {Step::Transact, -39.1},
-             {Step::Transact, -left_a}}, 0.1});
-        filled(o, 3, left_a, -0.0, left_a, {});
+        const auto o = run_case({"grid-boundaries-head",
+            {{Step::Transact, 39.0}, {Step::Transact, 0.2}, {Step::Reduce, 38.9},
+             {Step::Transact, 0.3}, {Step::Reduce, left_c}}, 0.1});
+        filled(o, 4, left_c, 0.0, left_c, {0.2, 0.3});
+        CHECK(o.steps.size() == 5 && o.steps[4].rows == std::vector<double>({left_c}));
     }
     {
+        const double prefix = left_c + 0.2;
+        CHECK(!no::quantity_on_grid(prefix, 0.1));
+        const auto o = run_case({"grid-boundaries-prefix",
+            {{Step::Transact, 39.0}, {Step::Transact, 0.2}, {Step::Reduce, 38.9},
+             {Step::Transact, 0.3}, {Step::Reduce, prefix}}, 0.1});
+        filled(o, 4, prefix, 0.0, prefix, {0.3});
+        CHECK(o.steps.size() == 5 && o.steps[4].rows == std::vector<double>({left_c, 0.2}));
+    }
+    // A bound scope's own boundary: its opening's lot.
+    {
+        const double big = 1000.1 - 1000.0;   // 0x1.99999999a3p-4 on a 0.1 grid
+        CHECK(!no::quantity_on_grid(big, 0.1));
+        const auto o = run_case({"grid-bound-boundary",
+            {{Step::Transact, 0.5}, {Step::Transact, 1000.1}, {Step::BoundReduce, 1000.0, 1},
+             {Step::BoundReduce, big, 1}}, 0.1});
+        filled(o, 2, 1000.0, 0.0, 1000.0, {0.5, big});
+        filled(o, 3, big, 0.0, big, {0.5});
+    }
+    // Not a boundary: a Book-scope Reduce of the second lot's size would take
+    // it FIFO from the first, on-grid lot and leave an off-grid split, so it
+    // is still OffGrid; so is any Transact (it could open), and any other
+    // off-grid quantity.
+    {
+        const double big = 1000.1 - 1000.0;
         const auto o = run_case({"grid-off-grid-still-refused",
-            {{Step::Transact, 39.0}, {Step::Transact, 0.2}, {Step::Transact, -39.1},
-             {Step::Reduce, std::nextafter(left_a, 0.0)}, {Step::Transact, left_a}}, 0.1});
-        CHECK(o.steps.size() == 5);
-        if (o.steps.size() == 5) {
+            {{Step::Transact, 0.5}, {Step::Transact, 1000.1}, {Step::BoundReduce, 1000.0, 1},
+             {Step::Reduce, big}, {Step::Transact, -0.5 - big},
+             {Step::Reduce, std::nextafter(0.5 + big, 0.0)}}, 0.1});
+        CHECK(o.steps.size() == 6);
+        if (o.steps.size() == 6) {
             CHECK(o.steps[3].submit == static_cast<int>(no::RequestRejectReason::OffGrid));
-            // An opening on the lot's own side is not a close of it.
             CHECK(o.steps[4].submit == static_cast<int>(no::RequestRejectReason::OffGrid));
+            CHECK(o.steps[5].submit == static_cast<int>(no::RequestRejectReason::OffGrid));
+            CHECK(o.steps[5].book == std::vector<double>({0.5, big}));
         }
     }
     // AUDIT4 F5b/c/d: after the whole-scope close nothing is left to trip on.
