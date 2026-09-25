@@ -4,19 +4,34 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 
-from ci_preflight import check_commands, ci_workflow_findings, run_checks
+from ci_preflight import (CORES, LINUX_RUNNER, MATRIX_RUNNER, _jobs, check_commands,
+                          ci_workflow_findings, run_checks)
+
+ROOT = Path(__file__).resolve().parents[1]
+# ci_workflow_findings' arguments, in order.
+CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
+              '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
+              '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml')
+
+
+def in_job(workflow, job, before, after):
+    """Replace the first `before` inside job `job` (anywhere when job is None)."""
+    start = 0 if job is None else workflow.index(f'\n  {job}:\n')
+    if job is not None and before not in _jobs(workflow)[job]:
+        raise AssertionError(f'{before!r} is not in job {job}')
+    at = workflow.index(before, start)
+    return workflow[:at] + after + workflow[at + len(before):]
 
 
 class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
-        root = Path(__file__).resolve().parents[1]
-        return [(root / path).read_text() for path in (
-            '.github/workflows/ci.yml', '.github/workflows/native-live.yml',
-            '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt')]
+        return [(ROOT / path).read_text() for path in CI_SOURCES]
 
     def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
         original = self.ci_sources()
@@ -78,6 +93,114 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn(before, changed[index])
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
+
+    def test_ci_contract_pins_runners_time_limits_and_the_fork_guard(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        fork_head = 'github.event.pull_request.head.repo.full_name'
+        mutations = (
+            # A heavy job moved back to the slow standard runner.
+            (0, 'preflight', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job preflight must run on'),
+            (0, 'sanitizers', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job sanitizers must run on'),
+            (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job kernel-only must run on'),
+            (0, 'build', MATRIX_RUNNER, '${{ matrix.os }}', 'ci.yml job build must run on'),
+            (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26',
+             'ci.yml build must pair each image'),
+            (0, 'build', 'larger_runner: pf-linux-x64-16', 'larger_runner: ubuntu-24.04',
+             'ci.yml build must pair each image'),
+            (1, 'native-live', LINUX_RUNNER, 'ubuntu-24.04', 'native-live.yml job native-live must run on'),
+            (4, 'corpus-parity', LINUX_RUNNER, 'ubuntu-24.04', 'corpus-parity.yml job corpus-parity must run on'),
+            (4, 'corpus-parity-subset', LINUX_RUNNER, 'ubuntu-24.04',
+             'corpus-parity.yml job corpus-parity-subset must run on'),
+            # A fork's pull request let onto a larger runner, which bills the org.
+            (0, 'preflight', LINUX_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
+            (0, 'sanitizers', fork_head, 'github.event.pull_request.base.repo.full_name',
+             'ci.yml job sanitizers must run on'),
+            (0, 'kernel-only', f'{fork_head} == github.repository', f"{fork_head} != ''",
+             'ci.yml job kernel-only must run on'),
+            (0, 'build', MATRIX_RUNNER, '${{ matrix.larger_runner }}', 'ci.yml job build must run on'),
+            (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26-large',
+             'ci.yml build must pair each image'),
+            (1, 'native-live', "|| 'ubuntu-24.04'", "|| 'pf-linux-x64-16'",
+             'native-live.yml job native-live must run on'),
+            (4, 'corpus-parity-subset', f'runs-on: {LINUX_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
+             'corpus-parity.yml job corpus-parity-subset must run on'),
+            (0, 'build-gate', 'runs-on: ubuntu-24.04', 'runs-on: pf-linux-x64-16',
+             'ci.yml job build-gate must run on ubuntu-24.04'),
+            (5, 'build', 'runs-on: ubuntu-latest', 'runs-on: pf-linux-x64-16',
+             'docs.yml job build must stay on a standard runner'),
+            (2, 'promote', 'runs-on: ubuntu-latest', 'runs-on: macos-26-xlarge',
+             'promote-baseline.yml job promote must stay on a standard runner'),
+            (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
+             '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
+            # A changed time limit.
+            (0, 'preflight', 'timeout-minutes: 10', 'timeout-minutes: 30',
+             'ci.yml job preflight must allow 10 minutes'),
+            (0, 'build', 'timeout-minutes: 45', 'timeout-minutes: 75', 'ci.yml job build must allow 45'),
+            (0, 'sanitizers', 'timeout-minutes: 120', 'timeout-minutes: 60',
+             'ci.yml job sanitizers must allow 120'),
+            (0, 'kernel-only', 'timeout-minutes: 45', 'timeout-minutes: 60',
+             'ci.yml job kernel-only must allow 45'),
+            (0, 'build-gate', '    timeout-minutes: 5\n', '', 'ci.yml job build-gate must allow 5'),
+            (1, 'native-live', 'timeout-minutes: 45', 'timeout-minutes: 60',
+             'native-live.yml job native-live must allow 45'),
+            (4, 'corpus-parity', 'timeout-minutes: 120', 'timeout-minutes: 30',
+             'corpus-parity.yml job corpus-parity must allow 120'),
+            (4, 'corpus-parity-subset', 'timeout-minutes: 30', 'timeout-minutes: 10',
+             'corpus-parity.yml job corpus-parity-subset must allow 30'),
+            # Four jobs asked of a 16-core runner.
+            (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size'),
+            (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size'),
+            (0, 'kernel-only', f'--jobs {CORES}', '--jobs "$(nproc)"', 'ci.yml job kernel-only must size'),
+            (1, 'native-live', f'--jobs {CORES}', '--jobs 4', 'native-live.yml job native-live must size'),
+            (4, 'corpus-parity', f'JOBS={CORES} ./scripts', './scripts',
+             'corpus-parity.yml job corpus-parity must size'),
+            (4, 'corpus-parity-subset', '          BUILD_DIR: build-corpus-parity-subset\n',
+             '          BUILD_DIR: build-corpus-parity-subset\n          JOBS: "4"\n',
+             'corpus-parity.yml job corpus-parity-subset must size'),
+            # The build legs keep their names: build (<image>, <type>).
+            (0, 'build', '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n', '',
+             'ci.yml build must pair each image'),
+        )
+        for index, job, before, after, finding in mutations:
+            with self.subTest(file=CI_SOURCES[index], job=job, after=after):
+                changed = original.copy()
+                changed[index] = in_job(changed[index], job, before, after)
+                findings = ci_workflow_findings(*changed)
+                self.assertTrue(any(finding in line for line in findings), findings)
+
+    def contract_stage(self, mutation):
+        """Run the ci-workflow-contract stage's argv in a copy of the tree."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tree = Path(directory.name)
+        # A Python row CTest runs beside this one writes its bytecode through
+        # a temporary file that can vanish mid-copy: never copy bytecode.
+        shutil.copytree(ROOT / 'scripts', tree / 'scripts',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        for path in CI_SOURCES:
+            (tree / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, tree / path)
+        if mutation:
+            ci = tree / '.github/workflows/ci.yml'
+            ci.write_text(in_job(ci.read_text(), *mutation))
+        result = subprocess.run(
+            [sys.executable, str(tree / 'scripts/ci_preflight.py'), '--check-ci-workflow'],
+            cwd=tree, capture_output=True, text=True, timeout=120)
+        return result.returncode, result.stdout + result.stderr
+
+    def test_the_preflight_stage_fails_a_slow_or_fork_reachable_runner(self):
+        code, output = self.contract_stage(None)
+        self.assertEqual(code, 0, output)
+        self.assertIn('runners and time limits OK', output)
+        for mutation, finding in (
+                (('sanitizers', LINUX_RUNNER, 'ubuntu-24.04'), 'ci.yml job sanitizers must run on'),
+                (('sanitizers', 'pull_request.head.repo', 'pull_request.base.repo'),
+                 'ci.yml job sanitizers must run on')):
+            with self.subTest(mutation=mutation):
+                code, output = self.contract_stage(mutation)
+                self.assertEqual(code, 1, output)
+                self.assertIn(finding, output)
 
     def run_preflight(self, commands):
         directory = tempfile.TemporaryDirectory()

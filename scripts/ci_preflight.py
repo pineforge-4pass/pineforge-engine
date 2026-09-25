@@ -34,6 +34,37 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
+# A larger runner bills the organization even for a public repository, so a
+# pull request from a fork runs on the free standard runner. Every other event
+# -- a push, a dispatch, the schedule, a same-repository pull request -- runs
+# the heavy jobs on the organization's 16-core Linux runner or on GitHub's M2
+# runner for the macos-26 image.
+TRUSTED_EVENT = ("github.event_name != 'pull_request' || "
+                 "github.event.pull_request.head.repo.full_name == github.repository")
+LINUX_RUNNER = '${{ (' + TRUSTED_EVENT + ") && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"
+MATRIX_RUNNER = '${{ (' + TRUSTED_EVENT + ') && matrix.larger_runner || matrix.os }}'
+BUILD_MATRIX = ('      matrix:\n'
+                '        os: [ubuntu-24.04, macos-26]\n'
+                '        build_type: [Release, Debug]\n'
+                '        include:\n'
+                '          - os: ubuntu-24.04\n'
+                '            larger_runner: pf-linux-x64-16\n'
+                '          - os: macos-26\n'
+                '            larger_runner: macos-26-xlarge\n')
+# Build and CTest parallelism is the core count of whichever runner took the job.
+CORES = '"$(getconf _NPROCESSORS_ONLN)"'
+# Every job with a runner in the workflows a CI run starts: its runs-on and its
+# timeout-minutes, exactly.
+JOB_RUNNERS = {
+    'ci.yml': {'preflight': (LINUX_RUNNER, 10), 'build': (MATRIX_RUNNER, 45),
+               'sanitizers': (LINUX_RUNNER, 120), 'kernel-only': (LINUX_RUNNER, 45),
+               'build-gate': ('ubuntu-24.04', 5)},
+    'native-live.yml': {'native-live': (LINUX_RUNNER, 45)},
+    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120),
+                          'corpus-parity-subset': (LINUX_RUNNER, 30)},
+}
+# The other workflows a pull request (a fork's included) can start.
+STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 
 
 def _jobs(workflow: str) -> dict[str, str]:
@@ -47,9 +78,48 @@ def _jobs(workflow: str) -> dict[str, str]:
             for index, match in enumerate(matches)}
 
 
-def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str) -> list[str]:
-    """Pin the PR-light/full-event split, parallel start, merge statuses and row home."""
+def runner_findings(workflows: dict[str, str]) -> list[str]:
+    """Pin every CI job's runner, time limit and parallelism; keep forks off larger runners."""
     findings = []
+    for name, workflow in workflows.items():
+        pinned = JOB_RUNNERS.get(name, {})
+        jobs = _jobs(workflow)
+        findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
+        for job, body in jobs.items():
+            runs_on = re.findall(r'^    runs-on: (.*)$', body, re.MULTILINE)
+            limit = re.findall(r'^    timeout-minutes: (.*)$', body, re.MULTILINE)
+            if job not in pinned:
+                if pinned and runs_on:
+                    findings.append(f'{name} job {job} needs a pinned runner and time limit')
+                elif any(value not in STANDARD_RUNNERS for value in runs_on):
+                    findings.append(f'{name} job {job} must stay on a standard runner')
+                continue
+            runner, minutes = pinned[job]
+            if runs_on != [runner]:
+                findings.append(f'{name} job {job} must run on {runner}')
+            if limit != [str(minutes)]:
+                findings.append(f'{name} job {job} must allow {minutes} minutes')
+            # A job on 16 cores that still asks for 4 wastes the runner it pays for.
+            runs = re.findall(r'^ +run: (.*)$', body, re.MULTILINE)
+            if (re.search(r'--jobs [0-9]|^ +JOBS: ', body, re.MULTILINE)
+                    or any(f'--jobs {CORES}' not in run
+                           for run in runs if 'scripts/ci_verify.py' in run)
+                    or any(not run.startswith(f'JOBS={CORES} ./scripts/check_corpus_parity.sh')
+                           for run in runs if 'check_corpus_parity.sh' in run)):
+                findings.append(f'{name} job {job} must size its parallelism to the runner')
+    build = _jobs(workflows.get('ci.yml', '')).get('build', '')
+    if (BUILD_MATRIX not in build
+            or '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n' not in build):
+        findings.append('ci.yml build must pair each image with its larger runner')
+    return findings
+
+
+def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
+                         parity: str, docs: str) -> list[str]:
+    """Pin the PR-light/full-event split, parallel start, merge statuses, row home and runners."""
+    findings = runner_findings({'ci.yml': ci, 'native-live.yml': native,
+                                'corpus-parity.yml': parity, 'docs.yml': docs,
+                                'promote-baseline.yml': promote})
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]',
@@ -338,11 +408,14 @@ def main() -> int:
             (ROOT / '.github/workflows/ci.yml').read_text(),
             (ROOT / '.github/workflows/native-live.yml').read_text(),
             (ROOT / '.github/workflows/promote-baseline.yml').read_text(),
-            (ROOT / 'tests/CMakeLists.txt').read_text())
+            (ROOT / 'tests/CMakeLists.txt').read_text(),
+            (ROOT / '.github/workflows/corpus-parity.yml').read_text(),
+            (ROOT / '.github/workflows/docs.yml').read_text())
         for finding in findings:
             print(finding)
         if not findings:
-            print('CI workflow contract: PR exclusions, full events, statuses and slow rows OK')
+            print('CI workflow contract: PR exclusions, full events, statuses, slow rows, '
+                  'runners and time limits OK')
         return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
         workflow = (ROOT / '.github/workflows/docs.yml').read_text()

@@ -35,7 +35,8 @@ the preflight source guard rejects those includes before a build.
 CI pins Ubuntu 24.04 and macOS 26, the platforms used by the preceding green
 refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
-Python. CTest must discover tests; an empty suite is a failure.
+Python. CTest must discover tests; an empty suite is a failure. Which runner
+runs each image is in [Runners and time limits](#runners-and-time-limits).
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
@@ -665,3 +666,43 @@ imply a wall time above 35 min even after excluding the rows. The 25 min
 target needs a measured sanitizer build improvement; the current job logs do
 not separate compile from link time or report a ccache hit rate, so CI-LITE
 does not assume a build optimization without evidence.
+
+## Runners and time limits
+
+The heavy jobs -- `preflight`, the four `build` legs, `sanitizers`,
+`kernel-only`, `native-live` and both corpus-parity jobs -- run on larger
+runners for a push, a manual dispatch, the nightly schedule and a pull request
+from a branch of this repository: the organization's `pf-linux-x64-16` (Ubuntu
+24.04 x64, 16 cores, 64 GB) and GitHub's `macos-26-xlarge` (the `macos-26`
+arm64 image on an M2, 5 cores, 14 GB). A larger runner bills the organization
+even for a public repository, so a pull request from a fork runs the same jobs
+on the free standard runners, `ubuntu-24.04` (4 vCPU, 16 GB) and `macos-26`
+(M1, 3 cores, 7 GB). Every heavy job selects its runner with one test: any
+event but a pull request, or a pull request whose head is in this repository.
+
+```yaml
+runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+```
+
+The `build` matrix pairs each image with its `larger_runner` and names its legs
+explicitly, so they stay `build (<image>, <type>)`. `native-live.yml` and
+`corpus-parity.yml` apply the test themselves; in a `workflow_call` the
+`github` context is the caller's, so a fork's pull request through CI gets the
+standard runner there too. The advisory `build` aggregate runs a few seconds of
+shell and stays on the standard runner for every event.
+
+Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
+`check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
+parallelism follow the runner: 16 on the larger Linux runner, 5 on the M2, 4
+and 3 on the standard runners. The larger Linux runner runs at most eight jobs
+at once, and one CI run starts seven there (preflight, the two Ubuntu `build`
+legs, sanitizers, kernel-only, native-live and the parity subset), so a second
+run that overlaps it waits for a runner.
+
+`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner,
+time limit and parallelism in the three workflows a CI run starts, and keeps
+`docs.yml` and `promote-baseline.yml`, which a fork's pull request can also
+start, on standard runners. A heavy job moved back to the standard runner, a
+test that lets a fork's pull request onto a larger runner, a changed time
+limit, or a fixed `--jobs 4` fails preflight;
+`scripts/test_ci_preflight.py` holds the mutations.

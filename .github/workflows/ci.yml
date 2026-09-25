@@ -22,9 +22,15 @@ env:
   CCACHE_COMPRESS: "1"
   CCACHE_MAXSIZE: 500M
 
+# The heavy jobs run on the organization's 16-core larger runner, and the macOS
+# legs on GitHub's M2 runner for the macos-26 image, for every event except a
+# pull request from a fork: a larger runner bills the organization even for a
+# public repository, so a fork's pull request runs on the free standard runner.
+# Each verification sizes its parallelism to the runner that took it.
+# scripts/ci_preflight.py pins every runner, time limit and job count.
 jobs:
   preflight:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -67,14 +73,23 @@ jobs:
           if-no-files-found: warn
 
   build:
+    # Each leg keeps its name, build (<image>, <type>), whatever the matrix carries.
+    name: build (${{ matrix.os }}, ${{ matrix.build_type }})
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-26]
         build_type: [Release, Debug]
+        include:
+          - os: ubuntu-24.04
+            larger_runner: pf-linux-x64-16
+          - os: macos-26
+            larger_runner: macos-26-xlarge
 
-    runs-on: ${{ matrix.os }}
+    # matrix.os is the standard runner a fork's pull request gets; its
+    # larger_runner runs the same image with more cores.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && matrix.larger_runner || matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +136,7 @@ jobs:
           # ratio -- for a runner whose CPU accounting is unusable; record the
           # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
-        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}
+        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -142,7 +157,7 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # A full run (push to main, manual dispatch) gives its CTest stage an hour
     # after a build of about 30 minutes; the PR set keeps its 30-minute stage.
     timeout-minutes: 120
@@ -173,7 +188,7 @@ jobs:
             ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
 
       - name: Verify (sanitizers)
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs 4 --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -194,7 +209,7 @@ jobs:
   # modules are built from the kernel alone, and every examples/native host
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -220,7 +235,7 @@ jobs:
             ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
 
       - name: Verify (kernel)
-        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs 4 --ccache
+        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -255,6 +270,7 @@ jobs:
     name: build
     needs: [preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
     if: always()
+    # A few seconds of shell: the standard runner, for every event.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
