@@ -239,7 +239,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                  extracted from the page and run)
 # All six register in release too; RATIO-HARDEN, V19-FIX and K-IDX add no row.
 # 278 registered, 277 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 277
+# 278 run = those 277 plus the one source-free row of R5 lane H-MEASURE
+# (INT26; summed at the pick, recounted with ctest -N at INT26 (iv)):
+#   +1 H-MEASURE test_native_acid_composite (the G1 acid composite, C++ and C)
+# Its other eleven rows reach the source layer (see RELEASE_MIN_TESTS). 279
+# registered, 278 run: the WebSocket row still skips on a system libcurl.
+KERNEL_MIN_TESTS = 278
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -347,7 +352,23 @@ KERNEL_MIN_TESTS = 277
 # wave-G lane adds a source-bound row (the K-ULP4 and K-ULP5 C checks and
 # V19-FIX's scaling rows are rows inside existing TUs). No release row skips,
 # so 678 registered is 678 run.
-RELEASE_MIN_TESTS = 678
+# 690 = those 678 plus the twelve rows of R5 lane H-MEASURE (AUDIT4 X14 and
+# A4-ACID-COVERAGE; INT26, summed at the pick, recounted at INT26 (iv)): the
+# one KERNEL_MIN_TESTS lists above, which registers here too, plus eleven
+# source-bound ones the kernel profile does not build:
+#   +1 G2-09/-10/-12/-13, E20 f1  test_adapter_margin_schedule_differential
+#   +3 G2-15, G2-18, E5/E14       test_pyramiding_count_differential,
+#                                 test_zero_trail_sibling_stop,
+#                                 test_pending_entry_trail_tapes
+#   +4 G2-22, G2-21, G2-32, G2-36 test_e19_excursion_tape,
+#                                 test_short_seed_report_swap,
+#                                 test_pine_dust_sweep_paired,
+#                                 test_session_ismarket_tape
+#   +3 F1(e), F1 magnified, G2-23 test_aggregated_entry_bar_index_tape,
+#                                 test_magnified_aggregated_tape,
+#                                 test_adapter_security_route_conditions
+# No release row skips, so 690 registered is 690 run.
+RELEASE_MIN_TESTS = 690
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
