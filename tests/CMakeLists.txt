@@ -2179,29 +2179,20 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
 
-# R5 lane F6: the P2c historical spellings -- pf_equity_stats_t::sharpe_tv /
-# sortino_tv and exit_legs::Domain::Coof / MagnifierCoof -- are
-# compiler-deprecated aliases (ADR-0001 "Deprecated public spellings"). These
-# TUs name them on purpose: test_c_abi exercises the C alias, and the two
-# twins keep their frozen base CHECK texts verbatim. They build without the
-# diagnostic; test_deprecated_public_spellings holds that every other use
-# draws it, that the generic spellings compile clean, and that the aliases
-# still compile.
-foreach(_pf_deprecated_spelling_test
-        test_c_abi test_metrics_l4d test_exit_lifecycle_clock_l4c)
-    if(TARGET ${_pf_deprecated_spelling_test})
-        target_compile_options(${_pf_deprecated_spelling_test}
-            PRIVATE -Wno-deprecated-declarations)
-    endif()
-endforeach()
-add_test(NAME test_deprecated_public_spellings
+# Lane REL10: the four spellings ADR-0001 "Deprecated public spellings"
+# scheduled for removal -- pf_equity_stats_t::sharpe_tv / sortino_tv and
+# exit_legs::Domain::Coof / MagnifierCoof -- are gone at 1.0. The row compiles
+# their 1.0 spellings clean (-Werror) in strict C99 and in C++17, and each
+# removed spelling alone, which must fail with the unknown-member diagnostic
+# that names it (R5 lane F6 registered this row as the deprecation check).
+add_test(NAME test_removed_public_spellings
     COMMAND ${CMAKE_COMMAND}
         -DPF_CC=${CMAKE_C_COMPILER}
         -DPF_CXX=${CMAKE_CXX_COMPILER}
         "-DPF_INCLUDES=${PROJECT_SOURCE_DIR}/include|${PROJECT_BINARY_DIR}/include"
         -DPF_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-        -DPF_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/deprecated_spellings
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/deprecated_spellings.cmake)
+        -DPF_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/removed_spellings
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/removed_spellings.cmake)
 
 # R5 L13: the C-level native host API. One ctest row, two translation units.
 # test_native_c_api.c is compiled by the C compiler, so any C++ syntax leaking
@@ -2241,20 +2232,16 @@ target_compile_options(test_native_c_api_int23_header PRIVATE -UNDEBUG)
 pineforge_add_twin_test(test_native_c_api_int23_header test_native_c_api_int23_header)
 
 # R5 lane F4: the public C headers as a strict C99 consumer compiles them --
-# ADR-0001's P2c portability note. The one C11 construct they hold, the
-# anonymous union behind sharpe_tv / sortino_tv, is PF_ANONYMOUS_UNION; with
-# extensions off and -pedantic-errors, any other C11-only construct in
+# extensions off and -pedantic-errors, so any C11-only construct in
 # <pineforge/pineforge.h> or <pineforge/native_c_api.h> is a build failure.
-# The row executes the alias and one native C run.
+# The one C11 construct they held, the anonymous union behind P2c's
+# sharpe_tv / sortino_tv aliases, left with those spellings at 1.0 (lane
+# REL10). The row checks the equity offsets and executes one native C run.
 add_executable(test_native_c_api_c99 test_native_c_api_c99.c)
 set_target_properties(test_native_c_api_c99 PROPERTIES
     C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
 target_link_libraries(test_native_c_api_c99 PRIVATE pineforge)
-# It reads P2c's historical spellings (sharpe_tv, sortino_tv) on purpose, to
-# hold that the aliases share storage, so like test_c_abi it builds without
-# their deprecation diagnostic.
-target_compile_options(test_native_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra
-    -Wno-deprecated-declarations)
+target_compile_options(test_native_c_api_c99 PRIVATE -UNDEBUG -pedantic-errors -Wall -Wextra)
 if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_native_c_api_c99 PRIVATE ${_pf_cov_test_flags})
 endif()

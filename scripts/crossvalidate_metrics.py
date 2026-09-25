@@ -32,7 +32,8 @@ Engine conventions being validated (see pf_equity_stats_t doxygen):
   - sharpe_bar  = (mean(r)-rf_bar)/sample_sd(r, N-1)*sqrt(bpy),
     rf_bar = 0.02/bpy;
   - sortino_bar = (mean(r)-rf_bar)/pop_downside_dev(r vs rf_bar)*sqrt(bpy);
-  - sharpe_tv/sortino_tv: same construction over month-end-resampled
+  - sharpe_monthly/sortino_monthly (report keys sharpe_tv/sortino_tv):
+    the same construction over month-end-resampled
     equities (UTC calendar-month bucketing of bar-open times when the
     chart tz is empty), rf = 0.02/12, annualized by sqrt(12);
   - max_equity_drawdown: peak-to-trough walk over the curve (USD), pct
@@ -355,22 +356,22 @@ def crossvalidate(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None,
 
     # --- TV monthly sharpe / sortino ----------------------------------------
     np_sh_tv, np_so_tv = np_sharpe_sortino(m_ret, rf_month, math.sqrt(12.0))
-    t = Table(f"sharpe_tv / sortino_tv   (monthly, {len(m_ret)} returns, rf/mo={rf_month:.6f})")
-    t.add("sharpe_tv           | numpy engine conv.", eng["sharpe_tv"], np_sh_tv)
-    t.add("sharpe_tv           | empyrical(risk_free=rf/12, ann=12)",
-          eng["sharpe_tv"], ep.sharpe_ratio(m_ret_s, risk_free=rf_month, annualization=12))
-    t.add("sharpe_tv           | quantstats adapted (m-rf/12, rf=0)",
-          eng["sharpe_tv"], qs.stats.sharpe(m_ret_s - rf_month, rf=0.0, periods=12))
-    t.add("sharpe_tv           | quantstats native rf (geometric deann.)",
-          eng["sharpe_tv"], qs.stats.sharpe(m_ret_s, rf=RF_ANNUAL, periods=12),
+    t = Table(f"sharpe_monthly / sortino_monthly   (monthly, {len(m_ret)} returns, rf/mo={rf_month:.6f})")
+    t.add("sharpe_monthly      | numpy engine conv.", eng["sharpe_monthly"], np_sh_tv)
+    t.add("sharpe_monthly      | empyrical(risk_free=rf/12, ann=12)",
+          eng["sharpe_monthly"], ep.sharpe_ratio(m_ret_s, risk_free=rf_month, annualization=12))
+    t.add("sharpe_monthly      | quantstats adapted (m-rf/12, rf=0)",
+          eng["sharpe_monthly"], qs.stats.sharpe(m_ret_s - rf_month, rf=0.0, periods=12))
+    t.add("sharpe_monthly      | quantstats native rf (geometric deann.)",
+          eng["sharpe_monthly"], qs.stats.sharpe(m_ret_s, rf=RF_ANNUAL, periods=12),
           known_convention_delta=True)
-    t.add("sortino_tv          | numpy engine conv.", eng["sortino_tv"], np_so_tv)
-    t.add("sortino_tv          | empyrical(required_return=rf/12, ann=12)",
-          eng["sortino_tv"], ep.sortino_ratio(m_ret_s, required_return=rf_month, annualization=12))
-    t.add("sortino_tv          | quantstats adapted (m-rf/12, rf=0)",
-          eng["sortino_tv"], qs.stats.sortino(m_ret_s - rf_month, rf=0.0, periods=12))
-    t.add("sortino_tv          | quantstats native rf (geometric deann.)",
-          eng["sortino_tv"], qs.stats.sortino(m_ret_s, rf=RF_ANNUAL, periods=12),
+    t.add("sortino_monthly     | numpy engine conv.", eng["sortino_monthly"], np_so_tv)
+    t.add("sortino_monthly     | empyrical(required_return=rf/12, ann=12)",
+          eng["sortino_monthly"], ep.sortino_ratio(m_ret_s, required_return=rf_month, annualization=12))
+    t.add("sortino_monthly     | quantstats adapted (m-rf/12, rf=0)",
+          eng["sortino_monthly"], qs.stats.sortino(m_ret_s - rf_month, rf=0.0, periods=12))
+    t.add("sortino_monthly     | quantstats native rf (geometric deann.)",
+          eng["sortino_monthly"], qs.stats.sortino(m_ret_s, rf=RF_ANNUAL, periods=12),
           known_convention_delta=True)
     tables.append(t)
 
@@ -556,15 +557,15 @@ def engine_convention_checks(run: dict, cap: float) -> tuple[list, dict]:
          _lib_value(ep.sortino_ratio, r_s, required_return=rf_bar, annualization=bpy)),
         ("sortino_bar", "quantstats", eng["sortino_bar"],
          _lib_value(qs.stats.sortino, r_s - rf_bar, rf=0.0, periods=bpy)),
-        ("sharpe_tv", "numpy", eng["sharpe_tv"], np_sh_tv),
-        ("sharpe_tv", "empyrical", eng["sharpe_tv"],
+        ("sharpe_monthly", "numpy", eng["sharpe_monthly"], np_sh_tv),
+        ("sharpe_monthly", "empyrical", eng["sharpe_monthly"],
          _lib_value(ep.sharpe_ratio, m_ret_s, risk_free=rf_month, annualization=12)),
-        ("sharpe_tv", "quantstats", eng["sharpe_tv"],
+        ("sharpe_monthly", "quantstats", eng["sharpe_monthly"],
          _lib_value(qs.stats.sharpe, m_ret_s - rf_month, rf=0.0, periods=12)),
-        ("sortino_tv", "numpy", eng["sortino_tv"], np_so_tv),
-        ("sortino_tv", "empyrical", eng["sortino_tv"],
+        ("sortino_monthly", "numpy", eng["sortino_monthly"], np_so_tv),
+        ("sortino_monthly", "empyrical", eng["sortino_monthly"],
          _lib_value(ep.sortino_ratio, m_ret_s, required_return=rf_month, annualization=12)),
-        ("sortino_tv", "quantstats", eng["sortino_tv"],
+        ("sortino_monthly", "quantstats", eng["sortino_monthly"],
          _lib_value(qs.stats.sortino, m_ret_s - rf_month, rf=0.0, periods=12)),
         ("cagr", "numpy", eng["cagr"], np_cagr),
         ("calmar", "numpy", eng["calmar"], np_calmar),

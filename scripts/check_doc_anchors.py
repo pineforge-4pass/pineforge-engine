@@ -384,7 +384,7 @@ def symbol_of(span: str) -> tuple[str | None, str]:
 def qualifier_of(span: str) -> str | None:
     """The scope a qualified span claims: ``NativeRiskLimits`` of
     ``NativeRiskLimits::max_fills_per_day``, ``Domain`` of
-    ``exit_legs::Domain::Coof``; None for an unqualified span."""
+    ``exit_legs::Domain::FillRecalc``; None for an unqualified span."""
     text = span.strip()
     for cut in '({<[':
         index = text.find(cut)

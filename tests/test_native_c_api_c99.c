@@ -2,16 +2,13 @@
  * test_native_c_api_c99.c -- the public C headers as a strict C99 consumer
  * sees them (R5 lane F4, item 9).
  *
- * ADR-0001's P2c ruling keeps `sharpe_tv` / `sortino_tv` as deprecated
- * spellings of `sharpe_monthly` / `sortino_monthly`: one double behind an
- * anonymous union, which is a C11 construct. Its portability note promised a
- * strict C99 consumer a warning; under -pedantic-errors it was an error
- * (audit AUDIT3 §2.2 P2c). tests/CMakeLists.txt compiles this translation unit
- * as C99 with extensions off and -pedantic-errors, so any C11-only construct
- * in <pineforge/pineforge.h> or <pineforge/native_c_api.h> fails the build.
- * Its body executes what such a caller relies on: the alias reads one storage
- * both ways, and a native C host configures through the typed enumerations,
- * runs, and reads its words back by their C names.
+ * tests/CMakeLists.txt compiles this translation unit as C99 with extensions
+ * off and -pedantic-errors, so any C11-only construct in the public headers
+ * fails the build. The one they held, the anonymous union behind P2c's
+ * sharpe_tv / sortino_tv aliases, left with those spellings at 1.0 (lane
+ * REL10). Its body checks the equity offsets those spellings shared, and a
+ * native C host configures through the typed enumerations, runs, and reads
+ * its words back by their C names.
  *
  * No assert(): the Release gate defines NDEBUG and would no-op every row.
  */
@@ -65,19 +62,16 @@ static int c99_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_
     return strategy_native_submit_v1(host->handle, &request, NULL, NULL) == PF_NATIVE_OK ? 0 : 1;
 }
 
-static void check_deprecated_alias(void) {
+static void check_equity_layout(void) {
     pf_equity_stats_t stats;
-    CHECK(offsetof(pf_equity_stats_t, sharpe_tv) == offsetof(pf_equity_stats_t, sharpe_monthly),
-          "sharpe_tv is not sharpe_monthly's storage");
-    CHECK(offsetof(pf_equity_stats_t, sortino_tv)
-              == offsetof(pf_equity_stats_t, sortino_monthly),
-          "sortino_tv is not sortino_monthly's storage");
+    CHECK(offsetof(pf_equity_stats_t, sharpe_monthly) == 48, "sharpe_monthly offset");
+    CHECK(offsetof(pf_equity_stats_t, sortino_monthly) == 56, "sortino_monthly offset");
+    CHECK(sizeof(pf_equity_stats_t) == 120, "equity stats size");
     memset(&stats, 0, sizeof(stats));
     stats.sharpe_monthly = 1.25;
-    stats.sortino_tv = -0.5;
-    CHECK(stats.sharpe_tv == 1.25, "a write through sharpe_monthly does not read as sharpe_tv");
-    CHECK(stats.sortino_monthly == -0.5,
-          "a write through sortino_tv does not read as sortino_monthly");
+    stats.sortino_monthly = -0.5;
+    CHECK(stats.sharpe_monthly == 1.25, "sharpe_monthly roundtrip");
+    CHECK(stats.sortino_monthly == -0.5, "sortino_monthly roundtrip");
 }
 
 static void check_native_run(void) {
@@ -170,7 +164,7 @@ static void check_native_run(void) {
 }
 
 int main(void) {
-    check_deprecated_alias();
+    check_equity_layout();
     check_native_run();
     printf("test_native_c_api_c99: %s\n", failures == 0 ? "ok" : "FAILED");
     return failures == 0 ? 0 : 1;

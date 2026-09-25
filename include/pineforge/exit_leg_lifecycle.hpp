@@ -19,17 +19,12 @@ enum class Leg : uint8_t { Stop, Limit, Trail };
 // The observation domain a frame comes from. `FillRecalc` is the
 // fill-recalculation re-entry pass -- the host re-runs its script after a fill
 // and observes the rest of the same bar; `MagnifierFillRecalc` is that pass on
-// a magnified sub-bar. `Coof` / `MagnifierCoof` are the historical spellings
-// (coof = calc-on-order-fills, the Pine adapter's name for the same pass);
-// they are DEPRECATED aliases with identical values and are removed at
-// lifecycle_v2. See ADR-0001 "Deprecated public spellings".
+// a magnified sub-bar. Their pre-1.0 spellings `Coof` / `MagnifierCoof` (coof =
+// calc-on-order-fills, the Pine adapter's name for the same pass) were removed
+// for 1.0; the values (1 and 3) and the underlying type are unchanged. See
+// ADR-0001 "Deprecated public spellings".
 enum class Domain : uint8_t {
     Ordinary, FillRecalc, Magnifier, MagnifierFillRecalc, RawTicks,
-    Coof [[deprecated("Coof is the historical spelling of FillRecalc; removed at lifecycle_v2")]]
-        = FillRecalc,
-    MagnifierCoof [[deprecated("MagnifierCoof is the historical spelling of "
-                               "MagnifierFillRecalc; removed at lifecycle_v2")]]
-        = MagnifierFillRecalc,
 };
 enum class Phase : uint8_t { Observation, AfterMargin };
 enum class Fold : uint8_t { Prefix, Continue };

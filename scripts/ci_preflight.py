@@ -207,6 +207,9 @@ def check_commands(source: Path) -> list[tuple]:
         # every mutation of the recorded battery the full sweep caught.
         ('corpus-parity-subset-cover-tests',
          [sys.executable, str(source / 'scripts/test_corpus_parity_subset_cover.py')]),
+        # Lane REL10: the JSON report keys outlive the removed C spellings.
+        ('report-schema-key-tests',
+         [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
         ('design-inventory-tests',
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',

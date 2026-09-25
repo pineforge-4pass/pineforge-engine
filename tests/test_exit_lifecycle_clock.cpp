@@ -29,8 +29,8 @@ Lifecycle window(Domain domain) {
     return x;
 }
 void observation_windows() {
-    for (Domain domain : {Domain::Ordinary, Domain::Coof, Domain::Magnifier,
-                          Domain::MagnifierCoof, Domain::RawTicks}) {
+    for (Domain domain : {Domain::Ordinary, Domain::FillRecalc, Domain::Magnifier,
+                          Domain::MagnifierFillRecalc, Domain::RawTicks}) {
         for (Fold fold : {Fold::Prefix, Fold::Continue}) {
             auto x = window(domain); const auto before = facts(x);
             for (int64_t bar : {9, 10}) for (Phase phase : {Phase::Observation, Phase::AfterMargin}) {
@@ -75,8 +75,8 @@ Lifecycle staged(Domain domain) {
     CHECK(x.apply(x.target(), create) == Result::Applied); return x;
 }
 void completion_clocks() {
-    for (Domain domain : {Domain::Ordinary, Domain::Coof, Domain::Magnifier,
-                          Domain::MagnifierCoof, Domain::RawTicks}) {
+    for (Domain domain : {Domain::Ordinary, Domain::FillRecalc, Domain::Magnifier,
+                          Domain::MagnifierFillRecalc, Domain::RawTicks}) {
         auto x = staged(domain); const auto before = facts(x);
         const Frame occurrence{11, 10, domain, Phase::AfterMargin};
         for (Frame receipt : {Frame{12, 9, domain, Phase::AfterMargin},
@@ -97,15 +97,15 @@ void completion_clocks() {
     }
     auto routed = staged(Domain::Ordinary); const auto before = facts(routed);
     auto inconsistent = action(routed, {12, 9, Domain::Ordinary, Phase::AfterMargin},
-        CompleteBarrier{{11, 1, Domain::Coof, Phase::AfterMargin}, routed.release_barrier()});
+        CompleteBarrier{{11, 1, Domain::FillRecalc, Phase::AfterMargin}, routed.release_barrier()});
     CHECK(routed.apply(routed.target(), inconsistent) == Result::InvalidAction);
     CHECK(facts(routed) == before);
-    auto future_cross = action(routed, {12, 1, Domain::Coof, Phase::AfterMargin},
+    auto future_cross = action(routed, {12, 1, Domain::FillRecalc, Phase::AfterMargin},
         CompleteBarrier{{13, 11, Domain::Ordinary, Phase::AfterMargin}, routed.release_barrier()});
     CHECK(routed.apply(routed.target(), future_cross) == Result::InvalidAction);
     CHECK(facts(routed) == before);
-    auto selected = action(routed, {12, 1, Domain::Coof, Phase::AfterMargin},
-        CompleteBarrier{{11, 1, Domain::Coof, Phase::AfterMargin}, routed.release_barrier()});
+    auto selected = action(routed, {12, 1, Domain::FillRecalc, Phase::AfterMargin},
+        CompleteBarrier{{11, 1, Domain::FillRecalc, Phase::AfterMargin}, routed.release_barrier()});
     CHECK(routed.apply(routed.target(), selected) == Result::Applied);
     CHECK(!routed.pending_replacement());
 }

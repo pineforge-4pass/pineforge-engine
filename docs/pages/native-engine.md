@@ -4380,18 +4380,18 @@ surface"); the short version:
   layer alone, and a bare host's `strategy_pending_orders_len` is 0. The
   neutral view is `native_working_requests()`. Each family has its ADR row,
   listing every name, and the gate above holds the list.
-- **Deprecated public spellings** (`docs/adr/0001-kernel-adapter-boundary.md`,
-  "Deprecated public spellings" — a separate table, deliberately outside the
-  residual section the gate parses, because none of these names is a symbol or
-  a literal in the archive). The C ABI's `pf_equity_stats_t::sharpe_tv` /
-  `sortino_tv` are now `sharpe_monthly` / `sortino_monthly` — the same `double`
-  at the same offset behind a C11 anonymous union, so nothing an FFI consumer
-  links or reads moves; the old spelling is deprecated and removed at the next
-  `PF_ABI_VERSION`, and the serialized report key stays `sharpe_tv`. The
-  standalone `lifecycle_v1` enumerators `exit_legs::Domain::Coof` /
-  `MagnifierCoof` are now `FillRecalc` / `MagnifierFillRecalc` (the
-  fill-recalculation re-entry pass), with the old names kept as
-  value-identical aliases until `lifecycle_v2`. <!-- verified HEAD -->
+- **Deprecated public spellings, removed for 1.0**
+  (`docs/adr/0001-kernel-adapter-boundary.md`, "Deprecated public spellings" —
+  a separate table, outside the residual section the gate parses, because none
+  of these names is a symbol or a literal in the archive). The C ABI's
+  `pf_equity_stats_t::sharpe_monthly` / `sortino_monthly` were also spelled
+  `sharpe_tv` / `sortino_tv` before 1.0, the same `double` at the same offset;
+  the old spelling is gone, nothing an FFI consumer links or reads moved, and
+  the serialized report key stays `sharpe_tv`. The standalone `lifecycle_v1`
+  enumerators `exit_legs::Domain::FillRecalc` / `MagnifierFillRecalc` (the
+  fill-recalculation re-entry pass) were also spelled `Coof` / `MagnifierCoof`
+  before 1.0, with the same values. `test_removed_public_spellings` holds that
+  each old spelling fails to compile.
 - **The ambient EMA seeding default.** `ta::EMA` seeds from its first finite
   input (`EmaSeeding::FirstValue`, the default) or from the simple average
   of its first `length` inputs (`EmaSeeding::SimpleAverage`, na for the

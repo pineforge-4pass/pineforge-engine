@@ -130,7 +130,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +3 F12 example_native_fee_reserve_strategy, example_native_fx_roll_strategy,
 #          example_native_broker_hash_strategy
 #   +3 F6  test_f6_dead_kernel_members, test_timeframe_trace_switch_once,
-#          test_deprecated_public_spellings
+#          test_removed_public_spellings (renamed by lane REL10)
 #   +1 F3  test_native_bare_host_contracts
 #   +1 F4  test_native_c_api_c99
 #   +1 F5  test_native_session_day_facts
@@ -393,8 +393,12 @@ RELEASE_MIN_TESTS = 693
 # edit of this file. A lane that adds rulings raises the floor with them:
 # 46 texts once the lane also ruled Eigen's `matrix.cols() ==
 # matrix.rows()` assert text, which a debug or sanitizers archive carries.
-ADR_RULED_IDENTIFIERS_MIN = 174
-ADR_RULED_TEXTS_MIN = 46
+# 170 identifiers and 40 texts once lane REL10 removed the four deprecated
+# spellings for 1.0 (sharpe_tv, sortino_tv, Coof, MagnifierCoof): their names
+# and their six deprecation and static_assert texts left the headers, the
+# archive and the ADR's residual table together (INT26 pick of 38e8ad1e).
+ADR_RULED_IDENTIFIERS_MIN = 170
+ADR_RULED_TEXTS_MIN = 40
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,

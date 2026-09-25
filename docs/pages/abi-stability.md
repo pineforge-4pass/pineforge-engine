@@ -185,24 +185,22 @@ moves -- a declaring host's run is its empty-hook run, value for value -- and
 no C symbol is added: a C host declares both from its `pf_native_callbacks_v1`,
 a table without `on_bar_open` or `on_precommit`.
 
-R5 gap lane P2c gives two TradingView-named public surfaces a generic primary
-spelling without an epoch, because an alias needs none.
-`pf_equity_stats_t::sharpe_tv` / `sortino_tv` are now
-`sharpe_monthly` / `sortino_monthly`: each pair is one `double` behind a C11
-anonymous union of two same-typed members, so `sizeof(pf_equity_stats_t)`
-(120), the field offsets (48, 56) and `offsetof(pf_metrics_t, equity)` (648)
-are unchanged, `static_assert`s in `src/c_abi.cpp` pin them, and a consumer
-compiled against either spelling reads the same storage. The standalone
-`pineforge::exit_legs::lifecycle_v1` enumerators `Domain::Coof` /
-`MagnifierCoof` are now `Domain::FillRecalc` / `MagnifierFillRecalc`, with the
-old names kept as value-identical aliases (`== 1` and `== 3`, underlying type
-still `uint8_t`, `RawTicks` still 4). Both old spellings are DEPRECATED: the C
-fields are removed at the next `PF_ABI_VERSION`, the enumerators at
-`lifecycle_v2`. Serialized report keys are unaffected — a report dictionary <!-- verified HEAD -->
-still carries `sharpe_tv` / `sortino_tv`. Compile the public C header as C11 or
-later (the project's own `CMAKE_C_STANDARD` is 11 and the native C examples
-document `cc -std=c11`); strict C99 accepts the anonymous union with a
-`-Wc11-extensions` warning. Rulings of record: ADR-0001, "Deprecated public
+R5 gap lane P2c gave two TradingView-named public surfaces a generic primary
+spelling without an epoch, because an alias needs none, and lane REL10 removed
+the old spellings for 1.0 without one, because removing an alias moves
+nothing. The C fields are `pf_equity_stats_t::sharpe_monthly` /
+`sortino_monthly` (pre-1.0 also `sharpe_tv` / `sortino_tv`):
+`sizeof(pf_equity_stats_t)` (120), the field offsets (48, 56) and
+`offsetof(pf_metrics_t, equity)` (648) are unchanged, and `static_assert`s in
+`src/c_abi.cpp` pin them. The standalone `pineforge::exit_legs::lifecycle_v1`
+enumerators are `Domain::FillRecalc` / `MagnifierFillRecalc` (pre-1.0 also
+`Coof` / `MagnifierCoof`), still `== 1` and `== 3`, underlying type still
+`uint8_t`, `RawTicks` still 4. `test_removed_public_spellings` holds that each
+old spelling fails to compile. Serialized report keys are unaffected: a report
+dictionary still carries `sharpe_tv` / `sortino_tv`
+(`scripts/test_report_schema_keys.py`). With the anonymous union gone, the
+public C headers are plain C99, which `test_native_c_api_c99` compiles at
+`-std=c99 -pedantic-errors`. Rulings of record: ADR-0001, "Deprecated public
 spellings".
 
 The two relocation manifests remain reviewed descriptions of the v16→v18 source

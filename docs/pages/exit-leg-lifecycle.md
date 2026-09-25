@@ -47,10 +47,10 @@ barriers retain their requesting event/domain; completion identifies that exact
 barrier and an actual after-margin hook. Completion cannot follow the action's
 processing receipt; separate events caused by an owner bind retain that hook's
 phase. Ordinary, fill-recalculation (`Domain::FillRecalc`, the host's
-re-entry pass after a fill — shipped as the deprecated `Domain::Coof`, for
-TradingView's `calc_on_order_fills`) and both magnifier hooks
-(`Domain::Magnifier`, `Domain::MagnifierFillRecalc`, the latter shipped as
-`Domain::MagnifierCoof`) remain explicit. Raw-tick bar advancement supplies no such completion.
+re-entry pass after a fill — spelled `Domain::Coof`, for TradingView's
+`calc_on_order_fills`, before 1.0) and both magnifier hooks
+(`Domain::Magnifier`, `Domain::MagnifierFillRecalc`, the latter spelled
+`Domain::MagnifierCoof` before 1.0) remain explicit. Raw-tick bar advancement supplies no such completion.
 
 ## Bounded replay contract
 

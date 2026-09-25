@@ -46,38 +46,25 @@ int main(void) {
         memset(&m, 0, sizeof(m));
         memset(&p, 0, sizeof(p));
         m.all.num_trades = 42;
-        m.equity.sharpe_tv = 1.5;
+        m.equity.sharpe_monthly = 1.5;
         p.time_ms = 1700000000000LL;
         CHECK(m.all.num_trades == 42,             "m.all.num_trades roundtrip");
-        CHECK(m.equity.sharpe_tv == 1.5,          "m.equity.sharpe_tv roundtrip");
+        CHECK(m.equity.sharpe_monthly == 1.5,     "m.equity.sharpe_monthly roundtrip");
         CHECK(p.time_ms == 1700000000000LL,       "p.time_ms roundtrip");
 
-        /* R5 gap lane P2c: sharpe_monthly / sortino_monthly are the generic
-         * spelling of the fields this ABI shipped as sharpe_tv / sortino_tv.
-         * The old names are DEPRECATED aliases, removed at the next
-         * PF_ABI_VERSION (ADR-0001, "Deprecated public spellings"). Both
-         * spellings must name ONE double at ONE offset, in both directions,
-         * with no growth of the struct. Checked from C because that is the
-         * language of the contract. */
-        CHECK(m.equity.sharpe_monthly == 1.5,
-              "m.equity.sharpe_monthly reads what sharpe_tv wrote");
+        /* sharpe_monthly / sortino_monthly are plain doubles since their
+         * pre-1.0 spellings sharpe_tv / sortino_tv, P2c's aliases of the same
+         * storage, were removed for 1.0 (lane REL10; ADR-0001, "Deprecated
+         * public spellings"). Each still reads what it wrote, and the
+         * offsets and the size measured on 1974e87e, the commit before the
+         * alias, are unmoved. Checked from C because that is the language of
+         * the contract. */
         m.equity.sharpe_monthly = -0.25;
-        CHECK(m.equity.sharpe_tv == -0.25,
-              "m.equity.sharpe_tv reads what sharpe_monthly wrote");
+        CHECK(m.equity.sharpe_monthly == -0.25,
+              "m.equity.sharpe_monthly roundtrip");
         m.equity.sortino_monthly = 3.75;
-        CHECK(m.equity.sortino_tv == 3.75,
-              "m.equity.sortino_tv reads what sortino_monthly wrote");
-        m.equity.sortino_tv = -1.125;
-        CHECK(m.equity.sortino_monthly == -1.125,
-              "m.equity.sortino_monthly reads what sortino_tv wrote");
-        CHECK(offsetof(pf_equity_stats_t, sharpe_monthly)
-                  == offsetof(pf_equity_stats_t, sharpe_tv),
-              "sharpe_monthly / sharpe_tv share one offset");
-        CHECK(offsetof(pf_equity_stats_t, sortino_monthly)
-                  == offsetof(pf_equity_stats_t, sortino_tv),
-              "sortino_monthly / sortino_tv share one offset");
-        /* The offsets and the size measured on 1974e87e, the commit before
-         * the alias: the union must not move or grow anything. */
+        CHECK(m.equity.sortino_monthly == 3.75,
+              "m.equity.sortino_monthly roundtrip");
         CHECK(offsetof(pf_equity_stats_t, sharpe_monthly) == 48,
               "pf_equity_stats_t::sharpe_monthly is still at offset 48");
         CHECK(offsetof(pf_equity_stats_t, sortino_monthly) == 56,

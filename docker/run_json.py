@@ -611,11 +611,10 @@ class EquityStatsC(ctypes.Structure):
         ("max_equity_drawdown", ctypes.c_double), ("max_equity_drawdown_pct", ctypes.c_double),
         ("max_equity_runup", ctypes.c_double), ("max_equity_runup_pct", ctypes.c_double),
         ("buy_hold_return", ctypes.c_double), ("buy_hold_return_pct", ctypes.c_double),
-        # Historical member names of the C fields sharpe_monthly /
-        # sortino_monthly. ctypes matches by offset, never by the C field's
-        # name, and these strings are the serialized report keys, so the mirror
-        # keeps them (ADR-0001, "Deprecated public spellings").
-        ("sharpe_tv", ctypes.c_double), ("sortino_tv", ctypes.c_double),
+        # The C field names. _stats_dict writes these two under their JSON
+        # report keys sharpe_tv / sortino_tv (ADR-0001, "Deprecated public
+        # spellings"), so the report schema does not change.
+        ("sharpe_monthly", ctypes.c_double), ("sortino_monthly", ctypes.c_double),
         ("sharpe_bar", ctypes.c_double), ("sortino_bar", ctypes.c_double),
         ("cagr", ctypes.c_double), ("calmar", ctypes.c_double),
         ("recovery_factor", ctypes.c_double), ("time_in_market_pct", ctypes.c_double),
@@ -843,14 +842,23 @@ def _num(x):
     return f if math.isfinite(f) else None
 
 
+# The JSON report keys of pf_equity_stats_t's two monthly ratios. They are
+# report-schema names: the C fields are sharpe_monthly / sortino_monthly (their
+# pre-1.0 spellings were removed for 1.0), the keys did not change (ADR-0001,
+# "Deprecated public spellings").
+EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}
+
+
 def _stats_dict(s) -> dict:
     """Serialize a pf_trade_stats_t / pf_equity_stats_t ctypes struct to a dict,
     keying off each field's ctype: integer counters stay ints, every double is
-    sanitized through _num. Driven by _fields_ so it tracks the struct verbatim."""
+    sanitized through _num. Driven by _fields_ so it tracks the struct verbatim;
+    an equity struct's two monthly ratios take their EQUITY_REPORT_KEYS."""
+    keys = EQUITY_REPORT_KEYS if isinstance(s, EquityStatsC) else {}
     out = {}
     for name, ctype in s._fields_:
         v = getattr(s, name)
-        out[name] = _num(v) if ctype is ctypes.c_double else int(v)
+        out[keys.get(name, name)] = _num(v) if ctype is ctypes.c_double else int(v)
     return out
 
 

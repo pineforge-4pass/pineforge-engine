@@ -83,28 +83,6 @@
   #define PF_API
 #endif
 
-/* A public spelling kept only as a value-identical alias for compiled
- * consumers (ADR-0001 "Deprecated public spellings"): a consumer that still
- * names it compiles, with the compiler's deprecation diagnostic. */
-#if defined(__GNUC__) || defined(__clang__)
-  #define PF_DEPRECATED(msg) __attribute__((deprecated(msg)))
-#elif defined(_MSC_VER)
-  #define PF_DEPRECATED(msg) __declspec(deprecated(msg))
-#else
-  #define PF_DEPRECATED(msg)
-#endif
-
-/* An anonymous union member: C11 and C++ have them, and so does every
- * compiler this runtime builds with, but strict C99 does not -- a C99
- * consumer compiling with -pedantic-errors would reject the declaration.
- * GCC and Clang mark it __extension__, which exempts exactly that one
- * declaration from -pedantic and nothing else in the consumer. */
-#if defined(__GNUC__) || defined(__clang__)
-  #define PF_ANONYMOUS_UNION __extension__ union
-#else
-  #define PF_ANONYMOUS_UNION union
-#endif
-
 /** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
  *  whenever a caller-visible struct grows. Consumers MUST verify
  *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest.
@@ -306,32 +284,16 @@ typedef struct pf_equity_stats_s {
      *  bucketing), risk-free 2%/yr (2/12 per month), annualized by sqrt(12).
      *  Uses sample (N-1) stddev. NaN with <2 monthly returns or zero deviation.
      *
-     *  `sharpe_tv` is the historical spelling of this same field. Both names
-     *  are one `double` at one offset (an anonymous union of two members of
-     *  the same type, #PF_ANONYMOUS_UNION so a strict C99 consumer compiles
-     *  it too), so the struct's size and every field offset are unchanged and
-     *  a caller compiled against either spelling reads the same storage. The old spelling is DEPRECATED and is removed at the next
-     *  #PF_ABI_VERSION; see ADR-0001 "Deprecated public spellings". The
-     *  serialized report key stays `sharpe_tv` (report-schema name). */
-    PF_ANONYMOUS_UNION {
-        double sharpe_monthly;
-        PF_DEPRECATED("sharpe_tv is the historical spelling of sharpe_monthly; "
-                      "removed at PF_ABI_VERSION 5")
-        double sharpe_tv;              /**< Deprecated spelling of
-                                        *   pf_equity_stats_s::sharpe_monthly. */
-    };
+     *  Its pre-1.0 spelling `sharpe_tv` named this same double at this same
+     *  offset (48) and was removed for 1.0; the serialized report key is still
+     *  `sharpe_tv` (report-schema name). */
+    double sharpe_monthly;
     /** Same resampling as sharpe_monthly; uses population downside deviation
      *  vs the monthly risk-free. NaN with <2 monthly returns or zero deviation.
      *
-     *  `sortino_tv` is the historical spelling of this same field, on the same
-     *  terms as sharpe_monthly / sharpe_tv above. */
-    PF_ANONYMOUS_UNION {
-        double sortino_monthly;
-        PF_DEPRECATED("sortino_tv is the historical spelling of sortino_monthly; "
-                      "removed at PF_ABI_VERSION 5")
-        double sortino_tv;             /**< Deprecated spelling of
-                                        *   pf_equity_stats_s::sortino_monthly. */
-    };
+     *  Its pre-1.0 spelling `sortino_tv` (offset 56) was removed the same way;
+     *  the serialized report key is still `sortino_tv`. */
+    double sortino_monthly;
     double sharpe_bar;                 /**< Per-script-bar returns, annualized by observed bar density
                                         *   (bars per year = (len-1)/calendar span), NOT a fixed
                                         *   calendar formula. Uses sample (N-1) stddev.

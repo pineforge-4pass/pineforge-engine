@@ -73,7 +73,7 @@ every **script-bar close**, timestamped with the script-bar **open** time
 | `max_equity_drawdown` (+`_pct`) | Peak-to-trough equity drop, positive currency; pct vs the peak in effect | — (0 when flat) |
 | `max_equity_runup` (+`_pct`) | Trough-to-peak rise, **trough resets on each new equity peak** (mirrors the engine's intra-run extremes); pct vs that trough | — |
 | `buy_hold_return` (+`_pct`) | `initial_capital · (last_close/first_open − 1)` | first open non-finite or ≤ 0 |
-| `sharpe_monthly` / `sortino_monthly` | Month-end-resampled equity simple returns (chart tz, open-time bucketing), risk-free 2 %/yr (2/12 per month), annualized ×√12. Sharpe: sample (N−1) stddev. Sortino: population downside deviation vs the monthly risk-free. Deprecated alias: `sharpe_tv` / `sortino_tv` — the same `double` at the same offset, removed at the next `PF_ABI_VERSION`; the **serialized report key stays `sharpe_tv` / `sortino_tv`** (see @ref report_schema) | < 2 monthly returns, or zero deviation |
+| `sharpe_monthly` / `sortino_monthly` | Month-end-resampled equity simple returns (chart tz, open-time bucketing), risk-free 2 %/yr (2/12 per month), annualized ×√12. Sharpe: sample (N−1) stddev. Sortino: population downside deviation vs the monthly risk-free. The pre-1.0 C spelling `sharpe_tv` / `sortino_tv` (the same `double` at the same offset) was removed for 1.0; the **serialized report key stays `sharpe_tv` / `sortino_tv`** (see @ref report_schema) | < 2 monthly returns, or zero deviation |
 | `sharpe_bar` / `sortino_bar` | Same construction over per-script-bar returns, annualized by **observed bar density** (`bars/yr = (len−1)/calendar span`) — not a fixed calendar formula | < 2 returns, or zero deviation |
 | `cagr` | `100 · ((final_equity/initial_capital)^(1/years) − 1)`, calendar span | span ≤ 0, or either side ≤ 0 |
 | `calmar` | `cagr / max_equity_drawdown_pct` (both percent → dimensionless) | zero drawdown |
@@ -103,8 +103,8 @@ exactly from the engine curve:
 
 | TV panel row | TV's actual construction | Engine field & difference |
 | --- | --- | --- |
-| Sharpe ratio | Monthly returns of **realized** equity (open profit excluded), account-currency, UTC months, rf 2 %/12, **population** stddev, **not annualized** | `sharpe_monthly` (historical spelling `sharpe_tv`): mark-to-market equity, chart-tz months, sample stddev, ×√12 |
-| Sortino ratio | Same series, population downside dev vs rf, not annualized | `sortino_monthly` (historical spelling `sortino_tv`) = TV × √12 (same convention otherwise — matches to 4 decimals after de-annualizing) |
+| Sharpe ratio | Monthly returns of **realized** equity (open profit excluded), account-currency, UTC months, rf 2 %/12, **population** stddev, **not annualized** | `sharpe_monthly` (report key `sharpe_tv`): mark-to-market equity, chart-tz months, sample stddev, ×√12 |
+| Sortino ratio | Same series, population downside dev vs rf, not annualized | `sortino_monthly` (report key `sortino_tv`) = TV × √12 (same convention otherwise — matches to 4 decimals after de-annualizing) |
 | Max/avg drawdown & run-up "(close-to-close)" | Realized equity sampled at **trade exits only**, split into alternating phases at the global max/min; phase value = endpoint-to-endpoint change (durations in days corroborate) | `max_equity_drawdown/runup`: per-script-bar curve with trough-reset walk |
 | Max DD / run-up "(intrabar)" | Settled realized curve (with entry-commission dips) vs per-trade excursion extremes | closest to the engine's per-bar walk; reproduced exactly from trade MFE/MAE |
 | CAGR | Net over the **configured backtesting range** day count, 365-day year | `cagr`: traded calendar span, 365.25 |
@@ -118,9 +118,8 @@ durations, intrabar excursion variants, account-size/margin rows. The retired re
 
 ```python
 report.metrics.all.profit_factor        # ctypes mirror, see FFI page
-report.metrics.equity.sharpe_tv         # the ctypes mirror keeps the historical
-                                        # member name of equity.sharpe_monthly;
-                                        # it is also the serialized JSON key
+report.metrics.equity.sharpe_monthly    # the C field name; the serialized
+                                        # JSON key of this field is sharpe_tv
 curve = report.equity_curve[:report.equity_curve_len]
 ```
 

@@ -239,31 +239,20 @@ static_assert(offsetof(pf_report_t, broker_state_hash) == offsetof(pineforge::Re
 static_assert(offsetof(pf_report_t, broker_state_hash_len) == offsetof(pineforge::ReportC, broker_state_hash_len),
               "pf_report_t::broker_state_hash_len offset mismatch");
 
-/* ── Equity-stats deprecated-spelling parity (R5 gap lane P2c) ──── */
-/* sharpe_monthly / sortino_monthly are the generic spelling of the fields
- * this ABI shipped as sharpe_tv / sortino_tv. Each pair is ONE double behind a
- * C11 anonymous union of two same-typed members, so the old spelling stays
- * valid and no offset, no size and no value moves. These assertions pin the
- * numbers measured on the commit before the alias (1974e87e, arm64 macOS and
- * the LP64 C ABI generally): sizeof 120, the pair at 48 and 56, and
- * pf_metrics_t::equity at 648. The old spelling is removed at the next
- * PF_ABI_VERSION; until then both names must keep answering one offset. */
+/* ── Equity-stats layout (R5 gap lane P2c; removal for 1.0, lane REL10) ── */
+/* sharpe_monthly / sortino_monthly are plain doubles again: their pre-1.0
+ * spellings sharpe_tv / sortino_tv, which shared that storage through an
+ * anonymous union, were removed for 1.0. These assertions pin the numbers
+ * measured on 1974e87e, the commit before the union (arm64 macOS and the
+ * LP64 C ABI generally): sizeof 120, the pair at 48 and 56, and
+ * pf_metrics_t::equity at 648. Neither the union nor its removal moved an
+ * offset or a size. */
 static_assert(sizeof(pf_equity_stats_t) == 120,
-              "pf_equity_stats_t size moved; the deprecated-spelling union must not grow it");
+              "pf_equity_stats_t size moved");
 static_assert(offsetof(pf_equity_stats_t, sharpe_monthly) == 48,
               "pf_equity_stats_t::sharpe_monthly offset moved");
 static_assert(offsetof(pf_equity_stats_t, sortino_monthly) == 56,
               "pf_equity_stats_t::sortino_monthly offset moved");
-/* The two assertions below name the deprecated spellings on purpose (they are
- * what pins each alias to its generic storage), so they compile without the
- * deprecation diagnostic every other use of those names draws. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-static_assert(offsetof(pf_equity_stats_t, sharpe_tv) == offsetof(pf_equity_stats_t, sharpe_monthly),
-              "the deprecated sharpe_tv spelling must name the sharpe_monthly storage");
-static_assert(offsetof(pf_equity_stats_t, sortino_tv) == offsetof(pf_equity_stats_t, sortino_monthly),
-              "the deprecated sortino_tv spelling must name the sortino_monthly storage");
-#pragma GCC diagnostic pop
 static_assert(offsetof(pf_equity_stats_t, sharpe_bar) == 64,
               "pf_equity_stats_t::sharpe_bar offset moved");
 static_assert(offsetof(pf_equity_stats_t, open_pl) == 112,

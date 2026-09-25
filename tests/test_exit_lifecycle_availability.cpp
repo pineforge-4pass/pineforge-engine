@@ -29,7 +29,7 @@ public:
         (leg==Leg::Stop||both)?(buy_?95:105):na,na,leg==Leg::Trail?1:na,leg==Leg::Trail?(buy_?110:90):na);}
     void action(Operation op,const std::string& id="X"){
         auto& o=get(id);if(o.legs.last_action())exit_leg_event_seq_=std::max(exit_leg_event_seq_,o.legs.last_action()->cause.event);
-        Frame f{++exit_leg_event_seq_,bar_index_,coof_?Domain::Coof:Domain::Ordinary,Phase::Observation};
+        Frame f{++exit_leg_event_seq_,bar_index_,coof_?Domain::FillRecalc:Domain::Ordinary,Phase::Observation};
         Action a{o.legs.target(),o.legs.revision(),f,std::move(op)};CHECK(o.legs.apply(o.legs.target(),a)==Result::Applied);
     }
     double metric(){Bar bar{100,110,90,100,1,0};return internal::exit_order_earliest_path_metric_no_trail(bar,true,get(),position_side_,false,100,position_cycle_seq_,bar_index_);}
@@ -83,7 +83,7 @@ public:
             stop_?selected:(sibling_ready_?(buy_?9.90:10.26):(buy_?5:20)));
         auto& o=pending_orders_.back();o.leg_activation.bind({position_cycle_seq_,2,2});
         if(o.legs.last_action())exit_leg_event_seq_=std::max(exit_leg_event_seq_,o.legs.last_action()->cause.event);
-        Frame f{++exit_leg_event_seq_,bar_index_,Domain::Coof,Phase::Observation};Leg leg=stop_?Leg::Stop:Leg::Limit;
+        Frame f{++exit_leg_event_seq_,bar_index_,Domain::FillRecalc,Phase::Observation};Leg leg=stop_?Leg::Stop:Leg::Limit;
         Operation op=suspend_?Operation{Suspend{{leg},{},{},{}}}:Operation{Cancel{{leg}}};
         Action a{o.legs.target(),o.legs.revision(),f,op};CHECK(o.legs.apply(o.legs.target(),a)==Result::Applied);
     }

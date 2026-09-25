@@ -216,14 +216,13 @@ by sqrt(12)) and `sharpe_bar` / `sortino_bar` (per-script-bar
 returns annualized by observed bar density) — plus `cagr`, `calmar`,
 `recovery_factor`, `time_in_market_pct`, and `open_pl`.
 
-`sharpe_tv` / `sortino_tv` are the historical spelling of
-`sharpe_monthly` / `sortino_monthly`: one `double` at one offset behind a
-C11 anonymous union, deprecated in the C header and removed at the next
-`PF_ABI_VERSION`. **The serialized keys do not change**: a report
-dictionary still carries `sharpe_tv` and `sortino_tv`, and they are ruled
-report-schema names — the historical spelling of `sharpe_monthly` /
-`sortino_monthly` — so no consumer of this schema has to change. See
-ADR-0001, "Deprecated public spellings".
+The C fields behind `sharpe_tv` / `sortino_tv` are
+`pf_equity_stats_t::sharpe_monthly` / `sortino_monthly`; the pre-1.0 C
+spelling `sharpe_tv` / `sortino_tv` of those fields was removed for 1.0.
+**The serialized keys do not change**: a report dictionary still carries
+`sharpe_tv` and `sortino_tv`, ruled report-schema names, so no consumer of
+this schema has to change (`scripts/test_report_schema_keys.py` pins the
+`metrics.equity` keys). See ADR-0001, "Deprecated public spellings".
 
 **NaN convention:** any statistic whose denominator is empty or zero is
 `NaN`, never 0 or an infinity — e.g. `profit_factor` with zero gross

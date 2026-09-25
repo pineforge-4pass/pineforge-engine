@@ -282,7 +282,7 @@ static pf_equity_point_t pt(int64_t ms, double eq) {
 static const int64_t kJan = 1706702400000LL, kFeb = 1709208000000LL,
                      kMar = 1711886400000LL, kApr = 1714478400000LL;
 
-static void test_equity_stats_sharpe_sortino_tv() {
+static void test_equity_stats_sharpe_sortino_monthly() {
     std::printf("equity stats: TV monthly sharpe/sortino\n");
     // equities 1000 -> 1100 -> 990 -> 1089 : monthly returns +10%, -10%, +10%
     pf_equity_point_t c[4] = { pt(kJan,1000), pt(kFeb,1100), pt(kMar,990), pt(kApr,1089) };
@@ -296,8 +296,8 @@ static void test_equity_stats_sharpe_sortino_tv() {
     //   sortino numerator same; population downside dev vs rf:
     //     d = min(0, -0.1 - rf)^2 / 3 => dd = |(-61/600)| / sqrt(3)
     //     sortino = (mean - rf) / dd * sqrt(12) = 114/61
-    CHECK(std::fabs(e.sharpe_tv  - 0.95) < 1e-9);                   // 19/20
-    CHECK(std::fabs(e.sortino_tv - 1.8688524590163935) < 1e-9);     // 114/61
+    CHECK(std::fabs(e.sharpe_monthly  - 0.95) < 1e-9);                   // 19/20
+    CHECK(std::fabs(e.sortino_monthly - 1.8688524590163935) < 1e-9);     // 114/61
     CHECK(std::fabs(e.buy_hold_return - 100.0) < 1e-12);       // 1000*(110/100-1)
     CHECK(std::fabs(e.buy_hold_return_pct - 10.0) < 1e-12);
     CHECK(std::fabs(e.time_in_market_pct - 50.0) < 1e-12);     // 2/4
@@ -319,7 +319,7 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
     CHECK(!std::isnan(e.cagr));
-    CHECK(std::isnan(e.sharpe_tv));   // single month bucket -> <2 returns
+    CHECK(std::isnan(e.sharpe_monthly));   // single month bucket -> <2 returns
 }
 
 static void test_equity_stats_edges() {
@@ -327,13 +327,13 @@ static void test_equity_stats_edges() {
     pf_equity_point_t flat[3] = { pt(kJan,1000), pt(kFeb,1000), pt(kMar,1000) };
     pf_equity_stats_t f = pineforge::metrics::compute_equity_stats(
         flat, 3, 1000.0, "", 100.0, 100.0, 0, 0.0);
-    CHECK(std::isnan(f.sharpe_tv));            // zero deviation
+    CHECK(std::isnan(f.sharpe_monthly));            // zero deviation
     CHECK(std::isnan(f.calmar));               // zero drawdown
     CHECK(std::isnan(f.recovery_factor));
     CHECK(f.max_equity_drawdown == 0.0);
     pf_equity_stats_t z = pineforge::metrics::compute_equity_stats(
         nullptr, 0, 1000.0, "", kNaN_test(), kNaN_test(), 0, 0.0);
-    CHECK(std::isnan(z.sharpe_tv));
+    CHECK(std::isnan(z.sharpe_monthly));
     CHECK(std::isnan(z.cagr));
     CHECK(std::isnan(z.buy_hold_return));
     CHECK(z.max_equity_drawdown == 0.0);
@@ -484,8 +484,8 @@ static void test_equity_stats_per_bar_oracle() {
     pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
         c, 5, 1000.0, "", /*first_open=*/100.0, /*last_close=*/100.0,
         /*bars_in_market=*/0, /*net_profit=*/19.99799);
-    // All 5 points in same UTC month -> single bucket -> sharpe_tv NaN.
-    CHECK(std::isnan(e.sharpe_tv));
+    // All 5 points in same UTC month -> single bucket -> sharpe_monthly NaN.
+    CHECK(std::isnan(e.sharpe_monthly));
     // Per-bar values from python oracle above.
     CHECK(std::fabs(e.sharpe_bar  - 9.451108474837675) < 1e-9);
     CHECK(std::fabs(e.sortino_bar - 18.79927771509577) < 1e-9);
@@ -527,14 +527,14 @@ static void test_equity_stats_non_utc_bucketing() {
     // UTC: first point in Feb -> 2 buckets (Feb, Mar) -> 1 return -> NaN.
     pf_equity_stats_t utc = pineforge::metrics::compute_equity_stats(
         c, 3, 1000.0, "", 100.0, 100.0, 0, -10.0);
-    CHECK(std::isnan(utc.sharpe_tv));
+    CHECK(std::isnan(utc.sharpe_monthly));
 
     // NY: first point in Jan -> 3 buckets (Jan, Feb, Mar) -> 2 returns -> finite.
     pf_equity_stats_t ny = pineforge::metrics::compute_equity_stats(
         c, 3, 1000.0, "America/New_York", 100.0, 100.0, 0, -10.0);
-    CHECK(!std::isnan(ny.sharpe_tv));
-    CHECK(std::fabs(ny.sharpe_tv  - (-0.04082482904638629)) < 1e-9);
-    CHECK(std::fabs(ny.sortino_tv - (-0.08031113910764517)) < 1e-9);
+    CHECK(!std::isnan(ny.sharpe_monthly));
+    CHECK(std::fabs(ny.sharpe_monthly  - (-0.04082482904638629)) < 1e-9);
+    CHECK(std::fabs(ny.sortino_monthly - (-0.08031113910764517)) < 1e-9);
 }
 
 // ---------- fill_report metrics integration (Task 6) -----------------------
@@ -582,7 +582,7 @@ static void test_report_empty_run() {
     s.fill_report(&rep);
     CHECK(rep.equity_curve == nullptr);
     CHECK(rep.equity_curve_len == 0);
-    CHECK(std::isnan(rep.metrics.equity.sharpe_tv));
+    CHECK(std::isnan(rep.metrics.equity.sharpe_monthly));
     CHECK(rep.metrics.all.num_trades == 0);
     BacktestEngine::free_report(&rep);
 }
@@ -595,7 +595,7 @@ int main() {
     test_trade_stats_all();
     test_trade_stats_filters_and_nan();
     test_trade_stats_largest_pct_independent();
-    test_equity_stats_sharpe_sortino_tv();
+    test_equity_stats_sharpe_sortino_monthly();
     test_equity_stats_drawdown_walk();
     test_equity_stats_edges();
     test_flat_strategy_bars_in_market();
