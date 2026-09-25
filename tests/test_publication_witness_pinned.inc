@@ -1,9 +1,9 @@
 // R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one
 // row per run of its battery (name, digest, source folds, closed trades,
 // recorded broker-state hash rows).
-// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23): see
-// the provenance note in the test. Generated --
-// never edit a row by hand.
+// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23) and
+// once for K-ULP3's whole-lot close: see the provenance note in the test.
+// Generated -- never edit a row by hand.
 constexpr Pinned kPinned[] = {
     {"Config01", 0x5694a8532bcd421dull, 144, 44, 144},
     {"ConfigFlags101", 0xba5e734f412ab41cull, 145, 45, 144},
@@ -14,7 +14,7 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0x7cf2779415b94164ull, 48, 11, 48},
     {"ConfigFlags102M", 0x058b509c4da54c03ull, 144, 52, 144},
     {"Config03", 0xb531a7e913be7754ull, 144, 50, 144},
-    {"ConfigFlags103", 0x0aad5489263fa72cull, 184, 65, 144},
+    {"ConfigFlags103", 0x4390169f9487551aull, 184, 65, 144},
     {"Config03M", 0x1ad51675e11578daull, 144, 48, 144},
     {"ConfigFlags103M", 0xfc0680619a86a9a2ull, 184, 66, 144},
     {"Config04", 0xa3abb573f86a6c7aull, 144, 21, 144},
@@ -113,8 +113,8 @@ constexpr Pinned kPinned[] = {
     {"Storm16M", 0x9e95f57c34f1034bull, 58, 18, 58},
     {"Storm17", 0x5386bd65c0f62e05ull, 82, 21, 54},
     {"Storm17M", 0x2db9219d5073e5a8ull, 77, 17, 54},
-    {"Storm18", 0x6d9829849ae0d7c4ull, 80, 25, 49},
-    {"Storm18M", 0x84b322fcea2c86bdull, 80, 25, 49},
+    {"Storm18", 0x419a4fae817d937aull, 80, 25, 49},
+    {"Storm18M", 0x821abf7a7b76eebaull, 80, 25, 49},
     {"Storm19", 0x7a6e676b4a275e0bull, 86, 22, 49},
     {"Storm19M", 0xe74e494dc47e836aull, 86, 22, 49},
     {"Storm20", 0xbe18e76544edfad4ull, 45, 12, 42},

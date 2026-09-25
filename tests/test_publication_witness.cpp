@@ -50,7 +50,14 @@
 // digest. The same TU harvests the same table against V19-D's own library,
 // and its digest without the three hash inputs (that fold, the recorded
 // broker-state hash rows, the final hash) is the 6c081f5d harvest's in all
-// 156 runs, as are every count.
+// 156 runs, as are every count. Re-harvested once more for R5 lane K-ULP3:
+// three runs (ConfigFlags103, Storm18, Storm18M) close a pyramided book by
+// exactly its own sum, whose last lot the kernel now closes whole, so their
+// closing rows book one ulp more -- the lot's full size instead of the rest
+// fl(U - C), whose dust lot the host swept unbooked -- and those rows' P&L,
+// the adapter's day ledger that sums it, the recorded broker-state hash rows
+// and the final hash move with them. Every count and the other 153 runs keep
+// their digest, and the rule fires in exactly those three runs (its census).
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -743,9 +750,9 @@ void harvest() {
     std::printf("// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one\n"
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
                 "// recorded broker-state hash rows).\n"
-                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23): see\n"
-                "// the provenance note in the test. Generated --\n"
-                "// never edit a row by hand.\n");
+                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23) and\n"
+                "// once for K-ULP3's whole-lot close: see the provenance note in the test.\n"
+                "// Generated -- never edit a row by hand.\n");
     std::printf("constexpr Pinned kPinned[] = {\n");
     for (const Scenario& s : battery()) {
         const Digest d = observe(s);
