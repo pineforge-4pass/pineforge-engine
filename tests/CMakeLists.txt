@@ -1230,6 +1230,12 @@ list(APPEND TEST_SOURCES test_native_precommit_hook)
 # nested run and two threads (differential). Source-free, so it also runs in
 # the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_runtime_ambient)
+# R5 lane H-DOCGATES (AUDIT4 N-7): the runtime blocks' LIFO order -- the legal
+# order in process, and in a forked child the outer block leaving first, which
+# a library with its debug checks compiled in must answer with SIGABRT and any
+# other library by returning (PINEFORGE_LIBRARY_DEBUG_CHECKS, below).
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_runtime_ambient_lifo)
 # R5 lane D2-C: the Pine host's publications, its suppressed probe tail and
 # its request.security evaluations (host-driven, kernel-routed, the
 # auxiliary lower-timeframe array) set the chart day partition, the EMA
@@ -2149,6 +2155,16 @@ endif()
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)
 target_link_libraries(test_native_runtime_ambient PRIVATE Threads::Threads)
+
+# The LIFO row's expectation is the library's build type. The library's
+# NDEBUG, which compiles uninstall_runtime_ambient's order check out, comes
+# from CMake's build-type flags -- Release, RelWithDebInfo and MinSizeRel
+# define it; Debug, the debug and sanitizers profiles' type, does not -- and
+# the row's TU strips NDEBUG like every test's (-UNDEBUG above), so it is
+# told. Flags that disagree with the build type fail the row; none passes it
+# without the check.
+target_compile_definitions(test_native_runtime_ambient_lifo PRIVATE
+    PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
 
 # Pure-C sanity test for <pineforge/pineforge.h>. Compiled with the C
 # compiler so any C++-only syntax leaking into the public header

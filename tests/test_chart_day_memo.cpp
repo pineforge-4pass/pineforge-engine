@@ -29,17 +29,26 @@
 //     the trades and the report's statistics -- each kept-key run equal to its
 //     computed-key run, and every report's statistics equal to the
 //     6c081f5d walk over the run's own equity curve
-//     (tests/equity_stats_reference.hpp).
+//     (tests/equity_stats_reference.hpp);
+//   * the memo itself, which no key above can show -- it answers the key the
+//     arithmetic answers -- read and planted in place (memo_witness): on each
+//     UTC spelling a read keeps its whole floor day and key, and a key
+//     planted over a day answers that day's first to last millisecond and no
+//     second outside it; on each chart timezone nothing is kept and a
+//     planted key is never answered; the computed host holds no cache.
 #include <pineforge/metrics.hpp>
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "../src/native_execution_consumer.hpp"
+#include "../src/source/pine_host_reads.hpp"
 #include "../src/timezone.hpp"
 #include "equity_stats_reference.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -49,6 +58,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <typeinfo>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -145,9 +156,11 @@ public:
     std::int64_t key(std::int64_t timestamp_ms) const noexcept {
         return fixture_chart_day_key(timestamp_ms);
     }
-    bool holds_cache() const {
-        return as_native_consumer(execution_consumer()).host_cache() != nullptr;
+    bool holds_cache() const { return cache() != nullptr; }
+    NativeHostCache* cache() const {
+        return as_native_consumer(execution_consumer()).host_cache();
     }
+    const void* adapter_address() const noexcept { return &adapter_; }
 };
 
 long long battery_keys = 0;
@@ -323,8 +336,9 @@ void zone_battery() {
             pair.walk(mondays, seed += 0x9e3779b9);
             pair.walk(months, seed += 0x9e3779b9);
         }
+        // The kept host's memo is memo_witness's: holding a cache shows
+        // nothing since D2-C, which adopts the index on every chart.
         CHECK(pair.computed.holds_cache() == false);
-        if (utc_spelling(zone.name)) CHECK(pair.kept.holds_cache());
     }
 }
 
@@ -575,20 +589,217 @@ void day_ledger_runs() {
     }
 }
 
+// ── The memo itself ──────────────────────────────────────────────────────
+// Every check above holds a key to the value it must have, and the memo
+// answers the value the arithmetic answers, so none of them can tell a key
+// read from the memo from one computed again: INT23's mutant cd5, a memo
+// never kept or read, passes them all. Nor can holding a cache: since R5
+// lane D2-C the consumer holds the adapter's lookup index from every run's
+// begin (take_run_facts), on a chart timezone too, where chart_day_key never
+// reaches it. So the witness reads the memo in place and plants keys in it.
+// AdapterLookupIndex is pine_adapter.cpp's own type. LookupIndexLayout
+// repeats its members in order over the same base only to find where the
+// last three -- day_lo, day_hi, day_key -- live; they are read and written
+// as bytes at those offsets from the index's NativeHostCache base, never
+// through the layout type. The offsets are held to the whole days UTC reads
+// keep before anything is planted, so a layout that drifts from the index's
+// fails there instead of writing over another member.
+struct LookupIndexLayout final : source::detail::PineRunCache {
+    struct CohortSides {
+        std::size_t folded = 0;
+        bool opened_long = false;
+        bool opened_short = false;
+    };
+    std::uint64_t answers = 0;
+    std::unordered_map<const void*, CohortSides> cohort_sides;
+    std::uint64_t erased_seen = 0;
+    std::uint64_t folded_high = 0;
+    std::size_t rows_folded = 0;
+    std::vector<std::uint64_t> unbound;
+    std::array<std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>, 3> legs_by_origin;
+    std::unordered_map<std::int32_t, std::vector<std::uint64_t>> immediate_closes_by_bar;
+    std::int64_t day_lo = 1;
+    std::int64_t day_hi = 0;
+    std::int64_t day_key = 0;
+    std::uint64_t answered() const noexcept override { return answers; }
+};
+
+// The memo: the whole seconds [lo, hi) it keeps and the key they answer. The
+// default is an index's own before any read keeps a day.
+struct DayMemo {
+    std::int64_t lo = 1;
+    std::int64_t hi = 0;
+    std::int64_t key = 0;
+    bool operator==(const DayMemo& other) const {
+        return lo == other.lo && hi == other.hi && key == other.key;
+    }
+};
+
+// The memo of the lookup index the host's consumer holds for the host's own
+// adapter, in place; not held when the consumer holds no such index.
+class MemoInPlace {
+public:
+    explicit MemoInPlace(const KeyHost& host) {
+        NativeHostCache* const cache = host.cache();
+        if (cache == nullptr || cache->kind() != &source::detail::kPineRunCacheKind) return;
+        if (static_cast<const source::detail::PineRunCache*>(cache)->owner
+            != host.adapter_address())
+            return;
+        if (std::strstr(typeid(*cache).name(), "AdapterLookupIndex") == nullptr) return;
+        index_ = reinterpret_cast<unsigned char*>(cache);
+    }
+    bool held() const { return index_ != nullptr; }
+    DayMemo read() const {
+        DayMemo memo;
+        std::memcpy(&memo.lo, index_ + offsets().lo, sizeof memo.lo);
+        std::memcpy(&memo.hi, index_ + offsets().hi, sizeof memo.hi);
+        std::memcpy(&memo.key, index_ + offsets().key, sizeof memo.key);
+        return memo;
+    }
+    void plant(const DayMemo& memo) const {
+        std::memcpy(index_ + offsets().lo, &memo.lo, sizeof memo.lo);
+        std::memcpy(index_ + offsets().hi, &memo.hi, sizeof memo.hi);
+        std::memcpy(index_ + offsets().key, &memo.key, sizeof memo.key);
+    }
+
+private:
+    struct Offsets {
+        std::ptrdiff_t lo;
+        std::ptrdiff_t hi;
+        std::ptrdiff_t key;
+    };
+    static const Offsets& offsets() {
+        static const Offsets at = [] {
+            const LookupIndexLayout layout;
+            const auto* base = reinterpret_cast<const unsigned char*>(
+                static_cast<const NativeHostCache*>(&layout));
+            const auto of = [&](const std::int64_t& field) {
+                return reinterpret_cast<const unsigned char*>(&field) - base;
+            };
+            return Offsets{of(layout.day_lo), of(layout.day_hi), of(layout.day_key)};
+        }();
+        return at;
+    }
+    unsigned char* index_ = nullptr;
+};
+
+// A key no day has: day 42 of month 42.
+constexpr std::int64_t kPlantedKey = 4242;
+
+long long memo_days_kept = 0;
+long long memo_planted_answers = 0;
+long long memo_computed_reads = 0;
+
+// The whole floor day a UTC read at `ts` keeps, as chart_day_key keeps it:
+// the stamp truncated to its second, then floored to its day.
+DayMemo kept_day(std::int64_t ts) {
+    const std::int64_t secs = ts / 1000;
+    const std::int64_t day = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+    return {day * 86400, day * 86400 + 86400, reference_day_key("UTC", ts)};
+}
+
+bool memo_is(const MemoInPlace& memo, const DayMemo& want, const char* zone, std::int64_t ts) {
+    const DayMemo got = memo.read();
+    if (got == want) return true;
+    if (failures < 25) {
+        std::fprintf(stderr, "  zone '%s' after ts_ms=%" PRId64 ": memo [%" PRId64 ",%" PRId64
+                     ") key %" PRId64 ", want [%" PRId64 ",%" PRId64 ") key %" PRId64 "\n",
+                     zone, ts, got.lo, got.hi, got.key, want.lo, want.hi, want.key);
+    }
+    return false;
+}
+
+void memo_witness() {
+    const std::int64_t mar_15 = 1710460800000LL;  // 2024-03-15 00:00 UTC
+    const std::int64_t mar_20 = 1710892800000LL;  // 2024-03-20 00:00 UTC
+    const std::int64_t dec_31_1969 = -kDay;       // 1969-12-31 00:00 UTC
+    const std::int64_t read_at = mar_15 + kHour;
+    const DayMemo planted{mar_20 / 1000, mar_20 / 1000 + 86400, kPlantedKey};
+    bool offsets_held = false;
+    // The UTC spellings first: their kept days hold the offsets the chart
+    // timezones' plants use.
+    for (const char* zone : {"", "UTC", "Etc/UTC", "America/New_York", "Europe/London",
+                             "Asia/Tokyo", "EST5EDT,M3.2.0,M11.1.0", "UTC+05:30"}) {
+        KeyHost kept;
+        kept.stage(zone, true);
+        KeyHost computed;
+        computed.stage(zone, false);
+        CHECK(kept.key(read_at) == reference_day_key(zone, read_at));
+        CHECK(computed.key(read_at) == reference_day_key(zone, read_at));
+        CHECK(computed.holds_cache() == false);
+        const MemoInPlace memo(kept);
+        CHECK(memo.held());  // the index D2-C adopts at the run's begin
+        if (!memo.held()) continue;
+        if (utc_spelling(zone)) {
+            // Kept: each read keeps its whole floor day and key -- a day
+            // before the epoch too, where the stamp truncates towards zero
+            // and the day floors below it.
+            bool kept_whole = memo_is(memo, kept_day(read_at), zone, read_at);
+            CHECK(kept_whole);
+            for (std::int64_t ts : {dec_31_1969 + 12 * kHour, read_at}) {
+                if (!kept_whole) break;
+                CHECK(kept.key(ts) == reference_day_key(zone, ts));
+                kept_whole = memo_is(memo, kept_day(ts), zone, ts);
+                CHECK(kept_whole);
+            }
+            if (!kept_whole) continue;  // never plant through offsets that do not hold
+            offsets_held = true;
+            memo_days_kept += 3;
+            // Read: a key planted over a day answers its first to its last
+            // millisecond, and those reads write nothing.
+            memo.plant(planted);
+            for (std::int64_t ts : {mar_20, mar_20 + 12 * kHour + 34567, mar_20 + kDay - 1}) {
+                const bool answered = kept.key(ts) == kPlantedKey;
+                CHECK(answered);
+                if (answered) ++memo_planted_answers;
+            }
+            CHECK(memo_is(memo, planted, zone, mar_20));
+            // ... and no second outside it: the first millisecond after and
+            // the last before compute their own key and keep their own day.
+            for (std::int64_t ts : {mar_20 + kDay, mar_20 - 1}) {
+                memo.plant(planted);
+                const bool computes = kept.key(ts) == reference_day_key(zone, ts);
+                CHECK(computes);
+                CHECK(memo_is(memo, kept_day(ts), zone, ts));
+                if (computes) ++memo_computed_reads;
+            }
+        } else {
+            // A chart timezone keeps nothing, and never answers a key planted
+            // over the day it reads.
+            CHECK(memo_is(memo, DayMemo{}, zone, read_at));
+            if (!offsets_held) continue;
+            const DayMemo over{mar_15 / 1000, mar_15 / 1000 + 86400, kPlantedKey};
+            memo.plant(over);
+            const bool computes = kept.key(read_at) == reference_day_key(zone, read_at);
+            CHECK(computes);
+            CHECK(memo_is(memo, over, zone, read_at));
+            if (computes) ++memo_computed_reads;
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
     zone_battery();
     utc_edges();
     day_ledger_runs();
+    memo_witness();
     std::printf("test_chart_day_memo: %lld keys against the 6c081f5d body (%lld on chart "
                 "timezones), %lld day-ledger runs (%lld source folds, %lld intraday-loss closes) "
                 "kept == computed\n",
                 battery_keys, zoned_keys, ledger_runs, ledger_folds, loss_closes);
+    std::printf("test_chart_day_memo: the memo in place: %lld UTC days kept whole, %lld reads "
+                "answered by a key planted over their day, %lld reads outside it or on a chart "
+                "timezone computed\n",
+                memo_days_kept, memo_planted_answers, memo_computed_reads);
     CHECK(battery_keys > 3000000 / kStride);
     CHECK(zoned_keys > 100000 / kStride);
     CHECK(ledger_runs == 70);
     CHECK(loss_closes > 0);
+    CHECK(memo_days_kept == 9);
+    CHECK(memo_planted_answers == 9);
+    CHECK(memo_computed_reads == 11);
     if (failures == 0) {
         std::printf("test_chart_day_memo: ok (%lld checks)\n", checks);
         return 0;
