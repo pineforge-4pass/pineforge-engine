@@ -279,9 +279,9 @@
     },
     "test_margin_call": {
       "baseAssertions": 414,
-      "reason": "owner-seeded margin scenarios are rewritten to public trade and liquidation rows",
+      "reason": "owner-seeded margin scenarios are rewritten to public trade and liquidation rows; the switched-off run's liquidation-price row follows lane H-THIN (X15 a), where the value is the kernel's native_liquidation_price() and a run that declares no margin model has none",
       "twin": "test_margin_call_l4a.cpp",
-      "twinAssertionSha256": "e63d76789c3496f779b727a7a971674926dbe0ef4e4287e9e428c730a0f1e2df",
+      "twinAssertionSha256": "5fd3bc55d5be90041fc35f45a26d9e5d2f38e45563576655d57a3d1a080dfcbe",
       "twinAssertions": 54
     },
     "test_order_birth_provenance": {

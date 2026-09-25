@@ -185,24 +185,15 @@ std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
 }
 
 double source::PineStrategyHost::margin_liquidation_price() const {
-    return compute_liquidation_price();
-}
-
-double source::PineStrategyHost::compute_liquidation_price() const {
-    if (position_side_ == PositionSide::FLAT) return na<double>();
-    const double point_value = syminfo_.pointvalue;
-    const double quantity = position_qty_;
-    if (!(quantity > 0.0) || !(point_value > 0.0)) return na<double>();
-    const double direction = position_side_ == PositionSide::LONG ? 1.0 : -1.0;
-    const double margin_pct = position_side_ == PositionSide::LONG
-        ? config_.margin_long : config_.margin_short;
-    const double denominator = (margin_pct / 100.0) - direction;
-    if (std::abs(denominator) < 1e-12) return na<double>();
-    const double equity_basis =
-        (initial_capital_ + net_profit_sum_) / active_account_currency_fx();
-    double liquidation =
-        (equity_basis / (quantity * point_value) - direction * position_entry_price_)
-        / denominator;
+    // The level is the kernel's (native_liquidation_price, solved from closed
+    // money alone: project() declares NativeLiquidationLevelBase::RealizedOnly),
+    // and na where it has none -- a flat book, a run without a margin model.
+    // TradingView's spelling is the one thing kept here (design row MG8): the
+    // level rounded onto the tick grid away from the position, down for a
+    // long, up for a short.
+    const std::optional<double> level = native_liquidation_price();
+    if (!level) return na<double>();
+    double liquidation = *level;
     if (syminfo_mintick_ > 0.0) {
         liquidation = position_side_ == PositionSide::SHORT
             ? std::ceil(liquidation / syminfo_mintick_) * syminfo_mintick_

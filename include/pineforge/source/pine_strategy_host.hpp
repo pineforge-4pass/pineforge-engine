@@ -589,8 +589,8 @@ protected:
                                            const Series<double>& fallback) const {
         return source_input_series(key, fallback);
     }
-    // Generated strategy.margin_liquidation_price reads this Pine-specific
-    // projection over the inherited native position state.
+    // Generated strategy.margin_liquidation_price reads this: the kernel's
+    // native_liquidation_price() in TradingView's tick spelling.
     double margin_liquidation_price() const;
     void fixture_publish_source_series(const Bar& bar, bool new_history_slot) {
         scheduler_.fixture_publish_source_series(bar, new_history_slot);
@@ -759,7 +759,6 @@ private:
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
     void scheduler_publish_suppressed_tail(const Bar&);
-    double compute_liquidation_price() const;
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     // The range-end row an applied execution may complete. It stays ordered

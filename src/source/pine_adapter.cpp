@@ -2419,7 +2419,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
              && config.commission_value > 0.0)
                 ? NativeMarginEquityBasis::MarkedEquity
                 : NativeMarginEquityBasis::MarkedEquityBeforeOpenCommission;
-        // compute_liquidation_price() solves from closed money alone.
+        // margin_liquidation_price() reads this level: closed money alone.
         margin.level_base = NativeLiquidationLevelBase::RealizedOnly;
         // TradingView's own liquidation ticket. The adapter's host classifies
         // a row as MARGIN_CALL from exactly this exit id (R5 lane L12, 2.ii l:

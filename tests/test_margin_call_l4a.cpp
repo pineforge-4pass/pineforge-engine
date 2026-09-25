@@ -168,7 +168,12 @@ void test_margin_switch_is_observable() {
     CHECK(margin_rows(host) == 0);
     CHECK(near(host.position(), -10.0));
     CHECK(near(host.average(), 100.0));
-    CHECK(std::isfinite(host.liquidation_price()));
+    // expectation corrected (R5 lane H-THIN, X15 a): the value is the kernel's
+    // native_liquidation_price() in TradingView's tick spelling, and a run whose
+    // margin calls are switched off declares no margin model, so it has no
+    // liquidation level: na, where the deleted Pine solve answered the level of
+    // a liquidation this run never performs (was std::isfinite).
+    CHECK(std::isnan(host.liquidation_price()));
 }
 
 void test_grid_floor_before_four_x() {
