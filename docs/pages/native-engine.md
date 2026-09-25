@@ -622,11 +622,11 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5603-5607`). Requests accepted before the
+`native_execution_consumer.cpp:5616-5620`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7053-7055`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7066-7068`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6945`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
@@ -1813,7 +1813,7 @@ says otherwise, and the C spellings are in
 | `native_marked_equity(mark)` | the account's marked equity at `mark` | `strategy_native_marked_equity_v1` |
 | `native_working_requests()` | one `NativeWorkingRequest` `native_host.hpp:669` per live request: its `definition`, its `remaining` and its `trigger_state` | `strategy_native_working_len_v1` / `_get_v1` |
 | `trail_state(handle)` | `NativeTrailState` `native_host.hpp:657`: `activated`, `best_price`, `current_level`, `activation_ordinal`; `nullopt` when the handle is not a live trail | `strategy_native_trail_state_v1` |
-| `native_events(after)` | `NativeMarketEvent` `native_host.hpp:370` rows: a `NativeEventKind` `native_host.hpp:360` (`Command`, `Driver`, `Account`) and exactly one of `command`, `driver` (`NativeDriverPoint` `market_driver.hpp:91`) or `account` (`NativeAccountObservation` `native_host.hpp:351`) — the rows the run's `event_retention` keeps (*What a run keeps of its events*) | `strategy_native_events_v1` |
+| `native_events(after)` | `NativeMarketEvent` `native_host.hpp:370` rows: a `NativeEventKind` `native_host.hpp:360` (`Command`, `Driver`, `Account`) and exactly one of `command`, `driver` (`NativeDriverPoint` `market_driver.hpp:97`) or `account` (`NativeAccountObservation` `native_host.hpp:351`) — the rows the run's `event_retention` keeps (*What a run keeps of its events*) | `strategy_native_events_v1` |
 | `native_event_window_start()` | the oldest ordinal a read can still return: every command event at or above it is retained; 1 while nothing was dropped | `strategy_native_event_window_v1` |
 | `current_execution_point()` | `NativeCurrentPointView` `native_host.hpp:646`: the active callback's decision context, its price, the `NativeCurrentQuoteKind` `native_host.hpp:451` and the ordinal the quote came from; `nullopt` outside a decision point | `pf_native_decision_v1::price` / `::quote_kind` |
 | `native_risk_state()` | `NativeRiskState` `native_host.hpp:631`: whether openings are blocked and why, the risk day, the fills counted in it, the loss-day streak, the peak equity and the day's opening equity | `strategy_native_risk_state_v1` |
@@ -1844,11 +1844,13 @@ rather than relabelled. Failure copy and move do not allocate.
 `last_error()` is presentation text beside it, never the authority.
 
 **Callback contexts.** The bar callbacks receive
-`NativeDecisionContext` (`market_driver.hpp:114`): the point's
-`NativeCoordinate` (`market_driver.hpp:71` — ordinal, the interval stamps,
-the effective time, the `NativePathPhase` and the `NativeCompletionKind`),
+`NativeDecisionContext` (`market_driver.hpp:120`): the point's
+`NativeCoordinate` (`market_driver.hpp:72` — ordinal, the script-bar
+`interval_index`, the named input-slot `input_interval_index`, the interval
+stamps, the effective time, the `NativePathPhase` and the
+`NativeCompletionKind`),
 the decision floor, both calendar intervals, and the script bar's
-session-day facts (R5 lane F5): `in_session` (`market_driver.hpp:155`),
+session-day facts (R5 lane F5): `in_session` (`market_driver.hpp:161`),
 `opens_session_day`, `closes_session_day` and
 `closes_session_day_open_ended`. They read the run's own calendar and
 session day — the cycle that rolls at the session's first window start,
@@ -1983,7 +1985,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7789`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7802`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2783,7 +2785,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7871`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7884`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the

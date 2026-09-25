@@ -62,7 +62,8 @@ enum class NativeCompletionKind : std::uint8_t {
 };
 
 /// Everything the kernel knows about WHERE a point is, as one owning value: its
-/// event ordinal, the interval index, the nominal and scheduled-eligible opens,
+/// event ordinal, the script interval index, the named input interval index,
+/// the nominal and scheduled-eligible opens,
 /// the last traded close, the next period and next input opens, the effective time
 /// the account converts and hashes at, the source price time, and the three
 /// classifications above. A host reads it through NativeDecisionContext; mutating
@@ -71,6 +72,11 @@ enum class NativeCompletionKind : std::uint8_t {
 struct NativeCoordinate {
     uint64_t ordinal = 0;
     int interval_index = 0;
+    // The script-bar coordinate is the public index above.  Aggregated runs
+    // retain the input slot that supplied this point here for hosts that need
+    // to inspect input cadence; it occupies the former alignment padding and
+    // does not change the v19 C++ layout.
+    int input_interval_index = 0;
     int64_t open_ms = 0;
     int64_t eligible_open_ms = 0;
     int64_t last_traded_close_ms = 0;

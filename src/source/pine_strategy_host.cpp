@@ -119,9 +119,10 @@ namespace source::detail {
 
 // A chart whose script bar aggregates several input bars: the input timeframe
 // is finer than the script's (PineScheduler::run_begin's needs_aggregation).
-// There the kernel's interval index names the INPUT bar a script bucket opens
-// on (390 for the 26th 15m bar of a 1m feed), where a Pine script counts chart
-// bars, as ab9714be's aggregation loop did (lane F1).
+// There the kernel's interval index names the SCRIPT bar (26 for the 26th
+// 15m bar of a 1m feed), while NativeCoordinate::input_interval_index keeps
+// the input slot for hosts that need it. Pine therefore reads the same public
+// script-bar index without a projection-time restamp.
 //
 // The host and the scheduler ask this in their per-bar callbacks, of a spec
 // that cannot change inside the run, so it must not cost a parse of both
@@ -384,8 +385,9 @@ void source::PineStrategyHost::on_native_tick(
         stream_warmup_mode_ = false;
     {
         // ab9714be pine_stream.cpp:298/:450 samples the excursion at every
-        // realtime print (a price point: H == L == C == print). The lots carry
-        // chart-bar indices wherever on_native_applied re-stamps them.
+        // realtime print (a price point: H == L == C == print). The explicit
+        // sample index keeps Pine's chart-bar sampling cadence separate from
+        // the kernel's script coordinate.
         const int sample_index = scheduler_.bar_magnifier_enabled()
                 || detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_)
             ? scheduler_.source_bar_index_for(context.decision)
@@ -418,9 +420,8 @@ void source::PineStrategyHost::on_native_bar(
     diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.observe_terminal_receipts();
-    // The lots carry chart-bar indices wherever on_native_applied re-stamps
-    // them, so the entry-bar tests below read the chart bar there. Under the
-    // magnifier the slippage mask keeps the kernel index it has always read.
+    // Pine's entry-bar sampling uses the chart index explicitly. The kernel
+    // books every lot and row in script-bar space, including aggregated runs.
     const bool aggregated = detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_);
     const int sample_index = scheduler_.bar_magnifier_enabled() || aggregated
         ? scheduler_.source_bar_index_for(context)
@@ -489,26 +490,8 @@ void source::PineStrategyHost::on_native_applied(
         }
     }
     if (source_prepare_failed_) return;
-    // Pine counts chart bars. Under the bar magnifier and on an aggregated
-    // chart the kernel books a fill at an input bar's index, so the lot the
-    // fill opened and the rows it closed carry the chart bar instead, as
-    // ab9714be's aggregation loops booked them (lane F1 extended this from
-    // the magnifier to every aggregated chart).
-    const bool aggregated = detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_);
-    if (scheduler_.bar_magnifier_enabled() || aggregated) {
-        const int source_index = scheduler_.source_bar_index_for(context);
-        for (auto& lot : pyramid_entries_) {
-            if (lot.entry_incarnation == event.handle().incarnation
-                && event.opened_units != 0.0) {
-                lot.entry_bar_index = source_index;
-            }
-        }
-        for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
-            const std::size_t index = event.first_trade_index + i;
-            if (index >= trades_.size()) continue;
-            trades_[index].exit_bar_index = source_index;
-        }
-    }
+    const bool aggregated = detail::run_aggregates_input_bars(
+        detail::run_consumer(*this), &adapter_, adapter_.run_counter_);
     // TradingView dates every fill of a chart bar at the bar's open, a
     // process_orders_on_close fill included (the e25-f-islastbar tape, lane
     // E27). The chart timeframe's zero-width interval gives exactly that:
@@ -840,19 +823,7 @@ ClosedLotExcursion source::PineStrategyHost::owner_lot_excursion(
         fill_fav = 0.0;
     }
     ClosedLotExcursion owned;
-    // Whether the lot opened on the bar this fill closes it on. A plain
-    // aggregated chart's lot carries its chart bar (on_native_applied
-    // re-stamps it, lane F1) while the kernel states the exit at its own
-    // interval index, the input bar the bucket opens on; the exit's chart bar
-    // is the one the adapter opened last. Under the magnifier the test keeps
-    // the kernel index it has always read.
-    int exit_bar_index = facts.exit_bar_index;
-    if (!scheduler_.bar_magnifier_enabled() && detail::run_aggregates_input_bars(detail::run_consumer(*this), &adapter_, adapter_.run_counter_)) {
-        NativeDecisionContext current{};
-        current.script_bar_open_ms = adapter_.last_broker_open_ms_;
-        exit_bar_index = scheduler_.source_bar_index_for(current);
-    }
-    const bool same_bar = facts.entry_bar_index == exit_bar_index;
+    const bool same_bar = facts.entry_bar_index == facts.exit_bar_index;
     // ab9714be src/source/pine_scheduler.cpp:242,257 samples the bar's H/L/C
     // into every OPEN trade (update_per_trade_extremes, step 2) only after the
     // resting priced exits of step 1 have closed. A leg this route force-fills

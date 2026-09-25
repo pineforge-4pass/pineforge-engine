@@ -638,10 +638,9 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     if (host.config_.process_orders_on_close && host.config_.slippage > 0 && open_point) {
         extremes_bar.high = extremes_bar.low = extremes_bar.close = extremes_bar.open;
     }
-    // A plain aggregated chart's lots carry the chart bar (the host re-stamps
-    // them, lane F1) where the kernel left its interval index, the input bar
-    // the bucket opens on, in bar_index_: the entry-bar mask reads the chart
-    // bar there. Under the magnifier it keeps the index it has always read.
+    // A plain aggregated chart's lots are booked by the kernel in script-bar
+    // space. Pine's excursion sampler still uses the chart source index here,
+    // so the entry-bar mask reads the chart bar without changing the lot.
     const int extremes_index = !retained_.bar_magnifier
             && detail::run_aggregates_input_bars(detail::run_consumer(host), &host.adapter_,
                                                  host.adapter_.run_counter_)

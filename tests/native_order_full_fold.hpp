@@ -97,6 +97,7 @@ void fold_vector(Fold& f, const std::vector<T>& values) {
 inline void fold(Fold& f, const pineforge::NativeCoordinate& c) {
     f.u(c.ordinal);
     f.i(c.interval_index);
+    f.i(c.input_interval_index);
     f.i(c.open_ms);
     f.i(c.eligible_open_ms);
     f.i(c.last_traded_close_ms);

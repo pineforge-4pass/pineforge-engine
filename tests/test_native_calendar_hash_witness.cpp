@@ -105,6 +105,7 @@ struct Fold {
     void coordinate(const NativeCoordinate& c) {
         u64(c.ordinal);
         i64(c.interval_index);
+        i64(c.input_interval_index);
         i64(c.open_ms);
         i64(c.eligible_open_ms);
         i64(c.last_traded_close_ms);
@@ -562,23 +563,23 @@ struct Pinned {
 };
 
 #ifndef PINEFORGE_K1_HARVEST
-// Observed on engine main fc7aad62, before lane PERF-K1.
+// K-IDX Option A re-pins the v19 coordinate witness once.
 const Pinned kPinned[] = {
     // PINNED-BEGIN
-    {"utc_year_end", 0x12a983768e1c150aULL, 1200, 1200, 1200, 0, 0, 4800, 112, 16},
-    {"ny_masked_dst", 0xf7c3d866b679a148ULL, 1400, 1400, 1400, 0, 0, 5600, 168, 24},
-    {"tokyo_lunch", 0x6169cc1a0c1c9798ULL, 1200, 1200, 1200, 0, 0, 4800, 101, 14},
-    {"london_dst", 0x36decf92d3c95856ULL, 400, 400, 400, 0, 0, 1600, 80, 11},
-    {"posix_overnight", 0x82af75049101b94aULL, 140, 140, 140, 0, 0, 560, 67, 9},
-    {"fixed_offset", 0x7be69391f0425aadULL, 900, 900, 900, 0, 0, 3600, 136, 19},
+    {"utc_year_end", 0xb941690ef38812a2ULL, 1200, 1200, 1200, 0, 0, 4800, 112, 16},
+    {"ny_masked_dst", 0xa01f619809a8a8bcULL, 1400, 1400, 1400, 0, 0, 5600, 168, 24},
+    {"tokyo_lunch", 0x2ec04b88881e49acULL, 1200, 1200, 1200, 0, 0, 4800, 101, 14},
+    {"london_dst", 0xfa652480d4640d2eULL, 400, 400, 400, 0, 0, 1600, 80, 11},
+    {"posix_overnight", 0xc07057fe81564f56ULL, 140, 140, 140, 0, 0, 560, 67, 9},
+    {"fixed_offset", 0x484ca66d57dc239dULL, 900, 900, 900, 0, 0, 3600, 136, 19},
     // expectation corrected (KERNEL-EDGE, v19): the calendar-closed final
     // daily bucket is calculated at batch end, including its last trade.
     {"ny_daily_over_hourly", 0xfa85a7f9a92aea39ULL, 13, 13, 300, 0, 0, 52, 14, 2},
-    {"ny_hourly_series", 0x9237cf98641532f4ULL, 234, 234, 234, 21, 0, 936, 42, 6},
-    {"tolerant_aggregating", 0x0110dff138377266ULL, 200, 200, 600, 0, 0, 800, 63, 9},
-    {"tolerant_stream_night", 0x7de1da848e8cb622ULL, 34, 34, 34, 0, 0, 136, 21, 3},
-    {"canonical_stream_night", 0xbdbc12b421f53424ULL, 110, 110, 110, 0, 0, 440, 42, 6},
-    {"tick_stream", 0xbb0a3a50f13c6aa2ULL, 14, 10, 50, 0, 60, 103, 10, 1},
+    {"ny_hourly_series", 0x284026ee6aa32186ULL, 234, 234, 234, 21, 0, 936, 42, 6},
+    {"tolerant_aggregating", 0xfa838ffaa5666c82ULL, 200, 200, 600, 0, 0, 800, 63, 9},
+    {"tolerant_stream_night", 0x8aa785e43e2916d0ULL, 34, 34, 34, 0, 0, 136, 21, 3},
+    {"canonical_stream_night", 0x5f0cc60fc521a1a2ULL, 110, 110, 110, 0, 0, 440, 42, 6},
+    {"tick_stream", 0x24a2c575b74ac52aULL, 14, 10, 50, 0, 60, 103, 10, 1},
     // PINNED-END
 };
 #endif

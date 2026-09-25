@@ -1051,6 +1051,7 @@ template <class F>
 void hash_coordinate(F& f, const NativeCoordinate& c) noexcept {
     f.u(c.ordinal);
     f.i(c.interval_index);
+    f.i(c.input_interval_index);
     f.i(c.open_ms);
     f.i(c.eligible_open_ms);
     f.i(c.last_traded_close_ms);
@@ -1589,6 +1590,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(processing_input_);
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
+    f.i(next_script_index_);
     // Declared higher-timeframe series carry their own delivery cursors, and
     // a stream's warmup boundary is where its live phase starts -- neither is
     // recoverable from the input count alone. Folded only for a run that
@@ -1730,6 +1732,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.i(script_.first_open_ms);
     f.i(script_.first_source_time_ms);
     f.i(script_.latest_close_ms);
+    f.i(script_.script_index);
     f.i(script_.first_index);
     f.i(script_.last_index);
     f.b(script_.modeled_ohlc);
@@ -2264,6 +2267,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     consuming_request_ = false;
     draining_notifications_ = false;
     next_interval_index_ = 0;
+    next_script_index_ = 0;
     current_input_open_.reset();
     observed_input_cursor_.reset();
     next_tradable_synthesis_cursor_.reset();
@@ -2524,11 +2528,12 @@ void NativeExecutionConsumer::raise_floor(int64_t t) {
 
 NativeCoordinate NativeExecutionConsumer::coordinate_from(
         const native_calendar::NativeInterval& interval,
-        int index, int64_t effective,
+        int script_index, int input_index, int64_t effective,
         NativePriceProvenance provenance,
         NativePathPhase phase) const {
     NativeCoordinate c;
-    c.interval_index = index;
+    c.interval_index = script_index;
+    c.input_interval_index = input_index;
     c.open_ms = interval.open_ms;
     c.eligible_open_ms = interval.eligible_open_ms;
     c.last_traded_close_ms = interval.last_traded_close_ms;
@@ -2539,6 +2544,14 @@ NativeCoordinate NativeExecutionConsumer::coordinate_from(
     c.provenance = provenance;
     c.path_phase = phase;
     return c;
+}
+
+int NativeExecutionConsumer::script_index_for_input(
+        const native_calendar::NativeInterval& interval) const noexcept {
+    const auto script = script_interval_at(interval.open_ms);
+    if (script && script_.has_data && script_.key == script->open_ms)
+        return script_.script_index;
+    return next_script_index_;
 }
 
 void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
@@ -7965,7 +7978,8 @@ bool NativeExecutionConsumer::seal_stale_script(BacktestEngine& engine,
 void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompletionKind kind) {
     if (!script_.has_data || script_.sealed) return;
     NativeCoordinate base;
-    base.interval_index = script_.first_index;
+    base.interval_index = script_.script_index;
+    base.input_interval_index = script_.first_index;
     base.open_ms = script_.interval.open_ms;
     base.eligible_open_ms = script_.interval.eligible_open_ms;
     base.last_traded_close_ms = script_.interval.last_traded_close_ms;
@@ -7983,6 +7997,7 @@ void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompleti
     }
     script_.sealed = true;
     script_.has_data = false;
+    ++next_script_index_;
 }
 
 bool NativeExecutionConsumer::final_script_session_closed() const noexcept {
@@ -8022,6 +8037,7 @@ bool NativeExecutionConsumer::contribute_input(
         script_.first_open_ms = interval.open_ms;
         script_.first_source_time_ms = source_open;
         script_.latest_close_ms = source_close;
+        script_.script_index = next_script_index_;
         script_.first_index = index;
         script_.last_index = index;
         script_.sealed = false;
@@ -8056,7 +8072,8 @@ bool NativeExecutionConsumer::contribute_input(
         script_ = ScriptBucket{};
     }
     engine.current_bar_ = bar;
-    engine.bar_index_ = index;
+    engine.bar_index_ = script_.has_data
+        ? script_.script_index : std::max(0, next_script_index_ - 1);
     next_interval_index_ = index + 1;
     if (!failed() && kind != InputContribution::QuietCarried)
         ++engine.diag_input_bars_processed_;
@@ -9393,7 +9410,8 @@ bool NativeExecutionConsumer::emit_quiet_carried_open(
     if (!has_last_price_) return true;
     if (next_tradable_synthesis_cursor_ == interval.open_ms) return true;
     NativeDriverPoint point;
-    point.coordinate = coordinate_from(interval, next_interval_index_,
+    point.coordinate = coordinate_from(interval, script_index_for_input(interval),
+                                       next_interval_index_,
                                        interval.eligible_open_ms,
                                        NativePriceProvenance::CarriedOpen,
                                        NativePathPhase::Open);
@@ -9421,7 +9439,8 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
         const bool equal = pairing_.pairing == native_calendar::TimeframePairing::Passthrough;
         if (equal) {
             NativeCoordinate calc;
-            calc.interval_index = next_interval_index_;
+            calc.interval_index = script_index_for_input(interval);
+            calc.input_interval_index = next_interval_index_;
             calc.open_ms = interval.open_ms;
             calc.eligible_open_ms = interval.eligible_open_ms;
             calc.last_traded_close_ms = interval.last_traded_close_ms;
@@ -9515,7 +9534,8 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
         return false;
     }
     NativeDriverPoint point;
-    point.coordinate = coordinate_from(*interval, next_interval_index_, tick.timestamp,
+    point.coordinate = coordinate_from(*interval, script_index_for_input(*interval),
+                                       next_interval_index_, tick.timestamp,
                                        NativePriceProvenance::ObservedPrint,
                                        NativePathPhase::None);
     point.coordinate.ordinal = take_ordinal(engine);

@@ -18260,9 +18260,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         auto* pine = pine_view_of(&require_host());
         const auto cohort = cohorts_by_id_.find(placement_snapshot->from_entry);
         if (pine && cohort != cohorts_by_id_.end()) {
-            // The lots carry the chart bar wherever the host re-stamps them
-            // (PineStrategyHost::on_native_applied): under the magnifier and,
-            // since lane F1, on every aggregated chart.
+            // The kernel books lot rows in script-bar space. This owner-side
+            // cohort rule intentionally compares the explicit chart source
+            // index to keep Pine's sampling cadence separate from that book.
             const auto state = detail::run_state(*pine);
             const int ratio = state.spec && !state.spec->timeframe_undetected
                 ? tf_ratio(state.spec->input_tf, state.spec->script_tf) : 1;

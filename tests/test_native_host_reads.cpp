@@ -129,6 +129,7 @@ bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; 
 
 bool same_coordinate(const NativeCoordinate& a, const NativeCoordinate& b) {
     return a.ordinal == b.ordinal && a.interval_index == b.interval_index
+        && a.input_interval_index == b.input_interval_index
         && a.open_ms == b.open_ms && a.eligible_open_ms == b.eligible_open_ms
         && a.last_traded_close_ms == b.last_traded_close_ms
         && a.next_period_open_ms == b.next_period_open_ms

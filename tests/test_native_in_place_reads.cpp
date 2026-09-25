@@ -56,6 +56,7 @@ std::uint64_t point_digest(const NativeCurrentPointView& point) {
     const NativeDecisionContext& d = point.decision;
     h = k3_book::fnv_u64(h, d.coordinate.ordinal);
     h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(d.coordinate.interval_index));
+    h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(d.coordinate.input_interval_index));
     h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(d.coordinate.open_ms));
     h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(d.coordinate.effective_time_ms));
     h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(d.coordinate.source_price_time_ms));

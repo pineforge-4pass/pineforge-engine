@@ -119,6 +119,7 @@ inline void fold_row(Fold& f, const pineforge::NativeMarketEvent& row) {
         f.u(static_cast<std::uint64_t>(c.effective_time_ms));
         f.u(static_cast<std::uint64_t>(c.open_ms));
         f.u(static_cast<std::uint64_t>(c.interval_index));
+        f.u(static_cast<std::uint64_t>(c.input_interval_index));
         f.u(static_cast<std::uint64_t>(c.provenance));
         f.u(static_cast<std::uint64_t>(c.path_phase));
         f.d(row.driver->raw_price);

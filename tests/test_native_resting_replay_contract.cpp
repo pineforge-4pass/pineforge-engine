@@ -150,6 +150,7 @@ bool equal_cursor_bits(const no::MatchCursor& a, const no::MatchCursor& b) {
     const auto& x = a.point;
     const auto& y = b.point;
     return bits_eq(a.t, b.t) && x.ordinal == y.ordinal && x.interval_index == y.interval_index
+        && x.input_interval_index == y.input_interval_index
         && x.open_ms == y.open_ms && x.eligible_open_ms == y.eligible_open_ms
         && x.last_traded_close_ms == y.last_traded_close_ms
         && x.next_period_open_ms == y.next_period_open_ms
@@ -304,6 +305,7 @@ void same_event_id(const no::EventId& a, const no::EventId& b) {
 void same_coord(const NativeCoordinate& a, const NativeCoordinate& b) {
     same_u64(a.ordinal, b.ordinal);
     CHECK(a.interval_index == b.interval_index);
+    CHECK(a.input_interval_index == b.input_interval_index);
     same_i64(a.open_ms, b.open_ms);
     same_i64(a.eligible_open_ms, b.eligible_open_ms);
     same_i64(a.last_traded_close_ms, b.last_traded_close_ms);

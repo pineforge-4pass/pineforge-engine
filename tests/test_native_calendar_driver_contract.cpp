@@ -294,6 +294,7 @@ std::string coordinate_json(const NativeCoordinate& c) {
     std::ostringstream out;
     out << "{\"ordinal\":" << json_u64(c.ordinal)
         << ",\"intervalIndex\":" << c.interval_index
+        << ",\"inputIntervalIndex\":" << c.input_interval_index
         << ",\"openMs\":" << json_i64(c.open_ms)
         << ",\"eligibleOpenMs\":" << json_i64(c.eligible_open_ms)
         << ",\"lastTradedCloseMs\":" << json_i64(c.last_traded_close_ms)

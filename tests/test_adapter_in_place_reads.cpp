@@ -70,6 +70,7 @@ std::uint64_t point_digest(const NativeCurrentPointView& point) {
     std::uint64_t h = 1469598103934665603ull;
     h = fold(h, d.coordinate.ordinal);
     h = fold(h, static_cast<std::uint64_t>(d.coordinate.interval_index));
+    h = fold(h, static_cast<std::uint64_t>(d.coordinate.input_interval_index));
     h = fold(h, static_cast<std::uint64_t>(d.coordinate.effective_time_ms));
     h = fold(h, static_cast<std::uint64_t>(d.coordinate.provenance));
     h = fold(h, static_cast<std::uint64_t>(d.coordinate.path_phase));

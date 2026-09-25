@@ -545,6 +545,7 @@ void read_journal(const ReissueHost& host, Record& record) {
     auto cursor = [](full_fold::Fold& f, const no::MatchCursor& c) {
         f.u(c.point.ordinal);
         f.i(c.point.interval_index);
+        f.i(c.point.input_interval_index);
         f.i(c.point.effective_time_ms);
         f.e(c.point.path_phase);
         f.d(c.t);

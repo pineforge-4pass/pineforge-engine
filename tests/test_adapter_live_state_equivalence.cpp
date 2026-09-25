@@ -503,6 +503,7 @@ private:
                 fold_definition(f, event.definition);
                 f.u(static_cast<std::uint64_t>(event.reason));
                 f.i(event.cursor.point.interval_index);
+                f.i(event.cursor.point.input_interval_index);
             } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
                 fold_definition(f, event.definition);
                 f.d(event.raw_price); f.d(event.resolved_price); f.d(event.closed_units);

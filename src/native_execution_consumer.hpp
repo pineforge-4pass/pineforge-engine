@@ -661,6 +661,7 @@ private:
         int64_t first_open_ms = 0;
         int64_t first_source_time_ms = 0;
         int64_t latest_close_ms = 0;
+        int script_index = 0;
         int first_index = 0;
         int last_index = 0;
         bool sealed = false;
@@ -946,6 +947,7 @@ private:
                         bool preserve_status = false);
     bool preflight_intrabar_path(BacktestEngine& engine);
     void pump_batch(BacktestEngine& engine, const Bar* bars, int n);
+    int script_index_for_input(const native_calendar::NativeInterval& interval) const noexcept;
     bool consume_confirmed_input(BacktestEngine& engine, const Bar& bar, int index, bool last);
     bool contribute_input(BacktestEngine& engine, const Bar& bar,
                           const native_calendar::NativeInterval& interval,
@@ -1329,7 +1331,7 @@ private:
     NativeEventRetention retention() const noexcept;
     void retire_journal() noexcept;
     NativeCoordinate coordinate_from(const native_calendar::NativeInterval& interval,
-                                     int index, int64_t effective,
+                                     int script_index, int input_index, int64_t effective,
                                      NativePriceProvenance provenance,
                                      NativePathPhase phase) const;
     bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
@@ -1462,6 +1464,7 @@ private:
     bool processing_input_ = false;
     InputMode input_mode_ = InputMode::Unselected;
     int next_interval_index_ = 0;
+    int next_script_index_ = 0;
     std::optional<int64_t> current_input_open_;
     std::optional<int64_t> observed_input_cursor_;
     std::optional<int64_t> next_tradable_synthesis_cursor_;

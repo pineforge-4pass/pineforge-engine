@@ -294,6 +294,7 @@ std::string terms_coordinate_json(const pineforge::NativeCoordinate& point) {
     std::ostringstream out;
     out << "{\"ordinal\":" << json_u64(point.ordinal)
         << ",\"intervalIndex\":" << point.interval_index
+        << ",\"inputIntervalIndex\":" << point.input_interval_index
         << ",\"openMs\":" << json_i64(point.open_ms)
         << ",\"eligibleOpenMs\":" << json_i64(point.eligible_open_ms)
         << ",\"lastTradedCloseMs\":" << json_i64(point.last_traded_close_ms)
