@@ -1813,7 +1813,13 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     }
     // The chart day partition, the EMA seeding default and the TA bar context
     // this publication runs under, written on the pump's runtime block (R5
-    // lane D2-C: no thread-local access per bar; runtime_ambient.hpp).
+    // lane D2-C: no thread-local WRITE per bar; runtime_ambient.hpp). The
+    // readers still reach the block through the thread's pointer, one
+    // thread-local access per call: every extremum ring behind ta.highest /
+    // lowest / highestbars / lowestbars / stoch / wpr / range, and the day
+    // partition behind the default-anchored ta.vwap, crosses_boundary(DAY) and
+    // the session-period helpers (docs/native-refactor-progress.md, "Deferred
+    // performance work").
     internal::RuntimeAmbient* const ambient = NativeExecutionConsumer::bound(*this).pump_ambient();
     internal::AmbientDayPartitionScope chart_day_partition(
         ambient, chart_day_partition_.empty() ? nullptr : &chart_day_partition_);

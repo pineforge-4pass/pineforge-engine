@@ -46,8 +46,8 @@ syminfo_mintick_ # Metadata convenience scalar; executable levels/terms retain t
 trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.
 run_counter_ # run-scoped; excluded for reuse invariance (ab9714be test_script_run_prepare:111)
 source_last_bar_index_ # derived script-input horizon, not broker state: a prefix run's per-bar hashes must equal the full run's (test_live_state_hash_recording_l4d:69; ab9714be behaviour); folding it would differ before any behaviour does
-event_high_water_reader_ # Immutable callback binding to the host's native event watermark, not mutable broker state.
-terminal_receipt_high_water_reader_ # Immutable callback binding to the host's terminal-receipt watermark, not mutable broker state.
+event_high_water_reader_ # Retired storage (R5 lane PERF-L4): nothing reads or writes it; kept only for PineStrategyHost's layout (script ABI) until the next engine_script_run epoch deletes it.
+terminal_receipt_high_water_reader_ # Retired storage (R5 lane PERF-L4): nothing reads or writes it; kept only for PineStrategyHost's layout (script ABI) until the next engine_script_run epoch deletes it.
 source_pending_view_cache_ # Read-only test projection cache rebuilt from adapter state and never consumed by execution.
 bar_magnifier_ # install-time fact mirrored from the scheduler (retained_.bar_magnifier is already folded); not evolving broker state (L8h A41(5))
 retired_row_scratch_ # Per-sweep working sets of erase_retired_rows (R5 lane V19-E), emptied at the start of every sweep, and one memo that survives sweeps (R5 lane V19-D: the high water each held leg was read through by the superseded test, emptied at every run begin), which answers exactly what reading every row answers; no value reaches a hash point.

@@ -383,11 +383,16 @@ std::optional<int64_t> period_key(const SessionCalendar& calendar, const Timefra
 // [origin_ms, next_origin_ms) that holds it, the session-day ordinal every
 // instant of that cycle keys to, and the cycle's in-session spans in epoch ms
 // ([first, second), ascending and disjoint; none on a masked or empty day).
-// For every instant t the day holds(), in_session(calendar, t) is
-// in_session_at(t) and session_day_ordinal(calendar, t) is `ordinal`, so a
-// caller asking about many instants of one day resolves the day once rather
-// than once per instant. For the queried instant itself both answers hold
-// even when holds() is false (a clock-change fold the cycles do not tile).
+// Where the session cycles tile the timeline, for every instant t the day
+// holds(), in_session(calendar, t) is in_session_at(t) and
+// session_day_ordinal(calendar, t) is `ordinal`, so a caller asking about many
+// instants of one day resolves the day once rather than once per instant.
+// A clock change that moves the local date breaks the tiling: America/Sitka
+// and America/Juneau in October 1867 under "2330-2300" hold instants (30 and
+// 45, all out of session) whose own session_day_at(t) carries another
+// ordinal, so a caller that needs exact ordinals there re-resolves each
+// instant. For the queried instant itself both answers hold even when
+// holds() is false (a clock-change fold the cycles do not tile).
 
 struct NativeSessionDay {
     int64_t origin_ms = 0;

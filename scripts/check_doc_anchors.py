@@ -200,6 +200,8 @@ PAGE_GLOBS = (
     'docs/pages/*.md',
     'docs/adr/*.md',
     'docs/design/*.md',
+    # R5 lane H-DOCGATES: the deferred-performance inventory cites the tree too.
+    'docs/native-refactor-progress.md',
 )
 
 SEARCH_DIRS = (

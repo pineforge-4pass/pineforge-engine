@@ -1905,7 +1905,7 @@ whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
 (`native_c_api.h:1454`). The kernel resolves each session day once through
-`native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
+`native_calendar::session_day_at` (`native_calendar.hpp:412`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
 copied onto the callback stack: writing to it cannot move the floor, the

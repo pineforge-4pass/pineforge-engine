@@ -1919,7 +1919,9 @@ private:
     // host is a PineStrategyHost". The readers ask the host's
     // PineStrategyHost view instead, so nothing reads or writes these two
     // slots; they keep this class's layout, which is part of
-    // PineStrategyHost's and so of the generated script's ABI.
+    // PineStrategyHost's and so of the generated script's ABI. Scheduled:
+    // both slots and ReceiptHighWaterReader go at the next engine_script_run
+    // epoch, the layout change that epoch licenses (R5 lane H-DOCGATES).
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
     bool is_declined_market_reversal(
