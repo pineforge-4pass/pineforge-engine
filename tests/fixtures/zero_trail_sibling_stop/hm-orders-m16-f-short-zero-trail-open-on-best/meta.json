@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE M16 NYSE:F short zero-offset trail, next open ON the carried best",
+  "slug": "hm-orders-m16-f-short-zero-trail-open-on-best",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:09:45.263Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-09-30"
+  },
+  "pine_sha256": "72e16bac83c429907a0d130393736aeae74103f6d2d10fa1dd026c2608d3e09a",
+  "tv_trades_sha256": "2e1f165d18468d7904ef034cae12f06a7491467236811d45257750a408fafbe4",
+  "tv_trades_rows": 16
+}

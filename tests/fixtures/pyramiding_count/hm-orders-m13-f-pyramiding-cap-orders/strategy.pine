@@ -1,0 +1,32 @@
+// H-MEASURE row M13 / G2-15 (group orders), third tape: is a limit or stop entry
+// placed AT the pyramiding cap refused, or does it fill when its level is reached?
+// pyramiding = 2, fixed 100 shares (UTC signal-bar times):
+//   D4 2025-07-30 17:30Z  two lots open (the cap); a limit entry placed there, first reached two bars later
+//   D4s 2025-07-31 14:15Z  two lots open (the cap); a stop entry placed there, first reached two bars later
+//@version=6
+strategy("H-MEASURE M13 NYSE:F pyramiding cap orders", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=2,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+// D4: two lots open (the cap); a limit entry placed there, first reached two bars later
+if at(2025, 7, 30, 17, 30)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 30, 17, 45)
+    strategy.entry("B", strategy.long)
+if at(2025, 7, 30, 18, 15)
+    strategy.entry("L2", strategy.long, limit=10.89)
+if at(2025, 7, 30, 19, 15)
+    strategy.close_all()
+
+// D4s: two lots open (the cap); a stop entry placed there, first reached two bars later
+if at(2025, 7, 31, 14, 15)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 31, 14, 30)
+    strategy.entry("B", strategy.long)
+if at(2025, 7, 31, 15, 0)
+    strategy.entry("S2", strategy.long, stop=11.10)
+if at(2025, 7, 31, 16, 0)
+    strategy.close_all()

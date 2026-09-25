@@ -1,0 +1,54 @@
+// H-MEASURE M16 NYSE:F short zero-offset trail, next open ON the carried best (H-MEASURE research, group orders, row M16 / G2-18).
+// strategy.exit(trail_points=n, trail_offset=0) is issued at the close of the bar
+// whose open filled the entry, and that close has ALREADY reached the activation
+// (on its tick). The next bar opens exactly ON the carried best (the close, or the
+// activation when the close only reaches it on its tick) and moves favourably
+// first to a new extreme. A touch at the open exits there at the carried best; a
+// zero-distance ride exits only after the new extreme. Events (UTC):
+//   2025-04-21 13:30 -> fill 2025-04-21 13:45  trail_points 4  carried best 9.500
+//   2025-04-30 16:00 -> fill 2025-04-30 16:15  trail_points 3  carried best 9.900
+//   2025-05-16 18:30 -> fill 2025-05-16 18:45  trail_points 1  carried best 10.785
+//   2025-06-17 14:30 -> fill 2025-06-17 14:45  trail_points 3  carried best 10.520
+//   2025-07-01 16:30 -> fill 2025-07-01 16:45  trail_points 8  carried best 11.210
+//   2025-07-15 13:30 -> fill 2025-07-15 13:45  trail_points 5  carried best 11.755
+//   2025-07-17 14:45 -> fill 2025-07-17 15:00  trail_points 2  carried best 11.145
+//   2025-07-25 16:00 -> fill 2025-07-25 16:15  trail_points 1  carried best 11.280
+//@version=6
+strategy("H-MEASURE M16 NYSE:F short zero-offset trail, next open ON the carried best", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 4, 21, 13, 30)
+        pts := 4
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 4, 30, 16, 0)
+        pts := 3
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 5, 16, 18, 30)
+        pts := 1
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 6, 17, 14, 30)
+        pts := 3
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 7, 1, 16, 30)
+        pts := 8
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 7, 15, 13, 30)
+        pts := 5
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 7, 17, 14, 45)
+        pts := 2
+        strategy.entry("S", strategy.short)
+    else if time == timestamp("UTC", 2025, 7, 25, 16, 0)
+        pts := 1
+        strategy.entry("S", strategy.short)
+
+// The exit is issued once, at the close of the bar whose open filled the entry.
+if strategy.position_size < 0 and strategy.opentrades.entry_bar_index(0) == bar_index
+    strategy.exit("SX", "S", trail_points=pts, trail_offset=0)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 25
+    strategy.close("S", comment="timeout")

@@ -1324,6 +1324,12 @@ list(APPEND TEST_SOURCES test_adapter_dual_entry_tie)
 #   G2-09/-10/-12/-13 margin scheduling, market-execution checkpoints, the
 #   pre-open slice, opening admission; E20 f1's probe-tail margin call.
 list(APPEND TEST_SOURCES test_adapter_margin_schedule_differential)
+#   G2-15 pyramiding as a per-cycle count against max_open_lots and the tape.
+list(APPEND TEST_SOURCES test_pyramiding_count_differential)
+#   G2-18 the sibling Stop beside an explicit-zero trail.
+list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
+#   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
+list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2057,6 +2063,9 @@ endif()
 
 # R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
 foreach(_pf_hm_row IN ITEMS
+        "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
+        "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
+        "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)

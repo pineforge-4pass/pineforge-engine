@@ -126,7 +126,7 @@ rather than defaulted.
 | `commission_value` | `fee_value` native_run_spec.hpp:589 | `fee_value` pineforge.h:540 | `native_open_lots_strategy.cpp` | Quoted per execution by `quote_execution_commissions` engine_execution.cpp:1588. A cash-per-execution ticket is split by units over every slice of that execution. |
 | `slippage` | `slippage_ticks` native_run_spec.hpp:583 | `slippage_ticks` pineforge.h:540 | `native_price_grid_strategy.cpp` | Raw `ticks * price_tick`, applied once native_execution_consumer.cpp:3958-3959. TradingView's round-then-slip order is adapter-only. |
 | `process_orders_on_close` | `NativeCloseExecution` native_run_spec.hpp:33 | `close_execution` pineforge.h:541 | `native_open_lots_strategy.cpp` | `AfterCalculation` emits the post-calculation close point native_execution_consumer.cpp:7524-7525, so a request submitted in bar *k*'s calculation fills at bar *k*'s own close. |
-| `pyramiding` | `max_open_lots` native_run_spec.hpp:595 | `max_open_lots` pineforge.h:543 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots `sha256:87bd0ff848901478840870d95eb356b35d7d368555ce8eadee8571b8e17f86ec` native_execution_consumer.cpp:2121-2124. Pine's per-cycle *entry count* is a TradingView rule, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`. |
+| `pyramiding` | `max_open_lots` native_run_spec.hpp:595 | `max_open_lots` pineforge.h:543 | `native_open_lots_strategy.cpp` | Caps surviving+new physical lots `sha256:87bd0ff848901478840870d95eb356b35d7d368555ce8eadee8571b8e17f86ec` native_execution_consumer.cpp:2121-2124. The Pine adapter keeps its own per-cycle *entry count*, ruled **adapter-policy** in ADR-0001's table row `max_open_lots`; measured against TradingView it is not TradingView's rule, and this cap is the closer one (14 of 15 tape scenarios against 8, `tests/test_pyramiding_count_differential.cpp`). |
 | `default_qty_type` | `Sized` native_order.hpp:164 with `CashValue` native_order.hpp:91 or `EquityFraction` native_order.hpp:97 | `PF_NATIVE_INTENT_SIZED` native_c_api.h:344 with `size_basis` native_c_api.h:2104 | `native_sized_report_strategy.cpp` | The size is a property of the *request*, not of the run: a native host may size one order by cash and the next by equity fraction. `Transact` native_order.hpp:41 is the fixed-units form. Pine itself has no per-call `qty_type` — TradingView's compiler refuses one — so a script's `strategy.entry(qty = ...)` is always units; the source layer's typed per-call entry, which only generated or C++ callers reach, converts its money exactly as the declared default does. |
 | `default_qty_value` | the basis's own scalar: `CashValue::cash` native_order.hpp:92, `EquityFraction::fraction` native_order.hpp:98 | `intent_value` native_c_api.h:2108 | `native_sized_report_strategy.cpp` | `SizeTime` native_order.hpp:106 chooses *when* the basis resolves and `SizePrice` native_order.hpp:146 *which* price it converts at; both compose. |
 | `calc_on_order_fills` | `NativeCalculationTrigger` native_run_spec.hpp:94 | `calculation` native_c_api.h:2278 | `native_calc_on_fills_strategy.cpp` | `BarCloseAndFills` recalculates once at the cursor of each applied execution, bounded by `max_recalculations_per_point` native_run_spec.hpp:626. The generic cadence only: TradingView's waypoint-only refill, its two-fills-at-open rule and its script-state rollback stay in the adapter. |
@@ -382,7 +382,10 @@ The Pine adapter lowers its own queued relative legs exactly this way — a
 host-sized `Book` / `AfterArmPrint` child, with `resolve_anchored_level`
 carrying only TradingView's half-tick threshold — and adopts the armed child at
 the parent's fill. An explicit `qty=`, `close_entries_rule="ANY"` and stream
-runs keep the adapter's fill-point submission.
+runs keep the adapter's fill-point submission. The adopted child of a trailing
+exit names no `best_seed`, so its ride starts at the raw arm print where
+TradingView's starts at the activation: a recorded divergence on 13 of 13 taped
+trades (`tests/test_pending_entry_trail_tapes.cpp`).
 
 ## Risk limits {#pine_to_native_map_risk}
 

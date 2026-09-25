@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE H3 NYSE:F long pending-entry trail seed",
+  "slug": "hm-orders-h3-f-long-pending-seed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T18:45:53.287Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-04-10"
+  },
+  "pine_sha256": "2072eee2b09dd4d56c7b3da20dd729fc7d589dd795d8ed1f5998ca368b843ce3",
+  "tv_trades_sha256": "95b1e8309f3b2f93645f36d68b3b479517b7c303d0b7330b50622364a0787252",
+  "tv_trades_rows": 16
+}

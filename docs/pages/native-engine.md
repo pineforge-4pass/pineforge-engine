@@ -977,7 +977,12 @@ functions `exit()` uses. The parent's fill point still runs the source
 same-bar ordering are facts of that point and have no kernel analogue; it
 *adopts* the armed child instead of submitting whenever that child is the
 request it was about to submit: the same trigger bits, the same OCA group, a
-host-sized close of the book. Because the child is host-sized and
+host-sized close of the book. The comparison leaves out a trail's
+`best_seed`, so a pending entry's trailing exit adopts a child whose best
+starts at the raw arm print where the request `exit()` builds would start it
+at the activation; TradingView starts it at the activation, and the adapter
+exits later on 13 of 13 taped trades (`tests/test_pending_entry_trail_tapes.cpp`,
+recorded divergences). The quantized arm itself holds there, 28 of 28. Because the child is host-sized and
 book-scoped, that holds for every quantity the source resolves at the match
 (a percentage, a sibling's remainder) and for every book the parent's fill
 leaves (flat, a reversal, a later same-id add), under `calc_on_order_fills`
@@ -1810,7 +1815,9 @@ already armed it. The kernel's own crossing is then the price the adapter
 books, which is what the three trail twin suites now assert. The sibling stop
 an explicit-zero trail rests beside its `Trail` stays: a `Stop` is reached by
 a touch and a zero-distance ride needs a move strictly past the best, so they
-differ exactly on a print that lands ON the carried best.
+differ exactly on a print that lands ON the carried best. TradingView books
+the touch at the open: 16 of 16 taped trades of that shape, which a kernel
+host reproduces only with both legs (`tests/test_zero_trail_sibling_stop.cpp`).
 
 Two kernel helpers went with it. `BacktestEngine::round_to_mintick_directional`
 and `BacktestEngine::apply_slippage` were the pre-R5 spelling of the

@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE M13 NYSE:F pyramiding cap orders",
+  "slug": "hm-orders-m13-f-pyramiding-cap-orders",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:02:37.563Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-09-30"
+  },
+  "pine_sha256": "e97ac2c332282fdb9562be3836610a1594614ba362e669473515b379e3f4e054",
+  "tv_trades_sha256": "67cb6805a7b9cb20c8542e1e4c0805dbd539d1f3182dafe4a020a0c01c77a1b5",
+  "tv_trades_rows": 8
+}

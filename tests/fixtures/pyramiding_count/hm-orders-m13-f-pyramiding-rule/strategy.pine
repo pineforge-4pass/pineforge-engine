@@ -1,0 +1,57 @@
+// H-MEASURE row M13 / G2-15 (group orders), second tape: WHICH rule does TradingView's
+// pyramiding apply? pyramiding = 2, fixed 100 shares, fills at the next bar's open.
+// Four scenarios, each on its own NYSE:F session (UTC signal-bar times):
+//   D1 2025-07-01 16:45Z  one lot open; on one bar a far limit entry, then a market add
+//   D2 2025-07-09 14:15Z  flat; on one bar a far limit entry, then two market entries
+//   D3 2025-07-11 16:30Z  two lots open (the cap); on one bar strategy.close("A"), then entry("C")
+//   D3b 2025-07-14 14:00Z  two lots open (the cap); on one bar entry("C"), then strategy.close("A")
+//@version=6
+strategy("H-MEASURE M13 NYSE:F pyramiding rule", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=2,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+// D1: one lot open; on one bar a far limit entry, then a market add
+if at(2025, 7, 1, 16, 45)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 1, 17, 15)
+    strategy.entry("L2", strategy.long, limit=10.27)
+    strategy.entry("M", strategy.long)
+if at(2025, 7, 1, 18, 0)
+    strategy.cancel("L2")
+if at(2025, 7, 1, 18, 15)
+    strategy.close_all()
+
+// D2: flat; on one bar a far limit entry, then two market entries
+if at(2025, 7, 9, 14, 15)
+    strategy.entry("L2", strategy.long, limit=10.79)
+    strategy.entry("M1", strategy.long)
+    strategy.entry("M2", strategy.long)
+if at(2025, 7, 9, 15, 0)
+    strategy.cancel("L2")
+if at(2025, 7, 9, 15, 15)
+    strategy.close_all()
+
+// D3: two lots open (the cap); on one bar strategy.close("A"), then entry("C")
+if at(2025, 7, 11, 16, 30)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 11, 16, 45)
+    strategy.entry("B", strategy.long)
+if at(2025, 7, 11, 17, 15)
+    strategy.close("A")
+    strategy.entry("C", strategy.long)
+if at(2025, 7, 11, 18, 0)
+    strategy.close_all()
+
+// D3b: two lots open (the cap); on one bar entry("C"), then strategy.close("A")
+if at(2025, 7, 14, 14, 0)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 14, 14, 15)
+    strategy.entry("B", strategy.long)
+if at(2025, 7, 14, 14, 45)
+    strategy.entry("C", strategy.long)
+    strategy.close("A")
+if at(2025, 7, 14, 15, 30)
+    strategy.close_all()

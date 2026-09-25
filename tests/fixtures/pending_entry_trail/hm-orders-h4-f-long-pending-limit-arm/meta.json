@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE H4 NYSE:F long pending limit-entry trail arm",
+  "slug": "hm-orders-h4-f-long-pending-limit-arm",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:18:11.817Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-04-10"
+  },
+  "pine_sha256": "c429493c6186e3f16afdc5fe207011e8b27637c996a702260f87994fa3cd1e8a",
+  "tv_trades_sha256": "886d8cc2e2caa9134073cbb0910121aaa844824e66e9170e6615ab7128cb6c13",
+  "tv_trades_rows": 12
+}

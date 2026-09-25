@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE H4 NYSE:F short pending-entry trail arm",
+  "slug": "hm-orders-h4-f-short-pending-arm",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T18:45:49.157Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-04-10"
+  },
+  "pine_sha256": "361ea74dca1894c88b0ca9781c6a4d68dcbe90a825de03e2d010068f1c186d01",
+  "tv_trades_sha256": "41d1837adb0ebcc096e544de4abbd65eb2b0abf56553257ae2e004380a221521",
+  "tv_trades_rows": 16
+}

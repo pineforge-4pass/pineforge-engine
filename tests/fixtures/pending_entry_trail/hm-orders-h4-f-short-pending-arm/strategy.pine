@@ -1,0 +1,68 @@
+// H-MEASURE H4 NYSE:F short pending-entry trail arm (H-MEASURE research, group orders).
+// Row 4 (E5 pending-entry arm): does a trail whose strategy.exit was issued while its
+// entry was PENDING arm on the tick-QUANTIZED path, as lane E5 measured for a filled
+// entry? On every event the arm bar's raw extreme stops inside the activation's
+// tick cell; a quantized arm exits on that bar at activation -/+ 1 tick, a raw arm
+// later.
+// NYSE:F 15m (sub-cent prints). Each entry is a MARKET strategy.entry issued on
+// its signal bar together with strategy.exit(trail_points, trail_offset); the
+// entry fills at the next bar's open. Events (UTC signal bar -> fill bar):
+//   2025-04-24 15:30 -> 2025-04-24 15:45  trail_points 1  trail_offset 1
+//   2025-04-30 15:00 -> 2025-04-30 15:15  trail_points 4  trail_offset 1
+//   2025-05-05 15:30 -> 2025-05-05 15:45  trail_points 1  trail_offset 1
+//   2025-05-28 16:00 -> 2025-05-28 16:15  trail_points 2  trail_offset 1
+//   2025-06-02 19:30 -> 2025-06-02 19:45  trail_points 7  trail_offset 1
+//   2025-12-08 14:45 -> 2025-12-08 15:00  trail_points 5  trail_offset 1
+//   2025-12-15 19:45 -> 2025-12-15 20:00  trail_points 2  trail_offset 1
+//   2026-02-09 17:15 -> 2026-02-09 17:30  trail_points 1  trail_offset 1
+//@version=6
+strategy("H-MEASURE H4 NYSE:F short pending-entry trail arm", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+var float off = na
+bool go = false
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 4, 24, 15, 30)
+        pts := 1
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 4, 30, 15, 0)
+        pts := 4
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 5, 5, 15, 30)
+        pts := 1
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 5, 28, 16, 0)
+        pts := 2
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 6, 2, 19, 30)
+        pts := 7
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 12, 8, 14, 45)
+        pts := 5
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 12, 15, 19, 45)
+        pts := 2
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2026, 2, 9, 17, 15)
+        pts := 1
+        off := 1
+        go := true
+
+// The entry and its trailing exit are issued on the same (signal) bar: the exit
+// is placed while the entry is still pending.
+if go
+    strategy.entry("S", strategy.short)
+    strategy.exit("SX", "S", trail_points=pts, trail_offset=off)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 25
+    strategy.close("S", comment="timeout")

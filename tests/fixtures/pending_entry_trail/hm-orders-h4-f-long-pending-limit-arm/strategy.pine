@@ -1,0 +1,55 @@
+// H-MEASURE H4 NYSE:F long pending limit-entry trail arm (H-MEASURE research, group orders).
+// Row 4 (E5 pending-entry arm), LIMIT-entry variant: strategy.entry(limit=X) and
+// strategy.exit(trail_points=n, trail_offset=1) are issued together on the signal bar;
+// the limit fills later MID-BAR (the path crosses X; open and earlier extremes stay a
+// tick away, so no gap and no quantization ambiguity), and the trail may arm on the
+// rest of the fill bar. The arm bar's raw extreme stops inside the activation's tick
+// cell: a quantized arm exits there at activation -/+ 1 tick, a raw arm later. (UTC):
+//   2025-05-21 17:15  limit 10.51 (fills 2025-05-21 17:30)  trail_points 8
+//   2025-07-23 15:45  limit 11.41 (fills 2025-07-23 16:00)  trail_points 5
+//   2025-09-09 13:30  limit 11.58 (fills 2025-09-09 13:45)  trail_points 6
+//   2025-10-22 14:00  limit 12.45 (fills 2025-10-22 14:15)  trail_points 7
+//   2025-11-20 14:30  limit 12.90 (fills 2025-11-20 14:45)  trail_points 4
+//   2026-01-29 19:30  limit 13.98 (fills 2026-01-29 20:00)  trail_points 8
+//@version=6
+strategy("H-MEASURE H4 NYSE:F long pending limit-entry trail arm", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+var float lvl = na
+bool go = false
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 5, 21, 17, 15)
+        pts := 8
+        lvl := 10.51
+        go := true
+    else if time == timestamp("UTC", 2025, 7, 23, 15, 45)
+        pts := 5
+        lvl := 11.41
+        go := true
+    else if time == timestamp("UTC", 2025, 9, 9, 13, 30)
+        pts := 6
+        lvl := 11.58
+        go := true
+    else if time == timestamp("UTC", 2025, 10, 22, 14, 0)
+        pts := 7
+        lvl := 12.45
+        go := true
+    else if time == timestamp("UTC", 2025, 11, 20, 14, 30)
+        pts := 4
+        lvl := 12.90
+        go := true
+    else if time == timestamp("UTC", 2026, 1, 29, 19, 30)
+        pts := 8
+        lvl := 13.98
+        go := true
+
+// The limit entry and its trailing exit are issued on the same (signal) bar.
+if go
+    strategy.entry("L", strategy.long, limit=lvl)
+    strategy.exit("LX", "L", trail_points=pts, trail_offset=1)
+
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 25
+    strategy.close("L", comment="timeout")

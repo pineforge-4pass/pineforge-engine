@@ -1,0 +1,120 @@
+// H-MEASURE row M13 / G2-15 (group orders): Pine pyramiding as TradingView counts it.
+// pyramiding = 2, fixed 100 shares, orders filled at the next bar's open. Nine
+// scenarios, each on its own NYSE:F session, each flat at its start and closed by
+// strategy.close_all at its end (UTC signal-bar times):
+//   P1 2025-06-05 16:30Z  a strategy.close(qty) that closes the first lot whole, then a re-add (same id)
+//   P2 2025-06-18 17:30Z  a strategy.close(qty) inside a lot (2+2, close 1), then a re-add
+//   P3 2025-06-20 16:45Z  strategy.close of one id of two, then a third id
+//   P4 2025-06-02 15:00Z  a resting limit entry, then a market add while it rests (never fills)
+//   P4b 2025-06-11 14:30Z  a resting limit entry that fills AFTER a market add
+//   P6 2025-06-03 14:45Z  three market entries on one bar while flat
+//   P8 2025-06-23 15:00Z  strategy.exit(qty) FROM B stops out the oldest lot (A, FIFO), then a third id
+//   P9 2025-06-30 16:45Z  strategy.exit(qty) FROM A stops out lot A, then a third id
+//   P10 2025-07-21 17:45Z  strategy.exit FROM B with the default quantity, two lots open (how much closes?)
+//@version=6
+strategy("H-MEASURE M13 NYSE:F pyramiding count", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=2,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+// P1: a strategy.close(qty) that closes the first lot whole, then a re-add (same id)
+if at(2025, 6, 5, 16, 30)
+    strategy.entry("L", strategy.long)
+if at(2025, 6, 5, 16, 45)
+    strategy.entry("L", strategy.long)
+if at(2025, 6, 5, 17, 15)
+    strategy.close("L", qty=100)
+if at(2025, 6, 5, 17, 45)
+    strategy.entry("L", strategy.long)
+if at(2025, 6, 5, 18, 15)
+    strategy.close_all()
+
+// P2: a strategy.close(qty) inside a lot (2+2, close 1), then a re-add
+if at(2025, 6, 18, 17, 30)
+    strategy.entry("L", strategy.long, qty=200)
+if at(2025, 6, 18, 17, 45)
+    strategy.entry("L", strategy.long, qty=200)
+if at(2025, 6, 18, 18, 15)
+    strategy.close("L", qty=100)
+if at(2025, 6, 18, 18, 45)
+    strategy.entry("L", strategy.long, qty=200)
+if at(2025, 6, 18, 19, 15)
+    strategy.close_all()
+
+// P3: strategy.close of one id of two, then a third id
+if at(2025, 6, 20, 16, 45)
+    strategy.entry("A", strategy.long)
+if at(2025, 6, 20, 17, 0)
+    strategy.entry("B", strategy.long)
+if at(2025, 6, 20, 17, 30)
+    strategy.close("A")
+if at(2025, 6, 20, 18, 0)
+    strategy.entry("C", strategy.long)
+if at(2025, 6, 20, 18, 30)
+    strategy.close_all()
+
+// P4: a resting limit entry, then a market add while it rests (never fills)
+if at(2025, 6, 2, 15, 0)
+    strategy.entry("L", strategy.long)
+if at(2025, 6, 2, 15, 30)
+    strategy.entry("L2", strategy.long, limit=8.93)
+if at(2025, 6, 2, 15, 45)
+    strategy.entry("L3", strategy.long)
+if at(2025, 6, 2, 16, 15)
+    strategy.cancel("L2")
+if at(2025, 6, 2, 16, 30)
+    strategy.close_all()
+
+// P4b: a resting limit entry that fills AFTER a market add
+if at(2025, 6, 11, 14, 30)
+    strategy.entry("L", strategy.long)
+if at(2025, 6, 11, 15, 0)
+    strategy.entry("L2", strategy.long, limit=10.68)
+if at(2025, 6, 11, 15, 15)
+    strategy.entry("L3", strategy.long)
+if at(2025, 6, 11, 16, 15)
+    strategy.close_all()
+
+// P6: three market entries on one bar while flat
+if at(2025, 6, 3, 14, 45)
+    strategy.entry("A", strategy.long)
+    strategy.entry("B", strategy.long)
+    strategy.entry("C", strategy.long)
+if at(2025, 6, 3, 15, 30)
+    strategy.close_all()
+
+// P8: strategy.exit(qty) FROM B stops out the oldest lot (A, FIFO), then a third id
+if at(2025, 6, 23, 15, 0)
+    strategy.entry("A", strategy.long)
+if at(2025, 6, 23, 15, 15)
+    strategy.entry("B", strategy.long)
+if at(2025, 6, 23, 15, 30)
+    strategy.exit("XB", "B", stop=10.65, qty=100)
+if at(2025, 6, 23, 16, 30)
+    strategy.entry("C", strategy.long)
+if at(2025, 6, 23, 17, 0)
+    strategy.close_all()
+
+// P9: strategy.exit(qty) FROM A stops out lot A, then a third id
+if at(2025, 6, 30, 16, 45)
+    strategy.entry("A", strategy.long)
+if at(2025, 6, 30, 17, 0)
+    strategy.entry("B", strategy.long)
+if at(2025, 6, 30, 17, 15)
+    strategy.exit("XA", "A", stop=10.75, qty=100)
+if at(2025, 6, 30, 18, 15)
+    strategy.entry("C", strategy.long)
+if at(2025, 6, 30, 18, 45)
+    strategy.close_all()
+
+// P10: strategy.exit FROM B with the default quantity, two lots open (how much closes?)
+if at(2025, 7, 21, 17, 45)
+    strategy.entry("A", strategy.long)
+if at(2025, 7, 21, 18, 0)
+    strategy.entry("B", strategy.long)
+if at(2025, 7, 21, 18, 15)
+    strategy.exit("XB", "B", stop=11.38)
+if at(2025, 7, 21, 19, 15)
+    strategy.close_all()

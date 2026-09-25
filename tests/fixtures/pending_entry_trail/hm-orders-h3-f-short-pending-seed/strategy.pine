@@ -1,0 +1,53 @@
+// H-MEASURE H3 NYSE:F short pending-entry trail seed (H-MEASURE research, group orders).
+// Row 3 (E14 anchored-leg seed): where does the running best of a trail whose
+// strategy.exit was issued while its entry was PENDING start? The arm bar's raw
+// extreme stops inside the activation's tick cell; a best that starts AT the
+// activation (lane E14, filled entries) exits on the event bar, a best that
+// starts at the raw arm print exits later.
+// NYSE:F 15m (sub-cent prints). Each entry is a MARKET strategy.entry issued on
+// its signal bar together with strategy.exit(trail_points, trail_offset); the
+// entry fills at the next bar's open. Events (UTC signal bar -> fill bar):
+//   2025-04-30 15:00 -> 2025-04-30 15:15  trail_points 4  trail_offset 2
+//   2025-05-27 17:45 -> 2025-05-27 18:00  trail_points 12  trail_offset 1
+//   2025-12-15 19:45 -> 2025-12-15 20:00  trail_points 2  trail_offset 3
+//   2026-01-16 18:15 -> 2026-01-16 18:30  trail_points 3  trail_offset 1
+//   2026-02-10 15:00 -> 2026-02-10 15:15  trail_points 3  trail_offset 3
+//@version=6
+strategy("H-MEASURE H3 NYSE:F short pending-entry trail seed", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+var float pts = na
+var float off = na
+bool go = false
+if strategy.position_size == 0
+    if time == timestamp("UTC", 2025, 4, 30, 15, 0)
+        pts := 4
+        off := 2
+        go := true
+    else if time == timestamp("UTC", 2025, 5, 27, 17, 45)
+        pts := 12
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2025, 12, 15, 19, 45)
+        pts := 2
+        off := 3
+        go := true
+    else if time == timestamp("UTC", 2026, 1, 16, 18, 15)
+        pts := 3
+        off := 1
+        go := true
+    else if time == timestamp("UTC", 2026, 2, 10, 15, 0)
+        pts := 3
+        off := 3
+        go := true
+
+// The entry and its trailing exit are issued on the same (signal) bar: the exit
+// is placed while the entry is still pending.
+if go
+    strategy.entry("S", strategy.short)
+    strategy.exit("SX", "S", trail_points=pts, trail_offset=off)
+
+if strategy.position_size < 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 25
+    strategy.close("S", comment="timeout")

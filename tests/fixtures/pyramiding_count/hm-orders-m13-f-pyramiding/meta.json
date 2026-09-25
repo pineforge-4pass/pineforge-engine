@@ -1,0 +1,16 @@
+{
+  "title": "H-MEASURE M13 NYSE:F pyramiding count",
+  "slug": "hm-orders-m13-f-pyramiding",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T18:57:42.928Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-05-01",
+    "to": "2025-07-31"
+  },
+  "pine_sha256": "99eb81b7cf2a4b2623c2492f315b05a0b6c0d54582c398e34c6ce080ae68e5cf",
+  "tv_trades_sha256": "de780cacf8ee965d787ef715d3af6ddf439370652dea820e71dbad55c4b0909d",
+  "tv_trades_rows": 48
+}

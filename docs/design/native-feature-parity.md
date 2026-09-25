@@ -96,7 +96,7 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 |---|---|---|---|---|---|---|
 | MG1 | Allowed opening directions (`allowed_open_directions` pine_adapter.cpp:2361) | **yes** — `allowed_open_directions` native_run_spec.hpp:596 → `MatchRejectReason::OpeningDirection` native_execution_consumer.cpp:2947-2955 | K | — | F:D4 O:D7 S:M1 | the one risk rule the adapter delegates (O) |
 | MG2 | Max absolute position size | **yes** — `max_abs_units` native_run_spec.hpp:594 tests the resulting book native_execution_consumer.cpp:2961-2964 | K+A | — | F:D5 O:D5 S:M1 S:M5 | **Disagree:** O, S:M5 partial. R5-1: the generic cap is native; the adapter's live-position `>= held` variant (`max_position_size` pine_adapter.cpp:13226-13229) is TV. |
-| MG3 | Open-lot cap (pyramiding) | **yes** — `max_open_lots` native_run_spec.hpp:595 → `MaxOpenLots` native_execution_consumer.cpp:2966-2969 | K+A | — | F:A5 O:A13 O:D6 S:M1 | **Disagree:** F, O:A13 partial / O:D6, S yes. R5-1: Pine's per-cycle entry count (`accepted_in_cycle` pine_adapter.cpp:6180-6226, cap left unset `max_open_lots` pine_adapter.cpp:2360-2362) is TV. |
+| MG3 | Open-lot cap (pyramiding) | **yes** — `max_open_lots` native_run_spec.hpp:595 → `MaxOpenLots` native_execution_consumer.cpp:2966-2969 | K+A | — | F:A5 O:A13 O:D6 S:M1 | **Disagree:** F, O:A13 partial / O:D6, S yes. R5-1: Pine's per-cycle entry count (`accepted_in_cycle` pine_adapter.cpp:6180-6226, cap left unset `max_open_lots` pine_adapter.cpp:2360-2362) is TV. **Measured (R5 lane H-MEASURE), and not TradingView's rule:** on 15 scenarios of three `lab tv` tapes (`tests/test_pyramiding_count_differential.cpp`) TradingView checks an entry once, at its first eligible point, against the trades then open; the kernel's `max_open_lots` books 14 as TradingView does, the adapter's count 8 (it counts a resting entry, admits three market entries on a flat bar, keeps a slot another entry's exit drained). The fifteenth, a resting entry accepted below the cap and filled at it, needs a first-eligible-point rule neither side has. A recorded divergence, retained pending a re-lowering ruling. |
 | MG4 | Initial-margin opening gate (adapter answers `AdmitWithHostMargin` from frozen signal-time equity pine_adapter.cpp:13280-13345 and leaves the kernel gate unset pine_adapter.cpp:13279-13281) | **yes** — `initial_margin_fraction` native_run_spec.hpp:597; the requirement `resulting_abs_notional * fraction` native_execution_consumer.cpp:2984 against marked equity. **Conversion instant, R5 follow-up lane E21:** both sites of the gate convert at their own point's rate — the candidate at its cursor, the placement gate at the acceptance point where a `Sized{SizeTime::AtAcceptance}` freezes its units — for the notional, the equity and a percent ticket, and the freeze's equity basis with them. The rate is threaded, never the clock: `make_command_context` native_execution_consumer.cpp:2830 hands the point's rate to the freeze, to `marked_equity_at` and to the engine's rate-explicit settlement inspection `inspect_native_settlement_scoped_at` engine.hpp:649, and the engine's presented clock is never written (`tests/test_native_margin_fx_clock.cpp` sections 8, 10 and 11) | K | — | F:D1 O:D1 S:M2 | **Disagree:** F, O partial (they fold per-side in) / S yes. Row split → MG5. **Measured (R5 lane H-MEASURE, M11):** the two gates part both ways on the same bars — the kernel's declines a 1× long whose entry fee the adapter admits, and admits a gap-up add the adapter refuses against its signal-time equity; `ab9714be` books the adapter's answer both times (`tests/test_adapter_margin_schedule_differential.cpp`). |
 | MG5 | Per-side initial margin (`margin_pct` pine_adapter.cpp:13935-13936, `margin_pct` pine_adapter.cpp:13343) | **no** — one `std::optional<double>` `initial_margin_fraction` native_run_spec.hpp:597 **Closed:** `NativeMarginModel::initial_long` / `initial_short` native_run_spec.hpp:242, opt-in and mutually exclusive with `initial_margin_fraction`; `initial_<side> == 0.0` is the maintenance-only spelling that leaves opening admission to the host at both of its gates (`tests/test_native_margin_model.cpp`). | K | L4 | F:D1 O:D2 | R5-1 |
 | MG6 | Maintenance margin + forced liquidation (`submit_margin_call_slice` pine_adapter.cpp:14035-14213, `submit_margin_call_units` pine_adapter.cpp:14174-14220, `schedule_margin_call_path` pine_adapter.cpp:18185-18262) | **no** — "no maintenance liquidation" `initial_margin_fraction` native_run_spec.hpp:597-598; margin is checked only when `inspect.would_open` native_execution_consumer.cpp:2943 **Closed:** `maintenance_long` / `maintenance_short` with `NativeLiquidationCheck::{PathAdverseExtreme, PathAdverseExtremeMark, CalculationOnly}`; the kernel solves the level, rests its own `Reduce`/`Flatten` bound to the live book, re-prices it with `CancelReason::Superseded` and books a `MarginCallEvent` (`tests/test_native_margin_model.cpp`, `tests/test_native_margin_hooks.cpp`). | K+A | L4 | F:D2 O:D3 S:M3 | TV parts → MG15 |
@@ -293,7 +293,7 @@ Depends on L7 (working view), L3 (so `Sized` is in v1 of the C request) and the 
 ### 2.v Promote the examples (L10)
 
 - Move `runner/examples/native_market_strategy.cpp` and `native_selected_strategy.cpp` to a top-level `examples/native/`, built by `PINEFORGE_BUILD_EXAMPLES` (today "none yet" and guarding nothing CMakeLists.txt:37; the examples build only under `PINEFORGE_BUILD_LIVE_RUNNER` CMakeLists.txt:454-455, with `native_market_example` runner/CMakeLists.txt:45). Link the kernel target (S), or `PineForge::pineforge` during migration (O) — no SQLite / curl / OpenSSL (runner/CMakeLists.txt:1-4).
-- Build (1) standalone executables with a `main()` that runs batch + stream on embedded bars (the guide already contains that `main` native-engine.md:2963-3031) and (2) the same MODULE targets the runner tests load; keep the C-ABI shims so the live runner can still `dlopen` them (F, O, S).
+- Build (1) standalone executables with a `main()` that runs batch + stream on embedded bars (the guide already contains that `main` native-engine.md:2925-2992) and (2) the same MODULE targets the runner tests load; keep the C-ABI shims so the live runner can still `dlopen` them (F, O, S).
 - Update the three places that pin the paths: `sha256:60a689e9bbb16d77370ee18557929c420ee846d162b7d2bcd5472ffd74409e69` runner/CMakeLists.txt:37-45, `sha256:e7b0011fb5e730a159692b9f8ab97b2d43bd386e7c4802f13a4ae4c1db083c80` check_native_include_independence.py:36-39, the tests at `sha256:2c88205b43a02dafe8915e74417743b3b3faa0c65595686ccd305386505bdf55` runner/CMakeLists.txt:98-128.
 - Add a minimal "hello, kernel" host (~60 lines, no C ABI — O) and one example per v1 feature lane as it lands; each doubles as that lane's twin host (F).
 - Add `include/pineforge/native_module.hpp` with `PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)` to replace the ~70 hand-written `extern "C"` lines per example (F, single-source).
@@ -655,18 +655,33 @@ there); the sub-tick sweep is the gate. What is NOT redundant afterwards is
 the sibling stop an explicit-zero trail rests beside its `Trail`: a `Stop` is
 reached by a touch and a zero-distance ride needs a move strictly past the
 best, and a print landing ON the carried best separates them in the booked
-price's last bits.
+price's last bits. **Measured (R5 lane H-MEASURE,
+`tests/test_zero_trail_sibling_stop.cpp`):** a bare kernel host given both
+legs is the adapter bit for bit; given the `Trail` alone it rides past the
+open and fills on a later leg of the bar, half a tick to a tick and a half
+away. On two `lab tv` tapes (NYSE:F 15m, sixteen trades of that shape)
+TradingView books the touch at the open 16 of 16: the adapter's bar and price
+16 of 16, the `Trail` alone 0 of 16.
 
-**Anchored relative legs: an open measurement (lane F7).** A trailing
-`strategy.exit` issued while its entry is still pending is materialized as the
-kernel's anchored child at the fill (`relative_leg_shapes`, M17) and names no
-`best_seed`: its ride starts where the kernel arms it. None of the 23 E5 / E9 /
-E14 tapes measures that shape — every probe issues its exit once the entry has
-filled (`strategy.opentrades.entry_bar_index(0) == bar_index`) — so whether
-TradingView's best starts at the activation there too is unknown, and F7
-records it rather than changing it. The tape it needs is the E14 shape with the
-exit written on the entry's signal bar: a fill bar that reaches the activation
-on its tick, a shallow next bar.
+**Anchored relative legs: measured (lane F7 recorded it, R5 lane H-MEASURE
+taped it).** A trailing `strategy.exit` issued while its entry is still pending
+is materialized as the kernel's anchored child at the fill
+(`relative_leg_shapes`, M17) and names no `best_seed`: its ride starts where the
+kernel arms it. Six `lab tv` tapes of that shape (NYSE:F 15m, the exit written
+on the entry's signal bar; `tests/fixtures/pending_entry_trail`, replayed by
+`tests/test_pending_entry_trail_tapes.cpp`) settle both halves. The arm: on 28
+trades whose arming bar's raw extreme stops inside the activation's tick cell
+(16 market entries, 12 limit entries filling mid-bar), TradingView exits on
+that bar at the activation ∓ 1 tick 28 of 28, and so does the adapter's
+anchored child (E5's quantized arm holds for a pending entry). The running
+best: on 13 trades whose prints after the arm fall between the two stops a best
+can give, TradingView's best starts AT the activation 13 of 13, as E14 measured
+for a filled entry; the anchored child's starts at the raw arm print, and the
+adapter exits 1 to 24 bars later on all 13. The fill point's adoption compare
+leaves `best_seed` out, so it adopts the unseeded child where `exit()` would
+have submitted a seeded leg. These are recorded divergences (each row pinned at
+the engine's bar and price); refusing to adopt a seeded fill-point leg closes
+all 13 in a scratch build.
 
 **The trail stop's own ULP (lane E16, closing E14's finding).** E14's tape
 left one trade of `e14-f-long-shallow-next` pinned as a recorded divergence:
@@ -760,7 +775,7 @@ still in the table.
 | `price_grid`, `grid_rounding` | native-only | §3.6.2 |
 | `risk` | native-only | §3.6.1 |
 | `max_abs_units` | adapter-policy: the pre-fill live-book gate is TradingView's | row MG2; N12's `PS` measurement (book 4 against 2) |
-| `max_open_lots` | adapter-policy: Pine pyramiding is a per-cycle entry count | row MG3; the contract comment in `project()` |
+| `max_open_lots` | adapter-policy: Pine pyramiding is a per-cycle entry count (measured against TradingView: not its rule, row MG3) | row MG3; the contract comment in `project()`; `tests/test_pyramiding_count_differential.cpp` |
 | `initial_margin_fraction` | adapter-policy: TradingView's money admission answers `AdmitWithHostMargin`; the declared `margin` model is maintenance-only | row MG4; the wave-4 ruling in `project()` |
 | `report_open_position_at_end` | adapter-policy: TradingView's range-end report is report shape, not a mark-to-market row | row RP5 |
 | `open_bar_view` | adapter-policy: TradingView's open scheduling and its fill callback read the whole bar | rows CT4, E5 |
@@ -1352,7 +1367,7 @@ std::optional<Bar> current_partial_bar() const;                                 
 
 Callback chronology contract (the normative part of the lane; F P4.1 + O G8):
 
-1. At one point: match and settle → `on_native_applied` per applied event, FIFO (rule already at `on_native_applied` native-engine.md:1642-1643) → with `BarCloseAndFills`, one recalculation at the fill cursor (reason `OrderFill`), driven from the existing notification drain (native_execution_consumer.cpp:6982-6994) under its re-entrancy guard, bounded by `max_recalculations_per_point`. S would run it *before* the drain; not chosen, the drain order is frozen (E4).
+1. At one point: match and settle → `on_native_applied` per applied event, FIFO (rule already at `on_native_applied` native-engine.md:1630-1631) → with `BarCloseAndFills`, one recalculation at the fill cursor (reason `OrderFill`), driven from the existing notification drain (native_execution_consumer.cpp:6982-6994) under its re-entrancy guard, bounded by `max_recalculations_per_point`. S would run it *before* the drain; not chosen, the drain order is frozen (E4).
 2. Requests born in any of these callbacks follow the existing birth rule: eligible on the unconsumed rest of the bar (`sha256:d2bc11d04fb37fc9c5d8b87bef2f5438be7a5f5c8ff72da5fcf255500d92f5cb` native_execution_consumer.cpp:3491-3500). `born_on_remaining_path` (native_execution_consumer.cpp:5616-5620) is not touched — the adapter's COOF deferral (`pending_coof_requests_`, element type `PendingCoofRequest` pine_adapter.hpp:1659-1666) is calibrated against it.
 3. `EveryModeledPoint`: a calculation at each magnifier sample / observed print, in batch as well as stream (every delivery loop asks the per-point guard native_execution_consumer.hpp:1073-1080, whose body is native_execution_consumer.cpp:6835-6842). `on_native_tick` stays the observation hook (S).
 4. `current_partial_bar()` derives from the driver points already recorded (`record_driver` native_execution_consumer.cpp:2557); valid in bar-open, applied and tick callbacks.
