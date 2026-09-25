@@ -1434,7 +1434,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:13844-13868`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14052-14076`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2192,7 +2192,13 @@ Both digests fold **state**, not history (the v19 value epoch, R5 lane V19-A:
   two driver-point instants the FX-roll check reads. The acknowledgement and
   the event high waters are readback bookkeeping and fold nowhere. So equal state answers an equal value,
   two command histories that reach one state answer one value, and a read costs
-  the live state whatever the run's length. The fold takes one
+  the live state whatever the run's length. A cohort roster is live state as
+  its host keeps it: every member folds at every read, so an origin the host
+  leaves on its roster after nothing can bind it any more — its request chain
+  no longer works and no lot it opened is still open — costs every later read.
+  The Pine adapter takes each such origin off its roster (`cohort_remove`) at
+  the next bar open (R5 lane V19-FIX), so a Pine run's rosters hold the
+  openings that still work or hold a lot, however many the run has made. The fold takes one
   multiply-xorshift per 64-bit word; a string folds as its length, then its
   bytes eight at a time. `native_run_spec_digest(spec)` keeps its byte-wise
   FNV-1a and its values.

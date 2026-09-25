@@ -194,37 +194,37 @@ into kernel driving — never by special-casing the kernel *for a specific scrip
 kernel and own these quirks, each at its site:
 
 - **Seams the adapter overrides.** The kernel is driven, not patched. `PineStrategyHost` overrides
-  `resolve_execution_terms` (`pine_strategy_host.cpp:694`) for TV sizing and fill spelling;
-  `validate_execution_precommit` (`pine_strategy_host.cpp:719`), whose
-  `validate_precommit` (`pine_adapter.cpp:12809`) returns `AdmitWithHostMargin`
-  (`pine_adapter.cpp:13054`) to own the opening margin decision; `owns_lot_excursions() = true`
-  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:804`), so
+  `resolve_execution_terms` (`pine_strategy_host.cpp:693`) for TV sizing and fill spelling;
+  `validate_execution_precommit` (`pine_strategy_host.cpp:718`), whose
+  `validate_precommit` (`pine_adapter.cpp:13017`) returns `AdmitWithHostMargin`
+  (`pine_adapter.cpp:13262`) to own the opening margin decision; `owns_lot_excursions() = true`
+  (`pine_strategy_host.hpp:284-285`) with `closed_lot_excursion` (`pine_strategy_host.cpp:803`), so
   MFE/MAE are measured on TV tick-quantized prices; and `on_native_tick`
-  (`pine_strategy_host.cpp:381`) / `on_native_applied` (`pine_strategy_host.cpp:477`) for
+  (`pine_strategy_host.cpp:380`) / `on_native_applied` (`pine_strategy_host.cpp:476`) for
   `calc_on_order_fills` re-entry. `process_orders_on_close` becomes
-  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2259-2260`);
+  `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:2301-2302`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:20`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
-  (`sha256:27e64b2cd0bbe283a8c83056538d66cd374e53cad072772c775a8529624768ac` pine_adapter.hpp:1785-1816); the retained parent-before-child ordering of live handles — an
+  (`sha256:27e64b2cd0bbe283a8c83056538d66cd374e53cad072772c775a8529624768ac` pine_adapter.hpp:1788-1819); the retained parent-before-child ordering of live handles — an
   exactly-shaped entry and its `from_entry` exit, re-created after a named cancel, on a flat book
   under `process_orders_on_close` (`src/compat/pine/order_priority.cpp:13-59`, applied by
-  `pine_adapter.cpp:1071-1150`). Kernel priority is acceptance/incarnation order.
+  `pine_adapter.cpp:1080-1159`). Kernel priority is acceptance/incarnation order.
 - **Exit-leg lifecycle.** Activation / suspension / revival barriers
   (`sha256:fd8fba34d3e8008fe8e844cd6f251df0a343f07106bb48013c0301f77a10f3ff` src/compat/pine/exit_activation.cpp:42-60) and historical birth reach
   (`order_birth.cpp` `src/compat/pine/order_birth.cpp:5-14`).
 - **Trail and tick conventions.** The half-tick arm threshold measured against tick-quantized
-  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:9381-9386`); the half-tick
-  trigger threshold (`sha256:bbd5b742d2109e4b01f97a199f3883c4037918f4e0e6a0cf8cbd99b98f823b0c` pine_adapter.cpp:332-344) and raw-vs-booked fill spelling, behind the
-  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:11446`).
+  extremes while the raw running best is retained (`has_trail_request` `pine_adapter.cpp:9574-9579`); the half-tick
+  trigger threshold (`sha256:bbd5b742d2109e4b01f97a199f3883c4037918f4e0e6a0cf8cbd99b98f823b0c` pine_adapter.cpp:341-353) and raw-vs-booked fill spelling, behind the
+  adapter's terms seam (`resolve_terms` `pine_adapter.cpp:11654`).
 - **Money arithmetic.** Ten-significant-digit half-up money (`source_money_round`
-  `pine_adapter.cpp:445-451`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
+  `pine_adapter.cpp:454-460`, twin `tv_money_round` `pine_policy_support.hpp:9-15`).
 - **Close reservations.** `strategy.close` callsite batching, two-call provenance and the entry-id
-  ledger (`close_logical_units_` `pine_adapter.hpp:2011-2022`); the POOC reservation-growth population predicate
+  ledger (`close_logical_units_` `pine_adapter.hpp:2018-2029`); the POOC reservation-growth population predicate
   (`sha256:f524cf2b9e21e231672451db30ab94184ba3125d8ad6e4f9f614a0f4c538919e` src/compat/pine/reservation_expansion.cpp:9-20).
 - **Margin.** The kernel owns the margin *mechanism* — the level solve, the check points, the
   kernel request, its re-pricing, the receipt — and the adapter answers its three policy hooks
-  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:13844`) for the scheduling,
-  `resolve_margin_requirement` (`pine_adapter.cpp:13880`) for the ten-significant-digit money,
+  with TradingView's: `margin_check_allowed` (`pine_adapter.cpp:14052`) for the scheduling,
+  `resolve_margin_requirement` (`pine_adapter.cpp:14088`) for the ten-significant-digit money,
   and `resolve_margin_call_units` for the lot-floored 4x restore. That hook answers every call
   on purpose (R5 lane F7): TradingView floors the restore onto the lot grid before the multiple,
   so on a gridded tape the kernel's own `ShortfallMultiple 4` books 5 lots where TradingView
@@ -235,7 +235,7 @@ kernel and own these quirks, each at its site:
   margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
   0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
   stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:16578`), the pre-open admission slice and
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:16787`), the pre-open admission slice and
   the 1x-long money call — plus the TV admission scopes
   (`src/compat/pine/market_admission.cpp:33-46`) and the review fold they feed (`:67-72`,
   `:79-136`).
@@ -243,14 +243,14 @@ kernel and own these quirks, each at its site:
   projects `NativeCalculationTrigger::BarCloseAndFills` with TradingView's guard literal as
   `max_recalculations_per_point`. What stays are the specifics COOF adds on top —
   the language-state snapshot/restore around a recalculation, the waypoint-only refill deferral
-  (`next_source_path_waypoint` `pine_adapter.cpp:8072`), the first-open execution chain and its
+  (`next_source_path_waypoint` `pine_adapter.cpp:8265`), the first-open execution chain and its
   own loop guard (`kFirstOpenLoopGuard` `pine_scheduler_native.cpp:681`), and the two fills Pine refuses to
-  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5431`).
+  recalculate on (`suppress_grouped_stop_recalc` `pine_adapter.cpp:5624`).
 - **Pine language state and harness flags.** Series, the tick-level barstate flags and
   position-view freezing (`PineLanguageState` `pine_language_state.hpp:12`); the three session flags generated code
   reads, `PineStrategyHost` members since R5 lane F5 (`session_ismarket_`
   `pine_strategy_host.hpp:857`), which `scheduler_update_session_state`
-  (`pine_strategy_host.cpp:1794`) selects from the kernel's session-day facts before each source
+  (`pine_strategy_host.cpp:1793`) selects from the kernel's session-day facts before each source
   callback — the host computes no session-day rule of its own; `barstate_islast_`, still a
   `BacktestEngine` member (`engine.hpp:378`) only this host writes; the live-tail /
   probe-suppress overrides (`set_realtime_tail` `pine_strategy_host.hpp:446`,
@@ -292,8 +292,8 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   927-961 of that tree, between `round_to_mintick` and `bar_fill_price`), deleted by R5 lane E6;
   the lines 73-180 earlier drafts cited are and were live code (`ClosedLotExcursionFacts`,
   `PyramidEntry`, `Trade`, each with its own doc). The arithmetic is
-  adapter-side (`source_money_round` `pine_adapter.cpp:445-451`). `strategy.close` batching and the entry-id ledger
-  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:2011-2022`) and
+  adapter-side (`source_money_round` `pine_adapter.cpp:454-460`). `strategy.close` batching and the entry-id ledger
+  are **gone** from the kernel — the ledger is adapter state (`close_logical_units_` `pine_adapter.hpp:2018-2029`) and
   only names survive in comments. The TradingView margin-call toggle remains source-owned as
   `source::PineStrategyHost::set_margin_call_enabled` (`pine_strategy_host.hpp:424`);
   what enables the generic model is the presence of `NativeRunSpec::margin`. So is the string-sentinel decoding of adapter-written comments:
@@ -303,7 +303,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   lot flags: `skip_entry_bar_high` / `skip_entry_bar_low` (`engine.hpp:153`), hashed
   (`skip_entry_bar_high` `src/engine_state_hash.cpp:66`) and, since R5 lane E6, set by no host at
   all: the excursion owner declares where its fill sat (`declare_opened_lot_entry_bar_mask`
-  `pine_strategy_host.cpp:566`) and the kernel derives the pair — the intrabar-fill excursion
+  `pine_strategy_host.cpp:565`) and the kernel derives the pair — the intrabar-fill excursion
   mask. Rule 5 is now scoped to that pair's storage; the comment residue it also covered was
   deleted by R5 lane E6 (Section A below).
 - **The wider coupling inventory, re-derived.** `docs/design/native-feature-parity.md` §2.ii
@@ -548,14 +548,14 @@ Every line number in this section names its symbol on this tree, which
 <!-- native-feature-rulings:begin -->
 | `NativeRunSpec` field | ruling | what the adapter runs instead | measurement and ruling of record | executed native consumers |
 |---|---|---|---|---|
-| `price_grid`, `grid_rounding` | **native-only** | TradingView's per-order-kind tick rules on top of `None`: `source_trigger_threshold` (`pine_adapter.cpp:333`), `source_level_on_price_grid` (`:319`), `nearest_tick` (`:257`) / `source_bar_fill_tick` (`:278`) / `directional_tick` (`:302`), behind the terms seam | R5-3 and design risk E7 ruled `None` for the adapter before the lane ran; lanes R7 and N13 measured the alternative anyway (raw levels submitted, `QuantizeFillsAndTriggers` with `HalfUp` declared). L8b closed the first blocker (no run aborts). The second has no remedy on either side: TradingView quantizes per order kind (stop and limit legs and a trail's activation on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors raw), the grid is one rule for the run, and the old N13 trial moved 30 pinned checks in 4 units; this is historical evidence, not a current-head result; a per-kind mask would spell that inconsistency into the kernel. The corpus cannot arbitrate (every probe runs a 0.01 tick on an on-grid feed; 5 of 312 differ in an engine-only column). Permanent witness: `tests/test_adapter_grid_relower.cpp`, whose section 5 pins the trail stop the grid fires a bar early. Design row PG and §3.6 | `examples/native/native_price_grid_strategy.cpp`, `examples/native/native_price_grid_c.c`, `tests/test_native_price_grid.cpp` |
-| `risk` | **native-only** | all of `strategy.risk.*` but the direction: `update_risk_state` (`pine_adapter.cpp:13642`), `SourceDayLedger`, `submit_intraday_loss_close` (`pine_adapter.cpp:14697`), `chart_day_key` (`pine_adapter.cpp:13539`), `compat::pine::IntradayCap` with `IntradayOrderBudget` (337 lines) | Structural first: Pine's risk calls are per-bar statements, so a limit reaches the adapter on script bar 0, after `project()` (`pine_strategy_host.cpp:324`) and `configure_native` (`pine_strategy_host.cpp:325`) have fixed and digested the spec. In substance (lane N12, `tests/test_adapter_risk_relower.cpp`, 62 checks over nine paired scenarios): the drawdown latch samples at the close only and still admits a reversal; the loss-day streak counts trades, not days; the intraday loss closes at the path's adverse extreme, refuses every placement and withdraws the book; the fill cap charges slots, transfers quota and closes at the bar's better extreme on the chart timezone's day. With the kernel seeded on the corpus, 3 of 4 cap probes diverge (3840 of 3916, 312 of 604, 2370 of 2384 rows). `strategy.risk.allow_entry_in` is the one rule that is the kernel's already (`allowed_open_directions`). Design §3.6 | `examples/native/native_risk_limits_strategy.cpp`, `examples/native/native_trail_risk_strategy.cpp`, `tests/test_native_risk_limits.cpp`, `tests/test_native_c_api.c` |
-| `max_abs_units` | **adapter-policy** | `strategy.risk.max_position_size` as a gate on the LIVE book before the fill (`max_position_size` `pine_adapter.cpp:13001-13002`): an entry is refused once the book already holds the limit | design row MG2 (R5-1): the resulting-book cap is the generic one. Measured by N12's scenario `PS` in `tests/test_adapter_risk_relower.cpp`: two-unit entries against a limit of 3 leave the adapter at 4 and the kernel cap at 2 | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_run_spec.cpp` |
-| `max_open_lots` | **adapter-policy** | Pine pyramiding is a per-cycle entry count in the adapter's command policy; a resting source entry must not consume a physical-lot cap before it fills, so `project()` leaves the cap unset (`max_open_lots` `pine_adapter.cpp:2301-2303`) | design row MG3 (R5-1); the contract comment in `project()` | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_margin_model.cpp` |
-| `initial_margin_fraction` | **adapter-policy** | TradingView's ten-significant-digit money admission against the signal-time tuple, answered as `AdmitWithHostMargin`; the `margin` model the adapter does declare is maintenance-only (`NativeMarginModel` `pine_adapter.cpp:2328-2336`, `margin.maintenance_long` `pine_adapter.cpp:2343`) | design row MG4 and the wave-4 ruling recorded in `project()`: a positive initial requirement would decline openings TradingView takes | `tests/test_native_precommit_view.cpp`, `tests/test_native_margin_model.cpp` |
-| `report_open_position_at_end` | **adapter-policy** | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it (`scheduler_record_range_end`): report shape, not a mark-to-market row (`sha256:71a6a8622f560fca3a27d37e098ea8b6f68f831abcca0b6c46ad004d3ffe9358` pine_adapter.cpp:2275-2282) | design row RP5; the kernel reads the field under `KernelRecorded` only, which `scripts/check_adapter_spec_shadowing.py` gates | `examples/native/native_sized_report_strategy.cpp`, `tests/test_native_report_truth.cpp` |
-| `open_bar_view` | **adapter-policy** | `Complete`: TradingView's bar-open scheduling and its `calc_on_order_fills` callback read the whole script bar (`pine_adapter.cpp:2266-2268`) | design rows CT4 and E5: the open-only view is opt-in because the adapter needs the full bar | `examples/native/native_calc_on_fills_strategy.cpp`, `tests/test_native_calc_timing.cpp` |
-| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1613`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
+| `price_grid`, `grid_rounding` | **native-only** | TradingView's per-order-kind tick rules on top of `None`: `source_trigger_threshold` (`pine_adapter.cpp:342`), `source_level_on_price_grid` (`:328`), `nearest_tick` (`:266`) / `source_bar_fill_tick` (`:287`) / `directional_tick` (`:311`), behind the terms seam | R5-3 and design risk E7 ruled `None` for the adapter before the lane ran; lanes R7 and N13 measured the alternative anyway (raw levels submitted, `QuantizeFillsAndTriggers` with `HalfUp` declared). L8b closed the first blocker (no run aborts). The second has no remedy on either side: TradingView quantizes per order kind (stop and limit legs and a trail's activation on the quantized bar; the trail stop, the running best, stop-limit entries and the `calc_on_order_fills` cursors raw), the grid is one rule for the run, and the old N13 trial moved 30 pinned checks in 4 units; this is historical evidence, not a current-head result; a per-kind mask would spell that inconsistency into the kernel. The corpus cannot arbitrate (every probe runs a 0.01 tick on an on-grid feed; 5 of 312 differ in an engine-only column). Permanent witness: `tests/test_adapter_grid_relower.cpp`, whose section 5 pins the trail stop the grid fires a bar early. Design row PG and §3.6 | `examples/native/native_price_grid_strategy.cpp`, `examples/native/native_price_grid_c.c`, `tests/test_native_price_grid.cpp` |
+| `risk` | **native-only** | all of `strategy.risk.*` but the direction: `update_risk_state` (`pine_adapter.cpp:13850`), `SourceDayLedger`, `submit_intraday_loss_close` (`pine_adapter.cpp:14905`), `chart_day_key` (`pine_adapter.cpp:13747`), `compat::pine::IntradayCap` with `IntradayOrderBudget` (337 lines) | Structural first: Pine's risk calls are per-bar statements, so a limit reaches the adapter on script bar 0, after `project()` (`pine_strategy_host.cpp:323`) and `configure_native` (`pine_strategy_host.cpp:324`) have fixed and digested the spec. In substance (lane N12, `tests/test_adapter_risk_relower.cpp`, 62 checks over nine paired scenarios): the drawdown latch samples at the close only and still admits a reversal; the loss-day streak counts trades, not days; the intraday loss closes at the path's adverse extreme, refuses every placement and withdraws the book; the fill cap charges slots, transfers quota and closes at the bar's better extreme on the chart timezone's day. With the kernel seeded on the corpus, 3 of 4 cap probes diverge (3840 of 3916, 312 of 604, 2370 of 2384 rows). `strategy.risk.allow_entry_in` is the one rule that is the kernel's already (`allowed_open_directions`). Design §3.6 | `examples/native/native_risk_limits_strategy.cpp`, `examples/native/native_trail_risk_strategy.cpp`, `tests/test_native_risk_limits.cpp`, `tests/test_native_c_api.c` |
+| `max_abs_units` | **adapter-policy** | `strategy.risk.max_position_size` as a gate on the LIVE book before the fill (`max_position_size` `pine_adapter.cpp:13209-13210`): an entry is refused once the book already holds the limit | design row MG2 (R5-1): the resulting-book cap is the generic one. Measured by N12's scenario `PS` in `tests/test_adapter_risk_relower.cpp`: two-unit entries against a limit of 3 leave the adapter at 4 and the kernel cap at 2 | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_run_spec.cpp` |
+| `max_open_lots` | **adapter-policy** | Pine pyramiding is a per-cycle entry count in the adapter's command policy; a resting source entry must not consume a physical-lot cap before it fills, so `project()` leaves the cap unset (`max_open_lots` `pine_adapter.cpp:2343-2345`) | design row MG3 (R5-1); the contract comment in `project()` | `tests/test_native_resting_matching_contract.cpp`, `tests/test_native_margin_model.cpp` |
+| `initial_margin_fraction` | **adapter-policy** | TradingView's ten-significant-digit money admission against the signal-time tuple, answered as `AdmitWithHostMargin`; the `margin` model the adapter does declare is maintenance-only (`NativeMarginModel` `pine_adapter.cpp:2370-2378`, `margin.maintenance_long` `pine_adapter.cpp:2385`) | design row MG4 and the wave-4 ruling recorded in `project()`: a positive initial requirement would decline openings TradingView takes | `tests/test_native_precommit_view.cpp`, `tests/test_native_margin_model.cpp` |
+| `report_open_position_at_end` | **adapter-policy** | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it (`scheduler_record_range_end`): report shape, not a mark-to-market row (`sha256:71a6a8622f560fca3a27d37e098ea8b6f68f831abcca0b6c46ad004d3ffe9358` pine_adapter.cpp:2317-2324) | design row RP5; the kernel reads the field under `KernelRecorded` only, which `scripts/check_adapter_spec_shadowing.py` gates | `examples/native/native_sized_report_strategy.cpp`, `tests/test_native_report_truth.cpp` |
+| `open_bar_view` | **adapter-policy** | `Complete`: TradingView's bar-open scheduling and its `calc_on_order_fills` callback read the whole script bar (`pine_adapter.cpp:2308-2310`) | design rows CT4 and E5: the open-only view is opt-in because the adapter needs the full bar | `examples/native/native_calc_on_fills_strategy.cpp`, `tests/test_native_calc_timing.cpp` |
+| `subscriptions` | **adapter-hook** | `declare_timeframe_subscriptions` from the begin-time hook (`pine_strategy_host.cpp:1612`): a plain `request.security` site is a kernel subscription | lane R3b over the L6c hook: 21 of the corpus's 23 `request.security` probes run their sites on the kernel, byte-identical; the sites the predicate leaves out (lower timeframe, lookahead, auxiliary, streams) keep the source evaluator | `examples/native/native_htf_strategy.cpp`, `tests/test_native_htf_subscriptions.cpp` |
 | `auxiliary_feed` | **adapter-policy** | the adapter's own auxiliary drive: the chart-slice mapping and the deferred first bucket (`src/source/pine_aux_security.cpp`) | lane N7, retained on three measurements: 0 of 312 corpus probes install an auxiliary feed; TradingView's chart slice leaves pre-range coverage inert where the kernel folds it by time, and evaluates after the bar's matching pass where the kernel delivers before it (`tests/test_native_auxiliary_feed_twin.cpp`, rows B and C). Design §2.iv | `tests/test_native_auxiliary_feed.cpp`, `tests/test_native_auxiliary_feed_stream.cpp` |
 | `quantity_tolerance` | **adapter-policy** | TradingView's `1e-10` quantity rules on top of the exact default: a close within `1e-10` of the held position is a `Flatten`, a close ending within it of an interior lot boundary is one selected `Flatten` of whole lots (`source_fifo_prefix_openings`, `src/source/pine_adapter.cpp`), and after every fill `PineStrategyHost::on_native_applied` erases lots of at most `kQtyEpsilon` without a closing row (`src/source/pine_strategy_host.cpp`) | lane K-ULP4 (the owner-level ruling of audit X1, part b): opt-in and absent by default, so every adapter run is byte-identical by construction. The tolerance charges a snapped `Reduce` its request and books every dust lot it closes as a row, where the adapter's prefix `Flatten` is charged the lots it holds and its sweep books no row; declaring it would move the adapter's fills, ledgers and hashes, so whether the adapter can move onto it is a later lane's measurement | `tests/test_native_quantity_tolerance.cpp` |
 <!-- native-feature-rulings:end -->
@@ -642,7 +642,7 @@ The table records, at the tree the doc wave read, what each block described and 
 | `src/engine_run.cpp`, lines 162-186 | `process_orders_on_close` semantics | the spec field `NativeCloseExecution::AfterCalculation` (`NativeCloseExecution::AfterCalculation` `native_run_spec.hpp:35`) |
 | `include/pineforge/engine.hpp`, lines 1262-1330 | TradingView freezes default market-order sizing at the signal bar | `native_order::SizePrice` (`Signal`, `SignalOnTick`) with `SizeTime::AtAcceptance` — a request value that names no platform |
 | `include/pineforge/engine.hpp`, lines 1352-1381 | TradingView liquidates intrabar, before the bar-close script body | `NativeLiquidationCheck` (`NativeLiquidationCheck` `native_run_spec.hpp:158`), whose three values are three broker models |
-| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:445-451`) |
+| `include/pineforge/engine.hpp`, lines 918-952 (the row first named lines 73-180, which were and are live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`) | the ten-significant-digit money rule | adapter-side arithmetic (`source_money_round` `pine_adapter.cpp:454-460`) |
 
 ### B. Live kernel mechanisms with a calibrated number — each passes the amended rule 2
 

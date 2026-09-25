@@ -304,6 +304,26 @@ consumed input prefix fold as counts and running digests, each element once;
 the auxiliary request.security feed folds as the digest taken when it is set.
 The values the tree pins were re-pinned once more, each marked "expectation
 corrected ... because v19-E folds live adapter state".
+R5 lane V19-FIX moves every Pine broker-state, recorded per-bar,
+host-extension and continuation value once more, inside the unreleased v19
+epoch and with the source extension still v4, because two of those reads
+still cost what the run had done. An exit the script cancelled and re-placed
+every bar at one level kept its lifecycle for a revival that never reads a
+cancelled exit, one row per bar the whole position cycle long: a strategy.cancel
+or strategy.cancel_all now retires every leg of each exit it withdraws, live
+or dormant, and the adapter lets such a row go. And every opening stayed on
+its id's kernel cohort roster, which the continuation folds member by member:
+an origin whose request chain no longer works and that holds no open lot now
+leaves the roster at the next bar open. The dead
+`PineExecutionAdapter::path_order_` leaves the extension's fold with them (the
+leg order a run declares folds in the spec digest, `NativeRunSpec::path_order`).
+Trades move only where a margin call used to revive an exit the script had
+cancelled while it was live, or while the adapter had it parked for a
+margin-call slice, as the lab tv tapes v19fix-cancel-before-pair,
+v19fix-cancel-at-1000, v19fix-gapped-stop-cancel and
+v19fix-gapped-stop-cancel-after-pair show TradingView never does; the values
+the tree pins were re-pinned once more, each marked "expectation corrected
+(V19-FIX, ...)".
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v7`.
 Terms receipts, attempted terms, deferred
