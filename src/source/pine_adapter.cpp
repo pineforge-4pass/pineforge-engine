@@ -18444,23 +18444,18 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
                 * owner_->config_.slippage * owner_->staged_.syminfo.mintick;
         }
         const int type = owner_->config_.default_qty_type;
-        if (type == static_cast<int>(QtyType::CASH)) {
-            const double denominator = sized_price * owner_->staged_.syminfo.pointvalue
-                * owner_->staged_.account_fx;
-            *qty = finite_positive(denominator)
-                ? floor_quantity_grid(owner_->config_.default_qty_value / denominator,
-                                      owner_->staged_.quantity_grid)
-                : 0.0;
-        } else if (type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            const double denominator = sized_price * owner_->staged_.syminfo.pointvalue
-                * owner_->staged_.account_fx;
-            const double equity = finite_positive(sized_price)
-                ? owner_->require_host().native_marked_equity(sized_price) : 0.0;
-            *qty = finite_positive(denominator) && finite_positive(equity)
-                ? floor_quantity_grid(equity * owner_->config_.default_qty_value
-                                          / 100.0 / denominator,
-                                      owner_->staged_.quantity_grid)
-                : 0.0;
+        if (type == static_cast<int>(QtyType::CASH)
+            || type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
+            // The quantity resolve_terms books at this fill (its at-fill
+            // branch): the source's money on its own sizing equity, converted
+            // by the kernel with the percentage fee reserve and floored by the
+            // source -- default_sizing_units, the one conversion.
+            PineSizingSnapshot sizing = owner_->sizing_snapshot();
+            sizing.price = sized_price;
+            sizing.mark = sized_price;
+            sizing.equity = finite_positive(sized_price)
+                ? owner_->percent_commission_live_equity(sized_price) : kNaN;
+            *qty = owner_->default_sizing_units(sizing);
         } else {
             *qty = floor_quantity_grid(owner_->config_.default_qty_value,
                                        owner_->staged_.quantity_grid);

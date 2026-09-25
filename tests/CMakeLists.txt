@@ -1250,6 +1250,11 @@ list(APPEND TEST_SOURCES test_native_crossing_transact)
 # MessageFormat, and the mintick mode byte-identical to 8cf3be58. Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_str_number_format)
+# R5 lane B-ADAPTER (item 2, AUDIT3-opus2 H4): the pending-order fill-quantity
+# probe's AT_FILL partition answers the quantity a default cash / percent entry
+# books at that fill -- fee 0 / 0.1 %, grid none / 0.001, limit and slipped
+# stop entries (differential). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_fill_qty_probe)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
