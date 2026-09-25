@@ -889,8 +889,8 @@ enum class MatchRejectReason : std::uint8_t {
     /// request core cannot take the fill off the request's own units
     /// (CoreFailure::NonrepresentableQuantity: a scope of dust closed by a far
     /// larger request, a point budget too small to move its remaining units);
-    /// or an off-grid Reduce the grid admitted as a FIFO boundary of its scope
-    /// meets a book on which it no longer is one
+    /// or what an off-grid Reduce the grid admitted as a FIFO boundary of its
+    /// scope settles no longer closes whole lots of the book it meets
     /// (CommandContext::units_are_scope_boundary). The request ends here,
     /// nothing moves, and the run goes on; the settlement's and the core's
     /// cases stopped the whole run before R5 lane K-ULP4.
@@ -1424,14 +1424,14 @@ struct CommandContext {
     /// A Reduce's ExplicitUnits are a FIFO boundary of its scope: the binary64
     /// sum, in book order, of the scope's lots through one of them -- the head
     /// lot's own size, a prefix, the whole scope. Such a quantity is on the
-    /// quantity grid whatever the grid predicate answers: the grid admits the
-    /// quantities a host chooses, and these are the book's own, which
-    /// settlement arithmetic can move off any decimal grid; closing them takes
-    /// whole lots and splits none (R5 lane K-ULP4). The execution consumer
-    /// measures it at submit, for a request of ImmediateRemaining capacity,
-    /// and holds the candidate to the same test: a book that changed before
-    /// the match refuses it (MatchRejectReason::UnrepresentableQuantity).
-    /// Appended last, like the members above.
+    /// quantity grid whatever the grid predicate answers: these are the book's
+    /// own quantities, which settlement arithmetic can move off any decimal
+    /// grid; closing them takes whole lots and splits none (R5 lane K-ULP4).
+    /// The execution consumer measures it at submit, for a request of
+    /// ImmediateRemaining capacity; its candidate settles what then remains
+    /// only on the grid, at a boundary of the scope as it stands or at least at
+    /// its held total, and refuses anything else (MatchRejectReason::
+    /// UnrepresentableQuantity). Appended last, like the members above.
     bool units_are_scope_boundary = false;
 };
 

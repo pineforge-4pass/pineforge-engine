@@ -462,9 +462,18 @@ bool explicit_reduction_units_representable(double units, double exposure) noexc
     return order_action::plan(exposure, order_action::Reduce{units}).has_value();
 }
 
-// `own_quantity`: the answered units are the book's own -- a closing size equal
-// to its scope's held total, or a fraction's whole scope -- which the quantity
-// grid admits as they stand (R5 lane K-ULP4).
+// A request that settles its units in one fill, all of them: no point budget
+// splits them and no group deduction is pending against them. Only such a
+// request's units can be the book's own quantity, closed as it stands
+// (R5 lane K-ULP4).
+bool settles_in_one_fill(const native_order::LiveRequest& live) noexcept {
+    return std::holds_alternative<native_order::ImmediateRemaining>(live.request().capacity)
+        && !std::holds_alternative<native_order::PendingDeferred>(live.pending);
+}
+
+// `own_quantity`: the answered units are the book's own -- a closing size,
+// settled in one fill, equal to its scope's held total (which a fraction of one
+// resolves to) -- which the quantity grid admits as they stand (R5 lane K-ULP4).
 bool execution_terms_grid_representable(
         const native_order::ExecutionTerms& terms,
         const native_order::HostSized* host_sized, bool unresolved,
@@ -2824,13 +2833,14 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         ctx.quantity_grid = spec->quantity_grid;
         // A Reduce whose units are a FIFO boundary of its scope is on the grid
         // as it stands (CommandContext::units_are_scope_boundary; R5 lane
-        // K-ULP4) -- one that closes in one fill, so the candidate can hold it
-        // to the same test (grid_boundary_holds).
+        // K-ULP4) -- one that closes in one fill, so the candidate can hold
+        // what it settles to the same test (grid_boundary_holds).
         if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT
             && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)) {
             if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
                 if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
-                    ctx.units_are_scope_boundary = scope_boundary_units(engine, request, units->units);
+                    ctx.units_are_scope_boundary =
+                        scope_boundary_units(engine, request, units->units, false);
                 }
             }
         }
@@ -4652,18 +4662,31 @@ bool NativeExecutionConsumer::admit_placement_units(
 }
 
 bool NativeExecutionConsumer::grid_boundary_holds(const BacktestEngine& engine,
-                                                  const native_order::LiveRequest& live) const {
+                                                  const native_order::LiveRequest& live,
+                                                  const native_order::MatchCursor& cursor) const {
     const auto* spec = spec_ptr();
     if (!spec || !spec->quantity_grid) return true;
     const auto* reduce = std::get_if<native_order::Reduce>(&live.request().intent);
     const auto* units = reduce ? std::get_if<native_order::ExplicitUnits>(&reduce->size) : nullptr;
     if (!units || native_order::quantity_on_grid(units->units, *spec->quantity_grid)) return true;
-    return scope_boundary_units(engine, live.request(), units->units);
+    // Admitted only as a FIFO boundary of its scope. What this candidate
+    // settles -- the remaining units, which an OCA-Reduce sibling's fill can
+    // lower, capped as inspect_candidate caps them -- must still close whole
+    // lots: be on the grid, a boundary of the scope as it stands, or at least
+    // its whole held total.
+    const auto* remaining = std::get_if<native_order::RemainingUnits>(&live.remaining);
+    if (!remaining) return true;
+    double qty = remaining->q;
+    if (const auto* allowance = std::get_if<native_order::AllowanceUnits>(&live.allowance)) {
+        if (allowance->point_ordinal == cursor.point.ordinal) qty = std::min(qty, allowance->left);
+    }
+    if (native_order::quantity_on_grid(qty, *spec->quantity_grid)) return true;
+    return scope_boundary_units(engine, live.request(), qty, /*or_whole_scope=*/true);
 }
 
 bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
                                                    const native_order::Request& request,
-                                                   double units) noexcept {
+                                                   double units, bool or_whole_scope) noexcept {
     const auto* one = std::get_if<native_order::BindOpening>(&request.owner);
     const auto* many = std::get_if<native_order::BindOpenings>(&request.owner);
     if (!one && !many && !std::holds_alternative<native_order::Independent>(request.owner)) {
@@ -4686,13 +4709,15 @@ bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
         sum += lot.qty;
         if (sum == units) return true;
     }
-    return false;
+    // At least the scope's whole held total closes every lot of it whole: the
+    // walk takes each lot while the rest exceeds it, and a bound scope's close
+    // is capped to what the scope holds.
+    return or_whole_scope && units >= sum;
 }
 
 std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const NativeExecutionTermsFacts& facts, bool* whole_scope) const {
-    if (whole_scope) *whole_scope = false;
+        const NativeExecutionTermsFacts& facts) const {
     const auto* spec = spec_ptr();
     if (!spec) return std::nullopt;
     if (const auto* native_sized = sized_intent(live)) {
@@ -4731,13 +4756,16 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     // caller converts percent -> fraction itself, so no second rounding step
     // enters here.
     const double units = scope * fraction->fraction;
-    // A fraction whose product is the scope itself -- fraction 1, "close it
-    // all" -- resolves to the scope, which the grid does not floor. The scope
-    // is the binary64 fold of the book's own lots, which settlement arithmetic
-    // moves off any decimal grid: floored, the close fell up to a whole step
-    // short, left a dust lot, or found nothing to close (R5 lane K-ULP4).
-    if (units == scope) {
-        if (whole_scope) *whole_scope = true;
+    // A fraction whose product is its scope's own held total -- fraction 1,
+    // "close it all", of the gross scope as it stands -- resolves to that
+    // total, which the grid does not floor, for a request that settles it in
+    // one fill. The total is the binary64 fold of the book's own lots, which
+    // settlement arithmetic moves off any decimal grid: floored, the close fell
+    // up to a whole step short, left a dust lot, or found nothing to close. A
+    // scope net of siblings' claims or frozen at another total, a point budget
+    // and a pending group deduction settle something else, and are floored as
+    // before (R5 lane K-ULP4).
+    if (units == scope && scope == facts.scope_exposure_units && settles_in_one_fill(live)) {
         return scope;
     }
     return representable_units(units, native_order::ExecutionGridPolicy::SnapToGrid,
@@ -4880,9 +4908,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // and publishes the result as the facts' remaining units, so a host
         // override of resolve_execution_terms still has the last word.
         std::optional<double> kernel_units;
-        bool whole_scope = false;
         if (unresolved && (native_sized || scope_fraction)) {
-            kernel_units = resolve_sized_units(engine, *live, terms_facts, &whole_scope);
+            kernel_units = resolve_sized_units(engine, *live, terms_facts);
             if (kernel_units) {
                 terms_facts.remaining = native_order::RemainingUnits{*kernel_units};
             }
@@ -4934,9 +4961,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
-        const bool own_quantity = closing_size && terms.units
-            && ((whole_scope && kernel_units && *terms.units == *kernel_units)
-                || *terms.units == terms_facts.scope_exposure_units);
+        const bool own_quantity = closing_size && terms.units && settles_in_one_fill(*live)
+            && *terms.units == terms_facts.scope_exposure_units;
         if (!execution_terms_grid_representable(
                 terms, host_sized, unresolved, terms_facts.scope_exposure_units,
                 spec_ptr(), own_quantity)) {
@@ -5101,10 +5127,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
 
         // An off-grid Reduce the grid admitted at submit as a FIFO boundary of
-        // its scope is admitted only while it is one: if the book changed
-        // before it matched, closing it would split a lot off the grid, so it
-        // ends here with the same typed refusal (R5 lane K-ULP4).
-        if (!grid_boundary_holds(engine, *live)) {
+        // its scope settles only what still closes whole lots: if its book or
+        // remaining units changed so that closing them would split a lot off
+        // the grid, it ends here with the same typed refusal (R5 lane K-ULP4).
+        if (!grid_boundary_holds(engine, *live, evaluation.cursor)) {
             return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
                             nonidentity_attempt);
         }
@@ -6434,9 +6460,8 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule,
         raw_price, default_resolved);
     std::optional<double> kernel_units;
-    bool whole_scope = false;
     if (unresolved && (native_sized || scope_fraction)) {
-        kernel_units = resolve_sized_units(engine, *live, facts, &whole_scope);
+        kernel_units = resolve_sized_units(engine, *live, facts);
         if (kernel_units) facts.remaining = native_order::RemainingUnits{*kernel_units};
     }
     native_order::ExecutionTerms terms;
@@ -6484,9 +6509,8 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
-    const bool own_quantity = closing_size && terms.units
-        && ((whole_scope && kernel_units && *terms.units == *kernel_units)
-            || *terms.units == facts.scope_exposure_units);
+    const bool own_quantity = closing_size && terms.units && settles_in_one_fill(*live)
+        && *terms.units == facts.scope_exposure_units;
     if (!execution_terms_grid_representable(
             terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr(),
             own_quantity)) {

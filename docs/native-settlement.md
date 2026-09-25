@@ -117,21 +117,26 @@ refused, typed, as above -- the settlement's own refusal shows beforehand in
 `UnrepresentableQuantity`, while the request core's check and the grid's
 boundary re-check below are made at execution only; and `Flatten` is never
 refused for a quantity. On a quantity grid (`NativeRunSpec::quantity_grid`) the
-book's own quantities are on the grid: a `ScopeFraction` whose product is its
-scope -- `fraction == 1` -- resolves to the scope's held total, which the grid
-does not floor; a `Reduce` whose units are a FIFO boundary of its scope -- the
-binary64 sum, in book order, of the scope's lots through one of them: the head
-lot's own size, a prefix, the whole scope -- is admitted at submit, for a
-request that settles in one fill (no point budget), and closes whole lots; its
-candidate holds it to the same test, so one that meets a changed book, on which
-it is no longer a boundary, is refused, typed, instead of splitting a lot off
-the grid; and a host-sized close answered with its scope's held total is
-admitted at the candidate (R5 lane K-ULP4). Before, such a fraction was floored
-onto the grid and closed up to a step short, left a dust lot, or found nothing
-to close, and the book's own sizes were `OffGrid`. A `Transact` is still
-gridded (it can open), and so is a `Reduce` of a quantity that is no boundary
-of its scope: a later lot's size would be taken FIFO from the head lot and
-split it off the grid.
+book's own quantities are on the grid, for a request that settles them in one
+fill (no point budget, no group deduction pending against it): a
+`ScopeFraction` whose product is its scope's held total as it stands --
+`fraction == 1` of the gross scope -- resolves to that total, which the grid
+does not floor (a scope net of siblings' claims, or frozen at acceptance at
+another total, is floored as before); a `Reduce` whose units are a FIFO
+boundary of its scope -- the binary64 sum, in book order, of the scope's lots
+through one of them: the head lot's own size, a prefix, the whole scope -- is
+admitted at submit and closes whole lots; its candidate settles what then
+remains -- which an OCA-Reduce sibling's fill can lower -- only on the grid, at
+a boundary of the scope as it stands, or at least at the scope's held total,
+which closes every lot whole (a whole-book stop still closes the book after a
+partial close shrank it), and refuses anything else, typed, instead of
+splitting a lot off the grid; and a host-sized close answered with its scope's
+held total is admitted at the candidate (R5 lane K-ULP4). Before, such a
+fraction was floored onto the grid and closed up to a step short, left a dust
+lot, or found nothing to close, and the book's own sizes were `OffGrid`. A
+`Transact` is still gridded (it can open), and so is a `Reduce` of a quantity
+that is no boundary of its scope: a later lot's size would be taken FIFO from
+the head lot and split it off the grid.
 
 ## Quantity tolerance
 

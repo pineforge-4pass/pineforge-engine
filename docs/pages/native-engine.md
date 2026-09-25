@@ -458,7 +458,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9109-9149`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9133-9173`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -622,13 +622,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5577-5581`). Requests accepted before the
+`native_execution_consumer.cpp:5603-5607`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7029-7031`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7053-7055`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6921`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6945`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -644,8 +644,9 @@ FIFO boundary of its scope -- the binary64 sum, in book order, of the scope's
 lots through one of them: the head lot's own size, a prefix, the whole scope --
 which settlement arithmetic can move off any decimal grid
 (`CommandContext::units_are_scope_boundary`, R5 lane K-ULP4), for a request
-that settles in one fill; its candidate is held to the same test, and one that
-meets a changed book is refused with `MatchRejectReason::UnrepresentableQuantity`.
+that settles in one fill; its candidate settles what then remains only on the
+grid, at a boundary of the scope as it stands or at least at its held total,
+and refuses anything else with `MatchRejectReason::UnrepresentableQuantity`.
 Flatten is not gridded. Rejection does not rewrite the attempted bits.
 
 **Acceptance is not a fill.** `submit_market` returns `SubmitResult`:
@@ -1982,7 +1983,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7765`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7789`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2776,7 +2777,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7826`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7850`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3098,9 +3099,10 @@ quantity stops the run. The FIFO rules are the settlement's
   side. Until K-ULP4 each of these stopped the run with code 6, discriminator
   5. `Flatten` is never refused for a quantity.
 - On a `quantity_grid` the book's own quantities are on the grid: a
-  `ScopeFraction` whose product is its scope (`fraction == 1`) resolves to the
-  scope's held total, unfloored, and a `Reduce` of a FIFO boundary of its
-  scope is admitted (above). A fill the request's own units cannot absorb --
+  `ScopeFraction` whose product is its scope's held total as it stands
+  (`fraction == 1` of the gross scope, settled in one fill) resolves to that
+  total, unfloored, and a `Reduce` of a FIFO boundary of its scope is
+  admitted (above). A fill the request's own units cannot absorb --
   a scope of dust closed by a far larger request -- is the same typed
   refusal, from the request core's check.
 - `NativeRunSpec::quantity_tolerance` is the opt-in for a host that keeps
@@ -3325,11 +3327,14 @@ because `scope * percent / 100` and `scope * (percent / 100)` are different
 binary64 values. The result is floored onto `quantity_grid` like every other
 engine quantity; a fraction that does not buy one whole step is
 `TermsUnresolved`, and `fraction` outside `(0, 1]` is `InvalidQuantityBasis` at
-submit. The one exception is a fraction whose product is the scope itself --
-`fraction == 1`, "close it all": it resolves to the scope, which is the fold
-of the book's own lots and is not floored, so it closes the scope whole
-whatever the grid (R5 lane K-ULP4; floored, it closed up to a step short, left
-a dust lot, or found nothing to close).
+submit. The one exception is a fraction whose product is its scope's held
+total as it stands -- `fraction == 1` of the gross scope, "close it all", for a
+request that settles it in one fill (no point budget, no group deduction
+pending against it): it resolves to that total, which is the fold of the
+book's own lots and is not floored, so it closes the scope whole whatever the
+grid (R5 lane K-ULP4; floored, it closed up to a step short, left a dust lot,
+or found nothing to close). A scope net of siblings' claims, or frozen at
+acceptance at another total, is floored like any other fraction.
 
 Neither kind is emitted by the Pine adapter, which keeps resolving its own
 `HostSized` terms; `native_order` values therefore belong to `native_order_v7`.

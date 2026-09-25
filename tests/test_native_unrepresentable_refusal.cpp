@@ -52,6 +52,17 @@
 //   grid-after-dust    the AUDIT4 F5b/c/d continuations: open, an oversized
 //                      Reduce and a reversal after the whole-scope close
 //   controls           the lot's own size and the host's total, which close
+//   grid-stop-*,       scripted, on {0.5, A'}: the candidate tests what it
+//   grid-oca-*         settles -- a whole-book stop fired after a partial
+//                      close shrank the book closes it whole, as with no grid;
+//                      an OCA-Reduce opening's fill that lowers a boundary
+//                      Reduce's remaining to no boundary is a typed refusal;
+//                      a take-profit's fill that lowers the stop's remaining
+//                      to the book it meets closes that book whole
+//   grid-fraction-*    a fraction of one net of a live sibling's claim, with a
+//                      pending OCA-Reduce deduction or under a point budget
+//                      settles something else, and is floored exactly as a
+//                      fraction just below one is
 // Every C++ case runs on the request core's staged and direct paths, which
 // must agree bit for bit, hashes included, and every run completes.
 //
@@ -60,7 +71,11 @@
 // name spelled 10 it runs there and fails 100 of 350 checks: every refusal
 // case stops its run with code 6, discriminator 5 (scoped-dust with
 // discriminator 2), and every grid case keeps its residual, its dust lot or
-// its OffGrid refusal; only the controls pass.
+// its OffGrid refusal; only the controls pass. The scripted cases came with
+// the lane's third review: linked against d2932403's execution consumer they
+// fail 23 of 547 checks -- the stops are refused, the OCA-lowered close splits
+// the 0.5 lot to 0.19999999999997725, and each fraction closes its unfloored
+// scope instead of the floored one.
 // Source-free: the kernel-only profile registers the row.
 #include "../src/engine_internal.hpp"
 #include "../src/native_execution_consumer.hpp"
@@ -73,10 +88,13 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -836,11 +854,324 @@ void grid_cases() {
     }
 }
 
+// ---- Scripted cases: resting triggers, OCA-Reduce groups, claims ------------
+// Each bar may place requests. Bars 0-4 build {0.5, A'} with A' = fl(1000.1 -
+// 1000) off the 0.1 grid: open 0.5, open 1000.1, then a close of 1000 bound to
+// the second opening. The book's own quantities are 0.5, U = fl(0.5 + A') and
+// what settlement leaves of them.
+
+class ScriptHost;
+using Script = std::map<int, std::function<void(ScriptHost&)>>;
+
+class ScriptHost final : public NativeStrategyHost {
+public:
+    ScriptHost(Script script, bool direct) : script_(std::move(script)) {
+        as_native_consumer(execution_consumer()).set_direct_mutation(direct);
+    }
+    void on_native_run_begin() override { bar_ = 0; }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        const auto it = script_.find(bar_++);
+        if (it != script_.end()) it->second(*this);
+    }
+    void put(const std::string& label, no::Request r) {
+        r.label = label;
+        const auto res = submit(r);
+        if (res.status == no::SubmitStatus::Accepted && res.handle) handles[label] = *res.handle;
+        else submits[label] = res.reason ? static_cast<int>(*res.reason) : -2;
+    }
+    std::vector<double> book() const {
+        std::vector<double> out;
+        for (const auto& lot : native_open_lots(std::numeric_limits<double>::quiet_NaN())) {
+            out.push_back(lot.signed_units);
+        }
+        return out;
+    }
+    std::vector<double> row_units(std::size_t first, std::size_t n) const {
+        std::vector<double> out;
+        for (std::size_t i = first; i < first + n && i < trades_.size(); ++i) {
+            out.push_back(trades_[i].qty);
+        }
+        return out;
+    }
+    std::int64_t cycle() const { return position_cycle_seq_; }
+
+    std::map<std::string, no::RequestHandle> handles;
+    std::map<std::string, int> submits;   // the refused submits' RequestRejectReason
+
+private:
+    Script script_;
+    int bar_ = 0;
+};
+
+struct Terminal {
+    int kind = 0;            // 0 none, 1 applied, 2 MatchRejected, 3 NoEffect
+    unsigned reason = 0;     // the MatchRejectReason
+    std::vector<double> closed, rows;
+    bool operator==(const Terminal& o) const {
+        return kind == o.kind && reason == o.reason && closed == o.closed && rows == o.rows;
+    }
+};
+
+struct ScriptOutcome {
+    bool completed = false;
+    unsigned code = 0, discriminator = 0;
+    std::map<std::string, int> submits;
+    std::map<std::string, Terminal> terminals;
+    std::vector<double> book;
+    std::uint64_t continuation = 0, broker = 0;
+    bool operator==(const ScriptOutcome& o) const {
+        return completed == o.completed && code == o.code && discriminator == o.discriminator
+            && submits == o.submits && terminals == o.terminals && book == o.book
+            && continuation == o.continuation && broker == o.broker;
+    }
+};
+
+ScriptOutcome run_script_once(const char* name, const Script& script, std::optional<double> grid,
+                              const std::vector<Bar>& bars, bool direct) {
+    ScriptHost host(script, direct);
+    Case c{name, {}, grid};
+    CHECK(host.configure_native(spec_for(c)).status == NativeSetupStatus::Applied);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    ScriptOutcome out;
+    const auto state = host.native_state();
+    out.completed = state.kind == NativeLifecycleKind::Completed;
+    out.code = static_cast<unsigned>(state.failure.code);
+    out.discriminator = static_cast<unsigned>(state.failure.discriminator);
+    out.submits = host.submits;
+    for (const auto& [label, handle] : host.handles) {
+        Terminal t;
+        for (const auto& row : host.native_events(0)) {
+            if (!row.command) continue;
+            if (const auto* a = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+                if (a->handle().incarnation != handle.incarnation) continue;
+                t.closed.push_back(a->closed_units);
+                const auto rows = host.row_units(a->first_trade_index, a->closed_trade_count);
+                t.rows.insert(t.rows.end(), rows.begin(), rows.end());
+                if (a->terminal) t.kind = 1;
+            } else if (const auto* r = std::get_if<no::MatchRejectedEvent>(&*row.command)) {
+                if (r->handle().incarnation != handle.incarnation) continue;
+                t.kind = 2;
+                t.reason = static_cast<unsigned>(r->reason);
+            } else if (const auto* e = std::get_if<no::NoEffectEvent>(&*row.command)) {
+                if (e->handle().incarnation == handle.incarnation) t.kind = 3;
+            }
+        }
+        out.terminals[label] = t;
+    }
+    out.book = host.book();
+    out.continuation = host.native_continuation_hash();
+    out.broker = host.broker_state_hash();
+    return out;
+}
+
+// Both twins, required equal and complete.
+ScriptOutcome run_script(const char* name, const Script& script, std::optional<double> grid,
+                         const std::vector<Bar>& bars) {
+    scenario = name;
+    const ScriptOutcome staged = run_script_once(name, script, grid, bars, false);
+    const ScriptOutcome direct = run_script_once(name, script, grid, bars, true);
+    std::printf("%s: completed=%d code=%u book:", name, staged.completed ? 1 : 0, staged.code);
+    for (double lot : staged.book) std::printf(" %a", lot);
+    std::printf("\n");
+    for (const auto& [label, t] : staged.terminals) {
+        std::printf("  %-12s terminal=%d reason=%u closed:", label.c_str(), t.kind, t.reason);
+        for (double q : t.closed) std::printf(" %a", q);
+        std::printf(" rows:");
+        for (double q : t.rows) std::printf(" %a", q);
+        std::printf("\n");
+    }
+    CHECK(staged == direct);
+    CHECK(staged.completed);
+    CHECK(staged.code == 0 && staged.discriminator == 0);
+    return staged;
+}
+
+std::vector<Bar> flat_bars(int n, std::map<int, std::pair<double, double>> high_low = {}) {
+    std::vector<Bar> bars;
+    for (int i = 0; i < n; ++i) {
+        double high = kPrice, low = kPrice;
+        const auto it = high_low.find(i);
+        if (it != high_low.end()) std::tie(high, low) = it->second;
+        bars.push_back(Bar{kPrice, high, low, kPrice, 10.0, 60'000LL * (i + 1)});
+    }
+    return bars;
+}
+
+no::Request script_request(no::OrderIntent intent) {
+    no::Request r;
+    r.intent = std::move(intent);
+    return r;
+}
+
+// {0.5, A'} by bar 4.
+Script dust_book_script() {
+    Script s;
+    s[0] = [](ScriptHost& h) { h.put("open-0.5", script_request(no::Transact{0.5})); };
+    s[2] = [](ScriptHost& h) { h.put("open-1000.1", script_request(no::Transact{1000.1})); };
+    s[4] = [](ScriptHost& h) {
+        auto r = script_request(no::Reduce{no::ExplicitUnits{1000.0}});
+        r.owner = no::BindOpening{h.handles.at("open-1000.1"), h.cycle()};
+        h.put("bound-1000", r);
+    };
+    return s;
+}
+
+const Terminal& terminal_of(const ScriptOutcome& o, const char* label) {
+    static const Terminal none;
+    const auto it = o.terminals.find(label);
+    CHECK(it != o.terminals.end());
+    return it == o.terminals.end() ? none : it->second;
+}
+
+void scripted_grid_cases() {
+    const double a = 1000.1 - 1000.0;   // A' = 0x1.99999999a3p-4
+    const double u = 0.5 + a;           // U, the book's own total
+    const double two = 0.5 - 0.3;       // what a close of 0.3 leaves of the 0.5 lot
+    CHECK(!no::quantity_on_grid(a, 0.1) && !no::quantity_on_grid(u, 0.1));
+    CHECK(!no::quantity_on_grid(two + a, 0.1));
+    // A whole-book stop, placed as the book's own total, fires after a partial
+    // close shrank the book below it: what it settles is at least the scope's
+    // whole held total, so it closes every lot whole -- as it does with no grid.
+    {
+        auto s = dust_book_script();
+        s[6] = [u](ScriptHost& h) {
+            auto stop = script_request(no::Reduce{no::ExplicitUnits{u}});
+            stop.trigger = no::Stop{90.0};
+            h.put("stop", stop);
+        };
+        s[8] = [](ScriptHost& h) { h.put("take-0.3", script_request(no::Reduce{no::ExplicitUnits{0.3}})); };
+        const auto bars = flat_bars(20, {{14, {kPrice, 89.0}}});
+        const auto o = run_script("grid-stop-after-partial", s, 0.1, bars);
+        const auto& stop = terminal_of(o, "stop");
+        CHECK(o.submits.empty());
+        CHECK(stop.kind == 1);
+        CHECK(stop.closed == std::vector<double>({two + a}));
+        CHECK(stop.rows == std::vector<double>({two, a}));
+        CHECK(o.book.empty());
+        const auto free = run_script("grid-stop-after-partial-no-grid", s, std::nullopt, bars);
+        CHECK(terminal_of(free, "stop") == stop);
+    }
+    // An OCA-Reduce opening fills before the boundary Reduce in its group and
+    // lowers the Reduce's remaining to fl(U - 0.3), which is no boundary of
+    // {0.5, A', 0.3}: closing it would split the on-grid 0.5 lot off the grid,
+    // so it is refused, typed, and the book is untouched.
+    {
+        auto s = dust_book_script();
+        s[6] = [u](ScriptHost& h) {
+            auto open = script_request(no::Transact{0.3});
+            open.group = no::Member{7, 2, no::GroupEffect::Reduce};
+            h.put("oca-open", open);
+            auto close = script_request(no::Reduce{no::ExplicitUnits{u}});
+            close.group = no::Member{7, 1, no::GroupEffect::Reduce};
+            h.put("oca-close", close);
+        };
+        const auto o = run_script("grid-oca-lowered", s, 0.1, flat_bars(12));
+        CHECK(o.submits.empty());
+        CHECK(terminal_of(o, "oca-open").kind == 1);
+        const auto& close = terminal_of(o, "oca-close");
+        CHECK(close.kind == 2 && close.reason == kUnrepresentable);
+        CHECK(close.closed.empty() && close.rows.empty());
+        CHECK(o.book == std::vector<double>({0.5, a, 0.3}));
+    }
+    // A take-profit in the stop's OCA-Reduce group fills first; the stop's
+    // remaining, fl(U - 0.3), is the book it then meets, {0.2, A'}, and closes
+    // it whole.
+    {
+        CHECK(u - 0.3 == two + a);
+        auto s = dust_book_script();
+        s[6] = [u](ScriptHost& h) {
+            auto stop = script_request(no::Reduce{no::ExplicitUnits{u}});
+            stop.trigger = no::Stop{90.0};
+            stop.group = no::Member{5, 1, no::GroupEffect::Reduce};
+            h.put("stop", stop);
+            auto take = script_request(no::Reduce{no::ExplicitUnits{0.3}});
+            take.trigger = no::Limit{110.0};
+            take.group = no::Member{5, 2, no::GroupEffect::Reduce};
+            h.put("take", take);
+        };
+        const auto o = run_script("grid-oca-take-then-stop", s, 0.1,
+                                  flat_bars(20, {{10, {111.0, kPrice}}, {14, {kPrice, 89.0}}}));
+        CHECK(o.submits.empty());
+        CHECK(terminal_of(o, "take").kind == 1);
+        const auto& stop = terminal_of(o, "stop");
+        CHECK(stop.kind == 1);
+        CHECK(stop.closed == std::vector<double>({two + a}));
+        CHECK(stop.rows == std::vector<double>({two, a}));
+        CHECK(o.book.empty());
+    }
+    // A fraction of one resolves unfloored only to the gross scope as it
+    // stands, settled in one fill. Net of a live sibling's claim, with a
+    // pending OCA-Reduce deduction, or under a point budget it settles
+    // something else and is floored as before: the same outcome, bit for bit,
+    // as a fraction just below one, which is always floored.
+    const double below_one = std::nextafter(1.0, 0.0);
+    const auto fraction = [](double f, no::ScopeClaim claim) {
+        return script_request(no::Reduce{no::ScopeFraction{f, claim}});
+    };
+    const auto floored_like = [&](const char* name, double sibling,
+                                  std::function<void(ScriptHost&, double)> place) {
+        const auto script_for = [&](double f) {
+            auto s = dust_book_script();
+            if (sibling > 0.0) {
+                s[6] = [sibling, place, f](ScriptHost& h) {
+                    auto resting = script_request(no::Reduce{no::ExplicitUnits{sibling}});
+                    resting.trigger = no::Limit{150.0};
+                    h.put("sibling", resting);
+                    place(h, f);
+                };
+            } else {
+                s[6] = [place, f](ScriptHost& h) { place(h, f); };
+            }
+            return s;
+        };
+        const auto one = run_script(name, script_for(1.0), 0.1, flat_bars(24));
+        const auto floored = run_script((std::string(name) + "-control").c_str(),
+                                        script_for(below_one), 0.1, flat_bars(24));
+        scenario = name;
+        CHECK(one.submits == floored.submits);
+        CHECK(one.terminals.count("fraction") == 1 && floored.terminals.count("fraction") == 1);
+        CHECK(terminal_of(one, "fraction") == terminal_of(floored, "fraction"));
+        CHECK(one.book == floored.book);
+        return one;
+    };
+    {
+        const auto o = floored_like("grid-fraction-net", 0.3, [&](ScriptHost& h, double f) {
+            h.put("fraction", fraction(f, no::ScopeClaim::NetOfSiblings));
+        });
+        const auto& t = terminal_of(o, "fraction");
+        CHECK(t.kind == 1 && t.closed.size() == 1);
+        CHECK(!t.closed.empty() && no::quantity_on_grid(t.closed[0], 0.1));
+    }
+    {
+        const auto o = floored_like("grid-fraction-net-dust", 0.6, [&](ScriptHost& h, double f) {
+            h.put("fraction", fraction(f, no::ScopeClaim::NetOfSiblings));
+        });
+        const auto& t = terminal_of(o, "fraction");
+        CHECK(t.kind == 2
+              && t.reason == static_cast<unsigned>(no::MatchRejectReason::TermsUnresolved));
+        CHECK(o.book == std::vector<double>({0.5, a}));
+    }
+    floored_like("grid-fraction-oca-pending", 0.0, [&](ScriptHost& h, double f) {
+        auto take = script_request(no::Reduce{no::ExplicitUnits{0.3}});
+        take.group = no::Member{9, 1, no::GroupEffect::Reduce};
+        h.put("take", take);
+        auto all = fraction(f, no::ScopeClaim::Gross);
+        all.group = no::Member{9, 2, no::GroupEffect::Reduce};
+        h.put("fraction", all);
+    });
+    floored_like("grid-fraction-budget", 0.0, [&](ScriptHost& h, double f) {
+        auto all = fraction(f, no::ScopeClaim::Gross);
+        all.capacity = no::PointBudget{0.2};
+        h.put("fraction", all);
+    });
+}
+
 }  // namespace
 
 int main() {
     refusal_cases();
     grid_cases();
+    scripted_grid_cases();
     std::printf("test_native_unrepresentable_refusal: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

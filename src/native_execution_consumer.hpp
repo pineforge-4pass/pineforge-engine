@@ -593,25 +593,27 @@ private:
     // L3 kernel sizing bases. resolve_sized_units answers the units a Sized
     // opening or a ScopeFraction reduce claims at this candidate; nullopt is
     // the nonrepresentable basis the matching path reports as TermsUnresolved.
-    // `whole_scope`, when given, says whether the answer is a fraction's
-    // whole scope, which the quantity grid does not floor (R5 lane K-ULP4).
     std::optional<double> resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const NativeExecutionTermsFacts& facts, bool* whole_scope = nullptr) const;
+        const NativeExecutionTermsFacts& facts) const;
     // Whether `units` is a FIFO boundary of the request's scope -- the binary64
     // sum of the scope's lots, in book order, through one of them: the head
-    // lot's own size, a prefix, the whole scope. The scope is the book for an
+    // lot's own size, a prefix, the whole scope -- or, with `or_whole_scope`,
+    // at least the whole scope's held total. The scope is the book for an
     // Independent request and the bound openings' lots for BindOpening /
     // BindOpenings; any other owner has none here. The quantity grid admits
     // such a Reduce as it stands (R5 lane K-ULP4).
     static bool scope_boundary_units(const BacktestEngine& engine,
                                      const native_order::Request& request,
-                                     double units) noexcept;
-    // An off-grid Reduce{ExplicitUnits} (admitted at submit as a FIFO boundary
-    // of its scope) is still one at its candidate; every other request, and
-    // any run without a quantity grid, answers true (R5 lane K-ULP4).
+                                     double units, bool or_whole_scope) noexcept;
+    // What an off-grid Reduce{ExplicitUnits} (admitted at submit as a FIFO
+    // boundary of its scope) settles at this candidate still closes whole lots:
+    // it is on the grid, a boundary of the scope as it stands, or at least the
+    // scope's whole held total. Every other request, and any run without a
+    // quantity grid, answers true (R5 lane K-ULP4).
     bool grid_boundary_holds(const BacktestEngine& engine,
-                             const native_order::LiveRequest& live) const;
+                             const native_order::LiveRequest& live,
+                             const native_order::MatchCursor& cursor) const;
     double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units
