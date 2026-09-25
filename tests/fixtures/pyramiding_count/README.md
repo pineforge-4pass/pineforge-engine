@@ -28,7 +28,7 @@ NYSE:F 15), byte-identical: `strategy.pine`, `tv_trades.csv` (UTC+8),
 | P6 | three market entries on one flat bar | 2 fill | 3 fill | = |
 | P8 | `exit(qty)` from B stops out lot A (FIFO), third id | fills | refuses | = |
 | P9 | `exit(qty)` from A stops out lot A, third id | fills | = | = |
-| P10 | `exit` from B, default quantity, lots A+B | closes 100 (A) | closes 200 | = (Reduce 100) |
+| P10 | `exit` from B, default quantity, lots A+B | closes 100 (A) | closes 200 (100 since R5 lane H-THIN) | = (Reduce 100) |
 | D1 | one lot; same bar: far limit, then market add | add fills | refuses | = |
 | D2 | flat; same bar: far limit, two markets | both fill | = | = |
 | D3 | at the cap; same bar: `close("A")` then `entry("C")` | C fills | refuses | = |
@@ -43,7 +43,19 @@ that passed that check is never checked again when it fills (P4b). The
 kernel's `max_open_lots` (surviving + new lots at every match) agrees on 14 of
 15, all but P4b; the adapter's command-time count on 8 of 15. P10 is not a
 pyramiding question (the quantity a default `strategy.exit(from_entry)` closes
-under FIFO) and is pinned as a separate recorded divergence.
+under FIFO); it was pinned as a separate recorded divergence and R5 lane
+H-THIN fixed it (the exit reserves its entry's own quantity; 9 of 15 now).
+
+R5 lane H-THIN measured the lowering the fifteen suggest -- `project()`
+declaring `max_open_lots = max(1, pyramiding)` -- on the corpus: with the
+adapter's count kept beside it, 4 probes move, each away from its TradingView
+tape (`bracket-tp-sl-oca-reduce-isolate-01` 2240 -> 2150 trades matched,
+`composite-bracket-cap-range-pending-stop-01` 1178 -> 1170,
+`order-dual-stop-both-touch-priority-01` 755 -> 738,
+`order-opposite-entry-close-same-pass-01` 828 -> 824); without the count, 11
+move. TradingView's first-eligible-point rule (P4b) decides those corpus
+trades, and the kernel's cap, checked at every match, has no such mode, so
+the count stays until the kernel does.
 
 `bars.inc`: per scenario the 12 bars from its first signal bar, from the
 registry feed `lab bars NYSE:F 15`, evidence sha256

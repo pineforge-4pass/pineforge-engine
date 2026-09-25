@@ -277,13 +277,6 @@ public:
     // parent's fill; TradingView's projection of that level is the adapter's.
     std::optional<double> resolve_anchored_level(
         const NativeAnchoredLevelView&) const final;
-    // RULING A48: the source host owns per-lot excursion accounting (MFE/MAE)
-    // on the switched route. It samples every completed source bar's H/L/C
-    // with the owner's entry-bar masks, and supplies the closing row's two
-    // magnitudes through the kernel's single generic capability.
-    bool owns_lot_excursions() const noexcept final { return true; }
-    ClosedLotExcursion closed_lot_excursion(
-        const ClosedLotExcursionFacts&) const final;
     // The R5 R2 sizing classification of the adapter, for tests and for hosts
     // that need to know whether the core or the source owns a default
     // quantity at this point.
@@ -948,38 +941,9 @@ protected:
     // Read-only test projection cache; no future execution can observe it.
     mutable std::vector<FixtureIntentRow> source_pending_view_cache_;
 
-    // The owner's sampled excursion of one closing lot, in price points x
-    // quantity; closed_lot_excursion reports it on TradingView's basis.
-    ClosedLotExcursion owner_lot_excursion(const ClosedLotExcursionFacts&) const;
-
-    // Transient excursion-sampler caches (RULING A48). Pure caches: each is
-    // re-derived from the immutable placement snapshots and the delivered
-    // decision context, and cleared at the applied-notification boundary.
-    mutable bool excursion_priced_fill_ = false;
-    mutable bool excursion_level_fill_ = false;
-    mutable bool excursion_margin_call_ = false;
-    // Which of the owner's two margin-slice chronologies the pending slice was
-    // born in: true when it samples only the traversed waypoint prefix (the
-    // POOC pre-script pass, or the 1x-long opening slice taken inside
-    // process_pending_orders before a priced exit's fill), false when the
-    // non-POOC end-of-bar opening trim inherits the complete script bar.
-    mutable bool excursion_margin_prefix_ = false;
-    // A slice the owner books with no sample of the current bar at all: the
-    // carried position's open slice and the general pre-exit slice own only
-    // their carried extremes and the fill itself.
-    mutable bool excursion_margin_fill_only_ = false;
-    mutable bool excursion_range_end_projection_ = false;
-    mutable double excursion_trail_offset_ticks_ =
-        std::numeric_limits<double>::quiet_NaN();
     // Held units the applied request's precommit saw (the owner's pre-fill
     // position_qty_); cleared after the applied notification.
     mutable double precommit_held_units_ =
-        std::numeric_limits<double>::quiet_NaN();
-    // The matcher basis behind a TRAIL fill. ab9714be pine_fills.cpp:5766-5770
-    // reads the arming peak off the PRE-slip fill price (apply_fill_slippage
-    // runs later, at :7136/:7184), while the booked
-    // ClosedLotExcursionFacts::fill_price the sampler sees is already slipped.
-    mutable double excursion_trail_raw_price_ =
         std::numeric_limits<double>::quiet_NaN();
 };
 

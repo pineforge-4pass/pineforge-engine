@@ -183,8 +183,12 @@ int main() {
         CHECK(host.last_error().empty());
         CHECK(host.trade_count() == 1);
         if (host.trade_count() >= 1) {
+            // expectation corrected (R5 lane H-THIN, E19: the kernel samples
+            // the Pine host's lots; the host-owned model is gone): favorable
+            // 11.18 -> 10.66, TradingView's own number (corpus tape
+            // bracket-exit-stop-limit-trail-same-bar-01 trade #466).
             expect_trade("bracket-exit-stop-limit-trail#466", host.get_trade(0),
-                         false, 3155.66, 3148.74, 6.92, 11.18, 12.23);
+                         false, 3155.66, 3148.74, 6.92, 10.66, 12.23);
         }
     }
 

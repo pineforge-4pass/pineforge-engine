@@ -1,11 +1,19 @@
 // R4-D L10y: a default 100%-of-equity opening that the legacy owner (ab9714be)
 // ADMITS and books as a main lot plus a small residual lot closed again on the
 // entry bar must replay the same way on the switched route instead of being
-// refused as unaffordable, and the split-off residual must inherit the entry
-// bar's COMPLETE H/L excursion sample (pine_scheduler.cpp:257/:363 runs
-// update_per_trade_extremes() over the full script bar before the non-POOC
-// end-of-bar opening margin trim; only the POOC pre-script pass samples the
-// traversed waypoint prefix, pine_fills.cpp:2014-2023).
+// refused as unaffordable. The legacy owner also gave the split-off residual
+// the entry bar's COMPLETE H/L excursion sample (pine_scheduler.cpp:257/:363
+// runs update_per_trade_extremes() over the full script bar before the
+// non-POOC end-of-bar opening margin trim).
+//
+// expectation corrected (R5 lane H-THIN, E19: the kernel samples the Pine
+// host's lots; the host-owned model is gone): TradingView books that residual
+// with its fill alone -- favorable 0, adverse the fill's loss plus the entry
+// commission -- as the `lab tv` tape tests/fixtures/e19_allin_trim shows on
+// this very bar (hthin-e19-allin-trim trade #1: 1812.35 -> 1812.31 margin
+// call, favorable 0, adverse -(0.04 + 0.0002 * 1812.35) * 1 = -0.40247), and
+// so does the kernel sampler. The residual's rows below are that rule; the
+// main lot's are unchanged.
 //
 // Shape pinned from corpus/validation/zz-pop-yukozb-gold-ny-orb-v19-close-20-00
 // owner rows #2/#3: Entry long 2025-04-04 15:15 @1812.35 is booked as a
@@ -156,20 +164,16 @@ void test_all_in_entry_splits_and_residual_sees_full_bar() {
     CHECK(main_lot.exit_time == bars[3].timestamp);
     CHECK(main_lot.qty > residual.qty);
 
-    // --- the L10y excursion rule: the FULL entry bar, not the open prefix --
-    // owner model: (H - entry) * qty and (entry - L) * qty, sampled before the
-    // non-POOC end-of-bar opening trim.  The reverted submit-time prefix
-    // sample printed max_runup == 0 here.
-    // The owner's report folds the per-side commission (0.02% of notional)
-    // into the excursion, so the pinned products carry the same shift:
-    //   fav = ((H - entry) - 0.0002*entry) * qty, adv = ((entry - L) + 0.0002*entry) * qty
-    // (owner row #2: ((1820.18-1812.35)-0.0002*1812.35)*0.00012464 = 0.000931).
+    // --- the residual's excursion: the fill alone (TradingView's rule) ----
+    // The report folds the per-side commission (0.02% of notional) into the
+    // excursion: favorable max(0, 0 - fee) = 0, adverse (fill loss + fee) * qty.
+    // (was the owner's full entry bar: ((H - entry) - fee) * qty and
+    // ((entry - L) + fee) * qty, and max_runup > 0.)
     const double fee_px = 0.0002 * 1812.35;
-    const double full_bar_runup = (1820.18 - 1812.35 - fee_px) * residual.qty;
-    const double full_bar_drawdown = (1812.35 - 1800.63 + fee_px) * residual.qty;
-    CHECK(near(residual.max_runup, full_bar_runup, 1e-9));
-    CHECK(near(residual.max_drawdown, full_bar_drawdown, 1e-9));
-    CHECK(residual.max_runup > 0.0);
+    const double fill_only_drawdown = (1812.35 - 1812.31 + fee_px) * residual.qty;
+    CHECK(near(residual.max_runup, 0.0, 1e-9));
+    CHECK(near(residual.max_drawdown, fill_only_drawdown, 1e-9));
+    CHECK(residual.max_runup == 0.0);
     // The main lot is sampled by the ordinary per-bar walk over the same bar.
     CHECK(near(main_lot.max_runup, (1820.18 - 1812.35 - fee_px) * main_lot.qty, 1e-6));
     CHECK(near(main_lot.max_drawdown, (1812.35 - 1786.40 + fee_px) * main_lot.qty, 1e-6));

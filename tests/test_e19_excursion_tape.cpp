@@ -49,9 +49,18 @@
 //      entry bar into the lot (ab9714be pine_scheduler.cpp:357-366's
 //      update_per_trade_extremes on every fill recalculation).
 //
-// The adapter columns are pinned as MEASURED DIVERGENCES: a lane that moves
-// the Pine host onto the kernel sampler, or corrects the adapter's masks,
-// flips them to TradingView's value and must re-pin this row.
+// The adapter columns were pinned as MEASURED DIVERGENCES, to flip when a lane
+// moved the Pine host onto the kernel sampler.
+//
+// expectation corrected (R5 lane H-THIN, E19): that lane is this one. The Pine
+// host no longer owns lot excursions (owns_lot_excursions is the kernel's
+// default, false), so the kernel samples its lots and the adapter columns are
+// TradingView's wherever the kernel's are: classes A and B and all four COOF
+// scratches flip to the tape (adapter == TradingView 6 -> 10 of 12, 0 -> 4 of
+// 4). Class C stays off the tape on both sides, and the Pine run shows the
+// kernel sampler's reading under the adapter's per-kind tick rules: the
+// stop's half-tick crossing, 13.645 / 7.785 (was 13.64 / 7.78), 0.005 closer
+// to TradingView's 13.65 / 7.79.
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
@@ -185,13 +194,13 @@ const Measured kMeasured[] = {
     {29, 4.98, 10.37, 4.98, 10.37, "control"},
     {30, 0.32, 12.67, 0.32, 12.67, "control"},
     {31, 3.58, 25.21, 3.58, 25.21, "control"},
-    {32, 27.07, 0.00, 27.07, 3.22, "A entry-bar over-mask (adverse)"},
-    {169, 0.14, 16.35, 0.14, 13.75, "B exit-bar over-fold (adverse)"},
-    {170, 11.55, 3.44, 11.55, 0.43, "B exit-bar over-fold (adverse)"},
-    {171, 1.47, 13.62, 6.97, 13.62, "A entry-bar over-mask (favorable)"},
+    {32, 27.07, 3.22, 27.07, 3.22, "A entry-bar over-mask (adverse)"},
+    {169, 0.14, 13.75, 0.14, 13.75, "B exit-bar over-fold (adverse)"},
+    {170, 11.55, 0.43, 11.55, 0.43, "B exit-bar over-fold (adverse)"},
+    {171, 6.97, 13.62, 6.97, 13.62, "A entry-bar over-mask (favorable)"},
     {172, 4.50, 21.77, 4.50, 21.77, "control"},
-    {797, 13.64, 5.77, 13.64, 5.77, "C open print before a same-bar stop fill"},
-    {798, 7.78, 6.01, 7.78, 6.01, "C open print before a same-bar stop fill"},
+    {797, 13.645, 5.77, 13.64, 5.77, "C open print before a same-bar stop fill"},
+    {798, 7.785, 6.01, 7.78, 6.01, "C open print before a same-bar stop fill"},
     {799, 5.69, 22.27, 5.69, 22.27, "control"},
     {800, 3.08, 24.92, 3.08, 24.92, "control"},
 };
@@ -241,8 +250,10 @@ private:
 void test_coof_scratch() {
     const std::vector<Bar> days[] = {day_bars(kCoofDay0), day_bars(kCoofDay1),
                                      day_bars(kCoofDay2), day_bars(kCoofDay3)};
-    // The adapter's magnitudes, pinned (the entry bar's extremes folded in).
-    const double adapter[4][2] = {{4.08, 4.21}, {11.75, 0.0}, {0.0, 11.19}, {6.44, 0.22}};
+    // The adapter's magnitudes, pinned: the kernel's, 0 / 0 (were the entry
+    // bar's extremes folded in: {4.08, 4.21}, {11.75, 0.0}, {0.0, 11.19},
+    // {6.44, 0.22}).
+    const double adapter[4][2] = {{0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
     int adapter_tv = 0, kernel_tv = 0;
     for (const TapeRow& tv : kCoofTape) {
         const int d = tv.day;
@@ -279,11 +290,11 @@ void test_coof_scratch() {
                     a_is_tv ? " =TV" : " !=TV", x.max_runup, x.max_drawdown, k_is_tv ? " =TV" : " !=TV");
         CHECK(near(a.max_runup, adapter[d][0]));
         CHECK(near(a.max_drawdown, adapter[d][1]));
-        CHECK(!a_is_tv);
+        CHECK(a_is_tv);
         CHECK(k_is_tv);
     }
     std::printf("coof scratch rows 4: adapter == TradingView %d, kernel == TradingView %d\n", adapter_tv, kernel_tv);
-    CHECK(adapter_tv == 0);
+    CHECK(adapter_tv == 4);
     CHECK(kernel_tv == 4);
 }
 
@@ -357,16 +368,16 @@ int main() {
             CHECK(!a_is_tv);
             CHECK(!k_is_tv);
         } else {
-            // Classes A and B: the kernel sampler is TradingView's, the
-            // adapter's host-owned model is not.
-            CHECK(!a_is_tv);
+            // Classes A and B: the kernel sampler is TradingView's, and so is
+            // the adapter since it reads the kernel's (was CHECK(!a_is_tv)).
+            CHECK(a_is_tv);
             CHECK(k_is_tv);
         }
     }
     CHECK(n == 12);
     std::printf("tape rows %d: adapter == TradingView %d, kernel == TradingView %d\n",
                 n, agree_adapter, agree_kernel);
-    CHECK(agree_adapter == 6);
+    CHECK(agree_adapter == 10);
     CHECK(agree_kernel == 10);
     test_coof_scratch();
     std::printf("test_e19_excursion_tape: %d passed, %d failed\n", passed, failed);

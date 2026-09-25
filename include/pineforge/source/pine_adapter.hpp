@@ -235,11 +235,6 @@ struct PlacementSnapshot {
     // later submit of the same instance (a bracket leg materialized when its
     // parent entry applies) must not re-stamp it to the submitting bar.
     bool projection_created_bar_pinned = false;
-    // Set when a carried bracket leg is force-executed at its own level on the
-    // bar its parent entry opened (ab9714be src/source/pine_fills.cpp:7695-7728).
-    // The close of such a leg must not inherit the exit bar's path sample: the
-    // owner books that fill at step 1, before update_per_trade_extremes().
-    bool post_parent_calc_level_fill = false;
     std::int32_t projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
     bool projection_after_close = false;
     bool projection_over_pyramiding = false;
@@ -1226,15 +1221,6 @@ struct PineRiskState {
     bool intraday_cancel_pending = false;
 };
 
-// ab9714be pine_risk.cpp:256-292 (update_per_trade_extremes): the source
-// host's per-lot excursion sampler. Folds one completed source bar's H/L/C
-// into every open lot, honoring the entry-bar masks. Shared by the bar-close
-// walk, the stream tick walk and the margin-call submit preload.
-void sample_open_trade_extremes(std::vector<PyramidEntry>& lots,
-                                PositionSide side, int bar_index, const Bar& bar);
-Bar margin_call_sample_bar(const Bar& bar, double fire_price, bool prefix_sample,
-                           bool high_first, double mintick = 0.0, int slippage = 0);
-
 class PineExecutionAdapter;
 
 // Allocation-free view facade for Appendix C's later C projection. L2 does
@@ -1387,19 +1373,6 @@ public:
     std::optional<NativeMarginDecision> resolve_margin_requirement(
         const NativeMarginRequirementView&) const;
     std::optional<double> resolve_margin_call_units(const NativeMarginCallView&) const;
-    // True when the request is a source exit leg carrying priced stop, limit
-    // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
-    bool source_priced_exit(std::uint64_t incarnation) const noexcept;
-    bool source_post_parent_calc_level_fill(std::uint64_t incarnation) const noexcept;
-    std::optional<double> source_trail_offset_ticks(std::uint64_t incarnation) const noexcept;
-    bool source_margin_exit(std::uint64_t incarnation) const noexcept;
-    static bool source_kernel_liquidation(const native_order::DefinitionRef&) noexcept;
-    bool has_pending_market_exit(int current_interval_index = -1) const noexcept;
-    // The carried 1x long's opening money call precedes the bar's excursion
-    // sample only ahead of one resting full-position priced exit that the
-    // open does not reach (ab9714be pine_fills.cpp:164-218).
-    bool carried_long_money_precedes_priced_exit(const NativePrecommitView&,
-                                                 double held_units) const;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
     void on_tick(const Bar&, const NativeTickContext&);
     // Called from the generic calculation callback after the source script

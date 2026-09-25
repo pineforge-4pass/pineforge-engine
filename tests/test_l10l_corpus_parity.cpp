@@ -217,7 +217,11 @@ void test_oca_reduce_open_gap_excursion() {
         CHECK(near(t.exit_price, 1583.34));
         CHECK(near(t.qty, 1.0));
         CHECK(near(t.pnl, 1.880000));
-        CHECK(near(t.max_runup, 3.370000));
+        // expectation corrected (R5 lane H-THIN, E19: the kernel samples the
+        // Pine host's lots; the host-owned model is gone): favorable 3.37 ->
+        // 2.33, TradingView's own number (corpus tape
+        // bracket-tp-sl-oca-reduce-isolate-01 trade #117).
+        CHECK(near(t.max_runup, 2.330000));
         CHECK(near(t.max_drawdown, 2.080000));
     }
 }

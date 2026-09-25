@@ -1,7 +1,9 @@
 // R4-D L10k: dual-stop both-touch fills the older book stop first
 // (order-dual-stop-both-touch-priority-01 #34/#35), and
 // order-stop-entry-reversal-grouping-01 replays identical to ab9714be
-// (the host owns excursion accounting, so the half-tick residual is gone).
+// (the host owned excursion accounting, so the half-tick residual was gone;
+// since R5 lane H-THIN the kernel samples the Pine host's lots and it is
+// back, see #801 below).
 // Bars are embedded from corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv —
 // this test must never open corpus files (CI has no corpus checkout).
 #include "l4a_native_route_guard.hpp"
@@ -142,8 +144,16 @@ int main() {
             expect_trade("dual-stop#34", host.get_trade(0), true,
                          1600.84, 1583.64, 14.11, 17.20, -17.20);
         if (host.trade_count() >= 2)
+            // expectation corrected (R5 lane H-THIN, E19: the kernel samples
+            // the Pine host's lots; the host-owned model is gone): favorable
+            // 18.59 -> 16.00. The engine books LE2's 1596.36 fill after LE's
+            // and after the entry bar's 1614.95 high (its fill order on this
+            // bar, unchanged by E19), so the lot's best price is the 17:15
+            // high 1612.36. TradingView fills LE2 first and closes it with
+            // another exit (tape trade #34, 18.59 to 16:15), so no tape row
+            // grades this one.
             expect_trade("dual-stop#35", host.get_trade(1), true,
-                         1596.36, 1576.62, 18.59, 58.80, -19.74);
+                         1596.36, 1576.62, 16.00, 58.80, -19.74);
     }
     {
         StopReversal host;
@@ -164,7 +174,14 @@ int main() {
             const auto& t = host.get_trade(i);
             if (t.is_long && near(t.entry_price, 3912.15) && near(t.exit_price, 3925.79)) {
                 found = true;
-                expect_trade("reversal#801", t, true, 3912.15, 3925.79, 13.64, 5.77, 13.64);
+                // expectation corrected (R5 lane H-THIN, E19: the kernel
+                // samples the Pine host's lots): favorable 13.64 -> 13.645,
+                // the kernel's sample at the stop's half-tick crossing
+                // (3925.795) under this run's per-kind tick rules. TradingView
+                // books 13.65 (corpus tape trade #801: it counts the exit
+                // bar's 3925.80 open print, which neither model samples), so
+                // the row moves 0.005 closer to the tape and is not its number.
+                expect_trade("reversal#801", t, true, 3912.15, 3925.79, 13.645, 5.77, 13.64);
                 break;
             }
         }

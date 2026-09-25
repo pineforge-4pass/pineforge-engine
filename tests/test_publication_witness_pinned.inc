@@ -29,6 +29,22 @@
 //   Storm19M: digest 0x6e51f913b73007d5 -> 0x83ea12d967fea7e7
 //   Storm22: digest 0xce56d5badb05638c -> 0xda5de455f464504d
 //   Storm22M: digest 0xa8b971a9116eb495 -> 0xfdaa191a97b50614
+// R5 lane H-THIN's P10 moves the closed trades of 12 runs and the source folds
+// of Storm17 and Storm17M (INT26: the behaviour half of its hash step ab297364,
+// harvested on the integrated tree, every value equal to the lane's); every
+// digest moves once, in the INT26 v19 hash re-pin:
+//   Storm04: trades 20 -> 22
+//   Storm04M: trades 20 -> 22
+//   Storm07: trades 15 -> 13
+//   Storm07M: trades 15 -> 13
+//   Storm17: folds 82 -> 86, trades 21 -> 23
+//   Storm17M: folds 77 -> 80, trades 17 -> 18
+//   Storm18: trades 25 -> 23
+//   Storm18M: trades 25 -> 23
+//   Storm19: trades 22 -> 23
+//   Storm19M: trades 22 -> 23
+//   Storm23: trades 27 -> 26
+//   Storm23M: trades 27 -> 26
 constexpr Pinned kPinned[] = {
     {"Config01", 0x13599d44631228e2ull, 144, 44, 144},
     {"ConfigFlags101", 0x9d75aa3c41307c6aull, 145, 45, 144},
@@ -110,14 +126,14 @@ constexpr Pinned kPinned[] = {
     {"Storm02M", 0x1521264d78122ebeull, 63, 12, 42},
     {"Storm03", 0x25f90b9eeb5f057aull, 41, 17, 41},
     {"Storm03M", 0xe4da66913719f57aull, 41, 17, 41},
-    {"Storm04", 0x3157bd59f491a789ull, 54, 20, 54},
-    {"Storm04M", 0xa1dd548b8f00457eull, 54, 20, 54},
+    {"Storm04", 0x3157bd59f491a789ull, 54, 22, 54},
+    {"Storm04M", 0xa1dd548b8f00457eull, 54, 22, 54},
     {"Storm05", 0x8eacccdcac89765cull, 81, 17, 53},
     {"Storm05M", 0x67d9decf4dd40cb4ull, 82, 17, 53},
     {"Storm06", 0x4053ebf00e230b53ull, 40, 11, 40},
     {"Storm06M", 0x4d4c9f8c75e1901bull, 40, 11, 40},
-    {"Storm07", 0xf7e280a190e60133ull, 55, 15, 55},
-    {"Storm07M", 0x3b29ea97a5b2dd0aull, 55, 15, 55},
+    {"Storm07", 0xf7e280a190e60133ull, 55, 13, 55},
+    {"Storm07M", 0x3b29ea97a5b2dd0aull, 55, 13, 55},
     {"Storm08", 0x9302e1c04c2dfedfull, 81, 14, 58},
     {"Storm08M", 0x8944facb400c0524ull, 81, 14, 58},
     {"Storm09", 0x09195d4f14ec28ddull, 48, 21, 48},
@@ -136,20 +152,20 @@ constexpr Pinned kPinned[] = {
     {"Storm15M", 0xa648d45a63e9a8afull, 43, 14, 43},
     {"Storm16", 0x8918c41ad3b998bdull, 58, 18, 58},
     {"Storm16M", 0x6b216cf99a1880dfull, 58, 18, 58},
-    {"Storm17", 0x644e0ad8e5fd4833ull, 82, 21, 54},
-    {"Storm17M", 0x46e2d77c04f174e3ull, 77, 17, 54},
-    {"Storm18", 0xe7e874c21bf9c5fcull, 80, 25, 49},
-    {"Storm18M", 0x75b39ccdb9b4542dull, 80, 25, 49},
-    {"Storm19", 0x8c49334fb012a382ull, 86, 22, 49},
-    {"Storm19M", 0x83ea12d967fea7e7ull, 86, 22, 49},
+    {"Storm17", 0x644e0ad8e5fd4833ull, 86, 23, 54},
+    {"Storm17M", 0x46e2d77c04f174e3ull, 80, 18, 54},
+    {"Storm18", 0xe7e874c21bf9c5fcull, 80, 23, 49},
+    {"Storm18M", 0x75b39ccdb9b4542dull, 80, 23, 49},
+    {"Storm19", 0x8c49334fb012a382ull, 86, 23, 49},
+    {"Storm19M", 0x83ea12d967fea7e7ull, 86, 23, 49},
     {"Storm20", 0xe93eebdfc01f57b4ull, 45, 12, 42},
     {"Storm20M", 0xfdb5a657600e2375ull, 45, 12, 42},
     {"Storm21", 0xc0aad15a28128003ull, 47, 14, 47},
     {"Storm21M", 0xbc3fbaacf5272ad1ull, 47, 14, 47},
     {"Storm22", 0xda5de455f464504dull, 76, 19, 50},
     {"Storm22M", 0xfdaa191a97b50614ull, 76, 19, 50},
-    {"Storm23", 0xb91e295d6da6778cull, 89, 27, 54},
-    {"Storm23M", 0x78f7d0134456384full, 89, 27, 54},
+    {"Storm23", 0xb91e295d6da6778cull, 89, 26, 54},
+    {"Storm23M", 0x78f7d0134456384full, 89, 26, 54},
     {"Storm24", 0x6f40ccb0266ca278ull, 54, 25, 54},
     {"Storm24M", 0xa2eeb9f1d0e10619ull, 54, 25, 54},
     {"Legs01", 0xb34653b540b649dfull, 30, 6, 30},

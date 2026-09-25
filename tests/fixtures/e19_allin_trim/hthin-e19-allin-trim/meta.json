@@ -1,0 +1,16 @@
+{
+  "title": "H-THIN E19 all-in opening trim",
+  "slug": "hthin-e19-allin-trim",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T23:18:34.016Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01"
+  },
+  "pine_sha256": "ec6038f03e89929c26c0e7862f7e24f18575f12d710947e823eafccfe2e60ce9",
+  "tv_trades_sha256": "c229f8fd7d1fd6c414db51a032d4c5ac8261bcee35c98989b7d9d168af5eb299",
+  "tv_trades_rows": 12
+}

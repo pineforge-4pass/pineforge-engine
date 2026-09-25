@@ -28,11 +28,12 @@
  *   P6  three market entries on one flat bar          adapter != TV = kernel
  *   P8  exit(qty) from B drains lot A (FIFO), third   adapter != TV = kernel
  *   P9  exit(qty) from A drains lot A, third id       adapter = kernel = TV
- *   P10 exit from B, default quantity, two lots open  adapter != TV = kernel
+ *   P10 exit from B, default quantity, two lots open  adapter = kernel = TV
  *
  * P10 is not a pyramiding question: it is the quantity a default
  * strategy.exit(from_entry) closes under FIFO with two lots open, which the
- * tape's scenario exposed (TradingView closes B's 100, the adapter the book).
+ * tape's scenario exposed (TradingView closes B's 100, the adapter closed the
+ * book until R5 lane H-THIN reserved the entry's own quantity).
  */
 
 #include <pineforge/bar.hpp>

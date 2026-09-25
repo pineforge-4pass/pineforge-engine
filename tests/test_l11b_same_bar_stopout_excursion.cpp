@@ -1,8 +1,7 @@
 // R4-D L11b: same-bar stopout excursion parity.
 // Pins the owner rows of arun-rajan #1-#3 and geckin-joey #1-#2 with embedded
 // bars, and verifies host-owned excursion accounting for same-bar stopouts:
-// (a) a short entered and liquidated on a low-first bar with low masked
-//     reports favorable excursion 0.000000 (ahtisham / waranyutrkm);
+// (a) [retired with the host model, R5 lane H-THIN E19];
 // (b) a 100%-of-equity long entry opening slice preceding a priced exit
 //     preserves the exit-fill loss in adverse excursion (yukozb).
 // Bars are embedded literals from corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv.
@@ -184,19 +183,6 @@ public:
     }
 };
 
-class DeclaresOwnership : public source::PineStrategyHost {
-public:
-    DeclaresOwnership() {
-        source::PineStrategyConfig c;
-        c.initial_capital = 10000.0;
-        configure_pine_strategy(c);
-        set_syminfo_metadata("ETHUSDT", 0.01);
-    }
-    void on_source_bar(const Bar&) override {}
-    void set_margin_call(bool mc) { excursion_margin_call_ = mc; }
-    void set_current_bar_public(const Bar& b) { current_bar_ = b; }
-};
-
 }  // namespace
 
 int main() {
@@ -338,35 +324,11 @@ int main() {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Same-bar short stopout: low-first bar with low masked
-    // (zz-pop-ahtisham trade #83 / zz-pop-waranyutrkm trade #66)
-    // -----------------------------------------------------------------------
-    {
-        DeclaresOwnership host;
-        host.set_margin_call(true);
-        // Bar 2025-05-30 01:00: O 2572.24, H 2595.90, L 2566.55, C 2594.03. Low-first.
-        host.set_current_bar_public(mk(1748566800000LL, 2572.24, 2595.90, 2566.55, 2594.03));
-        ClosedLotExcursionFacts facts{};
-        facts.entry_bar_index = 10;
-        facts.exit_bar_index = 10;
-        facts.is_long = false;
-        facts.entry_price = 2572.24;
-        facts.fill_price = 2595.90;
-        facts.lot_qty = 4.049824;
-        facts.closed_qty = 0.295293;
-        facts.entry_bar_low_masked = true;
-        facts.entry_bar_high_masked = false;
-        facts.carried_favorable = 0.0;
-        facts.carried_adverse = 0.0;
-
-        const ClosedLotExcursion owned = host.closed_lot_excursion(facts);
-        // Because entry_bar_low_masked is true, the pre-entry low 2566.55 is masked
-        // to entry price, so favorable excursion MUST be 0.000000, not 1.680216.
-        CHECK(near(owned.favorable, 0.0));
-        // Adverse excursion reaches the high (2595.90 - 2572.24) * 0.295293 = 6.986632
-        CHECK(near(owned.adverse, (2595.90 - 2572.24) * 0.295293));
-    }
+    // The former "same-bar short stopout: low-first bar with low masked"
+    // section (zz-pop-ahtisham trade #83 / zz-pop-waranyutrkm trade #66)
+    // reached the host's own excursion model directly with owner facts. R5
+    // lane H-THIN (E19) retired that model -- the kernel samples the path it
+    // walks -- so the section went with it.
 
     // -----------------------------------------------------------------------
     // Same-bar long margin call slice with fill loss

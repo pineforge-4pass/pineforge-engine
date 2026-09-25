@@ -38,7 +38,7 @@ inline void expect(const char* tag, const Trade& t, bool is_long, double entry_p
     CHECK(t.is_long == is_long);
     CHECK(near(t.entry_price, entry_px));
     CHECK(near(t.exit_price, exit_px));
-    CHECK(near(t.max_runup, fav) /* exact: the host owns excursion */);
+    CHECK(near(t.max_runup, fav) /* exact */);
     CHECK(near(t.max_drawdown, adv));
 }
 

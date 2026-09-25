@@ -1,11 +1,18 @@
-// R4-D L11a (RULING A48), the source-host TWIN: the source host owns per-lot
+// R4-D L11a (RULING A48), the source-host TWIN: the source host owned per-lot
 // excursion accounting behind ONE generic kernel capability. The kernel no
-// longer samples the lot at the matched trigger price and no longer folds
-// bar-path extremes into the closing row; both magnitudes come from the
-// host's own sampler. Pins the owner rows around the first divergence of
+// longer sampled the lot at the matched trigger price and no longer folded
+// bar-path extremes into the closing row; both magnitudes came from the
+// host's own sampler. It pinned the owner rows around the first divergence of
 // order-stop-entry-reversal-grouping-01 (favorable 13.64, exact — the
-// half-tick kernel overshoot 13.645 is gone) and the entry-bar mask rows of
+// half-tick kernel overshoot 13.645 was gone) and the entry-bar mask rows of
 // the composite-scalping shape (same-bar priced entry + priced exit).
+//
+// R5 lane H-THIN (E19) retired the host model: measured against TradingView
+// (tests/test_e19_excursion_tape.cpp and the corpus, 315 of the 326 trades
+// where the two differ go to the kernel, none to the host) it was ab9714be's,
+// not TradingView's. The Pine host now declares no ownership and the kernel
+// samples its lots, so this twin pins the kernel's numbers on the same rows;
+// each row says what moved and why.
 // Bars are embedded; this test must never open corpus files. This half binds
 // pineforge/source, so tests/CMakeLists.txt registers it only when
 // PINEFORGE_BUILD_SOURCE_LAYER is ON; the kernel half (a bare host and an
@@ -89,25 +96,11 @@ private:
 
 int main() {
     {
+        // expectation corrected (R5 lane H-THIN, E19): the Pine host no longer
+        // owns lot excursions (was CHECK(host.owns_lot_excursions()) and the
+        // owner model's four magnitudes on hand-made facts).
         DeclaresOwnership host;
-        CHECK(host.owns_lot_excursions());
-        ClosedLotExcursionFacts facts;
-        facts.carried_favorable = 4.0;
-        facts.carried_adverse = 2.0;
-        facts.entry_price = 100.0;
-        facts.fill_price = 103.0;
-        facts.lot_qty = 1.0;
-        facts.closed_qty = 1.0;
-        facts.is_long = true;
-        // The supplier is the host's own model: carried extremes scaled to the
-        // closed slice, with the exit fill itself always inside the trade.
-        const ClosedLotExcursion owned = host.closed_lot_excursion(facts);
-        CHECK(near(owned.favorable, 4.0));
-        CHECK(near(owned.adverse, 2.0));
-        facts.closed_qty = 0.5;
-        const ClosedLotExcursion half = host.closed_lot_excursion(facts);
-        CHECK(near(half.favorable, 2.0));
-        CHECK(near(half.adverse, 1.0));
+        CHECK(!host.owns_lot_excursions());
     }
     {
         StopReversal host;
@@ -128,8 +121,12 @@ int main() {
             const auto& t = host.get_trade(i);
             if (t.is_long && near(t.entry_price, 3912.15) && near(t.exit_price, 3925.79)) {
                 found = true;
-                // Owner row: favorable == 13.64 exactly, not 13.645.
-                expect("reversal#801", t, true, 3912.15, 3925.79, 13.64, 5.77);
+                // expectation corrected (R5 lane H-THIN, E19): 13.64 ->
+                // 13.645, the kernel's sample at the stop's half-tick crossing
+                // (3925.795) under this run's per-kind tick rules; the corpus
+                // tape books 13.65 (it counts the exit bar's 3925.80 open,
+                // which neither model samples).
+                expect("reversal#801", t, true, 3912.15, 3925.79, 13.645, 5.77);
                 break;
             }
         }
@@ -153,9 +150,14 @@ int main() {
             const auto& t = host.get_trade(0);
             // High-first bar: the 1819.40 high precedes the stop-short fill,
             // so it is masked out of the lot and out of the exit fold; the
-            // post-fill low 1806.40 gives mfe 3.60 and the buy-back fill
-            // itself gives mae 8.00 (ab9714be pine_fills.cpp:42 + :5741).
-            expect("same-bar-scalp#1", t, false, 1810.00, 1818.00, 3.60, 8.00);
+            // post-fill low 1806.40 gave the owner mfe 3.60 and the buy-back
+            // fill itself gives mae 8.00 (ab9714be pine_fills.cpp:42 + :5741).
+            // expectation corrected (R5 lane H-THIN, E19): mfe 3.60 -> 0.00.
+            // The exit's buy limit at 1818.00 is already marketable when the
+            // entry fills, so the engine books the buy-back at the entry's own
+            // crossing and the lot is closed before the low; the kernel
+            // samples that chronology. No tape of this synthetic shape exists.
+            expect("same-bar-scalp#1", t, false, 1810.00, 1818.00, 0.00, 8.00);
         }
     }
     std::printf("test_l11a_host_excursion_twin: %d passed, %d failed\n", passed, failed);

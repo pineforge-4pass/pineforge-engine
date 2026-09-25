@@ -630,23 +630,6 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     else if (open_point && bar_known) coof_context.coordinate.path_phase = first_extreme;
     host.adapter_.begin_coof_recalc(
         event, coof_context, first_open, host.broker_fill_event_seq_);
-    // ab9714be pine_scheduler.cpp:357-366: under COOF every fill recalculation
-    // invokes update_per_trade_extremes() against the full script bar, except
-    // the carried positive-slip POOC opening-money chain at O
-    // (pine_scheduler.cpp:494-511), whose exits see only the open.
-    Bar extremes_bar = callback_bar;
-    if (host.config_.process_orders_on_close && host.config_.slippage > 0 && open_point) {
-        extremes_bar.high = extremes_bar.low = extremes_bar.close = extremes_bar.open;
-    }
-    // A plain aggregated chart's lots are booked by the kernel in script-bar
-    // space. Pine's excursion sampler still uses the chart source index here,
-    // so the entry-bar mask reads the chart bar without changing the lot.
-    const int extremes_index = !retained_.bar_magnifier
-            && detail::run_aggregates_input_bars(detail::run_consumer(host), &host.adapter_,
-                                                 host.adapter_.run_counter_)
-        ? source_bar_index_for(context) : host.bar_index_;
-    sample_open_trade_extremes(
-        host.pyramid_entries_, host.position_side_, extremes_index, extremes_bar);
     try {
         host.scheduler_publish_source_bar(
             callback_bar, true, callback_advances_source_bar);

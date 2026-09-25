@@ -24,14 +24,17 @@
 //   3. the AUTO control: the same shape with no declared order. The seam
 //      answers the open-proximity rule, so this row is the same before and
 //      after the fix — the byte-identity of the default, at test scope.
-//   4. the margin-call prefix sample, reached directly with owner facts (the
-//      l11b pattern) after a forced-order run has configured the spec. The
-//      prefix walk stops at the liquidation waypoint, so which extremes it
-//      has already traversed is the declared order's question too.
 //
 // Fills are unchanged by the fix in every row: the matcher has always walked
 // the declared order (`NativeExecutionConsumer`'s own resolution). Only the
 // excursion columns move.
+//
+// R5 lane H-THIN (E19): the Pine host no longer owns lot excursions; the
+// kernel's sampler (NativeExecutionConsumer::apply_excursion) samples every
+// point of the path it walks, in the order the run declares, so rows 1-3 now
+// read the kernel's numbers, which are these. The former row 4 reached the
+// host's margin-call prefix walk directly with owner facts; that walk left the
+// source layer with the model, so the row went with it.
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -109,24 +112,6 @@ private:
     double exit_stop_;
 };
 
-// The l11b DeclaresOwnership pattern: reach the owner's excursion model
-// directly with chosen facts. The run below is what puts the declared order
-// into the consumer's spec, which is where the seam reads it from.
-class MarginPrefixProbe : public source::PineStrategyHost {
-public:
-    explicit MarginPrefixProbe(int path_order_mode) {
-        configure_pine_strategy(cfg());
-        if (path_order_mode != 0) set_path_order(path_order_mode);
-    }
-    void on_source_bar(const Bar&) override {}
-    void arm_margin_prefix(const Bar& bar) {
-        current_bar_ = bar;
-        excursion_margin_call_ = true;
-        excursion_margin_prefix_ = true;
-        excursion_margin_fill_only_ = false;
-    }
-};
-
 void expect_row(const char* tag, const Trade& t, bool is_long,
                 double entry_px, double exit_px, double fav, double adv) {
     std::printf("%s %s @%.2f->%.2f mfe=%.6f mae=%.6f (want @%.2f->%.2f mfe=%.6f mae=%.6f)\n",
@@ -175,48 +160,6 @@ int main() {
     //    behind it. favorable = 12.00 (the fill), adverse = 10.00 (the low).
     run_bracket("auto-long-take-profit", 0, kLowFirstBar, true,
                 99.00, 112.00, kNaN, 100.00, 112.00, 12.00, 10.00);
-
-    // 4. The margin-call prefix sample. A long lot opened at 100.00 and
-    //    liquidated at the 90.00 low of the same bar: the prefix the slice
-    //    inherits is the traversed waypoints, so under the declared
-    //    HIGH_FIRST the 115.00 high is already behind the fire price and the
-    //    slice's favorable excursion is 15.00; the open-proximity frame would
-    //    reach only the open. Adverse is the low either way.
-    ClosedLotExcursionFacts facts{};
-    facts.entry_bar_index = 1;
-    facts.exit_bar_index = 1;
-    facts.is_long = true;
-    facts.entry_price = 100.00;
-    facts.fill_price = 90.00;
-    facts.lot_qty = 1.0;
-    facts.closed_qty = 1.0;
-    {
-        MarginPrefixProbe host(1);
-        const std::vector<Bar> bars = {kFlatBefore, kFlatAfter};
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        CHECK(host.last_error().empty());
-        host.arm_margin_prefix(kLowFirstBar);
-        const ClosedLotExcursion owned = host.closed_lot_excursion(facts);
-        std::printf("forced-high-first-margin-prefix fav=%.6f adv=%.6f (want fav=15.000000 adv=10.000000)\n",
-                    owned.favorable, owned.adverse);
-        CHECK(near(owned.favorable, 15.00));
-        CHECK(near(owned.adverse, 10.00));
-    }
-    {
-        // The AUTO control of row 4: the same bar, no declared order. The
-        // prefix stops at the low, which IS the first waypoint under the
-        // open-proximity rule, so nothing but the open precedes it.
-        MarginPrefixProbe host(0);
-        const std::vector<Bar> bars = {kFlatBefore, kFlatAfter};
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        CHECK(host.last_error().empty());
-        host.arm_margin_prefix(kLowFirstBar);
-        const ClosedLotExcursion owned = host.closed_lot_excursion(facts);
-        std::printf("auto-margin-prefix fav=%.6f adv=%.6f (want fav=0.000000 adv=10.000000)\n",
-                    owned.favorable, owned.adverse);
-        CHECK(near(owned.favorable, 0.00));
-        CHECK(near(owned.adverse, 10.00));
-    }
 
     // 5. R5 lane F7 (audit M25): the source layer ASKS the kernel for the leg
     //    order instead of keeping copies of the rule. Rows 1-4 pin that the

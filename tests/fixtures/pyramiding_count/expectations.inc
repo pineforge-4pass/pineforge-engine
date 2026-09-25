@@ -42,10 +42,14 @@ const Scenario kScenarios[] = {
      true, true,
      "A 100 @1:10.77->4:10.75; B 100 @2:10.77->9:10.78; C 100 @7:10.77->9:10.78; ",
      "A 100 @1:10.77->4:10.75; B 100 @2:10.77->9:10.78; C 100 @7:10.77->9:10.78; "},
+    // expectation corrected (R5 lane H-THIN, M13's P10): a default
+    // strategy.exit(from_entry) under FIFO reserves its entry's own quantity,
+    // so the stop closes 100 (lot A, the oldest) as TradingView does; it
+    // closed the whole book (A and B at 11.38) before.
     {"P10", "hm-orders-m13-f-pyramiding",
      {{0, Op::Entry, "A"}, {1, Op::Entry, "B"}, {2, Op::StopExit, "XB", kNaN, 11.38, "B"}, {6, Op::CloseAll, "close_all"}},
-     false, true,
-     "A 100 @1:11.34->4:11.38; B 100 @2:11.37->4:11.38; ",
+     true, true,
+     "A 100 @1:11.34->4:11.38; B 100 @2:11.37->7:11.34; ",
      "A 100 @1:11.34->4:11.38; B 100 @2:11.37->7:11.34; "},
     {"D1", "hm-orders-m13-f-pyramiding-rule",
      {{0, Op::Entry, "A"}, {2, Op::LimitEntry, "L2", kNaN, 10.27}, {2, Op::Entry, "M"}, {5, Op::Cancel, "L2"}, {6, Op::CloseAll, "close_all"}},

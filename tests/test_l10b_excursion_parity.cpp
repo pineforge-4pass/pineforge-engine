@@ -139,6 +139,12 @@ int main() {
         // Legacy trade #3: Margin call 1 @1606.17, favorableUsd 27.34
         // (exit-bar high 1619.86 - 1592.52), adverseUsd 0. Native without
         // the full-bar pre-margin sample reports 21.28 (entry-bar high only).
+        // expectation corrected (R5 lane H-THIN, E19: the kernel samples the Pine
+        // host's lots; the host-owned model is gone):
+        // 27.34 -> 21.28, which is TradingView's own number for this row
+        // (corpus tape anomaly-equity-mirror-strategy-equity-01 trade #3:
+        // Favorable excursion 21.28, Adverse 0); ab9714be's 27.34 folded an
+        // extreme after the liquidation.
         MirrorLong host(992399.54089, 623.163);
         auto bars = bars_0421();
         host.run(bars.data(), static_cast<int>(bars.size()));
@@ -148,7 +154,7 @@ int main() {
             const auto& t = host.get_trade(0);
             CHECK(t.exit_comment == std::string("Margin call"));
             expect_trade("0421-mc", t, "E", true, 1.0, 1592.52, 1606.17,
-                         27.34, 0.0, 13.65);
+                         21.28, 0.0, 13.65);
         }
         if (host.trade_count() >= 2) {
             const auto& t = host.get_trade(1);
@@ -164,6 +170,13 @@ int main() {
         // Legacy samples the bar low (1488.21) before process_margin_call
         // and scales that extreme to the closed slice (ab9714be output
         // of this excerpt: mfe=(1501.56-1488.21)*qty).
+        // expectation corrected (R5 lane H-THIN, E19: the kernel samples the Pine
+        // host's lots; the host-owned model is gone):
+        // the high-first walk reaches the liquidation at the high before the
+        // 1488.21 low, so no favorable price belongs to the slice (mfe 0,
+        // was (1501.56-1488.21)*qty); TradingView folds no extreme after a
+        // closing fill (tests/test_e19_excursion_tape.cpp, class B, and the
+        // row above). No tape of this excerpt exists.
         const double capital = 7.7232 * 1501.56;
         ShortPct host(capital);
         auto bars = bars_h16_short();
@@ -172,7 +185,7 @@ int main() {
         CHECK(host.trade_count() >= 1);
         if (host.trade_count() >= 1) {
             const auto& t = host.get_trade(0);
-            const double fav = (1501.56 - 1488.21) * t.qty;
+            const double fav = 0.0;
             const double adv = (1503.74 - 1501.56) * t.qty;
             CHECK(t.exit_comment == std::string("Margin call"));
             expect_trade("h16-short", t, "S", false, t.qty, 1501.56, 1503.74,

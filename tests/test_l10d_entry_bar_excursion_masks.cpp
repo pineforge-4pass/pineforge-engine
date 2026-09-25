@@ -2,6 +2,14 @@
 // reached BEFORE the fill (ab9714be pine_fills.cpp:42 skip_entry_bar_high/low
 // + pine_risk.cpp:248-300). Literals are the legacy corpus engine_trades.csv
 // rows that first diverge on 890da75.
+//
+// expectation corrected (R5 lane H-THIN, E19: the kernel samples the Pine
+// host's lots; the host-owned model is gone): every excursion literal below is
+// now TradingView's own, read off each probe's corpus tape (tv_trades.csv,
+// Favorable / Adverse excursion). ab9714be's entry-bar masks hid a favorable
+// extreme the fill had already passed (#46 0.00 -> 0.86, #29 0.00 -> 0.98,
+// #60 0.00 -> 1.33, #11 0.00 -> 6.78) and folded an exit-bar extreme after an
+// at-open exit (#22 adverse 5.53 -> 0.90); fills and prices are unchanged.
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -219,7 +227,7 @@ int main() {
         CHECK(host.trade_count() >= 1);
         if (host.trade_count() >= 1)
             expect_trade("dual-stop-open-tie#46", host.get_trade(0), false,
-                         1691.11, 1691.13, 0.0, 0.02);
+                         1691.11, 1691.13, 0.86, 0.02);
     }
     {
         GapShort host;
@@ -233,7 +241,7 @@ int main() {
             CHECK(host.trade_count() >= 1);
             if (host.trade_count() >= 1)
                 expect_trade("deferred-flip-gap-stops#29", host.get_trade(0), false,
-                             1630.11, 1661.93, 0.0, 61.46);
+                             1630.11, 1661.93, 0.98, 61.46);
         }
     }
     {
@@ -248,7 +256,7 @@ int main() {
             CHECK(host.trade_count() >= 1);
             if (host.trade_count() >= 1)
                 expect_trade("stop-entry-touch-boundary#60", host.get_trade(0), false,
-                             2413.99, 2467.86, 0.0, 98.01);
+                             2413.99, 2467.86, 1.33, 98.01);
         }
     }
     {
@@ -266,7 +274,7 @@ int main() {
         CHECK(host.trade_count() >= 1);
         if (host.trade_count() >= 1)
             expect_trade("composite-bracket-cap#11", host.get_trade(0), false,
-                         1812.34, 1819.23, 0.0, 8.42);
+                         1812.34, 1819.23, 6.78, 8.42);
     }
     {
         RangeLong host;
@@ -280,7 +288,7 @@ int main() {
             CHECK(host.trade_count() >= 1);
             if (host.trade_count() >= 1)
                 expect_trade("range-expansion-pending-stop#22", host.get_trade(0), true,
-                             1811.09, 1812.34, 33.88, 5.53);
+                             1811.09, 1812.34, 33.88, 0.90);
         }
     }
     std::printf("test_l10d_entry_bar_excursion_masks: %d passed, %d failed\n",

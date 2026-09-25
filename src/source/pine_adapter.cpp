@@ -75,91 +75,6 @@ bool finite_non_negative(double value) noexcept {
     return std::isfinite(value) && value >= 0.0;
 }
 
-// ab9714be pine_fills.cpp:384 routes a priced exit's fill through
-// margin_call_slice_before_priced_exit, whose 1x-long arm
-// (pine_fills.cpp:2328-2456) takes the entry-bar opening slice THERE -- inside
-// process_pending_orders, strictly before that bar's update_per_trade_extremes
-// (pine_scheduler.cpp:257).  In that chronology neither the split-off residual
-// nor the surviving main lot inherits the bar's H/L/C sample: the residual
-// keeps its entry seed (fav 0, adv = its own commission) and the main lot only
-// ever sees its exit fill.  The end-of-bar opening branch is the one that
-// samples the complete bar.  A priced exit leg still resting from an EARLIER
-// bar whose level this bar's range crosses is exactly the fill that preempts
-// the slice, so it is the discriminator between the two sampling points.
-template <typename Handles, typename Placement, typename FromEntryFilled>
-bool opening_slice_precedes_priced_exit_fill(const Handles& handles,
-                                             const Placement& placement,
-                                             const Bar& bar,
-                                             int interval_index,
-                                             bool is_long,
-                                             double mintick,
-                                             double avg_price,
-                                             std::int64_t position_cycle,
-                                             const FromEntryFilled& from_entry_filled) noexcept {
-    // The discriminator is CYCLE-scoped, exactly like the owner's bracket
-    // liveness: only a leg whose from_entry filled in THIS position cycle is
-    // evaluated (ab9714be pine_fills.cpp:7669-7673), its activation and leg
-    // ownership are bound to position_cycle_seq_ and unbound the moment the
-    // book goes flat (pine_orders.cpp:597-608, 614-627), and its priced legs
-    // are tested against the live position's own direction. A bracket left
-    // over from a finished cycle -- or one prearmed for the opposite side --
-    // never preempts the opening slice. A trail leg participates through its
-    // activation price, resolved from the live entry when the birth operand
-    // was points (pine_fills.cpp:7208-7230).
-    const auto expected_side = is_long
-        ? static_cast<std::int32_t>(PositionSide::LONG)
-        : static_cast<std::int32_t>(PositionSide::SHORT);
-    for (const auto& handle : handles) {
-        const auto found = placement.find(handle.incarnation);
-        if (found == placement.end()) continue;
-        const auto& row = found->second;
-        if (row.family != PineOrderFamily::ExitLimit
-            && row.family != PineOrderFamily::ExitStop
-            && row.family != PineOrderFamily::ExitTrail) {
-            continue;
-        }
-        if (position_cycle > 0 && row.placement_cycle != 0
-            && row.placement_cycle != position_cycle) {
-            continue;
-        }
-        if (row.projection_position_side != expected_side
-            && row.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)) {
-            continue;
-        }
-        // ab9714be pine_fills.cpp:7671-7674 removes an exit whose from_entry
-        // has not filled in the live position cycle before it can fill, so
-        // a bracket the script keeps re-issuing for the other side's id
-        // (re-priced off the live position's average) cannot preempt.
-        if (!row.from_entry.empty() && !from_entry_filled(row.from_entry)) continue;
-        if (row.projection_created_bar < 0
-            || row.projection_created_bar > interval_index) {
-            continue;
-        }
-        if (row.family == PineOrderFamily::ExitStop && std::isfinite(row.exit_levels.stop)) {
-            if (is_long && bar.low <= row.exit_levels.stop) return true;
-            if (!is_long && bar.high >= row.exit_levels.stop) return true;
-        }
-        if (row.family == PineOrderFamily::ExitLimit && std::isfinite(row.exit_levels.limit)) {
-            if (is_long && bar.high >= row.exit_levels.limit) return true;
-            if (!is_long && bar.low <= row.exit_levels.limit) return true;
-        }
-        if (row.family == PineOrderFamily::ExitTrail) {
-            double trail_act = row.exit_levels.trail_price;
-            const double base_px = finite_positive(avg_price) ? avg_price : bar.open;
-            if (!finite_positive(trail_act) && finite_positive(row.exit_levels.trail_points)
-                && finite_positive(mintick) && finite_positive(base_px)) {
-                trail_act = base_px + (is_long ? 1.0 : -1.0)
-                    * row.exit_levels.trail_points * mintick;
-            }
-            if (finite_positive(trail_act)) {
-                if (is_long && bar.high >= trail_act) return true;
-                if (!is_long && bar.low <= trail_act) return true;
-            }
-        }
-    }
-    return false;
-}
-
 // ab9714be pine_strategy_commands.cpp:533-537: a non-NaN limit/stop is a
 // present price level, including 0.0.
 bool price_present(double value) noexcept { return !std::isnan(value); }
@@ -728,89 +643,6 @@ void audit_placement_scan(const PlacementTable& table, unsigned line, Predicate&
 #define PINEFORGE_AUDIT_PLACEMENT_SCAN(table, ...) ((void)0)
 #endif
 } // namespace
-
-// ab9714be pine_fills.cpp:2009-2023: a margin slice born in a prefix-sampling
-// chronology (the POOC pre-script pass, or the 1x-long opening slice taken
-// inside process_pending_orders before a priced exit's fill) samples only the
-// traversed waypoint prefix (open-trigger must not inherit a later high).
-// Every other slice is the non-POOC end-of-bar opening trim, which
-// process_margin_call runs after the ordinary full-bar sample, so the closed
-// row inherits the complete bar.
-Bar margin_call_sample_bar(const Bar& bar, double fire_price, bool prefix_sample,
-                           bool high_first, double mintick, int slippage) {
-    if (!prefix_sample || !std::isfinite(fire_price)) return bar;
-    // A slipped open waypoint does not bit-match bar.open, so the prefix walk
-    // below would run past it to the close; the tick-scaled tolerance keeps an
-    // open-fired slice at the open.
-    const double slip_tol = (slippage + 1) * (mintick > 0.0 ? mintick : 0.01) + 1e-7;
-    if (std::abs(fire_price - bar.open) <= slip_tol) {
-        Bar prefix = bar;
-        prefix.high = prefix.low = bar.open;
-        prefix.close = fire_price;
-        return prefix;
-    }
-    const double path[4] = {
-        bar.open,
-        high_first ? bar.high : bar.low,
-        high_first ? bar.low : bar.high,
-        bar.close,
-    };
-    // finding-446: a short's slice books at the nearest-tick rounded high,
-    // which need not bit-match the raw waypoint; without the tick fallback
-    // the walk would run past it and sample the whole bar.
-    int fire = -1;
-    for (int i = 0; i < 4 && fire < 0; ++i) {
-        if (same_double_bits(path[i], fire_price)) fire = i;
-    }
-    for (int i = 0; i < 4 && fire < 0 && mintick > 0.0; ++i) {
-        if (same_double_bits(nearest_tick(path[i], mintick), fire_price)) fire = i;
-    }
-    if (fire < 0) fire = 3;
-    Bar prefix = bar;
-    prefix.high = prefix.low = path[0];
-    for (int i = 1; i <= fire; ++i) {
-        prefix.high = std::max(prefix.high, path[i]);
-        prefix.low = std::min(prefix.low, path[i]);
-    }
-    prefix.close = fire_price;
-    return prefix;
-}
-
-// ab9714be pine_risk.cpp:256-292: sample the full bar H/L/C into every open
-// lot. Legacy runs this AFTER pending-order fills and BEFORE
-// process_margin_call, so a liquidation at the first extreme still owns the
-// rest of the bar. Native apply_excursion stops when the lot is closed, so
-// the adapter re-runs this walk at margin-call submit.
-void sample_open_trade_extremes(std::vector<PyramidEntry>& lots,
-                                PositionSide side, int bar_index, const Bar& bar) {
-    if (side == PositionSide::FLAT || lots.empty()) return;
-    if (!std::isfinite(bar.high) || !std::isfinite(bar.low)
-        || !std::isfinite(bar.close)) {
-        return;
-    }
-    const bool is_long = (side == PositionSide::LONG);
-    for (auto& pe : lots) {
-        double pe_hi = bar.high;
-        double pe_lo = bar.low;
-        if (pe.entry_bar_index == bar_index) {
-            if (pe.skip_entry_bar_high) pe_hi = pe.price;
-            if (pe.skip_entry_bar_low) pe_lo = pe.price;
-        }
-        const double fav_px = is_long ? pe_hi : pe_lo;
-        const double adv_px = is_long ? pe_lo : pe_hi;
-        const double favorable = is_long ? (fav_px - pe.price) * pe.qty
-                                         : (pe.price - fav_px) * pe.qty;
-        const double adverse = is_long ? (pe.price - adv_px) * pe.qty
-                                       : (adv_px - pe.price) * pe.qty;
-        if (favorable > pe.max_runup) pe.max_runup = favorable;
-        if (adverse > pe.max_drawdown) pe.max_drawdown = adverse;
-        const double closing = is_long ? (bar.close - pe.price) * pe.qty
-                                       : (pe.price - bar.close) * pe.qty;
-        if (closing > pe.max_runup) pe.max_runup = closing;
-        const double closing_dd = -closing;
-        if (closing_dd > pe.max_drawdown) pe.max_drawdown = closing_dd;
-    }
-}
 
 PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachment)
     : cap(attachment) {
@@ -5764,8 +5596,8 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
 
 // The leg order the kernel walks `bar` in -- the run's declared
 // NativeRunSpec::path_order, the open-proximity rule under Auto
-// (NativeExecutionConsumer::path_high_first, which E19's excursion seam
-// already reads). The source layer asks rather than keeping a copy of the rule.
+// (NativeExecutionConsumer::path_high_first). The source layer asks rather
+// than keeping a copy of the rule.
 bool PineExecutionAdapter::source_path_uses_high_first(const Bar& bar) const noexcept {
     auto* pine = pine_view_of(host_);
     return pine != nullptr && detail::run_consumer(*pine).path_high_first(bar);
@@ -9005,8 +8837,15 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
+    // TradingView's default strategy.exit(from_entry) under FIFO closes the
+    // entry's own quantity -- the oldest lots first -- not the whole book
+    // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
+    const bool fifo_named_entry = !config_.close_entries_rule_any && !from_entry.empty();
+    const double book_basis = fifo_named_entry
+        ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
+        : std::abs(physical.signed_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
-        : std::max(0.0, std::abs(physical.signed_units)
+        : std::max(0.0, book_basis
                          - pending_same_bar_close_qty_ + pending_parent_units);
     const bool reservation_ok = compute_exit_reservation(
         exit_id, from_entry, qty, qty_percent, live_reservation_basis,
@@ -10400,7 +10239,6 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                     if (execute_after_calculation) {
                         const double units = std::abs(
                             detail::run_position(require_host()).signed_units);
-                        leg.snapshot.post_parent_calc_level_fill = true;
                         leg.snapshot.forced_execution_price = level;
                         leg.snapshot.immediately = true;
                         leg.snapshot.requested_qty = units;
@@ -13016,231 +12854,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     return result;
 }
 
-bool PineExecutionAdapter::source_post_parent_calc_level_fill(
-        std::uint64_t incarnation) const noexcept {
-    // True when the request being committed is the bracket leg this route
-    // force-executed at its own level after its parent entry's calculation
-    // (ab9714be src/source/pine_fills.cpp:7695-7728).
-    const auto snapshot = placement_.find(incarnation);
-    return snapshot != placement_.end()
-        && snapshot->second.post_parent_calc_level_fill;
-}
-
-// ab9714be pine_fills.cpp:5736-5744: priced exit fills flag fold_exit_path_extremes_ to fold pre-fill path excursion
-bool PineExecutionAdapter::source_priced_exit(std::uint64_t incarnation) const noexcept {
-    const auto snapshot = placement_.find(incarnation);
-    if (snapshot == placement_.end()) return false;
-    const auto& source = snapshot->second;
-    return (source.family == PineOrderFamily::ExitLimit
-            || source.family == PineOrderFamily::ExitStop
-            || source.family == PineOrderFamily::ExitTrail)
-        && (std::isfinite(source.exit_levels.limit)
-            || std::isfinite(source.exit_levels.stop)
-            || std::isfinite(source.exit_levels.trail_points)
-            || std::isfinite(source.exit_levels.trail_price)
-            || std::isfinite(source.exit_levels.trail_offset));
-}
-
-std::optional<double> PineExecutionAdapter::source_trail_offset_ticks(std::uint64_t incarnation) const noexcept {
-    const auto snapshot = placement_.find(incarnation);
-    if (snapshot == placement_.end()) return std::nullopt;
-    if (snapshot->second.family != PineOrderFamily::ExitTrail) return std::nullopt;
-    if (std::isnan(snapshot->second.exit_levels.trail_offset)) return 0.0;
-    return compat::pine::trail_offset_to_ticks(snapshot->second.exit_levels.trail_offset);
-}
-
-bool PineExecutionAdapter::source_margin_exit(std::uint64_t incarnation) const noexcept {
-    const auto snapshot = placement_.find(incarnation);
-    if (snapshot == placement_.end()) return false;
-    return snapshot->second.family == PineOrderFamily::Margin;
-}
-
-// A request the kernel's own margin model originated. Before on_applied
-// adopts it into the source placement table there is no row to read, so its
-// origin is the only thing that identifies it.
-bool PineExecutionAdapter::source_kernel_liquidation(
-        const native_order::DefinitionRef& definition) noexcept {
-    return static_cast<bool>(definition)
-        && definition->origin == native_order::RequestOrigin::KernelLiquidation;
-}
-
-bool PineExecutionAdapter::has_pending_market_exit(int current_bar) const noexcept {
-    const auto physical = detail::run_position(require_host());
-    if (physical.signed_units == 0.0) return false;
-    const bool is_long = physical.signed_units > 0.0;
-    for (const auto& handle : live_handles_) {
-        const auto it = placement_.find(handle.incarnation);
-        if (it == placement_.end()) continue;
-        const auto& sn = it->second;
-        if (current_bar >= 0 && sn.projection_created_bar != current_bar - 1) {
-            continue;
-        }
-        if (sn.opening && sn.family == PineOrderFamily::Entry
-            && sn.is_long != is_long
-            && !std::isfinite(sn.exit_levels.stop)
-            && !std::isfinite(sn.exit_levels.limit)
-            && !std::isfinite(sn.exit_levels.trail_points)
-            && !std::isfinite(sn.exit_levels.trail_price)
-            && !std::isfinite(sn.exit_levels.trail_offset)) {
-            return true;
-        }
-        if (sn.family == PineOrderFamily::Close || sn.family == PineOrderFamily::CloseAll) {
-            const auto target_side = is_long ? static_cast<std::int32_t>(PositionSide::LONG)
-                                             : static_cast<std::int32_t>(PositionSide::SHORT);
-            if (sn.projection_position_side == target_side
-                || sn.projection_position_side == static_cast<std::int32_t>(PositionSide::FLAT)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool PineExecutionAdapter::carried_long_money_precedes_priced_exit(
-        const NativePrecommitView& view, double held_units) const {
-    // ab9714be pine_fills.cpp:164-218: the scheduler, account and single-lot
-    // book facts, then the one pending order of that book.
-    const auto state = detail::run_state(require_host());
-    const double tick = staged_.syminfo.mintick;
-    if (config_.process_orders_on_close || config_.calc_on_order_fills
-        || stream_mode_ || (state.spec && !state.spec->intrabar.is_none())
-        || !(held_units > 1.0) || detail::run_position(require_host()).lot_count != 1
-        || config_.commission_value != 0.0 || config_.slippage != 0
-        || std::abs(config_.margin_long - 100.0) > 1e-12
-        || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
-        || !staged_.account_fx_effective_from_ms.empty()
-        || active_staged_fx(view.cursor.point.effective_time_ms) != 1.0
-        || cap.active() || risk_.max_intraday_loss != 0.0
-        || risk_.max_drawdown != 0.0 || risk_.max_cons_loss_days > 0
-        || !pending_entries_.empty() || !pending_same_bar_commands_.empty()
-        || !pending_bracket_legs_.empty() || !finite_positive(tick)
-        || !finite_positive(view.raw_price)) {
-        return false;
-    }
-    const PlacementSnapshot* exit = nullptr;
-    for (const auto& handle : live_handles_) {
-        if (handle == view.target) continue;
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) return false;
-        const auto& leg = found->second;
-        // Broker margin slices are not source pending orders.
-        if (leg.family == PineOrderFamily::Margin) continue;
-        if (leg.family != PineOrderFamily::ExitLimit
-            && leg.family != PineOrderFamily::ExitStop) {
-            return false;
-        }
-        if (exit && (leg.source_id != exit->source_id
-                     || leg.from_entry != exit->from_entry)) {
-            return false;
-        }
-        exit = &leg;
-    }
-    if (!exit || exit->from_entry.empty() || exit->legs.dormant()
-        || exit->projection_created_bar >= projection_bar_index(view.cursor.point)
-        || !exit->oca_name.empty() || exit->oca_type != 0
-        || !std::isnan(exit->exit_levels.trail_points)
-        || !std::isnan(exit->exit_levels.trail_offset)
-        || !std::isnan(exit->exit_levels.trail_price)
-        || std::isinf(exit->exit_levels.limit) || std::isinf(exit->exit_levels.stop)) {
-        return false;
-    }
-    const auto cohort = cohorts_by_id_.find(exit->from_entry);
-    if (cohort == cohorts_by_id_.end() || cohort->second.opened.empty()) return false;
-    // One ordinary own full-position reservation.
-    if (std::isnan(exit->requested_qty)) {
-        if (!std::isfinite(exit->qty_percent) || exit->qty_percent < 100.0) return false;
-    } else if (!std::isfinite(exit->requested_qty)
-               || exit->requested_qty < held_units - internal::kQtyEpsilon) {
-        return false;
-    }
-    const double limit = exit->exit_levels.limit;
-    const double stop = exit->exit_levels.stop;
-    if (!finite_positive(limit) && !finite_positive(stop)) return false;
-    // Every finite leg participates in opening marketability, on the
-    // tick-quantized open (broker_trigger_bar).
-    const double open = nearest_tick(view.raw_price, tick);
-    return !((std::isfinite(limit) && open >= limit)
-             || (std::isfinite(stop) && open <= stop));
-}
-
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     const auto snapshot = placement_.find(view.target.incarnation);
-    // R5: a kernel-originated liquidation IS a margin slice, and it reaches
-    // this hook before it is booked -- before on_applied adopts it into the
-    // source placement table. The excursion chronology below is decided here,
-    // so it has to recognise the slice from its origin.
-    const bool kernel_liquidation = source_kernel_liquidation(view.definition);
-    if (snapshot != placement_.end() || kernel_liquidation) {
-        static const PlacementSnapshot kKernelLiquidation = [] {
-            PlacementSnapshot row;
-            row.family = PineOrderFamily::Margin;
-            return row;
-        }();
-        const auto& source = snapshot != placement_.end() ? snapshot->second
-                                                          : kKernelLiquidation;
+    if (snapshot != placement_.end()) {
+        const auto& source = snapshot->second;
         const auto physical = detail::run_position(require_host());
-        // ab9714be pine_scheduler.cpp:257-278: process_margin_call runs after
-        // update_per_trade_extremes sampled the script bar into every lot that
-        // is still open, so the residual it splits off inherits that complete
-        // bar (POOC samples only the traversed waypoint prefix,
-        // pine_fills.cpp:2014-2023).  RULING A48: the host owns the sample
-        // itself; this resolves which of the owner's two chronologies born the
-        // slice (complete-bar trim or traversed prefix).
-        if (source.family == PineOrderFamily::Margin
-            && view.inspected_closed_units > 0.0) {
-            if (auto* pine = pine_view_of(&require_host())) {
-                const Bar& sample_bar = pine->current_bar_;
-                const bool is_long_pos = pine->position_side_ == PositionSide::LONG;
-                const bool crosses = opening_slice_precedes_priced_exit_fill(
-                    live_handles_, placement_, sample_bar,
-                    view.cursor.point.interval_index,
-                    is_long_pos, staged_.syminfo.mintick,
-                    require_host().position_avg_price(), current_position_cycle_,
-                    [this](const SourceId& id) { return from_entry_filled_this_cycle(id); });
-                const bool one_x_long_opening = physical.signed_units > 0.0
-                    && !config_.process_orders_on_close
-                    && std::isfinite(config_.margin_long)
-                    && std::abs(config_.margin_long - 100.0) < 1e-12;
-                // ab9714be pine_fills.cpp:2224: the general pre-exit arm takes
-                // the slice only when the adverse extreme strictly precedes the
-                // priced exit's own fill; a crossing leg moves it ahead of the
-                // bar's update_per_trade_extremes. The 1x-long opening arm is
-                // the only current-coordinate route through that pre-exit hook.
-                const bool pre_exit_chronology = view.current
-                    ? (one_x_long_opening && crosses)
-                    : crosses;
-                pine->excursion_margin_prefix_ = config_.process_orders_on_close
-                    || pre_exit_chronology;
-                // ab9714be pine_scheduler.cpp:167-191 and pine_fills.cpp:
-                // 2525-2678: a carried position's slice at the bar open runs
-                // while current_bar_ is restricted to the opening point, and
-                // pine_fills.cpp:2150-2305 books the general pre-exit slice
-                // before update_per_trade_extremes (pine_scheduler.cpp:
-                // 257-278) with fold_exit_path_extremes_ cleared
-                // (pine_fills.cpp:5858): either row owns only its carried
-                // extremes and the fill.
-                bool carried_open_slice =
-                    view.cursor.point.path_phase == NativePathPhase::Open
-                    && position_open_bar_index_ >= 0
-                    && position_open_bar_index_ < view.cursor.point.interval_index;
-                // ab9714be pine_fills.cpp:2544-2548 exempts a 1x long from the
-                // open slice: its opening-point rounded-money call is booked
-                // before sampling only through
-                // process_carried_long_money_before_priced_orders
-                // (pine_fills.cpp:164-218), whose book is exactly one resting
-                // full-position priced exit of the open lot that the open does
-                // not reach.  Otherwise the end-of-bar process_margin_call
-                // (pine_fills.cpp:1350-1352, after pine_scheduler.cpp:257-270
-                // sampled the bar) fires at the same open point and the slice
-                // inherits the complete bar.
-                if (carried_open_slice && one_x_long_opening) {
-                    carried_open_slice = carried_long_money_precedes_priced_exit(
-                        view, physical.signed_units);
-                }
-                pine->excursion_margin_fill_only_ = !config_.process_orders_on_close
-                    && (carried_open_slice || (!view.current && crosses));
-            }
-        }
         // ab9714be pine_fills.cpp:7449-7459: a deferred strategy.close belongs
         // to the position cycle it was issued in.  When the live position
         // opened on a bar later than the close's creation bar — the next open's
@@ -17126,8 +16744,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // submit through submit_or_replace to record one. Adopt it into the
         // source placement table on arrival, with the same family the
         // adapter's own slice carried, so every Margin-family branch below --
-        // the pending-sizing refresh, the bracket revival, the excursion
-        // sample, source_margin_exit -- sees it exactly as before.
+        // the pending-sizing refresh, the bracket revival -- sees it exactly
+        // as before.
         PlacementSnapshot adopted;
         adopted.family = PineOrderFamily::Margin;
         adopted.source_id = "__margin_call__";
@@ -17146,9 +16764,6 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             placement_snapshot->family == PineOrderFamily::ExitLimit
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail;
-        // RULING A48: the closed row's excursions come from the host's own
-        // per-lot sampler, so the resting-stop fill-based drawdown
-        // normalization this call site used to request is gone with it.
         if (auto* pine_host = pine_view_of(&require_host())) {
             pine_host->adapter_label_bracket_trades(event, from_bracket);
         }

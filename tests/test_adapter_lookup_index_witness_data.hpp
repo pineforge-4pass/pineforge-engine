@@ -797,9 +797,14 @@ constexpr std::uint64_t kFlip_reads[] = {
 // expectation corrected (v19-D): kFlip_final 3653829772705383872ull -> 8142912162810668916ull, because v19-D keeps fewer retired rows and folds a bracket family's erased members behind a retained one as runs (pineforge-source-adapter/v4: K1 releases a current-cycle leg the revival's superseded test answers for; BracketRoster parks); the trades did not move; harvested with the TU's own switch on this tree (r5/v19-d).
 // expectation corrected (V19-FIX): kFlip_final 8142912162810668916ull -> 9440871734801450516ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 constexpr std::uint64_t kFlip_final = 9440871734801450516ull;
+// R5 lane H-THIN's P10 moves one kFlip trade (INT26: the behaviour half of its
+// hash step ab297364, harvested on the integrated tree, equal to the lane's):
+//   {1736121780000, 1736121840000, 103, 106} -> {1736121780000, 1736121900000,
+//   103, 105.5}; the rows, reads and final hash values move once, in the INT26
+//   v19 hash re-pin.
 constexpr Trade kFlip_trades[] = {
     {1736121720000LL, 1736121840000LL, 102, 106, 1, 0},
-    {1736121780000LL, 1736121840000LL, 103, 106, 1, 0},
+    {1736121780000LL, 1736121900000LL, 103, 105.5, 1, 0},
     {1736121900000LL, 1736121960000LL, 105.5, 109, 1, 0},
     {1736122080000LL, 1736122260000LL, 110, 111, 1, 0},
     {1736122200000LL, 1736122260000LL, 111, 111, 1, 0},

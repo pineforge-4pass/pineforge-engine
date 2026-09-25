@@ -1,0 +1,37 @@
+// R5 lane H-THIN, E19: which excursion does TradingView give the residual an
+// all-in commissioned opening books and margin-calls again on its own entry
+// bar? Default 100 % of equity, 0.02 % commission, 2 ticks slippage, margin
+// 100/100; each scenario is flat at its start and closed by strategy.close_all.
+//   A 2025-04-04 15:00Z signal: long all-in + a bracket the entry bar never reaches
+//   B 2025-04-09 13:00Z signal: long all-in, no bracket
+//   C 2025-04-15 09:00Z signal: short all-in, no bracket
+//   D 2025-04-22 14:00Z signal: long all-in + a bracket the entry bar never reaches
+//@version=6
+strategy("H-THIN E19 all-in opening trim", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0.02, slippage=2,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 4, 15, 0)
+    strategy.entry("LA", strategy.long)
+    strategy.exit("LAX", "LA", limit=1830.0, stop=1780.0)
+if at(2025, 4, 4, 15, 30) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 9, 13, 0)
+    strategy.entry("LB", strategy.long)
+if at(2025, 4, 9, 14, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 15, 9, 0)
+    strategy.entry("SC", strategy.short)
+if at(2025, 4, 15, 10, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 22, 14, 0)
+    strategy.entry("LD", strategy.long)
+    strategy.exit("LDX", "LD", limit=close * 1.03, stop=close * 0.97)
+if at(2025, 4, 22, 15, 0) and strategy.position_size != 0
+    strategy.close_all()
