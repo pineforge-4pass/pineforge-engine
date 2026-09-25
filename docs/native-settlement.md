@@ -107,10 +107,11 @@ residual. A selection closed by its whole sum was already consumed whole, and
 `Flatten` needs no quantity at all.
 
 What a native host gets, then, from a quantity request on the exact settlement:
-exactly one terminal outcome, and no run stopped for a quantity. A close that spans lots
-and ends inside one is one fill charged its request (K-ULP2); a close whose
-binary64 FIFO sum reaches its request at a lot closes that lot whole (K-ULP3);
-a `Transact` that crosses the book is one fill charged its units (K-ULP1, in
+exactly one terminal outcome, and no run stopped for its quantity (one group
+case is left, below). A close that spans lots and ends inside one is one fill
+charged its request (K-ULP2); a close whose binary64 FIFO sum reaches its
+request at a lot closes that lot whole (K-ULP3); a `Transact` that crosses the
+book is one fill charged its units (K-ULP1, in
 `docs/pages/native-engine.md`); a request the settlement cannot book exactly is
 refused, typed, as above -- the settlement's own refusal shows beforehand in
 `inspect_current_execution` as a `settlement_readiness` of
@@ -137,6 +138,16 @@ lot, or found nothing to close, and the book's own sizes were `OffGrid`. A
 `Transact` is still gridded (it can open), and so is a `Reduce` of a quantity
 that is no boundary of its scope: a later lot's size would be taken FIFO from
 the head lot and split it off the grid.
+
+One case still stops the run, as it did before K-ULP4, and it is the request
+core's, not the settlement's: in an OCA group whose effect is
+`GroupEffect::Reduce`, a member's fill smaller than half an ulp of a sibling's
+remaining units cannot be deducted from them, and after the fill is booked the
+run fails with code 6, discriminator 7 (`CoreFailure::UnrepresentableReservation`).
+It takes a dust-sized fill -- the close of a dust lot -- beside a far larger
+resting sibling. A sibling's fill also lowers a member's remaining units
+without regard to the quantity grid; the grid's re-check above holds only the
+`Reduce` it admitted as a boundary.
 
 ## Quantity tolerance
 

@@ -2777,7 +2777,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7850`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7871`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3074,8 +3074,9 @@ a 2^-49-unit remainder that a second fill opened as a dust lot.
 ### What a host gets from a quantity
 
 Every quantity request ends in exactly one terminal outcome, and no ordinary
-quantity stops the run. The FIFO rules are the settlement's
-(`docs/native-settlement.md`, "Physical lots and quantities"); what a host sees:
+quantity stops the run (one OCA-group case is left, last below). The FIFO
+rules are the settlement's (`docs/native-settlement.md`, "Physical lots and
+quantities"); what a host sees:
 
 - A close that spans lots and ends inside one is one terminal fill whose
   `closed_units` and `filled_working` are its request, even where the rows,
@@ -3112,6 +3113,12 @@ quantity stops the run. The FIFO rules are the settlement's
   meet the refusal above. A C host sets it in the `quantity_tolerance` tail of
   `pf_native_run_spec_ext_v1`. The Pine adapter does not declare it and keeps
   its own `1e-10` rule (`docs/native-settlement.md`, "Quantity tolerance").
+- Still a run failure, as before K-ULP4: in an OCA group with
+  `GroupEffect::Reduce`, a member's fill smaller than half an ulp of a
+  sibling's remaining units cannot be deducted from them, and after the fill
+  is booked the run fails with code 6, discriminator 7
+  (`CoreFailure::UnrepresentableReservation`) -- a dust-sized fill beside a far
+  larger resting sibling.
 
 ### Sizing without a host override
 
