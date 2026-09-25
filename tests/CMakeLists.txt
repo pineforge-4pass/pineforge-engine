@@ -2135,6 +2135,17 @@ endif()
 pineforge_add_twin_test(test_native_c_api test_native_c_api)
 pineforge_add_twin_test(test_native_c_api_frozen_header test_native_c_api_frozen_header)
 
+# C-SURFACE-1: an INT23 object compiled with the db98990c C header closure
+# must receive the decision tail its 168-byte policy-hook table published.
+# The fixture include path precedes the live headers for this target only.
+add_executable(test_native_c_api_int23_header test_native_c_api_int23_header.c)
+target_include_directories(test_native_c_api_int23_header BEFORE PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/native_c_api/int23)
+set_target_properties(test_native_c_api_int23_header PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(test_native_c_api_int23_header PRIVATE pineforge)
+target_compile_options(test_native_c_api_int23_header PRIVATE -UNDEBUG)
+pineforge_add_twin_test(test_native_c_api_int23_header test_native_c_api_int23_header)
+
 # R5 lane F4: the public C headers as a strict C99 consumer compiles them --
 # ADR-0001's P2c portability note. The one C11 construct they hold, the
 # anonymous union behind sharpe_tv / sortino_tv, is PF_ANONYMOUS_UNION; with

@@ -45,20 +45,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Public C words with enum types must retain their published width even when
- * a consumer enables -fshort-enums. The C99 fallback keeps the strict-C99
- * header build valid; the two newer languages get a native static assertion. */
-#if defined(__cplusplus)
-#define PF_STATIC_ASSERT(condition) static_assert((condition), #condition)
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-#define PF_STATIC_ASSERT(condition) _Static_assert((condition), #condition)
-#else
-#define PF_STATIC_ASSERT_JOIN_(a, b) a##b
-#define PF_STATIC_ASSERT_JOIN(a, b) PF_STATIC_ASSERT_JOIN_(a, b)
-#define PF_STATIC_ASSERT(condition) \
-    typedef char PF_STATIC_ASSERT_JOIN(pf_static_assertion_, __LINE__)[(condition) ? 1 : -1]
-#endif
-
 /* ── Version ─────────────────────────────────────────────────────── */
 /* Macros (PINEFORGE_VERSION_MAJOR / _MINOR / _PATCH / _STRING / _FULL,
  * PINEFORGE_GIT_SHA) live in the generated <pineforge/version.h>. */
@@ -515,19 +501,11 @@ typedef enum pf_native_spec_optional_e {
  *  `fee_kind` is a #pf_native_fee_kind_t, `close_execution` a
  *  #pf_native_close_execution_t and `allowed_open_directions` a
  *  #pf_native_open_directions_t (zero-filled, that word admits no opening at
- *  all). #strategy_configure_native_v1 hands the whole value to the kernel,
- *  which answers an invalid spec with -1 and a Failed native handle
- *  (PF_NATIVE_FAILURE_INVALID_SPECIFICATION). A Ready handle still fails by
- *  the kernel's Contract rule. A Running handle is refused at the C boundary
- *  without changing its native state, including from a callback. A Completed
- *  handle or one Failed by a cooperative abort may be configured for another
- *  run outside callbacks; the kernel judges reuse constraints. A Completed
- *  host's `on_hash_extension` callback cannot reconfigure it during a read-only hash query.
- *  This call has no typed out-parameters. The
- *  extended path validates before configuring: #strategy_configure_native_ext_v1
- *  keeps the handle Unconfigured on a validation refusal, and
- *  #strategy_configure_native_ext_result_v1 additionally writes the exact
- *  #pf_native_spec_error_t / #pf_native_spec_field_t pair. */
+ *  all). #strategy_configure_native_v1 hands a word outside its enumeration
+ *  to the kernel's own validation, which refuses the spec: it answers -1 and
+ *  the host is Failed. #strategy_configure_native_ext_v1 refuses the same
+ *  word with PF_NATIVE_E_TAG before the kernel sees it, and the host stays
+ *  usable. */
 typedef struct pf_native_run_spec_v1 {
     uint32_t struct_size;
     const char *session_key; uint64_t run_number;
@@ -554,19 +532,6 @@ typedef struct pf_native_fx_curve_v1 {
     const double* account_per_quote;
 } pf_native_fx_curve_v1;
 
-/** Why a native FX curve was refused — the C twin of
- *  `pineforge::NativeFxCurveError`. The typed additive route writes this word
- *  beside the offending array index. */
-typedef enum pf_native_fx_curve_error_e {
-    PF_NATIVE_FX_CURVE_ERROR_NONE                    = 0,
-    PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH        = 1,
-    PF_NATIVE_FX_CURVE_ERROR_NOT_STRICTLY_INCREASING = 2,
-    PF_NATIVE_FX_CURVE_ERROR_NOT_FINITE_POSITIVE    = 3,
-    PF_NATIVE_FX_CURVE_ERROR_ALLOCATION_FAILURE     = 4,
-    PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE            = 5
-} pf_native_fx_curve_error_t;
-PF_STATIC_ASSERT(sizeof(pf_native_fx_curve_error_t) == 4);
-
 /** Stage an immutable account-currency FX curve on a Ready native handle.
  *
  *  Timestamps must be strictly increasing and rates finite and positive.
@@ -575,20 +540,9 @@ PF_STATIC_ASSERT(sizeof(pf_native_fx_curve_error_t) == 4);
  *  Legacy handles and non-Ready native handles refuse without mutation.
  *
  *  @return 0 only when staging is applied; -1 for invalid input, an invalid
- *  handle, a non-native or non-host native handle, or a non-Ready host. The
- *  typed additive #strategy_configure_native_fx_curve_ext_v1 writes the
- *  #pf_native_fx_curve_error_t and offending index when the kernel judged the
- *  curve. */
+ *  handle, a non-native or non-host native handle, or a non-Ready host. */
 PF_API int strategy_configure_native_fx_curve_v1(
     pf_strategy_t s, const pf_native_fx_curve_v1* curve);
-
-/** Typed additive spelling of #strategy_configure_native_fx_curve_v1. On a
- *  kernel validation refusal, writes the #pf_native_fx_curve_error_t and the
- *  offending element index (length mismatch uses index 0). C-layer argument,
- *  handle and layout refusals leave the out-parameters untouched. */
-PF_API int strategy_configure_native_fx_curve_ext_v1(
-    pf_strategy_t s, const pf_native_fx_curve_v1* curve,
-    pf_native_fx_curve_error_t* error, uint64_t* index);
 
 /* ───────────────────────────────────────────────────────────────────
  * STRATEGY .SO EXPORTS — implemented per compiled strategy
@@ -756,11 +710,9 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  *  lifecycle uses close-only strategy calculation (the Pine strategy default)
  *  while resting broker orders are evaluated on every normalized trade.
  *
- *  This compiled-strategy C entry point rejects calc_on_order_fills, historical
- *  probe/tail overrides, timestamped FX and auxiliary/native security feeds.
- *  The hand-written `NativeStrategyHost` stream API has its own generic
- *  contract and accepts the native FX curve, auxiliary feeds and calculation
- *  trigger where its run specification permits them.
+ *  calc_on_order_fills, historical probe/tail overrides, timestamped FX,
+ *  auxiliary and native security feeds are rejected. No every-tick strategy
+ *  callback is provided; hand-written strategies follow the same lifecycle.
  *  @return 0 on success, -1 on failure. Inspect #strategy_get_last_error. */
 PF_API int strategy_stream_begin(pf_strategy_t s,
                                  const pf_bar_t* warmup_bars,

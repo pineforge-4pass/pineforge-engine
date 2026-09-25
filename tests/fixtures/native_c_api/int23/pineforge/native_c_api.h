@@ -63,9 +63,7 @@
  *   [C]  on_native_run_begin               pf_native_callbacks_v1::on_run_begin
  *   [C]  on_native_input                   pf_native_callbacks_v1::on_input
  *   [C]  on_native_tick                    pf_native_callbacks_v1::on_tick
- *   [C]  on_native_timeframe_bar           pf_native_callbacks_v1::on_timeframe_bar; its
- *                                          NativeTimeframeBarContext::interval is read inside
- *                                          that callback with strategy_native_timeframe_bar_interval_v1
+ *   [C]  on_native_timeframe_bar           pf_native_callbacks_v1::on_timeframe_bar
  *   [C]  on_native_bar_open                pf_native_callbacks_v1::on_bar_open
  *   [C]  on_native_bar                     pf_native_callbacks_v1::on_bar
  *   [C]  on_native_recalculate             pf_native_callbacks_v1::on_recalculate
@@ -119,9 +117,7 @@
  *   [C]  append_auxiliary_bars_result      strategy_native_append_auxiliary_bars_ext_v1 --
  *                                          NativeAuxiliaryAppendError (pf_native_append_error_e) and the
  *                                          bar of the call it stopped on
- *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1 /
- *                                          strategy_configure_native_ext_result_v1 -- the last writes
- *                                          NativeRunSpecError / NativeRunSpecField out-parameters;
+ *   [C]  configure_native                  strategy_configure_native_v1 / strategy_configure_native_ext_v1 --
  *                                          the two specs' enum-valued words are pf_native_fee_kind_e,
  *                                          pf_native_close_execution_e, pf_native_open_directions_e,
  *                                          pf_native_report_policy_e, pf_native_price_grid_e,
@@ -284,10 +280,8 @@ extern "C" {
 /** @defgroup pf_native_c_status Status codes
  *  @brief Every `int`-returning symbol here answers 0 or one of these.
  *
- *  Negative values are errors. A C-layer validation refusal does not mutate
- *  native run state; a kernel-origin refusal can latch Failed, as the
- *  configure-reuse and reentrant-append contracts below specify.
- *  Non-negative values are outcomes: 0 is success everywhere, and
+ *  Negative values are errors and never mutate run state.  Non-negative
+ *  values are outcomes: 0 is success everywhere, and
  *  #strategy_native_execute_current_v1 additionally answers the positive
  *  #pf_native_execute_outcome_t codes.
  *  @{ */
@@ -301,8 +295,8 @@ extern "C" {
 #define PF_NATIVE_E_REJECTED        -6   /**< The kernel rejected the request (reason written out). */
 #define PF_NATIVE_E_UNSUPPORTED     -7   /**< A tag this API version cannot represent. */
 #define PF_NATIVE_E_EXCEPTION       -8   /**< A C++ exception was contained at the boundary. */
-#define PF_NATIVE_E_NOT_WORKING     -9   /**< A nonzero target incarnation is not live, whether it was retired or never issued. */
-#define PF_NATIVE_E_INVALID_TARGET -10   /**< Malformed target: incarnation 0. C commands pair an incarnation with this handle's current run identity, so they cannot pass a foreign run identity. */
+#define PF_NATIVE_E_NOT_WORKING     -9   /**< The target handle is no longer a live request. */
+#define PF_NATIVE_E_INVALID_TARGET -10   /**< The target handle was never issued by this run. */
 #define PF_NATIVE_E_RUN_FAILED     -11   /**< The run did not reach Completed; read the state. */
 #define PF_NATIVE_E_REFUSED        -12   /**< execute_current refused; see pf_native_refusal_e. */
 /** Non-negative outcome: the kernel HAS no answer here and the output was
@@ -954,6 +948,7 @@ typedef enum pf_native_opened_lot_fill_point_e {
     PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH    = 0,
     PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH = 1
 } pf_native_opened_lot_fill_point_t;
+
 /* ── The readout words ─────────────────────────────────────────────
  * Every enumeration below names a word the runtime WRITES for a C host: a
  * field of a struct it fills or presents, an event's reason, a callback
@@ -961,6 +956,7 @@ typedef enum pf_native_opened_lot_fill_point_e {
  * published as, so no layout moves; each value is written by an exhaustive
  * translation of its kernel enumeration, and a kernel value no enumeration
  * here names cannot build (src/native_c_host.cpp). */
+
 /** Where a point's price came from — `NativePriceProvenance`: the
  *  `provenance` word of #pf_native_decision_v1 and #pf_native_event_v1 and
  *  #pf_native_margin_view_v1::cursor_provenance. */
@@ -1132,12 +1128,13 @@ typedef enum pf_native_completion_e {
     PF_NATIVE_COMPLETION_BATCH_COMPLETE = 0,
     PF_NATIVE_COMPLETION_STREAM_ENDED   = 1
 } pf_native_completion_t;
+
 /* ── The typed refusal words of a declaration and an append ──────── */
+
 /** Why a declaration was refused — `NativeRunSpecError`, the kernel's own
  *  validation word: the `error` out-parameter of
- *  #strategy_native_declare_subscriptions_ext_v1,
- *  #strategy_native_declare_auxiliary_feed_v1 and
- *  #strategy_configure_native_ext_result_v1. Read beside the
+ *  #strategy_native_declare_subscriptions_ext_v1 and
+ *  #strategy_native_declare_auxiliary_feed_v1. Read beside the
  *  #pf_native_spec_field_t the same call writes. Every value the run spec's
  *  validation can answer is named, the ones a begin-time declaration cannot
  *  reach included, so one enumeration reads every setup refusal. */
@@ -1203,31 +1200,15 @@ typedef enum pf_native_spec_error_e {
                                                                        *   phase it is legal
                                                                        *   in. Read with
                                                                        *   FIELD_NONE. */
-    PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION                = 54, /**< An `event_retention`
+    PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION                = 54  /**< An `event_retention`
                                                                        *   word outside
                                                                        *   #pf_native_event_retention_t. */
-    PF_NATIVE_SPEC_ERROR_ABORTED_HOST_NO_REUSABLE_RUN_SPEC      = 55, /**< An aborted host had
-                                                                       *   no reusable spec.
-                                                                       *   Defensive: a
-                                                                       *   cooperative abort
-                                                                       *   latches only while a
-                                                                       *   run holds its spec,
-                                                                       *   and the Failed state
-                                                                       *   keeps it, so no
-                                                                       *   public call reaches
-                                                                       *   this word. */
-    PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE           = 56, /**< A reused host's
-                                                                       *   session key changed. */
-    PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER = 57 /**< A reused host's
-                                                                         *   run number did not
-                                                                         *   exceed its high-water. */
 } pf_native_spec_error_t;
 
 /** Where a declaration was refused — `NativeRunSpecField`, the first field
  *  the kernel's validation found: the `field` out-parameter of
- *  #strategy_native_declare_subscriptions_ext_v1,
- *  #strategy_native_declare_auxiliary_feed_v1 and
- *  #strategy_configure_native_ext_result_v1. */
+ *  #strategy_native_declare_subscriptions_ext_v1 and
+ *  #strategy_native_declare_auxiliary_feed_v1. */
 typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_NONE                        = 0, /**< Not about one field. */
     PF_NATIVE_SPEC_FIELD_SESSION_KEY                 = 1,
@@ -1325,7 +1306,9 @@ typedef enum pf_native_append_error_e {
     PF_NATIVE_APPEND_ERROR_ALLOCATION_FAILURE            = 9  /**< Growing the feed threw;
                                                                *   this fails the host. */
 } pf_native_append_error_t;
+
 /* ── The policy hooks' words ───────────────────────────────────── */
+
 /** How an opening settles against an opposite book —
  *  `native_order::OpeningShape`, #pf_native_terms_v1::shape. Only an OPENING
  *  may name a shape other than TRANSACT: a kernel-sized one
@@ -1400,12 +1383,13 @@ typedef enum pf_native_anchored_trigger_e {
  *  `price` is `current_execution_point()`'s price (the bar's own close at its
  *  close calculation) and NaN only where that answers nullopt.
  *
- *  It has TWO published layouts. A callback table sent at
- *  #PF_NATIVE_CALLBACKS_V1_POLICY_SIZE or the current `sizeof` receives the
- *  whole struct and its session tail. A table sent at an earlier published
- *  length receives `struct_size` = #PF_NATIVE_DECISION_V1_BASE_SIZE — the
- *  sizeof that earlier caller's header compiled — and nothing past it is
- *  filled. A caller reads a field only below the presented `struct_size`.
+ *  It has TWO published layouts, and the runtime PRESENTS the one the
+ *  caller's callback table was published with: a table sent at the current
+ *  length is handed the whole struct, with its session tail; a table sent at
+ *  an earlier published length is handed `struct_size` =
+ *  #PF_NATIVE_DECISION_V1_BASE_SIZE — the sizeof that caller's own header
+ *  compiled — and nothing past it is filled. So an older caller's exact-size
+ *  check keeps holding, and a caller reads a field only below `struct_size`.
  *
  *  The four session-day bytes after `quote_kind` (R5 lane F5) sit in what
  *  was the base layout's tail padding: its size and every offset before them
@@ -1460,8 +1444,8 @@ typedef struct pf_native_decision_v1 {
     uint8_t  opens_session_day;  /**< It opens its session day. */
     uint8_t  closes_session_day; /**< It closes its session day. */
 
-    /* ── The additive session tail (R5 lane F4). Presented to a callback
-     * table with the policy-hook tail or its successor; see above. ── */
+    /* ── The additive session tail (R5 lane F4). Presented only to a callback
+     * table of the current layout; see the struct note. ── */
     int64_t  script_interval_open_ms;             /**< The script interval's nominal origin. */
     int64_t  script_interval_eligible_open_ms;    /**< Its first in-session instant. */
     int64_t  script_interval_last_traded_close_ms; /**< Its exclusive end of trading. */
@@ -1488,27 +1472,11 @@ typedef struct pf_native_decision_v1 {
 
 /** Byte length of #pf_native_decision_v1 as the L13 lane first published it,
  *  before the session tail was appended — the `struct_size` a callback table
- *  shorter than #PF_NATIVE_CALLBACKS_V1_POLICY_SIZE is presented. It is the
- *  offset of the first appended field, which is that layout's sizeof on every
- *  target (it ended in
+ *  of an earlier published length is presented. It is the offset of the first
+ *  appended field, which is that layout's sizeof on every target (it ended in
  *  padding the tail's first 8-byte field begins after). */
 #define PF_NATIVE_DECISION_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_decision_v1, script_interval_open_ms))
-
-/** The calendar interval of the bucket delivered to
- *  #pf_native_callbacks_v1::on_timeframe_bar. The query that fills this POD is
- *  valid only while that callback is running; outside it the runtime answers
- *  #PF_NATIVE_E_STATE. A zero interval is a valid kernel answer when the
- *  bucket had no calendar lookup. */
-typedef struct pf_native_timeframe_interval_v1 {
-    uint32_t struct_size; /**< sizeof(pf_native_timeframe_interval_v1). */
-    uint32_t version;     /**< PF_NATIVE_API_VERSION. */
-    int64_t  open_ms;
-    int64_t  eligible_open_ms;
-    int64_t  last_traded_close_ms;
-    int64_t  next_period_open_ms;
-    int64_t  next_input_open_ms;
-} pf_native_timeframe_interval_v1;
 
 /** One applied execution, presented to `on_applied`. */
 typedef struct pf_native_applied_v1 {
@@ -1746,10 +1714,8 @@ typedef struct pf_native_state_v1 {
                                 *   PF_NATIVE_FAILURE_CALLBACK_EXCEPTION for a callback
                                 *   that returned non-zero. */
     uint32_t failure_operation; /**< #pf_native_failure_operation_t. */
-    uint32_t failure_discriminator; /**< The kernel's opaque durable failure
-                                     *   discriminator; 0 when no more specific
-                                     *   reason was recorded. Settlement
-                                     *   failures can carry a nonzero core reason. */
+    uint32_t failure_discriminator; /**< Reserved beside the code: the kernel records no
+                                     *   discriminator on this surface, so it reads 0. */
     uint64_t failure_ordinal;  /**< The point the failure was latched at, 0 when absent. */
     uint64_t consumed_high_water;
     int64_t  decision_floor_ms;
@@ -1849,8 +1815,7 @@ typedef struct pf_native_close_view_v1 {
  *  in, magnitudes out: nothing about the host's price model crosses the
  *  boundary in either direction. The two entry-bar masks are what
  *  #strategy_native_declare_opened_lot_entry_bar_mask_v1 derived for the lot,
- *  and 0 for a lot nobody declared. The additive tail's entry_commission is
- *  the entry-fee share already carried by this closing slice. */
+ *  and 0 for a lot nobody declared. */
 typedef struct pf_native_lot_excursion_v1 {
     uint32_t struct_size;      /**< sizeof(pf_native_lot_excursion_v1). */
     uint32_t version;          /**< PF_NATIVE_API_VERSION. */
@@ -1868,16 +1833,7 @@ typedef struct pf_native_lot_excursion_v1 {
     uint8_t  entry_bar_high_masked; /**< The entry bar's high is not this trade's. */
     uint8_t  entry_bar_low_masked;  /**< The entry bar's low is not this trade's. */
     uint8_t  reserved0;
-    double   entry_commission; /**< This closing slice's share of the entry fee,
-                                *   in account currency. Present in the additive
-                                *   tail of the current layout. */
 } pf_native_lot_excursion_v1;
-
-/** Byte length of the first published #pf_native_lot_excursion_v1 layout,
- *  before #pf_native_lot_excursion_v1::entry_commission was appended. A
- *  callback table from that layout receives this length in @c struct_size. */
-#define PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE \
-    ((uint32_t)offsetof(pf_native_lot_excursion_v1, entry_commission))
 
 /** The facts of one matching candidate, handed to
  *  #pf_native_callbacks_v1::on_execution_terms — the price half of
@@ -2155,6 +2111,7 @@ typedef struct pf_native_request_v1 {
     uint8_t  reserved2[7];        /**< Must be 0. The seed layout's own padding,
                                    *   named so the tail below starts where
                                    *   that layout's sizeof ended. */
+
     /* ── The additive arm-relation tail (R5 lane F4). Read only when
      * `struct_size` is the current sizeof; a caller sending any earlier
      * layout stops above and keeps both defaults (AT_ARM_PRINT, OWNER_LOT),
@@ -2407,11 +2364,10 @@ typedef struct pf_native_run_spec_ext_v1 {
  *  a failure raised there could not be latched without unwinding through
  *  them. A host that must abort does it from an observation callback.
  *
- *  Commands follow the C++ host's callback guard: they are legal in every
- *  callback while the kernel is Running, including `on_timeframe_bar` and
- *  `on_margin_call`. The kernel may still reject a particular request or
- *  current-execution action for its own reason. The answering hooks must
- *  only answer their question; they run on paths without the callback guard.
+ *  Commands are legal inside `on_bar_open`, `on_bar`, `on_tick` and
+ *  `on_applied`. `on_run_begin`, `on_input`, `on_timeframe_bar` and
+ *  `on_margin_call` are observation-only: a command there answers
+ *  PF_NATIVE_E_STATE and changes nothing.
  *  #strategy_native_declare_opened_lot_entry_bar_mask_v1 is legal inside
  *  `on_applied` alone.
  *
@@ -2512,13 +2468,13 @@ typedef struct pf_native_callbacks_v1 {
      *  other value to close @p units of
      *  #pf_native_close_view_v1::scope_exposure_units. */
     int (*on_close_units)(void* user, const pf_native_close_view_v1* view, double* units);
+
     /* ── The additive policy-hook tail (R5 lane F4). Read only when
-     * `struct_size` is the policy layout or the current sizeof; a caller
-     * sending an earlier layout stops at `on_close_units` (or at
-     * `on_margin_call`) and gets the kernel's own answers for all four,
-     * exactly the C++ defaults. All four are ANSWERING callbacks. The
-     * reserved marker after this tail publishes the current layout whose
-     * lot-excursion facts include their fee tail. ── */
+     * `struct_size` is the current sizeof; a caller sending an earlier layout
+     * stops at `on_close_units` (or at `on_margin_call`) and gets the
+     * kernel's own answers for all four, exactly the C++ defaults. All four
+     * are ANSWERING callbacks. ── */
+
     /** The price half of `resolve_execution_terms`, consulted at EVERY
      *  matching candidate once installed. ANSWERING callback: return
      *  #PF_NATIVE_ANSWER_DEFAULT to keep the kernel's terms, any other value
@@ -2555,33 +2511,22 @@ typedef struct pf_native_callbacks_v1 {
      *  function of that state. The continuation hash is the kernel's alone
      *  and does not move. */
     int (*on_hash_extension)(void* user, uint64_t* digest);
-
-    /* The trailing layout marker lets the runtime distinguish the policy-hook
-     * layout published by F4 from this layout, whose lot-excursion facts carry
-     * the additive entry_commission tail. It is reserved and must be zero;
-     * host creation refuses a nonzero value. */
-    uint64_t reserved1;
 } pf_native_callbacks_v1;
 
 /** Byte length of #pf_native_callbacks_v1 as the L13 lane first published it,
  *  before the six-hook tail was appended. It is the offset of the first
- *  appended field, so it stays correct on every target — not a literal.
- *  #strategy_native_host_create_v1 accepts it, #PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE,
- *  #PF_NATIVE_CALLBACKS_V1_POLICY_SIZE and the current `sizeof`: that is what
- *  makes each tail additive rather than a layout break. */
+ *  appended field, so it stays correct on every target this header builds for
+ *  — it is not a literal. #strategy_native_host_create_v1 accepts this length
+ *  as well as #PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE and the current `sizeof`,
+ *  which is what makes each tail additive rather than a layout break. */
 #define PF_NATIVE_CALLBACKS_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_callbacks_v1, on_recalculate))
 
 /** Byte length of #pf_native_callbacks_v1 with the six-hook tail but without
- *  the policy-hook tail — the second of its four published layouts, and the
+ *  the policy-hook tail — the second of its three published layouts, and the
  *  `sizeof` every caller compiled before that tail existed sends. */
 #define PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE \
     ((uint32_t)offsetof(pf_native_callbacks_v1, on_execution_terms))
-
-/** Byte length of the F4 policy-hook layout, before the reserved marker that
- *  publishes the current lot-excursion facts layout. */
-#define PF_NATIVE_CALLBACKS_V1_POLICY_SIZE \
-    ((uint32_t)offsetof(pf_native_callbacks_v1, reserved1))
 
 /** @} */ /* end of pf_native_c_types */
 
@@ -2598,9 +2543,8 @@ PF_API int strategy_native_api_version(void);
  *  #strategy_configure_native_v1, the whole `strategy_stream_*` family and the
  *  read-only accessors all take it unchanged.
  *
- *  @return The handle, or NULL for a NULL/mis-sized table, a nonzero
- *  `reserved1` in the current layout, or an allocation failure. Release it
- *  with #strategy_native_host_free — never
+ *  @return The handle, or NULL for a NULL/mis-sized table or on allocation
+ *  failure. Release it with #strategy_native_host_free — never
  *  #strategy_free, which does not own this allocation. */
 PF_API pf_strategy_t strategy_native_host_create_v1(const pf_native_callbacks_v1* callbacks);
 
@@ -2966,15 +2910,6 @@ PF_API int strategy_native_trail_state_v1(pf_strategy_t s, uint64_t incarnation,
 PF_API int strategy_native_series_bar_v1(pf_strategy_t s, uint32_t subscription,
                                          pf_bar_t* out);
 
-/** Read the delivered bucket's own calendar interval from inside
- *  #pf_native_callbacks_v1::on_timeframe_bar. The returned fields are exactly
- *  the C++ NativeTimeframeBarContext::interval; no interval is inferred from the
- *  delivered bar or its delivery timestamp. @p out is size-prefixed.
- *  @return PF_NATIVE_OK inside that callback, PF_NATIVE_E_STATE elsewhere,
- *  or PF_NATIVE_E_STRUCT / PF_NATIVE_E_ARGUMENT for an invalid output. */
-PF_API int strategy_native_timeframe_bar_interval_v1(
-    pf_strategy_t s, pf_native_timeframe_interval_v1* out);
-
 /** The account's marked equity at @p mark — `native_marked_equity()`. */
 PF_API int strategy_native_marked_equity_v1(pf_strategy_t s, double mark, double* out);
 
@@ -3075,47 +3010,6 @@ PF_API int strategy_native_cohort_remove_v1(pf_strategy_t s, uint64_t cohort,
 PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
                                             const pf_native_run_spec_v1* base,
                                             const pf_native_run_spec_ext_v1* ext);
-
-/** The typed spelling of #strategy_configure_native_ext_v1: the same inputs,
- *  plus @p error / @p field, which receive the kernel's
- *  #pf_native_spec_error_t / #pf_native_spec_field_t pair once the call's
- *  phase or its specification has been judged.
- *
- *  Whether either out-parameter is non-NULL decides which handles it accepts:
- *  - both NULL: it is exactly #strategy_configure_native_ext_v1. Only an
- *    Unconfigured handle is configured; every other phase answers
- *    #PF_NATIVE_E_STATE without mutation.
- *  - either non-NULL: it also configures the next run of a Completed handle,
- *    or of one Failed by a cooperative abort (#PF_NATIVE_FAILURE_ABORTED), as
- *    #strategy_configure_native_v1 reuses a host. A Ready or Running handle,
- *    and a handle Failed by anything but an abort, answer #PF_NATIVE_E_STATE
- *    with #PF_NATIVE_SPEC_ERROR_WRONG_PHASE / #PF_NATIVE_SPEC_FIELD_NONE,
- *    without mutation. A call from a C hook frame is refused the same way,
- *    including `on_hash_extension` during a hash read of a Completed host.
- *
- *  On an accepted handle the specification is validated before the kernel
- *  sees it: a refused value answers #PF_NATIVE_E_ARGUMENT with its pair and
- *  leaves the handle as it was. A reuse whose session key is not the one the
- *  handle's runs are bound to, or whose run number does not exceed the highest
- *  one the handle has run, answers #PF_NATIVE_E_ARGUMENT with
- *  #PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE /
- *  #PF_NATIVE_SPEC_FIELD_SESSION_KEY or
- *  #PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER /
- *  #PF_NATIVE_SPEC_FIELD_RUN_NUMBER. That refusal latches a Completed handle
- *  Failed with #PF_NATIVE_FAILURE_CONTRACT, which no configure call accepts
- *  again; an aborted handle keeps its abort and may be configured again.
- *  #PF_NATIVE_OK writes NONE / NONE and leaves the handle Ready.
- *
- *  C-layer shape refusals leave both out-parameters untouched: a NULL handle
- *  (#PF_NATIVE_E_HANDLE); NULL @p base, @p ext, or required string member;
- *  a negative auxiliary count or a NULL subscription timeframe
- *  (#PF_NATIVE_E_ARGUMENT); a mis-sized struct (#PF_NATIVE_E_STRUCT); or an
- *  unknown enumerator on an accepted handle (#PF_NATIVE_E_TAG).
- *
- *  Exercised by `tests/test_native_c_api.c`. */
-PF_API int strategy_configure_native_ext_result_v1(
-    pf_strategy_t s, const pf_native_run_spec_v1* base,
-    const pf_native_run_spec_ext_v1* ext, uint32_t* error, uint32_t* field);
 
 /** Append later bars to the run's declared auxiliary feed on a realtime
  *  stream (`NativeStrategyHost::append_auxiliary_bars`).

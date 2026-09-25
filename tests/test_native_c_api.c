@@ -1046,6 +1046,36 @@ static void check_callback_failure_latch(void) {
     CHECK_EQ_INT(state.failure_code, PF_NATIVE_FAILURE_CALLBACK,
                  "failure is not CallbackException");
     CHECK_EQ_INT(calls, 3, "the run continued past the refusing callback");
+    CHECK(strategy_get_last_error(host) && strategy_get_last_error(host)[0] != '\0',
+          "the failed run has no presentation error to clear");
+    CHECK_EQ_INT(strategy_native_state_v1(host, NULL), PF_NATIVE_E_ARGUMENT,
+                 "a NULL state output was not refused");
+    CHECK(strategy_get_last_error(host) && strategy_get_last_error(host)[0] == '\0',
+          "a C-layer state refusal kept the previous run's last_error");
+    strategy_native_host_free(host);
+
+    /* The older configure symbol is implemented in c_abi.cpp rather than
+     * native_c_host.cpp. Its own argument refusal must clear that same stale
+     * presentation text without moving the durable Failed state. */
+    calls = 0;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "second refusing host create failed");
+    if (!host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), 0, "second refusing configure");
+    CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_E_RUN_FAILED,
+                 "second refusing callback did not fail the run");
+    CHECK(strategy_get_last_error(host) && strategy_get_last_error(host)[0] != '\0',
+          "the second failed run has no presentation error to clear");
+    CHECK_EQ_INT(strategy_configure_native_v1(host, NULL), -1,
+                 "a NULL native spec was not refused");
+    CHECK(strategy_get_last_error(host) && strategy_get_last_error(host)[0] == '\0',
+          "a C-layer configure refusal kept the previous run's last_error");
+    memset(&state, 0, sizeof(state));
+    state.struct_size = (uint32_t)sizeof(state);
+    CHECK_EQ_INT(strategy_native_state_v1(host, &state), PF_NATIVE_OK,
+                 "durable failure was not readable after C-layer refusal");
+    CHECK_EQ_INT(state.lifecycle, PF_NATIVE_LIFECYCLE_FAILED,
+                 "the C-layer refusal changed durable Failed state");
     strategy_native_host_free(host);
 }
 
@@ -3642,12 +3672,18 @@ typedef struct aux_state {
     int interval_checks;
     int interval_wrong;
     int interval_elsewhere; /* on_bar asked and was refused with E_STATE */
+    int timeframe_command_checked;
+    int timeframe_command_rc;
 } aux_state;
 
 static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
                                 uint32_t completion, int64_t delivered_at_ms) {
     aux_state* state = (aux_state*)user;
     pf_native_timeframe_interval_v1 interval;
+    if (!state->timeframe_command_checked) {
+        state->timeframe_command_rc = strategy_native_cancel_all_v1(state->host);
+        state->timeframe_command_checked = 1;
+    }
     memset(&interval, 0, sizeof(interval));
     interval.struct_size = (uint32_t)sizeof(interval);
     interval.version = PF_NATIVE_API_VERSION;
@@ -3827,6 +3863,8 @@ static void check_auxiliary_feed(void) {
     CHECK(state.interval_checks > 0 && state.interval_wrong == 0,
           "on_timeframe_bar did not read the C++ bucket interval");
     CHECK(state.interval_elsewhere > 0, "on_bar never asked for a bucket interval");
+    CHECK(state.timeframe_command_checked && state.timeframe_command_rc >= 0,
+          "on_timeframe_bar refused a command the C++ callback guard allows");
     /* After the run there is no bucket either; a missing or mis-sized output,
      * or a NULL handle, is refused before the phase is judged. */
     {
@@ -3987,6 +4025,7 @@ typedef struct fx_roll_state {
     int economics_rc;
     pf_native_margin_call_v1 economics;
     double position_in_call;
+    int margin_command_rc;
 } fx_roll_state;
 
 static int fx_roll_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
@@ -4054,6 +4093,7 @@ static int fx_roll_on_margin_call(void* user, const pf_native_event_v1* call) {
     state->economics_rc =
         strategy_native_margin_call_v1(state->host, call->ordinal, &state->economics);
     strategy_native_position_v1(state->host, &state->position_in_call, NULL, NULL);
+    state->margin_command_rc = strategy_native_cancel_all_v1(state->host);
     return 0;
 }
 
@@ -4071,6 +4111,7 @@ static void check_fx_roll_margin_point(void) {
 
     fx_roll_fill();
     memset(&state, 0, sizeof(state));
+    state.margin_command_rc = PF_NATIVE_E_STATE;
     memset(&report, 0, sizeof(report));
     table = blank_callbacks(&state);
     table.on_bar = fx_roll_on_bar;
@@ -4144,6 +4185,8 @@ static void check_fx_roll_margin_point(void) {
     CHECK_EQ_INT(state.roll_numbers, 1,
                  "the roll's two numbers are not the new rate at the unchanged price");
     CHECK_EQ_INT(state.margin_calls, 1, "the roll's breach called no margin");
+    CHECK(state.margin_command_rc >= 0,
+          "on_margin_call refused a command the C++ callback guard allows");
     CHECK(fabs(state.called_units - FX_ROLL_SLICE) < 1e-9,
           "the liquidation sliced another quantity");
     /* R5 lane E3: the call belongs to the ROLL's instant. The entry fill's own
@@ -8400,8 +8443,258 @@ static void check_session_day_tail(void) {
     }
 }
 
+typedef struct csurface_configure_state {
+    pf_strategy_t host;
+    pf_native_run_spec_v1 spec;
+    int base_rc;
+    int ext_rc;
+    int fx_rc;
+    int state_rc;
+    int begin_command_rc;
+    int input_command_rc;
+    int input_checked;
+    uint32_t ext_error;
+    uint32_t ext_field;
+    pf_native_fx_curve_error_t fx_error;
+    uint32_t lifecycle_during_hook;
+} csurface_configure_state;
+
+typedef struct csurface_postrun_state {
+    pf_strategy_t host;
+    pf_native_run_spec_v1 next_spec;
+    int saw_completed_hook;
+    int typed_rc;
+    int base_rc;
+    uint32_t typed_error;
+    uint32_t typed_field;
+} csurface_postrun_state;
+
+typedef struct csurface_failure_state {
+    pf_strategy_t host;
+    int submit_rc;
+} csurface_failure_state;
+
+static int csurface_nonrepresentable_on_begin(void* user) {
+    csurface_failure_state* state = (csurface_failure_state*)user;
+    pf_native_request_v1 request = blank_request();
+    request.intent = PF_NATIVE_INTENT_TRANSACT;
+    request.intent_value = 0x1p60;
+    request.capacity = PF_NATIVE_CAPACITY_POINT_BUDGET;
+    request.capacity_units = 1.0;
+    state->submit_rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+    return 0;
+}
+
+static void check_csurface_failure_discriminator(void) {
+    csurface_failure_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_state_v1 result;
+    const pf_bar_t* bars;
+    int n = 0;
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_run_begin = csurface_nonrepresentable_on_begin;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "discriminator host create failed");
+    if (!state.host) return;
+    spec.session_key = "csurface-discriminator";
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0,
+                 "discriminator host configure failed");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_E_RUN_FAILED,
+                 "nonrepresentable request did not fail settlement");
+    CHECK_EQ_INT(state.submit_rc, PF_NATIVE_OK,
+                 "nonrepresentable request was rejected at submission");
+    memset(&result, 0, sizeof(result));
+    result.struct_size = (uint32_t)sizeof(result);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &result), PF_NATIVE_OK,
+                 "discriminator state read failed");
+    CHECK_EQ_INT(result.failure_code, PF_NATIVE_FAILURE_SETTLEMENT_FAILURE,
+                 "the failure was not a settlement failure");
+    CHECK_EQ_INT(result.failure_operation, PF_NATIVE_OPERATION_SETTLEMENT,
+                 "the failure operation was not settlement");
+    CHECK(result.failure_discriminator != 0u,
+          "the C state dropped the kernel's nonzero failure discriminator");
+    strategy_native_host_free(state.host);
+}
+
+static int csurface_postrun_hash_hook(void* user, uint64_t* digest) {
+    csurface_postrun_state* state = (csurface_postrun_state*)user;
+    pf_native_state_v1 lifecycle;
+    pf_native_run_spec_ext_v1 ext;
+    (void)digest;
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    if (strategy_native_state_v1(state->host, &lifecycle) != PF_NATIVE_OK
+        || lifecycle.lifecycle != PF_NATIVE_LIFECYCLE_COMPLETED
+        || state->saw_completed_hook) {
+        return PF_NATIVE_ANSWER_DEFAULT;
+    }
+    state->saw_completed_hook = 1;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    state->typed_rc = strategy_configure_native_ext_result_v1(
+        state->host, &state->next_spec, &ext, &state->typed_error, &state->typed_field);
+    state->base_rc = strategy_configure_native_v1(state->host, &state->next_spec);
+    return PF_NATIVE_ANSWER_DEFAULT;
+}
+
+static int csurface_configure_in_begin(void* user) {
+    csurface_configure_state* state = (csurface_configure_state*)user;
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_fx_curve_v1 curve;
+    pf_native_state_v1 lifecycle;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    memset(&curve, 0, sizeof(curve));
+    curve.struct_size = (uint32_t)sizeof(curve);
+    state->base_rc = strategy_configure_native_v1(state->host, &state->spec);
+    state->ext_rc = strategy_configure_native_ext_result_v1(
+        state->host, &state->spec, &ext, &state->ext_error, &state->ext_field);
+    state->fx_rc = strategy_configure_native_fx_curve_ext_v1(
+        state->host, &curve, &state->fx_error, NULL);
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    state->state_rc = strategy_native_state_v1(state->host, &lifecycle);
+    state->lifecycle_during_hook = lifecycle.lifecycle;
+    state->begin_command_rc = strategy_native_cancel_all_v1(state->host);
+    return 0;
+}
+
+static int csurface_command_in_input(void* user, const pf_bar_t* bar, int32_t input_index,
+                                     int32_t completes_script_interval) {
+    csurface_configure_state* state = (csurface_configure_state*)user;
+    (void)bar;
+    (void)input_index;
+    (void)completes_script_interval;
+    if (!state->input_checked) {
+        state->input_command_rc = strategy_native_cancel_all_v1(state->host);
+        state->input_checked = 1;
+    }
+    return 0;
+}
+
+static void check_csurface_create_and_configure_refusals(void) {
+    pf_native_callbacks_v1 table = blank_callbacks(NULL);
+    pf_strategy_t host;
+    csurface_configure_state state;
+    pf_native_state_v1 lifecycle;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    table.reserved1 = 1u;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host == NULL, "a nonzero callback-table reserved1 marker was accepted");
+    if (host) strategy_native_host_free(host);
+
+    /* The pre-existing base-ABI Ready misuse still goes to the kernel and
+     * latches Contract. Running and Completed hash-hook calls use the new
+     * early refusal. */
+    table = blank_callbacks(NULL);
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "Ready-contract host create failed");
+    if (host) {
+        pf_native_run_spec_v1 ready_spec = twin_spec();
+        ready_spec.session_key = "csurface-ready-contract";
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &ready_spec), 0,
+                     "Ready-contract initial setup failed");
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &ready_spec), -1,
+                     "base configure accepted a Ready host");
+        memset(&lifecycle, 0, sizeof(lifecycle));
+        lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+        CHECK_EQ_INT(strategy_native_state_v1(host, &lifecycle), PF_NATIVE_OK,
+                     "Ready-contract state read failed");
+        CHECK_EQ_INT(lifecycle.lifecycle, PF_NATIVE_LIFECYCLE_FAILED,
+                     "base Ready misuse lost its kernel Contract latch");
+        CHECK_EQ_INT(lifecycle.failure_code, PF_NATIVE_FAILURE_CONTRACT,
+                     "base Ready misuse latched another failure");
+        strategy_native_host_free(host);
+    }
+
+    memset(&state, 0, sizeof(state));
+    state.spec = twin_spec();
+    state.spec.session_key = "csurface-configure-hook";
+    table = blank_callbacks(&state);
+    table.on_run_begin = csurface_configure_in_begin;
+    table.on_input = csurface_command_in_input;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "configure-hook host create failed");
+    if (!state.host) return;
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &state.spec), 0,
+                 "configure-hook initial setup failed");
+    bars = pf_twin_bars(&n);
+    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+                 "a refused configure inside on_run_begin failed the run");
+    CHECK_EQ_INT(state.base_rc, -1, "base configure was accepted inside a hook frame");
+    CHECK_EQ_INT(state.ext_rc, PF_NATIVE_E_STATE,
+                 "extended configure was accepted inside a hook frame");
+    CHECK_EQ_INT(state.ext_error, PF_NATIVE_SPEC_ERROR_WRONG_PHASE,
+                 "extended configure did not name WrongPhase");
+    CHECK_EQ_INT(state.ext_field, PF_NATIVE_SPEC_FIELD_NONE,
+                 "extended configure named a field inside a hook frame");
+    CHECK_EQ_INT(state.fx_rc, -1, "FX curve configure was accepted inside a hook frame");
+    CHECK_EQ_INT(state.fx_error, PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE,
+                 "FX curve configure did not name WrongPhase");
+    CHECK_EQ_INT(state.state_rc, PF_NATIVE_OK, "hook could not read its native state");
+    CHECK_EQ_INT(state.lifecycle_during_hook, PF_NATIVE_LIFECYCLE_RUNNING,
+                 "a refused configure changed the hook's Running state");
+    CHECK(state.begin_command_rc >= 0,
+          "on_run_begin refused a command the C++ callback guard allows");
+    CHECK(state.input_checked && state.input_command_rc >= 0,
+          "on_input refused a command the C++ callback guard allows");
+    memset(&lifecycle, 0, sizeof(lifecycle));
+    lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &lifecycle), PF_NATIVE_OK,
+                 "configure-hook final state read failed");
+    CHECK_EQ_INT(lifecycle.lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED,
+                 "a hook-frame configure refusal failed the host");
+    strategy_native_host_free(state.host);
+
+    /* A hash read can call the C hook after the host reached Completed. This
+     * frame must also refuse both configure routes and leave the read pure. */
+    {
+        csurface_postrun_state postrun;
+        pf_native_run_spec_v1 first = twin_spec();
+        memset(&postrun, 0, sizeof(postrun));
+        first.session_key = "csurface-postrun-hook";
+        postrun.next_spec = first;
+        postrun.next_spec.run_number = 2;
+        table = blank_callbacks(&postrun);
+        table.on_hash_extension = csurface_postrun_hash_hook;
+        postrun.host = strategy_native_host_create_v1(&table);
+        CHECK(postrun.host != NULL, "postrun-hook host create failed");
+        if (!postrun.host) return;
+        CHECK_EQ_INT(strategy_configure_native_v1(postrun.host, &first), 0,
+                     "postrun-hook initial setup failed");
+        CHECK_EQ_INT(strategy_native_run_v1(postrun.host, bars, n, NULL), PF_NATIVE_OK,
+                     "postrun-hook initial run failed");
+        (void)strategy_broker_state_hash(postrun.host);
+        CHECK(postrun.saw_completed_hook, "the Completed hash read did not call its C hook");
+        CHECK_EQ_INT(postrun.typed_rc, PF_NATIVE_E_STATE,
+                     "typed configure was accepted from a Completed hash hook");
+        CHECK_EQ_INT(postrun.typed_error, PF_NATIVE_SPEC_ERROR_WRONG_PHASE,
+                     "Completed hash hook did not name WrongPhase");
+        CHECK_EQ_INT(postrun.typed_field, PF_NATIVE_SPEC_FIELD_NONE,
+                     "Completed hash hook named a field");
+        CHECK_EQ_INT(postrun.base_rc, -1,
+                     "base configure was accepted from a Completed hash hook");
+        memset(&lifecycle, 0, sizeof(lifecycle));
+        lifecycle.struct_size = (uint32_t)sizeof(lifecycle);
+        CHECK_EQ_INT(strategy_native_state_v1(postrun.host, &lifecycle), PF_NATIVE_OK,
+                     "postrun-hook state read failed");
+        CHECK_EQ_INT(lifecycle.lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED,
+                     "a hash read mutated the Completed native state");
+        strategy_native_host_free(postrun.host);
+    }
+}
+
 int pf_native_c_api_checks(void) {
     failures = 0;
+    check_csurface_create_and_configure_refusals();
+    check_csurface_failure_discriminator();
     check_struct_and_tag_refusals();
     check_spec_extension();
     check_lifecycle_round_trips();

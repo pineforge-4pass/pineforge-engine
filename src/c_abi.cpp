@@ -53,6 +53,11 @@
 #include <utility>
 #include <vector>
 
+namespace pineforge {
+void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
+bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
+}
+
 namespace {
 
 template <typename Fn>
@@ -72,6 +77,10 @@ int pf_cabi_int(Fn&& fn) noexcept {
     }
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch"
+#endif
 pf_native_fx_curve_error_t fx_curve_error_word(
         pineforge::NativeFxCurveError error) noexcept {
     switch (error) {
@@ -88,20 +97,25 @@ pf_native_fx_curve_error_t fx_curve_error_word(
     case pineforge::NativeFxCurveError::WrongPhase:
         return PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE;
     }
-    return static_cast<pf_native_fx_curve_error_t>(error);
+    std::terminate();
 }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 int configure_native_fx_curve_cabi(
         pf_strategy_t s, const pf_native_fx_curve_v1* curve,
         pf_native_fx_curve_error_t* error, std::uint64_t* index) noexcept {
     return pf_cabi_int([&] {
-        if (!s || !curve) return -1;
+        if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
         if (!engine->native_bound()) return -1;
-        if (curve->struct_size != sizeof(pf_native_fx_curve_v1)) return -1;
-        if (curve->n > 0 && (!curve->effective_from_ms || !curve->account_per_quote)) return -1;
         auto* host = dynamic_cast<pineforge::NativeStrategyHost*>(engine);
         if (!host) return -1;
+        pineforge::clear_native_c_host_refusal_error(engine);
+        if (!curve) return -1;
+        if (curve->struct_size != sizeof(pf_native_fx_curve_v1)) return -1;
+        if (curve->n > 0 && (!curve->effective_from_ms || !curve->account_per_quote)) return -1;
 
         pineforge::NativeFxCurve cpp;
         if (curve->n > 0) {
@@ -881,12 +895,25 @@ PF_API int strategy_execution_contract(pf_strategy_t s) {
 
 PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spec_v1* spec) {
     try {
-        if (!s || !spec) return -1;
+        if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
         if (!engine->native_bound()) return -1;
-        if (spec->struct_size != sizeof(pf_native_run_spec_v1)) return -1;
         auto* host = dynamic_cast<pineforge::NativeStrategyHost*>(engine);
         if (!host) return -1;
+        pineforge::clear_native_c_host_refusal_error(engine);
+        if (!spec) return -1;
+        if (spec->struct_size != sizeof(pf_native_run_spec_v1)) return -1;
+        if (pineforge::native_c_host_in_postrun_hook_frame(engine)) return -1;
+        /* A reentrant configure must be refused at the C layer. The C++
+         * configure contract would latch a Running host Failed, changing the
+         * run from inside a hook that only asked for an invalid operation. */
+        const auto state = host->native_state();
+        /* Ready misuse keeps its established kernel Contract latch. */
+        if (state.kind == pineforge::NativeLifecycleKind::Running
+            || (state.kind == pineforge::NativeLifecycleKind::Failed
+                && state.failure.code != pineforge::NativeFailureCode::Aborted)) {
+            return -1;
+        }
         const auto require = [](const char* p) -> const char* {
             return p ? p : "";
         };

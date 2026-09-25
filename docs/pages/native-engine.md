@@ -482,7 +482,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2689-2739`), under the same legality rule; see *Driving the
+(`native_c_api.h:2696-2746`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -1848,7 +1848,7 @@ bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:1440`). The kernel resolves each session day once through
+(`native_c_api.h:1441`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -2090,13 +2090,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1833`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1253`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1271`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1176-1206`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1194-1224`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -2841,7 +2841,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2639`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2646`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
@@ -3659,8 +3659,8 @@ subscriptions, and the generic risk limits — travel in
 `pf_native_run_spec_ext_v1`, passed together with the base spec to
 `strategy_configure_native_ext_v1`. It replaces
 `strategy_configure_native_v1` rather than following it, because the kernel
-configures each run exactly once: a second configure of a Ready handle fails
-it. The one field of `NativeRunSpec` it deliberately does not carry is
+configures each run exactly once: a second extended configure of a Ready
+handle is refused without changing it. The one field of `NativeRunSpec` it deliberately does not carry is
 `identity`, which the base spec owns.
 
 The nine enum-valued words of the two specs are `uint32_t` words holding a
@@ -3687,11 +3687,14 @@ marks each report point from inside its own callbacks, and the callback table
 has no call that marks one, so its integer, 2, is refused like any other.
 `strategy_configure_native_v1` has no boundary check of its own for the three
 base-spec words: the kernel's validation judges them, and a bad one answers
--1 and leaves the host failed. That call answers every refusal so — Failed
-with `PF_NATIVE_FAILURE_INVALID_SPECIFICATION` for an invalid spec, with
-`PF_NATIVE_FAILURE_CONTRACT` for a Ready or Running handle or a refused reuse
-— and has no out-parameters; a handle an abort failed keeps that failure,
-and no configure call accepts a handle a configure failed.
+-1 and leaves the host Failed with `PF_NATIVE_FAILURE_INVALID_SPECIFICATION`.
+The kernel still fails a Ready handle under its Contract rule. The C boundary
+refuses a Running handle without changing its state, including when a callback
+calls it. It also refuses a Completed host's
+`on_hash_extension` callback during a read-only hash query. A Completed handle or one Failed by a
+cooperative abort may be configured for another run; the kernel judges reuse
+constraints and can fail a refused reuse with `PF_NATIVE_FAILURE_CONTRACT`.
+The call has no typed out-parameters.
 
 `strategy_configure_native_ext_result_v1` is the typed spelling of
 `strategy_configure_native_ext_v1`: the same inputs plus two out-parameters
@@ -3804,10 +3807,12 @@ lengths** and the runtime accepts each: the layout this header first shipped
 field rather than a literal), that plus six hooks
 (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the policy-hook tail
 (`PF_NATIVE_CALLBACKS_V1_POLICY_SIZE`), and the current one, whose trailing
-`reserved1` marker (documented zero, not checked) says the host reads the
+`reserved1` marker (required zero, checked at host creation) says the host reads the
 lot-excursion facts' `entry_commission` tail. A host compiled against an
 earlier layout keeps working and simply has none of the later hooks
-installed, which is exactly the kernel's own default for each.
+installed, which is exactly the kernel's own default for each. The policy-hook
+layout already receives the decision's session tail; the later marker affects
+only the lot-excursion facts tail.
 
 Two of the six are ordinary observation callbacks. `on_recalculate` is
 `on_native_recalculate`: every calculation of the run arrives there, tagged
