@@ -43,14 +43,19 @@ TRUSTED_EVENT = ("github.event_name != 'pull_request' || "
                  "github.event.pull_request.head.repo.full_name == github.repository")
 LINUX_RUNNER = '${{ (' + TRUSTED_EVENT + ") && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"
 MATRIX_RUNNER = '${{ (' + TRUSTED_EVENT + ') && matrix.larger_runner || matrix.os }}'
-BUILD_MATRIX = ('      matrix:\n'
-                '        os: [ubuntu-24.04, macos-26]\n'
-                '        build_type: [Release, Debug]\n'
-                '        include:\n'
-                '          - os: ubuntu-24.04\n'
-                '            larger_runner: pf-linux-x64-16\n'
-                '          - os: macos-26\n'
-                '            larger_runner: macos-26-xlarge\n')
+# The build job's whole strategy, exactly: an include entry more (a leg whose
+# os is a larger runner, or one that overrides a larger_runner) is a finding.
+BUILD_STRATEGY = ('    strategy:\n'
+                  '      fail-fast: false\n'
+                  '      matrix:\n'
+                  '        os: [ubuntu-24.04, macos-26]\n'
+                  '        build_type: [Release, Debug]\n'
+                  '        include:\n'
+                  '          - os: ubuntu-24.04\n'
+                  '            larger_runner: pf-linux-x64-16\n'
+                  '          - os: macos-26\n'
+                  '            larger_runner: macos-26-xlarge\n')
+BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 # Every job with a runner in the workflows a CI run starts: its runs-on and its
@@ -63,25 +68,110 @@ JOB_RUNNERS = {
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120),
                           'corpus-parity-subset': (LINUX_RUNNER, 30)},
 }
-# The other workflows a pull request (a fork's included) can start.
+# Every other workflow a pull request (a fork's included) can start keeps its
+# jobs on these. One that only a push, the schedule or a dispatch starts is free.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
-# literal-aware parity, receipt and submodule guards (L8d) and took 394-543 s
-# on the standard hosted runner, past 570 s at 0d76a099. The bound stays inside
-# the preflight job's time limit, so a stuck stage is logged here rather than
-# cut off with the job.
+# literal-aware parity, receipt and submodule guards and took 394-543 s on the
+# standard hosted runner, past 570 s at 0d76a099. The bound stays inside the
+# preflight job's time limit, so a stuck stage is logged here rather than cut
+# off with the job.
 STAGE_TIMEOUT_SECONDS = 1500
+# A job's header -- any id GitHub accepts -- and the top-level jobs and on keys.
+_JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MULTILINE)
+_JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)
+_ON_KEY = re.compile(r'^(?:on|"on"|\'on\'):[ \t]*([^#\n]*)', re.MULTILINE)
+
+
+def _jobs_text(workflow: str) -> str | None:
+    """The jobs mapping: from the jobs key to the next top-level key."""
+    key = _JOBS_KEY.search(workflow)
+    if not key:
+        return None
+    text = workflow[key.end():]
+    after = re.search(r'^[^\s#]', text, re.MULTILINE)
+    return text[:after.start()] if after else text
 
 
 def _jobs(workflow: str) -> dict[str, str]:
-    body = workflow.split('\njobs:\n', 1)
-    if len(body) != 2:
-        return {}
-    matches = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\s*$', body[1], re.MULTILINE))
-    return {match.group(1): body[1][match.end():
-                                    matches[index + 1].start() if index + 1 < len(matches)
-                                    else len(body[1])]
+    text = _jobs_text(workflow) or ''
+    matches = list(_JOB_HEADER.finditer(text))
+    return {match.group(1): text[match.end():
+                                 matches[index + 1].start() if index + 1 < len(matches)
+                                 else len(text)]
             for index, match in enumerate(matches)}
+
+
+def _code(text: str) -> list[str]:
+    return [line for line in text.split('\n')
+            if line.strip() and not line.lstrip().startswith('#')]
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(' '))
+
+
+def _unparsed(workflow: str) -> list[str]:
+    """Lines of the jobs mapping no job header accounts for: the parse fails closed."""
+    text = _jobs_text(workflow)
+    if text is None:
+        return ['jobs:']
+    first = _JOB_HEADER.search(text)
+    stray = _code(text[:first.start()] if first else text)
+    for body in _jobs(workflow).values():
+        stray += [line for line in _code(body) if _indent(line) <= 2]
+    return stray
+
+
+def _job_values(body: str, key: str) -> list[str]:
+    """Every value of a job-level key, a block value's lines folded onto one."""
+    lines = body.split('\n')
+    code = _code(body)
+    if not code:
+        return []
+    depth = _indent(code[0])
+    values = []
+    for index, line in enumerate(lines):
+        if _indent(line) != depth or not line.lstrip().startswith(key + ':'):
+            continue
+        parts = [line.strip()[len(key) + 1:]]
+        for follow in lines[index + 1:]:
+            if follow.strip() and _indent(follow) <= depth:
+                break
+            parts.append(follow)
+        values.append(' '.join(re.sub(r'\s+#.*$', '', part).strip() for part in parts
+                               if part.strip() and not part.lstrip().startswith('#')))
+    return values
+
+
+def _job_block(body: str, key: str) -> str:
+    """A job-level key's line and every line under it, as written."""
+    lines = body.split('\n')
+    code = _code(body)
+    depth = _indent(code[0]) if code else 0
+    for index, line in enumerate(lines):
+        if line == ' ' * depth + key + ':':
+            block = [line]
+            for follow in lines[index + 1:]:
+                if follow.strip() and _indent(follow) <= depth:
+                    break
+                block.append(follow)
+            return '\n'.join(block).rstrip() + '\n'
+    return ''
+
+
+def _events(workflow: str) -> set[str] | None:
+    """The events that start a workflow, or None when the on key cannot be read."""
+    match = _ON_KEY.search(workflow)
+    if not match:
+        return None
+    if match.group(1).strip():
+        return set(re.findall(r'[A-Za-z_]+', match.group(1)))
+    block = workflow[match.end():]
+    after = re.search(r'^[^\s#]', block, re.MULTILINE)
+    block = block[:after.start()] if after else block
+    return set(re.findall(r'^  ([A-Za-z_]+):', block, re.MULTILINE)) or None
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
@@ -89,11 +179,15 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     findings = []
     for name, workflow in workflows.items():
         pinned = JOB_RUNNERS.get(name, {})
+        events = _events(workflow)
+        if not pinned and events is not None and events <= TRUSTED_ONLY_EVENTS:
+            continue
+        if _unparsed(workflow):
+            findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
         findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
         for job, body in jobs.items():
-            runs_on = re.findall(r'^    runs-on: (.*)$', body, re.MULTILINE)
-            limit = re.findall(r'^    timeout-minutes: (.*)$', body, re.MULTILINE)
+            runs_on = _job_values(body, 'runs-on')
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -103,29 +197,37 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             runner, minutes = pinned[job]
             if runs_on != [runner]:
                 findings.append(f'{name} job {job} must run on {runner}')
-            if limit != [str(minutes)]:
+            if _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # A job on 16 cores that still asks for 4 wastes the runner it pays for.
-            runs = re.findall(r'^ +run: (.*)$', body, re.MULTILINE)
-            if (re.search(r'--jobs [0-9]|^ +JOBS: ', body, re.MULTILINE)
-                    or any(f'--jobs {CORES}' not in run
-                           for run in runs if 'scripts/ci_verify.py' in run)
-                    or any(not run.startswith(f'JOBS={CORES} ./scripts/check_corpus_parity.sh')
-                           for run in runs if 'check_corpus_parity.sh' in run)):
-                findings.append(f'{name} job {job} must size its parallelism to the runner')
+            # Every line counts, a multi-line run block's included; comments do not.
+            for line in _code(body):
+                command = re.sub(r'^\s*(?:-\s+)?run:\s*', '', line)
+                if (line.count('--jobs') != line.count(f'--jobs {CORES}')
+                        or ('scripts/ci_verify.py' in line and f'--jobs {CORES}' not in line)
+                        or ((re.search(r'\bJOBS\s*[:=]', line)
+                             or 'check_corpus_parity.sh' in line)
+                            and not command.startswith(
+                                f'JOBS={CORES} ./scripts/check_corpus_parity.sh'))):
+                    findings.append(f'{name} job {job} must size its parallelism to the runner')
+                    break
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
-    if (BUILD_MATRIX not in build
-            or '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n' not in build):
-        findings.append('ci.yml build must pair each image with its larger runner')
+    if _job_block(build, 'strategy') != BUILD_STRATEGY:
+        findings.append('ci.yml build must pair each image with its larger runner, exactly')
+    if _job_values(build, 'name') != [BUILD_NAME]:
+        findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
     return findings
 
 
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
-                         parity: str, docs: str) -> list[str]:
-    """Pin the PR-light/full-event split, parallel start, merge statuses, row home and runners."""
+                         parity: str, docs: str, others: dict[str, str] | None = None) -> list[str]:
+    """Pin the PR-light/full-event split, parallel start, merge statuses, row home and runners.
+
+    ``others`` holds every other workflow file by name, for the runner rule.
+    """
     findings = runner_findings({'ci.yml': ci, 'native-live.yml': native,
                                 'corpus-parity.yml': parity, 'docs.yml': docs,
-                                'promote-baseline.yml': promote})
+                                'promote-baseline.yml': promote, **(others or {})})
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]',
@@ -220,7 +322,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)' not in cmake
             or 'if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})' not in cmake):
         findings.append('measured slow rows must keep one pinned CMake label list')
-    return findings
+    return list(dict.fromkeys(findings))
 
 
 def docs_workflow_findings(workflow: str) -> list[str]:
@@ -408,13 +510,18 @@ def main() -> int:
     parser.add_argument('--check-ci-workflow', action='store_true')
     args = parser.parse_args()
     if args.check_ci_workflow:
+        workflows = ROOT / '.github/workflows'
+        named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
+                 'docs.yml')
         findings = ci_workflow_findings(
-            (ROOT / '.github/workflows/ci.yml').read_text(),
-            (ROOT / '.github/workflows/native-live.yml').read_text(),
-            (ROOT / '.github/workflows/promote-baseline.yml').read_text(),
+            (workflows / 'ci.yml').read_text(),
+            (workflows / 'native-live.yml').read_text(),
+            (workflows / 'promote-baseline.yml').read_text(),
             (ROOT / 'tests/CMakeLists.txt').read_text(),
-            (ROOT / '.github/workflows/corpus-parity.yml').read_text(),
-            (ROOT / '.github/workflows/docs.yml').read_text())
+            (workflows / 'corpus-parity.yml').read_text(),
+            (workflows / 'docs.yml').read_text(),
+            {path.name: path.read_text() for path in sorted(workflows.iterdir())
+             if path.suffix in ('.yml', '.yaml') and path.name not in named})
         for finding in findings:
             print(finding)
         if not findings:

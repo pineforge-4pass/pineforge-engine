@@ -23,7 +23,7 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
 
 def in_job(workflow, job, before, after):
     """Replace the first `before` inside job `job` (anywhere when job is None)."""
-    start = 0 if job is None else workflow.index(f'\n  {job}:\n')
+    start = 0 if job is None else workflow.index(f'\n  {job}:')
     if job is not None and before not in _jobs(workflow)[job]:
         raise AssertionError(f'{before!r} is not in job {job}')
     at = workflow.index(before, start)
@@ -33,6 +33,13 @@ def in_job(workflow, job, before, after):
 class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
         return [(ROOT / path).read_text() for path in CI_SOURCES]
+
+    def other_sources(self):
+        """Every other workflow file, by name: ci_workflow_findings' ``others``."""
+        named = {Path(path).name for path in CI_SOURCES}
+        return {path.name: path.read_text()
+                for path in sorted((ROOT / '.github/workflows').iterdir())
+                if path.suffix in ('.yml', '.yaml') and path.name not in named}
 
     def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
         original = self.ci_sources()
@@ -96,8 +103,8 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
     def test_ci_contract_pins_runners_time_limits_and_the_fork_guard(self):
-        original = self.ci_sources()
-        self.assertEqual(ci_workflow_findings(*original), [])
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
         fork_head = 'github.event.pull_request.head.repo.full_name'
         mutations = (
             # A heavy job moved back to the slow standard runner.
@@ -108,6 +115,11 @@ class PreflightFailures(unittest.TestCase):
             (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26',
              'ci.yml build must pair each image'),
             (0, 'build', 'larger_runner: pf-linux-x64-16', 'larger_runner: ubuntu-24.04',
+             'ci.yml build must pair each image'),
+            # A later include entry overrides one leg's larger runner.
+            (0, 'build', '            larger_runner: macos-26-xlarge\n',
+             '            larger_runner: macos-26-xlarge\n          - os: ubuntu-24.04\n'
+             '            build_type: Debug\n            larger_runner: ubuntu-24.04\n',
              'ci.yml build must pair each image'),
             (1, 'native-live', LINUX_RUNNER, 'ubuntu-24.04', 'native-live.yml job native-live must run on'),
             (4, 'corpus-parity', LINUX_RUNNER, 'ubuntu-24.04', 'corpus-parity.yml job corpus-parity must run on'),
@@ -122,6 +134,21 @@ class PreflightFailures(unittest.TestCase):
             (0, 'build', MATRIX_RUNNER, '${{ matrix.larger_runner }}', 'ci.yml job build must run on'),
             (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26-large',
              'ci.yml build must pair each image'),
+            # A leg whose os is a larger runner: the fork's fallback is the larger runner.
+            (0, 'build', '            larger_runner: macos-26-xlarge\n',
+             '            larger_runner: macos-26-xlarge\n          - os: pf-linux-x64-16\n'
+             '            build_type: Release\n', 'ci.yml build must pair each image'),
+            # Block forms of runs-on, and job ids the parser must still see.
+            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on:\n      group: pineforge-ci-large\n',
+             'docs.yml job build must stay on a standard runner'),
+            (2, 'promote', '    runs-on: ubuntu-latest\n', '    runs-on:\n      - macos-26-xlarge\n',
+             'promote-baseline.yml job promote must stay on a standard runner'),
+            (0, None, '  build-gate:\n', '  extra:\n    runs-on:\n      group: pineforge-ci-large\n'
+             '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
+            (5, None, '\njobs:\n', '\njobs:\n  pre_build:\n    runs-on: macos-26-xlarge\n    steps:\n'
+             '      - run: "true"\n\n', 'docs.yml job pre_build must stay on a standard runner'),
+            (5, None, '\njobs:\n', '\njobs:\n  "pre-build":\n    runs-on: macos-26-xlarge\n    steps:\n'
+             '      - run: "true"\n\n', 'docs.yml has jobs lines the runner contract cannot read'),
             (1, 'native-live', "|| 'ubuntu-24.04'", "|| 'pf-linux-x64-16'",
              'native-live.yml job native-live must run on'),
             (4, 'corpus-parity-subset', f'runs-on: {LINUX_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
@@ -159,16 +186,60 @@ class PreflightFailures(unittest.TestCase):
             (4, 'corpus-parity-subset', '          BUILD_DIR: build-corpus-parity-subset\n',
              '          BUILD_DIR: build-corpus-parity-subset\n          JOBS: "4"\n',
              'corpus-parity.yml job corpus-parity-subset must size'),
+            # ... through a multi-line run block, an = spelling, or a later flag.
+            (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES}',
+             'run: |\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel',
+             'ci.yml job kernel-only must size'),
+            (0, 'sanitizers', f'--jobs {CORES}', '--jobs=4', 'ci.yml job sanitizers must size'),
+            (0, 'build', f'--jobs {CORES} --ccache', f'--jobs {CORES} --ccache --jobs=4',
+             'ci.yml job build must size'),
+            (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
+             'run: |\n          JOBS=4 ./scripts/check_corpus_parity.sh --subset',
+             'corpus-parity.yml job corpus-parity-subset must size'),
+            (4, 'corpus-parity', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh',
+             'run: |\n          export JOBS=4\n          ./scripts/check_corpus_parity.sh',
+             'corpus-parity.yml job corpus-parity must size'),
             # The build legs keep their names: build (<image>, <type>).
             (0, 'build', '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n', '',
-             'ci.yml build must pair each image'),
+             'ci.yml build legs must keep their names'),
         )
         for index, job, before, after, finding in mutations:
             with self.subTest(file=CI_SOURCES[index], job=job, after=after):
                 changed = original.copy()
                 changed[index] = in_job(changed[index], job, before, after)
-                findings = ci_workflow_findings(*changed)
+                findings = ci_workflow_findings(*changed, others=others)
                 self.assertTrue(any(finding in line for line in findings), findings)
+
+    def test_comments_and_commented_headers_are_not_findings(self):
+        changed, others = self.ci_sources(), self.other_sources()
+        changed[0] = in_job(changed[0], 'kernel-only', '    steps:\n',
+                            '    # Was --jobs 4, and JOBS: "4", on the standard runner.\n'
+                            '    steps:\n')
+        changed[0] = changed[0].replace('\n  preflight:\n', '\n  preflight:  # the fast gate\n', 1)
+        self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+
+    def test_every_workflow_a_pull_request_can_start_stays_on_standard_runners(self):
+        original, others = self.ci_sources(), self.other_sources()
+        # release.yml starts only on a dispatch, so no pull request reaches its runners.
+        self.assertIn('release.yml', others)
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        opened = others['release.yml'].replace('on:\n  workflow_dispatch:\n',
+                                               'on:\n  pull_request:\n  workflow_dispatch:\n', 1)
+        self.assertNotEqual(opened, others['release.yml'])
+        self.assertIn('release.yml job prebuilt must stay on a standard runner',
+                      ci_workflow_findings(*original, others=dict(others, **{'release.yml': opened})))
+        new = 'name: lint\non: {on}\njobs:\n  lint:\n    runs-on: {runner}\n    steps:\n      - run: "true"\n'
+        for on, runner, refused in (
+                ('[pull_request]', 'pf-linux-x64-16', True),
+                ('pull_request_target', 'macos-26-xlarge', True),
+                ('\n  pull_request:\n', '\n      group: pineforge-ci-large', True),
+                ('[pull_request]', 'ubuntu-latest', False),
+                ('\n  workflow_dispatch:\n', 'pf-linux-x64-16', False)):
+            with self.subTest(on=on, runner=runner):
+                findings = ci_workflow_findings(
+                    *original, others=dict(others, **{'lint.yml': new.format(on=on, runner=runner)}))
+                self.assertEqual('lint.yml job lint must stay on a standard runner' in findings,
+                                 refused, findings)
 
     def test_a_stage_times_out_inside_the_preflight_job(self):
         # Five minutes stay for the runner setup and the other stages, so the
@@ -187,9 +258,9 @@ class PreflightFailures(unittest.TestCase):
         # a temporary file that can vanish mid-copy: never copy bytecode.
         shutil.copytree(ROOT / 'scripts', tree / 'scripts',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-        for path in CI_SOURCES:
-            (tree / path).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / path, tree / path)
+        shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+        (tree / 'tests').mkdir()
+        shutil.copyfile(ROOT / 'tests/CMakeLists.txt', tree / 'tests/CMakeLists.txt')
         if mutation:
             ci = tree / '.github/workflows/ci.yml'
             ci.write_text(in_job(ci.read_text(), *mutation))

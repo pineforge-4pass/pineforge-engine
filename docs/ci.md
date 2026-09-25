@@ -701,12 +701,15 @@ legs, sanitizers, kernel-only, native-live and the parity subset), so a second
 run that overlaps it waits for a runner.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner,
-time limit and parallelism in the three workflows a CI run starts, and keeps
-`docs.yml` and `promote-baseline.yml`, which a fork's pull request can also
-start, on standard runners. A heavy job moved back to the standard runner, a
-test that lets a fork's pull request onto a larger runner, a changed time
-limit, or a fixed `--jobs 4` fails preflight;
-`scripts/test_ci_preflight.py` holds the mutations.
+time limit and parallelism in the three workflows a CI run starts, the `build`
+strategy block included, and keeps every other workflow a pull request can
+start -- `docs.yml`, `promote-baseline.yml` and any new one -- on standard
+runners; one that only a push, the schedule or a dispatch starts
+(`release.yml`) is exempt. A heavy job moved back to the standard runner, a
+test or matrix entry that lets a fork's pull request onto a larger runner, a
+changed time limit, or any other job count fails preflight, and so does a
+jobs line the check cannot read; `scripts/test_ci_preflight.py` holds the
+mutations.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
