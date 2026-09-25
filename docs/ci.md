@@ -420,8 +420,8 @@ drifted".
 ## Documentation guards
 
 The documentation guards run fail-closed. Source-only `ci_preflight` stages include
-`doc-anchors`, `doc-lint`, `design-inventory`, `doc-pine-coverage`, its self-test,
-and the detached-comment ceiling. The migration worked example is an executed
+`doc-anchors`, `doc-lint`, `doc-reverts`, `design-inventory`, `doc-pine-coverage`,
+their self-tests, and the detached-comment ceiling. The migration worked example is an executed
 CTest row, and the Doxygen documentation build runs in CI for pull requests,
 main pushes, tags and manual dispatch (`.github/workflows/docs.yml`). A pull
 request builds and uploads the site; the Cloudflare Pages deploy step is
@@ -474,6 +474,34 @@ python3 scripts/ci_preflight.py        # doc-anchors and doc-lint among its stag
 
 Their own self-tests are binding as well and register as CTest rows
 (`test_doc_anchors`, `test_doc_lint`).
+
+`scripts/check_doc_reverts.py` (`doc-reverts`, with `doc-reverts-tests`) holds
+what the other two cannot see: a sentence that leaves a published page, or older
+text put back over newer text, cites nothing wrong. Each commit it judges is
+compared with its parent sentence by sentence — paragraphs, list items and table
+cells of `README.md`, `CONTRIBUTING.md` and `docs/**/*.md`, anchor digits and
+content pins normalised away — and every sentence the commit deletes, or reverts
+to a wording the page held before, must be named by the commit's message: by the
+lane label or the hash of the commit that introduced it, by six consecutive
+words of it, or by the key of its table row (`OL7`). A fresh rewrite and a
+re-anchor need no name. It judges the non-merge commits since the merge base
+with `main`; with no `main` ref (the lab's remote hosts) it walks back from
+`HEAD`, and a commit whose tree predates the gate is never judged.
+`--base R --head R [--message-file F]` judges one replayed change instead:
+lane B-C-SURFACE's pages replayed onto `db98990c` (the rebase that dropped
+V19-D's `keep_handle` row and put D2-C's runtime-block wording back) fail it,
+and `e3e20cb5`, V19-A's stated revert of PERF-P1's continuation view, passes with
+its own message.
+
+```sh
+python3 scripts/check_doc_reverts.py                          # commits since the merge base
+python3 scripts/check_doc_reverts.py --base db98990c --head 597a4367 --message-from 597a4367 \
+    --files docs/adr/0001-kernel-adapter-boundary.md docs/pages/native-engine.md   # a replay
+```
+
+The kernel-residual gate's ruled counts have floors beside the CTest floors
+(`ADR_RULED_IDENTIFIERS_MIN`, `ADR_RULED_TEXTS_MIN` in `scripts/ci_verify.py`), so
+a ruling that leaves ADR-0001 together with its name is an edit of that file too.
 
 The third source-only guard is `scripts/check_design_inventory.py`
 (`design-inventory`, with its own `design-inventory-tests` suite). It was

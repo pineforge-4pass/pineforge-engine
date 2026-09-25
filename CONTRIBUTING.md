@@ -144,13 +144,14 @@ What each gate refuses:
 | `check_doc_anchors.py` | a `file:line` citation that no longer points at the symbol it claims |
 | `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified | <!-- verified HEAD -->
 | `check_pine_to_native_coverage.py` | a Pine builtin with no row on the migration page |
+| `check_doc_reverts.py` | a published sentence deleted, or older wording restored over newer, by a commit whose message does not name it (by the lane label or hash of the commit that wrote it, or by six of its words) |
 | the CTest row **floors** | a test row that vanished from a profile |
 
 ### The floors
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
-floor — `KERNEL_MIN_TESTS` ci_verify.py:247 and `RELEASE_MIN_TESTS`
-ci_verify.py:371.
+floor — `KERNEL_MIN_TESTS` ci_verify.py:249 and `RELEASE_MIN_TESTS`
+ci_verify.py:375.
 A deleted or silently skipped row is a failure, not a quieter run. If your
 change adds rows, raise the floor in the same commit and say by how much; if it
 legitimately removes one, lower it deliberately and say why. `--min-tests`

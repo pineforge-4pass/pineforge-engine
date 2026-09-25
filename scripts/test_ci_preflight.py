@@ -115,7 +115,8 @@ class PreflightFailures(unittest.TestCase):
         # declares advisory by carrying a third element; none of these may.
         plan = {entry[0]: entry for entry in check_commands(Path('/src'))}
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
-                     'doc-pine-coverage', 'design-inventory', 'design-inventory-tests'):
+                     'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
+                     'doc-reverts', 'doc-reverts-tests'):
             self.assertIn(name, plan)
             self.assertEqual(len(plan[name]), 2, name)
 

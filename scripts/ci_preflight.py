@@ -223,6 +223,13 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
         ('doc-lint',
          [sys.executable, str(source / 'scripts/check_doc_lint.py')]),
+        # R5 lane H-DOCGATES (AUDIT4-opus X13): a published sentence leaves only
+        # when its commit's message names it -- by the introducing lane or commit,
+        # or by its words -- and older text never silently replaces newer text.
+        ('doc-reverts-tests',
+         [sys.executable, str(source / 'scripts/test_check_doc_reverts.py')]),
+        ('doc-reverts',
+         [sys.executable, str(source / 'scripts/check_doc_reverts.py')]),
         # NOT advisory: the migration page's coverage claim is L14-B's own, and
         # it is true on this tree. A `strategy.*` name added to the Pine v6
         # inventory without a row on that page fails here immediately.

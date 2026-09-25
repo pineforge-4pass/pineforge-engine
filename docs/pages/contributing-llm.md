@@ -103,11 +103,14 @@ finding to report, not a step to take.
    file's own docstring), `scripts/check_doc_lint.py` for stale epochs,
    roadmap labels and falsified negative claims, and
    `scripts/check_pine_to_native_coverage.py` for the migration page's
-   coverage claim.
+   coverage claim. A sentence leaves a page only when the commit's message
+   names it — the lane or commit that wrote it, or six of its words —
+   and older wording never silently replaces newer: *Enforced:*
+   `scripts/check_doc_reverts.py`.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:247 and
-    `RELEASE_MIN_TESTS` ci_verify.py:371. Adding rows means raising the floor
+    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:249 and
+    `RELEASE_MIN_TESTS` ci_verify.py:375. Adding rows means raising the floor
     in the same commit.
 
 ## The recipe for a lane
@@ -253,7 +256,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:247, `RELEASE_MIN_TESTS` ci_verify.py:371). It
+(`KERNEL_MIN_TESTS` ci_verify.py:249, `RELEASE_MIN_TESTS` ci_verify.py:375). It
 counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared

@@ -244,7 +244,9 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 H-MEASURE test_native_acid_composite (the G1 acid composite, C++ and C)
 # Its other eleven rows reach the source layer (see RELEASE_MIN_TESTS). 279
 # registered, 278 run: the WebSocket row still skips on a system libcurl.
-KERNEL_MIN_TESTS = 278
+# 279 = those 278 plus R5 lane H-DOCGATES' test_doc_reverts (the doc-revert
+# gate's self-test, a Python row every profile registers; INT26 pick, summed).
+KERNEL_MIN_TESTS = 279
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -368,7 +370,9 @@ KERNEL_MIN_TESTS = 278
 #                                 test_magnified_aggregated_tape,
 #                                 test_adapter_security_route_conditions
 # No release row skips, so 690 registered is 690 run.
-RELEASE_MIN_TESTS = 690
+# 691 = those 690 plus R5 lane H-DOCGATES' test_doc_reverts (see
+# KERNEL_MIN_TESTS; INT26 pick, summed).
+RELEASE_MIN_TESTS = 691
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the

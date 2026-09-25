@@ -397,6 +397,7 @@ The gates a pull request passes, one line each:
 | C surface | `scripts/check_c_abi_runtime.py`, `scripts/check_native_c_api_surface.py` | A `PF_API` export added without its inventory row; a public host member with no C spelling and no recorded reason. |
 | Twin parity | `scripts/check_twin_parity.py` | A frozen assertion quietly rewritten instead of a behaviour change being argued. |
 | Documentation | `scripts/check_doc_anchors.py`, `scripts/check_doc_lint.py`, `scripts/check_pine_to_native_coverage.py` | A `file:line` citation that no longer points at its symbol; a stale epoch, roadmap label or negative claim; a Pine builtin with no row on the migration page. |
+| Doc reverts | `scripts/check_doc_reverts.py` | A published sentence deleted, or older wording restored over newer, by a commit whose message does not name it. |
 
 New here? [CONTRIBUTING.md](CONTRIBUTING.md) is the human walkthrough of all of
 the above; [Contributing as an LLM](docs/pages/contributing-llm.md) is the same
