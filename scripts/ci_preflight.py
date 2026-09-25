@@ -54,17 +54,23 @@ BUILD_MATRIX = ('      matrix:\n'
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 # Every job with a runner in the workflows a CI run starts: its runs-on and its
-# timeout-minutes, exactly.
+# timeout-minutes, exactly. docs/ci.md gives each limit's measured basis.
 JOB_RUNNERS = {
-    'ci.yml': {'preflight': (LINUX_RUNNER, 10), 'build': (MATRIX_RUNNER, 45),
-               'sanitizers': (LINUX_RUNNER, 120), 'kernel-only': (LINUX_RUNNER, 45),
+    'ci.yml': {'preflight': (LINUX_RUNNER, 30), 'build': (MATRIX_RUNNER, 75),
+               'sanitizers': (LINUX_RUNNER, 120), 'kernel-only': (LINUX_RUNNER, 60),
                'build-gate': ('ubuntu-24.04', 5)},
-    'native-live.yml': {'native-live': (LINUX_RUNNER, 45)},
+    'native-live.yml': {'native-live': (LINUX_RUNNER, 60)},
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120),
                           'corpus-parity-subset': (LINUX_RUNNER, 30)},
 }
 # The other workflows a pull request (a fork's included) can start.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+# One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
+# literal-aware parity, receipt and submodule guards (L8d) and took 394-543 s
+# on the standard hosted runner, past 570 s at 0d76a099. The bound stays inside
+# the preflight job's time limit, so a stuck stage is logged here rather than
+# cut off with the job.
+STAGE_TIMEOUT_SECONDS = 1500
 
 
 def _jobs(workflow: str) -> dict[str, str]:
@@ -369,10 +375,8 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         summary['stages'].append(stage)
         record()
         try:
-            # 900 s: the verifier self-tests (test_ci_verify.py) now drive the real
-            # literal-aware parity, receipt and submodule guards (L8d) and take
-            # ~80 s locally, >180 s on the hosted runner.
-            result = subprocess.run(argv, cwd=source, capture_output=True, timeout=900)
+            result = subprocess.run(argv, cwd=source, capture_output=True,
+                                    timeout=STAGE_TIMEOUT_SECONDS)
             code, log = result.returncode, result.stdout + result.stderr
         except subprocess.TimeoutExpired as error:
             code = 124

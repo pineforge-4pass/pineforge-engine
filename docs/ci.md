@@ -36,7 +36,8 @@ CI pins Ubuntu 24.04 and macOS 26, the platforms used by the preceding green
 refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
-runs each image is in [Runners and time limits](#runners-and-time-limits).
+runs each image, and each job's time limit, is in
+[Runners and time limits](#runners-and-time-limits).
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
@@ -706,3 +707,31 @@ start, on standard runners. A heavy job moved back to the standard runner, a
 test that lets a fork's pull request onto a larger runner, a changed time
 limit, or a fixed `--jobs 4` fails preflight;
 `scripts/test_ci_preflight.py` holds the mutations.
+
+More cores do not shorten every job. The `test_ci_verify` CTest row
+(`scripts/test_ci_verify.py`) is one Python process, and in the main run at
+0d76a099 it was the whole CTest wall time of every full-set leg but
+sanitizers: 976-1288 s on the standard runners, against 455-620 s at 8cf3be58
+the day before. Preflight's `verifier-tests` stage runs the same suite:
+394-543 s on the standard runner, and past 570 s at 0d76a099, when the old
+ten-minute limit cancelled main's preflight. The full corpus sweep's run phase
+is serial as well.
+
+Each limit below is at least twice the slowest time measured for the job on a
+runner it can land on. The standard-runner times are the eight CI runs from
+main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
+and the corpus-parity workflow's own runs of 2026-09-23 to 2026-09-25.
+Until the larger runners' own runs accumulate, the maintainers' x86-64
+verification hosts at 8 to 12 jobs stand in for the Linux one, and the 3-core
+M1 bounds the M2 from above.
+
+| Job | Limit (min) | Measured basis |
+| --- | --- | --- |
+| `preflight` | 30 (was 10) | 7.3-9.8 min on the standard runner; cancelled at 10.3 min at 0d76a099, still in `verifier-tests`. 4.8-8.2 min on the verification hosts. Each stage is bounded at 25 min inside it. |
+| `build` | 75 (was 45) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min after a standard-runner build of about 30 min. Pull-request set 35.2 min and full runs 34.0-60.0 min on the standard runner; full runs 18.2-19.0 min on the verification hosts. |
+| `kernel-only` | 60 (was 45) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. |
+| `native-live` | 60 (was 45) | Only the larger runner runs the full set, which waits on `test_ci_verify` (1034 s as a row on the standard runner at 0d76a099); the verification hosts' release profile, the nearest they run, took 11.2-18.4 min. A fork's pull request runs the set without that row: 3.4 min on the standard runner. |
+| `corpus-parity` | 120 | 16.3-24.4 min on the standard runner, 10.1-10.3 min on the verification hosts. |
+| `corpus-parity-subset` | 30 | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
+| `build` (aggregate) | 5 | Seconds. |

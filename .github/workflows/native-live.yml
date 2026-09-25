@@ -34,7 +34,9 @@ env:
 jobs:
   native-live:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    timeout-minutes: 45
+    # The full set waits on the test_ci_verify CTest row, 1034 s on the
+    # standard runner at 0d76a099, which more cores do not shorten.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

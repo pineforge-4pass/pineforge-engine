@@ -10,7 +10,8 @@ import sys
 import tempfile
 import unittest
 
-from ci_preflight import (CORES, LINUX_RUNNER, MATRIX_RUNNER, _jobs, check_commands,
+from ci_preflight import (CORES, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER,
+                          STAGE_TIMEOUT_SECONDS, _jobs, check_commands,
                           ci_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,17 +134,17 @@ class PreflightFailures(unittest.TestCase):
              'promote-baseline.yml job promote must stay on a standard runner'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
              '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
-            # A changed time limit.
-            (0, 'preflight', 'timeout-minutes: 10', 'timeout-minutes: 30',
-             'ci.yml job preflight must allow 10 minutes'),
-            (0, 'build', 'timeout-minutes: 45', 'timeout-minutes: 75', 'ci.yml job build must allow 45'),
+            # A time limit changed away from its measured basis.
+            (0, 'preflight', 'timeout-minutes: 30', 'timeout-minutes: 10',
+             'ci.yml job preflight must allow 30 minutes'),
+            (0, 'build', 'timeout-minutes: 75', 'timeout-minutes: 45', 'ci.yml job build must allow 75'),
             (0, 'sanitizers', 'timeout-minutes: 120', 'timeout-minutes: 60',
              'ci.yml job sanitizers must allow 120'),
-            (0, 'kernel-only', 'timeout-minutes: 45', 'timeout-minutes: 60',
-             'ci.yml job kernel-only must allow 45'),
+            (0, 'kernel-only', 'timeout-minutes: 60', 'timeout-minutes: 45',
+             'ci.yml job kernel-only must allow 60'),
             (0, 'build-gate', '    timeout-minutes: 5\n', '', 'ci.yml job build-gate must allow 5'),
-            (1, 'native-live', 'timeout-minutes: 45', 'timeout-minutes: 60',
-             'native-live.yml job native-live must allow 45'),
+            (1, 'native-live', 'timeout-minutes: 60', 'timeout-minutes: 45',
+             'native-live.yml job native-live must allow 60'),
             (4, 'corpus-parity', 'timeout-minutes: 120', 'timeout-minutes: 30',
              'corpus-parity.yml job corpus-parity must allow 120'),
             (4, 'corpus-parity-subset', 'timeout-minutes: 30', 'timeout-minutes: 10',
@@ -168,6 +169,14 @@ class PreflightFailures(unittest.TestCase):
                 changed[index] = in_job(changed[index], job, before, after)
                 findings = ci_workflow_findings(*changed)
                 self.assertTrue(any(finding in line for line in findings), findings)
+
+    def test_a_stage_times_out_inside_the_preflight_job(self):
+        # Five minutes stay for the runner setup and the other stages, so the
+        # stage's own timeout, with its log, fires before the job's.
+        job_seconds = JOB_RUNNERS['ci.yml']['preflight'][1] * 60
+        self.assertLessEqual(STAGE_TIMEOUT_SECONDS + 300, job_seconds)
+        # And at least twice the slowest verifier-tests stage measured: 570 s.
+        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 570)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""

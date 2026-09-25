@@ -27,11 +27,14 @@ env:
 # pull request from a fork: a larger runner bills the organization even for a
 # public repository, so a fork's pull request runs on the free standard runner.
 # Each verification sizes its parallelism to the runner that took it.
-# scripts/ci_preflight.py pins every runner, time limit and job count.
+# scripts/ci_preflight.py pins every runner, time limit and job count, and
+# docs/ci.md gives each limit's measured basis.
 jobs:
   preflight:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    timeout-minutes: 10
+    # The verifier self-tests alone took 394-543 s on the standard runner and
+    # passed 570 s at 0d76a099, where ten minutes cancelled main's run.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,7 +78,11 @@ jobs:
   build:
     # Each leg keeps its name, build (<image>, <type>), whatever the matrix carries.
     name: build (${{ matrix.os }}, ${{ matrix.build_type }})
-    timeout-minutes: 45
+    # A full-set leg waits on the test_ci_verify CTest row, 976-1288 s on the
+    # standard runners at 0d76a099, which more cores do not shorten. There the
+    # Release legs, which a fork's pull request runs in full, took 30.3 and
+    # 32.0 min, and the macOS Debug leg 37.0 min.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -159,7 +166,8 @@ jobs:
   sanitizers:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # A full run (push to main, manual dispatch) gives its CTest stage an hour
-    # after a build of about 30 minutes; the PR set keeps its 30-minute stage.
+    # after the build; the PR set keeps its 30-minute stage, after a build of
+    # about 30 minutes on the standard runner a fork's pull request gets.
     timeout-minutes: 120
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -210,7 +218,9 @@ jobs:
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    timeout-minutes: 45
+    # 22.3 min on the standard runner at 0d76a099, where a fork's pull request
+    # still runs the whole kernel set.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
