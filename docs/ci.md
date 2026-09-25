@@ -346,7 +346,7 @@ population using the same byte oracle:
 ./scripts/check_corpus_parity.sh --subset
 ```
 
-builds and re-runs only the 30 probes
+builds and re-runs only the 54 probes
 [`scripts/corpus_parity_subset.txt`](../scripts/corpus_parity_subset.txt)
 names — **in parallel**, which the full sweep's serial loop is not, because the
 probes write into disjoint directories and share only the read-only feeds — and
@@ -356,8 +356,8 @@ judges them against the same pinned sha256 rows of
 never re-record the oracle it is measured by, and a row naming a probe the
 corpus does not commit is exit 2, never a pass.
 
-The 30 were chosen mechanically, and the reason each one is in the list is on
-its line. Every strategy.pine was scanned for the 40 engine mechanisms the
+The first 30 were chosen mechanically, and the reason each one is in the list
+is on its line. Every strategy.pine was scanned for the 40 engine mechanisms the
 corpus exercises at all — order kinds, exit shapes, OCA, pyramiding, the three
 commission kinds, the three sizing bases, slippage, margin, the three
 calculation-timing switches, `request.security` and `_lower_tf`, the magnifier,
@@ -366,13 +366,32 @@ ta/math/array/matrix/map/UDT/drawing surfaces — a greedy cover took the fewest
 probes witnessing all 40, then one probe per corpus family of three or more
 members the cover had missed, then the keepers: the corpus's only anomaly-tier
 verdict, its two largest trade surfaces, and the mechanisms the campaign
-measured as divergence-prone. Every mechanism with exactly one witness in the
-corpus is therefore in the subset by construction — `strategy.cancel_all`,
-`calc_on_order_fills=true`, `commission.cash_per_order`, a non-zero
-`commission_value`, and `map.*`.
+measured as divergence-prone. Every mechanism of that 40-item scan with
+exactly one witness in the corpus is therefore in the subset by construction —
+`strategy.cancel_all`, `calc_on_order_fills=true`, `commission.cash_per_order`,
+a non-zero `commission_value`, and `map.*`.
+
+**Measured against mutations (R5 lane H-MEASURE, AUDIT3 H12).** A battery of
+44 single-line mutations — kernel matching, fees, sizing, path order, sessions,
+timeframe aggregation, adapter policy and the `ta.*` library — each built and
+run over all 312 probes, then 17 more designed afterwards as a holdout: the full
+sweep caught 39, and the first 30 rows caught 19 of them. What escaped was
+mostly `ta.*` arithmetic (`wma`, `cci`, `mfi`, the crossover tie, `supertrend`,
+`stdev`, `atr`, `dmi`, `linreg`, `roc`), plus the AUTO path-order tie, an
+HTF aggregation low, `strategy.risk.max_position_size`'s equality gate and the
+stop-limit entry — the last two mechanisms outside the 40-item scan with one
+witness each. 24 probes were added: the greedy cover of those escapes, then one
+witness per `ta` class a generated strategy constructs; the 54 catch all 39.
+[`scripts/corpus_parity_mutation_battery.tsv`](../scripts/corpus_parity_mutation_battery.tsv)
+records every caught mutation with the probes that caught it, and
+`scripts/test_corpus_parity_subset_cover.py`, a `ci_preflight` stage, fails
+when the subset stops witnessing one. The same run measured the full sweep
+parallelised ten-wide on an idle 20-core host at 19–24 s (113 s serial on one
+core) after a 99 s build: the serial loop of `scripts/run_corpus.sh` and the
+hosted runner, not the probes, are what keep the whole population nightly.
 
 Measured on the same 16-core laptop at `JOBS=8`, corpus 442d497, under sibling
-load: derive 2 s (a no-op when the feeds are fresh), build the runtime and the
+load, when the list held its first 30 probes: derive 2 s (a no-op when the feeds are fresh), build the runtime and the
 30 strategy `.so` 68 s from clean, run **45 s wall** for 80 s of probe CPU,
 judge <1 s — **94 s** end to end over an up-to-date build directory, against
 1792 s for the run phase alone in full mode.

@@ -22,9 +22,13 @@
 # campaign measured as divergence-prone: recompute state, risk rules, calendar
 # and timeframe resolution, trade statistics).
 #
-# Every mechanism that exactly ONE probe in the whole corpus witnesses is in
-# here by construction: strategy.cancel_all, calc_on_order_fills=true,
-# commission.cash_per_order, a non-zero commission_value, and map.*.
+# Every mechanism of that 40-item scan that exactly ONE probe in the whole
+# corpus witnesses is in here by construction: strategy.cancel_all,
+# calc_on_order_fills=true, commission.cash_per_order, a non-zero
+# commission_value, and map.*. Mechanisms outside the scan were not covered by
+# construction: the H12 mutation battery (below) found strategy.risk.
+# max_position_size's equality gate and the stop-limit entry, each with one
+# witness in the corpus and none in the first 30 rows.
 #
 # The subset is NOT a second oracle and has no baseline of its own: it names
 # probes, and scripts/corpus_trades_identity.py --subset judges them against
@@ -63,3 +67,39 @@ validation/stats-ledger-outcome-throttle-01                # trade statistics re
 validation/ta-pivot-point-levels-break-01                  # the ta.* family's largest surface: pivot_point_levels array returns
 validation/timeframe-main-period-self-adaptive-01          # timeframe.main_period resolution driving the script
 validation/udt-regime-stack-stress-01                      # enum, flat type UDTs and var <UDT> per-field state under stress
+
+# H12 mutation battery top-up (lane H-MEASURE, 2026-09-26): the greedy cover of every
+# mutation the full sweep caught and the 30 rows above missed (battery: 44 single-line
+# mutations, 27 caught by the full sweep, 13 escaped the rows above; the caught ones and the
+# probes that catch them are scripts/corpus_parity_mutation_battery.tsv, which
+# scripts/test_corpus_parity_subset_cover.py holds this file to).
+validation/ta-supertrend-adx-filter-01                     # ta.supertrend / ta.atr true range / ta.dmi +DM (battery T05, T08, T09)
+validation/ta-momentum-roc-zero-cross-01                   # ta.crossover equal-pair tie, ta.roc lookback (T04, T12)
+validation/ta-sextant-cci-hma-01                           # ta.wma weights under ta.hma, ta.cci constant (T01, T02)
+validation/ta-bb-kc-squeeze-breakout-01                    # ta.stdev (biased) and ta.linreg offset (T06, T11)
+validation/cap-risk-gates-allow-max-intraday-01            # strategy.risk.max_position_size equality gate (A04)
+validation/order-dual-side-same-id-stop-no-cancel-01       # AUTO path order: open-equidistant tie (K05)
+validation/volume-tide-vwap-mfi-01                         # ta.mfi money flow (volume factor) (T03)
+validation/mtf-cascade-tuple-01                            # request.security HTF low aggregation (timeframe feed merge) (K17)
+
+# ta.* class witnesses: every ta:: class a corpus generated.cpp constructs is constructed by at
+# least one row of this file (greedy, larger TV tape first). Class-level witness is necessary,
+# not sufficient: the battery's crossover-tie escape (T04) had 18 crossover users above.
+validation/ta-highestbars-lowestbars-breakout-01           # ta.highest / lowest / highestbars / lowestbars
+validation/ta-conduit-obv-accdist-01                       # ta.obv, ta.accdist
+validation/ta-plumbline-pvt-vwma-01                        # ta.pvt, ta.vwma
+validation/ta-zenith-rci-wpr-01                            # ta.rci, ta.wpr
+validation/vwap-bands-breakout-1sigma-01                   # ta.vwap 3-tuple bands, anchored VWAP bands
+validation/composite-ies-adx-regime-classify-01            # ta.rma, ta.tr
+validation/ta-gyroscope-cmo-median-01                      # ta.cmo, ta.median
+validation/ta-tally-volume-index-roc-01                    # ta.nvi, ta.pvi
+validation/ta-stoch-slow-k-d-cross-01                      # ta.stoch
+validation/ta-cog-10-signal-cross-01                       # ta.cog
+validation/ta-tsi-25-13-signal-cross-01                    # ta.tsi
+validation/ta-dual-ma-switch-dispatch-01                   # ta.wma (direct)
+validation/array-atlas-momentum-rotation-01                # ta.percentrank
+validation/control-heliograph-while-channel-01             # ta.stdev (direct)
+
+# holdout witnesses (H12 holdout battery: the two full-sweep detections subset-plus22 still missed)
+validation/order-harbor-stop-limit-01                      # strategy.entry with BOTH limit and stop: the corpus's only stop-limit entry witness (holdout H06)
+validation/ta-quarry-alma-correlation-01                   # ta.correlation on its compute path (holdout H16) and ta.alma

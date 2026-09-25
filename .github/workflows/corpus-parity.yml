@@ -24,10 +24,10 @@ name: Corpus parity
 # the parity tooling itself.
 #
 # PR EARLY SIGNAL. The `corpus-parity-subset` job below
-# re-runs the 30 probes scripts/corpus_parity_subset.txt names -- in parallel,
+# re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
 # they write into disjoint directories -- and judges them against the same
 # pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
-# under sibling load: derive 2 s, build the runtime + the 30 strategy .so 68 s
+# under sibling load, when the list held its first 30 probes: derive 2 s, build the runtime + the 30 strategy .so 68 s
 # from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
 # over an up-to-date build directory, under 3 min cold.
 # .github/workflows/ci.yml calls it as a reusable workflow and includes it in
@@ -156,7 +156,7 @@ jobs:
           path: corpus-parity-diagnostics/
           if-no-files-found: warn
 
-  # The advisory PR subset: the 30 probes scripts/corpus_parity_subset.txt
+  # The advisory PR subset: the 54 probes scripts/corpus_parity_subset.txt
   # names, judged against the same pinned sha256 rows. Reached through CI.
   corpus-parity-subset:
     if: inputs.mode == 'subset'
@@ -218,7 +218,7 @@ jobs:
       # A restored cache is not evidence. Every LFS pointer the corpus commits
       # under data/ records its content's sha256; check the bytes on disk
       # against it, so a corrupt or stale cache is "the feed is wrong" here and
-      # not "30 probes drifted" three steps later.
+      # not "54 probes drifted" three steps later.
       - name: Verify the chart feed against its Git-LFS pointers
         shell: bash
         run: |

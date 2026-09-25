@@ -390,7 +390,7 @@ The gates a pull request passes, one line each:
 
 | Gate | Command | What it refuses |
 |---|---|---|
-| TradingView parity | `./scripts/check_corpus_parity.sh --subset` | A trade that moved: 30 probes re-run and hashed against `scripts/corpus_parity_baseline.txt`. The full 312-probe sweep (`--subset` dropped) runs nightly. |
+| TradingView parity | `./scripts/check_corpus_parity.sh --subset` | A trade that moved: 54 probes re-run and hashed against `scripts/corpus_parity_baseline.txt`. The full 312-probe sweep (`--subset` dropped) runs nightly. |
 | CTest row floors | `ci_verify.py release` / `kernel` | A test row that vanished: each profile counts the rows that actually ran against a floor. |
 | Kernel residuals | `scripts/check_kernel_residuals.py` | A TradingView-shaped name reaching the kernel archive or its installed headers without an ADR 0001 row. |
 | Feature rulings | `scripts/check_native_feature_rulings.py` | A `NativeRunSpec` field the adapter does not declare and the ADR does not rule. |

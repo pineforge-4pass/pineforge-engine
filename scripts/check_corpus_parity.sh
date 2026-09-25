@@ -23,18 +23,19 @@
 #
 # --subset — THE HALF A PULL REQUEST CAN WAIT FOR. The whole sweep is ~32 min,
 # so it cannot hold a merge (docs/ci.md). With --subset this builds and re-runs
-# only the 30 probes scripts/corpus_parity_subset.txt names, in parallel, and
+# only the 54 probes scripts/corpus_parity_subset.txt names, in parallel, and
 # judges them against the SAME pinned sha256 rows. Measured on a 16-core laptop
-# at JOBS=8, corpus 442d497, under sibling load: derive 2 s (a no-op when the
-# feeds are fresh), build the runtime + the 30 strategy .so 68 s from clean,
+# at JOBS=8, corpus 442d497, under sibling load, when the list held its first 30
+# probes: derive 2 s (a no-op when the feeds are fresh), build the runtime +
+# the 30 strategy .so 68 s from clean,
 # run 45 s wall for 80 s of probe CPU, judge <1 s — 94 s end to end over an
 # up-to-date build directory, against 1792 s for the run phase alone in full
 # mode. That fits the ~25 min a required check is budgeted for, which is why
 # .github/workflows/ci.yml can make it a dependency of the required `build`
 # context.
 #
-# What --subset does NOT prove: the other 282 probes, and the tier headline
-# (scripts/verify_corpus.py grades the whole population, so 30 runs cannot
+# What --subset does NOT prove: the other 258 probes, and the tier headline
+# (scripts/verify_corpus.py grades the whole population, so a subset run cannot
 # print its line). Both stay with the nightly full sweep. The subset is a
 # blocking floor, not a replacement.
 #

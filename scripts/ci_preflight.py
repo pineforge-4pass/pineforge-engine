@@ -196,6 +196,10 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
          [sys.executable, str(source / 'scripts/test_corpus_trades_identity.py')]),
+        # R5 lane H-MEASURE (AUDIT3 H12): the pull-request subset witnesses
+        # every mutation of the recorded battery the full sweep caught.
+        ('corpus-parity-subset-cover-tests',
+         [sys.executable, str(source / 'scripts/test_corpus_parity_subset_cover.py')]),
         ('design-inventory-tests',
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',

@@ -162,7 +162,7 @@ The validation corpus is a **byte oracle**, not a smoke test.
 
 ```bash
 ./scripts/check_corpus_parity.sh            # the full 312-probe sweep, ~32 min
-./scripts/check_corpus_parity.sh --subset   # the 30 probes a pull request waits for
+./scripts/check_corpus_parity.sh --subset   # the 54 probes a pull request waits for
 ```
 
 It checks the corpus out at the gitlink this repository records, refuses to
@@ -186,7 +186,7 @@ python3 scripts/corpus_trades_identity.py --update
 ```
 
 The subset runs as a required check on a pull request; the full sweep runs
-nightly and on demand. The details, including which 30 probes and why, are in
+nightly and on demand. The details, including which 54 probes and why, are in
 `docs/ci.md`.
 
 ### "Expectation corrected"
