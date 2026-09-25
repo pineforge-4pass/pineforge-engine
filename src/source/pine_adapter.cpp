@@ -16024,11 +16024,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             const bool long_touched = bar.high >= long_stop->exit_levels.stop;
             const bool short_touched = bar.low <= short_stop->exit_levels.stop;
             if (long_touched && short_touched) {
-                const bool high_first = path_order_ == NativePathOrder::HighFirst
-                    || (path_order_ == NativePathOrder::Auto
-                        && std::abs(bar.high - bar.open)
-                            <= std::abs(bar.open - bar.low));
-                last_bar_dual_entry_path_ = high_first ? 1 : 2;
+                // The leg the run walks first, asked of the kernel: under Auto
+                // a tie bar walks the low leg first and fills the short entry.
+                last_bar_dual_entry_path_ = source_path_uses_high_first(bar) ? 1 : 2;
             }
         }
     }

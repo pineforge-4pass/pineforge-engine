@@ -78,7 +78,11 @@ void dual_path_is_a_live_adapter_projection() {
     const Bar bars[] = {{100,101,99,100,1,1000}, {100,110,90,100,1,2000}};
     probe.run(bars, 2);
     CHECK(probe.last_error().empty());
-    CHECK(probe.last_bar_dual_entry_path() == 1);
+    // Expectation corrected (R5 INT24, ruling on B-ADAPTER finding 1): the
+    // second bar is a tie (|H - O| = |O - L| = 10), whose low leg the kernel
+    // walks first, filling the short entry first; the observation reported 1
+    // under its own `<=` tie rule and now names the leg the run walks.
+    CHECK(probe.last_bar_dual_entry_path() == 2);
 }
 } // namespace
 

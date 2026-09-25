@@ -222,8 +222,10 @@ int main() {
     //    order instead of keeping copies of the rule. Rows 1-4 pin that the
     //    forced orders reach the adapter; this pins where the answer comes
     //    from: pine_adapter.cpp restates the open-proximity comparison
-    //    nowhere (its one `<=` spelling is the flat dual-stop observer's own
-    //    tie rule, kept and counted), names no private path-order helper, and
+    //    nowhere -- the flat dual-stop observer asks too, since R5 INT24
+    //    (expectation corrected: its own `<=` tie rule, counted here as 1,
+    //    named the long entry on a tie bar whose short entry the run filled
+    //    first) -- names no private path-order helper, and
     //    pine_path_resolve.cpp no longer carries the overload that read the
     //    sampler's thread-local override, nor the trail-tick using-declarations
     //    nothing in it has used since N10 deleted the trail machinery.
@@ -264,10 +266,10 @@ int main() {
         const int override_reader = count(resolve, "bar_path_uses_high_first(")
             + count(resolve, "using compat::pine::");
         std::printf("source-layer path order: restated=%d observer-tie=%d helper=%d "
-                    "override-reader=%d (want 0 1 0 0)\n",
+                    "override-reader=%d (want 0 0 0 0)\n",
                     restated, observer_tie, helper, override_reader);
         CHECK(restated == 0);
-        CHECK(observer_tie == 1);
+        CHECK(observer_tie == 0);
         CHECK(helper == 0);
         CHECK(override_reader == 0);
     }

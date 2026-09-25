@@ -1282,6 +1282,11 @@ list(APPEND TEST_SOURCES test_adapter_margin_revival_cancel)
 # it see the frame's; plus the kernel sources that say so. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_current_execution_rate)
+# R5 INT24 (ruling on B-ADAPTER finding 1): strategy_last_bar_dual_entry_path
+# names the entry the run fills first -- on a tie bar the kernel walks the low
+# leg first (|H - O| < |O - L| is strict), and so does the observation.
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_dual_entry_tie)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
