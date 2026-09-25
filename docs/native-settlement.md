@@ -119,7 +119,8 @@ refused, typed, as above -- the settlement's own refusal shows beforehand in
 boundary re-check below are made at execution only; and `Flatten` is never
 refused for a quantity. On a quantity grid (`NativeRunSpec::quantity_grid`) the
 book's own quantities are on the grid, for a request that settles them in one
-fill (no point budget, no group deduction pending against it): a
+fill (no point budget, no group deduction pending against it that takes any; a
+pending total its units absorb takes none, R5 lane K-OCA-KEEP): a
 `ScopeFraction` whose product is its scope's held total as it stands --
 `fraction == 1` of the gross scope -- resolves to that total, which the grid
 does not floor (a scope net of siblings' claims, or frozen at acceptance at

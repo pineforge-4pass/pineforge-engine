@@ -1198,7 +1198,10 @@ list(APPEND TEST_SOURCES test_native_group_absorption)
 # probe under Cancel and Reduce, a retained trail and a carried binding, the
 # order core's receipts in queue order and in reverse, and a seeded battery of
 # groups re-priced in random subsets and orders under every option set against
-# the plain replace, staged and direct. Source-free, so it also runs in the
+# the plain replace, staged and direct; and K-ULP5's finding 2 -- on a quantity
+# grid, a whole-scope close whose pending group total its units absorb closes
+# the scope whole (a fraction floored and left dust, a host-sized close was
+# refused InvalidTerms, on 2a03c658). Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_group_keep_handle)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two

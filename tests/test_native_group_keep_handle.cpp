@@ -32,6 +32,13 @@
 //                  best retained (retain_trigger_state), then a sibling's fill
 //   bound-*        a close bound to the book re-priced with keep_handle and
 //                  keep_binding, then a sibling's fill
+//   grid-absorbed-* K-ULP5's finding 2: on a 0.1 quantity grid, a close of its
+//                  scope's whole held total -- a ScopeFraction{1}, or a
+//                  host-sized close answered with that total -- whose pending
+//                  group deduction its units absorb settles them all in one
+//                  fill, so it closes the scope whole: no floor, no dust lot, no
+//                  InvalidTerms refusal; matched at a stop, or previewed and
+//                  executed as the current execution
 //   core-*         the order core itself: one cause's receipts in queue order
 //                  and in reverse, each found again on a replay
 //                  (AlreadyApplied) and read back in commit order; after a
@@ -60,14 +67,18 @@
 // replace only, whose successor is the newest request in both orders.
 //
 // Fail-before: compiled against 2a03c658 (K-ULP5) the TU builds and fails
-// 464 of 3,356 checks: the 12 probe-*, trail-* and bound-* runs under a
+// 490 of 3,436 checks: the 12 probe-*, trail-* and bound-* runs under a
 // keep_handle option set stop with code 2, discriminator 1, cause the member's
 // fill and recipient the re-priced request (the 12 plain and keep_binding runs
-// complete); core-* refuses the re-priced recipient InvalidCause in queue
-// order, staged and direct (the reverse order passes, and the older-cause
-// replay fails at its first drain); and of the battery's 360 runs, every one
-// of the 180 under a keep_handle option set stops with code 2, discriminator
-// 1, while no plain drain leaves incarnation order.
+// complete); grid-absorbed-fraction floors F to 1.1000000000000001 and leaves
+// a 2.2648549702353193e-14 dust lot, and both grid-absorbed-host rows refuse F
+// InvalidTerms and leave the lot open (the current one's preview answers
+// InvalidTerms first, and its execution is refused), staged and direct; core-*
+// refuses the re-priced recipient InvalidCause in queue order, staged and
+// direct (the reverse order passes, and the older-cause replay fails at its
+// first drain); and of the battery's 360 runs, every one of the 180 under a
+// keep_handle option set stops with code 2, discriminator 1, while no plain
+// drain leaves incarnation order.
 // Source-free: the kernel-only profile registers the row.
 #include "../src/native_execution_consumer.hpp"
 #include "native_match_book_fixture.hpp"
@@ -79,6 +90,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -144,6 +156,17 @@ struct ScriptHost final : public NativeStrategyHost {
     const no::WorkingRequestCore& core() const {
         return as_native_consumer(execution_consumer()).request_core();
     }
+    std::int64_t cycle() const { return position_cycle_seq_; }
+    // A host-sized close is answered with its scope's held total.
+    no::ExecutionTerms resolve_execution_terms(
+            const NativeExecutionTermsFacts& facts) const override {
+        no::ExecutionTerms terms{facts.default_resolved_price, std::nullopt,
+                                 no::OpeningShape::Transact};
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            terms.units = facts.scope_exposure_units;
+        }
+        return terms;
+    }
     // Submits under `name`; answers whether the kernel accepted it.
     bool sub(const std::string& name, no::Request r) {
         r.label = name;
@@ -190,6 +213,9 @@ struct ScriptHost final : public NativeStrategyHost {
     std::map<std::string, no::RequestHandle> h;
     std::map<std::uint64_t, std::string> names;
     std::vector<std::string> queues;
+    std::optional<NativeCurrentExecutionPreview> preview;
+    std::optional<NativeCurrentExecutionResult> executed;
+    bool live_after = true;
     int bar = 0;
     int refused = 0;
     int kept = 0;
@@ -269,7 +295,7 @@ struct Outcome {
     std::unique_ptr<ScriptHost> host;
 };
 
-NativeRunSpec spec_for(const std::string& name) {
+NativeRunSpec spec_for(const std::string& name, std::optional<double> grid = std::nullopt) {
     NativeRunSpec s;
     s.event_retention = NativeEventRetention::Full;
     s.identity = {"k-oca-keep-" + name, 1};
@@ -284,6 +310,7 @@ NativeRunSpec spec_for(const std::string& name) {
     s.price_tick = 0.01;
     s.fee_kind = NativeFeeKind::CashPerExecution;
     s.fee_value = 0.0;
+    if (grid) s.quantity_grid = *grid;
     return s;
 }
 
@@ -296,12 +323,12 @@ std::vector<Bar> flat_bars(int n, double price = 100.0) {
 }
 
 Outcome run_one(const std::string& name, const Script& script, bool direct, Mode mode,
-                int bars = 8) {
+                const std::vector<Bar>& tape = flat_bars(8),
+                std::optional<double> grid = std::nullopt) {
     Outcome out;
     out.host = std::make_unique<ScriptHost>(direct, mode);
     out.host->script = script;
-    CHECK(out.host->configure_native(spec_for(name)).status == NativeSetupStatus::Applied);
-    const auto tape = flat_bars(bars);
+    CHECK(out.host->configure_native(spec_for(name, grid)).status == NativeSetupStatus::Applied);
     out.host->run(tape.data(), static_cast<int>(tape.size()));
     const auto state = out.host->native_state();
     out.completed = state.kind == NativeLifecycleKind::Completed;
@@ -510,6 +537,138 @@ void bound(no::GroupEffect effect) {
             CHECK(drain[1].find("Cancelled A") != std::string::npos);
         }
     });
+}
+
+// K-ULP5's finding 2 (item 5 of this lane): on a 0.1 quantity grid, a request
+// whose pending group deduction its units absorb settles them all in one fill
+// (settles_in_one_fill, src/native_execution_consumer.cpp). L1 =
+// 0.30000000000000004 less a bound close of 0.3 leaves one ulp,
+// 5.5511151231257827e-17; L2 = 1001.1 less a bound close of 1000 leaves
+// 1.1000000000000227, off the grid. F, bound to L2, closes it all: a
+// ScopeFraction{1}, or a host-sized close the host answers with its scope's
+// total. D, a market Reduce of the dust lot bound to L1 in F's Reduce group,
+// defers the dust into F's pending total, below half an ulp of the
+// 1.1000000000000227 F settles. F rests behind a stop the price later falls
+// through (the matcher's path), or -- the current path -- F and D are
+// accepted in one callback, D is executed there, and F is previewed and
+// executed after it. On 2a03c658 the fraction was floored to
+// 1.1000000000000001 and left a dust lot of 2.2648549702353193e-14, and the
+// host-sized close was refused InvalidTerms -- as it was before K-ULP5 -- and
+// left the lot open; each now closes it whole.
+enum class GridClose { Fraction, HostSized, HostSizedCurrent };
+
+void grid_absorbed(GridClose kind) {
+    const bool current = kind == GridClose::HostSizedCurrent;
+    Script s;
+    s[0] = [](ScriptHost& p) {
+        p.sub("L1", tx(0.30000000000000004));
+        p.sub("L2", tx(1001.1));
+    };
+    s[2] = [](ScriptHost& p) {
+        auto cut1 = red(0.3);
+        cut1.owner = no::BindOpening{p.h["L1"], p.cycle()};
+        p.sub("cut1", cut1);
+        auto cut2 = red(1000.0);
+        cut2.owner = no::BindOpening{p.h["L2"], p.cycle()};
+        p.sub("cut2", cut2);
+    };
+    s[4] = [kind, current](ScriptHost& p) {
+        no::Request f;
+        if (kind == GridClose::Fraction) {
+            f.intent = no::Reduce{no::ScopeFraction{1.0}};
+        } else {
+            f.intent = no::HostSized{no::HostSizedKind::Close, std::nullopt};
+        }
+        f = in_group(f, 4, 1, no::GroupEffect::Reduce);
+        if (!current) f.trigger = no::Stop{95.0};
+        f.owner = no::BindOpening{p.h["L2"], p.cycle()};
+        p.sub("F", f);
+        const auto lots = p.native_open_lots(std::numeric_limits<double>::quiet_NaN());
+        if (lots.empty()) return;
+        auto d = in_group(red(lots.front().signed_units), 4, 2, no::GroupEffect::Reduce);
+        d.owner = no::BindOpening{p.h["L1"], p.cycle()};
+        p.sub("D", d);
+        if (!current) return;
+        NativeCurrentExecution run;
+        run.target = p.h["D"];
+        const auto d_result = p.execute_current(run);
+        CHECK(std::holds_alternative<no::ExecutionAppliedEvent>(d_result));
+        run.target = p.h["F"];
+        p.preview = p.inspect_current_execution(run);
+        p.executed = p.execute_current(run);
+        p.live_after = p.core().find_live(p.h["F"]) != nullptr;
+    };
+    std::vector<Bar> tape;
+    for (int i = 0; i < 12; ++i) {
+        const double px = i < 8 ? 100.0 : 90.0;
+        tape.push_back(Bar{px, px, px, px, 10.0, 60'000LL * (i + 1)});
+    }
+    const double dust = 0.30000000000000004 - 0.3;
+    const double residue = 1001.1 - 1000.0;
+    const std::string name = kind == GridClose::Fraction ? "grid-absorbed-fraction"
+        : current ? "grid-absorbed-host-current" : "grid-absorbed-host";
+    std::optional<Outcome> staged;
+    for (const bool direct : {false, true}) {
+        scenario = name + (direct ? "/direct" : "/staged");
+        Outcome o = run_one(name, s, direct, Mode::Replace, tape, 0.1);
+        CHECK(o.completed && o.code == 0 && o.discriminator == 0);
+        CHECK(o.refused == 0);
+        CHECK(!no::quantity_on_grid(residue, 0.1));
+        CHECK(dust > 0.0 && residue - dust == residue);
+        double d_closed = -1.0, f_closed = -1.0, pending = -1.0, deduction = -1.0;
+        int f_rejected = -1;
+        for (const auto& row : o.host->native_events(0)) {
+            if (!row.command) continue;
+            if (const auto* a = std::get_if<no::ExecutionAppliedEvent>(&*row.command)) {
+                if (o.host->name_of(a->handle()) == "D") d_closed = a->closed_units;
+                if (o.host->name_of(a->handle()) == "F") f_closed = a->closed_units;
+            } else if (const auto* t = std::get_if<no::TermsResolvedEvent>(&*row.command)) {
+                if (o.host->name_of(t->handle()) == "F") {
+                    pending = t->pending_total;
+                    deduction = t->effective_deduction;
+                }
+            } else if (const auto* m = std::get_if<no::MatchRejectedEvent>(&*row.command)) {
+                if (o.host->name_of(m->handle()) == "F") f_rejected = static_cast<int>(m->reason);
+            }
+        }
+        // D closes the dust; F takes nothing off its units for it and closes
+        // L2's residue whole, unfloored and admitted; the book is flat.
+        CHECK(d_closed == dust);
+        CHECK(pending == dust && deduction == 0.0);
+        CHECK(f_rejected == -1);
+        CHECK(f_closed == residue);
+        const auto lots = o.host->native_open_lots(std::numeric_limits<double>::quiet_NaN());
+        CHECK(lots.empty());
+        // The preview, taken while D's dust stood pending on F, refuses nothing,
+        // and the current execution closes the residue there and then.
+        bool refused_terms = false;
+        if (current) {
+            CHECK(o.host->preview.has_value());
+            if (o.host->preview) {
+                CHECK(!o.host->preview->refusal);
+                refused_terms = o.host->preview->terms_rejection.has_value();
+            }
+            CHECK(!refused_terms);
+            const auto* applied = o.host->executed
+                ? std::get_if<no::ExecutionAppliedEvent>(&*o.host->executed) : nullptr;
+            CHECK(applied != nullptr);
+            CHECK(applied && applied->closed_units == residue);
+            CHECK(!o.host->live_after);
+        }
+        std::printf("%-34s completed=%d D=%.17g F=%.17g pending=%.17g deducted=%.17g "
+                    "rejected=%d preview_terms_rejected=%d lots=%zu continuation=%016llx "
+                    "broker=%016llx\n",
+                    scenario.c_str(), o.completed ? 1 : 0, d_closed, f_closed, pending, deduction,
+                    f_rejected, refused_terms ? 1 : 0, lots.size(),
+                    static_cast<unsigned long long>(o.continuation),
+                    static_cast<unsigned long long>(o.broker));
+        if (!direct) {
+            staged = std::move(o);
+        } else if (staged) {
+            CHECK(o.transcript == staged->transcript);
+            CHECK(o.continuation == staged->continuation && o.broker == staged->broker);
+        }
+    }
 }
 
 // ---- The order core itself ------------------------------------------------------
@@ -1415,6 +1574,9 @@ int main() {
         core_rows(effect, false);
         core_rows(effect, true);
     }
+    grid_absorbed(GridClose::Fraction);
+    grid_absorbed(GridClose::HostSized);
+    grid_absorbed(GridClose::HostSizedCurrent);
     Tally all;
     for (std::uint64_t seed : {11ULL, 22ULL, 33ULL}) all.add(battery(seed, 30));
     scenario = "battery";

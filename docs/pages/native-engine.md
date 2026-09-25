@@ -462,7 +462,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9150-9190`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9106-9146`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -626,13 +626,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5616-5620`). Requests accepted before the
+`native_execution_consumer.cpp:5611-5615`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7066-7068`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7062-7064`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6958`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6954`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -2034,7 +2034,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7802`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7783`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2845,7 +2845,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7884`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7863`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3431,11 +3431,15 @@ engine quantity; a fraction that does not buy one whole step is
 submit. The one exception is a fraction whose product is its scope's held
 total as it stands -- `fraction == 1` of the gross scope, "close it all", for a
 request that settles it in one fill (no point budget, no group deduction
-pending against it): it resolves to that total, which is the fold of the
-book's own lots and is not floored, so it closes the scope whole whatever the
-grid (R5 lane K-ULP4; floored, it closed up to a step short, left a dust lot,
-or found nothing to close). A scope net of siblings' claims, or frozen at
-acceptance at another total, is floored like any other fraction.
+pending against it that takes any): it resolves to that total, which is the
+fold of the book's own lots and is not floored, so it closes the scope whole
+whatever the grid (R5 lane K-ULP4; floored, it closed up to a step short, left
+a dust lot, or found nothing to close). A pending total the units absorb takes
+none, so such a request settles them all too (R5 lane K-OCA-KEEP; until then
+the fraction was floored and left a dust lot, and a host-sized close answered
+with its scope's total was refused `InvalidTerms`). A scope net of siblings'
+claims, or frozen at acceptance at another total, is floored like any other
+fraction.
 
 Neither kind is emitted by the Pine adapter, which keeps resolving its own
 `HostSized` terms; `native_order` values therefore belong to `native_order_v7`.

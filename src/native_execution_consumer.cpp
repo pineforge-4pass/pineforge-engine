@@ -463,12 +463,21 @@ bool explicit_reduction_units_representable(double units, double exposure) noexc
 }
 
 // A request that settles its units in one fill, all of them: no point budget
-// splits them and no group deduction is pending against them. Only such a
-// request's units can be the book's own quantity, closed as it stands
-// (R5 lane K-ULP4).
-bool settles_in_one_fill(const native_order::LiveRequest& live) noexcept {
-    return std::holds_alternative<native_order::ImmediateRemaining>(live.request().capacity)
-        && !std::holds_alternative<native_order::PendingDeferred>(live.pending);
+// splits them and no group deduction is pending against them that takes any
+// -- a pending total `units` absorb takes none (R5 lane K-ULP5), so it
+// settles them all (R5 lane K-OCA-KEEP). Only such a request's units can be
+// the book's own quantity, closed as it stands (R5 lane K-ULP4).
+bool settles_in_one_fill(const native_order::LiveRequest& live, double units) noexcept {
+    if (!std::holds_alternative<native_order::ImmediateRemaining>(live.request().capacity)) {
+        return false;
+    }
+    if (!std::holds_alternative<native_order::PendingDeferred>(live.pending)) return true;
+    double deduction = 0.0;
+    double after = 0.0;
+    bool exhausted = false;
+    return native_order::WorkingRequestCore::effective_host_units(live.pending, units, &deduction,
+                                                                  &after, &exhausted)
+        && !exhausted && deduction == 0.0;
 }
 
 // `own_quantity`: the answered units are the book's own -- a closing size,
@@ -4776,9 +4785,11 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     // settlement arithmetic moves off any decimal grid: floored, the close fell
     // up to a whole step short, left a dust lot, or found nothing to close. A
     // scope net of siblings' claims or frozen at another total, a point budget
-    // and a pending group deduction settle something else, and are floored as
-    // before (R5 lane K-ULP4).
-    if (units == scope && scope == facts.scope_exposure_units && settles_in_one_fill(live)) {
+    // and a pending group deduction that takes any settle something else, and
+    // are floored as before (R5 lane K-ULP4); a pending total the units absorb
+    // takes none (R5 lane K-OCA-KEEP).
+    if (units == scope && scope == facts.scope_exposure_units
+        && settles_in_one_fill(live, units)) {
         return scope;
     }
     return representable_units(units, native_order::ExecutionGridPolicy::SnapToGrid,
@@ -4974,7 +4985,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
-        const bool own_quantity = closing_size && terms.units && settles_in_one_fill(*live)
+        const bool own_quantity = closing_size && terms.units
+            && settles_in_one_fill(*live, *terms.units)
             && *terms.units == terms_facts.scope_exposure_units;
         if (!execution_terms_grid_representable(
                 terms, host_sized, unresolved, terms_facts.scope_exposure_units,
@@ -6522,7 +6534,8 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
-    const bool own_quantity = closing_size && terms.units && settles_in_one_fill(*live)
+    const bool own_quantity = closing_size && terms.units
+        && settles_in_one_fill(*live, *terms.units)
         && *terms.units == facts.scope_exposure_units;
     if (!execution_terms_grid_representable(
             terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr(),
