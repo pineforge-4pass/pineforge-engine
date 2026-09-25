@@ -2823,8 +2823,11 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     if (const auto* spec = spec_ptr()) {
         ctx.quantity_grid = spec->quantity_grid;
         // A Reduce whose units are a FIFO boundary of its scope is on the grid
-        // as it stands (CommandContext::units_are_scope_boundary; R5 lane K-ULP4).
-        if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT) {
+        // as it stands (CommandContext::units_are_scope_boundary; R5 lane
+        // K-ULP4) -- one that closes in one fill, so the candidate can hold it
+        // to the same test (grid_boundary_holds).
+        if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT
+            && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)) {
             if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
                 if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
                     ctx.units_are_scope_boundary = scope_boundary_units(engine, request, units->units);
@@ -4648,6 +4651,16 @@ bool NativeExecutionConsumer::admit_placement_units(
                                  nullptr);
 }
 
+bool NativeExecutionConsumer::grid_boundary_holds(const BacktestEngine& engine,
+                                                  const native_order::LiveRequest& live) const {
+    const auto* spec = spec_ptr();
+    if (!spec || !spec->quantity_grid) return true;
+    const auto* reduce = std::get_if<native_order::Reduce>(&live.request().intent);
+    const auto* units = reduce ? std::get_if<native_order::ExplicitUnits>(&reduce->size) : nullptr;
+    if (!units || native_order::quantity_on_grid(units->units, *spec->quantity_grid)) return true;
+    return scope_boundary_units(engine, live.request(), units->units);
+}
+
 bool NativeExecutionConsumer::scope_boundary_units(const BacktestEngine& engine,
                                                    const native_order::Request& request,
                                                    double units) noexcept {
@@ -5087,6 +5100,14 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             }
         }
 
+        // An off-grid Reduce the grid admitted at submit as a FIFO boundary of
+        // its scope is admitted only while it is one: if the book changed
+        // before it matched, closing it would split a lot off the grid, so it
+        // ends here with the same typed refusal (R5 lane K-ULP4).
+        if (!grid_boundary_holds(engine, *live)) {
+            return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
+                            nonidentity_attempt);
+        }
         auto candidate = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
                                            execution_fx, plan ? &*plan : nullptr);
         const auto& inspect = candidate.inspect;

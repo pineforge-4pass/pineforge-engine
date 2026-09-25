@@ -607,6 +607,11 @@ private:
     static bool scope_boundary_units(const BacktestEngine& engine,
                                      const native_order::Request& request,
                                      double units) noexcept;
+    // An off-grid Reduce{ExplicitUnits} (admitted at submit as a FIFO boundary
+    // of its scope) is still one at its candidate; every other request, and
+    // any run without a quantity grid, answers true (R5 lane K-ULP4).
+    bool grid_boundary_holds(const BacktestEngine& engine,
+                             const native_order::LiveRequest& live) const;
     double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units

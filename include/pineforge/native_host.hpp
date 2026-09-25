@@ -704,7 +704,10 @@ struct NativeCurrentExecution {
 /// readiness of execution::Status::UnrepresentableQuantity is a quantity the
 /// settlement cannot book exactly on this book, which execute_current answers
 /// as a MatchRejectedEvent with MatchRejectReason::UnrepresentableQuantity;
-/// the run goes on.
+/// the run goes on. The request core's check that the fill can be taken off
+/// the request's own units, and the quantity grid's re-check of a boundary
+/// Reduce, are made at execution only, so a request whose preview is Applied
+/// can still be refused that way.
 struct NativeCurrentExecutionPreview {
     std::optional<NativeCurrentRefusal> refusal;
     std::optional<execution::Status> settlement_readiness;

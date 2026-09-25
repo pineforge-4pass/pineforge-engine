@@ -43,6 +43,9 @@
 //                      size (it would split the head lot off-grid), any
 //                      Transact and any other off-grid quantity are still
 //                      OffGrid
+//   grid-boundary-*    the boundary is held at the candidate too: a book that
+//                      changed after submit refuses it, typed; a point-budget
+//                      Reduce of a boundary is gridded
 //   scoped-dust        a bound scope of 2^-55 closed by Reduce 1.0: the
 //                      request core cannot take 2^-55 off 1.0 -- the same
 //                      typed refusal (code 6, discriminator 2 on 91d65ad6)
@@ -103,9 +106,14 @@ constexpr unsigned kUnrepresentable =
 const double kSurvivor = 1.5 - 1.3;   // 0x1.9999999999998p-3
 
 struct Step {
-    enum Kind { Transact, Reduce, Fraction, Flatten, BoundReduce } kind = Transact;
+    enum Kind {
+        Transact, Reduce, Fraction, Flatten, BoundReduce,
+        BudgetReduce,     // Reduce{value} with a PointBudget{1} capacity
+        BoundThenReduce,  // in ONE callback: BoundReduce{value, bind}, then an
+                          // Independent Reduce{value}; the step reports the second
+    } kind = Transact;
     double value = 0.0;
-    int bind = -1;   // BoundReduce: the step whose opening the Reduce binds to
+    int bind = -1;   // BoundReduce / BoundThenReduce: the step whose opening it binds to
 };
 
 struct Case {
@@ -175,7 +183,14 @@ no::Request request_of(const Step& s) {
     case Step::Reduce: r.intent = no::Reduce{no::ExplicitUnits{s.value}}; break;
     case Step::Fraction: r.intent = no::Reduce{no::ScopeFraction{s.value}}; break;
     case Step::Flatten: r.intent = no::Flatten{}; break;
-    case Step::BoundReduce: r.intent = no::Reduce{no::ExplicitUnits{s.value}}; break;
+    case Step::BoundReduce:
+    case Step::BoundThenReduce:
+        r.intent = no::Reduce{no::ExplicitUnits{s.value}};
+        break;
+    case Step::BudgetReduce:
+        r.intent = no::Reduce{no::ExplicitUnits{s.value}};
+        r.capacity = no::PointBudget{1.0};
+        break;
     }
     r.label = "step";
     return r;
@@ -197,9 +212,16 @@ public:
         StepOutcome out;
         auto request = request_of(case_.steps[k]);
         const int bind = case_.steps[k].bind;
-        if (case_.steps[k].kind == Step::BoundReduce && bind >= 0
-            && static_cast<std::size_t>(bind) < handles.size() && handles[bind]) {
+        const bool bound = case_.steps[k].kind == Step::BoundReduce
+            || case_.steps[k].kind == Step::BoundThenReduce;
+        if (bound && bind >= 0 && static_cast<std::size_t>(bind) < handles.size()
+            && handles[bind]) {
             request.owner = no::BindOpening{*handles[bind], position_cycle_seq_};
+        }
+        if (case_.steps[k].kind == Step::BoundThenReduce) {
+            // The bound close goes first; the Independent one is the step.
+            (void)submit(request);
+            request.owner = no::Independent{};
         }
         const auto res = submit(request);
         handles.push_back(res.handle);
@@ -421,7 +443,10 @@ int c_on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1*) {
         r.intent_value = step.value;
         break;
     case Step::Flatten: r.intent = PF_NATIVE_INTENT_FLATTEN; break;
-    case Step::BoundReduce: return 1;   // the C cases bind nothing
+    case Step::BoundReduce:
+    case Step::BudgetReduce:
+    case Step::BoundThenReduce:
+        return 1;   // the C cases use none of these
     }
     std::uint64_t inc = 0;
     std::uint32_t reject = 0;
@@ -749,6 +774,29 @@ void grid_cases() {
             CHECK(o.steps[5].submit == static_cast<int>(no::RequestRejectReason::OffGrid));
             CHECK(o.steps[5].book == std::vector<double>({0.5, big}));
         }
+    }
+    // The boundary must still hold when the Reduce matches. {A', 0.5}, A' =
+    // fl(1000.1 - 1000): a bound close of A' and an Independent Reduce{A'} in
+    // one callback -- the second is the head boundary at submit, but by its
+    // candidate the bound close has taken A', and on {0.5} it would split the
+    // on-grid lot off the grid: typed refusal, the 0.5 lot untouched.
+    {
+        const double big = 1000.1 - 1000.0;
+        const auto o = run_case({"grid-boundary-moved",
+            {{Step::Transact, 1000.1}, {Step::BoundReduce, 1000.0, 0}, {Step::Transact, 0.5},
+             {Step::BoundThenReduce, big, 0}}, 0.1});
+        filled(o, 2, 0.0, 0.5, 0.5, {big, 0.5});
+        refused(o, 3, {0.5});
+    }
+    // The exemption is for a close that settles in one fill: a point-budget
+    // Reduce of the same boundary is gridded.
+    {
+        const double big = 1000.1 - 1000.0;
+        const auto o = run_case({"grid-boundary-budget",
+            {{Step::Transact, 1000.1}, {Step::BoundReduce, 1000.0, 0}, {Step::Transact, 0.5},
+             {Step::BudgetReduce, big}}, 0.1});
+        CHECK(o.steps.size() == 4
+              && o.steps[3].submit == static_cast<int>(no::RequestRejectReason::OffGrid));
     }
     // AUDIT4 F5b/c/d: after the whole-scope close nothing is left to trip on.
     const std::vector<Step> dust_book = {

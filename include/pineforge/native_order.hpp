@@ -888,9 +888,12 @@ enum class MatchRejectReason : std::uint8_t {
     /// the position absorbs, or an opening the surviving book absorbs; or the
     /// request core cannot take the fill off the request's own units
     /// (CoreFailure::NonrepresentableQuantity: a scope of dust closed by a far
-    /// larger request, a point budget too small to move its remaining units).
-    /// The request ends here, nothing moves, and the run goes on; the same
-    /// request stopped the whole run before R5 lane K-ULP4.
+    /// larger request, a point budget too small to move its remaining units);
+    /// or an off-grid Reduce the grid admitted as a FIFO boundary of its scope
+    /// meets a book on which it no longer is one
+    /// (CommandContext::units_are_scope_boundary). The request ends here,
+    /// nothing moves, and the run goes on; the settlement's and the core's
+    /// cases stopped the whole run before R5 lane K-ULP4.
     UnrepresentableQuantity = 10,
 };
 
@@ -1425,7 +1428,10 @@ struct CommandContext {
     /// quantities a host chooses, and these are the book's own, which
     /// settlement arithmetic can move off any decimal grid; closing them takes
     /// whole lots and splits none (R5 lane K-ULP4). The execution consumer
-    /// measures it at submit; appended last, like the members above.
+    /// measures it at submit, for a request of ImmediateRemaining capacity,
+    /// and holds the candidate to the same test: a book that changed before
+    /// the match refuses it (MatchRejectReason::UnrepresentableQuantity).
+    /// Appended last, like the members above.
     bool units_are_scope_boundary = false;
 };
 
