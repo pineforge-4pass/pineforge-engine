@@ -390,9 +390,11 @@ RELEASE_MIN_TESTS = 693
 # map.hpp's 4 static_assert texts, the runtime's 32 dotted argument checks).
 # A row the vocabulary reads cannot leave silently -- its name turns unruled
 # -- unless its name left in the same change; the floor makes that drop an
-# edit of this file. A lane that adds rulings raises the floor with them.
+# edit of this file. A lane that adds rulings raises the floor with them:
+# 46 texts once the lane also ruled Eigen's `matrix.cols() ==
+# matrix.rows()` assert text, which a debug or sanitizers archive carries.
 ADR_RULED_IDENTIFIERS_MIN = 174
-ADR_RULED_TEXTS_MIN = 45
+ADR_RULED_TEXTS_MIN = 46
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,

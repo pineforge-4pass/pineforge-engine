@@ -166,7 +166,7 @@ def table_archive() -> tuple[list[str], list[str]]:
     it but the header-only rows (R5 lane H-DOCGATES), which table_headers()
     ships where the kernel profile ships them."""
     strings = (sorted(RULED.identifiers - RULED.header_only)
-               + sorted(RULED.phrases - RULED.header_only) + NOISE_STRINGS)
+               + sorted(RULED.phrases - RULED.header_only - RULED.debug_only) + NOISE_STRINGS)
     return strings, list(NOISE_NM)
 
 
@@ -184,6 +184,58 @@ def evaluate_table(strings: list[str], nm: list[str], **surfaces):
     unless the case brings its own header surface."""
     surfaces.setdefault("header_lines", table_headers())
     return guard.evaluate(strings, nm, RULED, **surfaces)
+
+
+class SanitizerAndDebugBuildTests(unittest.TestCase):
+    """R5 lane H-DOCGATES: the sanitizers profile's first run of the dotted-
+    namespace vocabulary (lab remote job rj-20260925t190344-64918a) found two
+    strings a release archive does not carry: UBSan's quoted type name
+    `'struct SymInfo'` and Eigen's assert text `matrix.cols() ==
+    matrix.rows()`."""
+
+    def test_a_sanitizer_type_name_is_judged_as_the_name(self) -> None:
+        for line in ("'struct SymInfo'", "'pineforge::SymInfo'"):
+            with self.subTest(line=line):
+                strings, nm = table_archive()
+                findings, _ = evaluate_table(strings + [line], nm)
+                self.assertEqual(findings, [], [str(f) for f in findings])
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings + ["'struct PineBogusType'"], nm)
+        self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", "PineBogusType")])
+
+    def test_a_quoted_text_is_still_a_text(self) -> None:
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings + ["'match Pine semantics exactly'"], nm)
+        self.assertGreaterEqual(len(findings), 1)
+        self.assertEqual({f.kind for f in findings}, {"unruled"})
+
+    def test_the_debug_only_assert_text(self) -> None:
+        text = "matrix.cols() == matrix.rows()"
+        self.assertIn(text, RULED.debug_only)
+        strings, nm = table_archive()
+        self.assertNotIn(text, strings)                 # a release archive: not stale
+        findings, _ = evaluate_table(strings, nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        findings, summary = evaluate_table(strings + [text], nm)   # a debug archive: covered
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        self.assertEqual(summary["phraseHits"], 4)
+
+    def test_only_a_marked_row_may_be_absent(self) -> None:
+        adr = guard.ADR.read_text(encoding="utf-8")
+        row = "so the text is " + guard.DEBUG_ONLY_MARK
+        self.assertEqual(adr.count(row), 1)
+        adr = adr.replace(row, "so the text is absent")
+        ruled = guard.ruled_entries(adr)
+        self.assertNotIn("matrix.cols() == matrix.rows()", ruled.debug_only)
+        strings, nm = table_archive()
+        findings, _ = guard.evaluate(strings, nm, ruled, header_lines=table_headers())
+        self.assertEqual([(f.kind, f.token) for f in findings],
+                         [("stale", "matrix.cols() == matrix.rows()")])
+
+    def test_an_unruled_assert_text_still_fails(self) -> None:
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings + ["map.size() == map.capacity()"], nm)
+        self.assertEqual([f.kind for f in findings], ["unruled"])
 
 
 class RuledTableTests(unittest.TestCase):
@@ -264,9 +316,12 @@ class EvaluatorTests(unittest.TestCase):
         # (expectation corrected: 3 -> every ruled text the vocabulary reads,
         # because R5 lane H-DOCGATES rules each text by its exact words: the
         # three feed texts, the deprecated aliases' texts, map.hpp's
-        # static_assert texts and the runtime's dotted argument checks.)
+        # static_assert texts and the runtime's dotted argument checks; the
+        # table archive models a release archive, which carries no assert
+        # text, so the debug-only row is not among them.)
         self.assertEqual(summary["ruledPhrasesCovered"],
-                         sum(1 for p in RULED.phrases if guard.vocabulary_text(p)))
+                         sum(1 for p in RULED.phrases - RULED.debug_only
+                             if guard.vocabulary_text(p)))
 
     def test_a_stale_ruling_fails(self) -> None:
         strings, nm = table_archive()

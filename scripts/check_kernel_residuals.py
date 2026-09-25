@@ -339,11 +339,17 @@ class Ruled:
     # installed headers carry them; the archive and the kernel's own literals
     # must not.
     header_only: frozenset[str] = frozenset()
+    # The texts whose row says a build with NDEBUG defined never carries them
+    # ("absent under NDEBUG" in its second column): an `assert` text the
+    # debug and sanitizers profiles compile in and release does not. Such a
+    # ruling is not stale when no surface carries it.
+    debug_only: frozenset[str] = frozenset()
 
 
 # The words a row's second column uses for a name the kernel profile installs
 # but never compiles into the archive: the gate holds the row to that claim.
 HEADER_ONLY_MARK = "no archive symbol"
+DEBUG_ONLY_MARK = "absent under NDEBUG"
 
 
 def ruled_entries(adr_text: str) -> Ruled:
@@ -365,12 +371,14 @@ def ruled_entries(adr_text: str) -> Ruled:
     identifiers: set[str] = set()
     phrases: set[str] = set()
     header_only: set[str] = set()
+    debug_only: set[str] = set()
     for line in section.splitlines():
         if not line.startswith("|"):
             continue
         cells = line.split("|")
         first = cells[1]
         scoped = len(cells) > 2 and HEADER_ONLY_MARK in cells[2]
+        debug = len(cells) > 2 and DEBUG_ONLY_MARK in cells[2]
         for token in BACKTICKED.findall(first):
             token = token.strip()
             if "/" in token:
@@ -383,9 +391,12 @@ def ruled_entries(adr_text: str) -> Ruled:
                 phrases.add(token)
                 if scoped:
                     header_only.add(token)
+                if debug:
+                    debug_only.add(token)
     if not identifiers:
         raise InfrastructureError("ADR residual section lists no ruled identifier")
-    return Ruled(frozenset(identifiers), frozenset(phrases), frozenset(header_only))
+    return Ruled(frozenset(identifiers), frozenset(phrases), frozenset(header_only),
+                 frozenset(debug_only))
 
 
 def scan(lines: list[str], source: str, *, texts: bool = True,
@@ -440,6 +451,13 @@ CLONE_SUFFIX = re.compile(
     r"(?:\.(?:cold|part|isra|constprop|lto_priv|localalias|llvm|clone|specialized)"
     r"(?:\.\d+)*)+$")
 
+# A type's name as UndefinedBehaviorSanitizer stores it in a sanitizer build's
+# type descriptors -- quoted, with GCC's elaborated keyword (`'struct SymInfo'`)
+# or clang's qualified name (`'pineforge::SymInfo'`). The line IS the type's
+# name, so its identifiers are judged as names, not as a text.
+SANITIZER_TYPE_NAME = re.compile(
+    r"^'(?:(?:struct|class|union|enum)\s+)?[A-Za-z_][\w:<>,\s*&\[\]]*'$")
+
 # The surfaces whose lines are texts a program prints or compiles in: an archive
 # string, a header literal, a kernel-source literal. (A symbol line and a code
 # line are names.)
@@ -459,6 +477,8 @@ def is_text(hit: Hit) -> bool:
     text = hit.text.strip()
     if hit.source == "strings":
         text = CLONE_SUFFIX.sub("", text)
+        if SANITIZER_TYPE_NAME.match(text):
+            return False
     return ARCHIVE_IDENTIFIER.fullmatch(text) is None
 
 
@@ -552,7 +572,7 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
                 "ruled in ADR-0001 but no longer in the archive, the installed headers or "
                 "a kernel source literal; drop its row"))
     for phrase in sorted(ruled.phrases):
-        if phrase in covered:
+        if phrase in covered or phrase in ruled.debug_only:
             continue
         if vocabulary_text(phrase):
             findings.append(Finding(
