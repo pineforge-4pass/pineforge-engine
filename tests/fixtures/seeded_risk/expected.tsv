@@ -1,0 +1,6 @@
+# probe	seed	tv_columns_rows_differ	rows_base	rows_seeded	first_chronological_row	first_row_time
+ta-closedtrades-risk-introspection-01	drawdown:20:pct	0	1502	1502	-	-
+cap-risk-gates-allow-max-intraday-01	cap:3	0	1464	1464	-	-
+cap-max-intraday-filled-orders-isolate-01	cap:5	3840	3916	3916	77	2025-04-08 02:00
+cap-gatekeeper-intraday-risk-01	cap:4	312	604	604	293	2025-10-25 01:15
+composite-bracket-cap-range-pending-stop-01	cap:5	2370	2384	2386	17	2025-04-02 02:45

@@ -538,7 +538,16 @@ the statements: ticket → day timezone → path check.
 the adapter half reproduced bit for bit against the 683a82f harvest, the
 kernel half pinned; corpus byte-identity not applicable (no `src/` or
 `include/` change); the five corpus risk probes measured as above with the
-kernel seeded in an uncommitted, env-gated experiment.
+kernel seeded in an env-gated experiment. That experiment is on the tree since
+R5 lane H-MEASURE: `scripts/check_seeded_risk_experiment.sh` applies
+`tests/fixtures/seeded_risk/n12-experiment.patch` to a throwaway copy, checks
+that the unseeded probes still hash to the parity baseline, runs them with the
+kernel's rule seeded in the adapter's place, and reproduces every count above
+on `6df7850a` (counted on the ten TradingView-recorded columns, oldest row
+first; the engine's own incarnation column renumbers a few rows earlier). It
+stays a script, not a CTest row: seeding the kernel's `NativeRunSpec::risk` for a
+Pine run needs the source change the patch makes, and the in-process pins
+remain the five probes' baseline rows and the `SW` check above.
 
 **The P6 decision: native-only.** Re-verified on main `b8e7976e`: the ordering
 stands (`project()` at pine_strategy_host.cpp:324, `configure_native` at :325,

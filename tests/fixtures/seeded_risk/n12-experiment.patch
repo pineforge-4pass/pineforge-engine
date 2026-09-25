@@ -1,0 +1,118 @@
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -2317,6 +2317,52 @@
+     // entry must not consume a generic physical-lot cap before it fills, so
+     // the projected native spec deliberately leaves max_open_lots unbounded.
+     spec.allowed_open_directions = directions_for(risk_.direction);
++    // N12 EXPERIMENT (a fixture, env-gated): route the TradingView drawdown
++    // limit and/or the fill cap through NativeRunSpec::risk so the corpus
++    // risk probes measure the kernel rule against the adapter's own.
++    if (const char* n12 = std::getenv("PF_N12_ROUTE"); n12 && *n12) {
++        const std::string routes = n12;
++        NativeRiskLimits limits;
++        bool any = false;
++        // Pine's strategy.risk.* statements arrive per bar, after this
++        // projection; seed the values from PF_N12_SEED=drawdown:<v>[:pct],cap:<n>.
++        double seed_dd = 0.0; bool seed_dd_pct = false; int seed_cap = 0;
++        if (const char* seed = std::getenv("PF_N12_SEED")) {
++            std::string sv = seed; std::size_t pos = 0;
++            while (pos <= sv.size()) {
++                std::size_t next = sv.find(',', pos); if (next == std::string::npos) next = sv.size();
++                const std::string item = sv.substr(pos, next - pos);
++                if (item.rfind("drawdown:", 0) == 0) {
++                    seed_dd = std::atof(item.c_str() + 9);
++                    seed_dd_pct = item.find(":pct") != std::string::npos;
++                } else if (item.rfind("cap:", 0) == 0) {
++                    seed_cap = std::atoi(item.c_str() + 4);
++                }
++                pos = next + 1;
++            }
++        }
++        if (routes.find("drawdown") != std::string::npos && seed_dd > 0.0) {
++            NativeLossLimit limit;
++            limit.value = seed_dd;
++            limit.percent = seed_dd_pct;
++            limits.max_drawdown = limit;
++            limits.action = NativeRiskAction::BlockOpenings;
++            any = true;
++        }
++        if (routes.find("cap") != std::string::npos && seed_cap > 0) {
++            limits.max_fills_per_day = static_cast<std::uint32_t>(seed_cap);
++            limits.day_basis = NativeRiskDay::CalendarDayInTimezone;
++            limits.action = NativeRiskAction::FlattenAndBlock;
++            const_cast<PineExecutionAdapter*>(this)->cap.detach();
++            any = true;
++        }
++        if (any) {
++            spec.risk = limits;
++            std::fprintf(stderr, "N12: spec.risk declared drawdown=%d fills=%u\n",
++                         limits.max_drawdown ? 1 : 0,
++                         limits.max_fills_per_day ? *limits.max_fills_per_day : 0u);
++        }
++    }
+     // Pine's frozen default sizing admits against its signal-time tuple.  The
+     // generic initial-margin gate only sees the later fill-time FX rate, so
+     // source admission is reproduced in validate_precommit instead: every
+@@ -13670,7 +13716,11 @@
+         }
+     }
+     if (risk_.halted) return;
+-    if (risk_.max_drawdown > 0.0 && std::isfinite(risk_.observed_peak_equity)) {
++    static const bool n12_route_drawdown = [] {
++        const char* n12 = std::getenv("PF_N12_ROUTE");
++        return n12 && std::string(n12).find("drawdown") != std::string::npos;
++    }();
++    if (!n12_route_drawdown && risk_.max_drawdown > 0.0 && std::isfinite(risk_.observed_peak_equity)) {
+         const double threshold = risk_.max_drawdown_percent
+             ? risk_.observed_peak_equity * risk_.max_drawdown / 100.0
+             : risk_.max_drawdown;
+@@ -16563,6 +16613,16 @@
+     if (!skip_quiet(QuietHook::TerminalExplicitMarket, bound && explicit_entries < 2))
+         apply_terminal_explicit_market_policy(context);
+     update_risk_state(bar.close);
++    if (std::getenv("PF_N12_ROUTE")) {
++        const auto rs = require_host().native_risk_state();
++        static bool n12_reported = false;
++        if (rs.blocked && !n12_reported) {
++            n12_reported = true;
++            std::fprintf(stderr, "N12: first kernel block at script bar %lld day=%lld fills_today=%llu\n",
++                         (long long)context.script_bar_open_ms, (long long)rs.day_ordinal,
++                         (unsigned long long)rs.fills_today);
++        }
++    }
+     if (stream_mode_) return;
+     // The native callback frame remains current after the source script
+     // returns. Reproduce the legacy once-per-script-bar margin checkpoint at
+--- a/include/pineforge/compat/pine/intraday_cap.hpp
++++ b/include/pineforge/compat/pine/intraday_cap.hpp
+@@ -87,6 +87,7 @@
+         : attachment_(attachment) {}
+ 
+     void attach() { attachment_ = CapAttachment::LegacySource; }
++    void detach() { attachment_ = CapAttachment::None; }
+ 
+     // The old generated assignment is an explicit request for Pine behavior,
+     // even from an opted-out native fixture. It never silently drops a rule.
+--- a/src/source/pine_strategy_host.cpp
++++ b/src/source/pine_strategy_host.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <cstdlib>
+ #include <ctime>
+ #include <limits>
+ #include <numeric>
+@@ -977,6 +978,12 @@
+ }
+ 
+ void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
++    // N12 EXPERIMENT (a fixture): under a routed cap the statement must not
++    // re-attach the adapter's own budget.
++    if (const char* n12 = std::getenv("PF_N12_ROUTE");
++        n12 && std::string(n12).find("cap") != std::string::npos && std::getenv("PF_N12_SEED")) {
++        return;
++    }
+     adapter_.cap = limit;
+ }
+ 
