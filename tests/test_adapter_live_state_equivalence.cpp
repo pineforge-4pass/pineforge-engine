@@ -208,7 +208,11 @@ std::vector<Bar> revival_tape(const Config& config) {
     long cents = 10000;
     for (int index = 0; index < config.bars; ++index) {
         long open = cents;
-        if (rng.percent(10)) open += (rng.percent(60) ? 1 : -1) * rng.between(100, 300);
+        if (rng.percent(10)) {
+            // One draw per statement: the operands of '*' are unsequenced.
+            const int sign = rng.percent(60) ? 1 : -1;
+            open += sign * rng.between(100, 300);
+        }
         long drift = rng.between(-80, 80);
         if (rng.percent(6)) drift = rng.between(600, 1400);
         if (rng.percent(3)) drift = -rng.between(600, 1400);

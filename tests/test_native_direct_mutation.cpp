@@ -379,7 +379,9 @@ private:
         const bool waits = owner < 25 && !staged_.live().empty();
         const int intent = rng_.below(100);
         if (intent < 30) {
-            r.intent = no::Transact{(rng_.percent(50) ? 1.0 : -1.0) * rng_.between(1, 3)};
+            // One draw per statement: the operands of '*' are unsequenced.
+            const double sign = rng_.percent(50) ? 1.0 : -1.0;
+            r.intent = no::Transact{sign * rng_.between(1, 3)};
         } else if (intent < 50) {
             const int size = rng_.below(100);
             if (size < 50) r.intent = no::Reduce{no::ExplicitUnits{static_cast<double>(rng_.between(1, 3))}};
@@ -394,7 +396,8 @@ private:
         } else if (intent < 62) {
             r.intent = no::Flatten{};
         } else if (intent < 70) {
-            r.intent = no::ReverseTo{(rng_.percent(50) ? 1.0 : -1.0) * rng_.between(1, 3)};
+            const double sign = rng_.percent(50) ? 1.0 : -1.0;
+            r.intent = no::ReverseTo{sign * rng_.between(1, 3)};
         } else if (intent < 85) {
             no::HostSized sized;
             sized.kind = rng_.percent(50) ? no::HostSizedKind::Open : no::HostSizedKind::Close;

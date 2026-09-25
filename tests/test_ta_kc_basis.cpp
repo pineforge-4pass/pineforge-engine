@@ -191,9 +191,14 @@ static void test_recompute_sequences() {
     double prev_close = na<double>();
     int bad = 0;
     for (int t = 0; t < (int)b.src.size(); ++t) {
-        kc.compute(1500.0 + r.unit() * 10.0, 1510.0, 1490.0 + r.unit(), 1500.0);
-        kc.recompute(r.unit() < 0.1 ? na<double>() : 1400.0 + r.unit() * 200.0,
-                     1600.0, 1400.0, r.unit() < 0.1 ? na<double>() : 1450.0);
+        // One draw per statement, left to right: C++ leaves the order in which
+        // a call's arguments are evaluated unspecified.
+        const double first_src = 1500.0 + r.unit() * 10.0;
+        const double first_low = 1490.0 + r.unit();
+        kc.compute(first_src, 1510.0, first_low, 1500.0);
+        const double second_src = r.unit() < 0.1 ? na<double>() : 1400.0 + r.unit() * 200.0;
+        const double second_close = r.unit() < 0.1 ? na<double>() : 1450.0;
+        kc.recompute(second_src, 1600.0, 1400.0, second_close);
         const ta::KCResult got = kc.recompute(b.src[t], b.high[t], b.low[t], b.close[t]);
         const double basis = basis_ref.compute(b.src[t]);
         const double span = true_range(b.high[t], b.low[t], prev_close);

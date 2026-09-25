@@ -373,10 +373,15 @@ static void test_recompute_sequences() {
         int bad = 0;
         for (int t = 0; t < n; ++t) {
             const int t1 = int(r.unit() * 6.0), t2 = int(r.unit() * 6.0);
-            p.compute(kTypes[t1], r.unit() < 0.5, t1 != 2 && r.unit() < 0.5, 2400.0, 2600.0, 2300.0,
-                      2450.0);
-            p.recompute(kTypes[t2], r.unit() < 0.5, t2 != 2 && r.unit() < 0.5,
-                        r.unit() < 0.2 ? na<double>() : 2410.0, 2700.0, 2200.0, 2500.0);
+            // One draw per statement, left to right: C++ leaves the order in
+            // which a call's arguments are evaluated unspecified.
+            const bool anchor1 = r.unit() < 0.5;
+            const bool developing1 = t1 != 2 && r.unit() < 0.5;
+            p.compute(kTypes[t1], anchor1, developing1, 2400.0, 2600.0, 2300.0, 2450.0);
+            const bool anchor2 = r.unit() < 0.5;
+            const bool developing2 = t2 != 2 && r.unit() < 0.5;
+            const double open2 = r.unit() < 0.2 ? na<double>() : 2410.0;
+            p.recompute(kTypes[t2], anchor2, developing2, open2, 2700.0, 2200.0, 2500.0);
             const std::vector<double> got =
                 p.recompute(kTypes[type[t]], a[t] != 0, dev[t] != 0, f.o[t], f.h[t], f.l[t], f.c[t]);
             if (!same_levels(got, reference(f, a, type, dev, t))) ++bad;

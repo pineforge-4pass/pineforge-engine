@@ -199,8 +199,11 @@ static void test_recompute_sequences() {
         for (int t = 0; t < (int)b.src.size(); ++t) {
             kc.compute(3100.0 + r.unit(), 3150.0, 3050.0, 3120.0);
             kcw.compute(3100.0 + r.unit(), 3150.0, 3050.0, 3120.0);
-            kc.recompute(r.unit() < 0.1 ? na<double>() : 3000.0, 3400.0,
-                         r.unit() < 0.1 ? na<double>() : 2900.0, 3001.0);
+            // One draw per statement, left to right: C++ leaves the order in
+            // which a call's arguments are evaluated unspecified.
+            const double second_src = r.unit() < 0.1 ? na<double>() : 3000.0;
+            const double second_low = r.unit() < 0.1 ? na<double>() : 2900.0;
+            kc.recompute(second_src, 3400.0, second_low, 3001.0);
             kcw.recompute(3000.0, 3400.0, 2900.0, r.unit() < 0.1 ? na<double>() : 3001.0);
             const ta::KCResult got = kc.recompute(b.src[t], b.high[t], b.low[t], b.close[t]);
             const double w = kcw.recompute(b.src[t], b.high[t], b.low[t], b.close[t]);

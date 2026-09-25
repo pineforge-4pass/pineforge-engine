@@ -608,7 +608,11 @@ private:
         const double size = units();
         const int kind = rng_.below(100);
         if (kind < 55) {
-            place(opening(buy, size, ref), rng_.percent(30));
+            // One draw per statement, left to right: C++ leaves the order in
+            // which a call's arguments are evaluated unspecified.
+            const no::Request request = opening(buy, size, ref);
+            const bool market = rng_.percent(30);
+            place(request, market);
         } else if (kind < 85) {
             // A bracket: the entry and two legs its fill arms, one OCA group.
             const auto parent = submit(opening(buy, size, ref));
@@ -739,7 +743,9 @@ private:
         const std::size_t at = static_cast<std::size_t>(rng_.below(static_cast<int>(handles_.size())));
         const no::RequestHandle target = handles_[at];
         if (rng_.percent(60)) {
-            const auto result = replace(target, opening(rng_.percent(50), units(), ref));
+            const bool buy = rng_.percent(50);
+            const double size = units();
+            const auto result = replace(target, opening(buy, size, ref));
             if (result.successor) {
                 ++outcome.replaced;
                 handles_[at] = *result.successor;

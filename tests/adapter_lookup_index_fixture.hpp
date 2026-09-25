@@ -238,9 +238,13 @@ private:
             const double level = near(bar, 1, 10);
             const bool limit = rng_.percent(50);
             const bool oca = rng_.percent(40);
-            strategy_entry(buy ? long_id() : short_id(), buy, limit ? level : kNa,
-                           limit ? kNa : level, kNa, {}, oca ? group() : "",
-                           oca ? (rng_.percent(60) ? 1 : 2) : 0);
+            // One draw per statement, left to right: C++ leaves the order in
+            // which a call's arguments are evaluated unspecified.
+            const char* const entry_id = buy ? long_id() : short_id();
+            const char* const oca_name = oca ? group() : "";
+            const int oca_type = oca ? (rng_.percent(60) ? 1 : 2) : 0;
+            strategy_entry(entry_id, buy, limit ? level : kNa, limit ? kNa : level, kNa, {},
+                           oca_name, oca_type);
         }
         if (position != 0.0 && rng_.percent(45)) {
             ++commands;
@@ -265,15 +269,22 @@ private:
         }
         if (position != 0.0 && rng_.percent(8)) {
             ++commands;
-            if (rng_.percent(50)) strategy_close(any_id(), {}, 1.0);
-            else strategy_close(any_id(), {}, kNa, 50.0, rng_.percent(30));
+            if (rng_.percent(50)) {
+                strategy_close(any_id(), {}, 1.0);
+            } else {
+                const char* const close_id = any_id();
+                const bool immediately = rng_.percent(30);
+                strategy_close(close_id, {}, kNa, 50.0, immediately);
+            }
         }
         if (rng_.percent(3)) { ++commands; strategy_close_all(); }
         if (rng_.percent(5)) { ++commands; strategy_cancel(any_id()); }
         if (rng_.percent(2)) { ++commands; strategy_cancel_all(); }
         if (rng_.percent(6)) {
             ++commands;
-            strategy_order("o", rng_.percent(50), 1.0, rng_.percent(50) ? near(bar, 1, 6) : kNa);
+            const bool is_long = rng_.percent(50);
+            const double limit = rng_.percent(50) ? near(bar, 1, 6) : kNa;
+            strategy_order("o", is_long, 1.0, limit);
         }
         if (rng_.percent(3)) { ++commands; strategy_exit_cancel_bracket("xl", "L"); }
     }

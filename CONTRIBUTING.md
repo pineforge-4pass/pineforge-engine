@@ -141,6 +141,7 @@ What each gate refuses:
 | `check_native_cpp_versions.py`, `check_aggregate_cpp_versions.py` | an internal C++ epoch moved without its consumers |
 | `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
 | `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |
+| `check_rng_draw_order.py` | two random draws in one call's arguments or one operator's operands, whose order the compiler picks (x86-64 GCC and AppleClang would test different batteries) |
 | `check_doc_anchors.py` | a `file:line` citation that no longer points at the symbol it claims |
 | `check_doc_lint.py` | a stale epoch, a roadmap label or a "there is no … yet" claim the tree has falsified | <!-- verified HEAD -->
 | `check_pine_to_native_coverage.py` | a Pine builtin with no row on the migration page |

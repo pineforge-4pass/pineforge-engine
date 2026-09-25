@@ -483,7 +483,9 @@ private:
             exit.kind = Kind::Exit;
             exit.trigger = rng_.below(3);
             exit.intent = rng_.below(3);
-            exit.level = ref_ + (rng_.percent(50) ? 1 : -1) * rng_.between(4, 16);
+            // One draw per statement: the operands of '*' are unsequenced.
+            const int side = rng_.percent(50) ? 1 : -1;
+            exit.level = ref_ + side * rng_.between(4, 16);
             const int tie = rng_.percent(30) ? pick_live(Kind::Exit) : -1;
             if (tie >= 0) {
                 const Slot& other = slots_[static_cast<std::size_t>(tie)];
@@ -499,7 +501,8 @@ private:
                 place(exit);
                 Slot sibling = exit;
                 sibling.trigger = exit.trigger == 0 ? 1 : 0;
-                sibling.level = ref_ + (rng_.percent(50) ? 1 : -1) * rng_.between(4, 16);
+                const int sibling_side = rng_.percent(50) ? 1 : -1;
+                sibling.level = ref_ + sibling_side * rng_.between(4, 16);
                 place(sibling);
                 return;
             }

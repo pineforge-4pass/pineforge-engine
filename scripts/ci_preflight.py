@@ -188,6 +188,13 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
+        # R5 lane H-DOCGATES (AUDIT4-opus X17, perf N-2): two random draws whose
+        # order C++ leaves to the compiler build a different battery on x86-64
+        # GCC than on AppleClang -- XPLAT1's bug class, back at ten sites.
+        ('rng-draw-order-tests',
+         [sys.executable, str(source / 'scripts/test_check_rng_draw_order.py')]),
+        ('rng-draw-order',
+         [sys.executable, str(source / 'scripts/check_rng_draw_order.py')]),
         ('verifier-tests', [sys.executable, str(source / 'scripts/test_ci_verify.py')]),
         ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
         ('native-c-surface-tests',
