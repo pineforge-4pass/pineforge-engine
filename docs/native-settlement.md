@@ -148,7 +148,10 @@ total, which its terms or its owner's fill later takes off the units they bind
 the units again: at most half an ulp of them) is absorbed. The sibling keeps
 its units, the exact binary64 result of the subtraction; the member's fill
 stands; and the event that records the deduction took nothing (R5 lane K-ULP5;
-`docs/pages/native-engine.md`, "What a host gets from a quantity"). It takes a
+`docs/pages/native-engine.md`, "What a host gets from a quantity"). Each
+deduction is taken on its own: a hundred fills of 1 beside a 2^60 sibling are
+a hundred absorbed deductions and leave it 2^60, where one deduction of 100
+would leave `fl(2^60 - 100)`, 2^60 - 128. It takes a
 dust-sized fill -- the close of a dust lot -- beside a far larger sibling, and
 until K-ULP5 it failed the run after the fill was booked, with code 6,
 discriminator 7 (`CoreFailure::UnrepresentableReservation`); only a pending

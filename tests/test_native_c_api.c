@@ -1628,10 +1628,13 @@ static void check_reservation_absorbed(void) {
     static pf_native_event_v1 rows[256];
     kulp5_state state;
     pf_native_working_v1 working;
+    pf_native_open_lot_v1 lot;
     const double resting_units = 1000.0 - 0.3;
+    const double head = 0.5 - 0.3;                       /* the 0.5 lot after the 0.3 close */
+    const double dust = (head + (1000.1 - 1000.0)) - 0.3; /* the fraction's units net of 0.3 */
     int got = 0;
     int i, n;
-    int reduced = 0, absorbed = 0, deferred = 0;
+    int reduced = 0, absorbed = 0, deferred = 0, applied = 0;
     double first_reduction = -1.0;
     uint32_t lifecycle;
 
@@ -1669,8 +1672,24 @@ static void check_reservation_absorbed(void) {
         ++reduced;
     }
     CHECK_EQ_INT(reduced, 1, "the resting member is no longer working");
+    /* The fraction's fill stands: one APPLIED row closing the dust, taken off
+     * the head lot. */
+    applied = 0;
+    for (i = 0; i < got; ++i) {
+        if (rows[i].kind == PF_NATIVE_EVENT_APPLIED && rows[i].incarnation == state.fraction) {
+            CHECK(rows[i].closed_units == dust, "the fraction closed another quantity");
+            ++applied;
+        }
+    }
+    CHECK_EQ_INT(applied, 1, "the fraction's fill did not stand");
     CHECK_EQ_INT(strategy_native_open_lot_count_v1(state.host, NAN), 2,
-                 "the fraction's fill did not stand");
+                 "the book holds another number of lots");
+    memset(&lot, 0, sizeof(lot));
+    lot.struct_size = (uint32_t)sizeof(lot);
+    lot.version = PF_NATIVE_API_VERSION;
+    CHECK_EQ_INT(strategy_native_open_lot_get_v1(state.host, 0, &lot), PF_NATIVE_OK,
+                 "the head lot could not be read");
+    CHECK(lot.signed_units == head - dust, "the dust was not taken off the head lot");
     strategy_native_host_free(state.host);
 
     lifecycle = kulp5_run(&state, 1, rows, 256, &got);

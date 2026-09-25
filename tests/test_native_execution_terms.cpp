@@ -675,12 +675,17 @@ void a_t4d_authenticated_absorbed_deduction() {
         CHECK(h.native_continuation_hash() == hash);
         CHECK(h.validator_calls == 1);
         bool execute_threw = false;
+        bool refused_typed = false;
         try {
-            (void)h.execute_current(command(b_target));
+            const auto result = h.execute_current(command(b_target));
+            const auto* refused = std::get_if<no::MatchRejectedEvent>(&result);
+            refused_typed = refused
+                && refused->reason == no::MatchRejectReason::UnrepresentableQuantity;
         } catch (const std::exception&) {
             execute_threw = true;
         }
         CHECK(!execute_threw);
+        CHECK(refused_typed);
         CHECK(h.native_state().kind == NativeLifecycleKind::Running);
         const auto terms = last_event<no::TermsResolvedEvent>(h);
         REQUIRE(terms);

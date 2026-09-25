@@ -37,7 +37,8 @@
 //                  2.2759572004815709e-14, below half an ulp of the resting
 //                  member's 999.7 -- absorbed; a later opening fills
 //   units-*        a 2^60 recipient beside fills of 1 (absorbed) and 256
-//                  (deducted), long and short
+//                  (deducted), long and short; a hundred fills of 1, each
+//                  absorbed on its own, then one of 100 (2^60 - 128)
 //   pending        a bracket child waiting on its parent holds 2^60 pending;
 //                  a fill of 1 is absorbed; the parent's fill binds the chain
 //   pending-rounds a pending 2^-60 then a fill of 1: the total is 1
@@ -57,8 +58,8 @@
 // Every case runs on the request core's staged and direct paths, which must
 // agree bit for bit, hashes included.
 //
-// Fail-before: compiled against f1af50dc (K-ULP4) the TU builds and fails 970
-// of 177,824 checks: p5b, units-*, pending, pending-rounds, terms,
+// Fail-before: compiled against f1af50dc (K-ULP4) the TU builds and fails 975
+// of 177,837 checks: p5b, units-*, pending, pending-rounds, terms,
 // terms-current and bound stop with code 6, discriminator 7 (terms-current's
 // preview throws "native host-sized deduction is not representable" first),
 // and the battery stops 321, 290 and 303 of its 1,000 runs per seed, each with
@@ -544,6 +545,43 @@ void units(double sign) {
     CHECK(events_of<no::CancelledEvent>(host).empty());
 }
 
+// Each deduction is taken on its own: a hundred fills of 1 against 2^60 are a
+// hundred absorbed deductions and leave it 2^60; one fill of 100 then takes it
+// to fl(2^60 - 100), which is 2^60 - 128. The hundred share one cohort, so
+// they reduce the recipient and not each other.
+void units_repeated() {
+    Script s;
+    s[0] = [](ScriptHost& p) {
+        auto recipient = in_group(tx(kP60), 7, 1);
+        recipient.trigger = no::Limit{1.0};
+        p.sub("recipient", recipient);
+        for (int i = 0; i < 100; ++i) {
+            p.sub("fill-" + std::to_string(i), in_group(tx(1.0), 7, 2));
+        }
+    };
+    s[2] = [](ScriptHost& p) { p.sub("fill-100", in_group(tx(100.0), 7, 200)); };
+    const Outcome o = run_both("units-repeated", s, flat_bars(6));
+    const ScriptHost& host = *o.host;
+    CHECK(o.completed);
+    const auto reduced = events_of<no::ReservationReducedEvent>(host);
+    CHECK(reduced.size() == 101);
+    int absorbed = 0;
+    for (std::size_t i = 0; i + 1 < reduced.size(); ++i) {
+        if (reduced[i].requested_delta == 1.0 && reduced[i].actual_deduction == 0.0
+            && reduced[i].before.q == kP60
+            && std::get<no::RemainingProjectionUnits>(reduced[i].after).q == kP60) {
+            ++absorbed;
+        }
+    }
+    CHECK(absorbed == 100);
+    if (reduced.size() == 101) {
+        CHECK(reduced[100].requested_delta == 100.0 && reduced[100].actual_deduction == 100.0);
+        CHECK(std::get<no::RemainingProjectionUnits>(reduced[100].after).q == kP60 - 128.0);
+    }
+    CHECK(remaining_is(host, "recipient", kP60 - 128.0));
+    CHECK(o.counts.absorbed_units == 100);
+}
+
 // Bars at 100 but `trigger_bar`, where the price is 250: a buy stop at 200
 // fills there.
 std::vector<Bar> bars_with_rise(int n, int trigger_bar) {
@@ -674,8 +712,8 @@ void terms_current() {
             p.preview_threw = true;
         }
         try {
-            p.current_kind = static_cast<int>(
-                    p.execute_current(NativeCurrentExecution{p.h["host-open"]}).index());
+            const auto result = p.execute_current(NativeCurrentExecution{p.h["host-open"]});
+            p.current_kind = std::holds_alternative<no::ExecutionAppliedEvent>(result) ? 1 : 0;
         } catch (const std::exception&) {
             p.current_kind = -2;
         }
@@ -684,7 +722,7 @@ void terms_current() {
     const ScriptHost& host = *o.host;
     CHECK(o.completed);
     CHECK(!host.preview_threw);
-    CHECK(host.current_kind >= 0);
+    CHECK(host.current_kind == 1);   // execute_current answered the host-sized fill
     const auto resolved = events_of<no::TermsResolvedEvent>(host);
     CHECK(resolved.size() == 1);
     if (resolved.size() == 1) {
@@ -996,6 +1034,7 @@ int main() {
     p5b();
     units(1.0);
     units(-1.0);
+    units_repeated();
     pending();
     pending_rounds();
     terms();

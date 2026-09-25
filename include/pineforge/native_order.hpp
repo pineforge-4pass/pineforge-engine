@@ -974,7 +974,8 @@ enum class CoreFailure : std::uint8_t {
     StaleHandle = 4,
     UnsupportedTransition = 5,
     ConflictingReceipt = 6,
-    /// A group deduction's pending total that overflows binary64. A deduction
+    /// A group deduction's pending total that overflows binary64 (or a
+    /// non-finite reservation, which a valid run does not reach). A deduction
     /// binary64 cannot take off its recipient is absorbed instead (R5 lane
     /// K-ULP5); it failed the run with this discriminator before.
     UnrepresentableReservation = 7,
@@ -1083,8 +1084,8 @@ struct NoEffectEvent {
 /// deferred it also binds them: it spends the pending group chain
 /// (`prior_adjustment_ids`, `pending_total`), takes `effective_deduction` off the
 /// resolved units and leaves `remaining_after`. That deduction is 0 with a
-/// positive `pending_total` when binary64 cannot take the total off the units --
-/// absorbed, and the units stand (R5 lane K-ULP5).
+/// positive `pending_total` and positive resolved units when binary64 cannot
+/// take the total off them -- absorbed, and the units stand (R5 lane K-ULP5).
 struct TermsResolvedEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;

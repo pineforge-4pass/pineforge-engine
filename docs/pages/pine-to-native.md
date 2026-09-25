@@ -67,9 +67,9 @@ gain:
   and nothing comes from a chart.
 - **Typed orders and typed outcomes.** A request is a value
   (`Request` native_order.hpp:483); its fate is a typed event — `AcceptedEvent`
-  (native_order.hpp:1000), `ExecutionAppliedEvent` (native_order.hpp:1145),
-  `MatchRejectedEvent` (native_order.hpp:1107), `CancelledEvent`
-  (native_order.hpp:1042) — readable in order from `native_events`
+  (native_order.hpp:1001), `ExecutionAppliedEvent` (native_order.hpp:1146),
+  `MatchRejectedEvent` (native_order.hpp:1108), `CancelledEvent`
+  (native_order.hpp:1043) — readable in order from `native_events`
   (native_host.hpp:1317).
 - **Any language.** The same kernel drives from C through a callback table
   (`pf_native_callbacks_v1` native_c_api.h:2456), so a host in Rust, Go, Python or Zig needs no C++.
@@ -283,7 +283,7 @@ is `strategy_native_submit_v1` native_c_api.h:2680 over a
 | `strategy.entry()` | `Request` native_order.hpp:483 carrying `Transact` native_order.hpp:41 | `strategy_native_submit_v1` native_c_api.h:2680 | `native_market_strategy.cpp` | Pine's entry *reverses* an opposite position; `Transact` does not. Spell the reversal explicitly with the row below. |
 | `strategy.order()` | the same `Request` native_order.hpp:483 | `strategy_native_submit_v1` native_c_api.h:2680 | `native_market_strategy.cpp` | `strategy.order` is the non-reversing entry, so it maps 1:1 with no caveat. |
 | `strategy.exit()` | `submit_bracket` native_toolkit.hpp:160 over a `BracketSpec` native_toolkit.hpp:37 | `strategy_native_submit_v1` native_c_api.h:2680 per leg | `native_bracket_strategy.cpp` | The full bracket is described below in [Brackets](@ref pine_to_native_brackets). |
-| `strategy.close()` | `Reduce` native_order.hpp:220 with `OwnerOpenedUnits` native_order.hpp:191 and `BindOpening` native_order.hpp:445 | `PF_NATIVE_REDUCE_OWNER_OPENED` native_c_api.h:350 with `PF_NATIVE_OWNER_BIND_OPENING` native_c_api.h:455 | `native_selected_strategy.cpp` | Closes the lots one opening produced. The cycle comes from `ExecutionAppliedEvent::cycle_after` native_order.hpp:1164. A fractional close is `ScopeFraction` native_order.hpp:207 — `qty_percent = 50` is `fraction = 0.5`, with `ScopeClaim` native_order.hpp:195 and `ScopeBasis` native_order.hpp:202 saying whether siblings are netted and when the scope is measured. On a `quantity_grid` a fraction below 1 is floored onto the grid, and `qty_percent = 100` (`fraction = 1`) of the gross scope, settled in one fill, closes the whole scope unfloored. |
+| `strategy.close()` | `Reduce` native_order.hpp:220 with `OwnerOpenedUnits` native_order.hpp:191 and `BindOpening` native_order.hpp:445 | `PF_NATIVE_REDUCE_OWNER_OPENED` native_c_api.h:350 with `PF_NATIVE_OWNER_BIND_OPENING` native_c_api.h:455 | `native_selected_strategy.cpp` | Closes the lots one opening produced. The cycle comes from `ExecutionAppliedEvent::cycle_after` native_order.hpp:1165. A fractional close is `ScopeFraction` native_order.hpp:207 — `qty_percent = 50` is `fraction = 0.5`, with `ScopeClaim` native_order.hpp:195 and `ScopeBasis` native_order.hpp:202 saying whether siblings are netted and when the scope is measured. On a `quantity_grid` a fraction below 1 is floored onto the grid, and `qty_percent = 100` (`fraction = 1`) of the gross scope, settled in one fill, closes the whole scope unfloored. |
 | `strategy.close_all()` | `Flatten` native_order.hpp:36 | `PF_NATIVE_INTENT_FLATTEN` native_c_api.h:333 | `hello_kernel.cpp` / `hello_kernel_c.c` | The whole book, in one settlement cycle. |
 | `strategy.cancel()` | `cancel_where` native_host.hpp:1266 with `NativeRequestField::Label` native_host.hpp:679 | `strategy_native_cancel_where_v1` native_c_api.h:2767 | `native_trail_risk_strategy.cpp` | Withdraws exactly the live requests whose `Request::label` native_order.hpp:485 is that id, and answers how many. `cancel` native_host.hpp:1237 is the single-request form for a host that kept the handle. |
 | `strategy.cancel_all()` | `cancel_all` native_host.hpp:1255 | `strategy_native_cancel_all_v1` native_c_api.h:2746 | `native_trail_risk_strategy.cpp` | Neither field is indexed: every form walks the live book once. A `PendingUntilArmed` native_order.hpp:394 child is absent from `native_working_requests` native_host.hpp:1251 before its arm, and all three cancels still address it. |
@@ -303,7 +303,7 @@ ticket and one settlement cycle — the explicit form of Pine's implicit
 reversal; and `PointBudget` native_order.hpp:379 caps how much of a request may
 fill at a single matching point, where Pine only ever uses the whole remaining
 quantity. Amending a live order is `replace` native_host.hpp:1208, which emits
-`ReplacedEvent` native_order.hpp:1016 and can carry the predecessor's live
+`ReplacedEvent` native_order.hpp:1017 and can carry the predecessor's live
 trigger state forward through `ReplaceOptions` native_order.hpp:367 -- or keep
 its handle, or carry a close's book binding, from C++ only. Its C
 spelling is `strategy_native_replace_v1`, or `strategy_native_replace_ext_v1`
@@ -315,8 +315,8 @@ when a rejection's `RequestRejectReason` native_order.hpp:821 matters.
 | --- | --- | --- | --- | --- |
 | `limit=` | `Limit` native_order.hpp:237 | `PF_NATIVE_TRIGGER_LIMIT` native_c_api.h:387 | `native_calc_on_fills_strategy.cpp` | `fill_through` native_order.hpp:239 makes it market-if-touched: the level gates when the request becomes executable, and the fill is no longer bounded by it. |
 | `stop=` | `Stop` native_order.hpp:246 | `PF_NATIVE_TRIGGER_STOP` native_c_api.h:388 | `native_price_grid_strategy.cpp` | Stop-limit is `StopLimit` native_order.hpp:252. |
-| `trail_points` | `FromOwnerFill{+ticks, true}` native_order.hpp:331 | `anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL`, `anchor_offset = ticks`, `anchor_offset_in_ticks = 1` native_c_api.h:2110-2117 | `native_bracket_strategy.cpp` | Pine points are the arm distance from the entry, in ticks. The adapter lowers that anchor distance separately from the ride offset; it is not `TrailTicks`. |
-| `trail_offset` | `TrailTicks` native_order.hpp:293 (resolved into `Trail::offset` native_order.hpp:291) | `p1 = ticks`, `trail_offset_in_ticks = 1` native_c_api.h:2111-2115 | `native_trail_risk_strategy.cpp` | Pine offset is the ride distance behind the running best, also expressed in ticks. Zero is legal and means "ride the best"; the first adverse move past it exits. |
+| `trail_points` | `FromOwnerFill{+ticks, true}` native_order.hpp:331 | `anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL`, `anchor_offset = ticks`, `anchor_offset_in_ticks = 1` native_c_api.h:2112-2119 | `native_bracket_strategy.cpp` | Pine points are the arm distance from the entry, in ticks. The adapter lowers that anchor distance separately from the ride offset; it is not `TrailTicks`. |
+| `trail_offset` | `TrailTicks` native_order.hpp:293 (resolved into `Trail::offset` native_order.hpp:291) | `p1 = ticks`, `trail_offset_in_ticks = 1` native_c_api.h:2113-2117 | `native_trail_risk_strategy.cpp` | Pine offset is the ride distance behind the running best, also expressed in ticks. Zero is legal and means "ride the best"; the first adverse move past it exits. |
 | `trail_price` | `Trail::arm_price` native_order.hpp:292 | `trail_has_arm_price` native_c_api.h:2118 | `native_trail_risk_strategy.cpp` | The absolute level the trail arms at. Read the live projection with `trail_state` native_host.hpp:1080 (C: `strategy_native_trail_state_v1` native_c_api.h:2992). The kernel compares `arm_price` with the **raw** path. TradingView tests the activation on the **tick-quantized** bar, with or without an offset and the placement close included (R5 lanes E5 and E9's tapes), so the Pine adapter arms at the activation's half-tick threshold — a placement close whose tick reaches the activation arms there — and books from a running best that starts at the activation; a one-shot (`trail_offset` 0) books the tick its resting threshold stands for, rounded away from the position. Since R5 lane E14 that running best is the **kernel's** own: the trailing leg names the activation — or the favourable one of the activation and the placement print when that print armed it — in the generic `Trail::best_seed` native_order.hpp:294, so the ride no longer starts half a tick short of the activation. |
 
 `limit=` and `stop=` are listed once here rather than once per command,
@@ -340,7 +340,7 @@ once. Natively they are separate and each is nameable:
   `FromOwnerFill::ticks` native_order.hpp:333 is set — snaps it per
   `NativeAnchorRounding` native_order.hpp:309, offers it once to
   `resolve_anchored_level` native_host.hpp:1000, and carries the installed level
-  in `ArmedEvent` native_order.hpp:1245.
+  in `ArmedEvent` native_order.hpp:1246.
 - **Invisible until armed.** `NativeArmVisibility::PendingUntilArmed`
   native_order.hpp:394 keeps the legs out of `native_working_requests`
   native_host.hpp:1251 until the fill, like Pine's pending exit and like a
@@ -432,7 +432,7 @@ liquidation level, and the ticket the forced close is booked under.
 | which check points run at all | `margin_check_allowed` native_host.hpp:976 | `on_margin_check` native_c_api.h:2519 | `native_margin_strategy.cpp` |
 | a step of the account FX curve, checked though no price moved | `NativeMarginCheckKind::FxRoll` native_host.hpp:542 | `PF_NATIVE_MARGIN_CHECK_FX_ROLL` native_c_api.h:931 | `native_fx_roll_strategy.cpp` |
 | the host's own liquidation size | `resolve_margin_call_units` native_host.hpp:983 | `on_margin_call_units` native_c_api.h:2526 | `native_margin_strategy.cpp` |
-| the liquidation event | `MarginCallEvent` native_order.hpp:1261 delivered to `on_native_margin_call` native_host.hpp:989 | `on_margin_call` native_c_api.h:2474 | `native_margin_strategy.cpp` |
+| the liquidation event | `MarginCallEvent` native_order.hpp:1262 delivered to `on_native_margin_call` native_host.hpp:989 | `on_margin_call` native_c_api.h:2474 | `native_margin_strategy.cpp` |
 
 The one-scalar `initial_margin_fraction` native_run_spec.hpp:597 predates the
 model and remains the simple spelling; the two are mutually exclusive. It is
@@ -519,14 +519,14 @@ range-end reporting is off.
 | --- | --- | --- | --- | --- |
 | `strategy.account_currency` | `currency` native_run_spec.hpp:570 | `currency` pineforge.h:537 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:581 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1190. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
 | `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:579 | `initial_capital` pineforge.h:539 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
-| `strategy.equity` | `current_equity() + open_profit(mark)` engine.hpp:970-1024; or `native_marked_equity(mark)` native_host.hpp:1289 plus open entry commissions | `strategy_native_marked_equity_v1` native_c_api.h:3015 plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341; add their remaining entry commissions to reproduce Pine's gross-open-profit equity. |
+| `strategy.equity` | `current_equity() + open_profit(mark)` engine.hpp:970-1024; or `native_marked_equity(mark)` native_host.hpp:1289 plus open entry commissions | `strategy_native_marked_equity_v1` native_c_api.h:3017 plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341; add their remaining entry commissions to reproduce Pine's gross-open-profit equity. |
 | `strategy.netprofit` | `net_profit` engine.hpp:967 | `net_profit` pineforge.h:412 | `native_open_lots_strategy.cpp` | Realized only. |
 | `strategy.netprofit_percent` | derive: `net_profit` engine.hpp:967 over `initial_capital` native_run_spec.hpp:579 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
 | `strategy.grossprofit` | `gross_profit` engine.hpp:968 | `pf_trade_stats_t` pineforge.h:291 | `native_open_lots_strategy.cpp` | |
 | `strategy.grossprofit_percent` | `grossprofit_percent` engine.hpp:975 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | Of initial capital. |
 | `strategy.grossloss` | `gross_loss` engine.hpp:969 | `pf_trade_stats_t::gross_loss` pineforge.h:246 | `native_open_lots_strategy.cpp` | For booked closed trades the protected C++ accessor is signed (negative for losses), while the C report stores a positive loss magnitude. With range-end reporting off, `-C.gross_loss == gross_loss()` and `netprofit == grossprofit - C.gross_loss`. With it on, C trade statistics include the report-only range-end rows; filter `open_at_end == 0` before comparing to Pine's closed-trade statistics. |
 | `strategy.grossloss_percent` | `grossloss_percent` engine.hpp:978 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | |
-| `strategy.openprofit` | `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | `strategy_native_marked_equity_v1` native_c_api.h:3015 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
+| `strategy.openprofit` | `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | `strategy_native_marked_equity_v1` native_c_api.h:3017 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
 | `strategy.openprofit_percent` | derive from `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the realized equity. |
 | `strategy.max_drawdown` | `max_drawdown_` engine.hpp:581 | `max_equity_drawdown` pineforge.h:296 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
 | `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1507 | `max_equity_drawdown_pct` pineforge.h:296 | `native_sized_report_strategy.cpp` | Same rule. |

@@ -3150,8 +3150,15 @@ and quantities"); what a host sees:
   exact binary64 result; the member's fill stands, and the event says it took
   nothing: `actual_deduction` 0 with `after` equal to `before`, or
   `deferred_delta` 0 with `pending_after` equal to `pending_before` (it joins
-  no chain), or `effective_deduction` 0 beside a positive `pending_total`; a C
-  row's `closed_units` is 0. After open 0.5, open 1000.1 and a bound close of
+  no chain), or `effective_deduction` 0 beside a positive `pending_total` and
+  units above zero that stand. A C host reads the first two as
+  `PF_NATIVE_EVENT_RESERVATION_REDUCED` and `PF_NATIVE_EVENT_DEFERRED_GROUP`
+  rows whose `closed_units` is 0; its `TERMS_RESOLVED` and `QUANTITY_BOUND`
+  rows carry no deduction, so there it reads the absorption as the units that
+  stand -- the fill, or the working row's remaining units -- beside the
+  `DEFERRED_GROUP` rows it received. Each deduction is taken on its own, so
+  fills absorbed one by one can leave a sibling above what one deduction of
+  their sum would. After open 0.5, open 1000.1 and a bound close of
   1000, one group of a resting `Reduce 1000`, a `Reduce 0.3` and a
   `ScopeFraction 1`: the fraction closes 2.2759572004815709e-14, below half an
   ulp of the resting member's 999.7, which keeps 999.70000000000005. A pending
