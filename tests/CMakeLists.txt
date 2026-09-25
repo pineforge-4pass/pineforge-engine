@@ -1316,6 +1316,14 @@ list(APPEND TEST_SOURCES test_native_current_execution_rate)
 # leg first (|H - O| < |O - L| is strict), and so does the observation.
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_dual_entry_tie)
+# R5 lane H-MEASURE (AUDIT4 X14): every adapter retention AUDIT4 §6 still read
+# as "ruled, unmeasured", measured -- the same bars and orders through the Pine
+# adapter and through a bare kernel host (a paired differential), and/or
+# TradingView's own trades (`lab tv` tapes under tests/fixtures/, each
+# directory's README.md names them). All source-bound.
+#   G2-09/-10/-12/-13 margin scheduling, market-execution checkpoints, the
+#   pre-open slice, opening admission; E20 f1's probe-tail margin call.
+list(APPEND TEST_SOURCES test_adapter_margin_schedule_differential)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2046,6 +2054,19 @@ if(TARGET test_offset_trail_quantized_arm)
     target_compile_definitions(test_offset_trail_quantized_arm PRIVATE
         PINEFORGE_E5_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/offset_trail_arm")
 endif()
+
+# R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
+foreach(_pf_hm_row IN ITEMS
+        "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar")
+    string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
+    list(GET _pf_hm_fields 0 _pf_hm_target)
+    list(GET _pf_hm_fields 1 _pf_hm_macro)
+    list(GET _pf_hm_fields 2 _pf_hm_dir)
+    if(TARGET ${_pf_hm_target})
+        target_compile_definitions(${_pf_hm_target} PRIVATE
+            ${_pf_hm_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_hm_dir}")
+    endif()
+endforeach()
 
 # R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
 # is the one implementation of the marked equity. Kernel files only, so the

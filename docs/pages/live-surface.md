@@ -120,14 +120,21 @@ before this flag existed.
 The last bar of the array fed to every subsequent `run()` does not
 calculate the script: the host's `on_bar` is not invoked for that bar, so
 neither is anything the script would have ordered on it. What the *broker*
-owes that bar it still does, because the adapter settles the bar's close
-whether or not the script ran. A margin call or an intraday-cap close that
+owes that bar it still does: the kernel still matches a resting liquidation
+on the bar's path, and the adapter still runs its post-script close pass
+(`on_bar_close`) whether or not the script ran. A margin call or an
+intraday-cap close that
 comes due against the forming bar is therefore **booked on that bar**, not
 deferred to the next non-suppressed run. Measured on a two-bar short tape
 whose second bar liquidates: with the flag on, the host is called once
 (bar 0 only) and the closed-trade row is still
 `Margin call @105.0000 qty=3.809524 t=2000` — the same row, at the same
-timestamp, as the same tape with the flag off.
+timestamp, as the same tape with the flag off. That row is the kernel's
+path liquidation; the close pass books its own: a carried 9.5 @ 100 short
+with a 0.1 % fee whose tail bar reaches 105 books the adapter's margin call
+1.7504761904761923 @ 105 at the post-script checkpoint, flag on or off
+(`tests/test_adapter_margin_schedule_differential.cpp`, E20 f1; `ab9714be`
+booked neither route on the tail).
 
 This paragraph used to promise the opposite ("surfaces only at settlement")
 and to list `process_margin_call` among the steps that never run. The
@@ -173,11 +180,12 @@ while either historical override is set, with
 `native stream cannot use historical probe/tail overrides`. A one-bar array
 is all tail, so `run(bars, 1)` under this flag calculates nothing.
 
-Under `process_orders_on_close`, the pre-script carried-position margin
-helpers `dispatch_bar` runs ahead of the script
-(`tv_money_long_margin_call(…, carried_pooc_pre_close=true)` and
-`process_carried_pooc_short_margin_before_script`) are skipped on the
-suppressed last bar along with the script calculation itself.
+Under `process_orders_on_close`, a carried position's margin checkpoints are
+not skipped on the suppressed last bar: the bar-open slice, the kernel's path
+liquidation and the adapter's post-script close pass all run there, as on any
+settled bar (the E20 f1 rows of
+`tests/test_adapter_margin_schedule_differential.cpp`). Only the script
+calculation itself is suppressed.
 
 Default off (`on == 0`): every historical run stays byte-identical to
 before this flag existed.

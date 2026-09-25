@@ -1450,11 +1450,33 @@ the kernel's can reach: the bar-open mark checkpoint and the script-close pass
 (the kernel checks once per point, at the remaining path's adverse mark), the
 account-currency FX rollover revaluation (the adapter refuses the kernel's
 `FxRoll` point by kind: TradingView's rollover is its broker-open slice, taken
-on the source's own sub-bar rate), the pre-open admission slice, and the
+on the source's own sub-bar rate), and the
 one-contract 1×-long money call — which is not a maintenance liquidation
-at all and fires on the favorable side of the path. Measured against the
+at all and fires on the favorable side of the path. The pre-open admission
+slice stays adapter-side as well, though the kernel's `AfterApplied` point
+after the open fill does reach its bar. Measured against the
 adapter as it stood before the re-lowering, on the same books, bit for bit:
 `tests/test_adapter_margin_relower.cpp`.
+
+Measured against the kernel's own points (R5 lane H-MEASURE,
+`tests/test_adapter_margin_schedule_differential.cpp`): the same bars and
+orders through the adapter and through a bare host whose hooks answer
+TradingView's money and slice, so that only the kernel's own scheduling,
+check kinds and opening gate differ. A gap-open breach books the adapter's
+market execution at the open, sized on the open's money; the kernel's mark
+check rests its slice at the remaining path's adverse extreme and
+`CalculationOnly` executes at the calculation, so no kernel check kind books
+that row. On the same money the pre-open slice and the kernel's
+`AfterApplied` point part on the one-contract band, on the restore's `+1e-6`
+floor and on the frozen signal-time units. The opening gate parts both ways:
+the kernel declines a 1× long whose entry fee the adapter admits, and admits a
+gap-up add the adapter refuses against its signal-time equity. And the
+scheduling misses one class the kernel reaches: a leveraged opening (margin
+below 100 %) is never checked on its own entry bar. Four `lab tv` tapes
+(`tests/fixtures/margin_entry_bar`) book TradingView's margin call on that
+bar at its low, as the kernel's `AfterApplied` point does; the adapter books
+it a bar late or not at all. The row pins that divergence as recorded, not
+ruled.
 
 ### Risk limits
 

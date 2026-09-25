@@ -1,0 +1,14 @@
+// H-MEASURE M7-A (G2-09): does TradingView check a LEVERAGED opening on its entry bar?
+// One long market entry, placed on the signal bar 2025-06-21 21:15 UTC, fills at the open of
+// 2025-06-21 21:30 UTC, whose low sits far under that open. margin_long=5 (the Pine percent),
+// quantity = 16 x equity / signal close: the entry bar's low breaches the requirement.
+// Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("hm-m7a-eth-m5-k16-0621", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     margin_long=5, margin_short=5, commission_value=0, slippage=0,
+     process_orders_on_close=false)
+if time == timestamp("UTC", 2025, 6, 21, 21, 15) and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = math.floor(16 * strategy.equity / close * 1000) / 1000)
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("L", comment="timeout")

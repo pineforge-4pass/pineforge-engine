@@ -1,0 +1,16 @@
+{
+  "title": "hm-m7a-eth-m5-k16-0621",
+  "slug": "hm-m7a-eth-m5-k16-0621",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T20:06:54.750Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "f61e9d0e864e1d47b4c7523c6690441351a5eca99c184164a68cd54327f42ba7",
+  "tv_trades_sha256": "82afdec0f73135dfa1af943f73db2cd6ee01a1fa2125935355b5a65cc7e85ca0",
+  "tv_trades_rows": 2
+}

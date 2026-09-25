@@ -440,7 +440,8 @@ ruled **adapter-policy** (ADR-0001's `initial_margin_fraction` row): the
 adapter answers TradingView's ten-significant-digit money admission itself with
 `NativePrecommitVerdict::AdmitWithHostMargin` native_host.hpp:509, and declares
 a maintenance-only model, because a positive initial requirement would decline
-openings TradingView takes.
+openings TradingView takes — and admit adds TradingView refuses: the two gates
+part both ways (`tests/test_adapter_margin_schedule_differential.cpp`, M11).
 
 ## Calculation context {#pine_to_native_map_context}
 
