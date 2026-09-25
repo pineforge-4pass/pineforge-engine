@@ -215,6 +215,18 @@ class Scripted:
             if self.exits.get('actual_empty_ctest'):
                 return default_runner(argv, extra_env=extra_env, timeout=timeout,
                                       combine_stderr=combine_stderr, stream_output=False)
+            registered = self.exits.get(
+                'ctest_registered',
+                ci_verify.EXCLUDED_REGISTERED_MIN.get(
+                    self.profile, ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS))
+            labelled = self.exits.get('ctest_labelled', 5)
+            if '-N' in argv:
+                stage = 'ctest-list-selected' if '-LE' in argv else 'ctest-list-all'
+                if self.exits.get(stage) == 'unreadable':
+                    return Completed(0, b'CTest list has no total\n', b'')
+                count = registered - labelled if '-LE' in argv else registered
+                return Completed(int(self.exits.get(stage, 0)),
+                                 f'Total Tests: {count}\n'.encode(), b'')
             env_ok = True
             if self.profile == 'sanitizers':
                 env_ok = extra_env == SANITIZER_RUN_ENV
@@ -227,8 +239,9 @@ class Scripted:
             # 'ctest_raw' scripts the output verbatim.
             if 'ctest_raw' in self.exits:
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
-            rows = self.exits.get(
-                'ctest_rows', ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS)
+            default_rows = (registered - labelled if '-LE' in argv else
+                            ci_verify.PROFILE[self.profile].min_tests or KERNEL_MIN_TESTS)
+            rows = self.exits.get('ctest_rows', default_rows)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
             summary = ctest_output(rows, self.exits.get('ctest_skipped', ()),
@@ -1295,14 +1308,36 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
                              (build_dir / 'ctest-junit.xml').resolve())
 
-    def test_ctest_label_exclusion_is_forwarded(self):
-        code, summary, scripted, _ = self.run_profile(
-            extra=['--exclude-label', 'l4-pending'])
-        self.assertEqual(code, 0, summary['failures'])
-        ctest_argv = next(
-            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
-        self.assertIn('-LE', ctest_argv)
-        self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
+    def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
+        self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
+                         {'debug': 653, 'sanitizers': 653, 'native': 662})
+        for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
+            with self.subTest(profile=profile):
+                code, summary, scripted, _ = self.run_profile(
+                    profile, extra=['--exclude-label', 'slow'])
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(summary['ctestRegistered'], registered)
+                self.assertEqual(summary['ctestSelected'], registered - 5)
+                self.assertEqual(summary['ctestRows'], registered - 5)
+                self.assertIn('ctest-exclusion', stage_names(summary))
+                self.assertNotIn('ctest-floor', stage_names(summary))
+                self.assertIn('ctest-list-all', stage_names(summary))
+                self.assertIn('ctest-list-selected', stage_names(summary))
+
+    def test_ctest_discovery_count_rejects_missing_or_ambiguous_summary(self):
+        self.assertEqual(ci_verify.ctest_list_count(b'Test #1: a\nTotal Tests: 1\n'), 1)
+        self.assertIsNone(ci_verify.ctest_list_count(b'No tests were found\n'))
+        self.assertIsNone(ci_verify.ctest_list_count(b'Total Tests: 1\nTotal Tests: 2\n'))
+
+    def test_pr_exclusion_refuses_lost_registration_or_label(self):
+        for exits in ({'ctest_registered': 652}, {'ctest_labelled': 0},
+                      {'ctest_rows': 647}, {'ctest_skipped': ['silent_skip']},
+                      {'ctest-list-selected': 'unreadable'}):
+            with self.subTest(exits=exits):
+                code, summary, _, _ = self.run_profile(
+                    'debug', extra=['--exclude-label', 'slow'], **exits)
+                self.assertEqual(code, 1)
+                self.assertIn('ctest-exclusion', failure_stages(summary))
 
     def test_junit_flag_omitted_when_unsupported(self):
         code, summary, scripted, build_dir = self.run_profile(junit_help='absent')
@@ -1314,7 +1349,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
         ctest_argv = next(
-            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
+            argv for argv in scripted.calls
+            if argv[0] == 'ctest' and '--test-dir' in argv and '-N' not in argv)
         self.assertIn('-LE', ctest_argv)
         self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
 

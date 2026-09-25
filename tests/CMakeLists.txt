@@ -2366,3 +2366,46 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_equivalence)
     add_test(NAME test_adapter_margin_revival_erasure
              COMMAND test_adapter_live_state_equivalence --margin-revival)
 endif()
+
+# PR CI-LITE timing selection: INT23 sanitizer job 107895095058 and INT24
+# sanitizer/Debug jobs 107996509646, 107996511076, 107996511419.
+# A row is slow when it exceeded 60 s in either sanitizer run or 30 s in
+# either Debug run. This is the single home of the PR exclusion population;
+# full push, dispatch, and maintainer verification still register and run it.
+set(PINEFORGE_PR_SLOW_TESTS
+    test_adapter_live_state_equivalence
+    test_adapter_live_state_scaling
+    test_adapter_reissue_binding
+    test_aggregate_cpp_versions
+    test_broker_state_hash_coverage_mutations
+    test_chart_day_memo
+    test_ci_verify
+    test_l10recon1_merge_fill_liveness
+    test_local_time_fields
+    test_magnifier_endpoints4
+    test_native_bar_open_hook
+    test_native_command_after
+    test_native_cpp_abi
+    test_native_cpp_versions
+    test_native_definition_index
+    test_native_direct_mutation
+    test_native_event_retention
+    test_native_handle_stable_replace
+    test_native_host_reads
+    test_native_lookup_memos
+    test_native_match_band_precheck
+    test_native_match_row_reuse
+    test_native_precommit_hook
+    test_native_quiet_point
+    test_native_runtime_ambient
+    test_native_script_bucket_completions
+    test_native_settlement_carry
+)
+foreach(_pf_slow_test IN LISTS PINEFORGE_PR_SLOW_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})
+        message(FATAL_ERROR "PR slow row is no longer registered: ${_pf_slow_test}")
+    endif()
+    if(TEST ${_pf_slow_test})
+        set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)
+    endif()
+endforeach()

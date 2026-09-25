@@ -330,6 +330,10 @@ KERNEL_MIN_TESTS = 271
 # B-C-SURFACE's new witnesses are rows inside test_native_c_api. No release row
 # skips, so 672 registered is 672 run.
 RELEASE_MIN_TESTS = 672
+# PR-only registration floors. These are the complete CTest populations at
+# 91d65ad6 (INT24); the ordinary full-run floors above remain unchanged.
+# An excluded run must still discover at least this many rows before -LE.
+EXCLUDED_REGISTERED_MIN = {'debug': 653, 'sanitizers': 653, 'native': 662}
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
@@ -342,6 +346,7 @@ CTEST_ROW_COUNT = re.compile(
 CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+) \(([^()\n]+)\)\s*$', re.MULTILINE)
 # A skipped row's own result line: ' 4/10 Test  #3: name .....***Skipped   0.01 sec'.
 CTEST_SKIPPED_RESULT = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: .*\*\*\*Skipped\b', re.MULTILINE)
+CTEST_LIST_COUNT = re.compile(r'^Total Tests:\s*(\d+)\s*$', re.MULTILINE)
 # LeakSanitizer is unavailable in Apple's ASan runtime.  Keep the Linux CI
 # lane strict, while allowing the local macOS ASan/UBSan profile to execute
 # its actual instrumented tests instead of failing during runtime startup.
@@ -471,6 +476,12 @@ def ctest_row_count(output: bytes) -> int | None:
     """The row count CTest prints in its closing summary line, or None."""
     match = ctest_summary(output.decode('utf-8', 'replace'))
     return int(match.group('total')) if match else None
+
+
+def ctest_list_count(output: bytes) -> int | None:
+    """Read CTest's own `ctest -N` discovery count, failing closed on ambiguity."""
+    counts = CTEST_LIST_COUNT.findall(output.decode('utf-8', 'replace'))
+    return int(counts[0]) if len(counts) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -619,7 +630,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--require-websocket', action='store_true',
                         help='native only: execute test_native_live_websocket and refuse skip (77)')
     parser.add_argument('--exclude-label', default=None,
-                        help='exclude one CTest label from this local verification run')
+                        help='exclude one CTest label; verify the run count against '
+                             'CTest discovery with and without -LE')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
@@ -948,6 +960,9 @@ class Driver:
             'requireWebsocket': cfg.require_websocket,
             'curlDir': str(cfg.curl_dir) if cfg.curl_dir else None,
             'minTests': cfg.min_tests,
+            'excludeLabel': cfg.exclude_label,
+            'ctestRegistered': None,
+            'ctestSelected': None,
             # Rows that ran, the floor's count; CTest's own count; the rows
             # it did not run, listed beside ctestRows and never counted.
             'ctestRows': None,
@@ -986,7 +1001,8 @@ class Driver:
         self.summary_path.write_text(json.dumps(self.summary, indent=2, sort_keys=True) + '\n')
 
     def invoke(self, name: str, argv: list[str], *, extra_env: dict[str, str] | None = None,
-               timeout: int = 600, combine_stderr: bool = True) -> Completed:
+               timeout: int = 600, combine_stderr: bool = True,
+               stream_output: bool | None = None) -> Completed:
         if self.cfg.ccache_path:
             extra_env = {**(extra_env or {}), 'CCACHE_COMPILERCHECK': 'content'}
         log = self.logs / f'{name}.log'
@@ -1001,12 +1017,13 @@ class Driver:
         self.stages.append(stage)
         log.write_text(header)
         self.write_summary()
-        if self.cfg.stream_output:
+        stream = self.cfg.stream_output if stream_output is None else stream_output
+        if stream:
             print(f'ci_verify: {name}: {shlex.join(map(str, argv))}', flush=True)
         try:
             result = call_runner(
                 self.cfg.runner, list(map(str, argv)), extra_env=extra_env, timeout=timeout,
-                combine_stderr=combine_stderr, stream_output=self.cfg.stream_output)
+                combine_stderr=combine_stderr, stream_output=stream)
         except Exception as error:
             result = Completed(1, b'', str(error).encode())
         body = result.stdout + (b'' if not result.stderr else b'\n' + result.stderr)
@@ -1418,6 +1435,21 @@ class Driver:
         apple_asan = (self.cfg.profile.sanitizers and sys.platform == 'darwin'
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
+        registered = selected = None
+        if self.cfg.exclude_label:
+            listing = ['ctest', '--test-dir', str(self.cfg.build_dir), '-N']
+            all_rows = self.invoke('ctest-list-all', listing, timeout=120,
+                                   stream_output=False)
+            selected_rows = self.invoke('ctest-list-selected',
+                                        listing + ['-LE', self.cfg.exclude_label],
+                                        timeout=120, stream_output=False)
+            if all_rows.returncode == 0:
+                registered = ctest_list_count(all_rows.stdout + all_rows.stderr)
+            if selected_rows.returncode == 0:
+                selected = ctest_list_count(selected_rows.stdout + selected_rows.stderr)
+            self.summary['ctestRegistered'] = registered
+            self.summary['ctestSelected'] = selected
+            self.write_summary()
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
         if self.cfg.exclude_label:
@@ -1425,7 +1457,7 @@ class Driver:
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
         ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)
-        self.enforce_test_floor(ran)
+        self.enforce_test_floor(ran, registered=registered, selected=selected)
 
         installed = self.invoke(
             'install',
@@ -1456,7 +1488,8 @@ class Driver:
         status = 'passed' if not self.failures else 'failed'
         return self.finish(status, 0 if status == 'passed' else 1)
 
-    def enforce_test_floor(self, ran: Completed) -> None:
+    def enforce_test_floor(self, ran: Completed, *, registered: int | None = None,
+                           selected: int | None = None) -> None:
         """Refuse a CTest run in which fewer rows ran than the profile's floor.
 
         The count is the rows whose test ran to a verdict, pass or fail. A row
@@ -1477,6 +1510,33 @@ class Driver:
         self.summary['ctestSkipped'] = list(rows.skipped) if rows else None
         self.summary['ctestNotRun'] = list(rows.not_run) if rows else None
         self.summary['ctestDisabled'] = list(rows.disabled) if rows else None
+        if self.cfg.exclude_label:
+            minimum = max(EXCLUDED_REGISTERED_MIN.get(self.cfg.profile.name, 0),
+                          self.cfg.min_tests or 0)
+            if unreadable or rows is None or registered is None or selected is None:
+                self.fail_stage('ctest-exclusion',
+                                'CTest discovery or run count was unreadable; cannot prove '
+                                'registered - labelled = ran'
+                                + (f' ({unreadable})' if unreadable else ''))
+            elif registered < minimum:
+                self.fail_stage('ctest-exclusion',
+                                f'CTest registered {registered} rows, below the PR '
+                                f'registration floor of {minimum}')
+            elif not 0 < selected < registered:
+                self.fail_stage('ctest-exclusion',
+                                f'CTest registered {registered} rows and selected {selected}; '
+                                f'expected a nonempty {self.cfg.exclude_label} exclusion')
+            elif rows.ran != selected:
+                self.fail_stage('ctest-exclusion',
+                                f'CTest registered {registered}, labelled '
+                                f'{registered - selected}, selected {selected}, but ran '
+                                f'{rows.ran}{rows.not_counted()}')
+            else:
+                self.pass_stage('ctest-exclusion',
+                                f'ctest registered {registered}, labelled '
+                                f'{registered - selected}, ran {rows.ran} '
+                                f'(registered - labelled){rows.not_counted()}')
+            return
         floor = self.cfg.min_tests
         if floor is None:
             self.write_summary()
