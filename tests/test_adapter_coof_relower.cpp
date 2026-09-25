@@ -296,7 +296,9 @@ const Bar kCascadeBars[] = {{100, 102, 98, 101, 1, 900000},
 // ---------------------------------------------------------------------------
 // Harvested from the PRE-lowering library (engine main b0cec54). See the file
 // header: these are the adapter's own cadence and book, produced when the
-// adapter still drove the recalculation itself.
+// adapter still drove the recalculation itself. One instant since: R5 lane
+// PAR-ORDERS dates l5 at its chart bar's open (900000), as TradingView dates a
+// magnified fill; b0cec54 kept its sub-bar's instant (960000).
 // ---------------------------------------------------------------------------
 
 const char kExpectRefill[] =
@@ -315,7 +317,7 @@ const char kExpectRefill[] =
     "  l2 L2@99@900000\n"
     "  l3 L3@101@900000\n"
     "  l4 L4@100.25@900000\n"
-    "  l5 L5@100.1@960000\n"
+    "  l5 L5@100.1@900000\n"
     "U6 C8\n";
 const char kExpectChronology[] =
     "#0:b0:u0:l0:o100:h101:l99:c100:f1\n"
@@ -561,9 +563,11 @@ void test_pine_refusals_compose_with_the_kernel_cadence() {
 // 4. The waypoint deferral is still needed: the kernel's birth rule alone does
 //    not reproduce TradingView's eligibility. Lane L5 measured this against a
 //    bare native twin (tests/test_native_calc_timing.cpp, CT11); here it is
-//    measured against the adapter itself — the six refilled lots sit on the
-//    chart bar's own O/L/H/C and the next chart open, NOT on the successive
-//    sub-bar opens the unqualified birth rule would produce.
+//    measured against the adapter itself — the six refilled lots fill on the
+//    chart bar's own O/L/H/C and the next sub-bar's open, NOT at the
+//    successive sub-bar opens the unqualified birth rule would produce. Every
+//    fill is dated at the chart bar's open, as TradingView dates a magnified
+//    fill (R5 lane PAR-ORDERS), so the prices carry the difference.
 // ---------------------------------------------------------------------------
 
 void test_the_waypoint_deferral_is_still_load_bearing() {
@@ -575,15 +579,14 @@ void test_the_waypoint_deferral_is_still_load_bearing() {
     CHECK(refill.last_error().empty());
     const auto position = refill.physical_position();
     CHECK(position.lot_count == 6);
-    const std::vector<std::int64_t> waypoint_times = {900000, 900000, 900000,
-                                                      900000, 900000, 960000};
-    const std::vector<std::int64_t> birth_rule_times = {900000, 960000, 1020000,
-                                                        1080000, 1140000, 1200000};
-    for (std::size_t i = 0; i < position.lot_count && i < waypoint_times.size(); ++i) {
+    const std::vector<double> waypoint_prices = {100.0, 100.0, 99.0, 101.0, 100.25, 100.1};
+    const std::vector<double> birth_rule_prices = {100.0, 100.1, 100.2, 100.3, 100.4, 100.5};
+    for (std::size_t i = 0; i < position.lot_count && i < waypoint_prices.size(); ++i) {
         const int index = static_cast<int>(i);
-        CHECK(refill.lot_time(index) == waypoint_times[i]);
-        CHECK(refill.lot_time(index) != birth_rule_times[i]
-              || waypoint_times[i] == birth_rule_times[i]);
+        CHECK(refill.lot_time(index) == 900000);
+        CHECK(std::abs(refill.lot_price(index) - waypoint_prices[i]) < 1e-9);
+        CHECK(std::abs(refill.lot_price(index) - birth_rule_prices[i]) > 1e-9
+              || waypoint_prices[i] == birth_rule_prices[i]);
     }
 }
 #endif  // PF_COOF_HARVEST

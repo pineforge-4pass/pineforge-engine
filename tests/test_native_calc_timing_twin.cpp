@@ -165,10 +165,14 @@ void test_twin_against_the_adapter() {
     // has no waypoint rule: a newborn market request is eligible at the next
     // discrete matching point of the delivered path, which under a retained
     // lower feed is the next sub-bar's opening. Nothing else differs: same
-    // rule, same six ids, same order, same resulting book.
+    // rule, same six ids, same order, same resulting book. The adapter dates
+    // every one of its fills at the chart bar's open, the sixth (filled at
+    // the next sub-bar's open, 960000) included, as TradingView dates a
+    // magnified fill (R5 lane PAR-ORDERS); the native route keeps the
+    // kernel's instants.
     const std::vector<double> adapter_prices = {100.0, 100.0, 99.0, 101.0, 100.25, 100.10};
     const std::vector<std::int64_t> adapter_times = {900000, 900000, 900000, 900000,
-                                                     900000, 960000};
+                                                     900000, 900000};
     const std::vector<double> native_prices = {100.0, 100.1, 100.2, 100.3, 100.4, 100.5};
     const std::vector<std::int64_t> native_times = {900000, 960000, 1020000, 1080000,
                                                     1140000, 1200000};

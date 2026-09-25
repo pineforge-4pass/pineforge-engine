@@ -1156,6 +1156,11 @@ struct Pinned {
 };
 
 // R4D_PINNED_DATA_BEGIN — harvested on 577315a, unchanged adapter.
+// R5 lane PAR-ORDERS re-harvested the magnified shapes' rows with this same
+// -DPINEFORGE_R4D_HARVEST build on its tree: every fill of an aggregated
+// magnified run is dated at its chart bar's open, as TradingView dates one, so
+// 20 instants of 16 rows (nine Mag* shapes) moved onto their bar's open; no
+// price, quantity, P&L, flag or digest moved.
 constexpr Row kRelBracketTp_rows[] = {
     {1700000060000LL, 1700000240000LL, 100, 102.5, 2, 5, 1, 0},
 };
@@ -1347,50 +1352,50 @@ constexpr Row kRelBreakoutPairSetOnce_rows[] = {
 constexpr Pinned kRelBreakoutPairSetOnce = {kRelBreakoutPairSetOnce_rows, 2, 10006, 0, 0, 0, 0x157cc0001ede7376ULL};
 
 constexpr Row kMagRelBreakoutPair_rows[] = {
-    {420000LL, 540000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {360000LL, 480000LL, 101.25, 102.75, 2, 3, 1, 0},
     {600000LL, 720000LL, 102.75, 104.25, 2, 3, 1, 0},
-    {840000LL, 900000LL, 103.25, 102.25, 2, -2, 1, 0},
-    {960000LL, 1020000LL, 101.25, 100.25, 2, -2, 1, 0},
-    {1080000LL, 1380000LL, 98.25, 99.25, 2, -2, 0, 0},
-    {1440000LL, 1500000LL, 99.25, 100.25, 2, -2, 0, 0},
-    {1620000LL, 1620000LL, 101.25, 102.75, 2, 3, 1, 0},
+    {840000LL, 840000LL, 103.25, 102.25, 2, -2, 1, 0},
+    {960000LL, 960000LL, 101.25, 100.25, 2, -2, 1, 0},
+    {1080000LL, 1320000LL, 98.25, 99.25, 2, -2, 0, 0},
+    {1440000LL, 1440000LL, 99.25, 100.25, 2, -2, 0, 0},
+    {1560000LL, 1560000LL, 101.25, 102.75, 2, 3, 1, 0},
     {1680000LL, 1680000LL, 103, 103, 2, 0, 1, 1},
 };
 constexpr Pinned kMagRelBreakoutPair = {kMagRelBreakoutPair_rows, 8, 10001, 8, 3, 2, 0x03474c49dca8bc04ULL};
 
 constexpr Row kMagRelBracketTp_rows[] = {
-    {120000LL, 540000LL, 100, 102.5, 2, 5, 1, 0},
+    {120000LL, 480000LL, 100, 102.5, 2, 5, 1, 0},
 };
 constexpr Pinned kMagRelBracketTp = {kMagRelBracketTp_rows, 1, 10005, 0, 0, 0, 0x577159c6dba2ac05ULL};
 
 constexpr Row kMagRelBracketSl_rows[] = {
-    {120000LL, 1020000LL, 100, 98.5, 2, -3, 1, 0},
+    {120000LL, 960000LL, 100, 98.5, 2, -3, 1, 0},
 };
 constexpr Pinned kMagRelBracketSl = {kMagRelBracketSl_rows, 1, 9997, 10.5, 0, 0, 0xa65938a0103f1ccdULL};
 
 constexpr Row kMagRelTrailOffset_rows[] = {
-    {120000LL, 780000LL, 100, 103.5, 2, 7, 1, 0},
+    {120000LL, 720000LL, 100, 103.5, 2, 7, 1, 0},
 };
 constexpr Pinned kMagRelTrailOffset = {kMagRelTrailOffset_rows, 1, 10007, 0.5, 0, 0, 0x61c23d6a28f0f142ULL};
 
 constexpr Row kMagRelTrailOneShot_rows[] = {
-    {120000LL, 540000LL, 100, 102.5, 2, 5, 1, 0},
+    {120000LL, 480000LL, 100, 102.5, 2, 5, 1, 0},
 };
 constexpr Pinned kMagRelTrailOneShot = {kMagRelTrailOneShot_rows, 1, 10005, 0, 0, 0, 0x83150528a91d732fULL};
 
 constexpr Row kMagRelLimitParent_rows[] = {
-    {120000LL, 420000LL, 99.75, 101.75, 2, 4, 1, 0},
-    {1020000LL, 1020000LL, 99.75, 98.75, 2, -2, 1, 0},
+    {120000LL, 360000LL, 99.75, 101.75, 2, 4, 1, 0},
+    {960000LL, 960000LL, 99.75, 98.75, 2, -2, 1, 0},
 };
 constexpr Pinned kMagRelLimitParent = {kMagRelLimitParent_rows, 2, 10002, 2, 0, 0, 0x24e46fd2675cf69fULL};
 
 constexpr Row kMagRelStopParent_rows[] = {
-    {300000LL, 540000LL, 100.75, 102.25, 2, 3, 1, 0},
+    {240000LL, 480000LL, 100.75, 102.25, 2, 3, 1, 0},
 };
 constexpr Pinned kMagRelStopParent = {kMagRelStopParent_rows, 1, 10003, 0, 0, 0, 0x9288d52f3e3a8aabULL};
 
 constexpr Row kMagRelShort_rows[] = {
-    {120000LL, 420000LL, 100, 101.5, 2, -3, 0, 0},
+    {120000LL, 360000LL, 100, 101.5, 2, -3, 0, 0},
 };
 constexpr Pinned kMagRelShort = {kMagRelShort_rows, 1, 9997, 3, 0, 0, 0x5ee3f00d56388cacULL};
 
@@ -1426,8 +1431,8 @@ constexpr Row kRelPyramidSetOnce_rows[] = {
 constexpr Pinned kRelPyramidSetOnce = {kRelPyramidSetOnce_rows, 2, 10014.5, 0, 0, 0, 0x3ff244519fd858e8ULL};
 
 constexpr Row kMagRelPyramidSetOnce_rows[] = {
-    {120000LL, 660000LL, 100, 104, 2, 8, 1, 0},
-    {360000LL, 660000LL, 100.75, 104, 2, 6.5, 1, 0},
+    {120000LL, 600000LL, 100, 104, 2, 8, 1, 0},
+    {360000LL, 600000LL, 100.75, 104, 2, 6.5, 1, 0},
 };
 constexpr Pinned kMagRelPyramidSetOnce = {kMagRelPyramidSetOnce_rows, 2, 10014.5, 0, 0, 0, 0xa608f3773ef1c340ULL};
 // R4D_PINNED_DATA_END

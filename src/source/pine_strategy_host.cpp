@@ -502,23 +502,24 @@ void source::PineStrategyHost::on_native_applied(
     // calc_on_order_fills first-open chain, a same-bar cover) at its decision
     // floor, which the bucket's inputs have already carried to the close on
     // the no-path route. The adapter dates the rows it presents at the chart
-    // bar's open: every modeled point of a plain aggregated chart, as
-    // ab9714be's aggregation loop did, and under the magnifier, whose sub-bar
-    // fills keep their sub-bar's instant, the close points alone. A realtime
-    // print keeps its own instant, as it does on the chart timeframe, and so
-    // does a stream's quiet carried interval, whose context still names the
-    // bar before it. The kernel's own instant, which its FX lookup, decision
-    // floor and ordering read, is untouched (lane F1).
+    // bar's open: every modeled point of an aggregated chart, as ab9714be's
+    // aggregation loop did, and under the magnifier too -- each sub-bar's
+    // open, path and close (ModeledOHLCClose, which only a magnified run
+    // presents). TradingView dates every magnified fill at its chart bar's
+    // open, 218 of 218 on H-MEASURE's sixteen tapes; ab9714be kept a sub-bar
+    // fill's own instant, and so did this adapter for all but the close
+    // points until R5 lane PAR-ORDERS. A realtime print keeps its own
+    // instant, as it does on the chart timeframe, and so does a stream's
+    // quiet carried interval, whose context still names the bar before it.
+    // The kernel's own instant, which its FX lookup, decision floor and
+    // ordering read, is untouched (lane F1).
     const auto provenance = context.coordinate.provenance;
     const bool modeled_point = provenance == NativePriceProvenance::Confirmed
         || provenance == NativePriceProvenance::ModeledOHLCOpen
+        || provenance == NativePriceProvenance::ModeledOHLCClose
         || provenance == NativePriceProvenance::Calculation
         || provenance == NativePriceProvenance::AfterCalculationClose;
-    const bool close_point = provenance == NativePriceProvenance::Calculation
-        || provenance == NativePriceProvenance::AfterCalculationClose
-        || (provenance == NativePriceProvenance::Confirmed
-            && context.coordinate.path_phase == NativePathPhase::Close);
-    if (aggregated && (scheduler_.bar_magnifier_enabled() ? close_point : modeled_point)) {
+    if (aggregated && modeled_point) {
         const std::int64_t script_open = context.script_bar_open_ms;
         if (event.opened_units != 0.0) {
             for (auto& lot : pyramid_entries_) {

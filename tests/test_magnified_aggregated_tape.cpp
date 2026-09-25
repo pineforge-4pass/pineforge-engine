@@ -13,11 +13,13 @@
  *   tests/fixtures/session_islastbar, use_bar_magnifier=true (hm-mag-*) and false
  *   (hm-chart-*). TradingView books 12 rows (v0, v2) and 14 (v4), as this engine
  *   does on every path: ab9714be's 9 was its own divergence.
- * - The rows are asserted at chart-bar granularity: TradingView dates a magnified
- *   fill at its chart bar's open, where the adapter keeps a magnified sub-bar fill's
- *   own instant (design AG2); that presentation difference is a separate finding.
- *   Excursions are not asserted (the E19 excursion model differs on every path,
- *   the chart timeframe's included).
+ * - TradingView dates every fill at its chart bar's open, a magnified one too
+ *   (218 of 218 fills on the sixteen tapes), and so does the engine on every path
+ *   since R5 lane PAR-ORDERS: each row's instants are asserted exactly. (The
+ *   adapter kept a magnified sub-bar fill's own instant, design AG2, and the row
+ *   compared the bar each instant opens: 71 of the 152 instants the magnified
+ *   replays book sat inside their bar.) Excursions are not asserted (the E19
+ *   excursion model differs on every path, the chart timeframe's included).
  * - Each row's bar indices are the chart bars its instants open, and its "Duration
  *   (bars)" is exit bar - entry bar, on the magnified path as on the chart path:
  *   since K-IDX the kernel books lots and rows in script-bar space.
@@ -265,7 +267,6 @@ int chart_bar_of(std::int64_t ms) {
     return -1;
 }
 
-std::int64_t bar_open(std::int64_t ms) { return ms - ms % kBar; }
 
 // TradingView's exit signal for strategy.close_all is "Close position order".
 std::string exit_signal(const MagDiffHost::Row& r) {
@@ -304,7 +305,7 @@ void replay(const char* slug, const Variant& v, Path path, unsigned recorded = 0
         const TapeTrade& tv = tape[i];
         const MagDiffHost::Row& r = rows[i];
         const bool ok = r.is_long == tv.is_long
-            && bar_open(r.entry_ms) == tv.entry_ms && bar_open(r.exit_ms) == tv.exit_ms
+            && r.entry_ms == tv.entry_ms && r.exit_ms == tv.exit_ms
             && near(r.entry_price, tv.entry_price, 1e-9)
             && near(r.exit_price, tv.exit_price, 1e-9)
             && r.qty == tv.qty && near(r.profit, tv.net_pnl, 0.00006)
