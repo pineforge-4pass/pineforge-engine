@@ -6,8 +6,8 @@
  * A host that is not written in C++ drives the kernel through this header:
  * it hands the runtime a callback table, runs a batch of bars, and submits,
  * replaces, cancels or executes order requests from inside those callbacks.
- * It is the C spelling of <pineforge/native_host.hpp>'s NativeStrategyHost —
- * the same kernel, the same events, no PineScript and no codegen.
+ * It drives the same kernel as <pineforge/native_host.hpp>'s NativeStrategyHost;
+ * the C++ it does not spell in 1.0 is docs/pages/native-engine.md's boundary table.
  *
  * SCOPE
  * ─────
@@ -98,10 +98,10 @@
  *                                          its script interval and session days are the decision's
  *                                          session tail
  *   [C]  trail_state                       strategy_native_trail_state_v1
- *   [--] inspect_current_execution         its preview carries the account-effect projection and a variable-
- *                                          length closed-row P&L vector with no size-prefixed POD;
- *                                          strategy_native_execute_current_v1 answers the same verdicts as
- *                                          pf_native_execute_outcome_e and pf_native_refusal_e
+ *   [--] inspect_current_execution         scheduled for 1.1.0 (C-SURFACE-2): C has no non-mutating call,
+ *                                          and strategy_native_execute_current_v1 applies the command, so
+ *                                          it is no preview; the preview's refusal, readiness, account
+ *                                          projection and closed-row P&L have no size-prefixed POD in 1.0
  *   [C]  execute_current                   strategy_native_execute_current_v1
  *   [--] mark_native_report_point          the C spec does not name KernelRecordedAtHostMarks,
  *                                          so a C host cannot select its mark cadence
@@ -169,7 +169,7 @@
  *                                          read, nothing is submitted
  *
  * Three asymmetries this list does not reach, recorded here because a C host
- * will look for them.
+ * will look for them; the 1.0 C boundary table lists every other one.
  *
  * pf_native_working_v1 has two trigger numbers, p1 and p2 -- plus, in its own
  * additive tail, trail_has_arm_price, which tells an absent arm from an arm at
@@ -2243,8 +2243,8 @@ typedef struct pf_native_subscription_v1 {
  *  what #strategy_configure_native_v1 would have.
  *
  *  Every field of NativeRunSpec that is not fixed by
- *  #pf_native_run_spec_v1 now travels here. The one deliberate omission is
- *  `identity`, which the base spec owns.
+ *  #pf_native_run_spec_v1 now travels here, except `identity`, which the base
+ *  spec owns, and `timeframe_undetected`: a C run always names both timeframes.
  *
  *  This struct has SIX published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
@@ -2538,7 +2538,7 @@ typedef struct pf_native_callbacks_v1 {
                             double* favorable, double* adverse);
 
     /** How many units a host-sized CLOSE takes — the units half of
-     *  `resolve_execution_terms`, and the only half this header exposes.
+     *  `resolve_execution_terms` (the price half is `on_execution_terms`).
      *  Consulted for #PF_NATIVE_INTENT_HOST_SIZED candidates and nothing
      *  else; without it a cohort close resolves no quantity and stands
      *  deferred, which is exactly what the C++ default does. ANSWERING

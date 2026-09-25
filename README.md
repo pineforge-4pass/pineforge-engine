@@ -115,9 +115,11 @@ Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers
 
 ## Three front doors
 
-The engine can be driven three ways. All three run the same kernel, so they
-match trigger, price fills, book lots and settle identically; what differs is
-who writes the strategy and who owns TradingView's quirks.
+The engine can be driven three ways. All three run the same kernel, so for the
+same requests they match trigger, price fills, book lots and settle
+identically; what differs is who writes the strategy, who owns TradingView's
+quirks and, for C, the C++ capabilities the 1.0 C surface does not spell (the
+1.0 C boundary table in the [native engine guide](docs/pages/native-engine.md)).
 
 ### 1. PineScript, through codegen
 
@@ -192,7 +194,8 @@ strategy_native_run_v1(s, bars, n, &report);
 
 **Coming from PineScript?** [PineScript to native C++](docs/pages/pine-to-native.md)
 maps every `strategy.*` builtin, the 19 covered `strategy()` declaration
-parameters and every `request.*` form to its C++ **and** C spelling, names the example that
+parameters and every `request.*` form to its C++ spelling and, where the 1.0 C surface has one,
+its C spelling, names the example that
 exercises each, and walks one six-feature strategy from Pine to a native host
 end to end. The [native engine guide](docs/pages/native-engine.md) is the
 reference underneath it.
@@ -395,7 +398,7 @@ The gates a pull request passes, one line each:
 | Kernel residuals | `scripts/check_kernel_residuals.py` | A TradingView-shaped name reaching the kernel archive or its installed headers without an ADR 0001 row. |
 | Kernel seams | `scripts/check_kernel_seam_rows.py` | A kernel `source_*` seam, or a kernel member or row field the source layer writes, with no ADR 0001 row. |
 | Feature rulings | `scripts/check_native_feature_rulings.py` | A `NativeRunSpec` field the adapter does not declare and the ADR does not rule. |
-| C surface | `scripts/check_c_abi_runtime.py`, `scripts/check_native_c_api_surface.py` | A `PF_API` export added without its inventory row; a public host member with no C spelling and no recorded reason. |
+| C surface | `scripts/check_c_abi_runtime.py`, `scripts/check_native_c_api_surface.py` | A `PF_API` export added without its inventory row; a public host member with no C spelling and no recorded reason; a 1.0 C boundary row whose gap has closed or that the native engine guide no longer lists. |
 | Twin parity | `scripts/check_twin_parity.py` | A frozen assertion quietly rewritten instead of a behaviour change being argued. |
 | Documentation | `scripts/check_doc_anchors.py`, `scripts/check_doc_lint.py`, `scripts/check_pine_to_native_coverage.py` | A `file:line` citation that no longer points at its symbol; a stale epoch, roadmap label or negative claim; a Pine builtin with no row on the migration page. |
 | Doc reverts | `scripts/check_doc_reverts.py` | A published sentence deleted, or older wording restored over newer, by a commit whose message does not name it. |
@@ -501,7 +504,10 @@ The header's **COVERAGE** block lists every public member of
 `scripts/check_native_c_api_surface.py` proves that list is exactly that
 class's public surface — a member added without a row, a row naming a member
 that no longer exists, or a spelling naming a symbol the C headers do not
-declare all fail CI.
+declare all fail CI. Every other C++ capability the 1.0 C surface lacks is a
+row of the 1.0 C boundary table in the native engine guide, and a
+`C_V1_EXCLUSIONS` row of the same checker fails when that gap closes or its C++
+declaration goes.
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and

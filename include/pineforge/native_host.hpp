@@ -278,7 +278,7 @@ static_assert(std::is_nothrow_move_assignable_v<NativeFailed>);
 /// pointer to the staged spec (nullptr when Unconfigured), the phase, how a
 /// Completed run ended, the durable failure, the consumed run-number high water
 /// and the monotonic decision floor. The spec pointer is valid until the next
-/// configure or begin. C spelling: strategy_native_state_v1.
+/// configure or begin. C spelling: strategy_native_state_v1 (no spec, no failure context).
 struct NativeStateView {
     NativeLifecycleKind kind = NativeLifecycleKind::Unconfigured;
     const NativeRunSpec* spec = nullptr;
@@ -365,8 +365,8 @@ enum class NativeEventKind : std::uint8_t {
 
 /// One owning row of native_events(after_ordinal): a command event, a driver point
 /// or an account observation, tagged by kind. Later commands and the next run's
-/// reset do not invalidate a row already returned. C spelling:
-/// strategy_native_events_v1, which flattens the same rows into one tagged POD.
+/// reset do not invalidate a row already returned. C spelling: strategy_native_events_v1,
+/// one tagged POD with each kind's documented fields; the rest is C++-only in 1.0.
 struct NativeMarketEvent {
     NativeEventKind kind = NativeEventKind::Command;
     uint64_t ordinal = 0;
@@ -642,7 +642,7 @@ struct NativeRiskState {
 /// What current_execution_point() answers inside a callback: the point's decision
 /// context, its price, which quote that price is, and the ordinal the quote came
 /// from. nullopt outside a decision point. C spelling: pf_native_decision_v1's
-/// price and quote_kind, on every callback.
+/// price and quote_kind, on every callback (no quote origin ordinal).
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
     double price = 0.0;
@@ -930,8 +930,8 @@ public:
     /// price, and units for an unresolved HostSized request; the default is the
     /// identity price with no units, which is what every bare host wants. Answering no
     /// units for a HostSized candidate is MatchRejectReason::TermsUnresolved. It does
-    /// not supply a second matcher, book or cash path. C spelling: the units half
-    /// only, pf_native_callbacks_v1::on_close_units.
+    /// not supply a second matcher, book or cash path. C spelling: on_execution_terms
+    /// (price, shape, grid) and on_close_units (a host-sized close's units only).
     virtual native_order::ExecutionTerms resolve_execution_terms(
             const NativeExecutionTermsFacts& facts) const {
         return {facts.default_resolved_price, std::nullopt,
@@ -1082,8 +1082,8 @@ public:
     /// A read-only preview of a current execution: the settlement readiness, any typed
     /// refusal or terms outcome, and the ordered closed-row P&L for an Applied-ready
     /// command. It is never an apply token — execute_current revalidates, and editing
-    /// the preview cannot authorize or alter a fill. No C spelling:
-    /// strategy_native_execute_current_v1 answers the same verdicts.
+    /// the preview cannot authorize or alter a fill. No C spelling in 1.0 (C-SURFACE-2,
+    /// 1.1.0): strategy_native_execute_current_v1 applies the command, so it is no preview.
     NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
     /// Consume, synchronously, a request accepted or replaced in this very callback.
     /// Answers a refusal or the applied outcome; applied effects and relationship
@@ -1179,14 +1179,14 @@ public:
     /// The only setup call. Copies the candidate spec, normalizes it and stages it
     /// atomically: Unconfigured or a Completed run with a larger run number becomes
     /// Ready, and a refusal is Failed with no partial apply. Calling it again while
-    /// Ready is a Contract failure — use a new host to change unconsumed setup. C
-    /// spelling: strategy_configure_native_v1 / strategy_configure_native_ext_v1.
+    /// Ready is a Contract failure — use a new host to change unconsumed setup. C spelling:
+    /// strategy_configure_native_v1 / _ext_v1, typed refusal _ext_result_v1.
     NativeSetupResult configure_native(const NativeRunSpec& spec);
     /// Stage the run's immutable FX epoch, legal only while Ready. Parallel
     /// timestamp/rate arrays of equal length, strictly increasing timestamps, finite
     /// positive rates; an empty curve clears it and restores the scalar account_fx
     /// fallback. Refused with WrongPhase once the run is Running. C spelling:
-    /// strategy_configure_native_fx_curve_v1.
+    /// strategy_configure_native_fx_curve_v1, typed refusal _fx_curve_ext_v1.
     NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);
     /// The whole run state as one owning read. The only observation of the lifecycle
     /// and of the durable failure; last_error() is presentation text beside it. C

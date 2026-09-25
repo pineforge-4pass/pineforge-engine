@@ -82,7 +82,10 @@ finding to report, not a step to take.
 
 5. **Every public host member has a C spelling or a recorded reason.** The
    COVERAGE comment block (`COVERAGE` `sha256:71e3e35c1a2409524f511b5ee0e02df496852dc5ff629728a78c5c0401cb8ad0` native_c_api.h:52-55) lists them; a member added without a
-   row, or a row naming a member that no longer exists, fails.
+   row, or a row naming a member that no longer exists, fails. Every other C++
+   capability the 1.0 C surface lacks is a row of the 1.0 C boundary table
+   (@ref native_engine), and the checker's `C_V1_EXCLUSIONS` row for it fails
+   when the gap closes or its C++ declaration goes.
    *Enforced:* `scripts/check_native_c_api_surface.py`.
 
 6. **The C ABI is append-only within a major version.** Fields and functions
@@ -288,7 +291,8 @@ no individual regression, and negative movement is outside it.
 ## Where to read next
 
 - [PineScript to native C++](@ref pine_to_native) — every Pine builtin mapped
-  to its C++ and C spelling, with the example that exercises it.
+  to its C++ spelling and, where the 1.0 C surface has one, its C spelling,
+  with the example that exercises it.
 - [Native engine](@ref native_engine) — the lifecycle, the run spec, the
   request vocabulary and the C ABI contract.
 - [ADR 0001](../adr/0001-kernel-adapter-boundary.md) — the boundary, its rules,

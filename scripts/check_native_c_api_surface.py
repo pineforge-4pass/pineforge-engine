@@ -36,6 +36,19 @@ an excluded one must stay unspelled, and every C enumerator must name a kernel
 value. So a kernel enumerator appended without a C name fails here -- the
 static_asserts in src/native_c_host.cpp pin the names they list, and cannot see
 one that nobody listed -- and so does a C enumeration nobody classified.
+
+R5 lane H-DOCGATES adds the 1.0 C boundary (supervisor ruling, 2026-09-26:
+C-SURFACE-2 moves to 1.1.0, so 1.0 lists every C++ capability the C surface
+does not expose, with its reason and the row that pins it). The censuses above
+are existence checks: a `[C]` row proves a C spelling exists, not that the C
+record carries every C++ fact, and ENUM_TWINS starts from the C side. Each
+C_V1_EXCLUSIONS row names one capability the C surface lacks: the C++
+declaration that must still exist, and the C spellings that must stay absent
+from a C record or from every C declaration. A pattern ends in `\w*`, so a
+suffixed or prefixed spelling (`strategy_..._entry_comment_v1`,
+`request_origin`) closes the gap as visibly as the plain one. The boundary
+table of docs/pages/native-engine.md cites every row exactly once, and cites no
+row this checker does not have.
 """
 from __future__ import annotations
 
@@ -49,6 +62,7 @@ HOST = INCLUDE / "native_host.hpp"
 ENGINE = INCLUDE / "engine.hpp"
 C_API = INCLUDE / "native_c_api.h"
 PUBLIC_C = INCLUDE / "pineforge.h"
+DOC_C_BOUNDARY = ROOT / "docs" / "pages" / "native-engine.md"
 
 # Members that are not part of the host's own surface: the copy/move deletions
 # the class spells out, and the friend declaration.
@@ -83,8 +97,10 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_open_directions_e": ("native_run_spec.hpp", "NativeOpenDirections", {}),
     "pf_native_report_policy_e": ("native_run_spec.hpp", "NativeReportPolicy", {
         "KernelRecordedAtHostMarks":
-            "its host names each report point from inside its own callbacks, and "
-            "the C callback table has no call that marks one (lane E22)",
+            "under it the host marks each report point, and the kernel's mark is "
+            "reached only by the Pine source host (not installed API); a C host has "
+            "no call that marks one and could only declare a series nobody records "
+            "(lane E22; the 1.0 C boundary table)",
     }),
     "pf_native_price_grid_e": ("native_run_spec.hpp", "NativePriceGrid", {}),
     "pf_native_grid_rounding_e": ("native_run_spec.hpp", "NativeGridRounding", {}),
@@ -164,6 +180,70 @@ C_ONLY: dict[str, str] = {
     "pf_native_plan_e": "alternative index of the std::variant native_order::ExecutionPlan",
 }
 
+# The 1.0 C boundary: key -> (the header under include/pineforge that declares
+# the C++ capability, a spelling of it that must still be there, and the pairs
+# (C region, pattern) whose pattern must stay absent from that region). A region
+# is a C struct's body, or "@declarations": every declaration of the two C
+# headers, comments cut out. docs/pages/native-engine.md's boundary table gives
+# each row's reason and C route.
+C_V1_EXCLUSIONS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
+    "replace_options": ("native_order.hpp", "struct ReplaceOptions", (
+        ("@declarations", r"\b\w*(?:keep_handle|keep_binding|retain_trigger_state|replace_opt)\w*"),)),
+    "applied_event_tail": ("native_order.hpp", "struct ExecutionAppliedEvent", (
+        ("pf_native_applied_v1", r"\b\w*(?:origin|label|comment|definition|first_trade"
+                                 r"|trade_count|allowance|scope|cursor)\w*"),
+        ("@declarations", r"\bpf_native_applied_(?!v1\b)\w+"))),
+    "closed_entry_comment": ("engine.hpp", "std::string entry_comment;", (
+        ("@declarations", r"\bstrategy_\w*entry_comment\w*"),
+        ("pf_trade_s", r"\b\w*comment\w*"))),
+    "closed_rows_in_place": ("engine.hpp", "const Trade& closed_trade(std::size_t i) const", (
+        ("@declarations", r"\bstrategy_(?:native_)?(?:closed_trade_count|closed_trade_get"
+                          r"|closed_trade_row|report_trade)\w*"),)),
+    "working_definition": ("native_order.hpp", "std::optional<double> best_seed", (
+        ("pf_native_working_v1", r"\b(?:reduce_\w+|size_\w+|side|grid_policy|reserve_percent_fee"
+                                 r"|fill_through|\w*best_seed\w*|predecessor\w*|root\w*|priority\w*"
+                                 r"|kept_binding\w*|host_sized\w*)\b"),)),
+    "open_ended_session_day": ("market_driver.hpp", "bool closes_session_day_open_ended", (
+        ("pf_native_decision_v1", r"\b\w*open_ended\w*"),)),
+    "callback_contexts": ("market_driver.hpp", "native_calendar::NativeInterval input_interval", (
+        ("pf_native_decision_v1", r"\b\w*(?:input_interval|source_price_time|driver_statistics"
+                                  r"|sub_bars_processed|quote_origin)\w*"),)),
+    "host_sized_opening": ("native_order.hpp", "enum class HostSizedKind", (
+        ("pf_native_request_v1", r"\b\w*(?:host_sized|sized_kind)\w*"),)),
+    "terms_units": ("native_order.hpp", "struct ExecutionTerms", (
+        ("pf_native_terms_v1", r"\b\w*units\w*"),)),
+    "excursion_fx": ("engine.hpp", "double account_fx = 1.0;", (
+        ("pf_native_lot_excursion_v1", r"\b\w*fx\w*"),)),
+    "hash_sink": ("engine.hpp", "class BrokerStateHashSink", (
+        ("@declarations", r"\b\w*hash_sink\w*|\bpf_native_hash\w*"),)),
+    "entry_bar_mask_phase": ("engine.hpp", "void declare_opened_lot_entry_bar_mask(", (
+        ("@declarations", r"\bstrategy_native_declare_opened_lot_entry_bar_mask_(?!v1\b)\w+"),)),
+    "timeframe_undetected": ("native_run_spec.hpp", "bool timeframe_undetected", (
+        ("@declarations", r"\b\w*undetected\w*"),)),
+    "inherited_statistics": ("engine.hpp", "double max_contracts_held_all() const", (
+        ("@declarations", r"\bstrategy_\w*(?:max_contracts_held|capital_held|open_profit"
+                          r"|gross_profit|gross_loss|net_profit|runup|drawdown)\w*"),)),
+    "hook_views": ("native_host.hpp", "struct NativeExecutionTermsFacts", (
+        ("pf_native_terms_view_v1", r"\b\w*(?:definition|allowance)\w*"),
+        ("pf_native_precommit_view_v1", r"\b\w*(?:definition|readiness)\w*"))),
+    "event_payloads": ("native_order.hpp", "enum class CommandSurface", (
+        ("pf_native_event_v1", r"\b\w*(?:surface|authority|definition|attempted|requested_delta"
+                               r"|kept_handle|allowance|projection)\w*"),)),
+    "command_results": ("native_order.hpp", "struct SubmitResult", (
+        ("@declarations", r"\bpf_native_(?:submit|replace|cancel|execute)\w*result\w*"
+                          r"|\b\w*event_ordinal\w*"),)),
+    "state_view": ("native_host.hpp", "struct NativeStateView", (
+        ("pf_native_state_v1", r"\b\w*(?:spec|context|recipient|cause)\w*"),)),
+    "host_minor": ("engine.hpp", "void trace(const std::string& name, double value);", (
+        ("@declarations", r"\bstrategy_(?:native_)?(?:trace|declare_\w*hook)\w*"),)),
+    "library_facilities": ("native_run_spec.hpp", "std::uint64_t native_run_spec_digest(", (
+        ("@declarations", r"\b\w*(?:spec_digest|fx_curve_digest|validate_native|preflight_native"
+                          r"|parse_timeframe|parse_session|quantity_on_grid)\w*"),)),
+    "toolkit": ("native_toolkit.hpp", "inline BracketReceipt submit_bracket", (
+        ("@declarations", r"\b\w*(?:bracket|order_book)\w*"),)),
+}
+_CITATION = re.compile(r'C_V1_EXCLUSIONS\["(\w+)"\]')
+
 _C_ENUM = re.compile(r"typedef\s+enum\s+(\w+)\s*\{(.*?)\}\s*\w+\s*;", re.DOTALL)
 _ENUMERATOR = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+?))?\s*$", re.DOTALL)
 
@@ -171,6 +251,51 @@ _ENUMERATOR = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+?))?\s*$", re.DOTALL)
 def _strip_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
     return re.sub(r"//[^\n]*", " ", text)
+
+
+def _squeeze(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
+
+
+def c_v1_exclusion_failures(c_api_text: str, public_text: str) -> list[str]:
+    """Hold the 1.0 C boundary table to the declarations: each row's C++
+    capability still exists, its C spelling is still absent, and the page
+    cites every row once and no row that is not here."""
+    failures: list[str] = []
+    declarations = _strip_comments(c_api_text) + "\n" + _strip_comments(public_text)
+    records = {name: body for name, body in re.findall(
+        r"\btypedef\s+struct\s+(\w+)\s*\{(.*?)\}\s*\w+\s*;", declarations, re.DOTALL)}
+    page = DOC_C_BOUNDARY.read_text(encoding="utf-8")
+    cited = _CITATION.findall(page)
+    for key in sorted(set(cited) - set(C_V1_EXCLUSIONS)):
+        failures.append(f'C_V1_EXCLUSIONS["{key}"]: the boundary table cites a row this '
+                        "checker does not have")
+    for key, (header, cpp_spelling, pins) in C_V1_EXCLUSIONS.items():
+        cpp = _squeeze(_strip_comments((INCLUDE / header).read_text(encoding="utf-8")))
+        spelling = _squeeze(cpp_spelling)
+        whole = ((r"(?<!\w)" if re.match(r"\w", spelling) else "") + re.escape(spelling)
+                 + (r"(?!\w)" if re.search(r"\w$", spelling) else ""))
+        if not re.search(whole, cpp):
+            failures.append(f'C_V1_EXCLUSIONS["{key}"]: the C++ declaration `{cpp_spelling}` '
+                            f"is gone from {header}: retire the row, or re-pin it")
+        if cited.count(key) != 1:
+            failures.append(f'C_V1_EXCLUSIONS["{key}"]: the boundary table in '
+                            f"docs/pages/native-engine.md cites it {cited.count(key)} times, "
+                            "not once")
+        for region, forbidden in pins:
+            if region == "@declarations":
+                shape = declarations
+            elif region in records:
+                shape = records[region]
+            else:
+                failures.append(f'C_V1_EXCLUSIONS["{key}"]: the C record {region} is gone')
+                continue
+            found = re.search(forbidden, shape)
+            if found:
+                failures.append(f'C_V1_EXCLUSIONS["{key}"]: `{found.group(0)}` is now declared '
+                                f"in {region}: the gap has closed, so retire or narrow the row "
+                                "and its boundary-table entry")
+    return failures
 
 
 def _value(expr: str, known: dict[str, int]) -> int:
@@ -413,6 +538,7 @@ def main() -> int:
 
     enum_failures, twinned, covered = enum_twin_failures((c_api_text, public_text))
     failures.extend(enum_failures)
+    failures.extend(c_v1_exclusion_failures(c_api_text, public_text))
 
     # Every claimed spelling must name something the C headers declare.
     for name, detail in sorted({**spelled, **seam_spelled}.items()):
@@ -431,7 +557,8 @@ def main() -> int:
           f"{len(seams)} marked BacktestEngine seams, {len(seam_spelled)} with a C spelling, "
           f"{len(seam_excluded)} excluded with a reason; {twinned + len(C_ONLY)} C enumerations, "
           f"{twinned} twinned to a kernel enumeration ({covered} enumerators, each with a C "
-          f"name), {len(C_ONLY)} C-only with a reason")
+          f"name), {len(C_ONLY)} C-only with a reason; {len(C_V1_EXCLUSIONS)} C++ capabilities "
+          "outside the 1.0 C surface, each pinned and in the boundary table")
     return 0
 
 

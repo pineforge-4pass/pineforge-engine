@@ -68,8 +68,8 @@ enum class Side : std::uint8_t { Long = 0, Short = 1 };
 /// opening, which must declare where it trades. A host-sized request that reaches
 /// a candidate with no units answered is MatchRejectReason::TermsUnresolved. It is
 /// the adapter's sizing seam; a bare host that wants the kernel to resolve a cash
-/// or equity basis uses Sized instead, and the C surface refuses HostSized under
-/// any owner but BindCohort.
+/// or equity basis uses Sized instead. The C surface admits HostSized as a cohort
+/// close or a Book-scoped WaitForApplied close only (the 1.0 C boundary table).
 struct HostSized {
     HostSizedKind kind = HostSizedKind::Open;
     std::optional<Side> side;

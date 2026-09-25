@@ -42,7 +42,8 @@ the one a host programs against.
   Read **[Native engine](@ref native_engine)** for `NativeStrategyHost`,
   `configure_native`, execution terms and the C ABI contract. Coming from
   PineScript, start with **[PineScript to native C++](@ref pine_to_native)** —
-  every `strategy.*` builtin mapped to its C++ and C spelling, the runnable
+  every `strategy.*` builtin mapped to its C++ spelling and, where the 1.0 C
+  surface has one, its C spelling, the runnable
   host that exercises each, and a six-feature strategy migrated end to end.
 
 - <b class="tab-title">I'm integrating from CMake</b>
@@ -226,7 +227,7 @@ Build the generated strategy module with the repository recipe (or
 | Page | What it covers |
 | --- | --- |
 | [Native engine](@ref native_engine) | The reference: lifecycle, run spec, request vocabulary, the C ABI contract. |
-| [PineScript to native C++](@ref pine_to_native) | Every Pine builtin mapped to its C++ and C spelling, with a worked migration. |
+| [PineScript to native C++](@ref pine_to_native) | Every Pine builtin mapped to its C++ spelling and, where the 1.0 C surface has one, its C spelling, with a worked migration. |
 | [Contributing as an LLM](@ref contributing_llm) | The repo map, the boundary invariants and the lane recipe, for an agent. |
 
 **How execution works**

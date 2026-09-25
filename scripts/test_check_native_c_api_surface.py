@@ -100,6 +100,100 @@ class SurfaceGuardTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("cancel_gone", err)
 
+    # --- the 1.0 C boundary (R5 lane H-DOCGATES) ---
+    # Each case adds the spelling a 1.1.0 lane would most likely give a
+    # capability the 1.0 C surface lacks. A pin that caught only the plain
+    # spelling let the first four through (AUDIT4 cparity mutants M1, M3, M4
+    # and M5): the gap would close and the boundary table would still list it.
+
+    def assert_boundary_fails(self, key: str, anchor: str, addition: str) -> None:
+        self.assertEqual(C_API_TEXT.count(anchor), 1, anchor)
+        self.c_api.write_text(C_API_TEXT.replace(anchor, anchor + addition, 1), encoding="utf-8")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn(f'C_V1_EXCLUSIONS["{key}"]', err)
+        self.assertIn("is now declared", err)
+
+    def test_a_suffixed_entry_comment_accessor_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "closed_entry_comment", "PF_API int strategy_native_submit_v1(",
+            "\n/* x */ const char* strategy_closed_trade_entry_comment_v1(pf_strategy_t s, int i);\n"
+            "PF_API int strategy_native_submit_v1(")
+
+    def test_a_replace_call_with_options_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "replace_options", "PF_API int strategy_native_submit_v1(",
+            "\nPF_API int strategy_native_replace_opts_v1(pf_strategy_t s, uint64_t incarnation,"
+            " uint32_t keep_handle);\nPF_API int strategy_native_submit_v1(")
+
+    def test_a_bracket_call_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "toolkit", "PF_API int strategy_native_submit_v1(",
+            "\nPF_API int strategy_native_submit_bracket_v1(pf_strategy_t s);\n"
+            "PF_API int strategy_native_submit_v1(")
+
+    def test_a_prefixed_applied_tail_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "applied_event_tail",
+            "    uint64_t opened_lot_incarnation; /**< The lot this fill opened, 0 when none. */",
+            "\n    uint32_t request_origin;\n    const char* request_label;")
+
+    def test_an_applied_struct_beside_v1_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "applied_event_tail", "PF_API int strategy_native_submit_v1(",
+            "\ntypedef struct pf_native_applied_ext_v1 { uint32_t origin; } "
+            "pf_native_applied_ext_v1;\nPF_API int strategy_native_submit_v1(")
+
+    def test_a_decision_input_interval_closes_the_gap(self) -> None:
+        self.assert_boundary_fails(
+            "callback_contexts", "    uint8_t  closes_session_day; /**< It closes its session day. */",
+            "\n    int64_t input_interval_open_ms;")
+
+    def test_a_cpp_capability_that_goes_retires_its_row(self) -> None:
+        saved = guard.INCLUDE
+        self.addCleanup(setattr, guard, "INCLUDE", saved)
+        copy = Path(self.c_api.parent, "include")
+        shutil.copytree(saved, copy)
+        order = copy / "native_order.hpp"
+        text = order.read_text(encoding="utf-8")
+        self.assertEqual(text.count("struct ReplaceOptions"), 1)
+        order.write_text(text.replace("struct ReplaceOptions", "struct ReplaceOptionsRenamed", 1),
+                         encoding="utf-8")
+        guard.INCLUDE = copy
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn('C_V1_EXCLUSIONS["replace_options"]: the C++ declaration', err)
+
+    def page_with(self, old: str, new: str) -> None:
+        saved = guard.DOC_C_BOUNDARY
+        self.addCleanup(setattr, guard, "DOC_C_BOUNDARY", saved)
+        page = Path(self.c_api.parent, "native-engine.md")
+        text = saved.read_text(encoding="utf-8")
+        self.assertEqual(text.count(old), 1, old)
+        page.write_text(text.replace(old, new, 1), encoding="utf-8")
+        guard.DOC_C_BOUNDARY = page
+
+    def test_a_boundary_row_cannot_disappear(self) -> None:
+        self.page_with('`C_V1_EXCLUSIONS["replace_options"]`', "(gone)")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn('C_V1_EXCLUSIONS["replace_options"]: the boundary table', err)
+        self.assertIn("cites it 0 times", err)
+
+    def test_a_boundary_row_cannot_be_doubled(self) -> None:
+        self.page_with('`C_V1_EXCLUSIONS["toolkit"]` |',
+                       '`C_V1_EXCLUSIONS["toolkit"]`, `C_V1_EXCLUSIONS["toolkit"]` |')
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn("cites it 2 times", err)
+
+    def test_the_page_cannot_cite_a_row_the_checker_lacks(self) -> None:
+        self.page_with('`C_V1_EXCLUSIONS["toolkit"]` |',
+                       '`C_V1_EXCLUSIONS["toolkit"]`, `C_V1_EXCLUSIONS["made_up"]` |')
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn('C_V1_EXCLUSIONS["made_up"]: the boundary table cites a row', err)
+
     # --- the BASE-CLASS SEAMS census (R5 lane E15) ---
 
     def test_a_marked_seam_without_a_row_fails(self) -> None:

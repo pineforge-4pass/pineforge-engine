@@ -72,7 +72,9 @@ gain:
   (native_order.hpp:1043) — readable in order from `native_events`
   (native_host.hpp:1317).
 - **Any language.** The same kernel drives from C through a callback table
-  (`pf_native_callbacks_v1` native_c_api.h:2456), so a host in Rust, Go, Python or Zig needs no C++.
+  (`pf_native_callbacks_v1` native_c_api.h:2456), so a host in Rust, Go, Python or Zig needs no C++
+  unless it needs a capability the 1.0 C surface does not spell (the 1.0 C boundary table,
+  @ref native_engine).
 - **One binary, no transpiler.** Link `libpineforge`, ship an executable or a
   loadable module.
 
@@ -267,7 +269,10 @@ source-only features state why a native counterpart does not exist.
 host answers the units itself from `resolve_execution_terms`
 (native_host.hpp:935), which sees the kernel-resolved quantity as the facts'
 `RemainingUnits` native_order.hpp:550 and may return its own. A C host answers
-the same question through `on_close_units` native_c_api.h:2548 for a close.
+it only for the two host-sized closes the C surface admits, a cohort close and a
+Book-scoped `WAIT_FOR_APPLIED` child, through `on_close_units`
+native_c_api.h:2548; a host-sized opening, and replacing the kernel's own `Sized`
+or `ScopeFraction` units, are C++-only in 1.0.
 
 ## Orders {#pine_to_native_map_orders}
 
@@ -411,7 +416,7 @@ lane N12 measured why — TradingView's drawdown latch samples at the close and
 still admits a reversal, its loss-day streak counts trades, its intraday loss
 closes at the path's adverse extreme and withdraws the book, and its fill cap
 charges slots and transfers quota on a chart-day key. The ruling of record is
-ADR-0001's `risk` row and `native-feature-parity.md:474`; the permanent witness
+ADR-0001's `risk` row and `native-feature-parity.md:479`; the permanent witness
 is `tests/test_adapter_risk_relower.cpp`.
 
 ## Margin and liquidation {#pine_to_native_map_margin}
@@ -744,7 +749,7 @@ native_c_api.h:2267 through `strategy_configure_native_ext_v1`
 native_c_api.h:3113, and `strategy_native_run_v1` native_c_api.h:2652 drives
 the bars into a `pf_report_t` pineforge.h:469.
 
-Three rules make the C door behave like the C++ one:
+Three rules govern the C door:
 
 1. **Every struct is tagged and size-prefixed.** Set `struct_size`
    native_c_api.h:2096 and `version` native_c_api.h:2097; a mismatch is refused
@@ -756,19 +761,22 @@ Three rules make the C door behave like the C++ one:
    only the recalculate hook and still expects the bar hook silently trades
    nothing.
 
-Not every member of the C++ host has a C spelling, and each that has none
-carries a recorded reason. Five members have no direct C spelling: `prepare_native_begin` (it
-borrows the codegen ingress a C host never supplies), `inspect_current_execution`
-native_host.hpp:1087 (its preview has no size-prefixed POD;
-`strategy_native_execute_current_v1` answers the same verdicts) and the two
-market-only conveniences `submit_market` / `replace_market`, and `native_closed_rows_amended` (the C++-only row-amendment notification). Every policy hook
-has a C route: `validate_execution_precommit` native_host.hpp:948 is
+Not every C++ capability has a C spelling in 1.0. Five members of the C++ host
+have none: `prepare_native_begin` (a C host supplies each begin argument itself),
+`inspect_current_execution` native_host.hpp:1087 (scheduled for 1.1.0:
+`strategy_native_execute_current_v1` applies the command and is no preview), the
+two market-only conveniences `submit_market` / `replace_market`, and
+`native_closed_rows_amended` (a C host cannot write the rows it would name).
+Every other C++ capability the 1.0 C surface lacks (record fields, hook answers,
+conveniences, library functions) is a row of the 1.0 C boundary table in
+@ref native_engine, with its reason and the checker row that pins it. Every policy hook
+has a C callback: `validate_execution_precommit` native_host.hpp:948 is
 `on_precommit`, `resolve_anchored_level` native_host.hpp:1000 `on_anchored_level`,
 the price and opening-shape halves of `resolve_execution_terms`
 native_host.hpp:935 `on_execution_terms`, `native_sized_units`
 native_host.hpp:1302 `strategy_native_sized_units_v1` and the
 `hash_host_extension` seam `on_hash_extension`; only its deprecated spelling
-`hash_source_extension` has none. The `COVERAGE` comment block at `sha256:71e3e35c1a2409524f511b5ee0e02df496852dc5ff629728a78c5c0401cb8ad0` native_c_api.h:52-55
+`hash_source_extension` has none. What each callback carries is its C struct. The `COVERAGE` comment block at `sha256:71e3e35c1a2409524f511b5ee0e02df496852dc5ff629728a78c5c0401cb8ad0` native_c_api.h:52-55
 lists every public member with either its C spelling or that reason, and
 `scripts/check_native_c_api_surface.py` proves the list is exactly that class's
 public surface.

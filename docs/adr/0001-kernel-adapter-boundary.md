@@ -378,7 +378,11 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   spelling or the reason it has none, and `scripts/check_native_c_api_surface.py` proves the
   block is exactly that class's public surface. `strategy_create` / `run_backtest` stay
   codegen-emitted (`include/pineforge/pineforge.h:631`), which is why a C host frees its report
-  with `strategy_native_report_free_v1`.
+  with `strategy_native_report_free_v1`. The 1.0 boundary is the table "The 1.0 C boundary" in
+  `docs/pages/native-engine.md`: every C++ capability the C surface does not expose, with its
+  reason and the checker row that pins it (a COVERAGE `[--]` row, an `ENUM_TWINS` exclusion or a
+  `C_V1_EXCLUSIONS` row of `scripts/check_native_c_api_surface.py`). 1.0 claims no C/C++ parity
+  beyond the declared fields and calls.
 - **The examples are a gated target with executed assertions.** Eighteen Pine-free hosts ship
   under `examples/native/` — sixteen C++ and two C. Each C++ host includes one public kernel
   header: `<pineforge/native_host.hpp>`, or `native_toolkit.hpp`
@@ -657,7 +661,9 @@ this section to what a run *declares*.
 
 A C host drives the same kernel a C++ host does, so every generic capability a C++ host reaches owes a
 C host either a route or a ruling that says why not — and "no size-prefixed POD yet" is a to-do, not a
-ruling. The census of `NativeStrategyHost` is the COVERAGE block of `include/pineforge/native_c_api.h`,
+ruling. In 1.0 each such to-do is a row of the 1.0 C boundary table (`docs/pages/native-engine.md`)
+that names its scheduled lane, or says it has none: C-SURFACE-2 (1.1.0) takes the execution preview,
+the applied event's origin and label, a closed row's entry comment and the replace options. The census of `NativeStrategyHost` is the COVERAGE block of `include/pineforge/native_c_api.h`,
 held by `scripts/check_native_c_api_surface.py`, which since this lane also classifies every C
 enumeration against its kernel twin value by value. This section records the lane's decisions on the
 surfaces the third audit named (AUDIT3 §3.1 "What breaks G1" 4, findings E12 f7 and E13 f4). Every line
@@ -894,7 +900,7 @@ no new kernel policy.
 ## Consequences
 
 "Use the engine without Pine" means, on this tree: program against `NativeStrategyHost` in C++
-**or** against `<pineforge/native_c_api.h>` in C; link `PineForge::kernel`, which is a separately
+**or** against `<pineforge/native_c_api.h>` in C, less the capabilities its 1.0 boundary table lists; link `PineForge::kernel`, which is a separately
 buildable archive with no source-layer object in it; size with `Sized` or with your own terms;
 let the kernel record the equity curve, the per-bar broker hashes and the open-position row, or
 record them yourself; declare higher-timeframe series and an auxiliary finer feed in the run
