@@ -117,9 +117,6 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/check_pine_to_native_coverage.py')]),
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
-        ('detached-comments',
-         [sys.executable, str(source / 'scripts/measure_detached_comments.py'),
-          '--check-ceiling', '--ceiling', '0']),
     ]
 
 

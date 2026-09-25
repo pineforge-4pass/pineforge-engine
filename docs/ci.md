@@ -93,10 +93,12 @@ release rows. Raise the constant when a row lands, and pass `--min-tests N` to
 override it for one run (the flag gates any profile; `kernel` and `release`
 have a default).
 
-Preflight also runs the detached-comment census with a checked-in ceiling of
-30 lines. Its self-test adds one detached line above that ceiling and requires
-the gate to refuse it. After B-DOCS clears the census, set
-`DETACHED_LINE_CEILING = 0` in `scripts/measure_detached_comments.py`.
+Preflight also runs the detached-comment census of the kernel compile closure
+(`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
+against the checked-in `DETACHED_LINE_CEILING`, which is 0: R5 lane B-DOCS
+cleared the census, so one detached comment line fails the stage. Its self-test
+(`detached-comments-tests`) requires a fixture one detached line above the
+ceiling to be refused and one at the ceiling to pass.
 
 Every compile of an `examples/native` source keeps `assert()` live: the
 `example_*` executables (`examples/native/CMakeLists.txt`) and the live

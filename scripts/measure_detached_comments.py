@@ -30,7 +30,7 @@ Usage:
     measure_detached_comments.py                 # census, per file
     measure_detached_comments.py --blocks        # every detached block's span
     measure_detached_comments.py --json
-    measure_detached_comments.py --check-ceiling [--ceiling N]
+    measure_detached_comments.py --check-ceiling # fail above DETACHED_LINE_CEILING
     measure_detached_comments.py --self-test     # the classifier's own pins
     measure_detached_comments.py FILE [FILE...]  # an explicit population
 """
@@ -45,8 +45,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# B-DOCS lowers this to zero after removing the remaining detached comments.
-DETACHED_LINE_CEILING = 30
+# The checked-in ceiling --check-ceiling holds the census to (R5 lane B-GATES'
+# ratchet). R5 lane B-DOCS cleared the census, so it is zero: one detached
+# line anywhere in the kernel compile closure fails the preflight stage.
+DETACHED_LINE_CEILING = 0
 KERNEL_SOURCE_BLOCK = re.compile(
     r"set\(PINEFORGE_KERNEL_SOURCES\s*(.*?)\)", re.DOTALL)
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:"([^"]+)"|<([^>]+)>)')
@@ -266,24 +268,27 @@ def self_test() -> int:
             failures += 1
         print(f"  {status} {name}"
               + ("" if got == want else f"\n       want {want} got {got}"))
-    # One additional detached line above today's ceiling must turn the CLI red.
-    fixture = (["int a;"] + ["// detached"] * (DETACHED_LINE_CEILING + 1)
-               + ["", "// attached", "int b;"])
-    with tempfile.TemporaryDirectory(prefix="pineforge-detached-test-") as directory:
-        path = Path(directory) / "one-extra.cpp"
-        path.write_text("\n".join(fixture) + "\n")
-        result = subprocess.run([sys.executable, __file__, '--check-ceiling',
-                                 str(path)], capture_output=True, text=True,
-                                check=False)
-        if (result.returncode != 1
-                or f"{DETACHED_LINE_CEILING + 1}/{DETACHED_LINE_CEILING}"
-                not in result.stdout):
+    # One additional detached line above today's ceiling must turn the CLI red,
+    # and a population exactly at the ceiling must not.
+    for detached, want_rc, name in (
+            (DETACHED_LINE_CEILING + 1, 1, "ceiling + one detached line is refused"),
+            (DETACHED_LINE_CEILING, 0, "a population at the ceiling passes")):
+        fixture = (["int a;"] + ["// detached"] * detached
+                   + ["", "// attached", "int b;"])
+        with tempfile.TemporaryDirectory(prefix="pineforge-detached-test-") as directory:
+            path = Path(directory) / "fixture.cpp"
+            path.write_text("\n".join(fixture) + "\n")
+            result = subprocess.run([sys.executable, __file__, '--check-ceiling',
+                                     str(path)], capture_output=True, text=True,
+                                    check=False)
+        if (result.returncode != want_rc
+                or f"{detached}/{DETACHED_LINE_CEILING}" not in result.stdout):
             failures += 1
-            print("  FAIL ceiling + one detached line: "
+            print(f"  FAIL {name}: "
                   f"exit {result.returncode}, output {result.stdout.strip()!r}")
         else:
-            print("  ok   ceiling + one detached line is refused")
-    print(f"measure_detached_comments self-test: {len(SELF_TESTS) + 1 - failures}"
+            print(f"  ok   {name}")
+    print(f"measure_detached_comments self-test: {len(SELF_TESTS) + 2 - failures}"
           f" passed, {failures} failed")
     return 1 if failures else 0
 
@@ -299,10 +304,6 @@ def main() -> int:
     parser.add_argument("--blocks", action="store_true",
                         help="print every detached block's line span")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--check-ceiling", action="store_true",
-                        help="fail when the detached-line census exceeds the ceiling")
-    parser.add_argument("--ceiling", type=int, default=0,
-                        help="detached-line ceiling for --check-ceiling (default 0)")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--check-ceiling", action="store_true",
                         help="fail when TOTAL exceeds the checked-in ceiling")
@@ -311,10 +312,6 @@ def main() -> int:
         return self_test()
     paths = [path.resolve() for path in args.paths] or kernel_closure(ROOT)
     rows = measure(paths)
-    observed = sum(row["lines"] for row in rows)
-    if args.check_ceiling:
-        print(f"detached comment ceiling={args.ceiling}, observed={observed}")
-        return 1 if observed > args.ceiling else 0
     if args.json:
         print(json.dumps({"files": rows,
                           "total": sum(row["lines"] for row in rows)},

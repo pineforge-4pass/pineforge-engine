@@ -1282,7 +1282,6 @@ public:
 };
 
 // --- pivot_point_levels (free function) ---
-
 // The 11 pivot levels [P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5] of one
 // period's high, low and close, na for the levels a type does not define and
 // all na for a missing input; an unknown name answers P alone. Traditional,
