@@ -37,6 +37,17 @@ read stale on that platform alone. The cases reproduce that strings line: stale
 without the source, live through the TU's literal, still stale when no surface
 carries it, never live through a comment or an include path; the surface is
 judged in both directions, and it is exactly the archive's own TU list.
+
+R5 lane H-DOCGATES (AUDIT4-opus X12, kres K4/K5/K11) closes the reach gaps
+the fourth audit probed: a ruled NAME never covers a TEXT (the bare-word
+rulings `Pine` and `syminfo` passed "match Pine semantics exactly" and
+"syminfo.tickerid must be set"), so a text is ruled by its exact words; the
+vocabulary reads Pine's other dotted namespaces (`timeframe.`, `input.`,
+`str.`, `math.`, `matrix.`, `line.`, `xloc.`, ...), the camel-case
+`Tv`/`TV` spelling, the bare session-bar flags and the chart-type and
+trade-date built-ins; a row whose second column says "no archive symbol" is
+held to it; the printed counts are the rulings the vocabulary reads; and the
+counts have floors that scripts/ci_verify.py passes.
 """
 from __future__ import annotations
 
@@ -151,9 +162,28 @@ BLIND_PROBE_NAMES = ("security_lower_tf_probe", "calc_on_every_tick", "strategy_
 
 
 def table_archive() -> tuple[list[str], list[str]]:
-    """A synthetic archive holding exactly the ADR's ruled vocabulary."""
-    strings = sorted(RULED.identifiers) + sorted(RULED.phrases) + NOISE_STRINGS
+    """A synthetic archive holding exactly the ADR's ruled vocabulary -- all of
+    it but the header-only rows (R5 lane H-DOCGATES), which table_headers()
+    ships where the kernel profile ships them."""
+    strings = (sorted(RULED.identifiers - RULED.header_only)
+               + sorted(RULED.phrases - RULED.header_only) + NOISE_STRINGS)
     return strings, list(NOISE_NM)
+
+
+def table_headers() -> tuple[list[str], list[str], list[str], list[str]]:
+    """The header-only rulings on the installed-header surface: each name as a
+    code line, each text as a literal (read_headers' four lists)."""
+    names = sorted(RULED.header_only & RULED.identifiers)
+    texts = sorted(RULED.header_only & RULED.phrases)
+    return (names, [f"pineforge/table.hpp:{n}" for n in range(1, len(names) + 1)],
+            texts, [f"pineforge/table.hpp:{n}" for n in range(1, len(texts) + 1)])
+
+
+def evaluate_table(strings: list[str], nm: list[str], **surfaces):
+    """guard.evaluate with the header-only rulings shipped in the headers,
+    unless the case brings its own header surface."""
+    surfaces.setdefault("header_lines", table_headers())
+    return guard.evaluate(strings, nm, RULED, **surfaces)
 
 
 class RuledTableTests(unittest.TestCase):
@@ -185,7 +215,7 @@ class RuledTableTests(unittest.TestCase):
 
 class EvaluatorTests(unittest.TestCase):
     def evaluate(self, strings: list[str], nm: list[str]):
-        return guard.evaluate(strings, nm, RULED)
+        return evaluate_table(strings, nm)
 
     def test_the_table_alone_passes(self) -> None:
         findings, summary = self.evaluate(*table_archive())
@@ -231,7 +261,12 @@ class EvaluatorTests(unittest.TestCase):
         strings, nm = table_archive()
         findings, summary = self.evaluate(strings, nm)
         self.assertEqual(findings, [])
-        self.assertEqual(summary["ruledPhrasesCovered"], 3)
+        # (expectation corrected: 3 -> every ruled text the vocabulary reads,
+        # because R5 lane H-DOCGATES rules each text by its exact words: the
+        # three feed texts, the deprecated aliases' texts, map.hpp's
+        # static_assert texts and the runtime's dotted argument checks.)
+        self.assertEqual(summary["ruledPhrasesCovered"],
+                         sum(1 for p in RULED.phrases if guard.vocabulary_text(p)))
 
     def test_a_stale_ruling_fails(self) -> None:
         strings, nm = table_archive()
@@ -320,7 +355,7 @@ class AuditBlindSpotTests(unittest.TestCase):
     """The probes the third audit's two reviewers passed through the gate."""
 
     def evaluate(self, strings: list[str], nm: list[str]):
-        return guard.evaluate(strings, nm, RULED)
+        return evaluate_table(strings, nm)
 
     def unruled(self, strings: list[str], nm: list[str]) -> set[str]:
         findings, _ = self.evaluate(strings, nm)
@@ -382,8 +417,10 @@ class AuditBlindSpotTests(unittest.TestCase):
                     "__func__._ZN5Eigen8internal14aligned_mallocEm"]
         findings, summary = self.evaluate(strings + metadata, nm)
         self.assertEqual(findings, [], [str(f) for f in findings])
+        # (expectation corrected: the text alone -> the text and its bare
+        # `islastbar`, which R5 lane H-DOCGATES' vocabulary reads by itself.)
         self.assertEqual(self.unruled(strings + metadata + ["session.islastbar probe"], nm),
-                         {"session.islastbar probe"})
+                         {"session.islastbar probe", "islastbar"})
         self.assertEqual(self.unruled(strings + ["session.start must precede its end"], nm),
                          set())
 
@@ -548,14 +585,13 @@ class KernelSourceSurfaceTests(unittest.TestCase):
 
     def test_without_the_source_the_split_label_reads_stale(self) -> None:
         """Fail-before: PR #278's Linux verdict, reproduced from its strings line."""
-        findings, _ = guard.evaluate(*self.split_archive(), RULED)
+        findings, _ = evaluate_table(*self.split_archive())
         self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
 
     def test_a_label_the_compiler_split_is_live_through_its_source_literal(self) -> None:
         literals = self.source_literals(
             'constexpr char kNativeLiquidationLabel[] = "__kernel_liquidation__";\n')
-        findings, summary = guard.evaluate(*self.split_archive(), RULED,
-                                           source_literals=literals)
+        findings, summary = evaluate_table(*self.split_archive(), source_literals=literals)
         self.assertEqual(findings, [], [str(f) for f in findings])
         self.assertEqual(summary["sourceHits"], 1)
 
@@ -563,7 +599,7 @@ class KernelSourceSurfaceTests(unittest.TestCase):
         literals = self.source_literals(
             'constexpr char kNativeRiskLabel[] = "__kernel_risk__";\n'
             'constexpr char kComment[] = "Margin liquidation";\n')
-        findings, _ = guard.evaluate(*self.split_archive(), RULED, source_literals=literals)
+        findings, _ = evaluate_table(*self.split_archive(), source_literals=literals)
         self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
 
     def test_a_comment_or_an_include_path_is_not_a_source_literal(self) -> None:
@@ -573,7 +609,7 @@ class KernelSourceSurfaceTests(unittest.TestCase):
             '/* "__kernel_liquidation__" */\n'
             'constexpr char kOther[] = "Margin liquidation";\n')
         self.assertEqual(literals[0], ["Margin liquidation"])
-        findings, _ = guard.evaluate(*self.split_archive(), RULED, source_literals=literals)
+        findings, _ = evaluate_table(*self.split_archive(), source_literals=literals)
         self.assertEqual([(f.kind, f.token) for f in findings], [("stale", SPLIT_LABEL)])
 
     def test_a_kernel_source_literal_is_judged_like_an_archive_text(self) -> None:
@@ -582,7 +618,7 @@ class KernelSourceSurfaceTests(unittest.TestCase):
         literals = self.source_literals('const char* reason = "strategy.entry rejected";\n'
                                         'const char* tag = "tv_probe_source";\n')
         strings, nm = table_archive()
-        findings, _ = guard.evaluate(strings, nm, RULED, source_literals=literals)
+        findings, _ = evaluate_table(strings, nm, source_literals=literals)
         self.assertEqual(sorted((f.kind, f.token) for f in findings),
                          [("unruled", "strategy.entry rejected"),
                           ("unruled", "tv_probe_source")])
@@ -613,9 +649,142 @@ class KernelSourceSurfaceTests(unittest.TestCase):
                                           [Path(unit).name + ".o" for unit in units])
         literals = guard.read_source_literals(guard.ROOT, files)
         strings, nm = table_archive()
-        findings, summary = guard.evaluate(strings, nm, RULED, source_literals=literals)
+        findings, summary = evaluate_table(strings, nm, source_literals=literals)
         self.assertEqual(findings, [], [str(f) for f in findings])
         self.assertGreater(summary["sourceHits"], 0)
+
+
+class ReachTests(unittest.TestCase):
+    """R5 lane H-DOCGATES (AUDIT4-opus X12, kres K4/K5/K11): the fourth
+    audit's probes, each of which the lane's base checker (21bdc2e8) passed
+    unflagged, and the two halves of the header-only and count rules."""
+
+    def unruled(self, strings: list[str], nm: list[str], **surfaces) -> set[str]:
+        findings, _ = evaluate_table(strings, nm, **surfaces)
+        return {f.token for f in findings if f.kind == "unruled"}
+
+    def test_a_ruled_name_never_covers_a_text(self) -> None:
+        """kres gate_bareword_probe.txt: the bare-word rulings `Pine`
+        (ADR-0001's PineMap row) and `syminfo` (the symbol-information row)
+        passed these four texts, and any ruled name passed a text around it."""
+        for text in ("match Pine semantics exactly", "Pine requires the chart symbol here",
+                     "syminfo.tickerid must be set", "syminfo.mintick drives the tick",
+                     "strategy_set_syminfo_type rejects this value"):
+            for surface in ("strings", "source-literal"):
+                with self.subTest(text=text, surface=surface):
+                    strings, nm = table_archive()
+                    if surface == "strings":
+                        found = self.unruled(strings + [text], nm)
+                    else:
+                        found = self.unruled(strings, nm,
+                                             source_literals=([text], ["src/probe.cpp:1"]))
+                    self.assertIn(text, found)
+        self.assertNotIn("Pine", RULED.identifiers)
+        # The name alone -- a symbol, a code identifier -- stays ruled by name.
+        strings, nm = table_archive()
+        self.assertEqual(self.unruled(strings + ["strategy_set_syminfo_type"],
+                                      nm + ["T _strategy_set_syminfo_type"]), set())
+
+    def test_pine_dotted_namespaces_are_residue(self) -> None:
+        for text in ("timeframe.change", "input.int", "str.format", "math.sum",
+                     "matrix.new: negative size", "line.get_price requires xloc.bar_index",
+                     "syminfo.tickerid", "format.mintick", "currency.USD", "dayofweek.monday",
+                     "timeframe.isintraday", "array.get index out of range",
+                     "ticker.heikinashi"):
+            with self.subTest(text=text):
+                strings, nm = table_archive()
+                self.assertIn(text, self.unruled(strings + [text], nm))
+                self.assertTrue(self.unruled(strings, nm + ["0000000000000000 T " + text]))
+        # A compiler's switch-table label, a project header, a member of a
+        # dotted run that is not a namespace: none is Pine's.
+        for text in ("l_switch.table.strategy_native_cancel_v1", "include/pineforge/map.hpp",
+                     "color.hpp", "matrix.hpp", "x.str.y", "data.exchange", "inline.cold"):
+            with self.subTest(look_alike=text):
+                strings, nm = table_archive()
+                findings, _ = evaluate_table(strings + [text], nm + ["t " + text])
+                self.assertEqual(findings, [], [str(f) for f in findings])
+
+    def test_camel_case_platform_names_and_bare_flags_are_residue(self) -> None:
+        for name in ("TvRound", "TVSession", "kTvStep", "islastbar", "isfirstbar",
+                     "isfirstbar_regular", "heikinashi_bar", "renko_brick", "time_tradingday"):
+            with self.subTest(name=name):
+                strings, nm = table_archive()
+                self.assertEqual(self.unruled(strings + [name], nm), {name})
+                self.assertEqual(self.unruled(strings, nm + ["T " + name]), {name})
+        # Machine-code runs that only resemble them are not names.
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings + ["TvV@", "TVh", 'C0"TV"', "xTVa", "ATVdisp"], nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+
+    def test_a_compiler_split_symbol_is_still_its_name(self) -> None:
+        """x86-64 GCC 13's kernel archive prints `strategy_set_syminfo_type.cold`
+        (the cold half GCC splits off a function) in its string table: one
+        symbol's name under a clone suffix, ruled with the export, not a text."""
+        strings, nm = table_archive()
+        clones = ["strategy_set_syminfo_type.cold", "_strategy_set_syminfo_type.cold.1",
+                  "strategy_set_syminfo_mintick.part.0", "strategy_position_size.isra.0",
+                  "strategy_set_syminfo_string.constprop.3", "strategy_set_syminfo_session.llvm.42"]
+        findings, _ = evaluate_table(strings + clones, nm + ["t " + c for c in clones])
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        # the suffix is a clone marker only at the end of a symbol-shaped line
+        self.assertEqual(self.unruled(strings + ["pine_probe_fn.cold", "timeframe.change"], nm),
+                         {"pine_probe_fn", "timeframe.change"})
+        self.assertIn("syminfo.part: bad", self.unruled(strings + ["syminfo.part: bad"], nm))
+
+    def test_a_header_only_ruling_is_held_to_its_row(self) -> None:
+        """A row saying "no archive symbol" rules its names and texts for the
+        installed headers alone: the same name in the archive or a kernel
+        literal is a finding (PineMap, round 3's blind probe, now flags there)."""
+        self.assertIn("PineMap", RULED.header_only)
+        self.assertIn("map.size: result exceeds int range", RULED.header_only)
+        self.assertNotIn("tv_carry_qty", RULED.header_only)
+        for surface in ("strings", "nm", "source-literal"):
+            with self.subTest(surface=surface):
+                strings, nm = table_archive()
+                if surface == "strings":
+                    found = self.unruled(strings + ["PineMap"], nm)
+                elif surface == "nm":
+                    found = self.unruled(strings, nm + ["T pineforge::PineMap<int, int>::size()"])
+                else:
+                    found = self.unruled(strings, nm,
+                                         source_literals=(["PineMap"], ["src/probe.cpp:1"]))
+                self.assertIn("PineMap", found)
+        strings, nm = table_archive()
+        self.assertIn("map.size: result exceeds int range",
+                      self.unruled(strings + ["map.size: result exceeds int range"], nm))
+        # Where the row puts them, they pass.
+        findings, _ = evaluate_table(*table_archive())
+        self.assertEqual(findings, [], [str(f) for f in findings])
+
+    def test_the_printed_counts_are_the_rulings_the_vocabulary_reads(self) -> None:
+        """kres K5: the mechanism tables' first columns were counted as rulings
+        (27 of "202" identifiers, 22 of "25" texts at 91d65ad6)."""
+        self.assertIn("priority", RULED.identifiers)
+        self.assertFalse(guard.vocabulary_name("priority"))
+        _, summary = evaluate_table(*table_archive())
+        self.assertEqual(summary["ruledIdentifiers"],
+                         sum(1 for name in RULED.identifiers if guard.vocabulary_name(name)))
+        self.assertLess(summary["ruledIdentifiers"], len(RULED.identifiers))
+        self.assertEqual(summary["ruledPhrases"],
+                         sum(1 for text in RULED.phrases if guard.vocabulary_text(text)))
+        self.assertLess(summary["ruledPhrases"], len(RULED.phrases))
+
+    def test_a_ruling_that_leaves_with_its_name_reads_below_the_floor(self) -> None:
+        """docs-a N7: a row and its name removed together pass every other
+        rule -- no unruled name, no stale row -- and only the floor sees it."""
+        _, full = evaluate_table(*table_archive())
+        row = next(line for line in ADR_TEXT.splitlines()
+                   if line.startswith("| `tv_carry_qty` |"))
+        reverted = guard.ruled_entries(ADR_TEXT.replace(row + "\n", ""))
+        self.assertNotIn("tv_carry_qty", reverted.identifiers)
+        strings, nm = table_archive()
+        strings.remove("tv_carry_qty")
+        findings, summary = guard.evaluate(strings, nm, reverted, header_lines=table_headers())
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        below = guard.floor_findings(summary, full["ruledIdentifiers"], full["ruledPhrases"])
+        self.assertEqual([(f.kind, f.token) for f in below], [("floor", "ruled identifiers")])
+        self.assertEqual(guard.floor_findings(full, full["ruledIdentifiers"],
+                                              full["ruledPhrases"]), [])
 
 
 class StripToolTests(unittest.TestCase):

@@ -4287,16 +4287,26 @@ build type: a `-g` archive's DWARF names every block-scope local, every struct
 member and every source path, and none of those is a residual surface. It
 matches a fixed residual vocabulary against whole identifiers only: at least
 three bytes, delimited by non-identifier bytes, so machine code `strings` prints
-as `C0"TV"` is not a name. The vocabulary (an identifier containing `pine` other
+as `C0"TV"` is not a name. It reads the installed headers and the kernel's own
+string literals as well. The vocabulary (an identifier containing `pine` other
 than `pineforge`, `tradingview`, `barmerge`, `coof`, `pooc`,
 `market_admission`, `calc_on_order_fills`, `process_orders_on_close` or a `tv`
-segment; a text containing `strategy.<name>`, `ta.<name>`, `request.security`,
-`barmerge.<name>` or `__margin_call__`, where `<name>` is a Pine member and not
-a C/C++ file suffix — `ta.ema` is a call, `ta.hpp` is this project's header, and
-a sanitizer build writes every source path into rodata as a real literal)
-requires every match to be listed,
-by name, in the first column of the ADR's residual tables — and every listed
-match to still be in the archive. The `kernel` profile runs it as the
+segment, a `strategy()` parameter word, `syminfo`, `barstate`, the underscore
+spelling of a Pine member, the camel-case `Tv` / `TV` spelling, a bare
+`islastbar` / `isfirstbar`, `heikinashi`, `renko` or `tradingday`; a text
+containing `strategy.<name>`, `ta.<name>`, `request.security`,
+`barmerge.<name>`, a dotted `session.` / `barstate.` member, another Pine
+namespace such as `timeframe.`, `input.`, `str.`, `math.`, `matrix.` or
+`xloc.`, the word `Pine`, or a `__name__` label, where `<name>` is not a C/C++
+file suffix — `ta.ema` is a call, `ta.hpp` is this project's header, and a
+sanitizer build writes every source path into rodata as a real literal)
+requires every match to be listed in the first column of the ADR's residual
+tables — a name by its name, a text by its exact words, so a ruled name never
+covers a text that contains it — and every listed match to still be in the
+archive, the installed headers or a kernel source literal. A row that says
+"no archive symbol" is held to it, and the two counts the key line prints
+(the rulings the vocabulary reads) have floors in `scripts/ci_verify.py`
+(`ADR_RULED_IDENTIFIERS_MIN`, `ADR_RULED_TEXTS_MIN`). The `kernel` profile runs it as the
 `kernel-residuals` stage right after the build; every profile runs it as the
 CTest row `test_kernel_residuals` (with the checker's own must-fail
 self-tests). What remains is listed with its ruling in

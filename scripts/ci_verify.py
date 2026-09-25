@@ -369,6 +369,17 @@ KERNEL_MIN_TESTS = 278
 #                                 test_adapter_security_route_conditions
 # No release row skips, so 690 registered is 690 run.
 RELEASE_MIN_TESTS = 690
+# ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
+# AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
+# its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
+# 175 AUDIT4 counted, less the bare word `Pine`, and the 3 feed texts plus
+# the 42 texts the lane rules by their exact words (6 deprecated-alias texts,
+# map.hpp's 4 static_assert texts, the runtime's 32 dotted argument checks).
+# A row the vocabulary reads cannot leave silently -- its name turns unruled
+# -- unless its name left in the same change; the floor makes that drop an
+# edit of this file. A lane that adds rulings raises the floor with them.
+ADR_RULED_IDENTIFIERS_MIN = 174
+ADR_RULED_TEXTS_MIN = 45
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
@@ -625,7 +636,9 @@ def twin_parity_command(source: Path) -> list[str]:
 def kernel_residuals_command(cfg: VerifyConfig) -> list[str]:
     return [sys.executable, str(cfg.source / 'scripts/check_kernel_residuals.py'),
             '--archive', str(cfg.build_dir / 'lib' / 'libpineforge_kernel.a'),
-            '--adr', str(cfg.source / 'docs/adr/0001-kernel-adapter-boundary.md')]
+            '--adr', str(cfg.source / 'docs/adr/0001-kernel-adapter-boundary.md'),
+            '--min-ruled-identifiers', str(ADR_RULED_IDENTIFIERS_MIN),
+            '--min-ruled-texts', str(ADR_RULED_TEXTS_MIN)]
 
 
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:

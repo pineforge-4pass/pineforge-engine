@@ -78,6 +78,26 @@ live everywhere else. So the gate also reads
     stays live while any surface carries it, and a vocabulary literal a
     kernel TU compiles must have a row even where the compiler split it.
 
+R5 lane H-DOCGATES (AUDIT4-opus X12, kres K4/K5/K11) closes what the fourth
+audit passed through the gate:
+
+  * a text is ruled by its exact words. A ruled NAME covers the name -- a
+    symbol, a code identifier, a string that is only the name -- and never a
+    text around it: the bare words `Pine` and `syminfo`, ruled as names,
+    passed "match Pine semantics exactly" and "syminfo.tickerid must be set";
+  * the vocabulary reads the camel-case `Tv`/`TV` spelling, the bare
+    session-bar flags, the chart-type and trade-date built-ins, the word
+    `Pine` in a text and Pine's other dotted namespaces (PINE_NAMESPACES);
+  * a row whose second column says "no archive symbol" is held to it: its
+    names and texts pass in the installed headers and fail in the archive or
+    a kernel source literal;
+  * the key line counts the rulings the vocabulary reads, not every
+    first-column token of the section (the mechanism tables' `priority`,
+    `keep_binding`, ... match no pattern), and --min-ruled-identifiers /
+    --min-ruled-texts floor those counts (scripts/ci_verify.py's
+    ADR_RULED_IDENTIFIERS_MIN / ADR_RULED_TEXTS_MIN), so a ruling cannot
+    leave together with its name unless the change lowers the floor.
+
 Exit 0 when every match is ruled and every ruling is live, 1 on a finding,
 2 when the archive, the tools (including the strip tool: the gate fails CLOSED
 rather than read debug information), the install rule or the ADR section
@@ -159,6 +179,17 @@ IDENTIFIER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("calc_on_order_fills", re.compile(r"calc_on_order_fills", re.IGNORECASE)),
     ("process_orders_on_close", re.compile(r"process_orders_on_close", re.IGNORECASE)),
     ("tv", re.compile(r"(?:^|_)tv(?:_|$)", re.IGNORECASE)),
+    # R5 lane H-DOCGATES (AUDIT4-opus X12): the camel-case spelling of the
+    # platform (`TvRound`, `TVSession`, `kTvStep`), which the `tv` segment
+    # above never reads. Two characters after the prefix, the first a capital,
+    # so a machine-code run such as `TvV@` or `TVh` is not a name.
+    ("Tv/TV camel case", re.compile(r"(?:^|[a-z0-9_])(?:Tv|TV)[A-Z][A-Za-z0-9]")),
+    # ... Pine's session-bar flags spelled bare (`islastbar`, not only
+    # `session_islastbar`), and the chart-type and trade-date built-ins
+    # (`ticker.heikinashi`, `ticker.renko`, `time_tradingday`).
+    ("session bar flag", re.compile(r"(?:^|_)is(?:first|last)bar(?:_|$)", re.IGNORECASE)),
+    ("chart-type or trade-date built-in",
+     re.compile(r"heikin_?ashi|renko|tradingday", re.IGNORECASE)),
     # R5 lane F6: Pine words with no `pine`/`tv` token. The strategy()
     # declaration parameters whose spelling has no generic reading ...
     ("pyramiding", re.compile(r"pyramiding", re.IGNORECASE)),
@@ -216,7 +247,21 @@ MANGLED = re.compile(r"^_{1,2}Z[0-9A-Z]")
 # is the same carve-out `pine(?!forge)` makes for the project's own name, and
 # it hides no Pine built-in: none is spelled `h`, `hpp`, `cpp`, ...
 NOT_A_SOURCE_FILE = r"(?!(?:h|hpp|hh|hxx|c|cc|cpp|cxx|inc|ipp)(?![A-Za-z0-9_]))"
+# R5 lane H-DOCGATES (AUDIT4-opus X12): Pine's other dotted namespaces, whose
+# member texts (`timeframe.change`, `input.int`, `str.format`, `math.sum`,
+# `matrix.new`, `line.get_price`, `xloc.bar_index`, `syminfo.tickerid`,
+# `format.mintick`, `currency.USD`, `dayofweek.monday`) no pattern above read.
+# The namespace must start the dotted run -- `l_switch.table.<symbol>`, a
+# compiler's switch-table label, is not Pine's `table.` -- and the member must
+# not be a C/C++ file suffix (`map.hpp`, `color.hpp` are this project's).
+PINE_NAMESPACES = (
+    "syminfo timeframe input str math matrix map array line linefill label box table "
+    "polyline xloc yloc format dayofweek currency color chart ticker plot hline").split()
 PHRASE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # R5 lane H-DOCGATES: the word Pine in a text is a claim about the
+    # language, so a text holding it needs its own row; a ruled identifier
+    # that happens to be spelled `Pine...` never covers it.
+    ("Pine prose", re.compile(r"\bpine\b", re.IGNORECASE)),
     ("strategy.", re.compile(r"\bstrategy\." + NOT_A_SOURCE_FILE + r"[a-z_]{2,}")),
     ("ta.", re.compile(r"\bta\." + NOT_A_SOURCE_FILE + r"[a-z_]{2,}")),
     ("request.security", re.compile(r"request\.security")),
@@ -227,6 +272,9 @@ PHRASE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # "session.start" is not Pine's.
     ("session.", re.compile(r"\bsession\." + _any_of(SESSION_MEMBERS) + r"\b")),
     ("barstate.", re.compile(r"\bbarstate\." + _any_of(BARSTATE_MEMBERS) + r"\b")),
+    ("dotted Pine namespace", re.compile(
+        r"(?<![A-Za-z0-9_.])" + _any_of(PINE_NAMESPACES) + r"\."
+        + NOT_A_SOURCE_FILE + r"[A-Za-z_][A-Za-z0-9_]*")),
 )
 # A C/C++ name as the ADR spells it, used to read the ruling tables.
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -267,8 +315,9 @@ class Hit:
     kind: str      # "identifier" or "phrase"
     token: str     # the identifier, or the whole text for a phrase hit
     pattern: str
-    source: str    # "strings", "nm", "header" (code) or "header-literal"
-    line: str
+    source: str    # "strings", "nm", "header" (code), "header-literal" or "source-literal"
+    line: str      # the text with its location, as a finding prints it
+    text: str = "" # the text itself: the line of `strings`/`nm`, the code line, the literal
 
 
 @dataclass(frozen=True)
@@ -285,14 +334,27 @@ class Finding:
 class Ruled:
     identifiers: frozenset[str]
     phrases: frozenset[str]
+    # R5 lane H-DOCGATES: the names and texts whose row says they are
+    # header-only ("... so no archive symbol" in its second column). The
+    # installed headers carry them; the archive and the kernel's own literals
+    # must not.
+    header_only: frozenset[str] = frozenset()
+
+
+# The words a row's second column uses for a name the kernel profile installs
+# but never compiles into the archive: the gate holds the row to that claim.
+HEADER_ONLY_MARK = "no archive symbol"
 
 
 def ruled_entries(adr_text: str) -> Ruled:
     """The first column of every table row in the ADR's residual section.
 
     A backticked token that is a plain identifier is ruled by name; a token with
-    spaces or punctuation is a ruled phrase (a text is covered when it contains
-    it); a token with a path separator is a citation, not a ruling."""
+    spaces or punctuation is a ruled text, and it rules exactly that text (a
+    text is covered only by a row that spells all of it -- R5 lane
+    H-DOCGATES); a token with a path separator is a citation, not a ruling. A
+    row whose second column says "no archive symbol" rules its identifiers for
+    the installed headers only, names and texts alike."""
     start = adr_text.find(SECTION_HEADING)
     if start < 0:
         raise InfrastructureError("ADR section not found: " + SECTION_HEADING)
@@ -302,21 +364,28 @@ def ruled_entries(adr_text: str) -> Ruled:
         section = section[:following.start()]
     identifiers: set[str] = set()
     phrases: set[str] = set()
+    header_only: set[str] = set()
     for line in section.splitlines():
         if not line.startswith("|"):
             continue
-        first = line.split("|")[1]
+        cells = line.split("|")
+        first = cells[1]
+        scoped = len(cells) > 2 and HEADER_ONLY_MARK in cells[2]
         for token in BACKTICKED.findall(first):
             token = token.strip()
             if "/" in token:
                 continue
             if IDENTIFIER.fullmatch(token):
                 identifiers.add(token)
+                if scoped:
+                    header_only.add(token)
             else:
                 phrases.add(token)
+                if scoped:
+                    header_only.add(token)
     if not identifiers:
         raise InfrastructureError("ADR residual section lists no ruled identifier")
-    return Ruled(frozenset(identifiers), frozenset(phrases))
+    return Ruled(frozenset(identifiers), frozenset(phrases), frozenset(header_only))
 
 
 def scan(lines: list[str], source: str, *, texts: bool = True,
@@ -338,16 +407,17 @@ def scan(lines: list[str], source: str, *, texts: bool = True,
                 continue
             if SENTINEL[1].match(identifier):
                 if texts:
-                    hits.append(Hit("identifier", identifier, SENTINEL[0], source, where))
+                    hits.append(Hit("identifier", identifier, SENTINEL[0], source, where, line))
                 continue
             for name, pattern in IDENTIFIER_PATTERNS:
                 if pattern.search(identifier):
-                    hits.append(Hit("identifier", identifier, name, source, where))
+                    hits.append(Hit("identifier", identifier, name, source, where, line))
                     break
         if texts:
+            phrase_line = CLONE_SUFFIX.sub("", line) if source in ("strings", "nm") else line
             for name, pattern in PHRASE_PATTERNS:
-                if pattern.search(line):
-                    hits.append(Hit("phrase", line, name, source, where))
+                if pattern.search(phrase_line):
+                    hits.append(Hit("phrase", line, name, source, where, line))
                     break
     return hits
 
@@ -359,6 +429,47 @@ def symbol_name(token: str, source: str) -> str:
     if source in ("strings", "nm") and token.startswith("_") and not token.startswith("__"):
         return token[1:]
     return token
+
+
+# The suffixes a compiler appends to a symbol it splits or clones -- GCC's
+# `.cold` / `.part.N` / `.isra.N` / `.constprop.N` / `.lto_priv.N`, clang's
+# `.cold.N` / `.llvm.N` -- which the ELF and Mach-O string tables print as
+# `strategy_set_syminfo_type.cold`: still one symbol's name, never a text
+# (x86-64 GCC 13's kernel archive carries seven such names of ruled exports).
+CLONE_SUFFIX = re.compile(
+    r"(?:\.(?:cold|part|isra|constprop|lto_priv|localalias|llvm|clone|specialized)"
+    r"(?:\.\d+)*)+$")
+
+# The surfaces whose lines are texts a program prints or compiles in: an archive
+# string, a header literal, a kernel-source literal. (A symbol line and a code
+# line are names.)
+TEXT_SOURCES = frozenset(("strings", "header-literal", "source-literal"))
+# The surfaces a header-only ruling must never appear on.
+ARCHIVE_SOURCES = frozenset(("strings", "nm", "source-literal"))
+
+
+def is_text(hit: Hit) -> bool:
+    """A hit inside a text of several words, rather than a line that IS a name
+    (a symbol-table string, a one-name literal). R5 lane H-DOCGATES: a ruled
+    name inside such a text never covers it -- `PineMap` or `syminfo` ruled
+    as names used to pass "match Pine semantics exactly" and "syminfo.tickerid
+    must be set"; the text is ruled by its own words or not at all."""
+    if hit.source not in TEXT_SOURCES:
+        return False
+    text = hit.text.strip()
+    if hit.source == "strings":
+        text = CLONE_SUFFIX.sub("", text)
+    return ARCHIVE_IDENTIFIER.fullmatch(text) is None
+
+
+def vocabulary_text(text: str) -> bool:
+    """Whether the vocabulary reads anything in `text` (the rulings it counts)."""
+    return bool(scan([text], "strings"))
+
+
+def vocabulary_name(identifier: str) -> bool:
+    return (any(pattern.search(identifier) for _, pattern in IDENTIFIER_PATTERNS)
+            or bool(SENTINEL[1].match(identifier)))
 
 
 def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
@@ -383,36 +494,59 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
     present: set[str] = set()
     covered: set[str] = set()
     reported: set[tuple[str, str]] = set()
+
+    def report(kind: str, token: str, detail: str) -> None:
+        if (kind, token) not in reported:
+            reported.add((kind, token))
+            findings.append(Finding("unruled", token, detail))
+
     for hit in hits + header_hits + source_hits:
-        if hit.kind == "identifier":
-            name = symbol_name(hit.token, hit.source)
-            ruled_as = next((candidate for candidate in (hit.token, name)
-                             if candidate in ruled.identifiers), None)
-            if ruled_as is not None:
-                present.add(ruled_as)
-            elif (hit.kind, name) not in reported:
-                reported.add((hit.kind, name))
-                findings.append(Finding(
-                    "unruled", name,
-                    f"identifier matches residual vocabulary {hit.pattern!r} via {hit.source} "
-                    f"and has no ADR-0001 row: {hit.line[:160]}"))
+        if is_text(hit) or hit.kind == "phrase":
+            # A text is ruled by its exact words, ends trimmed (a table cell
+            # cannot carry a trailing space); an nm line is a symbol line, and
+            # only a phrase of the vocabulary makes it a text.
+            text = hit.text.strip()
+            if text in ruled.phrases:
+                if text in ruled.header_only and hit.source in ARCHIVE_SOURCES:
+                    report("text", text[:160],
+                           f"ruled for the installed headers only (its row says "
+                           f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it")
+                else:
+                    covered.add(text)
+                continue
+            if hit.kind == "identifier":
+                name = symbol_name(hit.token, hit.source)
+                if hit.token not in ruled.identifiers and name not in ruled.identifiers:
+                    report("identifier", name,
+                           f"identifier matches residual vocabulary {hit.pattern!r} via "
+                           f"{hit.source} and has no ADR-0001 row: {hit.line[:160]}")
+                    continue
+                report("text", hit.text[:160],
+                       f"text names the ruled identifier {name!r} via {hit.source}, and a "
+                       "ruled name never covers a text: the text needs its own ADR-0001 "
+                       "row, spelled exactly")
+                continue
+            report("text", hit.text[:160],
+                   f"text matches residual vocabulary {hit.pattern!r} via {hit.source} "
+                   "and no ADR-0001 row spells it")
+            continue
+        name = symbol_name(hit.token, hit.source)
+        ruled_as = next((candidate for candidate in (hit.token, name)
+                         if candidate in ruled.identifiers), None)
+        if ruled_as is None:
+            report("identifier", name,
+                   f"identifier matches residual vocabulary {hit.pattern!r} via {hit.source} "
+                   f"and has no ADR-0001 row: {hit.line[:160]}")
+        elif ruled_as in ruled.header_only and hit.source in ARCHIVE_SOURCES:
+            report("identifier", name,
+                   f"ruled for the installed headers only (its row says "
+                   f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it: {hit.line[:160]}")
         else:
-            covering = [phrase for phrase in ruled.phrases if phrase in hit.line]
-            if covering:
-                covered.update(covering)
-            elif (hit.kind, hit.token) not in reported:
-                reported.add((hit.kind, hit.token))
-                findings.append(Finding(
-                    "unruled", hit.token[:160],
-                    f"text matches residual vocabulary {hit.pattern!r} via {hit.source} "
-                    "and contains no ADR-0001 phrase"))
-    def matched(identifier: str) -> bool:
-        return (any(pattern.search(identifier) for _, pattern in IDENTIFIER_PATTERNS)
-                or bool(SENTINEL[1].match(identifier)))
+            present.add(ruled_as)
     for identifier in sorted(ruled.identifiers):
         if identifier in present:
             continue
-        if matched(identifier):
+        if vocabulary_name(identifier):
             findings.append(Finding(
                 "stale", identifier,
                 "ruled in ADR-0001 but no longer in the archive, the installed headers or "
@@ -420,11 +554,11 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
     for phrase in sorted(ruled.phrases):
         if phrase in covered:
             continue
-        if any(pattern.search(phrase) for _, pattern in PHRASE_PATTERNS):
+        if vocabulary_text(phrase):
             findings.append(Finding(
                 "stale", phrase,
-                "ruled in ADR-0001 but no archive, header or kernel source text contains it; "
-                "drop its row"))
+                "ruled in ADR-0001 but no archive, header or kernel source text is exactly "
+                "this; drop its row"))
     summary = {
         "hits": len(hits),
         "identifierHits": sum(1 for hit in hits if hit.kind == "identifier"),
@@ -433,8 +567,14 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
         "sourceHits": len(source_hits),
         "ruledIdentifiersPresent": len(present),
         "ruledPhrasesCovered": len(covered),
-        "ruledIdentifiers": len(ruled.identifiers),
-        "ruledPhrases": len(ruled.phrases),
+        # R5 lane H-DOCGATES (AUDIT4-opus K5): the rulings the vocabulary
+        # reads. The mechanism tables' first columns (`priority`,
+        # `keep_binding`, `NativeRunSpec::event_retention`, ...) are parsed
+        # too, but no pattern matches them, so they are neither residue nor
+        # rulings and are not counted.
+        "ruledIdentifiers": sum(1 for identifier in ruled.identifiers
+                                if vocabulary_name(identifier)),
+        "ruledPhrases": sum(1 for phrase in ruled.phrases if vocabulary_text(phrase)),
         "findings": len(findings),
     }
     return findings, summary
@@ -733,8 +873,29 @@ def read_archive(archive: Path, workdir: Path) -> tuple[list[str], list[str], st
     return strings_text.splitlines(), nm_text.splitlines(), tool
 
 
+def floor_findings(summary: dict[str, int], min_identifiers: int | None,
+                   min_texts: int | None) -> list[Finding]:
+    """R5 lane H-DOCGATES (AUDIT4-opus X13): the ruled counts have a floor.
+
+    A row the vocabulary reads cannot vanish silently -- its name would turn
+    unruled -- unless the name left the archive in the same change; a floor
+    makes that drop a stated edit of scripts/ci_verify.py's
+    ADR_RULED_IDENTIFIERS_MIN / ADR_RULED_TEXTS_MIN, beside the ctest floors."""
+    findings: list[Finding] = []
+    for key, floor, what in (("ruledIdentifiers", min_identifiers, "identifiers"),
+                             ("ruledPhrases", min_texts, "texts")):
+        if floor is not None and summary[key] < floor:
+            findings.append(Finding(
+                "floor", f"ruled {what}",
+                f"{summary[key]} vocabulary-matched ruled {what} is below the floor {floor}: "
+                "a ruling left ADR-0001; restore it, or lower the floor in "
+                "scripts/ci_verify.py in the change that removes its name"))
+    return findings
+
+
 def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
-          include_root: Path = INCLUDE_ROOT, source_root: Path = ROOT) -> int:
+          include_root: Path = INCLUDE_ROOT, source_root: Path = ROOT,
+          min_identifiers: int | None = None, min_texts: int | None = None) -> int:
     ruled = ruled_entries(adr.read_text(encoding="utf-8"))
     cmake_text = (source_root / "CMakeLists.txt").read_text(encoding="utf-8")
     headers = kernel_profile_headers(include_root, cmake_text)
@@ -746,6 +907,8 @@ def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
     units = len(kernel_translation_units(cmake_text))
     findings, summary = evaluate(strings_lines, nm_lines, ruled, header_lines=header_lines,
                                  source_literals=source_literals)
+    findings += floor_findings(summary, min_identifiers, min_texts)
+    summary["findings"] = len(findings)
     if evidence_dir is not None:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         (evidence_dir / "strings.txt").write_text("\n".join(strings_lines) + "\n")
@@ -774,8 +937,10 @@ def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
           f"{summary['headerHits']} installed-header hits and "
           f"{summary['sourceHits']} kernel-source hits "
           f"against {summary['ruledIdentifiers']} ruled identifiers and "
-          f"{summary['ruledPhrases']} ruled texts in {adr.name}: "
-          f"{summary['findings']} findings ... {verdict}")
+          f"{summary['ruledPhrases']} ruled texts in {adr.name}"
+          + (f" (floors {min_identifiers}/{min_texts})"
+             if min_identifiers is not None or min_texts is not None else "")
+          + f": {summary['findings']} findings ... {verdict}")
     return 1 if findings else 0
 
 
@@ -791,10 +956,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="include root whose pineforge/ tree is read as the kernel "
                              "profile installs it -- this tree's include/ or an installed "
                              "prefix's (default: %(default)s)")
+    parser.add_argument("--min-ruled-identifiers", type=int, default=None,
+                        help="fail when fewer vocabulary-matched identifiers are ruled "
+                             "(ci_verify.py passes ADR_RULED_IDENTIFIERS_MIN)")
+    parser.add_argument("--min-ruled-texts", type=int, default=None,
+                        help="fail when fewer vocabulary-matched texts are ruled "
+                             "(ci_verify.py passes ADR_RULED_TEXTS_MIN)")
     args = parser.parse_args(argv)
     try:
         return check(args.archive.resolve(), args.adr.resolve(),
-                     evidence_dir=args.evidence_dir, include_root=args.headers.resolve())
+                     evidence_dir=args.evidence_dir, include_root=args.headers.resolve(),
+                     min_identifiers=args.min_ruled_identifiers,
+                     min_texts=args.min_ruled_texts)
     except InfrastructureError as error:
         print("check_kernel_residuals: " + str(error), file=sys.stderr)
         return 2
