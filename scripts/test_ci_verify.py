@@ -125,12 +125,16 @@ class Scripted:
         self.profile = profile
         self.exits = exits
         self.calls: list[list[str]] = []
+        # Every invocation's bound, beside the calls fixture (which existing
+        # tests assert verbatim).
+        self.timeouts: list[tuple[list[str], int]] = []
         self.cxx = shutil.which('c++') or '/usr/bin/c++'
         self.secret_seen_in_argv = False
 
     def __call__(self, argv, *, extra_env=None, timeout=600, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
+        self.timeouts.append((argv, timeout))
         # Discovery invocations are asserted through Driver stages. Keep the
         # existing execution-call fixture stable for pre-existing tests.
         if argv[0] != 'ctest' or '-N' not in argv:
@@ -1322,7 +1326,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 653, 'sanitizers': 653, 'native': 662})
+                         {'debug': 658, 'sanitizers': 658, 'native': 667})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(
@@ -1335,6 +1339,20 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertNotIn('ctest-floor', stage_names(summary))
                 self.assertIn('ctest-list-all', stage_names(summary))
                 self.assertIn('ctest-list-selected', stage_names(summary))
+
+    def test_full_sanitizers_ctest_runs_an_hour_and_every_other_run_half(self):
+        # Main's full sanitizers set outran 30 minutes twice; the PR set and
+        # every other profile keep the old bound.
+        for profile, extra, bound in (('sanitizers', [], 3600),
+                                      ('sanitizers', ['--exclude-label', 'slow'], 1800),
+                                      ('debug', [], 1800), ('debug', ['--exclude-label', 'slow'], 1800),
+                                      ('release', [], 1800), ('kernel', [], 1800)):
+            with self.subTest(profile=profile, extra=extra):
+                code, summary, scripted, _ = self.run_profile(profile, extra=extra)
+                self.assertEqual(code, 0, summary['failures'])
+                bounds = [timeout for argv, timeout in scripted.timeouts
+                          if argv[0] == 'ctest' and '--output-on-failure' in argv]
+                self.assertEqual(bounds, [bound])
 
     def test_ctest_discovery_count_rejects_missing_or_ambiguous_summary(self):
         self.assertEqual(ci_verify.ctest_list_count(b'Test #1: a\nTotal Tests: 1\n'), 1)

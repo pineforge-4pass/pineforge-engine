@@ -226,15 +226,18 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # dual-entry witness reach the source layer (see RELEASE_MIN_TESTS), and
 # B-C-SURFACE and B-DOCS add no row. 272 registered, 271 run: the WebSocket
 # row still skips on a system libcurl.
-# C-SURFACE-1 adds the INT23 frozen-header decision-tail witness.
-# Wave G KERNEL-EDGE adds the source-free test_native_kernel_edge row.
-# 275 run = those 271, C-SURFACE-1's and KERNEL-EDGE's rows, and the two
-# source-free TUs of R5 lane K-ULP4:
-#   +2 K-ULP4 test_native_unrepresentable_refusal, test_native_quantity_tolerance
-# All four register in release too. 276 registered, 275 run: the WebSocket row
-# still skips on a system libcurl.
-# DOC-TRUTH-4 adds the extracted Complete host (test_native_engine_complete_host):
-# 277 registered, 276 run.
+# 276 run = those 271 plus the five source-free TUs of wave G (INT25) --
+# measured on the integrated tree (ctest -N), not summed from the lanes' own
+# bases:
+#   +1 C-SURFACE-1 test_native_c_api_int23_header (the INT23 frozen-header
+#                  decision-tail witness)
+#   +1 KERNEL-EDGE test_native_kernel_edge
+#   +2 K-ULP4      test_native_unrepresentable_refusal,
+#                  test_native_quantity_tolerance
+#   +1 DOC-TRUTH-4 test_native_engine_complete_host (the guide's Complete host,
+#                  extracted from the page and run)
+# All five register in release too; RATIO-HARDEN, V19-FIX and K-IDX add no row.
+# 277 registered, 276 run: the WebSocket row still skips on a system libcurl.
 KERNEL_MIN_TESTS = 276
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
@@ -336,18 +339,35 @@ KERNEL_MIN_TESTS = 276
 #                test_adapter_margin_revival_cancel
 #   +1 INT24     test_adapter_dual_entry_tie (the ruling on B-ADAPTER's
 #                finding 1)
-# B-C-SURFACE's witnesses are rows inside test_native_c_api. C-SURFACE-1 adds
-# the INT23 frozen-header decision-tail row. Wave G KERNEL-EDGE adds the same
-# test_native_kernel_edge row in release: 674.
-# 676 = those 674 plus the two R5 lane K-ULP4 rows KERNEL_MIN_TESTS lists
-# above, which register here too (ctest -N on the lane's tree); its C-language
-# checks are rows inside test_native_c_api. No release row skips, so 676
-# registered is 676 run. DOC-TRUTH-4 adds the Complete host in release: 677.
+# B-C-SURFACE's witnesses are rows inside test_native_c_api.
+# 677 = those 672 plus the five wave-G (INT25) rows KERNEL_MIN_TESTS lists
+# above -- C-SURFACE-1 +1, KERNEL-EDGE +1, K-ULP4 +2, DOC-TRUTH-4 +1 -- which
+# register here too, counted with ctest -N on the integrated tree; no wave-G
+# lane adds a source-bound row (K-ULP4's C checks and V19-FIX's scaling rows
+# are rows inside existing TUs). No release row skips, so 677 registered is 677
+# run.
 RELEASE_MIN_TESTS = 677
-# PR-only registration floors. These are the complete CTest populations at
-# 91d65ad6 (INT24); the ordinary full-run floors above remain unchanged.
-# An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 653, 'sanitizers': 653, 'native': 662}
+# PR-only registration floors: the complete CTest populations of the three
+# excluded profiles at INT25, counted with ctest -N on the integrated tree --
+# 653/653/662 at 91d65ad6 (INT24) plus wave G's five rows (C-SURFACE-1 +1,
+# KERNEL-EDGE +1, K-ULP4 +2, DOC-TRUTH-4 +1) in each. An excluded run must
+# still discover at least this many rows before -LE.
+EXCLUDED_REGISTERED_MIN = {'debug': 658, 'sanitizers': 658, 'native': 667}
+# The ctest stage's bound. A full sanitizers run (push to main, a manual
+# dispatch, the maintainers' verification) ran out of its 30 minutes twice on
+# main's four-core runner before every row had finished, so it gets an hour; a
+# run that excludes a label (the PR set) and every other profile keep 30
+# minutes.
+CTEST_TIMEOUT = 1800
+SANITIZERS_FULL_CTEST_TIMEOUT = 3600
+
+
+def ctest_timeout(cfg: 'VerifyConfig') -> int:
+    if cfg.profile.sanitizers and not cfg.exclude_label:
+        return SANITIZERS_FULL_CTEST_TIMEOUT
+    return CTEST_TIMEOUT
+
+
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
@@ -1471,7 +1491,8 @@ class Driver:
             ctest += ['-LE', self.cfg.exclude_label]
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
-        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)
+        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
+                          timeout=ctest_timeout(self.cfg))
         self.enforce_test_floor(ran, registered=registered, selected=selected)
 
         installed = self.invoke(

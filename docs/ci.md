@@ -100,10 +100,10 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors at the INT24 base are 653
-for Debug and sanitizers and 662 for native. The existing full-run release and
-kernel floors remain 672 and 271 rows that ran; full runs do not exclude a
-label.
+missing label fails. The PR registration floors at INT25 are 658 for Debug
+and sanitizers and 667 for native (653 and 662 at the INT24 base, plus wave G's
+five rows). The full-run release and kernel floors are 677 and 276 rows that
+ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
@@ -524,9 +524,21 @@ the 27 CTest rows labelled `slow` in `tests/CMakeLists.txt`. These rows were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and all proof jobs start in
 parallel. The advisory `build` aggregate succeeds only if every job succeeds.
+INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
+legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
+DOC-TRUTH-4 rows) in a full sanitizers and Debug run on the maintainers' x86-64
+verification host (twelve parallel CTest jobs): none crosses either threshold,
+so the 27 labelled rows stand. The largest unlabelled rows there were
+`test_adapter_quiet_bar_differential` (39.3 s sanitizers),
+`test_native_state_continuation` (34.7 s sanitizers, 18.9 s Debug) and
+`test_adapter_lookup_index_scaling` (24.3 s sanitizers); the whole sanitizers
+set took 7.9 min of wall time, the PR set 614 s of summed test time.
 
 A push to `main` and a manual dispatch of `ci.yml` run every profile without
-the exclusion. Standalone manual dispatch of `native-live.yml` is also full.
+the exclusion. Their sanitizers CTest stage gets an hour (`ci_verify.py`
+bounds CTest at 30 minutes otherwise, the PR set included), because main's full
+set ran out of 30 minutes twice, and the sanitizers job allows 120 minutes for
+that hour after its build. Standalone manual dispatch of `native-live.yml` is also full.
 The maintainers run the full `ci_verify.py` profiles on their x86-64 build
 hosts before the PR merge gate and post `pineforge/verify` to the PR head.
 Their parity verdict posts `pineforge/parity`, reporting no regression or that
