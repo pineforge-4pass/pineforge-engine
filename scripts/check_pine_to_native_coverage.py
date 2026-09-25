@@ -76,7 +76,7 @@ INVENTORY_ROW = re.compile(r'^\|\s*`([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)`\s*\|', r
 #: A covered row: first cell exactly one backticked token, and at least one
 #: further cell after it.  The C++ column is the second cell.
 PAGE_ROW = re.compile(r'^\|\s*`([^`|]+)`\s*\|([^|]*)\|', re.M)
-DESIGN_ID_ROW = re.compile(r'^\|\s*\*{0,2}([A-Z][A-Z0-9]+)\*{0,2}\s*\|', re.M)
+DESIGN_ID_ROW = re.compile(r'^\|\s*\*{0,2}([A-Z][A-Z0-9]+[a-z]?)\*{0,2}\s*\|', re.M)
 FENCE = re.compile(r'^\s*(```|~~~)')
 
 
@@ -121,7 +121,8 @@ def design_inventory_ids(root: Path) -> list[str]:
     if begin < 0 or end < 0:
         raise ValueError(f'{DESIGN} has no bounded §1 inventory')
     ids = []
-    for match in re.finditer(r'^\|\s*([A-Z][A-Z0-9]+)\s*\|', text[begin:end], re.M):
+    # A sub-row keeps its parent's ID with a lowercase suffix (SZ10a).
+    for match in re.finditer(r'^\|\s*([A-Z][A-Z0-9]+[a-z]?)\s*\|', text[begin:end], re.M):
         value = match.group(1)
         if value != 'ID' and value not in ids:
             ids.append(value)

@@ -2559,15 +2559,15 @@ typedef struct pf_native_callbacks_v1 {
 
 /** Byte length of #pf_native_callbacks_v1 as the L13 lane first published it,
  *  before the six-hook tail was appended. It is the offset of the first
- *  appended field, so it stays correct on every target this header builds for
- *  — it is not a literal. #strategy_native_host_create_v1 accepts this length
- *  as well as #PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE and the current `sizeof`,
- *  which is what makes each tail additive rather than a layout break. */
+ *  appended field, so it stays correct on every target — not a literal.
+ *  #strategy_native_host_create_v1 accepts it, #PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE,
+ *  #PF_NATIVE_CALLBACKS_V1_POLICY_SIZE and the current `sizeof`: that is what
+ *  makes each tail additive rather than a layout break. */
 #define PF_NATIVE_CALLBACKS_V1_BASE_SIZE \
     ((uint32_t)offsetof(pf_native_callbacks_v1, on_recalculate))
 
 /** Byte length of #pf_native_callbacks_v1 with the six-hook tail but without
- *  the policy-hook tail — the second of its three published layouts, and the
+ *  the policy-hook tail — the second of its four published layouts, and the
  *  `sizeof` every caller compiled before that tail existed sends. */
 #define PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE \
     ((uint32_t)offsetof(pf_native_callbacks_v1, on_execution_terms))

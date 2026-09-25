@@ -298,7 +298,7 @@ def inventory_rows(text: str) -> list[Row]:
         if len(cells) < 3:
             continue
         identifier = cells[0]
-        if identifier == 'ID' or not re.fullmatch(r'[A-Z]{2}[0-9]{0,2}', identifier):
+        if identifier == 'ID' or not re.fullmatch(r'[A-Z]{2}[0-9]{0,2}[a-z]?', identifier):
             continue                       # the header row and its separator
         found = VERDICT_RE.search(cells[2])
         verdict = (found.group(1) or 'n/a') if found else 'other'

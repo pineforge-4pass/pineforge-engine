@@ -140,7 +140,7 @@ The public C surface is **109 `PF_API` declarations** across two headers:
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (65 and 41);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (66 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |

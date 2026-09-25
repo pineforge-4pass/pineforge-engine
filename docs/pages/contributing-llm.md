@@ -241,7 +241,7 @@ policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
 through `NativeStrategyHost` native_host.hpp:826, or C through the
-`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` `sha256:ea2cca13bca9aab8b43257996d9d469a1e408fccb5903133e81a6fbc2b17f99a` native_c_api.h:2609.
+`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` native_c_api.h:2600.
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be

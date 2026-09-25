@@ -1217,10 +1217,21 @@ stands on the opening print it filled on — and converting there calls a margin
 the account never owed (`tests/test_native_margin_fx_clock.cpp`). The rest of
 the kernel already converts at the cursor: a `Sized` request freezes its units
 at the acceptance coordinate's rate, and an execution term records its
-`active_fx` at its own cursor. The host queries are the exception, and they
+`active_fx` at its own cursor. A current execution does too: since R5 lane
+B-ADAPTER, `execute_current` converts at its cursor's rate, threaded through
+its terms facts, inspection, preview and settlement contexts, and it neither
+writes nor restores the engine's presented clock, so its own hooks and the
+host after it see the frame's clock. Its preview, `inspect_current_execution`,
+still converts at the presented clock's rate, so the preview and the
+execution disagree only when an FX step falls between the presented clock and
+the cursor. The host queries are the exception, and they
 are the rule restated: `native_liquidation_price()`, `native_open_lots(mark)`
 and `native_marked_equity(mark)` have no cursor of their own, so they answer at
-the rate of the instant the engine is presenting.
+the rate of the instant the engine is presenting. So do the kernel's own
+run-end rows (`record_open_position_report_rows`): they convert at the rate of
+the run's last presented instant, while the shared producer they call,
+`append_open_position_report_rows`, converts at whatever rate its caller hands
+it — the Pine source layer hands it the rate of TradingView's range-end mark.
 
 Both sides are affine in `P`, so `L` is unique unless the slopes coincide —
 `maintenance == 1.0` on a LONG, where equity and requirement move together and
@@ -1812,7 +1823,7 @@ in-run facts is populated is answered by three `constexpr` predicates rather
 than by reading the tag yourself:
 `native_failure_has_cause` (`native_host.hpp:145`),
 `native_failure_has_recipient` (`native_host.hpp:149`) and
-`native_failure_has_cursor` (``sha256:57ded95e69a90ce0e561eadbd0f81e8b130356dd7b480519e1904552d4647957` native_host.hpp:121`) — each taking either the
+`native_failure_has_cursor` (`sha256:57ded95e69a90ce0e561eadbd0f81e8b130356dd7b480519e1904552d4647957` native_host.hpp:121) — each taking either the
 kind or the whole context. `native_failure_context_in_run`
 (`native_host.hpp:207`) builds one; `native_failed_run_identity` reads back
 the `RunIdentity` the failed spec carried, and a foreign run is dropped
@@ -1952,7 +1963,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(``sha256:0fa957d2cea7acf800cce5bda68165d2505eab9650ec024c99dad417359364d9` engine.hpp:2125`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2126`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
@@ -2078,8 +2089,8 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (``sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` engine.hpp:1834`) is the C++ read and
-`strategy_closed_trade_close_cause` (``sha256:be247fcc9dd52b9a9faf460176dd5576d839e616f6acc024d3389d04b2d523b3` pineforge.h:1251`) the C one, with the
+`closed_trade_close_cause(i)` (`engine.hpp:1833`) is the C++ read and
+`strategy_closed_trade_close_cause` (`pineforge.h:1253`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
@@ -2334,6 +2345,12 @@ on its own last contributing bar and `LazyComplete` when the next period's
 first input closed it. `interval` is the bucket's own calendar interval — its
 period at the subscription's timeframe, located by its first contributing bar;
 `delivered_at_ms` is the input bar the delivery rides on. A bucket still open at the end of the input is never delivered.
+A C host, whose `on_timeframe_bar` signature is frozen, reads that interval
+with `strategy_native_timeframe_bar_interval_v1` from inside the callback:
+`pf_native_timeframe_interval_v1` (`open_ms`, `eligible_open_ms`,
+`last_traded_close_ms`, `next_period_open_ms`, `next_input_open_ms`) is a copy
+of the kernel's interval, never inferred from the delivered bar or its
+delivery time. Anywhere else the call answers `PF_NATIVE_E_STATE`.
 
 **Chronology against the script interval.** The pump is ordered against the
 *script* interval, not the raw input. With `script_tf` coarser than
@@ -2822,9 +2839,9 @@ These are existing refusals, not implied future features:
   confirmed bars carry those series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (``sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39`) take
+symbol — `strategy_stream_begin` and its family (`sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (``sha256:9b2a62efb044f5b285a824d5fb15be418b459ffd83c5dd4e1013cf798c8a9a32` native_c_api.h:2648`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2639`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
@@ -3372,6 +3389,14 @@ if (fx.status != pineforge::NativeSetupStatus::Applied) {
 }
 ```
 
+From C, `strategy_configure_native_fx_curve_v1` answers `-1` for every
+refusal. `strategy_configure_native_fx_curve_ext_v1` answers the same and, when
+the kernel judged the curve, also writes `pf_native_fx_curve_error_t` — the C
+twin of `NativeFxCurveError`: `LENGTH_MISMATCH`, `NOT_STRICTLY_INCREASING`,
+`NOT_FINITE_POSITIVE`, `ALLOCATION_FAILURE`, `WRONG_PHASE` — and the offending
+point's index (0 for a length mismatch). A refusal of the C layer itself (a
+NULL argument, a bad handle, a wrong layout) leaves both untouched.
+
 #### Stream FX: the declared curve is the stream's FX epoch {#native_engine_stream_fx}
 
 A curve declared through `configure_native_fx_curve` (C:
@@ -3634,9 +3659,9 @@ subscriptions, and the generic risk limits — travel in
 `pf_native_run_spec_ext_v1`, passed together with the base spec to
 `strategy_configure_native_ext_v1`. It replaces
 `strategy_configure_native_v1` rather than following it, because the kernel
-configures a host exactly once and fails it on a second attempt. The one
-field of `NativeRunSpec` it deliberately does not carry is `identity`, which
-the base spec owns.
+configures each run exactly once: a second configure of a Ready handle fails
+it. The one field of `NativeRunSpec` it deliberately does not carry is
+`identity`, which the base spec owns.
 
 The nine enum-valued words of the two specs are `uint32_t` words holding a
 value of a C enumeration that names its kernel enumeration's values one for
@@ -3662,7 +3687,31 @@ marks each report point from inside its own callbacks, and the callback table
 has no call that marks one, so its integer, 2, is refused like any other.
 `strategy_configure_native_v1` has no boundary check of its own for the three
 base-spec words: the kernel's validation judges them, and a bad one answers
--1 and leaves the host failed.
+-1 and leaves the host failed. That call answers every refusal so — Failed
+with `PF_NATIVE_FAILURE_INVALID_SPECIFICATION` for an invalid spec, with
+`PF_NATIVE_FAILURE_CONTRACT` for a Ready or Running handle or a refused reuse
+— and has no out-parameters; a handle an abort failed keeps that failure,
+and no configure call accepts a handle a configure failed.
+
+`strategy_configure_native_ext_result_v1` is the typed spelling of
+`strategy_configure_native_ext_v1`: the same inputs plus two out-parameters
+that receive the kernel's `pf_native_spec_error_t` / `pf_native_spec_field_t`
+pair. With both NULL it is exactly `strategy_configure_native_ext_v1`. With
+either set it also configures the next run of a Completed handle, or of one
+Failed by a cooperative abort, as `strategy_configure_native_v1` reuses a
+host, and it names a refused reuse: a changed session key
+(`PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE`, field `SESSION_KEY`) or a
+run number not above the highest the handle has run
+(`PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER`, field
+`RUN_NUMBER`), each `PF_NATIVE_E_ARGUMENT`. That refusal latches a Completed
+handle Failed with `PF_NATIVE_FAILURE_CONTRACT`; an aborted handle keeps its
+abort and may be configured again. A Ready or Running handle, and one Failed
+by anything but an abort, answer `PF_NATIVE_E_STATE` with
+`PF_NATIVE_SPEC_ERROR_WRONG_PHASE` and nothing changes; success writes `NONE`
+/ `NONE` and leaves the handle Ready. The third word appended with them,
+`PF_NATIVE_SPEC_ERROR_ABORTED_HOST_NO_REUSABLE_RUN_SPEC`, is defensive: a
+cooperative abort latches only while a run holds its spec, and the Failed
+state keeps it, so no public call reaches it.
 
 `pf_native_run_spec_ext_v1`'s third published length,
 `PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`, ends the tail after the base layout
@@ -3749,12 +3798,16 @@ by-name refusal above with the reason in `strategy_get_last_error`.
 `tests/test_native_c_api.c` runs the batch, the stream and each refusal from
 pure C.
 
-**The callback table.** `pf_native_callbacks_v1` has **two published
-lengths** and the runtime accepts either: the layout this header first shipped
+**The callback table.** `pf_native_callbacks_v1` has **four published
+lengths** and the runtime accepts each: the layout this header first shipped
 (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`, again the offset of the first appended
-field rather than a literal) and the current one, which appends six hooks. A
-host compiled against the base layout keeps working and simply has none of
-them installed, which is exactly the kernel's own default for all six.
+field rather than a literal), that plus six hooks
+(`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the policy-hook tail
+(`PF_NATIVE_CALLBACKS_V1_POLICY_SIZE`), and the current one, whose trailing
+`reserved1` marker (documented zero, not checked) says the host reads the
+lot-excursion facts' `entry_commission` tail. A host compiled against an
+earlier layout keeps working and simply has none of the later hooks
+installed, which is exactly the kernel's own default for each.
 
 Two of the six are ordinary observation callbacks. `on_recalculate` is
 `on_native_recalculate`: every calculation of the run arrives there, tagged
@@ -3802,7 +3855,13 @@ Installing `on_lot_excursion` at all is `owns_lot_excursions() == true`: the
 consumer then stops sampling excursion at matched trigger
 prices for the whole run and every closing row takes both magnitudes from the
 hook — so a lot the hook declines gets the kernel's own zero magnitudes,
-because nothing was sampled for it. The three margin hooks share one view
+because nothing was sampled for it. The facts it is handed,
+`pf_native_lot_excursion_v1`, end in an additive tail: `entry_commission`, this
+closing slice's share of the entry fee in account currency (the C++
+`ClosedLotExcursionFacts::entry_commission`). Only a table sent at the current
+length receives it; one sent at an earlier length is handed the facts with
+`struct_size` = `PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE`, which stops before it.
+The three margin hooks share one view
 POD, `pf_native_margin_view_v1`, whose fields are documented per hook and
 zero where that hook has no such fact, exactly as `pf_native_event_v1`'s
 union is.
@@ -3944,7 +4003,7 @@ thirty-five, which are what `add_library` (`CMakeLists.txt:153`) compiles into
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
 independence checker proves
-(``sha256:7ae64b598bf26ee68b06a7746c27c3ae62f620b0443b6c8c12781b20fe20bcd5` check_native_include_independence.py:36-46`). See
+(`sha256:7ae64b598bf26ee68b06a7746c27c3ae62f620b0443b6c8c12781b20fe20bcd5` check_native_include_independence.py:36-46). See
 `docs/adr/0001-kernel-adapter-boundary.md`.
 
 ### Building the kernel only

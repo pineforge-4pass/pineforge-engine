@@ -54,6 +54,21 @@ class CoverageGuard(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn('inventory_ids=2 inventory_rows=2', out)
 
+    def test_suffixed_design_id_is_an_id(self) -> None:
+        root = self.make_root()
+        design = root / 'docs/design/native-feature-parity.md'
+        design.write_text(design.read_text().replace(
+            '| OL2 | two | no |\n', '| OL2 | two | no |\n| OL2a | a sub-row | n/a |\n'))
+        self.page(root, '| OL1 | mapped above |\n| OL2 | no native counterpart |\n')
+        code, out = self.invoke(root)
+        self.assertEqual(code, 1, out)
+        self.assertIn('OL2a', out)
+        self.page(root, '| OL1 | mapped above |\n| OL2 | no native counterpart |\n'
+                        '| OL2a | no native counterpart |\n')
+        code, out = self.invoke(root)
+        self.assertEqual(code, 0, out)
+        self.assertIn('inventory_ids=3 inventory_rows=3', out)
+
 
 if __name__ == '__main__':
     unittest.main()

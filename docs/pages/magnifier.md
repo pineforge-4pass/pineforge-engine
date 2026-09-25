@@ -68,6 +68,11 @@ Every report carries two magnifier counters:
 | `magnifier_sub_bars_total` | Synthetic intra-bar slices generated. |
 | `magnifier_sample_ticks_total` | Sample ticks visited. |
 
+The kernel's intrabar driver counts both for every run that walks an intrabar
+path, so a bare C++ or C native host reports them as a compiled strategy does;
+a bar that was assigned no lower-feed bars counts nothing. The Pine host
+mirrors the same counts at its bar callbacks, and no state hash folds them.
+
 Quick sanity check: with `magnifier_samples = 4` and
 `PF_MAGNIFIER_ENDPOINTS`, expect roughly
 `magnifier_sample_ticks_total ≈ 4 * input_bars_processed`.

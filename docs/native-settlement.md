@@ -92,6 +92,18 @@ retain their existing behavior. This source translation requires separate
 compatibility measurement; it does not establish that every observed extra
 trade row has the same cause.
 
+Not every full exit reaches the kernel as a `Flatten`: a default
+`strategy.close(id)` on a pyramided id is a Book-scope `Reduce` of the id's
+quantity, and so are a bracket exit answered with the book's total, a margin
+liquidation of the whole position and an explicit-quantity order equal to
+it -- the closes the exact-sum rule above now closes lot by lot (R5 lane
+K-ULP3).
+The Pine source host keeps one quantity rule of its own: after every applied
+execution, `source::PineStrategyHost::on_native_applied` erases any lot of at
+most `kQtyEpsilon` (`1e-10`) without a closing row, the settle rule of the
+legacy engine it restates. That is source-layer TradingView policy, not the
+kernel's; since K-ULP3 an exact-sum close no longer leaves such a lot for it.
+
 ## Reversal to an exact exposure
 
 `execution::reverse_to_v1::ReverseTo{signed_units}`, declared in

@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 106 `extern "C"` functions across two headers — 65 compiled-strategy declarations and 41 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 109 `extern "C"` functions across two headers — 66 compiled-strategy declarations and 43 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -449,7 +449,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
 | `strategy_get_last_error` | The latest runtime error |
 | `pf_version_get` / `pf_version_string` / `pf_abi_version` | Runtime version, version string, struct-layout version (`PF_ABI_VERSION == 4`) |
-| `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification; stage or clear an immutable native FX curve |
+| `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (a refused one returns `-1` and leaves the handle Failed); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |
 | `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar runs only the broker's pre-`on_bar` steps (pending-order settlement, intraday-cap/loss checks) and returns — no `on_bar`, no margin-call / POOC second pass / bracket-reissue processing (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |
@@ -479,6 +479,8 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_position_v1` / `_working_len_v1` / `_working_get_v1` | The physical position, and a copy-out snapshot of the live working book (`pf_native_working_v1`: its appended `trail_has_arm_price` tells a trail with no arm price from one armed at 0.0, and a caller sending `PF_NATIVE_WORKING_V1_BASE_SIZE` is filled exactly that far) |
 | `strategy_native_open_lot_count_v1` / `_open_lot_get_v1` | The physical book lot by lot (`pf_native_open_lot_v1`: identity, entry facts, signed units, entry fee, fee-net P&L and excursions at a mark) — `strategy.opentrades.*` for a C host |
 | `strategy_native_events_v1` / `_state_v1` | Poll the recorded event history by ordinal; read the lifecycle and its typed failure |
+| `strategy_native_acknowledge_events_v1` / `strategy_native_event_window_v1` | Under the `WINDOW` event retention: say which events the host has read, so the kernel drops those command events at the next script-bar boundary; read the oldest ordinal a poll can still return |
+| `strategy_native_timeframe_bar_interval_v1` | From inside `on_timeframe_bar`, the delivered bucket's own calendar interval (`pf_native_timeframe_interval_v1`: the C++ `NativeTimeframeBarContext::interval`); `PF_NATIVE_E_STATE` anywhere else |
 | `strategy_native_partial_bar_v1` / `_series_bar_v1` / `_trail_state_v1` / `_liquidation_price_v1` | The four optional reads — the bar so far at the cursor, a declared higher-timeframe series' latest bucket, a live trail's projection, the solved liquidation level. Each answers `PF_NATIVE_ABSENT` where the C++ `std::optional` is empty |
 | `strategy_native_risk_state_v1` / `_marked_equity_v1` / `_recalculations_v1` / `_continuation_hash_v1` | The generic risk ledger, marked equity at a mark, the driven/suppressed recalculation counters, and the run's continuation identity |
 | `strategy_native_margin_call_v1` | One margin call's whole economics by its event ordinal (`pf_native_margin_call_v1`: mark, units, the position before and after, the surviving book's equity and requirement, the re-solved liquidation price) |
@@ -486,7 +488,7 @@ strategy. They are additive; no symbol, struct or behaviour above changes, and
 | `strategy_native_cohort_open_v1` / `_add_v1` / `_remove_v1` | Cohort rosters: a cohort close is `PF_NATIVE_INTENT_HOST_SIZED` owned by `PF_NATIVE_OWNER_BIND_COHORT`, sized by the `on_close_units` hook |
 | `strategy_native_declare_subscriptions_v1` / `_ext_v1` | Declare the run's higher-timeframe series from inside `on_run_begin`, replacing the staged list; `_ext_v1` adds a series source per row and writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) |
 | `strategy_native_declare_auxiliary_feed_v1` | Declare, replace or withdraw the run's auxiliary finer feed from inside `on_run_begin`, with the same typed refusal |
-| `strategy_configure_native_ext_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies). The two specs' nine enum-valued words stay `uint32_t` and each has a C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e` |
+| `strategy_configure_native_ext_v1` / `strategy_configure_native_ext_result_v1` | Configure from `pf_native_run_spec_v1` **plus** `pf_native_run_spec_ext_v1` (report policy, price grid, calculation timing, open-bar view, margin model, higher-timeframe subscriptions, generic risk limits, the auxiliary finer feed, the retained intrabar path, and the slot-label / feed-tolerance / path-order / abort-reporting policies). The two specs' nine enum-valued words stay `uint32_t` and each has a C enumeration: `pf_native_fee_kind_e`, `pf_native_close_execution_e`, `pf_native_open_directions_e`, `pf_native_report_policy_e`, `pf_native_price_grid_e`, `pf_native_grid_rounding_e`, `pf_native_calc_trigger_e`, `pf_native_open_bar_view_e`, `pf_native_liquidation_sizing_e`. `_ext_result_v1` writes the kernel's typed refusal (`pf_native_spec_error_e` and its field) and, with either out-parameter set, also configures the next run of a Completed handle or one an abort failed |
 | `strategy_native_append_auxiliary_bars_v1` / `_ext_v1` | Append a realtime stream's later bars to the run's declared auxiliary finer feed; `_ext_v1` writes the typed append refusal (`pf_native_append_error_e`) and the bar it stopped on |
 | `strategy_native_declare_opened_lot_entry_bar_mask_v1` | From inside `on_applied`, say where the fill that opened a lot sat on its entry bar (`pf_native_opened_lot_fill_point_e`: on the bar's path, or after it); the kernel derives the lot's entry-bar mask that `on_lot_excursion`'s facts carry back |
 | `strategy_native_api_version` | This surface's layout version (`PF_NATIVE_API_VERSION`) |
@@ -506,9 +508,11 @@ struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), tha
 plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`), the
 auxiliary-feed tail (`PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE`), the event-retention
 tail, and the current layout; `pf_native_callbacks_v1`
-has three — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
-that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`) and the
-current one with the policy-hook tail behind it. The runtime accepts each, so a host
+has four — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
+that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the
+policy-hook tail (`PF_NATIVE_CALLBACKS_V1_POLICY_SIZE`), and the current one,
+whose trailing `reserved1` marker says the host reads the lot-excursion facts'
+`entry_commission` tail. The runtime accepts each, so a host
 compiled against an earlier one keeps working unchanged. An **observation**
 callback that returns non-zero latches
 `NativeFailureCode::CallbackException` and ends the run `Failed`; the
