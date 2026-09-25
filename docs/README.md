@@ -92,9 +92,8 @@ python3 scripts/check_doc_lint.py                # no stale epoch, roadmap label
 python3 scripts/check_pine_to_native_coverage.py # every Pine builtin has a migration row
 ```
 
-All three run in `scripts/ci_preflight.py`. The coverage check is binding; the
-anchor and lint checks run advisory until the remaining page rewrites land, and
-`--strict-docs` makes them binding today.
+All three run as binding stages in `scripts/ci_preflight.py`. The design
+inventory guard and detached-comment ceiling run there too.
 
 ## Deployment (Cloudflare Pages)
 

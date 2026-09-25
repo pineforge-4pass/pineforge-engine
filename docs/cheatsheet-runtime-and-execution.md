@@ -374,9 +374,9 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   `calc_on_every_tick`).
 - `Series<T>` default depth = **500 bars**; `max_bars_back` is silently dropped
   → lookbacks > 500 return `na`.
-- The **simple `run(bars,n)`** entry point does NOT set session predicates
-  (`session.ismarket/isfirstbar/islastbar` stay false) — use the TF-aware
-  overload if the script uses sessions.
+- The **simple `run(bars,n)`** entry point sets the session predicates
+  (`session.ismarket/isfirstbar/islastbar`) from the configured session and timezone.
+  Use the TF-aware overload when the input and script timeframes differ.
 - `session.islastbar` is the last bar of a session **day**: in-session, and its
   next chart bar is out of session or belongs to another session day
   (`session.isfirstbar` is the dual). It is read by **next-bar lookahead** on

@@ -40,9 +40,9 @@ Kernel              src/engine_*, src/native_*, src/ta_*, …   ← knows nothin
 
 **The rule: the kernel must not know what TradingView is.** The test is
 mechanical — *if justifying the change needs the word "TradingView", it does
-not belong in the kernel.* The kernel changes only for a **generic** capability
-with a recorded ruling; TradingView's own rules go in the adapter or in
-codegen. The boundary, its five other rules and the ruling table live in
+not belong in the kernel.* The kernel changes only for a **generic** capability with a recorded ruling;
+the amended rule-2 test records the generic mechanism and the opt-in choice.
+TradingView's own rules go in the adapter or in codegen. The boundary, its five other rules and the ruling table live in
 [ADR 0001](docs/adr/0001-kernel-adapter-boundary.md).
 
 Two consequences that are easy to miss:

@@ -787,7 +787,6 @@ public:
 };
 
 // --- ALMA (Arnaud Legoux Moving Average) ---
-
 // The Gaussian's centre is m = offset * (length - 1); with `floor` it is
 // floor(offset * (length - 1)) ("whether the offset calculation is floored
 // before ALMA is calculated", default false). Omitting floor is the unfloored
@@ -1309,7 +1308,6 @@ std::vector<double> pivot_point_levels(const std::string& method, double open, d
                                        double low, double close, double next_open);
 
 // --- Pivot point levels of an anchored period ---
-
 // The six pivot types. DM is DeMark's.
 enum class PivotLevelsType : unsigned char {
     Traditional = 0,

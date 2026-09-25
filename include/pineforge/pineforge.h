@@ -710,9 +710,11 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  *  lifecycle uses close-only strategy calculation (the Pine strategy default)
  *  while resting broker orders are evaluated on every normalized trade.
  *
- *  calc_on_order_fills, historical probe/tail overrides, timestamped FX,
- *  auxiliary and native security feeds are rejected. No every-tick strategy
- *  callback is provided; hand-written strategies follow the same lifecycle.
+ *  This compiled-strategy C entry point rejects calc_on_order_fills, historical
+ *  probe/tail overrides, timestamped FX and auxiliary/native security feeds.
+ *  The hand-written `NativeStrategyHost` stream API has its own generic
+ *  contract and accepts the native FX curve, auxiliary feeds and calculation
+ *  trigger where its run specification permits them.
  *  @return 0 on success, -1 on failure. Inspect #strategy_get_last_error. */
 PF_API int strategy_stream_begin(pf_strategy_t s,
                                  const pf_bar_t* warmup_bars,

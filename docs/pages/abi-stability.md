@@ -54,9 +54,10 @@ Three layers:
 
 ## Symbol inventory
 
-A compiled strategy `.so` exports 65 public `PF_API` functions and zero
-internal C++ symbols. Of those declarations, 57 are runtime implementations
-and eight are generated per-strategy exports. The historical 28-symbol module
+A built strategy `.so` exposes 65 compiled-strategy `PF_API` declarations
+(57 runtime implementations plus eight generated exports) plus 41 native-host
+declarations: 106 `PF_API` exports in total. `nm -gU` also reports libc++'s
+`std::piecewise_construct`; no project-internal C++ symbol is exported. The historical 28-symbol module
 sentence was not a current module count; the grouped table below is a guide,
 not the complete inventory:
 

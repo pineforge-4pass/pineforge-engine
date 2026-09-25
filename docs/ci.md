@@ -386,35 +386,24 @@ drifted".
 
 ## Documentation guards
 
-Six guards hold the published documentation to the tree. Four of them run
-from the source alone — no build, no corpus — and are `ci_preflight` stages:
-`doc-anchors`, `doc-lint`, `design-inventory` and `doc-pine-coverage`. The
-fifth is a CTest row that compiles and runs the migration page's worked
-example, and the sixth is the documentation build, which runs after a merge
-(`.github/workflows/docs.yml` triggers on a push to `main`, a `v*` tag or a
-manual dispatch or a pull request). Pull requests build and upload the site;
-the Cloudflare Pages deploy step is guarded by
-`if: github.event_name != 'pull_request'`.
+The documentation guards run fail-closed. Source-only `ci_preflight` stages include
+`doc-anchors`, `doc-lint`, `design-inventory`, `doc-pine-coverage`, its self-test,
+and the detached-comment ceiling. The migration worked example is an executed
+CTest row, and the Doxygen documentation build runs in CI for pull requests,
+main pushes, tags and manual dispatch (`.github/workflows/docs.yml`). A pull
+request builds and uploads the site; the Cloudflare Pages deploy step is
+guarded by `if: github.event_name != 'pull_request'`.
 
-`scripts/check_doc_anchors.py` checks every `file:line` citation the pages
-make: the file must resolve, the line must exist, and when a backticked symbol
-precedes the citation in the same table cell or sentence, that symbol must be
-on the cited line or inside the cited range — not on the line after it. A
-qualified symbol (`GroupEffect::Reduce`) must also sit inside the braces of the
-scope it names when the cited file declares that scope. In the ruling tables of
-ADR-0001 and of the design record (its inventory, coupling and native-only
-sections) every citation must carry a claim: a symbol, or a backticked code
-fragment the gate finds verbatim in the cited lines; a bare citation there is
-`NOCLAIM`, because a claimless citation that drifts onto unrelated code still
-passes a line check. Anchors rot on every header edit — a single campaign left
-474 of 992 wrong — so the gate is the only durable repair. `--list` dumps every
-anchor with its verdict; `--fix` re-anchors in place, and it changes **line
-numbers and nothing else**: it moves a citation only when the claimed symbol
-has exactly one occurrence in the resolved file's code, or exactly one type
-declaration there. It will not choose between several plausible lines, will not
-invent a line for a symbol that has vanished, and will not guess a file — those
-are edits to the sentence, not to the coordinate, and it reports each one with
-its candidate lines instead.
+`scripts/check_doc_anchors.py` checks every `file:line` citation: the file and
+line must resolve, qualified symbols must land inside their declared scope, and
+continuations may inherit a full anchor across a physical line break only within
+the same paragraph or table row. Source-labelled fenced examples are scanned;
+unlabelled and output-labelled fences are treated as pasted output. A cited C/C++
+window made entirely of comments fails unless it carries an explicit content hash.
+Ruling-table citations require a symbol, fragment or content hash, and a
+symbol-less range elsewhere requires a backticked `sha256:<64 hex digits>` hash.
+`--fix` changes line numbers only when the symbol is uniquely locatable; `--list`
+shows every verdict.
 
 ```sh
 python3 scripts/check_doc_anchors.py            # the drift report, exit 1 if any
@@ -442,23 +431,16 @@ bumps and does not flag a live epoch of a family whose other members moved on.
 python3 scripts/check_doc_lint.py
 ```
 
-Both guards are wired into `scripts/ci_preflight.py` as `doc-anchors` and
-`doc-lint`, and both are **binding**: a bad anchor or a stale sentence fails
-the preflight, like any other stage. They ran advisory for one integration
-window — the citations and the sentences they named were exactly what the two
-page-rewriting lanes were written to correct, and a red stage on the
-integration branch would have blocked every other lane's verification — and the
-`--strict-docs` flag that promoted them was removed with that state: the pages
-are clean, and a guard that can be asked not to bind is decoration. The
-advisory *mechanism* remains in `ci_preflight.py` for the next guard that lands
-before the drift it names is gone; no stage uses it today.
+These guards are wired into `scripts/ci_preflight.py` and are **binding**: a bad
+anchor or stale sentence fails preflight. There is no advisory mode and no
+`--strict-docs` opt-out.
 
 ```sh
 python3 scripts/ci_preflight.py        # doc-anchors and doc-lint among its stages
 ```
 
-Their own self-tests, `doc-anchors-tests` and `doc-lint-tests`, were never
-advisory, and both register as CTest rows (`test_doc_anchors`, `test_doc_lint`).
+Their own self-tests are binding as well and register as CTest rows
+(`test_doc_anchors`, `test_doc_lint`).
 
 The third source-only guard is `scripts/check_design_inventory.py`
 (`design-inventory`, with its own `design-inventory-tests` suite). It was
@@ -471,8 +453,8 @@ against real `ctest -N` output in both directions.
 The fourth is `scripts/check_pine_to_native_coverage.py` (`doc-pine-coverage`),
 fail-closed from the day it landed as well: it derives the offered Pine set
 from `docs/pine_v6_coverage_detail.md` and the covered set from the migration
-page's own first table column, and fails when a `strategy.*`, `request.*` or
-`barmerge.*` name has no row.
+page's first table column and design §1 crosswalk, and fails when a `strategy.*`,
+`request.*`, `barmerge.*` or design inventory ID has no row.
 
 The fifth guard is the CTest row `test_pine_to_native_worked`. At build time
 `tests/extract_pine_to_native_worked.py` copies the six C++ blocks of the

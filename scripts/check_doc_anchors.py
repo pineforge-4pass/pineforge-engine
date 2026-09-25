@@ -19,15 +19,15 @@ accepted here:
 2. explicit path            ``src/native_execution_consumer.cpp:6670``
 3. range                    ``engine.hpp:2395-2396``
 4. continuation             ``:1487-1492`` - a bare ``:line`` that inherits the
-                            path of the last full anchor **earlier on the same
-                            physical line** (```chart_day_key` :12052-12077``).
+                            path of the last full anchor in the same citation
+                            list, even across a physical line break.
                             A continuation must start after a backtick, a space
                             or ``(`` so that clock times and URLs cannot match.
 
 Any of the four may be wrapped in backticks as a whole
 (```native_order.hpp:25```); that is a rendering choice, not a different
-anchor.  Anchors inside fenced code blocks are **skipped**: those are pasted
-tool output and compiler diagnostics, not citations the page is making.
+anchor. Unlabelled and output-labelled fences are skipped as pasted output.
+Source-labelled fences are scanned: a code example's citation is a claim.
 
 Path resolution
 ---------------
@@ -119,13 +119,13 @@ Verdicts
 ``SYMMISS``   the claimed symbol (or fragment) does not appear in the cited window.
 ``SCOPE``     the symbol is in the window, but outside the brace scope of the
               qualifier its span names.
-``NOCLAIM``   a ruling-table anchor carries no claim at all.
+``NOCLAIM``   a ruling-table anchor, or a symbol-less range anywhere, carries
+              no verifiable claim.
+``COMMENTONLY`` the complete cited C/C++ window is comment-only.
 
-The cited window is exactly ``[first, last]``.  Until lane F2 it was
-``[first, last + 1]`` - a line of slack for a declaration whose name wraps -
-and seventy anchors passed only through that slack, about nine of them on a
-different field or member; a citation whose symbol is on the next line now
-names the next line.
+The cited window is exactly ``[first, last]``. A symbol on the next line is
+outside the citation. Ranges without a symbol use a backticked content hash,
+and the hash covers the cited source lines joined with ``\n``.
 
 ``--fix``
 ---------
@@ -160,6 +160,7 @@ Exit status
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -221,9 +222,12 @@ SOURCE_SUFFIXES = ('cpp', 'hpp', 'h', 'c', 'py', 'md', 'txt', 'cmake', 'sh', 'ym
 _PATH = (r'(?:[A-Za-z0-9_][A-Za-z0-9_+.-]*/)*[A-Za-z0-9_][A-Za-z0-9_+.-]*'
          r'\.(?:' + '|'.join(SOURCE_SUFFIXES) + r')')
 ANCHOR_RE = re.compile(r'(?P<path>' + _PATH + r'):(?P<a>\d+)(?:-(?P<b>\d+))?(?!\d)')
-CONT_RE = re.compile(r'(?<=[ `(]):(?P<a>\d+)(?:-(?P<b>\d+))?(?!\d)')
-FENCE_RE = re.compile(r'^\s*(```|~~~)', re.MULTILINE)
+CONT_RE = re.compile(r'(?<=[ `(]):(?P<a>\d{1,6})(?:-(?P<b>\d{1,6}))?(?!\d)')
+FENCE_RE = re.compile(r'^\s*(```|~~~)([^\n]*)$', re.MULTILINE)
 SPAN_RE = re.compile(r'`([^`\n]+)`')
+OUTPUT_FENCE_LABELS = frozenset({'text', 'console', 'output', 'terminal', 'log',
+                                 'shell-session', 'ansi'})
+HASH_RE = re.compile(r'(?i)^sha256:[0-9a-f]{64}$')
 SCOPE_BREAKS = ('|', '\n\n', '. ', '; ', '\n- ', '\n* ', '\n> ', ':\n')
 #: A backticked span that is nothing but an anchor: a citation, never a claim.
 ANCHOR_ONLY_RE = re.compile(r'^\s*(?:' + _PATH + r')?:\d+(?:-\d+)?\s*$')
@@ -241,6 +245,12 @@ class Anchor:
         self.digits = digits          # (offset, length) of the ``line`` or ``a-b`` text
         self.symbol, self.span, self.mode = symbol, span, mode
         self.qualifier = qualifier_of(span) if symbol and span else None
+        self.content_hash = None
+        if symbol is None and span:
+            match = re.fullmatch(r'sha256:([0-9a-f]{64})', span.strip(), re.I)
+            if match:
+                self.content_hash = match.group(1).lower()
+        self.orphan = False
         self.ruling = False           # set by collect(): a row of a ruling table
         self.fragment: str | None = None  # a ruling row's code-fragment claim
         self.verdict = 'OK'
@@ -250,7 +260,7 @@ class Anchor:
 
     @property
     def text(self) -> str:
-        return f'{self.path}:{self.first}' + (f'-{self.last}' if self.last != self.first else '')
+        return f'{self.path + ":" if self.path else ":"}{self.first}' + (f'-{self.last}' if self.last != self.first else '')
 
     @property
     def length(self) -> int:
@@ -262,15 +272,20 @@ class Anchor:
 
 
 def fenced_spans(text: str) -> list[tuple[int, int]]:
-    """Half-open offset ranges of fenced code blocks, which are not citations."""
-    spans, open_at = [], None
+    """Half-open ranges of pasted-output fences, not source-example fences."""
+    spans, open_at, skip = [], None, False
     for match in FENCE_RE.finditer(text):
         if open_at is None:
             open_at = match.start()
+            info = match.group(2).strip().split()
+            skip = not info or info[0].lower() in OUTPUT_FENCE_LABELS
         else:
-            spans.append((open_at, text.find('\n', match.start()) + 1 or len(text)))
+            if skip:
+                end = text.find('\n', match.start())
+                spans.append((open_at, len(text) if end < 0 else end + 1))
             open_at = None
-    if open_at is not None:
+            skip = False
+    if open_at is not None and skip:
         spans.append((open_at, len(text)))
     return spans
 
@@ -346,6 +361,8 @@ def fragment_of(span: str | None) -> str | None:
     if not span:
         return None
     text = ' '.join(span.split())
+    if HASH_RE.fullmatch(text):
+        return None
     if not re.search(r'[A-Za-z_]', text) or ANCHOR_SPAN_RE.match(text):
         return None
     if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(\))?', text) \
@@ -421,33 +438,44 @@ def collect(page: Path, text: str) -> list[Anchor]:
         last = int(match.group('b') or match.group('a'))
         digit_start = match.start() + len(match.group('path')) + 1
         symbol, span, mode = claimed_symbol(text, match.start())
+        immediate = re.search(r'`(sha256:[0-9a-f]{64})`\s*$', text[:match.start()], re.I)
+        if immediate:
+            symbol, span, mode = None, immediate.group(1), 'word'
+        elif span and re.fullmatch(r'sha256:[0-9a-f]{64}', span.strip(), re.I):
+            symbol, span, mode = None, None, 'word'
         found.append(Anchor(page, match.start(), match.end(), doc_line(match.start()),
                             match.group('path'), first, last,
                             (digit_start, match.end() - digit_start), symbol, span, mode))
 
-    # Continuations inherit the path of the last FULL anchor before them on the
-    # same physical line -- by position, never another continuation (list order
-    # would hand `:49` in "`a` x.cpp:40 (`:40`), `b` y.cpp:53 (`:49`)" x.cpp's path).
+    # Continuations inherit the last full anchor in the same paragraph or table
+    # row. A physical wrap is harmless; a blank line, heading or next table row
+    # is a boundary. A true orphan is a BAD anchor instead of silently ignored.
     full = list(found)
     for match in CONT_RE.finditer(text):
         if fenced(match.start()) or any(lo <= match.start() < hi for lo, hi in taken):
             continue
         line = doc_line(match.start())
-        prior = sorted((a for a in full if a.doc_line == line and a.end <= match.start()),
-                       key=lambda a: a.end)
-        if not prior:
-            continue
+        prior = [a for a in full if a.end <= match.start() and not re.search(
+            r'\n\s*\n|\n\s*#{1,6}\s', text[a.end:match.start()])]
+        prior.sort(key=lambda a: a.end)
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
         symbol, span, mode = claimed_symbol(text, match.start())
-        if span is not None and ANCHOR_ONLY_RE.match(span):
+        immediate = re.search(r'`(sha256:[0-9a-f]{64})`\s*$', text[:match.start()], re.I)
+        if immediate:
+            symbol, span, mode = None, immediate.group(1), 'word'
+        elif span and re.fullmatch(r'sha256:[0-9a-f]{64}', span.strip(), re.I):
+            symbol, span, mode = None, None, 'word'
+        if prior and span is not None and ANCHOR_ONLY_RE.match(span):
             # "`sym` x.cpp:1730, `:1755`, `:7695`": the nearest span is the
             # list's previous citation, not a claim; the list shares its head's.
             symbol, span, mode = prior[-1].symbol, prior[-1].span, prior[-1].mode
-        found.append(Anchor(page, match.start(), match.end(), line,
-                            prior[-1].path, first, last,
-                            (match.start() + 1, match.end() - match.start() - 1),
-                            symbol, span, mode))
+        anchor = Anchor(page, match.start(), match.end(), line,
+                        prior[-1].path if prior else '', first, last,
+                        (match.start() + 1, match.end() - match.start() - 1),
+                        symbol, span, mode)
+        anchor.orphan = not bool(prior)
+        found.append(anchor)
     found.sort(key=lambda a: a.start)
     ruling_lines = ruling_table_lines(page, text)
     for anchor in found:
@@ -604,6 +632,9 @@ def runs(numbers: list[int]) -> list[tuple[int, int]]:
 
 
 def judge(anchor: Anchor, tree: Tree) -> None:
+    if anchor.orphan:
+        anchor.verdict, anchor.detail = 'ORPHAN', 'continuation has no full anchor in this paragraph or table row'
+        return
     path = tree.resolve(anchor.path)
     if path is None:
         anchor.verdict, anchor.detail = 'NOFILE', 'no such file in the tree'
@@ -612,9 +643,23 @@ def judge(anchor: Anchor, tree: Tree) -> None:
     if anchor.first < 1 or anchor.last < anchor.first or anchor.last > len(lines):
         anchor.verdict = 'NOLINE'
         anchor.detail = f'{path.relative_to(tree.root)} has {len(lines)} lines'
+    if anchor.verdict == 'OK' and path.suffix in CXX_SUFFIXES and anchor.content_hash is None:
+        code = tree.code_lines(path)
+        if not any(line.strip() for line in code[anchor.first - 1:anchor.last]):
+            anchor.verdict = 'COMMENTONLY'
+            anchor.detail = f'lines {anchor.first}-{anchor.last} contain no C/C++ code'
+            return
     if anchor.symbol is None:
-        if anchor.fragment is not None:
+        if anchor.content_hash is not None and anchor.verdict == 'OK':
+            content = '\n'.join(lines[anchor.first - 1:anchor.last]).encode()
+            actual = hashlib.sha256(content).hexdigest()
+            if actual != anchor.content_hash:
+                anchor.verdict, anchor.detail = 'HASHMISS', f'content hash is {actual}'
+        elif anchor.fragment is not None:
             judge_fragment(anchor, tree, path)
+        elif (anchor.length > 1 and anchor.span is None and anchor.verdict == 'OK'):
+            anchor.verdict = 'NOCLAIM'
+            anchor.detail = 'a symbol-less range needs a backticked symbol or sha256 content hash'
         elif anchor.ruling and anchor.verdict == 'OK':
             anchor.verdict = 'NOCLAIM'
             anchor.detail = ('a ruling-table anchor names nothing to verify: put the symbol '

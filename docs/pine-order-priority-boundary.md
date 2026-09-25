@@ -1,6 +1,6 @@
 # Explicit Pine execution attachment and order priority
 
-`BacktestEngine::attach_pine_execution_adapter()` explicitly selects two
+`source::PineStrategyHost::attach_pine_execution_adapter()` explicitly selects two
 compatibility components: the existing intraday cap and retained-parent order
 priority. It is idempotent, preserves configuration and outstanding cap state,
 and does not imply that all Pine behavior has been extracted from the engine.
@@ -36,9 +36,9 @@ before `strategy_create` returns and host metadata arrives:
 
 ```cpp
 #if defined(PINEFORGE_HAS_EXPLICIT_PINE_EXECUTION_ADAPTER_V1)
-    pineforge::BacktestEngine::attach_pine_execution_adapter();
+    pineforge::source::PineStrategyHost::attach_pine_execution_adapter();
 #elif defined(PINEFORGE_HAS_EXPLICIT_PINE_CAP_V1)
-    pineforge::BacktestEngine::enable_pine_intraday_cap();
+    pineforge::source::PineStrategyHost::enable_pine_intraday_cap();
 #endif
 ```
 

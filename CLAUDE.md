@@ -114,8 +114,9 @@ dispatches, reviews and measures; this section is what binds you here.
   supervisor, never edited quietly. You never push; the supervisor opens the
   PR after the one campaign sweep.
 - A neutral refactor never opens the measured sources
-  (`src/engine_strategy_commands.cpp`, `engine_fills.cpp`, `engine_orders.cpp`,
-  `engine_risk.cpp`, `engine_run.cpp`, `engine_market_admission.cpp`) and
+  (`src/native_execution_consumer.cpp`, `src/native_order.cpp`,
+  `src/engine_execution.cpp`, `src/engine_orders.cpp`, `src/engine_run.cpp`,
+  `src/engine_path_resolve.cpp`, and the source-layer `src/source/*` units) and
   never edits the frozen native headers the settlement ABI checker names; the
   fixed parity population must stay byte-identical by construction, which the
   supervisor proves with the sweep, not you.

@@ -35,7 +35,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) uses PolyForm Noncommercial terms with additional personal-trading permission; commercial use requires a separate license. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **15× faster than PyneCore** on 196 timed strategies (a median 603k bars/s per strategy with the bar magnifier on). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 97 `extern "C"` functions across two headers — 65 to run a compiled strategy, 32 to drive the kernel yourself — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 106 `extern "C"` functions across two headers — 65 compiled-strategy declarations and 41 native-host declarations — append-only ABI. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 ---
 
@@ -190,8 +190,8 @@ strategy_native_run_v1(s, bars, n, &report);
 ```
 
 **Coming from PineScript?** [PineScript to native C++](docs/pages/pine-to-native.md)
-maps every `strategy.*` builtin, every `strategy()` declaration parameter and
-every `request.*` form to its C++ **and** C spelling, names the example that
+maps every `strategy.*` builtin, the 19 covered `strategy()` declaration
+parameters and every `request.*` form to its C++ **and** C spelling, names the example that
 exercises each, and walks one six-feature strategy from Pine to a native host
 end to end. The [native engine guide](docs/pages/native-engine.md) is the
 reference underneath it.
@@ -425,11 +425,11 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 
 ## Public C ABI
 
-`<pineforge/pineforge.h>` is the single canonical consumer header. It declares
-exactly 65 public `PF_API` functions: 57 runtime implementations and eight
-per-strategy generated exports. Every compiled strategy `.so` exports that
-public set and no internal C++ symbol (`-fvisibility=hidden`, `PF_API` on the
-public set, checked in CI by `scripts/check_c_abi_runtime.py`):
+A built strategy `.so` exposes 65 compiled-strategy `PF_API` declarations
+(57 runtime implementations plus eight generated exports) plus 41 native-host
+declarations: 106 `PF_API` exports in total. `nm -gU` also shows libc++'s
+`std::piecewise_construct`; no project-internal C++ symbol is exported. The two
+inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
 | Symbol | Role |
 |---|---|
@@ -500,11 +500,12 @@ declare all fail CI.
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. `pf_native_run_spec_ext_v1` has four published lengths — the
+mutates nothing. `pf_native_run_spec_ext_v1` has five published lengths — the
 layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
 struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
-plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`) and the
-current one with the auxiliary-feed tail behind it; `pf_native_callbacks_v1`
+plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`), the
+auxiliary-feed tail (`PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE`), the event-retention
+tail, and the current layout; `pf_native_callbacks_v1`
 has three — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
 that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`) and the
 current one with the policy-hook tail behind it. The runtime accepts each, so a host

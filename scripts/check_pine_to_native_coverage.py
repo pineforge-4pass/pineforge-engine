@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 INVENTORY = 'docs/pine_v6_coverage_detail.md'
 PAGE = 'docs/pages/pine-to-native.md'
+DESIGN = 'docs/design/native-feature-parity.md'
 
 #: The namespaces whose inventory rows this page must map.
 NAMESPACES = ('strategy', 'request', 'barmerge')
@@ -75,6 +76,7 @@ INVENTORY_ROW = re.compile(r'^\|\s*`([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)`\s*\|', r
 #: A covered row: first cell exactly one backticked token, and at least one
 #: further cell after it.  The C++ column is the second cell.
 PAGE_ROW = re.compile(r'^\|\s*`([^`|]+)`\s*\|([^|]*)\|', re.M)
+DESIGN_ID_ROW = re.compile(r'^\|\s*\*{0,2}([A-Z][A-Z0-9]+)\*{0,2}\s*\|', re.M)
 FENCE = re.compile(r'^\s*(```|~~~)')
 
 
@@ -111,21 +113,43 @@ def covered(root: Path) -> dict[str, str]:
     return rows
 
 
+def design_inventory_ids(root: Path) -> list[str]:
+    """IDs in design §1; the published migration page must crosswalk all of them."""
+    text = (root / DESIGN).read_text()
+    begin = text.find('## 1. Inventory')
+    end = text.find('## 2. Structural work', begin + 1)
+    if begin < 0 or end < 0:
+        raise ValueError(f'{DESIGN} has no bounded §1 inventory')
+    ids = []
+    for match in re.finditer(r'^\|\s*([A-Z][A-Z0-9]+)\s*\|', text[begin:end], re.M):
+        value = match.group(1)
+        if value != 'ID' and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def design_rows(root: Path) -> set[str]:
+    text = outside_fences((root / PAGE).read_text())
+    return {value for value in DESIGN_ID_ROW.findall(text) if value != 'ID'}
+
+
 def ruled_none(native_cell: str) -> bool:
     """A row whose native counterpart is a ruling rather than a symbol."""
     return native_cell.startswith('none')
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Recount the migration page coverage.')
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--list', action='store_true',
                         help='print every offered token with its verdict')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     root = args.root.resolve()
 
     want = offered(root)
     have = covered(root)
+    inventory_ids = design_inventory_ids(root)
+    inventory_rows = design_rows(root)
 
     missing = [token for token in want if token not in have]
     # A page row whose first cell is a Pine spelling this inventory does not
@@ -145,12 +169,21 @@ def main() -> int:
 
     print(f'offered={len(want)} covered={len(mapped)} '
           f'native={len(mapped) - len(none_rows)} ruled-none={len(none_rows)}')
+    print(f'inventory_ids={len(inventory_ids)} inventory_rows={len(inventory_rows)}')
 
     if missing:
         print(f'\n{len(missing)} offered Pine names have no row in {PAGE}:', file=sys.stderr)
         for token in missing:
             print(f'  {token}', file=sys.stderr)
         print('\nAdd one row each, or the page\'s coverage claim is false.', file=sys.stderr)
+        return 1
+
+    missing_inventory = [value for value in inventory_ids if value not in inventory_rows]
+    if missing_inventory:
+        print(f'\n{len(missing_inventory)} design §1 IDs have no migration crosswalk row:',
+              file=sys.stderr)
+        for value in missing_inventory:
+            print(f'  {value}', file=sys.stderr)
         return 1
 
     # The page prints the totals; they must be the counted ones.

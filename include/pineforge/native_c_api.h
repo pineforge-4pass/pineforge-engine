@@ -295,8 +295,8 @@ extern "C" {
 #define PF_NATIVE_E_REJECTED        -6   /**< The kernel rejected the request (reason written out). */
 #define PF_NATIVE_E_UNSUPPORTED     -7   /**< A tag this API version cannot represent. */
 #define PF_NATIVE_E_EXCEPTION       -8   /**< A C++ exception was contained at the boundary. */
-#define PF_NATIVE_E_NOT_WORKING     -9   /**< The target handle is no longer a live request. */
-#define PF_NATIVE_E_INVALID_TARGET -10   /**< The target handle was never issued by this run. */
+#define PF_NATIVE_E_NOT_WORKING     -9   /**< The target handle was issued by this run but is no longer live. */
+#define PF_NATIVE_E_INVALID_TARGET -10   /**< The target handle was never issued by this run (a foreign or unknown incarnation). */
 #define PF_NATIVE_E_RUN_FAILED     -11   /**< The run did not reach Completed; read the state. */
 #define PF_NATIVE_E_REFUSED        -12   /**< execute_current refused; see pf_native_refusal_e. */
 /** Non-negative outcome: the kernel HAS no answer here and the output was
@@ -948,7 +948,6 @@ typedef enum pf_native_opened_lot_fill_point_e {
     PF_NATIVE_OPENED_LOT_FILL_POINT_ON_PATH    = 0,
     PF_NATIVE_OPENED_LOT_FILL_POINT_AFTER_PATH = 1
 } pf_native_opened_lot_fill_point_t;
-
 /* ── The readout words ─────────────────────────────────────────────
  * Every enumeration below names a word the runtime WRITES for a C host: a
  * field of a struct it fills or presents, an event's reason, a callback
@@ -956,7 +955,6 @@ typedef enum pf_native_opened_lot_fill_point_e {
  * published as, so no layout moves; each value is written by an exhaustive
  * translation of its kernel enumeration, and a kernel value no enumeration
  * here names cannot build (src/native_c_host.cpp). */
-
 /** Where a point's price came from — `NativePriceProvenance`: the
  *  `provenance` word of #pf_native_decision_v1 and #pf_native_event_v1 and
  *  #pf_native_margin_view_v1::cursor_provenance. */
@@ -1128,9 +1126,7 @@ typedef enum pf_native_completion_e {
     PF_NATIVE_COMPLETION_BATCH_COMPLETE = 0,
     PF_NATIVE_COMPLETION_STREAM_ENDED   = 1
 } pf_native_completion_t;
-
 /* ── The typed refusal words of a declaration and an append ──────── */
-
 /** Why a declaration was refused — `NativeRunSpecError`, the kernel's own
  *  validation word: the `error` out-parameter of
  *  #strategy_native_declare_subscriptions_ext_v1 and
@@ -1306,9 +1302,7 @@ typedef enum pf_native_append_error_e {
     PF_NATIVE_APPEND_ERROR_ALLOCATION_FAILURE            = 9  /**< Growing the feed threw;
                                                                *   this fails the host. */
 } pf_native_append_error_t;
-
 /* ── The policy hooks' words ───────────────────────────────────── */
-
 /** How an opening settles against an opposite book —
  *  `native_order::OpeningShape`, #pf_native_terms_v1::shape. Only an OPENING
  *  may name a shape other than TRANSACT: a kernel-sized one
@@ -2111,7 +2105,6 @@ typedef struct pf_native_request_v1 {
     uint8_t  reserved2[7];        /**< Must be 0. The seed layout's own padding,
                                    *   named so the tail below starts where
                                    *   that layout's sizeof ended. */
-
     /* ── The additive arm-relation tail (R5 lane F4). Read only when
      * `struct_size` is the current sizeof; a caller sending any earlier
      * layout stops above and keeps both defaults (AT_ARM_PRINT, OWNER_LOT),
@@ -2468,13 +2461,11 @@ typedef struct pf_native_callbacks_v1 {
      *  other value to close @p units of
      *  #pf_native_close_view_v1::scope_exposure_units. */
     int (*on_close_units)(void* user, const pf_native_close_view_v1* view, double* units);
-
     /* ── The additive policy-hook tail (R5 lane F4). Read only when
      * `struct_size` is the current sizeof; a caller sending an earlier layout
      * stops at `on_close_units` (or at `on_margin_call`) and gets the
      * kernel's own answers for all four, exactly the C++ defaults. All four
      * are ANSWERING callbacks. ── */
-
     /** The price half of `resolve_execution_terms`, consulted at EVERY
      *  matching candidate once installed. ANSWERING callback: return
      *  #PF_NATIVE_ANSWER_DEFAULT to keep the kernel's terms, any other value

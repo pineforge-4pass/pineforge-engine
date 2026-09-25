@@ -27,9 +27,8 @@ For each BAD anchor with a claimed symbol that ``--fix`` left alone:
    place the symbol where the page says it is cannot be the tree the citation
    was written against, and is dropped;
 2. map the cited first/last lines through
-   ``difflib.SequenceMatcher`` against the working tree's copy.  A line the
-   matcher deletes is carried by the nearest surviving line within
-   ``--slack`` lines, at the same offset;
+   ``difflib.SequenceMatcher`` against the working tree's copy.  A cited line
+   that was deleted is left for a human; no neighbour-line slack is applied.
 3. **verify**: the mapped citation must place the symbol inside its own window
    in the working tree.  A mapping that does not is dropped — so a wrong
    reference cannot produce a wrong anchor, only no anchor;
@@ -84,15 +83,9 @@ def line_map(old: list[str], new: list[str]) -> dict[int, int]:
     return out
 
 
-def carry(mapping: dict[int, int], line: int, slack: int) -> int | None:
-    """``line`` through the map, or the nearest surviving neighbour's offset."""
-    if line in mapping:
-        return mapping[line]
-    for distance in range(1, slack + 1):
-        for neighbour in (line - distance, line + distance):
-            if neighbour in mapping:
-                return mapping[neighbour] + (line - neighbour)
-    return None
+def carry(mapping: dict[int, int], line: int) -> int | None:
+    """Carry a line only when the exact source line survives the map."""
+    return mapping.get(line)
 
 
 def resolves(lines: list[str], first: int, last: int, symbol: str, mode: str) -> bool:
@@ -113,7 +106,7 @@ def rank(now: list[str], span: tuple[int, int], sources: list[str], symbol: str,
     return (gap, -len(sources), min(order[r] for r in sources))
 
 
-def reanchor(root: Path, refs: list[str], selected: list[str], slack: int,
+def reanchor(root: Path, refs: list[str], selected: list[str],
              dry_run: bool, decide: bool = False) -> tuple[int, int]:
     tree = cda.Tree(root)
     order = {ref: index for index, ref in enumerate(refs)}
@@ -142,8 +135,8 @@ def reanchor(root: Path, refs: list[str], selected: list[str], slack: int,
                 if not resolves(old, anchor.first, anchor.last, anchor.symbol, anchor.mode):
                     continue
                 mapping = line_map(old, now)
-                first = carry(mapping, anchor.first, slack)
-                last = carry(mapping, anchor.last, slack)
+                first = carry(mapping, anchor.first)
+                last = carry(mapping, anchor.last)
                 if first is None or last is None or last < first:
                     continue
                 if not resolves(now, first, last, anchor.symbol, anchor.mode):
@@ -236,7 +229,7 @@ def self_test() -> int:
         saved_root, saved_globs = cda.ROOT, cda.PAGE_GLOBS
         cda.PAGE_GLOBS = ('docs/pages/*.md',)
         try:
-            moved, stuck = reanchor(root, ['HEAD'], [], slack=3, dry_run=False)
+            moved, stuck = reanchor(root, ['HEAD'], [], dry_run=False)
         finally:
             cda.ROOT, cda.PAGE_GLOBS = saved_root, saved_globs
 
@@ -269,9 +262,6 @@ def main(argv: list[str] | None = None) -> int:
                              'written against; repeatable, tried in order')
     parser.add_argument('--page', action='append', default=[],
                         help='limit to these pages (default: every published page)')
-    parser.add_argument('--slack', type=int, default=3,
-                        help='how far to look for a surviving neighbour when the cited '
-                             'line itself was rewritten (default 3)')
     parser.add_argument('--decide', action='store_true',
                         help='resolve a disagreement between references by the anchor that '
                              'points most directly at the symbol (see the module docstring)')
@@ -284,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     if not args.ref:
         parser.error('at least one --ref is required')
-    moved, stuck = reanchor(cda.ROOT, args.ref, args.page, args.slack, args.dry_run,
+    moved, stuck = reanchor(cda.ROOT, args.ref, args.page, args.dry_run,
                             args.decide)
     print(f'reanchor_doc_citations: {moved} citations re-anchored, {stuck} left for a human')
     return 1 if stuck else 0

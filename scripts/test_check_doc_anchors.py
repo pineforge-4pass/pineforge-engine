@@ -447,5 +447,36 @@ class Grammar(unittest.TestCase):
         self.assertEqual(guard.runs([3, 4, 5, 9, 11, 12]), [(3, 5), (9, 9), (11, 12)])
 
 
+class H10MustFail(unittest.TestCase):
+    """Each old blind spot accepts the bad citation; the hardened gate rejects it."""
+
+    def test_previous_line_continuation_reproduces_item_12(self) -> None:
+        body = ('The declaration `initial_capital` native_host.hpp:6,\n'
+                'and `max_open_lots` (`:6`) follow.\n')
+        with tree(body) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:6  [SYMMISS]', out)
+
+    def test_comment_only_window_reproduces_item_8(self) -> None:
+        with tree('The callback `on_native_bar` native_host.hpp:2.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('COMMENTONLY', out)
+
+    def test_symbolless_range_reproduces_item_3(self) -> None:
+        with tree('The contract is native_host.hpp:5-7.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('NOCLAIM', out)
+
+    def test_source_fence_reproduces_item_33(self) -> None:
+        body = '```cpp\n// See `initial_capital` native_host.hpp:7.\n```\n'
+        with tree(body) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('SYMMISS', out)
+
+
 if __name__ == '__main__':
     unittest.main()

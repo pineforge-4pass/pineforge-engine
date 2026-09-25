@@ -47,9 +47,10 @@ a byte.
 Each is enforced by something. If you are about to violate one, that is a
 finding to report, not a step to take.
 
-1. **The kernel must not know what TradingView is.** If justifying your change
-   needs the word "TradingView", it belongs in `src/source/`,
-   `src/compat/pine/` or in codegen. *Ruled:* ADR 0001, "Boundary rules",
+1. **The kernel must not encode a platform rule.** A generic mechanism may stay
+   in the kernel when the ADR-0001 rule-2(a)/(b) test records why it is generic
+   and what opt-in choice keeps adapter bytes unchanged. TradingView-specific
+   policy belongs in `src/source/`, `src/compat/pine/` or codegen. *Ruled:* ADR 0001, "Boundary rules",
    rule 1. *Enforced:* `scripts/check_kernel_residuals.py` runs `strings` and
    `nm` over the built `libpineforge_kernel.a`, reads the headers the kernel
    profile installs and the string literals of the kernel's own translation
@@ -75,7 +76,7 @@ finding to report, not a step to take.
    site — and holds it against the ruling table.
 
 5. **Every public host member has a C spelling or a recorded reason.** The
-   COVERAGE block at native_c_api.h:45 lists them; a member added without a
+   COVERAGE block at `sha256:993ee68af70ee77c00489a30fe13e94d4cdc631cc572cbc520ee165f51e4d24d` native_c_api.h:45 lists them; a member added without a
    row, or a row naming a member that no longer exists, fails.
    *Enforced:* `scripts/check_native_c_api_surface.py`.
 
@@ -133,7 +134,8 @@ your new test unit against *its* headers, and record the first diagnostic.
 
 ```bash
 git worktree add --detach /tmp/<lane>-base <base>
-cmake -B /tmp/<lane>-base/build -S /tmp/<lane>-base --target pineforge
+cmake -B /tmp/<lane>-base/build -S /tmp/<lane>-base
+cmake --build /tmp/<lane>-base/build --target pineforge
 c++ -std=c++17 -ffp-contract=off -I/tmp/<lane>-base/include \
     -I/tmp/<lane>-base/build/include -c tests/test_<new>.cpp 2>&1 | head -3
 ```
@@ -239,7 +241,7 @@ policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
 through `NativeStrategyHost` native_host.hpp:826, or C through the
-`strategy_native_*` surface native_c_api.h:2551.
+`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` `sha256:ea2cca13bca9aab8b43257996d9d469a1e408fccb5903133e81a6fbc2b17f99a` native_c_api.h:2551.
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be

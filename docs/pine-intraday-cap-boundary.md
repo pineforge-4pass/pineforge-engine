@@ -122,7 +122,7 @@ claim.
 
 Relative to base `38dc73e`, the new policy/obligation members change the
 `BacktestEngine` layout, and this lane moved its inline namespace to <!-- verified HEAD -->
-`engine_script_run_v4` (since advanced to `engine_script_run_v18`); base-header <!-- verified HEAD -->
+`engine_script_run_v4` (since advanced to `engine_script_run_v19`); base-header <!-- verified HEAD -->
 v2 native/generated objects had to fail to link against that runtime.
 The exact source-pairing test compiles frozen base headers and checks explicit
 undefined v2 symbols, alongside matched v4 positive controls. Its isolated v2

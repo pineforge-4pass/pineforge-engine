@@ -66,11 +66,7 @@ enum class DualEntryStopPathWinner : int {
     ShortFirst,
     Tie,
 };
-
-
 // ── Path-resolution helpers (defined in engine_path_resolve.cpp) ──
-
-
 // The open-proximity rule: O -> H -> L -> C when the open is nearer the high
 // (|H-O| < |O-L|), otherwise O -> L -> H -> C, ties low-first. A run that
 // declares a leg order (NativeRunSpec::path_order) is walked in it by the
@@ -80,8 +76,6 @@ enum class DualEntryStopPathWinner : int {
 // carried it in here; it was AUTO everywhere else, which is what this
 // answers.
 bool bar_path_uses_high_first(const Bar& bar);
-
-
 // Return earliest path position (segment index + [0..1] interpolation) where
 // price level is crossed on OHLC path. Returns false if never crossed.
 bool first_touch_position(const Bar& bar, double level, double* out_pos);
@@ -96,8 +90,6 @@ bool first_touch_position(const Bar& bar, double level, double* out_pos);
 // the bar they are given (bar_path_uses_high_first) and are unchanged.
 bool first_touch_position(const Bar& bar, bool high_first, double level,
                           double* out_pos);
-
-
 // First path position where a stop ENTRY can fire, accounting for direction:
 // long stops only fire on up-segments (price rising through the stop), short
 // stops only fire on down-segments. The gap-fill shortcut uses non-strict
@@ -108,13 +100,9 @@ bool first_touch_position(const Bar& bar, bool high_first, double level,
 // broker emulator on probe 83.
 bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
                             bool is_long, double* out_pos);
-
-
 // Same 4-waypoint path, but with the leg order chosen by the caller (so a
 // tick-quantized twin of a bar walks the raw bar's leg order).
 void fill_bar_path_points_ordered(const Bar& bar, bool high_first, double path[4]);
-
-
 // ── The magnifier sampler in a caller's leg order (defined in magnifier.cpp) ──
 // sample_price_path and sample_price_path_volume_weighted
 // (<pineforge/magnifier.hpp>) walk the open-proximity order; these forms walk
@@ -155,8 +143,6 @@ void set_direct_endpoints(bool enabled) noexcept;
 // call by the path it took; disabled, stops counting.
 void count_endpoint_paths(bool enabled) noexcept;
 EndpointPathCounts endpoint_path_counts() noexcept;
-
-
 // ── Finer-timeframe sub-bar synthesis (defined in engine_lower_tf.cpp) ──
 // Generic primitives: a fixed intraday timeframe parser, the integer
 // input : requested ratio, and sub-bars sampled evenly along one input
@@ -176,8 +162,6 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
                                                  int ratio,
                                                  int requested_seconds);
-
-
 // ── Fused settlement (R5 lane PERF-L2, defined in engine_execution.cpp) ──
 // A settlement call that a book of at most one lot settles in one pass
 // (BacktestEngine::NativeSettlementStage::OneLot) takes that pass unless
@@ -186,7 +170,6 @@ std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
 // switch and the counts exist so tests/test_native_fused_settlement.cpp can
 // hold the two computations equal bit for bit and see which one ran. Both are
 // process-wide and a run only reads them; no host reaches either.
-
 // The fused-capable entries, as the counts index them: the inspection
 // (inspect_with_membership, inspect_native_reversal_v1), the projection
 // (project_with_membership, project_native_reversal_v1), the precommit

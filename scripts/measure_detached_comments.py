@@ -30,6 +30,7 @@ Usage:
     measure_detached_comments.py                 # census, per file
     measure_detached_comments.py --blocks        # every detached block's span
     measure_detached_comments.py --json
+    measure_detached_comments.py --check-ceiling [--ceiling N]
     measure_detached_comments.py --self-test     # the classifier's own pins
     measure_detached_comments.py FILE [FILE...]  # an explicit population
 """
@@ -298,6 +299,10 @@ def main() -> int:
     parser.add_argument("--blocks", action="store_true",
                         help="print every detached block's line span")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--check-ceiling", action="store_true",
+                        help="fail when the detached-line census exceeds the ceiling")
+    parser.add_argument("--ceiling", type=int, default=0,
+                        help="detached-line ceiling for --check-ceiling (default 0)")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--check-ceiling", action="store_true",
                         help="fail when TOTAL exceeds the checked-in ceiling")
@@ -306,6 +311,10 @@ def main() -> int:
         return self_test()
     paths = [path.resolve() for path in args.paths] or kernel_closure(ROOT)
     rows = measure(paths)
+    observed = sum(row["lines"] for row in rows)
+    if args.check_ceiling:
+        print(f"detached comment ceiling={args.ceiling}, observed={observed}")
+        return 1 if observed > args.ceiling else 0
     if args.json:
         print(json.dumps({"files": rows,
                           "total": sum(row["lines"] for row in rows)},

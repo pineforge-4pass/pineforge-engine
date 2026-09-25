@@ -1118,7 +1118,6 @@ protected:
     // Session-day facts are the native decision context's
     // (NativeDecisionContext::in_session and its neighbours, market_driver.hpp);
     // a host that keeps flags of its own stores them itself.
-
     // --- Timeframe state ---
     std::string input_tf_;
     std::string script_tf_;
@@ -2119,8 +2118,10 @@ public:
     //     continuation out with broker_state_hash_from_execution_hash(fixed)
     //     and the remaining fold is identical at every bar in every driving.
     // The batch<->stream oracle is therefore the OUTCOME, not this array:
-    // tests/test_native_margin_fx_roll.cpp section 8 and tests/test_streaming.cpp
-    // for the kernel, scripts/check_corpus_parity.sh for the Pine adapter.
+    // tests/test_native_margin_fx_roll.cpp section 8 and
+    // tests/test_native_report_truth.cpp are the kernel witnesses;
+    // tests/test_streaming.cpp is the source-layer companion, and
+    // scripts/check_corpus_parity.sh covers the Pine adapter.
     // Both directions are pinned in tests/test_native_report_truth.cpp.
     void set_broker_state_hash_recording(bool on) {
         guard_native_mutation("set_broker_state_hash_recording");

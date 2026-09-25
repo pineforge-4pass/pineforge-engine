@@ -22,7 +22,7 @@ these recomputation controls.
 
 | Symbol | Purpose | Default | Changes history when off? |
 | --- | --- | --- | --- |
-| `strategy_request_abort` | Set a cooperative abort flag, consumed by the run in progress, checked at the top of every bar loop (the single-timeframe `run()` loop, `run_simple_bar_loop`, `run_aggregation_bar_loop`). | N/A — an action, not configuration; cleared at `run()` entry. | No |
+| `strategy_request_abort` | Set a cooperative abort flag, consumed by the run in progress, checked at the top of the batch run's ordinary and aggregated paths. | N/A — an action, not configuration; cleared at `run()` entry. | No |
 | `strategy_last_run_status` | `0` completed, `1` `NOT_COMPLETED` (aborted), `-1` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_set_realtime_tail` | Mark the array's last bar as a still-forming tail (§3.1 semantics below). | Off (`on == 0`). | No |
 | `strategy_set_probe_suppress_tail_logic` | Run only the broker's pre-`on_bar` steps on the last bar and stop (§3.2 below). | Off (`on == 0`). | No |
@@ -88,10 +88,9 @@ configuration**, not one-shot: it stays in effect until a caller passes
 5. Interior bars (every bar before the last) are unaffected.
 
 Dispatch-path scope: all four effects are honoured on every dispatch path,
-including effect 2. This paragraph used to scope effect 2 to
-`run_simple_bar_loop`, deny that the single-timeframe `run(bars, n)`
-overload evaluates session predicates at all, and call effect 2 UNDEFINED
-under aggregation; all three were measured false. On an RTH tape that ends
+including effect 2. This paragraph used to scope effect 2 to one removed
+loop, deny that the single-timeframe `run(bars, n)` overload evaluates session
+predicates, and call effect 2 UNDEFINED under aggregation; all three were measured false. On an RTH tape that ends
 at the session close — so the calendar lookahead answers "last" while
 `in_session && barstate.islast` cannot, this flag having forced
 `barstate.islast` off — every path flags the tail bar from the calendar:
@@ -242,8 +241,7 @@ existed.
 
 `strategy_request_abort(s)` sets an atomic flag from any thread, consumed
 by the run in progress and cleared at `run()` entry (a no-op when idle),
-checked at the top of every bar loop (the single-timeframe `run()` loop,
-`run_simple_bar_loop`, `run_aggregation_bar_loop`).
+checked at the top of every batch path and stream input loop.
 `strategy_last_run_status(s)` (an append-only status accessor) reports
 whether the most recent run completed
 (`0`) or was aborted (`1`, `NOT_COMPLETED`); `-1` if `s` is `NULL`. L0 pins
