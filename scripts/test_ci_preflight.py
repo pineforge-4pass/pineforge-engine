@@ -162,8 +162,8 @@ class PreflightFailures(unittest.TestCase):
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
              '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
             # A time limit changed away from its measured basis.
-            (0, 'preflight', 'timeout-minutes: 30', 'timeout-minutes: 10',
-             'ci.yml job preflight must allow 30 minutes'),
+            (0, 'preflight', 'timeout-minutes: 45', 'timeout-minutes: 30',
+             'ci.yml job preflight must allow 45 minutes'),
             (0, 'build', 'timeout-minutes: 75', 'timeout-minutes: 45', 'ci.yml job build must allow 75'),
             (0, 'sanitizers', 'timeout-minutes: 120', 'timeout-minutes: 60',
              'ci.yml job sanitizers must allow 120'),
@@ -246,8 +246,9 @@ class PreflightFailures(unittest.TestCase):
         # stage's own timeout, with its log, fires before the job's.
         job_seconds = JOB_RUNNERS['ci.yml']['preflight'][1] * 60
         self.assertLessEqual(STAGE_TIMEOUT_SECONDS + 300, job_seconds)
-        # And at least twice the slowest verifier-tests stage measured: 570 s.
-        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 570)
+        # And at least twice the stage's standard-runner time at 0d76a099's
+        # tree: 475 s on the verification hosts, 1.94 times as fast.
+        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 475 * 1.94)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""

@@ -91,7 +91,7 @@ jobs:
   corpus-parity:
     if: inputs.mode != 'subset'
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # 16.3-24.4 min on the standard runner a fork's pull request still gets.
+    # 16.3-26.2 min on the standard runner a fork's pull request still gets.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4

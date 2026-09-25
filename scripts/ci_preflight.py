@@ -61,7 +61,7 @@ CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 # Every job with a runner in the workflows a CI run starts: its runs-on and its
 # timeout-minutes, exactly. docs/ci.md gives each limit's measured basis.
 JOB_RUNNERS = {
-    'ci.yml': {'preflight': (LINUX_RUNNER, 30), 'build': (MATRIX_RUNNER, 75),
+    'ci.yml': {'preflight': (LINUX_RUNNER, 45), 'build': (MATRIX_RUNNER, 75),
                'sanitizers': (LINUX_RUNNER, 120), 'kernel-only': (LINUX_RUNNER, 60),
                'build-gate': ('ubuntu-24.04', 5)},
     'native-live.yml': {'native-live': (LINUX_RUNNER, 60)},
@@ -73,11 +73,13 @@ JOB_RUNNERS = {
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
-# literal-aware parity, receipt and submodule guards and took 394-543 s on the
-# standard hosted runner, past 570 s at 0d76a099. The bound stays inside the
-# preflight job's time limit, so a stuck stage is logged here rather than cut
-# off with the job.
-STAGE_TIMEOUT_SECONDS = 1500
+# literal-aware parity, receipt and submodule guards in one serial process. At
+# 0d76a099's tree they take 458-475 s on the maintainers' verification hosts,
+# which ran them 1.93-1.94 times as fast as the standard hosted runner on the
+# same trees (91d65ad6, 53d36551): about 920 s there. The bound stays inside
+# the preflight job's time limit, so a stuck stage is logged here rather than
+# cut off with the job.
+STAGE_TIMEOUT_SECONDS = 2400
 # A job's header -- any id GitHub accepts -- and the top-level jobs and on keys.
 _JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MULTILINE)
 _JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)

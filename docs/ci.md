@@ -331,8 +331,8 @@ all 312 corpus strategies 90 s at `JOBS=8` — and then the run phase, which
 process per probe over a 221 861-bar feed, took **1792 s** (about 5.7 s per
 probe, machine load average 100–160 from sibling builds). Judging the result
 (byte-identity plus the verifier) takes a further 94 s. That is ~32 min here,
-and the dominant term is single-core serial work that a 4-vCPU hosted runner
-runs slower, not faster.
+and the dominant term is single-core serial work, which a runner's extra cores
+do not shorten.
 
 So the whole population cannot be held to the ~25 min pull-request CI target,
 and it runs nightly (01:30 UTC), on `workflow_dispatch`,
@@ -697,8 +697,9 @@ Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 parallelism follow the runner: 16 on the larger Linux runner, 5 on the M2, 4
 and 3 on the standard runners. The larger Linux runner runs at most eight jobs
 at once, and one CI run starts seven there (preflight, the two Ubuntu `build`
-legs, sanitizers, kernel-only, native-live and the parity subset), so a second
-run that overlaps it waits for a runner.
+legs, sanitizers, kernel-only, native-live and the parity subset); a pull
+request that touches the corpus pin or the parity tooling also starts the whole
+sweep there, an eighth. A second run that overlaps them waits for a runner.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner,
 time limit and parallelism in the three workflows a CI run starts, the `build`
@@ -714,27 +715,31 @@ mutations.
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
 0d76a099 it was the whole CTest wall time of every full-set leg but
-sanitizers: 976-1288 s on the standard runners, against 455-620 s at 8cf3be58
-the day before. Preflight's `verifier-tests` stage runs the same suite:
-394-543 s on the standard runner, and past 570 s at 0d76a099, when the old
-ten-minute limit cancelled main's preflight. The full corpus sweep's run phase
-is serial as well.
+sanitizers: 976-1288 s on the standard runners, against 341-621 s at 8cf3be58
+the day before. Preflight's `verifier-tests` stage runs the same suite on its
+own: 394-542 s on the standard runner through 1a0e7ea1, and still running
+593 s in at 0d76a099, when the old ten-minute limit cancelled main's
+preflight. At that tree it takes 458-475 s on the maintainers' verification
+hosts, which ran it 1.93-1.94 times as fast as the standard runner on the
+same trees (91d65ad6, 53d36551): about 15 min there. The full corpus sweep's
+run phase is serial as well.
 
 Each limit below is at least twice the slowest time measured for the job on a
 runner it can land on. The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
-and the corpus-parity workflow's own runs of 2026-09-23 to 2026-09-25.
-Until the larger runners' own runs accumulate, the maintainers' x86-64
-verification hosts at 8 to 12 jobs stand in for the Linux one, and the 3-core
-M1 bounds the M2 from above.
+and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. Until
+the larger runners' own runs accumulate, the maintainers' x86-64 verification
+hosts at 8 to 12 jobs stand in for the Linux one on parallel work, the
+standard runner's speed stands in for it on serial work, and the 3-core M1
+bounds the M2 from above.
 
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
-| `preflight` | 30 (was 10) | 7.3-9.8 min on the standard runner; cancelled at 10.3 min at 0d76a099, still in `verifier-tests`. 4.8-8.2 min on the verification hosts. Each stage is bounded at 25 min inside it. |
+| `preflight` | 45 (was 10) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Each stage is bounded at 40 min (2400 s) inside it. |
 | `build` | 75 (was 45) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
-| `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min after a standard-runner build of about 30 min. Pull-request set 35.2 min and full runs 34.0-60.0 min on the standard runner; full runs 18.2-19.0 min on the verification hosts. |
+| `sanitizers` | 120 | The verifier bounds a full run's CTest stage at 60 min after the build, a pull-request set's at 30 min. A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s of the verifier's 1800-s build bound (53d36551, 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 60 (was 45) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. |
-| `native-live` | 60 (was 45) | Only the larger runner runs the full set, which waits on `test_ci_verify` (1034 s as a row on the standard runner at 0d76a099); the verification hosts' release profile, the nearest they run, took 11.2-18.4 min. A fork's pull request runs the set without that row: 3.4 min on the standard runner. |
-| `corpus-parity` | 120 | 16.3-24.4 min on the standard runner, 10.1-10.3 min on the verification hosts. |
+| `native-live` | 60 (was 45) | Only the larger runner runs the full set, which is its build plus the serial `test_ci_verify` row (1034 s on the standard runner at 0d76a099): about 25 min. The verification hosts' release profile, the nearest they run, took 11.2-18.4 min. A fork's pull request runs the set without that row: 3.4 min on the standard runner. |
+| `corpus-parity` | 120 | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 30 | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
 | `build` (aggregate) | 5 | Seconds. |

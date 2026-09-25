@@ -32,9 +32,11 @@ env:
 jobs:
   preflight:
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # The verifier self-tests alone took 394-543 s on the standard runner and
-    # passed 570 s at 0d76a099, where ten minutes cancelled main's run.
-    timeout-minutes: 30
+    # Its verifier-tests stage is one serial process: 458-475 s at 0d76a099's
+    # tree on the maintainers' verification hosts, which ran it 1.93-1.94
+    # times as fast as the standard runner on the same trees, so about 15 min
+    # here. Ten minutes cancelled main's run at 0d76a099 593 s into it.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
