@@ -1876,7 +1876,7 @@ in-run facts is populated is answered by three `constexpr` predicates rather
 than by reading the tag yourself:
 `native_failure_has_cause` (`native_host.hpp:145`),
 `native_failure_has_recipient` (`native_host.hpp:149`) and
-`native_failure_has_cursor` (`sha256:57ded95e69a90ce0e561eadbd0f81e8b130356dd7b480519e1904552d4647957` native_host.hpp:121) — each taking either the
+`native_failure_has_cursor` (`native_host.hpp:153`) — each taking either the
 kind or the whole context. `native_failure_context_in_run`
 (`native_host.hpp:207`) builds one; `native_failed_run_identity` reads back
 the `RunIdentity` the failed spec carried, and a foreign run is dropped
@@ -2919,7 +2919,7 @@ These are existing refusals, not implied future features:
   confirmed bars carry those series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39) take
+symbol — `strategy_stream_begin` and its family (`pineforge.h:748`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2680`) obeys the one legality
 rule its C++ spelling does.
@@ -4190,7 +4190,7 @@ constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
 zero-argument (`native_host.hpp:833`); the `CapAttachment` constructor belongs
 to `source::PineStrategyHost` (`pine_strategy_host.hpp:241-244`), and the cap
-type itself lives in the adapter (`intraday_cap.hpp:18`).
+type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:83`).
 
 Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
@@ -4201,7 +4201,7 @@ thirty-five, which are what `add_library` (`CMakeLists.txt:153`) compiles into
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
 independence checker proves
-(`sha256:7ae64b598bf26ee68b06a7746c27c3ae62f620b0443b6c8c12781b20fe20bcd5` check_native_include_independence.py:36-46). See
+(`ROOT_HEADERS` check_native_include_independence.py:392). See
 `docs/adr/0001-kernel-adapter-boundary.md`.
 
 ### Building the kernel only

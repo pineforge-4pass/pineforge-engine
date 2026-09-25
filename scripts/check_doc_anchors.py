@@ -121,11 +121,35 @@ Verdicts
               qualifier its span names.
 ``NOCLAIM``   a ruling-table anchor, or a symbol-less range anywhere, carries
               no verifiable claim.
-``COMMENTONLY`` the complete cited C/C++ window is comment-only.
+``COMMENTONLY`` the complete cited C/C++ window is comment-only (a pinned one
+              too, unless the sentence says it cites a comment).
+``HASHMISS``  the cited lines no longer hash to the content pin.
+``PINLINE``   a content pin on a single line: a line is cited by its symbol.
+``PINEMPTY``  a content pin over blank lines only (the empty string's hash).
+``PINDOUBLE`` two or more pins before one anchor.
 
 The cited window is exactly ``[first, last]``. A symbol on the next line is
-outside the citation. Ranges without a symbol use a backticked content hash,
+outside the citation. A range without a symbol uses a backticked content hash,
 and the hash covers the cited source lines joined with ``\n``.
+
+Content pins (R5 lane H-DOCGATES)
+---------------------------------
+A pin ```sha256:<64 hex>``` written right before an anchor ACCOMPANIES the
+claim; it never replaces it. The nearest backticked span before the pin is
+still the claim and is still checked against the window, a ruling row still
+needs its symbol or fragment, and a pinned comment window is ``COMMENTONLY``
+unless the sentence says "comment". Until this lane a pin dropped the claim and
+was compared alone, so whatever the line held passed -- a wrong line, a blank
+line, a garbage hash before a real one (the fourth audit's probes P09, P10,
+P11 and P16, and 44 of the tree's 92 pins held something else than their
+sentence claimed).
+
+A citation that prose words introduce after an earlier citation's comma
+(```a` x.cpp:1, FX curve x.cpp:9``) claims nothing of the list's earlier
+symbol; outside the ruling tables too, it is ``NOCLAIM`` until it carries its
+own backticked symbol. A comma inside the sentence before the list's first
+citation is not a list comma, and ``and`` / ``or`` / ``at`` and the other
+``LIST_JOINERS`` do not introduce a new thing.
 
 ``--fix``
 ---------
@@ -231,6 +255,26 @@ HASH_RE = re.compile(r'(?i)^sha256:[0-9a-f]{64}$')
 SCOPE_BREAKS = ('|', '\n\n', '. ', '; ', '\n- ', '\n* ', '\n> ', ':\n')
 #: A backticked span that is nothing but an anchor: a citation, never a claim.
 ANCHOR_ONLY_RE = re.compile(r'^\s*(?:' + _PATH + r')?:\d+(?:-\d+)?\s*$')
+#: The run of content pins written right before an anchor, and one pin in it.
+PIN_RUN_RE = re.compile(r'((?:`sha256:[0-9a-f]{64}`\s*)+)$', re.I)
+PIN_RE = re.compile(r'`sha256:([0-9a-f]{64})`', re.I)
+#: The hash of the empty string: a pin over a blank line pins nothing.
+EMPTY_SHA256 = hashlib.sha256(b'').hexdigest()
+#: Words that join a citation list without naming a new thing ("`a` x.cpp:1,
+#: and :7"); any other prose word after the list's last comma introduces a
+#: citation of its own ("`a` x.cpp:1, FX curve x.cpp:9"), which then claims
+#: nothing unless it carries its own backticked symbol.
+LIST_JOINERS = frozenset('and or at in on plus then with also via from to line lines '
+                         'its the its and/or'.split())
+
+
+def pins_before(text: str, start: int) -> tuple[int, list[str]]:
+    """Where the pin run before ``start`` begins, and its hashes (lowercase)."""
+    lookback = max(0, start - 1200)
+    match = PIN_RUN_RE.search(text, lookback, start)
+    if not match or match.end() != start:
+        return start, []
+    return match.start(1), [h.lower() for h in PIN_RE.findall(match.group(1))]
 
 
 class Anchor:
@@ -245,11 +289,12 @@ class Anchor:
         self.digits = digits          # (offset, length) of the ``line`` or ``a-b`` text
         self.symbol, self.span, self.mode = symbol, span, mode
         self.qualifier = qualifier_of(span) if symbol and span else None
-        self.content_hash = None
-        if symbol is None and span:
-            match = re.fullmatch(r'sha256:([0-9a-f]{64})', span.strip(), re.I)
-            if match:
-                self.content_hash = match.group(1).lower()
+        # The content pins written immediately before the anchor (R5 lane
+        # H-DOCGATES): a pin accompanies the claim, it never replaces it.
+        self.pins: list[str] = []
+        self.content_hash: str | None = None
+        self.context = ''             # the anchor's scope, up to the anchor
+        self.borrowed = False         # a prose citation after a comma, claimless
         self.orphan = False
         self.ruling = False           # set by collect(): a row of a ruling table
         self.fragment: str | None = None  # a ruling row's code-fragment claim
@@ -397,16 +442,52 @@ def scope_start(text: str, start: int) -> int:
 
 
 def claimed_symbol(text: str, anchor_start: int) -> tuple[str | None, str | None, str]:
-    """The nearest backticked span before the anchor, and the symbol it claims."""
+    """The nearest backticked span before the anchor, and the symbol it claims.
+
+    A content pin is never the claim (R5 lane H-DOCGATES): the nearest span
+    that is not a pin is. See borrowed_claim() for the comma rule."""
     begin = scope_start(text, anchor_start)
     nearest = None
     for match in SPAN_RE.finditer(text, begin, anchor_start + 1):
-        if match.end() <= anchor_start:
+        if match.end() <= anchor_start and not HASH_RE.fullmatch(match.group(1).strip()):
             nearest = match
     if nearest is None:
         return None, None, 'word'
     symbol, mode = symbol_of(nearest.group(1))
     return symbol, nearest.group(1), mode
+
+
+def borrowed_claim(text: str, anchor_start: int, span: str | None) -> bool:
+    """Whether the anchor would only borrow ``span``'s claim across a list comma.
+
+    AUDIT4-opus docs-a N2: in ```strategy_configure_native_v1` c_abi.cpp:882,
+    FX curve c_abi.cpp:882, probe c_abi.cpp:882`` the second and third
+    citations name other things ("FX curve", "probe") yet passed under the
+    first one's symbol, and re-anchoring moved them onto its line. A citation
+    that follows an earlier citation of the same list, after a comma and prose
+    words, claims nothing of its own (R5 lane H-DOCGATES). A comma inside the
+    sentence that precedes the list's first citation is not a list comma."""
+    if span is None:
+        return False
+    begin = scope_start(text, anchor_start)
+    nearest = None
+    for match in SPAN_RE.finditer(text, begin, anchor_start + 1):
+        if match.end() <= anchor_start and not HASH_RE.fullmatch(match.group(1).strip()):
+            nearest = match
+    if nearest is None:
+        return False
+    between = PIN_RE.sub(' ', text[nearest.end():anchor_start])
+    cited = [m for m in list(ANCHOR_RE.finditer(between)) + list(CONT_RE.finditer(between))]
+    if cited:
+        after = between[max(m.end() for m in cited):]
+    elif ANCHOR_ONLY_RE.match(nearest.group(1)):
+        after = between                    # the nearest span IS the list's last citation
+    else:
+        return False
+    if ',' not in after:
+        return False
+    words = [w.lower() for w in re.findall(r'[A-Za-z][A-Za-z-]+', after.rsplit(',', 1)[1])]
+    return any(w not in LIST_JOINERS for w in words)
 
 
 def collect(page: Path, text: str) -> list[Anchor]:
@@ -437,15 +518,18 @@ def collect(page: Path, text: str) -> list[Anchor]:
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
         digit_start = match.start() + len(match.group('path')) + 1
-        symbol, span, mode = claimed_symbol(text, match.start())
-        immediate = re.search(r'`(sha256:[0-9a-f]{64})`\s*$', text[:match.start()], re.I)
-        if immediate:
-            symbol, span, mode = None, immediate.group(1), 'word'
-        elif span and re.fullmatch(r'sha256:[0-9a-f]{64}', span.strip(), re.I):
+        claim_end, pins = pins_before(text, match.start())
+        symbol, span, mode = claimed_symbol(text, claim_end)
+        borrowed = borrowed_claim(text, claim_end, span)
+        if borrowed:
             symbol, span, mode = None, None, 'word'
-        found.append(Anchor(page, match.start(), match.end(), doc_line(match.start()),
-                            match.group('path'), first, last,
-                            (digit_start, match.end() - digit_start), symbol, span, mode))
+        anchor = Anchor(page, match.start(), match.end(), doc_line(match.start()),
+                        match.group('path'), first, last,
+                        (digit_start, match.end() - digit_start), symbol, span, mode)
+        anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
+        anchor.borrowed = borrowed
+        anchor.context = text[scope_start(text, claim_end):match.start()]
+        found.append(anchor)
 
     # Continuations inherit the last full anchor in the same paragraph or table
     # row. A physical wrap is harmless; a blank line, heading or next table row
@@ -460,11 +544,10 @@ def collect(page: Path, text: str) -> list[Anchor]:
         prior.sort(key=lambda a: a.end)
         first = int(match.group('a'))
         last = int(match.group('b') or match.group('a'))
-        symbol, span, mode = claimed_symbol(text, match.start())
-        immediate = re.search(r'`(sha256:[0-9a-f]{64})`\s*$', text[:match.start()], re.I)
-        if immediate:
-            symbol, span, mode = None, immediate.group(1), 'word'
-        elif span and re.fullmatch(r'sha256:[0-9a-f]{64}', span.strip(), re.I):
+        claim_end, pins = pins_before(text, match.start())
+        symbol, span, mode = claimed_symbol(text, claim_end)
+        borrowed = borrowed_claim(text, claim_end, span)
+        if borrowed:
             symbol, span, mode = None, None, 'word'
         if prior and span is not None and ANCHOR_ONLY_RE.match(span):
             # "`sym` x.cpp:1730, `:1755`, `:7695`": the nearest span is the
@@ -474,6 +557,9 @@ def collect(page: Path, text: str) -> list[Anchor]:
                         prior[-1].path if prior else '', first, last,
                         (match.start() + 1, match.end() - match.start() - 1),
                         symbol, span, mode)
+        anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
+        anchor.borrowed = borrowed
+        anchor.context = text[scope_start(text, claim_end):match.start()]
         anchor.orphan = not bool(prior)
         found.append(anchor)
     found.sort(key=lambda a: a.start)
@@ -643,18 +729,30 @@ def judge(anchor: Anchor, tree: Tree) -> None:
     if anchor.first < 1 or anchor.last < anchor.first or anchor.last > len(lines):
         anchor.verdict = 'NOLINE'
         anchor.detail = f'{path.relative_to(tree.root)} has {len(lines)} lines'
-    if anchor.verdict == 'OK' and path.suffix in CXX_SUFFIXES and anchor.content_hash is None:
+    if anchor.pins and anchor.verdict == 'OK':
+        judge_pins(anchor, tree, path)
+        if anchor.bad:
+            return
+    elif anchor.verdict == 'OK' and path.suffix in CXX_SUFFIXES:
         code = tree.code_lines(path)
         if not any(line.strip() for line in code[anchor.first - 1:anchor.last]):
             anchor.verdict = 'COMMENTONLY'
             anchor.detail = f'lines {anchor.first}-{anchor.last} contain no C/C++ code'
             return
+    if anchor.borrowed and anchor.verdict == 'OK':
+        anchor.verdict = 'NOCLAIM'
+        anchor.detail = ('a citation that prose words introduce after a comma claims nothing, '
+                         'not the list\'s earlier symbol: put the symbol it cites in backticks '
+                         'before it')
+        return
     if anchor.symbol is None:
-        if anchor.content_hash is not None and anchor.verdict == 'OK':
-            content = '\n'.join(lines[anchor.first - 1:anchor.last]).encode()
-            actual = hashlib.sha256(content).hexdigest()
-            if actual != anchor.content_hash:
-                anchor.verdict, anchor.detail = 'HASHMISS', f'content hash is {actual}'
+        if anchor.pins:
+            if anchor.ruling and anchor.fragment is None:
+                anchor.verdict = 'NOCLAIM'
+                anchor.detail = ('a pin is not a claim: a ruling-table anchor names the symbol '
+                                 '(or the code fragment) it cites in backticks, pinned or not')
+            elif anchor.fragment is not None:
+                judge_fragment(anchor, tree, path)
         elif anchor.fragment is not None:
             judge_fragment(anchor, tree, path)
         elif (anchor.length > 1 and anchor.span is None and anchor.verdict == 'OK'):
@@ -720,6 +818,37 @@ def judge(anchor: Anchor, tree: Tree) -> None:
     shown = ', '.join(str(n) for n in hits[:6]) + (', ...' if len(hits) > 6 else '')
     anchor.suggestion = (f'{anchor.path}:{nearest}?  (ambiguous: `{anchor.symbol}` '
                          f'on {len(hits)} lines: {shown}; not fixed)')
+
+
+def judge_pins(anchor: Anchor, tree: Tree, path: Path) -> None:
+    """A content pin accompanies a claim; it never stands in for one (R5 lane
+    H-DOCGATES, AUDIT4-opus docs-a N1: P09-P11, P16). A pin covers a range --
+    a single line is cited by its symbol -- once, over content that is not
+    blank, and the window must still hash to it. A pinned C/C++ window that is
+    only comment is COMMENTONLY unless the sentence says it cites a comment."""
+    lines = tree.lines(path)
+    window = lines[anchor.first - 1:anchor.last]
+    if len(anchor.pins) > 1:
+        anchor.verdict = 'PINDOUBLE'
+        anchor.detail = (f'{len(anchor.pins)} pins before one anchor; only the last was ever '
+                         'compared: keep one')
+    elif anchor.pins[0] == EMPTY_SHA256 or not any(line.strip() for line in window):
+        anchor.verdict = 'PINEMPTY'
+        anchor.detail = 'the pin covers blank lines only, so it pins nothing'
+    elif anchor.first == anchor.last:
+        anchor.verdict = 'PINLINE'
+        anchor.detail = ('a single line is cited by the symbol it holds, not by a pin: drop '
+                         'the pin and keep (or add) the backticked symbol')
+    else:
+        actual = hashlib.sha256('\n'.join(window).encode()).hexdigest()
+        if actual != anchor.content_hash:
+            anchor.verdict, anchor.detail = 'HASHMISS', f'content hash is {actual}'
+        elif (path.suffix in CXX_SUFFIXES
+              and not any(line.strip() for line in tree.code_lines(path)[anchor.first - 1:anchor.last])
+              and not re.search(r'\bcomment', anchor.context, re.I)):
+            anchor.verdict = 'COMMENTONLY'
+            anchor.detail = (f'lines {anchor.first}-{anchor.last} contain no C/C++ code, and '
+                             'the sentence does not say it cites a comment')
 
 
 def judge_fragment(anchor: Anchor, tree: Tree, path: Path) -> None:

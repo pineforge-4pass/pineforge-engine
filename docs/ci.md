@@ -432,9 +432,15 @@ line must resolve, qualified symbols must land inside their declared scope, and
 continuations may inherit a full anchor across a physical line break only within
 the same paragraph or table row. Source-labelled fenced examples are scanned;
 unlabelled and output-labelled fences are treated as pasted output. A cited C/C++
-window made entirely of comments fails unless it carries an explicit content hash.
-Ruling-table citations require a symbol, fragment or content hash, and a
-symbol-less range elsewhere requires a backticked `sha256:<64 hex digits>` hash.
+window made entirely of comments fails. A content pin — a backticked
+`sha256:<64 hex digits>` hash right before a range — accompanies a claim and never
+replaces one: the symbol before it is still checked, a pinned comment window still
+fails unless the sentence says it cites a comment, a single line is cited by its
+symbol and never pinned, and a pin over blank lines or two pins before one anchor
+fail. Ruling-table citations require a symbol or a code fragment, pinned or not,
+and a symbol-less range elsewhere requires a pin. In a citation list, a citation
+that prose words introduce after a comma (`x.cpp:1, FX curve x.cpp:9`) claims
+nothing of the list's earlier symbol and is `NOCLAIM` until it carries its own.
 `--fix` changes line numbers only when the symbol is uniquely locatable; `--list`
 shows every verdict.
 

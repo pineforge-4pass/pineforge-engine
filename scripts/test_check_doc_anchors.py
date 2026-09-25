@@ -23,6 +23,13 @@ braces fails, and ``--fix`` moves it inside; a ruling-table anchor with no claim
 fails, and a code fragment there is verified verbatim; a continuation list
 shares the claim of the anchor that heads it, and a continuation takes the
 path of the last *full* anchor before it, never of another continuation.
+
+Lane H-DOCGATES (AUDIT4-opus X13) pins the pin rules (``PinMustFail``, the
+audit's probes P09/P10/P11/P16): a pin accompanies the claim and never replaces
+it, a single line is not pinned, a blank or doubled pin is rejected, a pinned
+ruling row still needs its claim, and a pinned comment window must say it cites
+a comment. ``BorrowedClaim``: a citation prose words introduce after a list
+comma claims nothing of the list's earlier symbol.
 """
 from __future__ import annotations
 
@@ -476,6 +483,130 @@ class H10MustFail(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 1, out)
             self.assertIn('SYMMISS', out)
+
+
+
+def pin(first: int, last: int, text: str = HEADER) -> str:
+    """The content pin of lines first..last of `text`, as a page writes it."""
+    lines = text.splitlines()
+    import hashlib
+    return 'sha256:' + hashlib.sha256('\n'.join(lines[first - 1:last]).encode()).hexdigest()
+
+
+COMMENT_HEADER = """#pragma once
+// A comment block the pages cite as a comment:
+// its lines hold no code at all,
+// only prose about resolve_terms.
+int resolve_terms(int units);
+"""
+
+
+class PinMustFail(unittest.TestCase):
+    """R5 lane H-DOCGATES (AUDIT4-opus docs-a N1, probes P09-P11 and P16): a
+    content pin accompanies a claim and never replaces it. Before the lane
+    each of these citations read OK, because the pin dropped the symbol claim
+    and was compared alone."""
+
+    def test_p09_a_pin_over_the_wrong_line_does_not_save_the_claim(self) -> None:
+        # The audit's P09: `strategy_create` pinned over the line after it.
+        with tree(f'`resolve_terms` `{pin(11, 11)}` native_host.hpp:11 answers.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:11  [PINLINE]', out)
+        # A range pinned exactly but holding another symbol: the claim is still checked.
+        with tree(f'`resolve_terms` `{pin(16, 20)}` native_host.hpp:16-20 answers.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:16-20  [SYMMISS]', out)
+
+    def test_p10_a_pin_over_a_blank_line_pins_nothing(self) -> None:
+        empty = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+        self.assertEqual(pin(4, 4), empty)
+        with tree(f'`resolve_terms` `{empty}` native_host.hpp:4 answers.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:4  [PINEMPTY]', out)
+        with tree(f'The gap `{pin(27, 27)}` native_host.hpp:27 is blank.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('[PINEMPTY]', out)
+
+    def test_p11_a_doubled_pin_is_rejected(self) -> None:
+        garbage = 'sha256:' + '0' * 64
+        with tree(f'The struct `{garbage}` `{pin(5, 8)}` native_host.hpp:5-8 holds it.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:5-8  [PINDOUBLE]', out)
+
+    def test_p16_a_pin_is_no_claim_in_a_ruling_row(self) -> None:
+        body = ('## Residual TradingView-named surface\n\n'
+                '| name | where | ruling |\n|---|---|---|\n'
+                f'| `probe_ruling_h` | a row pinned over code `{pin(16, 20)}` '
+                'native_host.hpp:16-20 | probe |\n')
+        with ruling(body) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:16-20  [NOCLAIM]', out)
+        # With the symbol the window holds, the same pinned row passes.
+        body = body.replace('a row pinned over code', '`NativeStrategyHost`')
+        with ruling(body) as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_a_pinned_comment_window_must_say_it_cites_a_comment(self) -> None:
+        with tree(f'`resolve_terms` `{pin(2, 4, COMMENT_HEADER)}` comments.hpp:2-4 decides.\n') as t:
+            (t.root / 'include/pineforge/comments.hpp').write_text(COMMENT_HEADER)
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('comments.hpp:2-4  [COMMENTONLY]', out)
+        with tree(f'The comment `{pin(2, 4, COMMENT_HEADER)}` comments.hpp:2-4 says so.\n') as t:
+            (t.root / 'include/pineforge/comments.hpp').write_text(COMMENT_HEADER)
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_a_pinned_range_with_its_claim_passes(self) -> None:
+        with tree(f'The class `NativeStrategyHost` `{pin(16, 20)}` native_host.hpp:16-20.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+        with tree(f'The class `{pin(16, 20)}` native_host.hpp:16-20 opens here.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)   # prose outside ruling rows: the pin alone
+        with tree(f'The class `{pin(16, 19)}` native_host.hpp:16-20 moved.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('[HASHMISS]', out)
+
+
+class BorrowedClaim(unittest.TestCase):
+    """AUDIT4-opus docs-a N2 / GAP-5: a citation that prose words introduce after
+    an earlier citation's comma claims nothing; it does not borrow the list's
+    symbol (design:177's "FX curve" and "probe" rode `strategy_configure_native_v1`)."""
+
+    def test_a_prose_citation_after_a_list_comma_is_noclaim(self) -> None:
+        with tree('`resolve_terms` native_host.hpp:14, other native_host.hpp:14.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('[NOCLAIM]', out)
+            listed = t.run('--list')[1]
+            self.assertRegex(listed, r'OK +native_host\.hpp:14 +`resolve_terms`')
+            self.assertRegex(listed, r'NOCLAIM +native_host\.hpp:14 +\(no symbol\)')
+        with tree('`resolve_terms` `native_host.hpp:14`, and its body `native_host.hpp:28`.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:28  [NOCLAIM]', out)
+
+    def test_a_list_continuation_and_a_sentence_comma_still_share_the_claim(self) -> None:
+        for body in ('`resolve_terms` native_host.hpp:14, :28.\n',
+                     '`resolve_terms` native_host.hpp:14, and native_host.hpp:28.\n',
+                     '`resolve_terms`, the one function, native_host.hpp:28.\n',
+                     '`resolve_terms` (native_host.hpp:14, native_host.hpp:28).\n'):
+            with self.subTest(body=body):
+                with tree(body) as t:
+                    code, out = t.run()
+                    self.assertEqual(code, 0, out)
+        with tree('`resolve_terms` native_host.hpp:14, other `resolve_terms` native_host.hpp:28.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)       # its own claim
 
 
 if __name__ == '__main__':

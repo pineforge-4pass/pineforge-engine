@@ -76,7 +76,7 @@ finding to report, not a step to take.
    site — and holds it against the ruling table.
 
 5. **Every public host member has a C spelling or a recorded reason.** The
-   COVERAGE block at `sha256:993ee68af70ee77c00489a30fe13e94d4cdc631cc572cbc520ee165f51e4d24d` native_c_api.h:45 lists them; a member added without a
+   COVERAGE comment block (`COVERAGE` `sha256:71e3e35c1a2409524f511b5ee0e02df496852dc5ff629728a78c5c0401cb8ad0` native_c_api.h:52-55) lists them; a member added without a
    row, or a row naming a member that no longer exists, fails.
    *Enforced:* `scripts/check_native_c_api_surface.py`.
 
@@ -244,7 +244,7 @@ policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
 through `NativeStrategyHost` native_host.hpp:833, or C through the
-`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` native_c_api.h:2641.
+`strategy_native_*` surface (`strategy_native_host_create_v1` native_c_api.h:2598).
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be
