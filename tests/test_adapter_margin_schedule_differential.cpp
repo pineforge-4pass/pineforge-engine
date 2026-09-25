@@ -29,13 +29,15 @@
  *       adapter executes at the open, sized at the open; the kernel has no
  *       check kind that does -- its mark check rests at the adverse extreme,
  *       its CalculationOnly executes at the calculation.
- *   M10 (G2-12) the pre-open slice. Same money through the pre-open x4
+ *   M10 (G2-12) the pre-open slice. Same money through the pre-open slice
  *       (schedule_preopen_margin_slice), through the shared rule
  *       (source_margin_units via the kernel's point) and through the kernel's
- *       AfterApplied point: they part on the one-contract band and on the
- *       +1e-6 restore fudge. They parted on the frozen units too until R5
- *       lane PAR-MARGIN froze a default-percent stop above 100 % at its
- *       snapped level, as TradingView does (the M10 tapes below).
+ *       AfterApplied point: they parted on the one-contract band and on the
+ *       +1e-6 restore fudge until R5 lane H-THIN (X15) sized the pre-open
+ *       slice through the shared rule, and on the frozen (signal-time) units
+ *       until R5 lane PAR-MARGIN froze a default-percent stop above 100 % at
+ *       its snapped level, as TradingView does (the M10 tapes below). With
+ *       both, the three book the same money.
  *   M11 (G2-13) opening admission. AdmitWithHostMargin admits an opening the
  *       kernel's initial-margin gate declines (a percent entry fee), and
  *       refuses an add the kernel admits (signal-time equity vs marked).
@@ -588,8 +590,10 @@ void m8_gap_open() {
 // bar reaches `low`, equity E at the bar's open.
 //   a-stop : a default-percent (190 %) buy stop at 101 placed at a 102 close,
 //            gapped through at the next 102 open -> schedule_preopen_margin_
-//            slice, sized by its OWN x4 (floor_quantity_grid twice, no band,
-//            no dust gate, no money rounding) on the frozen tuple;
+//            slice, sized on the frozen tuple -- by its OWN x4
+//            (floor_quantity_grid twice, no band, no dust gate, no money
+//            rounding) until R5 lane H-THIN (X15), by the shared
+//            source_margin_units since;
 //   a-carry: the same 18 lots carried in from an earlier 102 open -> the
 //            kernel's BarOpen point, sized by resolve_margin_call_units, i.e.
 //            the shared source_margin_units (floor, 4x, +1e-6 floor, the
@@ -597,9 +601,11 @@ void m8_gap_open() {
 //   kernel : the stop entry on a bare kernel host -> its AfterApplied point
 //            after the open fill, with the twin's slice.
 // ab9714be books the kernel's numbers on the stop entry in every case below
-// (1 @90 band, 1 @88 fudge, 1 @90 frozen); only the pre-open slice parts.
-// The stop entry's own entry bar stays the pre-open slice's where it slices
-// nothing (the band): R5 lane PAR-MARGIN admits the kernel's AfterApplied
+// (1 @90 band, 1 @88 fudge, 1 @90 frozen); only the pre-open slice parted.
+// expectation corrected (R5 lane H-THIN, X15: the pre-open slice sizes
+// through source_margin_units): band 0 -> 1 and fudge 3 -> 1 lots, the shared
+// rule's, the kernel's and ab9714be's. The stop entry's own entry bar stays
+// the pre-open slice's: R5 lane PAR-MARGIN admits the kernel's AfterApplied
 // point for a leveraged opening's entry bar (M7) everywhere but on the
 // opening this slice answers for (preopen_slice_class).
 struct M10Case {
@@ -659,8 +665,11 @@ void m10_same_money(const M10Case& m) {
 // slice sized 4 lots on a 19-lot book the run did not hold. TradingView
 // freezes a stop not yet marketable at its snapped level, above 100 % too
 // (the M10 tapes below): both are now the 101 level's 18 lots, and on them
-// the pre-open slice's own x4 sizes nothing -- the band row above, whose
-// one contract the kernel's point books (1 @90).
+// the pre-open slice's own x4 sized nothing -- the band row above, whose
+// one contract the kernel's point books (1 @90) -- until R5 lane H-THIN (X15)
+// sized the slice through the shared rule: it books that contract too, so
+// the stop entry and the kernel book the same 1 @90 on the same 18 lots
+// (INT26, where the two lanes meet).
 void m10_frozen_units() {
     std::printf("-- M10 frozen: signal 100, fill 102, low 90\n");
     Config c;
@@ -679,8 +688,10 @@ void m10_frozen_units() {
     kernel.run_bars(pine_margin_spec("m10-frozen", c, 0.0), bars);
     const auto native = margin_fills(kernel);
     print_side("kernel", native, kernel.position(), kernel.balance());
-    CHECK(preopen.empty());
-    CHECK(stop.position() == 18.0);   // the 101 level's 18 lots
+    REQUIRE(preopen.size() == 1);
+    check_fill(preopen[0], 1, NativePathPhase::Low, 1.0, 90.0, false);
+    CHECK(preopen[0].label == "__margin_preopen__L");
+    CHECK(stop.position() == 17.0);   // the 101 level's 18 lots, less the slice
     REQUIRE(native.size() == 1);
     check_fill(native[0], 1, NativePathPhase::Low, 1.0, 90.0, true);
 }
@@ -1888,8 +1899,8 @@ int main() {
     test("M7-C carried POOC short fee", m7_carried_pooc_short_fee);
     test("M8 gap open", m8_gap_open);
     test("M10 plain", [] { m10_same_money({"plain", 1000.0, 85.0, 4, 4}); });
-    test("M10 band", [] { m10_same_money({"band", 1000.0, 90.0, 0, 1}); });
-    test("M10 fudge", [] { m10_same_money({"fudge", 1000.000022, 88.0, 3, 1}); });
+    test("M10 band", [] { m10_same_money({"band", 1000.0, 90.0, 1, 1}); });
+    test("M10 fudge", [] { m10_same_money({"fudge", 1000.000022, 88.0, 1, 1}); });
     test("M10 frozen", m10_frozen_units);
     test("M11-A fee opening", m11_fee_opening);
     test("M11-B add 110", [] { m11_add(110.0, false); });

@@ -4817,10 +4817,19 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
             || !finite_positive(unit_margin) || !(required > marked_equity)) {
             continue;
         }
-        double restore = floor_quantity_grid((required - marked_equity) / unit_margin,
-                                             staged_.quantity_grid);
-        double slice = floor_quantity_grid(4.0 * restore, staged_.quantity_grid);
-        slice = std::min(units, slice);
+        // TradingView's slice from this money is the shared rule
+        // (source_margin_units: the lot-floored restore taken four times and
+        // floored again, the one-contract band, the dust gates), sized here
+        // on the frozen signal-time units the opening will book.
+        SourceMarginMoney money;
+        money.valid = true;
+        money.mark = adverse;
+        money.held = units;
+        money.unit_margin = unit_margin;
+        money.exact_required = required;
+        money.required = required;
+        money.equity = marked_equity;
+        const double slice = source_margin_units(money, /*opening_checkpoint=*/false);
         if (!finite_positive(slice)) continue;
 
         native_order::Request request;
