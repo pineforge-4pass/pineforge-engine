@@ -2574,11 +2574,12 @@ std::optional<double> PineExecutionAdapter::typed_entry_units(
     if (source.terms_priced_reverse) {
         const auto* pine_host = pine_view_of(&require_host());
         if (!pine_host) return std::nullopt;
-        const auto projection = pine_host->adapter_project_flatten(
-            price, source.source_id, source.comment, target.incarnation);
+        const auto projection = pine_host->project_native_settlement_at(
+            execution::Flatten{},
+            execution::Fill{price, source.source_id, source.comment, target.incarnation}, fx);
         return typed_quantity_units(projection.realized_balance * qty / 100.0, true, price, fx);
     }
-    return typed_quantity_units(percent_commission_live_equity(price) * qty / 100.0, true,
+    return typed_quantity_units(percent_commission_live_equity(price, fx) * qty / 100.0, true,
                                 price, fx);
 }
 
@@ -4118,6 +4119,11 @@ int PineExecutionAdapter::source_entry_slot_count() const noexcept {
 }
 
 double PineExecutionAdapter::percent_commission_live_equity(double mark) const noexcept {
+    return percent_commission_live_equity(mark, std::nullopt);
+}
+
+double PineExecutionAdapter::percent_commission_live_equity(
+        double mark, std::optional<double> fx) const noexcept {
     if (!host_) return std::numeric_limits<double>::quiet_NaN();
     // ab9714be pine_fills.cpp:1411-1426: entry-bar affordability marks open positions
     // from closed equity (initial capital + realized net profit) minus the open
@@ -4133,10 +4139,13 @@ double PineExecutionAdapter::percent_commission_live_equity(double mark) const n
                 if (!std::isfinite(fee)) return std::numeric_limits<double>::quiet_NaN();
                 paid_open_commission += fee;
             }
-            return (pine->current_equity() + pine->open_profit(mark)) - paid_open_commission;
+            const double open = fx ? pine->open_profit_at(mark, *fx) : pine->open_profit(mark);
+            return (pine->current_equity() + open) - paid_open_commission;
         }
     }
-    const double marked = host_->native_marked_equity(mark);
+    const auto* pine = pine_view_of(host_);
+    const double marked = fx && pine ? pine->marked_equity_at(mark, *fx)
+                                     : host_->native_marked_equity(mark);
     if (!std::isfinite(marked)) return marked;
     // `marked_equity()` accounts for every open entry fee.  Pine's sizing
     // basis subtracts only surviving PERCENT entry commissions, so restore the
@@ -12332,7 +12341,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         result.units = config_.default_qty_value;
     } else {
         const double equity = source.sizing.at_fill
-            ? percent_commission_live_equity(result.resolved_price) : source.sizing.equity;
+            ? percent_commission_live_equity(result.resolved_price, facts.active_fx)
+            : source.sizing.equity;
         const double price = source.sizing.at_fill ? result.resolved_price : source.sizing.price;
         const double fx = source.sizing.at_fill ? facts.active_fx : source.sizing.fx;
         PineSizingSnapshot sizing;
@@ -12518,8 +12528,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             // The source affordability tuple freezes its MTM equity at the
             // signal. The entry's later gap changes the cost, not the
             // carried-position mark; this is the NQ/rampatel close-only rule.
-            const double equity = finite_positive(source.sizing.equity)
-                ? source.sizing.equity : require_host().native_marked_equity(fill);
+            const auto* pine_host = pine_view_of(&require_host());
+            const double equity = finite_positive(source.sizing.equity) ? source.sizing.equity
+                : pine_host ? pine_host->marked_equity_at(fill, facts.active_fx)
+                            : require_host().native_marked_equity(fill);
             const double epsilon = std::max(
                 1e-9, std::abs(equity) * 1e-12);
             affordability_close_only = margin > 0.0 && std::isfinite(required)

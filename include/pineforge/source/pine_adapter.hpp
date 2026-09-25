@@ -1709,6 +1709,10 @@ private:
     double cohort_exposure_for(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
     double percent_commission_live_equity(double) const noexcept;
+    // The same equity at an explicit account-currency rate: the rate an
+    // execution converts at, which its terms facts carry
+    // (NativeExecutionTermsFacts::active_fx); none, the presented clock's.
+    double percent_commission_live_equity(double, std::optional<double> fx) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
                                        double available) const noexcept;

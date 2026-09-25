@@ -753,9 +753,6 @@ private:
     // The one writer of the three session flags below: it selects the
     // kernel's session-day facts of the script bar being published.
     void scheduler_update_session_state();
-    execution::AccountEffectProjection adapter_project_flatten(
-        double price, const std::string& id, const std::string& comment,
-        std::uint64_t incarnation) const;
     void adapter_label_bracket_trades(
         const native_order::ExecutionAppliedEvent&, bool from_bracket);
     bool adapter_has_open_entry_id(const std::string&) const;

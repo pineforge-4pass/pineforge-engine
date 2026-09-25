@@ -658,6 +658,12 @@ protected:
         const execution::Action& action,
         const execution::Fill& fill,
         const execution::SelectedOpeningSet& selection) const;
+    // The selected inspection at an explicit account-currency rate, as
+    // inspect_native_settlement_scoped_at is the scoped one.
+    execution::SettlementInspection inspect_native_settlement_selected_at(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection, double fx) const;
     execution::Result settle_native_execution_selected_at(
         const execution::Action& action,
         const execution::Fill& fill,
@@ -675,6 +681,13 @@ protected:
     execution::AccountEffectProjection project_native_settlement_v1(
         const execution::Action& action,
         const execution::Fill& fill) const;
+    // The same projection at an explicit account-currency rate: its rows, its
+    // quoted charges, its notional and its marked equity convert at `fx`, and
+    // no clock is read. project_native_settlement_v1() is this at the
+    // presented clock's rate.
+    execution::AccountEffectProjection project_native_settlement_at(
+        const execution::Action& action,
+        const execution::Fill& fill, double fx) const;
     execution::AccountEffectProjection project_native_settlement_scoped_v1(
         const execution::Action& action,
         const execution::Fill& fill,
@@ -690,6 +703,10 @@ protected:
     execution::SettlementInspection inspect_native_reversal_v1(
         const execution::ReverseTo& reversal,
         const execution::Fill& fill) const;
+    // The reversal inspection at an explicit account-currency rate.
+    execution::SettlementInspection inspect_native_reversal_at(
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill, double fx) const;
     execution::AccountEffectProjection project_native_reversal_v1(
         const execution::ReverseTo& reversal,
         const execution::Fill& fill) const;
@@ -1007,6 +1024,11 @@ protected:
     // so equity = capital + net_profit + open_profit stays in one unit.
     double open_profit(double current_price) const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
+        return open_profit_at(current_price, active_account_currency_fx());
+    }
+    // open_profit at an explicit account-currency rate `fx`.
+    double open_profit_at(double current_price, double fx) const {
+        if (position_side_ == PositionSide::FLAT) return 0.0;
         double diff = (position_side_ == PositionSide::LONG)
             ? (current_price - position_entry_price_)
             : (position_entry_price_ - current_price);
@@ -1014,7 +1036,7 @@ protected:
         // open_trade_profit —
         // callers combine this with initial_capital_ + net_profit_sum_ (both
         // account-currency) to get total equity. fx=1.0 is a no-op.
-        return diff * position_qty_ * syminfo_.pointvalue * active_account_currency_fx();
+        return diff * position_qty_ * syminfo_.pointvalue * fx;
     }
 
     int count_wintrades() const { return win_trades_count_; }
@@ -1502,7 +1524,7 @@ protected:
         const execution::Action& action,
         const execution::Fill& fill,
         execution::CloseScope book_or_opening,
-        const execution::SelectedOpeningSet* selected) const;
+        const execution::SelectedOpeningSet* selected, double fx) const;
     execution::SettlementInspection inspect_with_membership(
         const execution::Action& action,
         const execution::Fill& fill,

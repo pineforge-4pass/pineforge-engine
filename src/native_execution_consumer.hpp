@@ -574,9 +574,12 @@ private:
     double current_price(const BacktestEngine& engine, const native_order::LiveRequest& live,
                          NativeCurrentPriceRule rule) const;
     static execution::Action narrow_action(const native_order::ExecutionPlan& plan);
+    // The candidate's plan and its inspection at the account-currency rate
+    // `fx` the execution converts at.
     ResolvedCandidate inspect_candidate(const BacktestEngine& engine,
         const native_order::LiveRequest& live, const native_order::MatchCursor& cursor,
-        double resolved, const native_order::ExecutionPlan* plan_override = nullptr) const;
+        double resolved, double fx,
+        const native_order::ExecutionPlan* plan_override = nullptr) const;
     NativeExecutionTermsFacts build_terms_facts(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
         const native_order::EvaluationContext& evaluation,
@@ -1235,11 +1238,11 @@ private:
     // Roll the ledger onto `day`, closing the previous one: its realized
     // result decides the consecutive-loss streak, the fill count restarts and
     // the opening equity is marked at `mark`.
-    void risk_roll_day(const BacktestEngine& engine, std::int64_t day, double mark);
+    void risk_roll_day(const BacktestEngine& engine, std::int64_t day, double mark, double fx);
     // One applied fill of the risk day at `coordinate`, counted before any
     // evaluation. It never fires a breach: settlement is not a decision point.
     void risk_note_fill(const BacktestEngine& engine, const NativeCoordinate& coordinate,
-                        double price);
+                        double price, double fx);
     // The evaluation itself, at a script-bar open, at that bar's own close
     // calculation, and after an applied drain. `phase` is the frame a
     // FlattenAndBlock breach executes its own flatten in: the bar-open point's

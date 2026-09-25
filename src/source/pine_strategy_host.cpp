@@ -1959,13 +1959,6 @@ void source::PineStrategyHost::scheduler_record_broker_hash() {
     broker_state_hashes_.push_back(broker_state_hash());
 }
 
-execution::AccountEffectProjection source::PineStrategyHost::adapter_project_flatten(
-        double price, const std::string& id, const std::string& comment,
-        std::uint64_t incarnation) const {
-    return project_native_settlement_v1(
-        execution::Flatten{}, execution::Fill{price, id, comment, incarnation});
-}
-
 bool source::PineStrategyHost::adapter_core_sizes_default_opening(bool is_long) const {
     return adapter_.core_sizes_default_opening(is_long);
 }

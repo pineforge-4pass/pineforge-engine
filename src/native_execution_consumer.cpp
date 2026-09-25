@@ -3566,7 +3566,7 @@ std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
 }
 
 void NativeExecutionConsumer::risk_roll_day(const BacktestEngine& engine, std::int64_t day,
-                                            double mark) {
+                                            double mark, double fx) {
     if (risk_limits() == nullptr) return;
     // The closing day's own realized result decides the streak: a loss
     // extends it, a profit restarts it, and a day that realized nothing
@@ -3585,20 +3585,20 @@ void NativeExecutionConsumer::risk_roll_day(const BacktestEngine& engine, std::i
     risk_.has_day = true;
     risk_.fills_today = 0;
     risk_.day_open_realized = engine.net_profit_sum_;
-    const double equity = engine.marked_equity(mark);
+    const double equity = engine.marked_equity_at(mark, fx);
     risk_.day_open_equity = std::isfinite(equity)
         ? equity : engine.initial_capital_ + engine.net_profit_sum_;
 }
 
 void NativeExecutionConsumer::risk_note_fill(const BacktestEngine& engine,
                                              const NativeCoordinate& coordinate,
-                                             double price) {
+                                             double price, double fx) {
     if (risk_limits() == nullptr) return;
     if (const auto day = risk_day(coordinate.open_ms)) {
-        if (!risk_.has_day || *day != risk_.day_ordinal) risk_roll_day(engine, *day, price);
+        if (!risk_.has_day || *day != risk_.day_ordinal) risk_roll_day(engine, *day, price, fx);
     }
     if (risk_.fills_today < std::numeric_limits<std::uint64_t>::max()) ++risk_.fills_today;
-    const double equity = engine.marked_equity(price);
+    const double equity = engine.marked_equity_at(price, fx);
     if (std::isfinite(equity) && (!risk_.has_peak || equity > risk_.peak_equity)) {
         risk_.peak_equity = equity;
         risk_.has_peak = true;
@@ -3612,7 +3612,8 @@ void NativeExecutionConsumer::risk_evaluate(BacktestEngine& engine,
     if (!risk || failed() || consuming_request_) return;
     const double price = point.price;
     if (const auto day = risk_day(point.decision.coordinate.open_ms)) {
-        if (!risk_.has_day || *day != risk_.day_ordinal) risk_roll_day(engine, *day, price);
+        if (!risk_.has_day || *day != risk_.day_ordinal)
+            risk_roll_day(engine, *day, price, engine.active_account_currency_fx());
     }
     const double equity = engine.marked_equity(price);
     if (std::isfinite(equity) && (!risk_.has_peak || equity > risk_.peak_equity)) {
@@ -4421,7 +4422,7 @@ native_order::ExecutionPlan NativeExecutionConsumer::plan_from_terms(
 
 NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_candidate(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const native_order::MatchCursor& cursor, double resolved,
+        const native_order::MatchCursor& cursor, double resolved, double fx,
         const native_order::ExecutionPlan* plan_override) const {
     ResolvedCandidate candidate;
     candidate.target = read_target(engine, &live);
@@ -4486,12 +4487,14 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
                                     live.handle().incarnation, std::nullopt,
                                     close_cause_for(*live.definition)};
     if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
-        candidate.inspect = engine.inspect_native_reversal_v1(*reversal, candidate.fill);
+        candidate.inspect = engine.inspect_native_reversal_at(*reversal, candidate.fill, fx);
     } else {
         const auto action = narrow_action(candidate.physical);
         candidate.inspect = candidate.selected
-            ? engine.inspect_native_settlement_selected(action, candidate.fill, *candidate.selected)
-            : engine.inspect_native_settlement_scoped(action, candidate.fill, candidate.financial_scope);
+            ? engine.inspect_native_settlement_selected_at(action, candidate.fill,
+                                                           *candidate.selected, fx)
+            : engine.inspect_native_settlement_scoped_at(action, candidate.fill,
+                                                         candidate.financial_scope, fx);
     }
     // Carry the inspection's binary64 ticket through every preview and the
     // real settlement commit; proportional allocation must not replace it.
@@ -4629,7 +4632,8 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
             if (!live.sizing_price) return std::nullopt;
             price = *live.sizing_price;
         }
-        return sized_basis_units(*native_sized, price, marked(engine, price),
+        return sized_basis_units(*native_sized, price,
+                                 engine.marked_equity_at(price, facts.active_fx),
                                  facts.active_fx, *spec);
     }
     const auto* fraction = scope_fraction_intent(live);
@@ -4711,9 +4715,17 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
     try {
         auto* live = requests_.find_live(handle);
         if (!live) return std::nullopt;
-        // All resolver, inspection, admission and financial reads see the
-        // execution coordinate's FX activation instant.
-        engine.current_bar_.timestamp = evaluation.cursor.point.effective_time_ms;
+        // Every resolver, inspection, admission and financial read converts at
+        // the execution coordinate's FX activation instant: the rate is
+        // threaded (the terms facts' active_fx, the inspection, the preview and
+        // settlement contexts, the account observation, the risk note). A
+        // driver point's matching also presents that instant, which is its own
+        // point; a current execution presents nothing and leaves the host's
+        // clock where its frame put it (R5 lane B-ADAPTER; E21's rule -- thread
+        // the rate, never the clock).
+        const double execution_fx =
+            engine.account_currency_fx_at(evaluation.cursor.point.effective_time_ms);
+        if (!current) engine.current_bar_.timestamp = evaluation.cursor.point.effective_time_ms;
         auto terminal = [&](std::optional<native_order::MatchRejectReason> rejection,
                             std::optional<native_order::ExecutionTerms> attempted = std::nullopt)
                 -> std::optional<NativeCurrentExecutionResult> {
@@ -4925,7 +4937,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
         if (current && resolved_price <= 0.0 && !no_plan_terminal) {
-            const auto provisional = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
+            const auto provisional = inspect_candidate(engine, *live, evaluation.cursor,
+                                                       resolved_price, execution_fx,
                                                        plan ? &*plan : nullptr);
             if (provisional.inspect.would_open) {
                 return terminal(native_order::MatchRejectReason::NonpositivePrice,
@@ -4997,7 +5010,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
 
         auto candidate = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
-                                           plan ? &*plan : nullptr);
+                                           execution_fx, plan ? &*plan : nullptr);
         const auto& inspect = candidate.inspect;
         if (inspect.status == execution::Status::NoEffect) return terminal(std::nullopt);
         if (inspect.status != execution::Status::Applied) {
@@ -5057,6 +5070,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         execution::PhysicalExecutionContext ctx;
         ctx.effective_time_ms = evaluation.cursor.point.effective_time_ms;
         ctx.interval_index = evaluation.cursor.point.interval_index;
+        ctx.account_fx = execution_fx;
         // The consumer's view, reused fill after fill (capacity only): every
         // field is written here or by the preview below, as for a fresh one.
         NativePrecommitView& view = precommit_view_;
@@ -5211,7 +5225,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         NativeAccountObservation observation;
         observation.ordinal = applied_id.ordinal;
         observation.effective_time_ms = ctx.effective_time_ms;
-        observation.marked_equity = engine.marked_equity(resolved_price);
+        observation.marked_equity = engine.marked_equity_at(resolved_price, execution_fx);
         observation.realized_balance = engine.initial_capital_ + engine.net_profit_sum_;
         for (const auto& lot : engine.pyramid_entries_) observation.signed_units += lot.qty;
         if (engine.position_side_ == PositionSide::SHORT) observation.signed_units = -observation.signed_units;
@@ -5222,7 +5236,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         engine.bar_index_ = ctx.interval_index;
         // L9: one applied fill of its risk day. Counting only — settlement is
         // not a decision point, so no limit is evaluated here.
-        risk_note_fill(engine, notification.point.decision.coordinate, resolved_price);
+        risk_note_fill(engine, notification.point.decision.coordinate, resolved_price,
+                       execution_fx);
         // L4: the margin receipt of a kernel-issued liquidation follows its
         // own fill directly, before any dependency mutation of that fill. The
         // owning event is read from the outcome copy because recording it
@@ -6405,6 +6420,7 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         }
     }
     const auto candidate = inspect_candidate(engine, *live, cursor, terms.resolved_price,
+                                             engine.active_account_currency_fx(),
                                              plan ? &*plan : nullptr);
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = cursor.point.effective_time_ms;
@@ -6485,16 +6501,14 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         }
         const auto anchor = current_frame_->point;
         const double resolved = current_price(engine, *live, command.price_rule);
-        // The execution settles at its own cursor, and consume_matched_request
-        // presents that instant to everything it runs -- the terms, the
-        // inspection, the admission and the settlement all convert there. The
-        // clock the calling frame presents is the host's, and a host command
-        // hands it back unchanged (R5 lane F3), as submit and replace do.
-        const std::int64_t presented_clock = engine.current_bar_.timestamp;
+        // The execution settles at its own cursor: consume_matched_request
+        // threads that instant's rate to the terms, the inspection, the
+        // admission and the settlement, and presents no clock. The clock the
+        // calling frame presents is the host's, and a host command never
+        // writes it (R5 lanes F3 and B-ADAPTER), as submit and replace do not.
         auto outcome = consume_matched_request(engine, command.target, evaluation,
             anchor.price, resolved, anchor,
             native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
-        engine.current_bar_.timestamp = presented_clock;
         if (failed() || !outcome) throw std::runtime_error("native current execution failed");
         consuming_request_ = false;
         return std::move(*outcome);

@@ -442,7 +442,9 @@ execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot
 
     std::optional<Trade> built;
     if (closes && !row) {
-        built.emplace(close_row(engine, fill, execution::PhysicalExecutionContext{}));
+        execution::PhysicalExecutionContext at_rate;
+        at_rate.account_fx = fx;
+        built.emplace(close_row(engine, fill, at_rate));
         row = &*built;
     }
     double realized = engine.net_profit_sum_;
@@ -455,7 +457,7 @@ execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot
     if (!std::isfinite(realized))
         return invalid_projection(Status::InvalidAccounting);
 
-    const double account_fx = engine.active_account_currency_fx();
+    const double account_fx = fx;
     const double pv = engine.syminfo_.pointvalue;
     const PositionSide resulting_side = opening > 0.0 ? incoming : PositionSide::FLAT;
     const double direction = resulting_side == PositionSide::SHORT ? -1.0 : 1.0;
@@ -873,12 +875,16 @@ void BacktestEngine::finish_native_settlement_stage(
 
 execution::SettlementInspection BacktestEngine::inspect_native_reversal_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill) const {
+    return inspect_native_reversal_at(reversal, fill, active_account_currency_fx());
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_reversal_at(
+        const execution::ReverseTo& reversal, const execution::Fill& fill, double fx) const {
     NativeSettlementStage::OneLot one;
-    if (one.admit(*this, internal::SettlementEntry::Inspect, reversal, fill, nullptr,
-                  active_account_currency_fx()))
+    if (one.admit(*this, internal::SettlementEntry::Inspect, reversal, fill, nullptr, fx))
         return one.inspect(*this, fill);
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, nullptr, active_account_currency_fx());
+    stage_native_settlement(stage, reversal, fill, nullptr, fx);
     return inspect_native_settlement_stage(stage, fill);
 }
 
@@ -897,12 +903,12 @@ execution::Result BacktestEngine::settle_native_reversal_at_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context) {
     const execution::LifecycleEffects lifecycle;
+    const double fx = context.account_fx ? *context.account_fx : active_account_currency_fx();
     NativeSettlementStage::OneLot one;
-    if (one.admit(*this, internal::SettlementEntry::Settle, reversal, fill, &lifecycle,
-                  active_account_currency_fx()))
+    if (one.admit(*this, internal::SettlementEntry::Settle, reversal, fill, &lifecycle, fx))
         return one.settle(*this, fill, context);
     NativeSettlementStage stage;
-    stage_native_settlement(stage, reversal, fill, &lifecycle, active_account_currency_fx());
+    stage_native_settlement(stage, reversal, fill, &lifecycle, fx);
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
@@ -995,13 +1001,13 @@ execution::Result BacktestEngine::settle_with_membership(
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) {
+    const double fx = context.account_fx ? *context.account_fx : active_account_currency_fx();
     NativeSettlementStage::OneLot one;
     if (one.admit(*this, internal::SettlementEntry::Settle, action, fill, book_or_opening,
-                  selected, &lifecycle, active_account_currency_fx()))
+                  selected, &lifecycle, fx))
         return one.settle(*this, fill, context);
     NativeSettlementStage stage;
-    stage_native_settlement(stage, action, fill, book_or_opening, selected, &lifecycle,
-                            active_account_currency_fx());
+    stage_native_settlement(stage, action, fill, book_or_opening, selected, &lifecycle, fx);
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
@@ -1111,17 +1117,18 @@ execution::Status BacktestEngine::NativeSettlementStage::OneLot::preview_keeping
         execution::CloseScope scope, const execution::SelectedOpeningSet* selected,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl,
         std::optional<OneLot>* kept) {
+    const double fx = context.account_fx ? *context.account_fx
+                                         : engine.active_account_currency_fx();
     OneLot one;
     if (one.admit(engine, internal::SettlementEntry::Preview, action, fill, scope, selected,
-                  nullptr, engine.active_account_currency_fx())) {
+                  nullptr, fx)) {
         const auto readiness =
             one.preview(engine, fill, context, account, row_pnl, /*reserve_rows=*/true);
         if (kept) kept->emplace(one);
         return readiness;
     }
     NativeSettlementStage stage;
-    engine.stage_native_settlement(stage, action, fill, scope, selected, nullptr,
-                                   engine.active_account_currency_fx());
+    engine.stage_native_settlement(stage, action, fill, scope, selected, nullptr, fx);
     NativeSettlementRows rows;
     const auto readiness = engine.prepare_native_settlement_commit(stage, fill, context, rows);
     account = engine.project_native_settlement_stage(stage, fill);
@@ -1138,17 +1145,17 @@ execution::Status BacktestEngine::NativeSettlementStage::OneLot::preview_keeping
         const execution::Fill& fill, const execution::PhysicalExecutionContext& context,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl,
         std::optional<OneLot>* kept) {
+    const double fx = context.account_fx ? *context.account_fx
+                                         : engine.active_account_currency_fx();
     OneLot one;
-    if (one.admit(engine, internal::SettlementEntry::Preview, reversal, fill, nullptr,
-                  engine.active_account_currency_fx())) {
+    if (one.admit(engine, internal::SettlementEntry::Preview, reversal, fill, nullptr, fx)) {
         const auto readiness =
             one.preview(engine, fill, context, account, row_pnl, /*reserve_rows=*/false);
         if (kept) kept->emplace(one);
         return readiness;
     }
     NativeSettlementStage stage;
-    engine.stage_native_settlement(stage, reversal, fill, nullptr,
-                                   engine.active_account_currency_fx());
+    engine.stage_native_settlement(stage, reversal, fill, nullptr, fx);
     NativeSettlementRows rows;
     const auto readiness = engine.prepare_native_settlement_commit(stage, fill, context, rows);
     account = engine.project_native_settlement_stage(stage, fill);
@@ -1266,6 +1273,12 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement_select
                                    active_account_currency_fx());
 }
 
+execution::SettlementInspection BacktestEngine::inspect_native_settlement_selected_at(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection, double fx) const {
+    return inspect_with_membership(action, fill, execution::Book{}, &selection, fx);
+}
+
 execution::SettlementInspection BacktestEngine::inspect_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
@@ -1312,29 +1325,34 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_v1(
     return project_native_settlement_scoped_v1(action, fill, execution::Book{});
 }
 
+execution::AccountEffectProjection BacktestEngine::project_native_settlement_at(
+        const execution::Action& action, const execution::Fill& fill, double fx) const {
+    return project_with_membership(action, fill, execution::Book{}, nullptr, fx);
+}
+
 execution::AccountEffectProjection BacktestEngine::project_native_settlement_scoped_v1(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope scope) const {
-    return project_with_membership(action, fill, scope, nullptr);
+    return project_with_membership(action, fill, scope, nullptr, active_account_currency_fx());
 }
 
 execution::AccountEffectProjection BacktestEngine::project_native_settlement_selected_v1(
         const execution::Action& action, const execution::Fill& fill,
         const execution::SelectedOpeningSet& selection) const {
-    return project_with_membership(action, fill, execution::Book{}, &selection);
+    return project_with_membership(action, fill, execution::Book{}, &selection,
+                                   active_account_currency_fx());
 }
 
 execution::AccountEffectProjection BacktestEngine::project_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
-        const execution::SelectedOpeningSet* selected) const {
+        const execution::SelectedOpeningSet* selected, double fx) const {
     NativeSettlementStage::OneLot one;
     if (one.admit(*this, internal::SettlementEntry::Project, action, fill, book_or_opening,
-                  selected, nullptr, active_account_currency_fx()))
+                  selected, nullptr, fx))
         return one.project(*this, fill, nullptr);
     NativeSettlementStage stage;
-    stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr,
-                            active_account_currency_fx());
+    stage_native_settlement(stage, action, fill, book_or_opening, selected, nullptr, fx);
     return project_native_settlement_stage(stage, fill);
 }
 
@@ -1347,7 +1365,7 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
     const auto unchanged_account = [&]() -> execution::AccountEffectProjection {
         execution::AccountEffectProjection out;
         out.status = Status::NoEffect;
-        const double fx = active_account_currency_fx();
+        const double fx = stage.fx;
         const double pv = syminfo_.pointvalue;
         double abs_units = 0.0;
         for (const auto& lot : pyramid_entries_) abs_units += lot.qty;
@@ -1360,7 +1378,7 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
             remaining += open_entry_commission(lot);
         out.realized_balance = initial_capital_ + net_profit_sum_;
         out.remaining_entry_cost = remaining;
-        out.marked_equity = marked_equity(fill.price);
+        out.marked_equity = marked_equity_at(fill.price, stage.fx);
         out.cycle_after = pyramid_entries_.empty() ? 0 : position_cycle_seq_;
         out.signed_units_after = position_side_ == PositionSide::SHORT
             ? -abs_units
@@ -1393,6 +1411,7 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
         throw std::overflow_error("position cycle sequence exhausted");
 
     execution::PhysicalExecutionContext context;
+    context.account_fx = stage.fx;
     NativeSettlementRows rows;
     build_native_settlement_close_rows(stage, fill, context, rows);
 
@@ -1406,7 +1425,7 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
     if (!std::isfinite(realized))
         return invalid_projection(Status::InvalidAccounting);
 
-    const double fx = active_account_currency_fx();
+    const double fx = stage.fx;
     const double pv = syminfo_.pointvalue;
     const PositionSide resulting_side = !stage.survivors.empty()
         ? position_side_

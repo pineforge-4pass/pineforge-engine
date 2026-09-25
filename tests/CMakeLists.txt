@@ -1276,6 +1276,12 @@ list(APPEND TEST_SOURCES test_native_script_bucket_completions)
 # badapter-v19dp1-control / -cancel replayed on their NYSE:F bars.
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_margin_revival_cancel)
+# R5 lane B-ADAPTER (item 5, F3 finding 2): a current execution converts at its
+# cursor's rate, threaded through the terms facts, inspection, preview and
+# settlement contexts, and presents no clock -- its own hooks and the host after
+# it see the frame's; plus the kernel sources that say so. Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_current_execution_rate)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -1968,6 +1974,11 @@ if(TARGET test_adapter_sizing_relower)
         PINEFORGE_R2_CORE_FILES="${PINEFORGE_R2_CORE_JOINED}")
 endif()
 
+# R5 lane B-ADAPTER (item 5): the current-execution witness reads the kernel.
+if(TARGET test_native_current_execution_rate)
+    target_compile_definitions(test_native_current_execution_rate PRIVATE
+        PINEFORGE_B_ADAPTER_KERNEL_FILES="${PROJECT_SOURCE_DIR}/src/engine_execution.cpp|${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp")
+endif()
 # R5 lane B-ADAPTER (item 3): the range-end witness reads the source layer.
 if(TARGET test_adapter_range_end_fx)
     target_compile_definitions(test_adapter_range_end_fx PRIVATE
