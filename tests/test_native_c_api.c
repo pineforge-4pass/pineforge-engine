@@ -1970,6 +1970,7 @@ typedef struct hook_state {
     int      excursion_calls;
     int      excursion_facts_ok;
     double   excursion_entry_commission;
+    uint32_t excursion_struct_size;
 } hook_state;
 
 /* --- the recalculation hook --- */
@@ -2225,6 +2226,7 @@ static int excursion_on_lot(void* user, const pf_native_lot_excursion_v1* facts,
         state->excursion_facts_ok = 1;
     }
     state->excursion_entry_commission = facts->entry_commission;
+    state->excursion_struct_size = facts->struct_size;
     if (state->forced) return PF_NATIVE_ANSWER_DEFAULT;
     *favorable = HOOK_FAVORABLE;
     *adverse = HOOK_ADVERSE;
@@ -2254,7 +2256,10 @@ static int excursion_on_bar(void* user, const pf_bar_t* bar, const pf_native_dec
     return 0;
 }
 
-static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
+/* `table_size` is the callback-table length the caller publishes: the
+ * current sizeof, or an earlier layout that still installs the hook. */
+static void run_excursion_sized(int decline, uint32_t table_size, hook_state* state,
+                                pf_report_t* report) {
     pf_native_run_spec_v1 spec = twin_spec();
     pf_native_callbacks_v1 table;
     const pf_bar_t* bars;
@@ -2265,6 +2270,7 @@ static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
     spec.fee_kind = PF_NATIVE_FEE_CASH_PER_EXECUTION;
     spec.fee_value = 1.0;
     table = blank_callbacks(state);
+    table.struct_size = table_size;
     table.on_bar = excursion_on_bar;
     table.on_lot_excursion = excursion_on_lot;
     state->host = strategy_native_host_create_v1(&table);
@@ -2275,6 +2281,10 @@ static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
     CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, n, report), PF_NATIVE_OK,
                  "the excursion run did not complete");
     CHECK_EQ_INT(state->failures, 0, "in-callback excursion rows failed");
+}
+
+static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
+    run_excursion_sized(decline, (uint32_t)sizeof(pf_native_callbacks_v1), state, report);
 }
 
 static void check_excursion_hook(void) {
@@ -2322,6 +2332,23 @@ static void check_excursion_hook(void) {
     }
     CHECK_EQ_INT(declined_zero, report.trades_len,
                  "a declined lot did not take the kernel's zero magnitudes");
+    strategy_native_report_free_v1(&report);
+    strategy_native_host_free(state.host);
+
+    /* A table published at the F4 policy layout predates the fee tail: its
+     * hook still answers, and it is handed the first published length of the
+     * facts, with no entry commission behind it. */
+    memset(&report, 0, sizeof(report));
+    run_excursion_sized(0, PF_NATIVE_CALLBACKS_V1_POLICY_SIZE, &state, &report);
+    if (!state.host) return;
+    CHECK(state.excursion_calls >= 1, "the policy-layout excursion hook was never consulted");
+    CHECK_EQ_INT(state.excursion_struct_size, PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE,
+                 "a policy-layout table was not handed the base facts length");
+    CHECK(state.excursion_entry_commission == 0.0,
+          "a policy-layout table was handed the entry-commission tail");
+    CHECK(report.trades_len == 1 && report.trades[0].max_runup == HOOK_FAVORABLE
+              && report.trades[0].max_drawdown == HOOK_ADVERSE,
+          "the policy-layout hook's answer was not kept");
     strategy_native_report_free_v1(&report);
     strategy_native_host_free(state.host);
 }
@@ -3614,6 +3641,7 @@ typedef struct aux_state {
     int wrong;        /* a bucket that is not the hand-derived one */
     int interval_checks;
     int interval_wrong;
+    int interval_elsewhere; /* on_bar asked and was refused with E_STATE */
 } aux_state;
 
 static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
@@ -3653,6 +3681,26 @@ static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscr
             || interval.next_input_open_ms != (int64_t)(k + 1) * 300000) {
             ++state->interval_wrong;
         }
+    }
+    return 0;
+}
+
+/* Any callback but on_timeframe_bar has no bucket to read: on_bar asks at
+ * every calculation and must be refused with E_STATE, output untouched. */
+static int aux_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    aux_state* state = (aux_state*)user;
+    pf_native_timeframe_interval_v1 interval;
+    (void)bar;
+    (void)at;
+    memset(&interval, 0, sizeof(interval));
+    interval.struct_size = (uint32_t)sizeof(interval);
+    interval.version = PF_NATIVE_API_VERSION;
+    interval.open_ms = -7;
+    if (strategy_native_timeframe_bar_interval_v1(state->host, &interval) == PF_NATIVE_E_STATE
+        && interval.open_ms == -7) {
+        ++state->interval_elsewhere;
+    } else {
+        ++state->interval_wrong;
     }
     return 0;
 }
@@ -3700,6 +3748,7 @@ static void check_auxiliary_feed(void) {
     memset(&state, 0, sizeof(state));
     table = blank_callbacks(&state);
     table.on_timeframe_bar = aux_on_timeframe_bar;
+    table.on_bar = aux_on_bar;
     host = strategy_native_host_create_v1(&table);
     CHECK(host != NULL, "auxiliary host create failed");
     if (!host) return;
@@ -3777,6 +3826,27 @@ static void check_auxiliary_feed(void) {
     CHECK_EQ_INT(state.wrong, 0, "a feed-built bucket is not the hand-derived one");
     CHECK(state.interval_checks > 0 && state.interval_wrong == 0,
           "on_timeframe_bar did not read the C++ bucket interval");
+    CHECK(state.interval_elsewhere > 0, "on_bar never asked for a bucket interval");
+    /* After the run there is no bucket either; a missing or mis-sized output,
+     * or a NULL handle, is refused before the phase is judged. */
+    {
+        pf_native_timeframe_interval_v1 outside;
+        memset(&outside, 0, sizeof(outside));
+        outside.struct_size = (uint32_t)sizeof(outside);
+        outside.version = PF_NATIVE_API_VERSION;
+        outside.open_ms = -7;
+        CHECK_EQ_INT(strategy_native_timeframe_bar_interval_v1(host, &outside), PF_NATIVE_E_STATE,
+                     "the bucket interval was readable after the run");
+        CHECK(outside.open_ms == -7, "a refused interval query wrote its output");
+        outside.struct_size = (uint32_t)sizeof(outside) - 8u;
+        CHECK_EQ_INT(strategy_native_timeframe_bar_interval_v1(host, &outside), PF_NATIVE_E_STRUCT,
+                     "a mis-sized interval output was accepted");
+        CHECK_EQ_INT(strategy_native_timeframe_bar_interval_v1(host, NULL), PF_NATIVE_E_ARGUMENT,
+                     "a NULL interval output was accepted");
+        outside.struct_size = (uint32_t)sizeof(outside);
+        CHECK_EQ_INT(strategy_native_timeframe_bar_interval_v1(NULL, &outside), PF_NATIVE_E_HANDLE,
+                     "a NULL handle answered the interval query");
+    }
     strategy_native_host_free(host);
 
     /* A caller compiled before the tail existed still configures its risk
@@ -6611,17 +6681,64 @@ static void check_typed_setup_refusals(void) {
     check_typed_appends();
 }
 
+/* The lifecycle word, and the failure word beside it, of one handle. */
+static uint32_t configure_lifecycle(pf_strategy_t host, uint32_t* failure) {
+    pf_native_state_v1 state;
+    memset(&state, 0, sizeof(state));
+    state.struct_size = (uint32_t)sizeof(state);
+    if (strategy_native_state_v1(host, &state) != PF_NATIVE_OK) return 0xffffffffu;
+    if (failure) *failure = state.failure_code;
+    return state.lifecycle;
+}
+
+/* A run that asks for a typed configure from inside itself (Running) at its
+ * second calculation, and requests a cooperative abort at its fifth. */
+typedef struct typed_abort_state {
+    pf_strategy_t host;
+    int           calls;
+    int           in_run_rc;
+    uint32_t      in_run_error;
+    uint32_t      in_run_field;
+    uint32_t      in_run_lifecycle;
+} typed_abort_state;
+
+static int typed_abort_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    typed_abort_state* state = (typed_abort_state*)user;
+    pf_native_run_spec_v1 next = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    (void)bar;
+    (void)at;
+    ++state->calls;
+    if (state->calls == 2) {
+        memset(&ext, 0, sizeof(ext));
+        ext.struct_size = (uint32_t)sizeof(ext);
+        ext.version = PF_NATIVE_API_VERSION;
+        next.run_number = 2;
+        state->in_run_error = state->in_run_field = TYPED_UNTOUCHED;
+        state->in_run_rc = strategy_configure_native_ext_result_v1(state->host, &next, &ext,
+                                                                    &state->in_run_error,
+                                                                    &state->in_run_field);
+        state->in_run_lifecycle = configure_lifecycle(state->host, NULL);
+    }
+    if (state->calls == 5) strategy_request_abort(state->host);
+    return 0;
+}
+
 /* Configure has two additive C contracts. The legacy base call still hands a
  * refused value to the kernel and therefore latches Failed; the typed
  * extension validates first and names both value refusals and the two reuse
- * guards the C++ configure path owns. */
+ * guards the C++ configure path owns. Its out-parameters also decide which
+ * phases it accepts: NULL keeps the Unconfigured-only rule, a typed call
+ * configures a Completed or aborted handle's next run. */
 static void check_typed_configure_refusals(void) {
     pf_native_callbacks_v1 table = blank_callbacks(NULL);
     pf_native_run_spec_v1 spec = twin_spec();
     pf_native_run_spec_ext_v1 ext;
     pf_native_state_v1 state;
+    typed_abort_state aborted;
     uint32_t error;
     uint32_t field;
+    uint32_t failure;
     pf_strategy_t host;
     const pf_bar_t* bars;
     int n = 0;
@@ -6698,6 +6815,20 @@ static void check_typed_configure_refusals(void) {
                          "the reused session key refusal was not typed");
             CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_SESSION_KEY,
                          "the reused session key refusal named another field");
+            /* The kernel latches the Completed handle it refused a reuse of,
+             * and no configure call accepts it again. */
+            failure = TYPED_UNTOUCHED;
+            CHECK_EQ_INT(configure_lifecycle(host, &failure), PF_NATIVE_LIFECYCLE_FAILED,
+                         "a refused reuse left the Completed handle usable");
+            CHECK_EQ_INT(failure, PF_NATIVE_FAILURE_CONTRACT,
+                         "a refused reuse latched another failure");
+            changed.session_key = spec.session_key;
+            error = field = TYPED_UNTOUCHED;
+            CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &changed, &ext,
+                                                                 &error, &field),
+                         PF_NATIVE_E_STATE, "a contract-failed handle was configured again");
+            CHECK(error == PF_NATIVE_SPEC_ERROR_WRONG_PHASE && field == PF_NATIVE_SPEC_FIELD_NONE,
+                  "a contract-failed handle was not refused as WrongPhase");
         }
         strategy_native_host_free(host);
     }
@@ -6721,6 +6852,106 @@ static void check_typed_configure_refusals(void) {
             CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_RUN_NUMBER,
                          "the high-water refusal named another field");
         }
+        strategy_native_host_free(host);
+    }
+
+    /* A Completed handle: NULL out-parameters keep the Unconfigured-only rule
+     * and move nothing; an unknown enumerator on the handle a typed call
+     * accepts leaves the pair untouched; the typed call then configures the
+     * next run, and the Ready handle it leaves is a WrongPhase refusal. */
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "completed reuse host create failed");
+    if (host) {
+        pf_native_run_spec_v1 next = spec;
+        next.run_number = 2;
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), PF_NATIVE_OK,
+                     "completed reuse initial configure");
+        CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_OK,
+                     "completed reuse initial run");
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &next, &ext, NULL, NULL),
+                     PF_NATIVE_E_STATE, "an untyped call configured a Completed handle");
+        CHECK_EQ_INT(configure_lifecycle(host, NULL), PF_NATIVE_LIFECYCLE_COMPLETED,
+                     "an untyped refusal moved the Completed handle");
+        {
+            pf_native_run_spec_v1 tagged = next;
+            tagged.fee_kind = 99u;
+            error = field = TYPED_UNTOUCHED;
+            CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &tagged, &ext,
+                                                                 &error, &field),
+                         PF_NATIVE_E_TAG, "an unknown fee kind was accepted on reuse");
+            CHECK(error == TYPED_UNTOUCHED && field == TYPED_UNTOUCHED,
+                  "a tag refusal wrote the typed pair");
+            CHECK_EQ_INT(configure_lifecycle(host, NULL), PF_NATIVE_LIFECYCLE_COMPLETED,
+                         "a tag refusal moved the Completed handle");
+        }
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &next, &ext, &error, &field),
+                     PF_NATIVE_OK, "a typed call did not configure the Completed handle's next run");
+        CHECK(error == PF_NATIVE_SPEC_ERROR_NONE && field == PF_NATIVE_SPEC_FIELD_NONE,
+              "a typed reuse did not clear its pair");
+        CHECK_EQ_INT(configure_lifecycle(host, NULL), PF_NATIVE_LIFECYCLE_READY,
+                     "a typed reuse did not leave the handle Ready");
+        next.run_number = 3;
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &next, &ext, &error, &field),
+                     PF_NATIVE_E_STATE, "a Ready handle was configured again");
+        CHECK(error == PF_NATIVE_SPEC_ERROR_WRONG_PHASE && field == PF_NATIVE_SPEC_FIELD_NONE,
+              "a Ready handle was not refused as WrongPhase");
+        CHECK_EQ_INT(configure_lifecycle(host, NULL), PF_NATIVE_LIFECYCLE_READY,
+                     "a WrongPhase refusal moved the Ready handle");
+        strategy_native_host_free(host);
+    }
+
+    /* A run aborted from inside a callback: a typed call from inside the run
+     * is a WrongPhase refusal that moves nothing; after it, a refused reuse
+     * keeps the abort, and the next run is configured on the same handle. */
+    {
+        pf_native_callbacks_v1 aborting;
+        memset(&aborted, 0, sizeof(aborted));
+        aborting = blank_callbacks(&aborted);
+        aborting.on_bar = typed_abort_on_bar;
+        host = strategy_native_host_create_v1(&aborting);
+        CHECK(host != NULL, "aborted reuse host create failed");
+    }
+    if (host) {
+        pf_native_run_spec_v1 changed = spec;
+        pf_native_run_spec_v1 next = spec;
+        changed.session_key = "native-c-api-session-key-changed";
+        changed.run_number = 2;
+        next.run_number = 2;
+        aborted.host = host;
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), PF_NATIVE_OK,
+                     "aborted reuse initial configure");
+        CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_E_RUN_FAILED,
+                     "a run that requested an abort completed");
+        CHECK_EQ_INT(aborted.in_run_rc, PF_NATIVE_E_STATE,
+                     "a typed configure was accepted inside the run");
+        CHECK(aborted.in_run_error == PF_NATIVE_SPEC_ERROR_WRONG_PHASE
+                  && aborted.in_run_field == PF_NATIVE_SPEC_FIELD_NONE,
+              "an in-run typed configure was not refused as WrongPhase");
+        CHECK_EQ_INT(aborted.in_run_lifecycle, PF_NATIVE_LIFECYCLE_RUNNING,
+                     "an in-run typed refusal moved the run");
+        failure = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(configure_lifecycle(host, &failure), PF_NATIVE_LIFECYCLE_FAILED,
+                     "the aborted run did not fail its handle");
+        CHECK_EQ_INT(failure, PF_NATIVE_FAILURE_ABORTED, "the run failed by something but its abort");
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &changed, &ext, &error, &field),
+                     PF_NATIVE_E_ARGUMENT, "a changed session key reused an aborted handle");
+        CHECK(error == PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE
+                  && field == PF_NATIVE_SPEC_FIELD_SESSION_KEY,
+              "the aborted handle's session key refusal was not typed");
+        failure = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(configure_lifecycle(host, &failure), PF_NATIVE_LIFECYCLE_FAILED,
+                     "a refused reuse moved the aborted handle");
+        CHECK_EQ_INT(failure, PF_NATIVE_FAILURE_ABORTED, "a refused reuse replaced the abort");
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &next, &ext, &error, &field),
+                     PF_NATIVE_OK, "a typed call did not configure the aborted handle's next run");
+        CHECK(error == PF_NATIVE_SPEC_ERROR_NONE && field == PF_NATIVE_SPEC_FIELD_NONE,
+              "an aborted handle's reuse did not clear its pair");
+        CHECK_EQ_INT(configure_lifecycle(host, NULL), PF_NATIVE_LIFECYCLE_READY,
+                     "an aborted handle's reuse did not leave it Ready");
         strategy_native_host_free(host);
     }
 }

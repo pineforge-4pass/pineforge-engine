@@ -501,9 +501,12 @@ typedef enum pf_native_spec_optional_e {
  *  `fee_kind` is a #pf_native_fee_kind_t, `close_execution` a
  *  #pf_native_close_execution_t and `allowed_open_directions` a
  *  #pf_native_open_directions_t (zero-filled, that word admits no opening at
- *  all). #strategy_configure_native_v1 hands the whole value to the kernel's
- *  validation, which refuses an invalid spec with -1 and latches the legacy
- *  handle Failed. It has no typed out-parameters and cannot be retried. The
+ *  all). #strategy_configure_native_v1 hands the whole value to the kernel,
+ *  which answers every refusal with -1 and a Failed native handle:
+ *  PF_NATIVE_FAILURE_INVALID_SPECIFICATION for an invalid spec,
+ *  PF_NATIVE_FAILURE_CONTRACT for a Ready or Running handle or a refused reuse
+ *  (a handle an abort already failed keeps that failure). It has no typed
+ *  out-parameters, and no configure call accepts a handle it failed. The
  *  extended path validates before configuring: #strategy_configure_native_ext_v1
  *  keeps the handle Unconfigured on a validation refusal, and
  *  #strategy_configure_native_ext_result_v1 additionally writes the exact

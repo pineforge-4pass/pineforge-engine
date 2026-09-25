@@ -1133,8 +1133,9 @@ typedef enum pf_native_completion_e {
 /* ── The typed refusal words of a declaration and an append ──────── */
 /** Why a declaration was refused — `NativeRunSpecError`, the kernel's own
  *  validation word: the `error` out-parameter of
- *  #strategy_native_declare_subscriptions_ext_v1 and
- *  #strategy_native_declare_auxiliary_feed_v1. Read beside the
+ *  #strategy_native_declare_subscriptions_ext_v1,
+ *  #strategy_native_declare_auxiliary_feed_v1 and
+ *  #strategy_configure_native_ext_result_v1. Read beside the
  *  #pf_native_spec_field_t the same call writes. Every value the run spec's
  *  validation can answer is named, the ones a begin-time declaration cannot
  *  reach included, so one enumeration reads every setup refusal. */
@@ -1204,7 +1205,15 @@ typedef enum pf_native_spec_error_e {
                                                                        *   word outside
                                                                        *   #pf_native_event_retention_t. */
     PF_NATIVE_SPEC_ERROR_ABORTED_HOST_NO_REUSABLE_RUN_SPEC      = 55, /**< An aborted host had
-                                                                       *   no reusable spec. */
+                                                                       *   no reusable spec.
+                                                                       *   Defensive: a
+                                                                       *   cooperative abort
+                                                                       *   latches only while a
+                                                                       *   run holds its spec,
+                                                                       *   and the Failed state
+                                                                       *   keeps it, so no
+                                                                       *   public call reaches
+                                                                       *   this word. */
     PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE           = 56, /**< A reused host's
                                                                        *   session key changed. */
     PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER = 57 /**< A reused host's
@@ -1214,8 +1223,9 @@ typedef enum pf_native_spec_error_e {
 
 /** Where a declaration was refused — `NativeRunSpecField`, the first field
  *  the kernel's validation found: the `field` out-parameter of
- *  #strategy_native_declare_subscriptions_ext_v1 and
- *  #strategy_native_declare_auxiliary_feed_v1. */
+ *  #strategy_native_declare_subscriptions_ext_v1,
+ *  #strategy_native_declare_auxiliary_feed_v1 and
+ *  #strategy_configure_native_ext_result_v1. */
 typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_NONE                        = 0, /**< Not about one field. */
     PF_NATIVE_SPEC_FIELD_SESSION_KEY                 = 1,
@@ -3059,16 +3069,41 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
                                             const pf_native_run_spec_v1* base,
                                             const pf_native_run_spec_ext_v1* ext);
 
-/** The typed spelling of #strategy_configure_native_ext_v1. It has the same
- *  inputs and lifecycle contract, and additionally writes the kernel's
- *  #pf_native_spec_error_t / #pf_native_spec_field_t pair whenever the
- *  specification was judged. A C-layer argument, size or tag refusal leaves
- *  both out-parameters untouched. An invalid first specification leaves an
- *  Unconfigured handle usable. On a Completed or recoverable-abort handle it
- *  also exposes the kernel's reuse refusals — changed session key and consumed
- *  high-water run number — by name; Ready, Running and non-recoverable Failed
- *  remain #PF_NATIVE_SPEC_ERROR_WRONG_PHASE /
- *  #PF_NATIVE_SPEC_FIELD_NONE. */
+/** The typed spelling of #strategy_configure_native_ext_v1: the same inputs,
+ *  plus @p error / @p field, which receive the kernel's
+ *  #pf_native_spec_error_t / #pf_native_spec_field_t pair once the call's
+ *  phase or its specification has been judged.
+ *
+ *  Whether either out-parameter is non-NULL decides which handles it accepts:
+ *  - both NULL: it is exactly #strategy_configure_native_ext_v1. Only an
+ *    Unconfigured handle is configured; every other phase answers
+ *    #PF_NATIVE_E_STATE without mutation.
+ *  - either non-NULL: it also configures the next run of a Completed handle,
+ *    or of one Failed by a cooperative abort (#PF_NATIVE_FAILURE_ABORTED), as
+ *    #strategy_configure_native_v1 reuses a host. A Ready or Running handle,
+ *    and a handle Failed by anything but an abort, answer #PF_NATIVE_E_STATE
+ *    with #PF_NATIVE_SPEC_ERROR_WRONG_PHASE / #PF_NATIVE_SPEC_FIELD_NONE,
+ *    without mutation.
+ *
+ *  On an accepted handle the specification is validated before the kernel
+ *  sees it: a refused value answers #PF_NATIVE_E_ARGUMENT with its pair and
+ *  leaves the handle as it was. A reuse whose session key is not the one the
+ *  handle's runs are bound to, or whose run number does not exceed the highest
+ *  one the handle has run, answers #PF_NATIVE_E_ARGUMENT with
+ *  #PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE /
+ *  #PF_NATIVE_SPEC_FIELD_SESSION_KEY or
+ *  #PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER /
+ *  #PF_NATIVE_SPEC_FIELD_RUN_NUMBER. That refusal latches a Completed handle
+ *  Failed with #PF_NATIVE_FAILURE_CONTRACT, which no configure call accepts
+ *  again; an aborted handle keeps its abort and may be configured again.
+ *  #PF_NATIVE_OK writes NONE / NONE and leaves the handle Ready.
+ *
+ *  A NULL handle (#PF_NATIVE_E_HANDLE), a NULL @p base or @p ext
+ *  (#PF_NATIVE_E_ARGUMENT), a mis-sized struct (#PF_NATIVE_E_STRUCT) and an
+ *  unknown enumerator on an accepted handle (#PF_NATIVE_E_TAG) leave both
+ *  out-parameters untouched.
+ *
+ *  Exercised by `tests/test_native_c_api.c`. */
 PF_API int strategy_configure_native_ext_result_v1(
     pf_strategy_t s, const pf_native_run_spec_v1* base,
     const pf_native_run_spec_ext_v1* ext, uint32_t* error, uint32_t* field);
