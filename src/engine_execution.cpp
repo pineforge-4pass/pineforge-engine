@@ -114,6 +114,19 @@ struct CloseSplit {
 // Identical FIFO arithmetic for inspection and commit. Book callers pass
 // their original request unchanged; selected reductions pass the request
 // capped to selected exposure, independently of unrelated physical lots.
+//
+// A reduction closes whole every lot its rest exceeds, and recomputes the rest
+// from the binary64 sum closed so far, C. The lot it ends in -- the first lot
+// its rest r = fl(requested - C) does not exceed, or a whole lot whose sum
+// reaches the request -- closes r and keeps fl(qty - r) > 0, or closes whole
+// when r is its full size. The close is then charged exactly the request:
+// closed is `requested`, not fl(C + r). That sum can land one ulp either side
+// of the request, and then no binary64 r' has fl(C + r') == requested either
+// (C + r is a tie on the request's grid that rounds to an even neighbour), so
+// no row can be chosen to add up to it; above, the split was refused, and
+// below, a 2^-51 rest was left over. A sum that is the request is unchanged.
+// A whole lot whose sum falls short is not where the request ends: the rest
+// beyond it is real, and the walk goes on (R5 lane K-ULP2).
 CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
                             double requested, double& closed, double& remaining) {
     const double amount = !closes ? 0.0
@@ -126,8 +139,13 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
             && (next_closed == closed || next_closed == amount)))
         return {execution::Status::UnrepresentableQuantity};
     if (!flatten) {
+        if (next_closed > requested || (next_closed < requested && kept != 0.0)) {
+            closed = requested;
+            remaining = 0.0;
+            return {execution::Status::Applied, amount, kept};
+        }
         const double next_remaining = requested - next_closed;
-        if (next_remaining < 0.0 || next_remaining == remaining)
+        if (next_remaining == remaining)
             return {execution::Status::UnrepresentableQuantity};
         remaining = next_remaining;
     }

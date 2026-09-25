@@ -40,6 +40,24 @@ epsilon silently discards it. `Flatten` explicitly closes all lots and avoids
 using rounded aggregate equality to mean a whole-book close. Quantities whose
 changes cannot be represented are refused before settlement.
 
+A close that spans lots and ends inside one of them is charged exactly its
+units. Every lot before the one it ends in closes whole, and C is the binary64
+sum of what they closed; that lot closes the rest `r = fl(units - C)` and keeps
+`fl(qty - r)`, or closes whole when `r` is its full size. The execution's
+`closed_units` is the request itself, not `fl(C + r)`. That sum can land one ulp
+either side of the request (`C + r` is then a tie on the request's grid), and
+then no binary64 quantity `x` has `fl(C + x)` equal to the request, so no choice
+of rows adds up to it. Before this rule (R5 lane K-ULP2) a sum above the
+request was refused with `UnrepresentableQuantity`, and one below left a
+2^-51 rest for a second fill, for a later lot, or as an opening beside the
+survivor. For example, lots `{fl(106/84.5), 10}` reduced by `fl(277/84.5)` close
+`fl(106/84.5)` and `fl(277/84.5 - 106/84.5)`: the two rows add up one ulp above
+the request, and the execution reports `fl(277/84.5)` closed. A whole lot whose
+sum falls short of the request is not where it ends; the rest beyond it is real
+and the next lot closes it. A split that binary64 cannot hold is still refused:
+a rest below half an ulp of its lot, a rest that a whole lot's close cannot
+decrement, and a reduction that cannot move the position.
+
 The source `execute_partial_exit_qty` adapter retains its existing `1e-10`
 FIFO endpoint policy. After its existing whole-book Flatten check, it may
 translate a quantity ending at an interior whole-lot prefix into one selected

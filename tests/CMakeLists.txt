@@ -1145,6 +1145,15 @@ list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 # that keeps handles stays flat per bar at 4x the bars. Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_handle_stable_replace)
+# R5 lane K-ULP2: a close that spans lots and ends inside one of them --
+# Reduce or Transact, two or three lots, a selected scope, execute_current, a
+# C host, the settlement's own calls on an opening scope, a seeded battery of
+# books sized from cash at tick prices -- is one terminal fill whose closed
+# units are exactly the request, whichever way the whole lots and the rest add
+# up (it stopped, or left a 2^-51 rest, on db98990c); requests no binary64
+# split can carry are still refused. Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_partial_close_split)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs
