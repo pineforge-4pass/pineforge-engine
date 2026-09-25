@@ -116,7 +116,8 @@ class PreflightFailures(unittest.TestCase):
         plan = {entry[0]: entry for entry in check_commands(Path('/src'))}
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
                      'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
-                     'doc-reverts', 'doc-reverts-tests'):
+                     'doc-reverts', 'doc-reverts-tests',
+                     'kernel-seam-rows', 'kernel-seam-rows-tests'):
             self.assertIn(name, plan)
             self.assertEqual(len(plan[name]), 2, name)
 

@@ -237,6 +237,13 @@ def check_commands(source: Path) -> list[tuple]:
          [sys.executable, str(source / 'scripts/test_check_doc_reverts.py')]),
         ('doc-reverts',
          [sys.executable, str(source / 'scripts/check_doc_reverts.py')]),
+        # R5 lane H-DOCGATES (AUDIT4-opus X10): every kernel `source_*` seam and
+        # every kernel member or row field the source layer writes is named by
+        # an ADR-0001 row, which states who writes it and its ruling.
+        ('kernel-seam-rows-tests',
+         [sys.executable, str(source / 'scripts/test_check_kernel_seam_rows.py')]),
+        ('kernel-seam-rows',
+         [sys.executable, str(source / 'scripts/check_kernel_seam_rows.py')]),
         # NOT advisory: the migration page's coverage claim is L14-B's own, and
         # it is true on this tree. A `strategy.*` name added to the Pine v6
         # inventory without a row on that page fails here immediately.

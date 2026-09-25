@@ -511,6 +511,23 @@ The kernel-residual gate's ruled counts have floors beside the CTest floors
 (`ADR_RULED_IDENTIFIERS_MIN`, `ADR_RULED_TEXTS_MIN` in `scripts/ci_verify.py`), so
 a ruling that leaves ADR-0001 together with its name is an edit of that file too.
 
+`scripts/check_kernel_seam_rows.py` (`kernel-seam-rows`, with
+`kernel-seam-rows-tests`) holds the boundary the residual gate cannot name. A
+kernel seam the source layer implements, or a kernel member it writes, is the
+boundary itself, and its name need not hold a TradingView word. The gate reads
+every `virtual source_*` a kernel header declares, and every `BacktestEngine`
+member and `Trade` / `PyramidEntry` field that code under `src/source/`,
+`src/compat/` and their include trees assigns, increments or mutates. It fails
+when ADR-0001 has no table row naming one in its first cell; a row field counts
+only spelled qualified (`Trade::exit_time`). It reads the class body itself,
+because `scripts/check_broker_state_hash_coverage.py` splits a class at `;`
+alone and loses the member declared right after an inline function body. `--list`
+prints the inventory with each write site.
+
+```sh
+python3 scripts/check_kernel_seam_rows.py --list
+```
+
 The third source-only guard is `scripts/check_design_inventory.py`
 (`design-inventory`, with its own `design-inventory-tests` suite). It was
 fail-closed from the day it landed: it reads `docs/design/native-feature-parity.md`

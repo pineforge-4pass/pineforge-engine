@@ -247,6 +247,12 @@ Mac's 489 and 412 and 1003 of 1249, and no Mac output moved.
   `PineStrategyHost`'s and so of the generated script's ABI. They go at the next
   `engine_script_run` epoch, with their two rows in
   `scripts/broker_state_hash_waivers.txt`, which say so.
+- **The dead stream seam.** `BacktestEngine::source_stream_entry_comment`
+  (`include/pineforge/engine.hpp`) has two implementations, the kernel's
+  default and the Pine host's override, and both do nothing. It is a virtual
+  of the class every generated strategy derives from, so deleting it moves the
+  vtable of every generated script. It goes at the next `engine_script_run`
+  epoch (ADR-0001, the row "`source_stream_entry_comment`").
 
 ## Publication and acceptance
 

@@ -246,7 +246,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # registered, 278 run: the WebSocket row still skips on a system libcurl.
 # 279 = those 278 plus R5 lane H-DOCGATES' test_doc_reverts (the doc-revert
 # gate's self-test, a Python row every profile registers; INT26 pick, summed).
-KERNEL_MIN_TESTS = 280
+KERNEL_MIN_TESTS = 281
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -372,13 +372,16 @@ KERNEL_MIN_TESTS = 280
 # No release row skips, so 690 registered is 690 run.
 # 691 = those 690 plus R5 lane H-DOCGATES' test_doc_reverts (see
 # KERNEL_MIN_TESTS; INT26 pick, summed).
-RELEASE_MIN_TESTS = 692
+RELEASE_MIN_TESTS = 693
 # R5 lane H-DOCGATES (AUDIT4-opus perf N-7) raises both floors by one more:
 # test_native_runtime_ambient_lifo, the runtime blocks' LIFO death row, is
 # source-free, so it registers and runs in the kernel profile (279 -> 280) and
 # in release (691 -> 692; INT26 pick, summed). Recorded below both floors so
 # neither floor's line moves: CONTRIBUTING.md and contributing-llm.md cite
 # them by line.
+# R5 lane H-DOCGATES (AUDIT4-opus X10) raises both by one more:
+# test_kernel_seam_rows, the kernel seam-row gate's self-test, is a Python row
+# every profile registers (280 -> 281, 692 -> 693; INT26 pick, summed).
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the

@@ -2326,6 +2326,10 @@ add_test(NAME test_doc_lint COMMAND ${Python3_EXECUTABLE} -B
 # over throwaway git repositories; the gate itself is a ci_preflight stage.
 add_test(NAME test_doc_reverts COMMAND ${Python3_EXECUTABLE} -B
     ${PROJECT_SOURCE_DIR}/scripts/test_check_doc_reverts.py)
+# R5 lane H-DOCGATES (AUDIT4-opus X10): the kernel seam-row gate's must-fail
+# suite, over throwaway trees; the gate itself is a ci_preflight stage.
+add_test(NAME test_kernel_seam_rows COMMAND ${Python3_EXECUTABLE} -B
+    ${PROJECT_SOURCE_DIR}/scripts/test_check_kernel_seam_rows.py)
 
 # R5 F2: the worked migration of docs/pages/pine-to-native.md, executed. The
 # extractor copies the page's six C++ blocks out verbatim at build time and

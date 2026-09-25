@@ -138,6 +138,7 @@ What each gate refuses:
 | `check_native_c_api_surface.py` | a public `NativeStrategyHost` member with no C spelling and no recorded reason |
 | `check_native_feature_rulings.py` | a `NativeRunSpec` field the adapter does not declare and the ADR does not rule |
 | `check_kernel_residuals.py` | a TradingView-shaped name reaching the kernel archive or its installed headers without an ADR 0001 row |
+| `check_kernel_seam_rows.py` | a kernel `virtual source_*` seam, or a kernel member or row field the source layer writes, that no ADR 0001 row names in its first cell |
 | `check_native_cpp_versions.py`, `check_aggregate_cpp_versions.py` | an internal C++ epoch moved without its consumers |
 | `check_adapter_spec_shadowing.py` | the adapter setting a kernel field it is ruled not to set |
 | `check_twin_parity.py` | a frozen test assertion rewritten instead of a behaviour change being argued |

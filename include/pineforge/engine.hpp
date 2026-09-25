@@ -1044,13 +1044,13 @@ protected:
 
     // --- Time/date extraction from bar timestamp ---
     // The current bar's time components in UTC, the engine's storage
-    // timezone. Generated code reads them for Pine's bare ``hour`` /
-    // ``minute`` / ``dayofweek`` (the variable form), which the language
-    // defines on the symbol's exchange timezone -- UTC for the crypto symbols
-    // that are most of the corpus, so the cheap ``gmtime_r`` path is exact
-    // there. The 1-arg function form ``hour(time)`` is the codegen's own
-    // (codegen/visit_call.py) and honours ``syminfo_.timezone`` (set via
-    // ``strategy_set_chart_timezone``).
+    // timezone, memoized per stamp. Protected, so generated code could call
+    // them, but the codegen transpiler does not: it spells Pine's bare
+    // ``hour`` / ``minute`` / ``dayofweek`` ... as pine_hour(current_bar_.
+    // timestamp, syminfo_.timezone) and its siblings (session_time.hpp), on
+    // the symbol's exchange timezone, and no generated corpus strategy names
+    // one of these. Their callers are the tests that pin the UTC reading
+    // (test_chart_timezone, test_intraday_rollover_chart_tz_l4a).
     struct BarTime {
         int year, month, dayofmonth, hour, minute, second, dayofweek, weekofyear;
     };
@@ -1122,8 +1122,8 @@ protected:
     std::string input_tf_;
     std::string script_tf_;
     // Cached tf_to_seconds(script_tf_). MUST be refreshed immediately after
-    // every assignment to script_tf_ (both sites live in engine_run.cpp).
-    // Avoids a string parse per strategy.* call.
+    // every assignment to script_tf_ (the one writer is the Pine host's
+    // scheduler_prepare_script_run). Avoids a string parse per read.
     int script_tf_seconds_ = 0;
     TimeframeAggregator script_tf_agg_;
     int64_t prev_bar_timestamp_ = 0;
