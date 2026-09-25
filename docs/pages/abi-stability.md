@@ -352,17 +352,30 @@ lift the missing surface into the public ABI.
 
 ## Version macros
 
-The generated `<pineforge/version.h>` exposes, for this tree's `VERSION`
-(0.14.0):
+The generated `<pineforge/version.h>` exposes, for a `VERSION` of
+`1.0.0-rc.1` built from a tarball or at that release candidate's tag:
 
 ```c
-#define PINEFORGE_VERSION_MAJOR  0
-#define PINEFORGE_VERSION_MINOR  14
+#define PINEFORGE_VERSION_MAJOR  1
+#define PINEFORGE_VERSION_MINOR  0
 #define PINEFORGE_VERSION_PATCH  0
-#define PINEFORGE_VERSION_STRING "0.14.0"
-#define PINEFORGE_VERSION_FULL   "0.14.0"    /* or "0.14.0-3-gabc1234-dirty" */
+#define PINEFORGE_VERSION_STRING "1.0.0"
+#define PINEFORGE_VERSION_FULL   "1.0.0-rc.1"   /* or "1.0.0-rc.1-3-gabc1234-dirty" */
 #define PINEFORGE_GIT_SHA        "<sha>"
 ```
+
+`PINEFORGE_VERSION_STRING` is MAJOR.MINOR.PATCH, as are CMake's
+`project(VERSION)`, the package's `PineForge_VERSION` and #pf_version_get; a
+release candidate's `-rc.N` lives in `PINEFORGE_VERSION_FULL`, the package's
+`PineForge_VERSION_FULL` and #pf_version_string. A final release reads the
+same with no `-rc.N`: `FULL` is `"1.0.0"`. The trailing `-N-gSHA[-dirty]` is
+`git describe`'s, for a git checkout past its tag; a tarball build, or one
+configured with `-DPINEFORGE_VERSION_SOURCE=FILE`, carries the `VERSION` file
+exactly. `scripts/test_cmake_version_source.py` (CTest
+`test_cmake_version_source`) holds the resolution, from `VERSION` and from a
+tag; the installed-package smoke test that `scripts/ci_verify.py` runs
+(`cmake/smoke_consumer`) holds that the package, the installed header and the
+linked library name one full version, and that it is `VERSION` exactly.
 
 Use these for compile-time gating of features added in later minors:
 

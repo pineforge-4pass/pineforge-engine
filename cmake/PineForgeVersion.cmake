@@ -3,7 +3,8 @@
 # PINEFORGE_VERSION_SOURCE (CACHE STRING, AUTO|FILE):
 #   AUTO (default) — historical behavior exactly: prefer
 #     `git describe --tags --match 'v*' --abbrev=7 --dirty` for MMP/FULL
-#     when it matches MAJOR.MINOR.PATCH after stripping a leading 'v';
+#     when it begins with MAJOR.MINOR.PATCH after stripping a leading 'v'
+#     (so a prerelease tag vX.Y.Z-rc.N gives MMP X.Y.Z and FULL X.Y.Z-rc.N);
 #     otherwise use the VERSION file. Git SHA/dirty are observed the same way.
 #   FILE — MMP and FULL always come from VERSION (stable release identity).
 #     Git SHA/dirty are still observed as separate fields; checkout depth or
@@ -17,22 +18,27 @@
 #   PINEFORGE_VERSION_FULL    AUTO: describe-or-VERSION; FILE: VERSION
 #   PINEFORGE_VERSION_GIT_SHA short sha or "unknown"
 #   PINEFORGE_VERSION_DIRTY   ON/OFF
+#
+# VERSION holds MAJOR.MINOR.PATCH or, for a release candidate,
+# MAJOR.MINOR.PATCH-rc.N (N >= 1): MMP drops the -rc.N, FULL keeps it.
 
 set(PINEFORGE_VERSION_SOURCE "AUTO" CACHE STRING
     "Version identity source: AUTO (git describe preferred) or FILE (VERSION MMP/FULL)")
 set_property(CACHE PINEFORGE_VERSION_SOURCE PROPERTY STRINGS AUTO FILE)
 
-function(_pineforge_read_version_file _out_mmp)
+function(_pineforge_read_version_file _out_mmp _out_full)
     set(_vfile "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
     if(NOT EXISTS "${_vfile}")
         message(FATAL_ERROR "VERSION file missing at ${_vfile}")
     endif()
     file(READ "${_vfile}" _raw)
     string(STRIP "${_raw}" _raw)
-    if(NOT _raw MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-        message(FATAL_ERROR "VERSION file must be MAJOR.MINOR.PATCH (got '${_raw}')")
+    if(NOT _raw MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-rc\\.[1-9][0-9]*)?$")
+        message(FATAL_ERROR
+            "VERSION file must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N (got '${_raw}')")
     endif()
-    set(${_out_mmp} "${_raw}" PARENT_SCOPE)
+    set(${_out_mmp} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+    set(${_out_full} "${_raw}" PARENT_SCOPE)
 endfunction()
 
 function(pineforge_resolve_version)
@@ -42,7 +48,7 @@ function(pineforge_resolve_version)
             "PINEFORGE_VERSION_SOURCE must be AUTO or FILE (got '${PINEFORGE_VERSION_SOURCE}')")
     endif()
 
-    _pineforge_read_version_file(_file_mmp)
+    _pineforge_read_version_file(_file_mmp _file_full)
 
     set(_git_full "")
     set(_git_sha "unknown")
@@ -81,14 +87,14 @@ function(pineforge_resolve_version)
 
     if(PINEFORGE_VERSION_SOURCE STREQUAL "FILE")
         set(_mmp "${_file_mmp}")
-        set(_full "${_file_mmp}")
+        set(_full "${_file_full}")
     else()
         set(_mmp "${_file_mmp}")
         if(_git_full MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
             set(_mmp "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
         endif()
         if(NOT _git_full)
-            set(_git_full "${_mmp}")
+            set(_git_full "${_file_full}")
         endif()
         set(_full "${_git_full}")
     endif()

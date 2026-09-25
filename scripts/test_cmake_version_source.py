@@ -268,6 +268,79 @@ class VersionSourceTests(unittest.TestCase):
                 self.assertIn("got '" + mode + "'", log)
                 self.assertNotIn("Configuring done", log)
 
+    # Lane REL10: a release candidate's VERSION and tag. project(VERSION) takes
+    # MAJOR.MINOR.PATCH only (the probe calls it with MMP, so an -rc.N that
+    # leaked into MMP would fail configure); FULL keeps the -rc.N.
+    def assert_candidate(self, values: dict[str, str], full: str) -> None:
+        self.assertEqual(values["PINEFORGE_VERSION_MAJOR"], "1")
+        self.assertEqual(values["PINEFORGE_VERSION_MINOR"], "0")
+        self.assertEqual(values["PINEFORGE_VERSION_PATCH"], "0")
+        self.assertEqual(values["PINEFORGE_VERSION_MMP"], "1.0.0")
+        self.assertEqual(values["PINEFORGE_VERSION_FULL"], full)
+
+    def test_release_candidate_archive_no_git(self) -> None:
+        source = self.base / "rc-archive"
+        self.write_tree(source, "1.0.0-rc.1")
+        self.assertFalse((source / ".git").exists())
+        for label, defs in (("rc-archive-auto", ()),
+                            ("rc-archive-file", ("-DPINEFORGE_VERSION_SOURCE=FILE",))):
+            with self.subTest(label=label):
+                values = self.probe(source, label, *defs)
+                self.assert_candidate(values, "1.0.0-rc.1")
+                self.assertEqual(values["PINEFORGE_VERSION_GIT_SHA"], "unknown")
+
+    def test_release_candidate_tag(self) -> None:
+        source = self.base / "rc-tag"
+        self.write_tree(source, "1.0.0-rc.1")
+        self.init_repo(source)
+        self.git(source, "tag", "-a", "v1.0.0-rc.1", "-m", "Release v1.0.0-rc.1")
+        self.assertEqual(self.expected_describe(source), "1.0.0-rc.1")
+        for label, mode in (("rc-tag-auto", "AUTO"), ("rc-tag-file", "FILE")):
+            with self.subTest(mode=mode):
+                values = self.probe(source, label, "-DPINEFORGE_VERSION_SOURCE=" + mode)
+                self.assert_candidate(values, "1.0.0-rc.1")
+                self.assertEqual(values["PINEFORGE_VERSION_DIRTY"], "OFF")
+        source.joinpath("extra.txt").write_text("after the candidate\n", encoding="utf-8")
+        self.git(source, "add", "extra.txt")
+        self.git(source, "commit", "-m", "ahead of the candidate")
+        ahead = self.expected_describe(source)
+        self.assertTrue(ahead.startswith("1.0.0-rc.1-1-g"), ahead)
+        auto = self.probe(source, "rc-ahead-auto", "-DPINEFORGE_VERSION_SOURCE=AUTO")
+        file_mode = self.probe(source, "rc-ahead-file", "-DPINEFORGE_VERSION_SOURCE=FILE")
+        self.assert_candidate(auto, ahead)
+        self.assert_candidate(file_mode, "1.0.0-rc.1")
+
+    def test_final_release_after_candidate(self) -> None:
+        source = self.base / "rc-final"
+        self.write_tree(source, "1.0.0-rc.1")
+        self.init_repo(source)
+        self.git(source, "tag", "-a", "v1.0.0-rc.1", "-m", "Release v1.0.0-rc.1")
+        source.joinpath("VERSION").write_text("1.0.0\n", encoding="utf-8")
+        self.git(source, "add", "VERSION")
+        self.git(source, "commit", "-m", "chore(release): v1.0.0")
+        self.git(source, "tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+        self.assertEqual(self.expected_describe(source), "1.0.0")
+        for label, mode in (("final-auto", "AUTO"), ("final-file", "FILE")):
+            with self.subTest(mode=mode):
+                values = self.probe(source, label, "-DPINEFORGE_VERSION_SOURCE=" + mode)
+                self.assert_candidate(values, "1.0.0")
+
+    def test_other_prerelease_spellings_fail_clearly(self) -> None:
+        for index, version in enumerate((
+                "1.0.0-rc.0", "1.0.0-rc", "1.0.0-rc1", "1.0.0-beta.1",
+                "1.0.0-rc.1.1", "1.0.0+build.1", "v1.0.0-rc.1", "1.0")):
+            with self.subTest(version=version):
+                source = self.base / ("bad-version-" + str(index))
+                self.write_tree(source, version)
+                for mode in ("AUTO", "FILE"):
+                    log = self.configure_fail(
+                        source, "bad-version-" + str(index) + "-" + mode,
+                        "-DPINEFORGE_VERSION_SOURCE=" + mode)
+                    flat = " ".join(log.split())  # CMake wraps long messages
+                    self.assertIn(
+                        "VERSION file must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N", flat)
+                    self.assertIn("(got '" + version + "')", flat)
+
     def test_file_preserves_dirty_without_retagging_full(self) -> None:
         source = self.base / "dirty"
         self.write_tree(source, "3.2.1")

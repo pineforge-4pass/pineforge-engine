@@ -81,10 +81,14 @@ A self-contained smoke test ships under `cmake/smoke_consumer/`:
 ```bash
 cmake -S cmake/smoke_consumer -B build-smoke
 cmake --build build-smoke
-./build-smoke/smoke_version     # prints the runtime version
+./build-smoke/smoke_version     # prints the runtime version string
 ```
 
-If this prints the version you installed (`0.14.0` for this tree's `VERSION`)
-you're done. The configure step also checks that the package hands its
-consumers `-ffp-contract=off`, and the program exits 1 instead if its own
-multiply-add was fused.
+If this prints the version you installed you're done: `pf_version_string()`,
+which is the `VERSION` file exactly (a release candidate's `-rc.N` included)
+for a tarball build or one configured with `-DPINEFORGE_VERSION_SOURCE=FILE`,
+and `git describe`'s descriptor for a build from a git checkout. The program
+exits 1 instead if the CMake package's `PineForge_VERSION_FULL`, the installed
+`pineforge/version.h` and the linked library name different versions, or if
+its own multiply-add was fused; the configure step also checks that the
+package hands its consumers `-ffp-contract=off`.

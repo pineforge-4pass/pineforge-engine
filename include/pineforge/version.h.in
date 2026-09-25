@@ -9,11 +9,14 @@
 #define PINEFORGE_VERSION_MINOR   @PINEFORGE_VERSION_MINOR@
 #define PINEFORGE_VERSION_PATCH   @PINEFORGE_VERSION_PATCH@
 
-/* "MAJOR.MINOR.PATCH" — for ABI / find_package(PineForge X.Y) checks. */
+/* "MAJOR.MINOR.PATCH" — for ABI / find_package(PineForge X.Y) checks. A
+ * release candidate's -rc.N is not part of it: see PINEFORGE_VERSION_FULL. */
 #define PINEFORGE_VERSION_STRING  "@PINEFORGE_VERSION_MMP@"
 
-/* "MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]" — full git-derived descriptor.
- * Identical to PINEFORGE_VERSION_STRING for tarball / non-git builds. */
+/* "MAJOR.MINOR.PATCH[-rc.N][-N-gSHA[-dirty]]" — the full descriptor: git
+ * describe's in a tagged git checkout; exactly the VERSION file, -rc.N
+ * included, for a tarball / non-git build or one configured with
+ * PINEFORGE_VERSION_SOURCE=FILE. */
 #define PINEFORGE_VERSION_FULL    "@PINEFORGE_VERSION_FULL@"
 
 /* Short git sha (7 chars) or "unknown" if built outside a git checkout. */

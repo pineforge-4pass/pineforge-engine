@@ -1,5 +1,10 @@
 @PACKAGE_INIT@
 
+# find_package compares MAJOR.MINOR.PATCH only (PineForge_VERSION). The full
+# descriptor keeps a release candidate's -rc.N: the value of
+# <pineforge/version.h>'s PINEFORGE_VERSION_FULL and of pf_version_string().
+set(PineForge_VERSION_FULL "@PINEFORGE_VERSION_FULL@")
+
 include(CMakeFindDependencyMacro)
 find_dependency(Eigen3 3.3 REQUIRED)
 

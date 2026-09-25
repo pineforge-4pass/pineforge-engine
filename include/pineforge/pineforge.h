@@ -1432,11 +1432,15 @@ PF_API pf_version_t pf_version_get(void);
 /** @return Monotonic ABI version (see #PF_ABI_VERSION). */
 PF_API int pf_abi_version(void);
 
-/** Full git-derived version descriptor.
+/** Full version descriptor, the `PINEFORGE_VERSION_FULL` of the generated
+ *  `pineforge/version.h`.
  *
- *  Returns `"MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]"` for git checkouts, or
- *  plain `"MAJOR.MINOR.PATCH"` for tarball builds. The pointer is to a
- *  static string with program lifetime; do not free. */
+ *  Returns `"MAJOR.MINOR.PATCH[-rc.N][-N-gSHA[-dirty]]"` for a tagged git
+ *  checkout, or exactly the `VERSION` file (`"MAJOR.MINOR.PATCH"`, or
+ *  `"MAJOR.MINOR.PATCH-rc.N"` for a release candidate) for a tarball build
+ *  or one configured with `PINEFORGE_VERSION_SOURCE=FILE`. #pf_version_get
+ *  carries only the numeric MAJOR.MINOR.PATCH. The pointer is to a static
+ *  string with program lifetime; do not free. */
 PF_API const char* pf_version_string(void);
 
 /** @} */ /* end of pf_version */

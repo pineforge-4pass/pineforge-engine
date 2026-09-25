@@ -142,8 +142,12 @@ checksum, workflow configuration, compiler/package environment and install path.
 Verification explicitly uses `PINEFORGE_VERSION_SOURCE=FILE`: package MMP/FULL
 identity comes from `VERSION`, while Git revision/dirty observations remain
 separate. Git tags and checkout depth cannot change the smoke-test expectation.
-Ordinary CMake builds retain `AUTO`, the existing git-describe-first behavior.
-No release tag or VERSION value is rewritten by verification.
+The installed-package smoke test prints `pf_version_string()`, which must equal
+`VERSION` exactly, a release candidate's `-rc.N` included, and it exits 1 when
+the package's `PineForge_VERSION_FULL`, the installed `version.h` and the
+library disagree (`cmake/smoke_consumer`). Ordinary CMake builds retain `AUTO`,
+the existing git-describe-first behavior. No release tag or VERSION value is
+rewritten by verification.
 
 The verifier fetches the pinned ABI commits `e60e571` (R2), `0e18690`
 (selected settlement, before exact reversal), `c3ed455` (native host v13),

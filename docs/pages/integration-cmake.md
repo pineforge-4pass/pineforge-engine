@@ -11,7 +11,7 @@ projects pull it in with one `find_package` call.
 cmake_minimum_required(VERSION 3.16)
 project(my_strategy_runner LANGUAGES C)
 
-find_package(PineForge 0.1 REQUIRED)
+find_package(PineForge 1.0 REQUIRED)
 
 add_executable(runner runner.c)
 target_link_libraries(runner PRIVATE PineForge::pineforge)
@@ -42,14 +42,21 @@ Or set `CMAKE_PREFIX_PATH=/opt/pineforge`.
 ## Version selection
 
 ```cmake
-find_package(PineForge 0.14 REQUIRED)         # 0.14.0 or any later 0.x.y
-find_package(PineForge 0.14.0 EXACT REQUIRED) # pinned to this tree's VERSION
+find_package(PineForge 1.0 REQUIRED)         # 1.0.0 or any later 1.x.y
+find_package(PineForge 1.0.0 EXACT REQUIRED) # exactly 1.0.0
 ```
 
-The package config is `SameMajorVersion`, and within a major version
-PineForge guarantees C ABI back-compat — see
-[ABI stability](@ref abi_stability) — so a minimum `0.x` (any compatible
-later 0.x.y) is the recommended pin.
+The package config is `SameMajorVersion`: a minimum pins its major version, so
+`find_package(PineForge 0.14 REQUIRED)` does not find a 1.x install, and
+`1.0` does not find a 0.x one. Within a major version PineForge guarantees C
+ABI back-compat — see [ABI stability](@ref abi_stability) — so a minimum `1.x`
+(any compatible later 1.x.y) is the recommended pin.
+
+`find_package` compares MAJOR.MINOR.PATCH only. A release candidate installs
+as `PineForge_VERSION` `1.0.0` with `PineForge_VERSION_FULL` `1.0.0-rc.1`, so
+`find_package(PineForge 1.0.0 EXACT)` accepts `1.0.0-rc.1` as well; a project
+that must tell a candidate from its release compares `PineForge_VERSION_FULL`,
+the value `pf_version_string()` returns.
 
 ## Linking from a hand-written Makefile
 
@@ -116,8 +123,8 @@ have it.
 
 ```cmake
 find_package(PineForge REQUIRED)
-message(STATUS "PineForge ${PineForge_VERSION} from ${PineForge_DIR}")
+message(STATUS "PineForge ${PineForge_VERSION_FULL} from ${PineForge_DIR}")
 ```
 
-If `PineForge_VERSION` doesn't match what you installed, your
+If `PineForge_VERSION_FULL` doesn't match what you installed, your
 `CMAKE_PREFIX_PATH` or `PineForge_DIR` is pointing at a different copy.
