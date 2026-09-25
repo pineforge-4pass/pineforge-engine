@@ -101,10 +101,14 @@ static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE + 3u * sizeof(void*)
                          + 2u * sizeof(std::uint32_t),
               "the pf_native_run_spec_ext_v1 auxiliary tail moved");
-/* And the event-retention tail, last of the four: two words past it. */
-static_assert(sizeof(pf_native_run_spec_ext_v1)
+/* And the event-retention tail: two words past it. */
+static_assert(PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE
                   == PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE + 2u * sizeof(std::uint32_t),
               "the pf_native_run_spec_ext_v1 event-retention tail moved");
+/* And the quantity-tolerance tail, last of the five: one double past it. */
+static_assert(sizeof(pf_native_run_spec_ext_v1)
+                  == PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE + sizeof(double),
+              "the pf_native_run_spec_ext_v1 quantity-tolerance tail moved");
 static_assert(static_cast<int>(pineforge::NativeEventRetention::Window)
                       == PF_NATIVE_EVENT_RETENTION_WINDOW
                   && static_cast<int>(pineforge::NativeEventRetention::Full)
@@ -473,6 +477,8 @@ PF_PIN_WORD(no::MatchRejectReason::NoOppositeExposure,
             PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE);
 PF_PIN_WORD(no::MatchRejectReason::HostPrecommit, PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT);
 PF_PIN_WORD(no::MatchRejectReason::RiskLimit, PF_NATIVE_MATCH_REJECT_RISK_LIMIT);
+PF_PIN_WORD(no::MatchRejectReason::UnrepresentableQuantity,
+            PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY);
 PF_PIN_WORD(no::ActivationKind::Stop, PF_NATIVE_ACTIVATION_STOP);
 PF_PIN_WORD(no::ActivationKind::StopLimit, PF_NATIVE_ACTIVATION_STOP_LIMIT);
 PF_PIN_WORD(no::ActivationKind::TrailArm, PF_NATIVE_ACTIVATION_TRAIL_ARM);
@@ -780,6 +786,8 @@ PF_PIN_WORD(pineforge::NativeRunSpecField::AuxiliaryFeedBars,
 PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionSource,
             PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE);
 PF_PIN_WORD(pineforge::NativeRunSpecField::EventRetention, PF_NATIVE_SPEC_FIELD_EVENT_RETENTION);
+PF_PIN_WORD(pineforge::NativeRunSpecField::QuantityTolerance,
+            PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE);
 PF_PIN_WORD(pineforge::NativeFxCurveError::None, PF_NATIVE_FX_CURVE_ERROR_NONE);
 PF_PIN_WORD(pineforge::NativeFxCurveError::LengthMismatch,
             PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH);
@@ -916,6 +924,7 @@ constexpr std::uint32_t c_word(no::MatchRejectReason value) noexcept {
     case V::NoOppositeExposure: return PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE;
     case V::HostPrecommit: return PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT;
     case V::RiskLimit: return PF_NATIVE_MATCH_REJECT_RISK_LIMIT;
+    case V::UnrepresentableQuantity: return PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -1217,6 +1226,7 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecField value) noexcept {
     case V::AuxiliaryFeedBars: return PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS;
     case V::SubscriptionSource: return PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE;
     case V::EventRetention: return PF_NATIVE_SPEC_FIELD_EVENT_RETENTION;
+    case V::QuantityTolerance: return PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -3108,8 +3118,8 @@ int translate_subscriptions(const pf_native_subscription_v1* rows, std::uint32_t
 
 int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_v1& ext,
                    bool has_risk_tail, bool has_policy_tail, bool has_auxiliary_tail,
-                   bool has_retention_tail) {
-    if (ext.present_mask & ~0x7ffu) return PF_NATIVE_E_TAG;
+                   bool has_retention_tail, bool has_tolerance_tail) {
+    if (ext.present_mask & ~0xfffu) return PF_NATIVE_E_TAG;
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_RISK) && !has_risk_tail) {
         return PF_NATIVE_E_STRUCT;
     }
@@ -3118,6 +3128,14 @@ int apply_spec_ext(pineforge::NativeRunSpec& spec, const pf_native_run_spec_ext_
     }
     if ((ext.present_mask & PF_NATIVE_SPEC_EXT_EVENT_RETENTION) && !has_retention_tail) {
         return PF_NATIVE_E_STRUCT;
+    }
+    if ((ext.present_mask & PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE) && !has_tolerance_tail) {
+        return PF_NATIVE_E_STRUCT;
+    }
+    /* K-ULP4: the tolerance is set only under its bit; the value itself is
+     * judged by validate_native_run_spec (QuantityTolerance). */
+    if (ext.present_mask & PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE) {
+        spec.quantity_tolerance = ext.quantity_tolerance;
     }
     /* V19-B: without the bit the base translation's FULL stands. */
     if (ext.present_mask & PF_NATIVE_SPEC_EXT_EVENT_RETENTION) {
@@ -3966,12 +3984,15 @@ PF_API int strategy_configure_native_ext_result_v1(
         if (!host) return PF_NATIVE_E_HANDLE;
         if (!base || !ext) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
         if (base->struct_size != sizeof(pf_native_run_spec_v1)) return c_refuse(host, PF_NATIVE_E_STRUCT);
-        /* Five published layouts, and only five: the base one the lane
+        /* Six published layouts, and only six: the base one the lane
          * first shipped, that plus L9's risk tail, that plus N8's intrabar /
-         * policy tail, that plus the auxiliary-feed tail, and the current one
-         * with V19-B's event-retention tail behind it. Anything else is a
-         * caller this runtime cannot read. */
-        const bool has_retention_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+         * policy tail, that plus the auxiliary-feed tail, that plus V19-B's
+         * event-retention tail, and the current one with K-ULP4's
+         * quantity-tolerance tail behind it. Anything else is a caller this
+         * runtime cannot read. */
+        const bool has_tolerance_tail = ext->struct_size == sizeof(pf_native_run_spec_ext_v1);
+        const bool has_retention_tail =
+            has_tolerance_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE;
         const bool has_auxiliary_tail =
             has_retention_tail || ext->struct_size == PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE;
         const bool has_policy_tail =
@@ -4010,7 +4031,8 @@ PF_API int strategy_configure_native_ext_result_v1(
             return c_refuse(host, rc);
         }
         if (int rc = apply_spec_ext(spec, *ext, has_risk_tail, has_policy_tail,
-                                    has_auxiliary_tail, has_retention_tail);
+                                    has_auxiliary_tail, has_retention_tail,
+                                    has_tolerance_tail);
             rc != PF_NATIVE_OK) {
             return c_refuse(host, rc);
         }

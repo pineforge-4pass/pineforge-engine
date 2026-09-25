@@ -638,6 +638,18 @@ struct NativeRunSpec {
     /// What native_events() can still return; see NativeEventRetention.
     /// Folded into the spec digest only when it is not Window.
     NativeEventRetention event_retention = NativeEventRetention::Window;
+    /// Opt-in quantity tolerance, in units (finite, positive): two quantities
+    /// within it of each other are one quantity to the settlement. A close
+    /// that comes within it of a FIFO boundary -- the binary64 sum of the
+    /// lots through one of them -- ends at that boundary, charged its request,
+    /// and a lot of at most this size that binary64 cannot take off a close's
+    /// rest closes whole with the close that reaches it (docs/native-
+    /// settlement.md, "Quantity tolerance"). Absent is the whole default
+    /// surface: the settlement stays exact, a quantity it cannot book exactly
+    /// is that request's MatchRejectReason::UnrepresentableQuantity, and the
+    /// continuation digest is the pre-tolerance one; the value folds only
+    /// when present (R5 lane K-ULP4).
+    std::optional<double> quantity_tolerance;
 };
 
 /// Which field a validation refused, in deterministic first-error order. It is
@@ -667,6 +679,7 @@ enum class NativeRunSpecField : std::uint8_t {
     RiskDayBasis, RiskAction,
     AuxiliaryFeedTimeframe, AuxiliaryFeedBars, SubscriptionSource,
     EventRetention,
+    QuantityTolerance,
 };
 
 /// Why a field was refused. Read it beside NativeRunSpecValidation::field: the

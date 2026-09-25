@@ -55,7 +55,10 @@
 //                                 closed by its whole sum (consumed exactly), a
 //                                 one-lot book (the fused settlement)
 //   genuine-*                     the refusals of splits binary64 cannot hold:
-//                                 still code 6, discriminator 5, nothing moved
+//                                 a typed MatchRejected(UnrepresentableQuantity),
+//                                 nothing moved, the run completed (code 6,
+//                                 discriminator 5 and a stopped run until R5
+//                                 lane K-ULP4)
 //
 // Fail-before: on 07249e3b every dust case closes r and keeps fl(q - r) -- a
 // dust lot, and a dust position when the request is the whole book -- while the
@@ -218,12 +221,15 @@ struct Outcome {
     std::vector<double> rows;
     std::size_t working = 0;
     std::vector<Fill> fills;
+    // The close's MatchRejected reasons, in event order (R5 lane K-ULP4).
+    std::vector<unsigned> rejections;
     std::uint64_t continuation = 0, broker = 0;
     bool operator==(const Outcome& o) const {
         return completed == o.completed && failure_code == o.failure_code
             && discriminator == o.discriminator && signed_units == o.signed_units
             && lots == o.lots && rows == o.rows && working == o.working
-            && fills == o.fills && continuation == o.continuation && broker == o.broker;
+            && fills == o.fills && rejections == o.rejections
+            && continuation == o.continuation && broker == o.broker;
     }
 };
 
@@ -335,6 +341,12 @@ Outcome run_cpp(const Case& c, bool direct, Host** keep = nullptr) {
     out.working = host->native_working_requests().size();
     for (const auto& row : host->native_events(0)) {
         if (!row.command) continue;
+        if (const auto* r = std::get_if<no::MatchRejectedEvent>(&*row.command)) {
+            if (r->request().label == "close") {
+                out.rejections.push_back(static_cast<unsigned>(r->reason));
+            }
+            continue;
+        }
         const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command);
         if (!e || e->request().label != "close") continue;
         Fill f;
@@ -840,15 +852,19 @@ void run_genuine_case(const Case& c) {
     std::printf("%s: U=%a\n", c.name, c.units);
     print_outcome("staged", staged);
     print_outcome("direct", direct);
+    // The request is refused, typed, and the run goes on (R5 lane K-ULP4).
     for (const Outcome* o : {&staged, &direct}) {
-        CHECK(!o->completed);
-        CHECK(o->failure_code == static_cast<unsigned>(NativeFailureCode::SettlementFailure));
-        CHECK(o->discriminator
-              == static_cast<unsigned>(ex::Status::UnrepresentableQuantity));
+        CHECK(o->completed);
+        CHECK(o->failure_code == 0);
+        CHECK(o->discriminator == 0);
         CHECK(o->lots == c.lots);
         CHECK(o->rows.empty());
         CHECK(o->fills.empty());
-        CHECK(o->working == 1);
+        CHECK(o->working == 0);
+        CHECK(o->rejections.size() == 1);
+        CHECK(!o->rejections.empty()
+              && o->rejections.front()
+                     == static_cast<unsigned>(no::MatchRejectReason::UnrepresentableQuantity));
     }
     CHECK(staged == direct);
 }

@@ -593,9 +593,14 @@ private:
     // L3 kernel sizing bases. resolve_sized_units answers the units a Sized
     // opening or a ScopeFraction reduce claims at this candidate; nullopt is
     // the nonrepresentable basis the matching path reports as TermsUnresolved.
+    // `whole_scope`, when given, says whether the answer is a fraction's
+    // whole scope, which the quantity grid does not floor (R5 lane K-ULP4).
     std::optional<double> resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const NativeExecutionTermsFacts& facts) const;
+        const NativeExecutionTermsFacts& facts, bool* whole_scope = nullptr) const;
+    // Whether `units` is the binary64 quantity of one of the book's own lots,
+    // which the quantity grid admits as it stands (R5 lane K-ULP4).
+    static bool lot_quantity(const BacktestEngine& engine, double units) noexcept;
     double sibling_claimed_units(const native_order::LiveRequest& live) const noexcept;
     // L3b placement-time sizing. sizing_point_price answers the price a Sized
     // request's basis converts at when it is accepted; placement_scope_units

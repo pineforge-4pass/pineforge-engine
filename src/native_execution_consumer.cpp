@@ -329,6 +329,11 @@ void hash_spec(F& f, const NativeRunSpec& spec,
     if (spec.event_retention != NativeEventRetention::Window) {
         f.u(static_cast<uint64_t>(spec.event_retention));
     }
+    // K-ULP4: the quantity tolerance folds only where a host declared one, so
+    // every spec that declares none keeps its digest.
+    if (spec.quantity_tolerance) {
+        f.d(*spec.quantity_tolerance);
+    }
 }
 
 template <class F>
@@ -455,10 +460,14 @@ bool explicit_reduction_units_representable(double units, double exposure) noexc
     return order_action::plan(exposure, order_action::Reduce{units}).has_value();
 }
 
+// `own_quantity`: the answered units are the book's own -- a closing size equal
+// to one lot's binary64 quantity, or a fraction's whole scope -- which the
+// quantity grid admits as they stand (R5 lane K-ULP4).
 bool execution_terms_grid_representable(
         const native_order::ExecutionTerms& terms,
         const native_order::HostSized* host_sized, bool unresolved,
-        double scope_exposure_units, const NativeRunSpec* spec) noexcept {
+        double scope_exposure_units, const NativeRunSpec* spec,
+        bool own_quantity) noexcept {
     if (!valid_execution_grid_policy(terms.grid_policy)) return false;
     if (terms.grid_policy == native_order::ExecutionGridPolicy::ExplicitUnits) {
         return unresolved && host_sized
@@ -470,7 +479,8 @@ bool execution_terms_grid_representable(
     }
     if (!terms.units || !(*terms.units > 0.0)) return true;
     return spec && (!spec->quantity_grid
-        || native_order::quantity_on_grid(*terms.units, *spec->quantity_grid));
+        || native_order::quantity_on_grid(*terms.units, *spec->quantity_grid)
+        || own_quantity);
 }
 
 bool path_uses_high_first(const Bar& bar, NativePathOrder order) noexcept {
@@ -1901,6 +1911,7 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.syminfo_mintick_ = spec.price_tick;
     engine.commission_type_ = fee_to_commission(spec.fee_kind);
     engine.commission_value_ = spec.fee_value;
+    engine.native_quantity_tolerance_ = spec.quantity_tolerance ? *spec.quantity_tolerance : 0.0;
     engine.syminfo_.ticker = spec.ticker;
     engine.syminfo_.tickerid = spec.tickerid;
     engine.syminfo_.type = spec.type;
@@ -2809,6 +2820,21 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
     if (const auto* spec = spec_ptr()) {
         ctx.quantity_grid = spec->quantity_grid;
+        // A close of exactly one of the book's own lots is on the grid as it
+        // stands (CommandContext::units_are_lot_quantity; R5 lane K-ULP4).
+        if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT) {
+            if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
+                if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
+                    ctx.units_are_lot_quantity = lot_quantity(engine, units->units);
+                }
+            } else if (const auto* transact = std::get_if<native_order::Transact>(
+                           &request.intent)) {
+                const bool closes = (engine.position_side_ == PositionSide::LONG)
+                    == (transact->signed_units < 0.0);
+                ctx.units_are_lot_quantity = closes
+                    && lot_quantity(engine, std::abs(transact->signed_units));
+            }
+        }
         // A Sized request freezes its sizing price here when it asked for the
         // signal rule, and a Sized{AtAcceptance} additionally freezes its
         // units against that price, the marked equity there and the activated
@@ -4626,9 +4652,18 @@ bool NativeExecutionConsumer::admit_placement_units(
                                  nullptr);
 }
 
+bool NativeExecutionConsumer::lot_quantity(const BacktestEngine& engine,
+                                           double units) noexcept {
+    for (const auto& lot : engine.pyramid_entries_) {
+        if (lot.qty == units) return true;
+    }
+    return false;
+}
+
 std::optional<double> NativeExecutionConsumer::resolve_sized_units(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const NativeExecutionTermsFacts& facts) const {
+        const NativeExecutionTermsFacts& facts, bool* whole_scope) const {
+    if (whole_scope) *whole_scope = false;
     const auto* spec = spec_ptr();
     if (!spec) return std::nullopt;
     if (const auto* native_sized = sized_intent(live)) {
@@ -4666,8 +4701,17 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     // units = scope * fraction, one binary64 multiplication. A percent-spelled
     // caller converts percent -> fraction itself, so no second rounding step
     // enters here.
-    return representable_units(scope * fraction->fraction,
-                               native_order::ExecutionGridPolicy::SnapToGrid,
+    const double units = scope * fraction->fraction;
+    // A fraction whose product is the scope itself -- fraction 1, "close it
+    // all" -- resolves to the scope, which the grid does not floor. The scope
+    // is the binary64 fold of the book's own lots, which settlement arithmetic
+    // moves off any decimal grid: floored, the close fell up to a whole step
+    // short, left a dust lot, or found nothing to close (R5 lane K-ULP4).
+    if (units == scope) {
+        if (whole_scope) *whole_scope = true;
+        return scope;
+    }
+    return representable_units(units, native_order::ExecutionGridPolicy::SnapToGrid,
                                spec->quantity_grid);
 }
 
@@ -4807,8 +4851,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // and publishes the result as the facts' remaining units, so a host
         // override of resolve_execution_terms still has the last word.
         std::optional<double> kernel_units;
+        bool whole_scope = false;
         if (unresolved && (native_sized || scope_fraction)) {
-            kernel_units = resolve_sized_units(engine, *live, terms_facts);
+            kernel_units = resolve_sized_units(engine, *live, terms_facts, &whole_scope);
             if (kernel_units) {
                 terms_facts.remaining = native_order::RemainingUnits{*kernel_units};
             }
@@ -4860,9 +4905,14 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
+        const auto* grid_spec = spec_ptr();
+        const bool own_quantity = closing_size && terms.units && grid_spec
+            && grid_spec->quantity_grid
+            && ((whole_scope && kernel_units && *terms.units == *kernel_units)
+                || lot_quantity(engine, *terms.units));
         if (!execution_terms_grid_representable(
                 terms, host_sized, unresolved, terms_facts.scope_exposure_units,
-                spec_ptr())) {
+                spec_ptr(), own_quantity)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
 
@@ -5027,6 +5077,15 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                                            execution_fx, plan ? &*plan : nullptr);
         const auto& inspect = candidate.inspect;
         if (inspect.status == execution::Status::NoEffect) return terminal(std::nullopt);
+        // A quantity the settlement cannot book exactly on this book is that
+        // request's refusal, not the run's failure: the request ends with a
+        // typed MatchRejected and nothing moves (R5 lane K-ULP4). Every other
+        // non-Applied inspection is a broken book, price or accounting, and
+        // still stops the run.
+        if (inspect.status == execution::Status::UnrepresentableQuantity) {
+            return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
+                            nonidentity_attempt);
+        }
         if (inspect.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                 NativeFailureOperation::Settlement, P, static_cast<uint32_t>(inspect.status)});
@@ -6324,8 +6383,9 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule,
         raw_price, default_resolved);
     std::optional<double> kernel_units;
+    bool whole_scope = false;
     if (unresolved && (native_sized || scope_fraction)) {
-        kernel_units = resolve_sized_units(engine, *live, facts);
+        kernel_units = resolve_sized_units(engine, *live, facts, &whole_scope);
         if (kernel_units) facts.remaining = native_order::RemainingUnits{*kernel_units};
     }
     native_order::ExecutionTerms terms;
@@ -6373,8 +6433,14 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
+    const auto* grid_spec = spec_ptr();
+    const bool own_quantity = closing_size && terms.units && grid_spec
+        && grid_spec->quantity_grid
+        && ((whole_scope && kernel_units && *terms.units == *kernel_units)
+            || lot_quantity(engine, *terms.units));
     if (!execution_terms_grid_representable(
-            terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr())) {
+            terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr(),
+            own_quantity)) {
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }

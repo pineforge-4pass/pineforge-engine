@@ -25,7 +25,11 @@
     "RequestDefinition::priority",
     "RequestDefinition::kept_binding",
     "ReplaceOptions::keep_handle",
-    "ReplaceOptions::keep_binding"
+    "ReplaceOptions::keep_binding",
+    "MatchRejectReason::UnrepresentableQuantity",
+    "CommandContext::units_are_lot_quantity",
+    "NativeRunSpec::quantity_tolerance",
+    "NativeRunSpecField::QuantityTolerance"
   ],
   "addedVirtuals": [],
   "removedVirtuals": [],

@@ -54,8 +54,11 @@
 //   genuine-*                    requests no binary64 split can carry: a
 //                                reduction that cannot move the position, a
 //                                rest below half an ulp of its lot, a rest that
-//                                a whole lot cannot decrement. They still fail
-//                                with code 6, discriminator 5, and move nothing.
+//                                a whole lot cannot decrement. Each ends with a
+//                                typed MatchRejected(UnrepresentableQuantity),
+//                                moves nothing, and the run completes; until R5
+//                                lane K-ULP4 they stopped it with code 6,
+//                                discriminator 5.
 //
 // Fail-before: on db98990c every up case stops with code 6 / discriminator 5,
 // every down Reduce books a second 2^-51 fill, every down Transact stops, and
@@ -210,12 +213,15 @@ struct Outcome {
     std::vector<double> rows;
     std::size_t working = 0;
     std::vector<Fill> fills;
+    // The close's MatchRejected reasons, in event order (R5 lane K-ULP4).
+    std::vector<unsigned> rejections;
     std::uint64_t continuation = 0, broker = 0;
     bool operator==(const Outcome& o) const {
         return completed == o.completed && failure_code == o.failure_code
             && discriminator == o.discriminator && signed_units == o.signed_units
             && lots == o.lots && rows == o.rows && working == o.working
-            && fills == o.fills && continuation == o.continuation && broker == o.broker;
+            && fills == o.fills && rejections == o.rejections
+            && continuation == o.continuation && broker == o.broker;
     }
 };
 
@@ -325,6 +331,12 @@ Outcome run_cpp(const Case& c, bool direct, Host** keep = nullptr) {
     out.working = host->native_working_requests().size();
     for (const auto& row : host->native_events(0)) {
         if (!row.command) continue;
+        if (const auto* r = std::get_if<no::MatchRejectedEvent>(&*row.command)) {
+            if (r->request().label == "close") {
+                out.rejections.push_back(static_cast<unsigned>(r->reason));
+            }
+            continue;
+        }
         const auto* e = std::get_if<no::ExecutionAppliedEvent>(&*row.command);
         if (!e || e->request().label != "close") continue;
         Fill f;
@@ -736,15 +748,19 @@ void run_genuine_case(const Case& c) {
     std::printf("%s: U=%a\n", c.name, c.units);
     print_outcome("staged", staged);
     print_outcome("direct", direct);
+    // The request is refused, typed, and the run goes on (R5 lane K-ULP4).
     for (const Outcome* o : {&staged, &direct}) {
-        CHECK(!o->completed);
-        CHECK(o->failure_code == static_cast<unsigned>(NativeFailureCode::SettlementFailure));
-        CHECK(o->discriminator
-              == static_cast<unsigned>(ex::Status::UnrepresentableQuantity));
+        CHECK(o->completed);
+        CHECK(o->failure_code == 0);
+        CHECK(o->discriminator == 0);
         CHECK(o->lots == c.lots);
         CHECK(o->rows.empty());
         CHECK(o->fills.empty());
-        CHECK(o->working == 1);
+        CHECK(o->working == 0);
+        CHECK(o->rejections.size() == 1);
+        CHECK(!o->rejections.empty()
+              && o->rejections.front()
+                     == static_cast<unsigned>(no::MatchRejectReason::UnrepresentableQuantity));
     }
     CHECK(staged == direct);
 }

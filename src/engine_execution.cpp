@@ -172,6 +172,95 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
     return {execution::Status::Applied, amount, kept};
 }
 
+// The same walk under a declared quantity tolerance t > 0
+// (NativeRunSpec::quantity_tolerance): two quantities within t of each other
+// are one quantity. A close that comes within t of a FIFO boundary -- the
+// binary64 sum of the scope's lots through one of them -- ends at that
+// boundary, and a lot of at most t that binary64 cannot take off the rest or
+// the running sum closes whole with the close that reaches it. Each such end
+// is charged the request, as a split its rows cannot add up to is (above):
+//   - the lot the request ends in would keep at most t: it closes whole;
+//   - a rest of at most t is left after a whole lot, and the next member lot
+//     is larger than t: the walk ends before it, which is not touched; a next
+//     lot of at most t closes whole instead (the rule above), so a dust lot
+//     behind the boundary is taken, not left; after the scope's last lot the
+//     caller ends the walk the same way (finish_tolerant_walk);
+//   - a whole lot of at most t that cannot move the rest or the running sum,
+//     or a running sum of at most t that this lot's close absorbs -- the dust
+//     lot a close meets at the head of a book -- closes whole, and the walk
+//     goes on.
+// What stays refused is what no tolerance turns into a quantity: a rest below
+// half an ulp of the first lot it meets (a request of at most t, or a lot far
+// larger than the rest), and a rest or running sum above t that a lot absorbs.
+// Zero is not a boundary to snap to: a request of at most t closes what it
+// asks of a larger lot, or is refused (R5 lane K-ULP4).
+CloseSplit tolerant_close_split(const PyramidEntry& lot, double requested,
+                                double tolerance, double& closed, double& remaining) {
+    if (remaining == 0.0) return {execution::Status::Applied, 0.0, lot.qty};
+    if (closed != 0.0 && remaining <= tolerance && lot.qty > tolerance) {
+        closed = requested;
+        remaining = 0.0;
+        return {execution::Status::Applied, 0.0, lot.qty};
+    }
+    double amount = std::min(lot.qty, remaining);
+    double kept = lot.qty - amount;
+    const bool snaps_whole = kept != 0.0 && kept <= tolerance;
+    if (snaps_whole) {
+        amount = lot.qty;
+        kept = 0.0;
+    }
+    const bool dust_lot = amount == lot.qty && lot.qty <= tolerance;
+    const double next_closed = closed + amount;
+    if (!std::isfinite(next_closed) || kept == lot.qty
+        || (closed != 0.0 && next_closed == closed && !dust_lot)
+        || (closed != 0.0 && next_closed == amount && closed > tolerance))
+        return {execution::Status::UnrepresentableQuantity};
+    if (snaps_whole) {
+        closed = requested;
+        remaining = 0.0;
+        return {execution::Status::Applied, amount, kept};
+    }
+    if (next_closed > requested || (next_closed < requested && kept != 0.0)) {
+        closed = requested;
+        remaining = 0.0;
+        return {execution::Status::Applied, amount, kept};
+    }
+    if (kept != 0.0 && closed + lot.qty == requested) {
+        closed = requested;
+        remaining = 0.0;
+        return {execution::Status::Applied, lot.qty, 0.0};
+    }
+    const double next_remaining = requested - next_closed;
+    if (next_remaining == remaining && !dust_lot)
+        return {execution::Status::UnrepresentableQuantity};
+    remaining = next_remaining;
+    closed = next_closed;
+    return {execution::Status::Applied, amount, kept};
+}
+
+// The walk's one close-level step: the exact walk, or the tolerant one when
+// the run declared a tolerance and this lot is a member of a close that is not
+// a Flatten.
+CloseSplit close_split(const PyramidEntry& lot, bool closes, bool flatten,
+                       double requested, double tolerance, double& closed,
+                       double& remaining) {
+    if (tolerance > 0.0 && closes && !flatten)
+        return tolerant_close_split(lot, requested, tolerance, closed, remaining);
+    return next_close_split(lot, closes, flatten, requested, closed, remaining);
+}
+
+// After the scope's last lot: a tolerant walk that closed every member whole
+// with a rest of at most t left ends at the scope's end, charged the request,
+// and a transaction opens nothing for that rest (tolerant_close_split).
+void finish_tolerant_walk(double tolerance, bool closes, bool flatten, double requested,
+                          double& closed, double& remaining) {
+    if (tolerance > 0.0 && closes && !flatten && closed != 0.0 && remaining > 0.0
+        && remaining <= tolerance) {
+        closed = requested;
+        remaining = 0.0;
+    }
+}
+
 execution::AccountEffectProjection invalid_projection(execution::Status status) {
     execution::AccountEffectProjection out;
     out.status = status;
@@ -298,12 +387,15 @@ bool BacktestEngine::NativeSettlementStage::OneLot::stage(
     if (!lots.empty()) {
         const bool closes_member = (flatten || reduce || opposite)
             && selected_for_close(book_or_opening, lots.front());
-        const auto split = next_close_split(lots.front(), closes_member, flatten,
-                                            allocation_requested, closed, remaining);
+        const double tolerance = engine.native_quantity_tolerance_;
+        const auto split = close_split(lots.front(), closes_member, flatten,
+                                       allocation_requested, tolerance, closed, remaining);
         // An addition keeps the lot whole and a partial close keeps a part of
         // it: both leave a survivor, which is the chain's.
         if (split.status != Status::Applied || split.amount == 0.0 || split.kept != 0.0)
             return false;
+        finish_tolerant_walk(tolerance, closes_member, flatten, allocation_requested,
+                             closed, remaining);
         closes = true;
         closing = split.amount;
     }
@@ -636,10 +728,10 @@ execution::Status BacktestEngine::allocate_native_settlement_closes(
         const bool member = stage.use_selected
             ? stage.selected_ids.count(lot.entry_incarnation) != 0
             : selected_for_close(book_or_opening, lot);
-        const auto split = next_close_split(
+        const auto split = close_split(
             lot, stage.closes && member,
             stage.flatten || consume_selected_exactly,
-            stage.allocation_requested, closed, remaining);
+            stage.allocation_requested, native_quantity_tolerance_, closed, remaining);
         if (split.status != Status::Applied) return split.status;
         if (split.amount == 0.0) {
             stage.survivors.push_back(lot);
@@ -658,6 +750,9 @@ execution::Status BacktestEngine::allocate_native_settlement_closes(
             stage.survivors.push_back(std::move(survivor));
         }
     }
+    finish_tolerant_walk(native_quantity_tolerance_, stage.closes,
+                         stage.flatten || consume_selected_exactly,
+                         stage.allocation_requested, closed, remaining);
     stage.closed = closed;
     return Status::Applied;
 }
@@ -856,8 +951,14 @@ void BacktestEngine::finish_native_settlement_stage(
     }
     if (stage.opening > 0.0) {
         const double next = after_qty + stage.opening;
+        // Under a quantity tolerance t, a surviving book of at most t that the
+        // opening absorbs stays as it is -- dust beside the new lot, which
+        // the next close takes whole (tolerant_close_split) -- and is not a
+        // refusal (R5 lane K-ULP4). An opening the book absorbs still is.
+        const bool dust_book = native_quantity_tolerance_ > 0.0
+            && after_qty <= native_quantity_tolerance_;
         if (!std::isfinite(next) || (after_qty > 0.0
-            && (next == after_qty || next == stage.opening))) {
+            && (next == after_qty || (next == stage.opening && !dust_book)))) {
             fail(Status::UnrepresentableQuantity);
             return;
         }

@@ -2167,6 +2167,15 @@ public:
     void trace(const std::string& name, double value);
     void trace(const std::string& name, bool value)  { trace(name, value ? 1.0 : 0.0); }
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
+
+private:
+    // The run spec's quantity tolerance (NativeRunSpec::quantity_tolerance),
+    // 0 when the run declares none, which keeps the settlement exact. The FIFO
+    // close walk and the opening beside a surviving book read it
+    // (src/engine_execution.cpp); the execution consumer, a friend, projects
+    // it from the spec at every begin, and the spec digest folds the spec's
+    // value. Private, so no host writes it (R5 lane K-ULP4).
+    double native_quantity_tolerance_ = 0.0;
 };
 
 } // inline namespace engine_script_run_v19

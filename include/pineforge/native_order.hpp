@@ -865,7 +865,9 @@ struct CancelResult {
 /// submits again. OpeningDirection, MaxAbsUnits, MaxOpenLots, InitialMargin and
 /// RiskLimit are the run's admission gates; TermsUnresolved is a host-sized or
 /// basis-sized quantity that could not be resolved; NoOppositeExposure and
-/// InvalidTerms are shapes the answered terms cannot take.
+/// InvalidTerms are shapes the answered terms cannot take;
+/// UnrepresentableQuantity is a quantity the settlement cannot book exactly on
+/// the book it met.
 enum class MatchRejectReason : std::uint8_t {
     NonpositivePrice = 0,
     OpeningDirection = 1,
@@ -879,6 +881,14 @@ enum class MatchRejectReason : std::uint8_t {
     /// An opening refused while the run spec's generic risk limits are
     /// blocking (L9). Reduces never reach this gate.
     RiskLimit = 9,
+    /// The settlement's inspection answered execution::Status::
+    /// UnrepresentableQuantity: a close split binary64 cannot hold (a rest
+    /// below half an ulp of the lot it ends in, a whole lot that cannot
+    /// decrement the rest or move the running sum), a reduction or transaction
+    /// the position absorbs, or an opening the surviving book absorbs. The
+    /// request ends here, nothing moves, and the run goes on; the same request
+    /// stopped the whole run before R5 lane K-ULP4.
+    UnrepresentableQuantity = 10,
 };
 
 /// Which price a candidate is being offered at: the point's own price, or the
@@ -1405,6 +1415,15 @@ struct CommandContext {
     std::optional<double> sizing_scope;
     std::optional<double> sizing_price;
     bool sizing_admissible = true;
+    /// The request's explicit close quantity -- a Reduce's ExplicitUnits, or
+    /// the units of a Transact against the book's side -- is the binary64
+    /// quantity of one of the book's own lots. Such a quantity is on the
+    /// quantity grid whatever the grid predicate answers: the grid admits the
+    /// quantities a host chooses, and a lot's size is the book's own, which
+    /// settlement arithmetic can move off any decimal grid (R5 lane K-ULP4).
+    /// The execution consumer measures it; appended last, like the members
+    /// above.
+    bool units_are_lot_quantity = false;
 };
 
 struct EvaluationContext {

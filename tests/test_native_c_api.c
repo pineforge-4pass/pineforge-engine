@@ -1229,7 +1229,7 @@ static void check_event_retention(void) {
     const uint32_t current = (uint32_t)sizeof(pf_native_run_spec_ext_v1);
     const uint32_t bit = PF_NATIVE_SPEC_EXT_EVENT_RETENTION;
     retention_run v1, clear, older, full, commands, window, polled, bad_word, bad_reserved,
-        older_bit;
+        older_bit, fifth;
 
     v1 = retention_case(0u, 0u, 0u, 0u, 0);
     clear = retention_case(current, 0u, PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
@@ -1242,6 +1242,9 @@ static void check_event_retention(void) {
     bad_reserved = retention_case(current, bit, PF_NATIVE_EVENT_RETENTION_FULL, 1u, 0);
     older_bit = retention_case(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, bit,
                                PF_NATIVE_EVENT_RETENTION_WINDOW, 0u, 0);
+    /* K-ULP4 appended a sixth layout; the fifth still carries the word. */
+    fifth = retention_case(PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE, bit,
+                           PF_NATIVE_EVENT_RETENTION_COMMANDS, 0u, 0);
 
     /* A caller that does not send the word keeps everything. */
     CHECK_EQ_INT(v1.configure, PF_NATIVE_OK, "the v1 spec was refused");
@@ -1280,11 +1283,179 @@ static void check_event_retention(void) {
     CHECK_EQ_INT(bad_reserved.configure, PF_NATIVE_E_TAG, "a nonzero reserved2 was accepted");
     CHECK_EQ_INT(older_bit.configure, PF_NATIVE_E_STRUCT,
                  "the retention bit was accepted from the fourth layout");
+    CHECK_EQ_INT(fifth.configure, PF_NATIVE_OK, "the fifth layout's retention word was refused");
+    CHECK(fifth.drivers == 0 && fifth.commands == v1.commands,
+          "the fifth layout did not read COMMANDS");
     /* The two symbols refuse what they cannot read. */
     CHECK_EQ_INT(strategy_native_acknowledge_events_v1(NULL, 0u), PF_NATIVE_E_HANDLE,
                  "a NULL handle's acknowledgement was accepted");
     CHECK_EQ_INT(strategy_native_event_window_v1(NULL, NULL), PF_NATIVE_E_HANDLE,
                  "a NULL handle's window read was accepted");
+}
+
+/* ── K-ULP4: the typed quantity refusal and the tolerance tail, from C ─
+ *
+ * Open 1.5, Reduce 1.3, open 2.9: the book is {fl(1.5 - 1.3), 2.9}, and
+ * Reduce 0.2 needs 2^-54 of the 2.9 lot, below half its ulp. The exact
+ * settlement refuses THAT request with a MATCH_REJECTED row whose reason is
+ * PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY and the run completes (it
+ * failed with code 6 before the lane); under the extension's
+ * quantity-tolerance tail the close ends at the first lot. */
+typedef struct kulp4_state {
+    pf_strategy_t host;
+    int bar;
+    int error;
+    uint64_t last;
+} kulp4_state;
+
+static int kulp4_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    static const double units[4] = {1.5, 1.3, 2.9, 0.2};
+    static const int reduces[4] = {0, 1, 0, 1};
+    kulp4_state* state = (kulp4_state*)user;
+    const int b = state->bar++;
+    pf_native_request_v1 request;
+    uint64_t incarnation = 0;
+    uint32_t reject = 0;
+    (void)bar;
+    (void)at;
+    if (b % 2 != 0 || b / 2 >= 4) return 0;
+    request = blank_request();
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    request.label = "k-ulp4";
+    request.comment = "";
+    if (reduces[b / 2]) {
+        request.intent = PF_NATIVE_INTENT_REDUCE;
+        request.reduce_size = PF_NATIVE_REDUCE_EXPLICIT_UNITS;
+    } else {
+        request.intent = PF_NATIVE_INTENT_TRANSACT;
+    }
+    request.intent_value = units[b / 2];
+    if (strategy_native_submit_v1(state->host, &request, &incarnation, &reject) != PF_NATIVE_OK
+        && state->error == 0) {
+        state->error = 1;
+    }
+    state->last = incarnation;
+    return 0;
+}
+
+/* size 0 = strategy_configure_native_v1 alone; otherwise the extension at
+ * that size, carrying the tolerance bit when `tolerance` is not 0. Answers the
+ * configure status, the last request's MATCH_REJECTED reason (-1 when it has
+ * none), the book's lot count and the lifecycle. */
+static int kulp4_case(uint32_t size, double tolerance, uint32_t* error, uint32_t* field,
+                      int* reason, int* lots, uint32_t* lifecycle) {
+    static pf_native_event_v1 rows[256];
+    kulp4_state state;
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_state_v1 run_state;
+    pf_bar_t bars[12];
+    int configure;
+    int got;
+    int i;
+
+    *reason = -1;
+    *lots = -1;
+    *lifecycle = 0;
+    memset(&state, 0, sizeof(state));
+    table = blank_callbacks(&state);
+    table.on_bar = kulp4_on_bar;
+    state.host = strategy_native_host_create_v1(&table);
+    CHECK(state.host != NULL, "K-ULP4 host create failed");
+    if (!state.host) return -100;
+    spec.session_key = "native-c-api-k-ulp4";
+    spec.initial_capital = 1e9;
+    spec.fee_kind = PF_NATIVE_FEE_CASH_PER_EXECUTION;
+    if (size == 0u) {
+        configure = strategy_configure_native_v1(state.host, &spec);
+    } else {
+        memset(&ext, 0, sizeof(ext));
+        ext.struct_size = size;
+        ext.version = PF_NATIVE_API_VERSION;
+        ext.present_mask = PF_NATIVE_SPEC_EXT_EVENT_RETENTION;
+        ext.event_retention = PF_NATIVE_EVENT_RETENTION_FULL;
+        if (tolerance != 0.0) {
+            ext.present_mask |= PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE;
+            ext.quantity_tolerance = tolerance;
+        }
+        configure = strategy_configure_native_ext_result_v1(state.host, &spec, &ext, error,
+                                                             field);
+    }
+    if (configure == PF_NATIVE_OK) {
+        for (i = 0; i < 12; ++i) {
+            bars[i].open = bars[i].high = bars[i].low = bars[i].close = 100.0;
+            bars[i].volume = 5.0;
+            bars[i].timestamp = (int64_t)i * 300000;
+        }
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, 12, NULL), PF_NATIVE_OK,
+                     "K-ULP4 run");
+        CHECK_EQ_INT(state.error, 0, "a K-ULP4 submit was refused");
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.struct_size = (uint32_t)sizeof(run_state);
+        run_state.version = PF_NATIVE_API_VERSION;
+        CHECK_EQ_INT(strategy_native_state_v1(state.host, &run_state), PF_NATIVE_OK,
+                     "K-ULP4 state read");
+        *lifecycle = run_state.lifecycle;
+        memset(rows, 0, sizeof(rows));
+        for (i = 0; i < 256; ++i) {
+            rows[i].struct_size = (uint32_t)sizeof(rows[i]);
+            rows[i].version = PF_NATIVE_API_VERSION;
+        }
+        got = strategy_native_events_v1(state.host, 0, rows, 256);
+        for (i = 0; i < got; ++i) {
+            if (rows[i].kind == PF_NATIVE_EVENT_MATCH_REJECTED
+                && rows[i].incarnation == state.last) {
+                *reason = (int)rows[i].reason;
+            }
+        }
+        *lots = strategy_native_open_lot_count_v1(state.host, NAN);
+    }
+    strategy_native_host_free(state.host);
+    return configure;
+}
+
+static void check_unrepresentable_quantity(void) {
+    uint32_t error = 0;
+    uint32_t field = 0;
+    uint32_t lifecycle = 0;
+    int reason = 0;
+    int lots = 0;
+    const uint32_t current = (uint32_t)sizeof(pf_native_run_spec_ext_v1);
+
+    CHECK_EQ_INT(PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY, 10,
+                 "the typed quantity refusal's word moved");
+    CHECK_EQ_INT(PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE, 65,
+                 "the tolerance's field word moved");
+    CHECK_EQ_INT(PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE, 1u << 11,
+                 "the tolerance's mask bit moved");
+    /* Exact: the request is refused, typed; the book is untouched; the run
+     * completes. */
+    CHECK_EQ_INT(kulp4_case(0u, 0.0, &error, &field, &reason, &lots, &lifecycle), PF_NATIVE_OK,
+                 "the K-ULP4 v1 spec was refused");
+    CHECK_EQ_INT(reason, PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY,
+                 "Reduce 0.2 was not the typed quantity refusal");
+    CHECK_EQ_INT(lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the refusal stopped the run");
+    CHECK_EQ_INT(lots, 2, "the refused close moved the book");
+    /* The tolerance tail: the close ends at the first lot, whole. */
+    CHECK_EQ_INT(kulp4_case(current, 1e-10, &error, &field, &reason, &lots, &lifecycle),
+                 PF_NATIVE_OK, "the tolerance tail was refused");
+    CHECK_EQ_INT(reason, -1, "a close within the tolerance was refused");
+    CHECK_EQ_INT(lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the tolerant run did not complete");
+    CHECK_EQ_INT(lots, 1, "the close within the tolerance did not end at the lot");
+    /* The bit from the fifth layout, which has no field for it, and a bad
+     * value, named by its field. */
+    CHECK_EQ_INT(kulp4_case(PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE, 1e-10, &error, &field,
+                            &reason, &lots, &lifecycle),
+                 PF_NATIVE_E_STRUCT, "the tolerance bit was accepted from the fifth layout");
+    error = 0;
+    field = 0;
+    CHECK(kulp4_case(current, -1.0, &error, &field, &reason, &lots, &lifecycle) != PF_NATIVE_OK,
+          "a negative tolerance was accepted");
+    CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE,
+                 "a negative tolerance named another error");
+    CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE,
+                 "a negative tolerance named another field");
 }
 
 /* ── L9's risk limits, read back through the C event history ────── */
@@ -5571,7 +5742,13 @@ static void check_spec_word_layout(void) {
                      "the event-retention tail does not start where the auxiliary layout ended");
         CHECK_EQ_INT(PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE, 304,
                      "the auxiliary layout's length moved");
-        CHECK_EQ_INT(sizeof(pf_native_run_spec_ext_v1), 312, "pf_native_run_spec_ext_v1 resized");
+        /* K-ULP4 appends the quantity-tolerance tail: one double where the
+         * retention layout ended, 312 -> 320. */
+        CHECK_EQ_INT(offsetof(pf_native_run_spec_ext_v1, quantity_tolerance), 312,
+                     "the quantity-tolerance tail does not start where the retention layout ended");
+        CHECK_EQ_INT(PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE, 312,
+                     "the retention layout's length moved");
+        CHECK_EQ_INT(sizeof(pf_native_run_spec_ext_v1), 320, "pf_native_run_spec_ext_v1 resized");
     }
 }
 
@@ -5698,6 +5875,7 @@ static int match_reject_named(uint32_t w) {
     case PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE:
     case PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT:
     case PF_NATIVE_MATCH_REJECT_RISK_LIMIT:
+    case PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY:
         return 1;
     default:
         return 0;
@@ -8701,6 +8879,7 @@ int pf_native_c_api_checks(void) {
     check_callback_failure_latch();
     check_event_polling();
     check_event_retention();
+    check_unrepresentable_quantity();
     check_risk_event();
     check_absent_accessors();
     check_live_accessors();

@@ -49,7 +49,7 @@ class NativeFeatureRulings(unittest.TestCase):
         self.assertEqual(undeclared, [
             "price_grid", "grid_rounding", "max_abs_units", "max_open_lots",
             "initial_margin_fraction", "risk", "report_open_position_at_end",
-            "open_bar_view", "subscriptions", "auxiliary_feed"])
+            "open_bar_view", "subscriptions", "auxiliary_feed", "quantity_tolerance"])
         kinds = {field: row.kind for row in rulings.parse_rulings(ADR) for field in row.fields}
         self.assertEqual({field for field, kind in kinds.items() if kind == "native-only"},
                          {"price_grid", "grid_rounding", "risk"})
@@ -69,7 +69,7 @@ class NativeFeatureRulings(unittest.TestCase):
         begin = ADR.index(rulings.BEGIN_MARKER) + len(rulings.BEGIN_MARKER)
         end = ADR.index(rulings.END_MARKER)
         found = findings(adr=ADR[:begin] + "\n" + ADR[end:])
-        self.assertEqual(len(found), 10)
+        self.assertEqual(len(found), 11)
         self.assertTrue(all("no ruling row covers it" in finding for finding in found))
 
     def test_missing_markers_are_a_shape_error(self):

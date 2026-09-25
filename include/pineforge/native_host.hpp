@@ -700,7 +700,11 @@ struct NativeCurrentExecution {
 
 /// Recomputed observations, never an apply token. Readiness is the financial
 /// pre-source preparation boundary, independent of account projection validity
-/// and excluding opening admission and late counter/lifecycle checks.
+/// and excluding opening admission and late counter/lifecycle checks. A
+/// readiness of execution::Status::UnrepresentableQuantity is a quantity the
+/// settlement cannot book exactly on this book, which execute_current answers
+/// as a MatchRejectedEvent with MatchRejectReason::UnrepresentableQuantity;
+/// the run goes on.
 struct NativeCurrentExecutionPreview {
     std::optional<NativeCurrentRefusal> refusal;
     std::optional<execution::Status> settlement_readiness;

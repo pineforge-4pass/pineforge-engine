@@ -1167,6 +1167,23 @@ list(APPEND TEST_SOURCES test_native_partial_close_split)
 # and the refusals of unrepresentable splits are controls. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_exact_sum_close)
+# R5 lane K-ULP4: a request the settlement cannot book exactly on its book --
+# a close split binary64 cannot hold, a reduction the position absorbs, an
+# opening beside a dust lot -- ends with a typed
+# MatchRejected(UnrepresentableQuantity) and the run goes on (it stopped with
+# code 6 / discriminator 5 on 91d65ad6), staged and direct, execute_current
+# and its preview, a C host; on a quantity grid a whole-scope fraction and a
+# close of one lot's own size are the book's own quantities and settle.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_unrepresentable_refusal)
+# R5 lane K-ULP4 (ruling part b): NativeRunSpec::quantity_tolerance -- a close
+# within the tolerance of a FIFO boundary ends at it, charged its request; a
+# dust lot a close meets at the head of the book closes whole; a dust book
+# beside an opening stays; an overshoot opens nothing -- staged and direct,
+# fused and staged-only, the spec's validation and digest (unchanged when
+# absent, pinned from 91d65ad6), and the C extension's tail. Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_quantity_tolerance)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs

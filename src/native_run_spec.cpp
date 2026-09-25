@@ -566,6 +566,8 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         return {Error::NotFiniteNonnegative, Field::FeeValue};
     if (spec.quantity_grid && !positive(*spec.quantity_grid))
         return {Error::NotFinitePositive, Field::QuantityGrid};
+    if (spec.quantity_tolerance && !positive(*spec.quantity_tolerance))
+        return {Error::NotFinitePositive, Field::QuantityTolerance};
     switch (spec.close_execution) {
     case NativeCloseExecution::NextEligiblePoint:
     case NativeCloseExecution::AfterCalculation:

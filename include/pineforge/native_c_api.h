@@ -749,7 +749,12 @@ typedef enum pf_native_spec_ext_mask_e {
      *  set this bit; a caller sending any earlier layout is refused with
      *  PF_NATIVE_E_STRUCT. Without it the run keeps
      *  #PF_NATIVE_EVENT_RETENTION_FULL. */
-    PF_NATIVE_SPEC_EXT_EVENT_RETENTION = 1u << 10
+    PF_NATIVE_SPEC_EXT_EVENT_RETENTION = 1u << 10,
+    /** The settlement's quantity tolerance (`quantity_tolerance`). Only a
+     *  caller whose pf_native_run_spec_ext_v1 carries the tolerance tail may
+     *  set this bit; a caller sending any earlier layout is refused with
+     *  PF_NATIVE_E_STRUCT. Without it the settlement stays exact. */
+    PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE = 1u << 11
 } pf_native_spec_ext_mask_t;
 
 /** What a run keeps of its event record — `NativeRunSpec::event_retention`,
@@ -1066,8 +1071,13 @@ typedef enum pf_native_match_reject_e {
     PF_NATIVE_MATCH_REJECT_INVALID_TERMS         = 6,
     PF_NATIVE_MATCH_REJECT_NO_OPPOSITE_EXPOSURE  = 7,
     PF_NATIVE_MATCH_REJECT_HOST_PRECOMMIT        = 8,
-    PF_NATIVE_MATCH_REJECT_RISK_LIMIT            = 9  /**< An opening refused while a risk
+    PF_NATIVE_MATCH_REJECT_RISK_LIMIT            = 9, /**< An opening refused while a risk
                                                        *   limit blocks. */
+    PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY = 10 /**< A quantity the settlement
+                                                          *   cannot book exactly on
+                                                          *   this book: the request
+                                                          *   ends, nothing moves and
+                                                          *   the run goes on. */
 } pf_native_match_reject_t;
 
 /** Which trigger a price reached — `native_order::ActivationKind`: the
@@ -1296,7 +1306,8 @@ typedef enum pf_native_spec_field_e {
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_TIMEFRAME    = 61,
     PF_NATIVE_SPEC_FIELD_AUXILIARY_FEED_BARS         = 62,
     PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE         = 63,
-    PF_NATIVE_SPEC_FIELD_EVENT_RETENTION             = 64
+    PF_NATIVE_SPEC_FIELD_EVENT_RETENTION             = 64,
+    PF_NATIVE_SPEC_FIELD_QUANTITY_TOLERANCE          = 65
 } pf_native_spec_field_t;
 
 /** Why an append was refused — `NativeAuxiliaryAppendError`: the `error`
@@ -2233,22 +2244,24 @@ typedef struct pf_native_subscription_v1 {
  *  #pf_native_run_spec_v1 now travels here. The one deliberate omission is
  *  `identity`, which the base spec owns.
  *
- *  This struct has FIVE published layouts and the runtime accepts any of
+ *  This struct has SIX published layouts and the runtime accepts any of
  *  them: the base layout the L13 lane first shipped
  *  (#PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE); that layout plus L9's `risk_*`
  *  tail (#PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE); that one plus N8's intrabar
  *  path, the four feed-shape and presentation policies, and the margin
  *  model's equity basis, level base and liquidation strings
  *  (#PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE); that one plus the
- *  `auxiliary_*` tail (#PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE); and the
- *  current one, which appends the `event_retention` tail after them. A
- *  caller compiled against an earlier layout keeps working unchanged and
- *  simply cannot set the mask bits its struct has no fields for
- *  (#PF_NATIVE_SPEC_EXT_RISK, #PF_NATIVE_SPEC_EXT_INTRABAR,
- *  #PF_NATIVE_SPEC_EXT_FEED_POLICY, #PF_NATIVE_SPEC_EXT_AUXILIARY_FEED,
- *  #PF_NATIVE_SPEC_EXT_EVENT_RETENTION): doing so is PF_NATIVE_E_STRUCT. Any
- *  other `struct_size` is PF_NATIVE_E_STRUCT too. Every tail is append-only:
- *  nothing above them moved. */
+ *  `auxiliary_*` tail (#PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE); that one
+ *  plus the `event_retention` tail
+ *  (#PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE); and the current one, which
+ *  appends the `quantity_tolerance` tail after them. A caller compiled
+ *  against an earlier layout keeps working unchanged and simply cannot set
+ *  the mask bits its struct has no fields for (#PF_NATIVE_SPEC_EXT_RISK,
+ *  #PF_NATIVE_SPEC_EXT_INTRABAR, #PF_NATIVE_SPEC_EXT_FEED_POLICY,
+ *  #PF_NATIVE_SPEC_EXT_AUXILIARY_FEED, #PF_NATIVE_SPEC_EXT_EVENT_RETENTION,
+ *  #PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE): doing so is PF_NATIVE_E_STRUCT.
+ *  Any other `struct_size` is PF_NATIVE_E_STRUCT too. Every tail is
+ *  append-only: nothing above them moved. */
 typedef struct pf_native_run_spec_ext_v1 {
     uint32_t struct_size;    /**< sizeof(pf_native_run_spec_ext_v1). */
     uint32_t version;        /**< PF_NATIVE_API_VERSION. */
@@ -2361,6 +2374,16 @@ typedef struct pf_native_run_spec_ext_v1 {
      * runs under PF_NATIVE_EVENT_RETENTION_FULL. ── */
     uint32_t event_retention;  /**< #pf_native_event_retention_t. */
     uint32_t reserved2;        /**< Must be 0. */
+
+    /* ── The additive quantity-tolerance tail (K-ULP4). Read only when
+     * `present_mask` carries PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE; a caller
+     * sending an earlier layout stops at `reserved2` or above and keeps the
+     * exact settlement, in which a quantity it cannot book exactly is that
+     * request's #PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY. ── */
+    double   quantity_tolerance; /**< Units, finite and positive:
+                                  *   `NativeRunSpec::quantity_tolerance`, two
+                                  *   quantities within it of each other are
+                                  *   one quantity to the settlement. */
 } pf_native_run_spec_ext_v1;
 
 /** Byte length of #pf_native_run_spec_ext_v1 as the L13 lane first published
@@ -2385,11 +2408,18 @@ typedef struct pf_native_run_spec_ext_v1 {
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, auxiliary_tf))
 
 /** Byte length of #pf_native_run_spec_ext_v1 with the `auxiliary_*` tail but
- *  before the `event_retention` tail was appended — the fourth of its five
+ *  before the `event_retention` tail was appended — the fourth of its six
  *  published layouts, an offset for the same reason
  *  #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE \
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, event_retention))
+
+/** Byte length of #pf_native_run_spec_ext_v1 with the `event_retention` tail
+ *  but before the `quantity_tolerance` tail was appended — the fifth of its
+ *  six published layouts, an offset for the same reason
+ *  #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is. */
+#define PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE \
+    ((uint32_t)offsetof(pf_native_run_spec_ext_v1, quantity_tolerance))
 
 /** The C host's strategy logic.
  *
