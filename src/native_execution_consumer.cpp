@@ -3121,7 +3121,8 @@ bool NativeExecutionConsumer::margin_check_admitted(
 // The most adverse price the modeled script path still reaches after `phase`,
 // including the cursor price itself so a point with no remaining waypoint
 // still has a finite mark. A run with an intrabar path has no whole-bar
-// waypoint model here: it re-evaluates at each delivered sample instead.
+// waypoint model here: it re-evaluates at each delivered sample of a
+// continuous path instead (NativeMarginCheckKind::IntrabarSample).
 double NativeExecutionConsumer::margin_sizing_price(
         bool short_side, NativePathPhase phase, double fallback) const noexcept {
     if (!has_margin_path_) return fallback;
@@ -7553,7 +7554,9 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     }
 
     // A sampled intrabar path re-evaluates the margin model at each delivered
-    // sample instead of at the containing bar's remaining waypoints.
+    // sample of a continuous path (IntrabarSample, below) instead of at the
+    // containing bar's remaining waypoints; a one-price distribution path, at
+    // its first sample and after fills.
     has_margin_path_ = false;
     // The script bar's sub-bars and one sub-bar's samples, in consumer-owned
     // buffers whose capacity outlives the bar (R5 lane PERF-L1): a lower-path
@@ -7714,6 +7717,19 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                     risk_evaluate(engine, point_frame_view(point), CallbackPhase::PreOpen);
                     if (failed()) return;
                 }
+            } else if (!distribution_samples) {
+                // No whole-bar waypoint model here, so every later sample of a
+                // continuous path is a check point of its own, measured at its
+                // price before it is matched: a mark-check liquidation rests at
+                // that sample, and the segment into it (or, at a sub-bar's
+                // open, the segment out of it) reaches it there. A one-price
+                // distribution sample is not offered one: a request armed at a
+                // discrete point is matched only at a later point, so a
+                // liquidation re-armed at every sample would never be.
+                maintain_margin_liquidation(
+                    engine, make_cursor(point, 0.0), point.coordinate.path_phase, price,
+                    NativeMarginCheckKind::IntrabarSample);
+                if (failed()) return;
             }
             if (distribution_samples || sample_index == 0) {
                 match_discrete(engine, point);

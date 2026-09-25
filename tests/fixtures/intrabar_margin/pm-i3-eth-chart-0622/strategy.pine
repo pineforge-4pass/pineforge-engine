@@ -1,0 +1,15 @@
+// R5 lane PAR-MARGIN item 3: does TradingView check the margin model at each
+// intrabar sample under the bar magnifier? One leveraged long (margin 20, 4.608 x equity)
+// placed on the signal bar 2025-06-22 12:45 UTC, filled at the next bar's open and
+// carried: the bar after the entry bar first crosses the maintenance line at an early
+// sub-bar low and reaches a deeper low later in the same 15m bar.
+// Magnifier OFF (control). Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("pm-i3-eth-chart-0622", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     margin_long=20, margin_short=20, commission_value=0, slippage=0,
+     process_orders_on_close=false, use_bar_magnifier=false)
+if time == timestamp("UTC", 2025, 6, 22, 12, 45) and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = math.floor(4.608 * strategy.equity / close * 1000) / 1000)
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("L", comment="timeout")

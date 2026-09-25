@@ -1,0 +1,16 @@
+{
+  "title": "pm-i3-eth-mag-0824",
+  "slug": "pm-i3-eth-mag-0824",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T22:14:51.826Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-08-22",
+    "to": "2025-08-26"
+  },
+  "pine_sha256": "a0380dfc38314faef2de873033780865b42d066527ac3e2b7a130ef65af1d4e4",
+  "tv_trades_sha256": "f0e1b58462313b44a5727e0d9ecc952238de677cf6db3ad3ecdc0192d04d8d4a",
+  "tv_trades_rows": 4
+}

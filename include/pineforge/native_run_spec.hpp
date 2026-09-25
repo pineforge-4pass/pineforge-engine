@@ -387,9 +387,10 @@ struct IntrabarPath {
     };
     /// A RETAINED finer feed: the host's own lower-timeframe bars, the literal they
     /// are at, and the sampling policy over them. It is the only alternative that has
-    /// sub-bars of its own, so it is what makes on_native_sub_bar reachable, and it is
-    /// what gives the margin model a delivered sample to re-evaluate at instead of a
-    /// whole-bar waypoint. C spelling: PF_NATIVE_INTRABAR_LOWER_TF.
+    /// sub-bars of its own, so it is what makes on_native_sub_bar reachable, and,
+    /// matched as ContinuousSegments, it is what gives the margin model a delivered
+    /// sample to re-evaluate at instead of a whole-bar waypoint
+    /// (NativeMarginCheckKind::IntrabarSample). C spelling: PF_NATIVE_INTRABAR_LOWER_TF.
     struct lower_tf {
         std::vector<Bar> bars;
         std::string tf;

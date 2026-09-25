@@ -525,8 +525,19 @@ struct NativeMarginCallView {
 /// Which kernel check point is about to test the maintenance requirement.
 /// BarOpen is the script bar's open, after on_native_bar_open and before the
 /// bar's own matching; AfterApplied is the re-arm that follows a point's
-/// applied fills, which is the kernel's only mid-path check; Calculation is
-/// the script calculation of a CalculationOnly model; FxRoll is a step of the
+/// applied fills, the only mid-path check of a bar walked on its modeled
+/// waypoints; IntrabarSample is every later delivered sample of a run whose
+/// intrabar path is matched as continuous segments (IntrabarPath::lower_tf
+/// with SampleEligibility::ContinuousSegments), which has no whole-bar
+/// waypoint model: each is measured at its own price immediately before it
+/// is matched, as the bar's first sample is at BarOpen, so a breach inside the
+/// bar rests its liquidation at the sample that crossed and the path reaches
+/// it there. A one-price distribution path (synthesized, or
+/// DistributionSamples) is not offered it -- a request armed at a discrete
+/// point is matched only at a later one -- and is checked at its first
+/// sample and after fills;
+/// Calculation is the script calculation of a CalculationOnly model; FxRoll is
+/// a step of the
 /// run's declared NativeFxCurve: the first driver point the account converts
 /// at a different rate than the point before it, offered immediately before
 /// that point is matched, with the price where the walk left it -- the
@@ -540,6 +551,7 @@ enum class NativeMarginCheckKind : std::uint32_t {
     AfterApplied = 1,
     Calculation = 2,
     FxRoll = 3,
+    IntrabarSample = 4,
 };
 
 /// Ephemeral factual view of one kernel check point, offered to the host

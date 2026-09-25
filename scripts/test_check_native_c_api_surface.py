@@ -298,11 +298,13 @@ class EnumTwinGuardTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
     def test_an_appended_kernel_enumerator_without_a_c_name_fails(self) -> None:
-        # The audit's R12 mutation, verbatim: a kind appended after FxRoll.
-        self.edit("native_host.hpp", "    FxRoll = 3,\n};", "    FxRoll = 3,\n    Unnamed = 4,\n};")
+        # The audit's R12 mutation: a kind appended after the last one (FxRoll
+        # then, IntrabarSample since R5 lane PAR-MARGIN).
+        self.edit("native_host.hpp", "    IntrabarSample = 4,\n};",
+                  "    IntrabarSample = 4,\n    Unnamed = 5,\n};")
         code, err = self.run_guard()
         self.assertEqual(code, 1)
-        self.assertIn("NativeMarginCheckKind::Unnamed (4) has no C name in "
+        self.assertIn("NativeMarginCheckKind::Unnamed (5) has no C name in "
                       "pf_native_margin_check_kind_e", err)
 
     def test_an_implicit_enumerator_appended_without_a_c_name_fails(self) -> None:
@@ -312,12 +314,13 @@ class EnumTwinGuardTests(unittest.TestCase):
         self.assertIn("ActivationKind::Later (4) has no C name in pf_native_activation_e", err)
 
     def test_an_inserted_kernel_enumerator_fails(self) -> None:
-        # Inserted before the last: the C names now spell shifted values.
-        self.edit("native_host.hpp", "    Calculation = 2,\n    FxRoll = 3,",
-                  "    Calculation = 2,\n    Inserted = 3,\n    FxRoll = 4,")
+        # Inserted before the last two: the C names now spell shifted values,
+        # and the last one's has no C name at all.
+        self.edit("native_host.hpp", "    Calculation = 2,\n    FxRoll = 3,\n    IntrabarSample = 4,",
+                  "    Calculation = 2,\n    Inserted = 3,\n    FxRoll = 4,\n    IntrabarSample = 5,")
         code, err = self.run_guard()
         self.assertEqual(code, 1)
-        self.assertIn("NativeMarginCheckKind::FxRoll (4) has no C name", err)
+        self.assertIn("NativeMarginCheckKind::IntrabarSample (5) has no C name", err)
 
     def test_a_c_name_for_no_kernel_value_fails(self) -> None:
         self.edit("native_c_api.h", "    PF_NATIVE_ORIGIN_KERNEL_RISK        = 2  ",

@@ -1,0 +1,15 @@
+// R5 lane PAR-MARGIN item 3: TradingView's own 1-minute lows inside two 15m bars, read
+// through request.security_lower_tf and printed as order comments (Signal column), to
+// compare with the corpus 1m feed the magnified replay uses.
+//@version=6
+strategy("pm-i3-eth-ltf-lows", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.fixed, default_qty_value=0.001, pyramiding=4)
+lows = request.security_lower_tf(syminfo.tickerid, "1", low)
+if time == timestamp("UTC", 2026, 1, 30, 1, 30) and array.size(lows) >= 15
+    strategy.entry("A", strategy.long, comment = str.tostring(array.slice(lows, 0, 8)))
+    strategy.entry("B", strategy.long, comment = str.tostring(array.slice(lows, 8, 15)))
+if time == timestamp("UTC", 2025, 6, 22, 13, 15) and array.size(lows) >= 15
+    strategy.entry("C", strategy.long, comment = str.tostring(array.slice(lows, 0, 8)))
+    strategy.entry("D", strategy.long, comment = str.tostring(array.slice(lows, 8, 15)))
+if time == timestamp("UTC", 2026, 1, 30, 2, 0) or time == timestamp("UTC", 2025, 6, 22, 14, 0)
+    strategy.close_all(comment = "n=" + str.tostring(array.size(lows)))

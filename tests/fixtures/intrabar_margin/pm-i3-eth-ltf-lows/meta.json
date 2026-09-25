@@ -1,0 +1,16 @@
+{
+  "title": "pm-i3-eth-ltf-lows",
+  "slug": "pm-i3-eth-ltf-lows",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T22:17:08.403Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-20",
+    "to": "2026-02-01"
+  },
+  "pine_sha256": "a4a4906f620d6d7f45339021217ba192aaa23fb7fb6232860acf700e2c265304",
+  "tv_trades_sha256": "ad312f3e1202becf14efea0f2f1c00dbcda4b0c54e3eb80a51b8aee93a4ccc9a",
+  "tv_trades_rows": 8
+}

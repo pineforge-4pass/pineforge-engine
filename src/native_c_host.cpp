@@ -356,6 +356,8 @@ static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::Calculation)
  * c_word() make each name its kernel value. */
 static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
                   == PF_NATIVE_MARGIN_CHECK_FX_ROLL, "NativeMarginCheckKind drifted");
+static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::IntrabarSample)
+                  == PF_NATIVE_MARGIN_CHECK_INTRABAR_SAMPLE, "NativeMarginCheckKind drifted");
 /* The hook tails are append-only: the base layout must still end exactly
  * where PF_NATIVE_CALLBACKS_V1_BASE_SIZE says, the six-hook tail must be the
  * seven function pointers below it, and the policy-hook tail the four after
@@ -1024,6 +1026,7 @@ constexpr std::uint32_t c_word(pineforge::NativeMarginCheckKind value) noexcept 
     case V::AfterApplied: return PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED;
     case V::Calculation: return PF_NATIVE_MARGIN_CHECK_CALCULATION;
     case V::FxRoll: return PF_NATIVE_MARGIN_CHECK_FX_ROLL;
+    case V::IntrabarSample: return PF_NATIVE_MARGIN_CHECK_INTRABAR_SAMPLE;
     }
     return static_cast<std::uint32_t>(value);
 }

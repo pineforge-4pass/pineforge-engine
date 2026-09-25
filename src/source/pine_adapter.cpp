@@ -14194,6 +14194,15 @@ bool PineExecutionAdapter::margin_check_allowed(
     // Refused by kind, ahead of the ordinal test, because a roll can share
     // its driver point with an armed BarOpen check.
     if (point.kind == NativeMarginCheckKind::FxRoll) return false;
+    // A magnified run's later samples. TradingView's magnified broker checks
+    // the book at every lower-timeframe bar and books the call at the first
+    // sub-bar low that crosses, sized there, then again at each later one
+    // that crosses the reduced book's line (lab tv tapes
+    // tests/fixtures/intrabar_margin/pm-i3-eth-mag-*, R5 lane PAR-MARGIN);
+    // the kernel's IntrabarSample point is that check.
+    if (point.kind == NativeMarginCheckKind::IntrabarSample) {
+        return intrabar_sample_checked(point) && !source_margin_rounded_tie_veto();
+    }
     // The kernel's BarOpen point and its post-fill AfterApplied re-arm are
     // both points TradingView checks at -- schedule_margin_call_path is
     // called from on_bar_open and from on_applied -- so the admitted point is
@@ -14214,6 +14223,25 @@ bool PineExecutionAdapter::margin_check_allowed(
     // The rounded-tie veto is re-read here rather than at the arming site: the
     // book it inspects is the one standing at the check point.
     return !source_margin_rounded_tie_veto();
+}
+
+// Where the per-sample check is TradingView's as measured: a plain magnified
+// run (the tapes run neither process_orders_on_close nor calc_on_order_fills)
+// holding a leveraged book -- a full-margin book keeps its own checkpoints,
+// unmeasured under the magnifier -- and no slice of the adapter's own resting
+// (the pre-open slice keeps its verdict for its bar, as on the chart path).
+// A flat book is admitted: the kernel then withdraws what it had resting.
+bool PineExecutionAdapter::intrabar_sample_checked(
+        const NativeMarginCheckPoint& point) const {
+    if (!bar_magnifier_ || config_.process_orders_on_close || config_.calc_on_order_fills)
+        return false;
+    const double held = point.position.signed_units;
+    if (held == 0.0) return true;
+    const double margin = held > 0.0 ? config_.margin_long : config_.margin_short;
+    if (!(margin < 100.0)) return false;
+    return !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
+        return row.family == PineOrderFamily::Margin;
+    });
 }
 
 // TradingView's money (MG-A + MG-B), restated for the kernel's breach test at

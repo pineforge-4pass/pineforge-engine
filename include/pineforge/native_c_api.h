@@ -928,7 +928,7 @@ typedef enum pf_native_margin_check_kind_e {
     PF_NATIVE_MARGIN_CHECK_BAR_OPEN      = 0, /**< The script bar's open. */
     PF_NATIVE_MARGIN_CHECK_AFTER_APPLIED = 1, /**< The re-arm after a point's fills. */
     PF_NATIVE_MARGIN_CHECK_CALCULATION   = 2, /**< A CalculationOnly model's calculation. */
-    PF_NATIVE_MARGIN_CHECK_FX_ROLL       = 3  /**< A step of the run's declared
+    PF_NATIVE_MARGIN_CHECK_FX_ROLL       = 3, /**< A step of the run's declared
                                                *   #pf_native_fx_curve_v1: the first point
                                                *   the account converts at a new rate,
                                                *   offered immediately before that point is
@@ -936,6 +936,13 @@ typedef enum pf_native_margin_check_kind_e {
                                                *   none, and a CalculationOnly model, which
                                                *   measures at its calculation alone, is not
                                                *   offered it. */
+    PF_NATIVE_MARGIN_CHECK_INTRABAR_SAMPLE = 4 /**< A delivered sample, after the
+                                               *   script bar's first, of a
+                                               *   #PF_NATIVE_INTRABAR_LOWER_TF path matched as
+                                               *   continuous segments, measured at its own
+                                               *   price immediately before it is matched. A
+                                               *   one-price distribution path and a
+                                               *   CalculationOnly model are not offered it. */
 } pf_native_margin_check_kind_t;
 
 /** What an ANSWERING callback's return value means.

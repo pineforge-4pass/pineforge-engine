@@ -857,6 +857,10 @@ list(APPEND TEST_SOURCES test_native_session_day_facts)
 # Wave G KERNEL-EDGE: one source-free row with fail-before witnesses for FX
 # rolls, session-day neighbours, final calendar-closed buckets and host marks.
 list(APPEND TEST_SOURCES test_native_kernel_edge)
+# R5 lane PAR-MARGIN (item 3): the margin model on an intrabar path is offered
+# NativeMarginCheckKind::IntrabarSample at every delivered sample after the
+# bar's first. Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_margin_intrabar_samples)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail

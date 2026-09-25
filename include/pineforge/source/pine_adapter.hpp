@@ -1383,6 +1383,7 @@ public:
 
     bool source_margin_rounded_tie_veto() const;
     bool margin_check_allowed(const NativeMarginCheckPoint&) const;
+    bool intrabar_sample_checked(const NativeMarginCheckPoint&) const;
     std::optional<NativeMarginDecision> resolve_margin_requirement(
         const NativeMarginRequirementView&) const;
     std::optional<double> resolve_margin_call_units(const NativeMarginCallView&) const;

@@ -42,6 +42,14 @@
  *   E20 f1: under set_probe_suppress_tail_logic the post-script close
  *       checkpoint still runs on the forming bar (ruling of 2026-09-22,
  *       docs/pages/live-surface.md §3.2).
+ *   Intrabar margin on TradingView's tapes (tests/fixtures/intrabar_margin):
+ *       a carried leveraged long under the bar magnifier crosses its line at
+ *       a 1-minute low inside a 15m bar. TradingView books the call there,
+ *       sized there, and again at each later 1-minute low that crosses the
+ *       reduced book's line; with the magnifier off, once at the chart bar's
+ *       low. Since R5 lane PAR-MARGIN the kernel offers an IntrabarSample
+ *       point at every delivered sample and the adapter admits it on a
+ *       magnified run's leveraged book.
  *   M7 on TradingView's tapes (tests/fixtures/margin_entry_bar): a leveraged
  *       opening whose entry bar breaches. TradingView books the margin call
  *       on the entry bar at its low (4 of 4 tapes), and so does the kernel's
@@ -84,6 +92,7 @@ struct FeedBar {
 };
 #include "fixtures/margin_entry_bar/bars.inc"
 #include "fixtures/margin_entry_bar/m10_bars.inc"
+#include "fixtures/intrabar_margin/bars_1m.inc"
 
 // ------------------------------------------------------------ TV policy
 // The twin's TradingView money and slice (test_native_margin_hooks_twin.cpp,
@@ -873,8 +882,9 @@ std::int64_t tape_ms(const std::string& text) {
 
 // The tape's exits, each as {exit bar, price, qty, signal}; bars counted
 // from the signal bar.
-std::vector<TapeFill> tape_exits(const char* slug, const FeedBar* bars) {
-    std::ifstream in(std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/" + slug + "/tv_trades.csv");
+std::vector<TapeFill> tape_exits(const char* slug, const FeedBar* bars,
+                                 const std::string& dir = PINEFORGE_HM_M7A_FIXTURE_DIR) {
+    std::ifstream in(dir + "/" + slug + "/tv_trades.csv");
     std::vector<TapeFill> out;
     std::string line;
     bool header = true;
@@ -1107,6 +1117,114 @@ void m10_tradingview_tapes() {
     }
 }
 
+// ================================================================= intrabar margin on tapes
+// Item 3 of R5 lane PAR-MARGIN: does TradingView check the margin model at each
+// intrabar sample under the bar magnifier? Four pairs of lab tv tapes
+// (tests/fixtures/intrabar_margin, BINANCE:ETHUSDT.P 15m, ws-report-v1,
+// rangeProof covered): one leveraged long (margin 20, K x equity) placed on
+// the signal bar, filled at the next bar's open and carried into a bar that
+// first crosses the maintenance line at an early 1-minute low and reaches a
+// deeper low later in the same bar; closed 3 bars after its entry bar. The
+// same script with use_bar_magnifier on and off.
+//   magnifier off: TradingView books one call at the chart bar's low, and so
+//     does the adapter on the chart path (4 of 4);
+//   magnifier on: TradingView books the call at the first 1-minute low that
+//     crosses, sized there, and again at each later one that crosses the
+//     reduced book's line. The kernel checked a magnified bar at its first
+//     sample and after fills only, so the adapter booked none of those rows
+//     inside the bar; since the lane the kernel offers an IntrabarSample point
+//     at every later sample and the adapter admits it on a leveraged book, and
+//     it books every row on 0622 (three calls), 0824 and 0406.
+//   Recorded, open: on 0130 TradingView books its second call at the 01:43
+//     low (0.4824 @2673.33) on the book the first call left, though the 01:42
+//     low (2690) already crosses that book's line; the adapter books it there
+//     (0.3228 @2690), and nothing at 01:43. The first call and the chart-path
+//     control agree; the tape repeats over three other windows, and
+//     TradingView's own 1-minute lows (pm-i3-eth-ltf-lows) are the feed's.
+struct IntrabarTape {
+    const char* tag;
+    const FeedBar* one;   // 90 one-minute bars: the signal bar .. the entry bar + 4
+    double leverage;
+    bool recorded;        // 0130: pinned rows instead of the tape's
+};
+
+void intrabar_margin_tapes() {
+    const std::string dir = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/../intrabar_margin";
+    const IntrabarTape tapes[] = {
+        {"0622", kI3_0622, 4.608, false},
+        {"0130", kI3_0130, 4.743, true},
+        {"0824", kI3_0824, 4.694, false},
+        {"0406", kI3_0406, 4.657, false},
+    };
+    for (const IntrabarTape& tape : tapes) {
+        std::vector<Bar> one;
+        for (int i = 0; i < 90; ++i) {
+            const FeedBar& r = tape.one[i];
+            one.push_back({r.open, r.high, r.low, r.close, 1.0, r.ts});
+        }
+        FeedBar fifteen_rows[6];
+        std::vector<Bar> fifteen;
+        for (int b = 0; b < 6; ++b) {
+            const FeedBar* sub = tape.one + 15 * b;
+            FeedBar agg{sub[0].ts, sub[0].open, sub[0].high, sub[0].low, sub[14].close};
+            for (int i = 1; i < 15; ++i) {
+                agg.high = std::max(agg.high, sub[i].high);
+                agg.low = std::min(agg.low, sub[i].low);
+            }
+            fifteen_rows[b] = agg;
+            fifteen.push_back({agg.open, agg.high, agg.low, agg.close, 1.0, agg.ts});
+        }
+        const double qty = std::floor(tape.leverage * 1000.0 / fifteen_rows[0].close * 1000.0)
+            / 1000.0;
+        Config c;
+        c.capital = 1000.0; c.margin_long = 20.0; c.margin_short = 20.0;
+        c.qty_step = 0.0001;   // TradingView's margin-call floor on this symbol (M7)
+        const auto script = [qty](PineSide& h, int bar) {
+            if (bar == 0) h.entry("L", true, kNaN, kNaN, qty);
+            if (h.position() > 0.0 && bar - h.entry_bar_index() >= 3) h.close("L");
+        };
+        for (const bool magnified : {false, true}) {
+            const std::string slug = std::string(magnified ? "pm-i3-eth-mag-" : "pm-i3-eth-chart-")
+                + tape.tag;
+            std::printf("-- intrabar margin tape %s\n", slug.c_str());
+            PineSide pine(c);
+            pine.script = script;
+            if (magnified) {
+                pine.run(one.data(), static_cast<int>(one.size()), "1", "15", true);
+            } else {
+                pine.run(fifteen.data(), static_cast<int>(fifteen.size()), "15", "15", false);
+            }
+            CHECK(pine.last_error().empty());
+            const auto adapter = engine_exits(pine);
+            const auto tv = tape_exits(slug.c_str(), fifteen_rows, dir);
+            print_rows("tape", tv);
+            print_rows("adapter", adapter);
+            // Every call lands on the bar after the entry bar (bar 2).
+            REQUIRE(!tv.empty());
+            CHECK(tv[0].bar == 2);
+            CHECK(tv[0].signal == "Margin call");
+            if (!magnified) {
+                CHECK(std::abs(tv[0].price - fifteen_rows[2].low) <= 5e-3);
+                CHECK(same_rows(adapter, tv));
+                continue;
+            }
+            if (!tape.recorded) {
+                CHECK(same_rows(adapter, tv));
+                continue;
+            }
+            // 0130, recorded: the first call agrees; the second parts.
+            REQUIRE(adapter.size() == 3);
+            REQUIRE(tv.size() == 3);
+            CHECK(same_rows({adapter[0]}, {tv[0]}));
+            CHECK(adapter[1].bar == 2 && same_value(adapter[1].price, 2690.0)
+                  && std::abs(adapter[1].qty - 0.3228) <= 5e-5);
+            CHECK(tv[1].bar == 2 && std::abs(tv[1].price - 2673.33) <= 5e-3
+                  && std::abs(tv[1].qty - 0.4824) <= 5e-5);
+            CHECK(adapter[2].bar == tv[2].bar && std::abs(adapter[2].price - tv[2].price) <= 5e-3);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1124,6 +1242,7 @@ int main() {
     test("E20 f1 probe tail", e20_probe_tail_margin_call);
     test("M7 TradingView tapes", m7_tradingview_tapes);
     test("M10 TradingView tapes", m10_tradingview_tapes);
+    test("intrabar margin tapes", intrabar_margin_tapes);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
