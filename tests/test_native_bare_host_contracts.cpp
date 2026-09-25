@@ -535,7 +535,9 @@ void owned_excursion_is_recorded_verbatim() {
 // 24 ms; lanes PERF-K24 (lower-feed lookup) and PERF-K1 (calendar memo) cut that
 // run to about 2.2 ms, and the ratio is 3.3-3.5x (1.6x in Debug). A fold that
 // re-walks the 10 000 path bars at every read measured about 40x when this row
-// was written and 440-460x on the INT17 tree.
+// was written and 440-460x on the INT17 tree. RATIO-HARDEN repeats the fixed
+// 2,000-bar legs until the cheaper read-once leg has at least 100 ms of CPU;
+// the x20 bound stays in place so the old fold mutant still fails.
 struct LowerPathReader final : NativeStrategyHost {
     bool read_each_bar = false;
     std::uint64_t last_read = 0;
@@ -549,7 +551,7 @@ struct ReadCost {
     std::uint64_t digest = 0;
 };
 
-ReadCost lower_path_read_cost(int script_bars, bool read_each_bar) {
+ReadCost lower_path_read_cost(int script_bars, bool read_each_bar, int repeats) {
     std::vector<Bar> bars;
     IntrabarPath::lower_tf path;
     path.tf = "1";
@@ -568,29 +570,47 @@ ReadCost lower_path_read_cost(int script_bars, bool read_each_bar) {
     s.intrabar.value = path;
     ReadCost best;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        LowerPathReader host;
-        host.read_each_bar = read_each_bar;
-        CHECK(host.configure_native(s).status == NativeSetupStatus::Applied);
         const std::clock_t start = std::clock();
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        const double seconds = static_cast<double>(std::clock() - start) / CLOCKS_PER_SEC;
-        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-        if (attempt == 0 || seconds < best.seconds) best.seconds = seconds;
-        best.digest = host.native_continuation_hash();
-        if (read_each_bar) CHECK(host.last_read != 0);
+        double seconds = 0.0;
+        std::uint64_t digest = 0;
+        for (int repeat = 0; repeat < repeats; ++repeat) {
+            LowerPathReader host;
+            host.read_each_bar = read_each_bar;
+            CHECK(host.configure_native(s).status == NativeSetupStatus::Applied);
+            host.run(bars.data(), static_cast<int>(bars.size()));
+            CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+            digest = host.native_continuation_hash();
+            if (read_each_bar) CHECK(host.last_read != 0);
+        }
+        seconds = static_cast<double>(std::clock() - start) / CLOCKS_PER_SEC;
+        if (attempt == 0 || seconds < best.seconds) {
+            best.seconds = seconds;
+            best.digest = digest;
+        }
     }
     return best;
 }
 
 void continuation_read_is_linear_in_the_feed() {
-    const ReadCost every_bar = lower_path_read_cost(2000, true);
-    const ReadCost once = lower_path_read_cost(2000, false);
+    constexpr int kScriptBars = 2000;
+    constexpr int kMaxRepeats = 256;
+    constexpr double kMinLegSeconds = 0.1;
+    int repeats = 1;
+    while (lower_path_read_cost(kScriptBars, false, repeats).seconds < kMinLegSeconds
+           && repeats < kMaxRepeats / 2) {
+        repeats *= 2;
+    }
+    const ReadCost every_bar = lower_path_read_cost(kScriptBars, true, repeats);
+    const ReadCost once = lower_path_read_cost(kScriptBars, false, repeats);
     const double ratio = every_bar.seconds / std::max(once.seconds, 1e-6);
-    std::printf("  2000 bars over a lower-timeframe path: continuation read every bar %.4f s,"
-                " read once %.4f s, ratio %.2f\n", every_bar.seconds, once.seconds, ratio);
+    std::printf("  %d bars x%d over a lower-timeframe path: continuation read every bar %.4f s,"
+                " read once %.4f s, ratio %.2f (bound x20)\n", kScriptBars, repeats,
+                every_bar.seconds, once.seconds, ratio);
     // expectation corrected: ratio < 3.0 -> ratio < 20.0, because K24 and K1
     // made the read-once run about 11x cheaper while each read costs what it
     // did (see above); the quadratic re-walk this guards against is 440x+.
+    CHECK(every_bar.seconds >= kMinLegSeconds);
+    CHECK(once.seconds >= kMinLegSeconds);
     CHECK(ratio < 20.0);
     CHECK(every_bar.digest == once.digest);
 }

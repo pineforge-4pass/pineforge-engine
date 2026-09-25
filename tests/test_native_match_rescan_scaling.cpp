@@ -22,6 +22,10 @@
 // (test_native_match_hash_witness) and compared bit for bit against the
 // full rescan (test_native_match_row_reuse); here only the finished state is
 // checked, so a leg that failed or placed fewer orders cannot pass as cheap.
+// RATIO-HARDEN calibrates the tape length until the best small-leg sample has
+// at least 100 ms of CPU. The four-to-one live-order ratio and the x8 bound
+// stay unchanged; sizing the legs, rather than widening the bound, keeps the
+// old full-rescan mutant above the gate.
 #include <pineforge/native_host.hpp>
 
 #include <cstdint>
@@ -117,18 +121,35 @@ double best_of_three(int live, const std::vector<Bar>& bars) {
     return best;
 }
 
-constexpr int kBars = 3000;
+constexpr int kInitialBars = 3000;
+constexpr int kMaxCalibratedBars = 384000;
+// The original 100 ms floor was enough for a single run but one loaded-Mac
+// repetition still let the best-of-three ratio escape. A 250 ms floor keeps
+// the process-CPU sample away from that scheduling edge without changing the
+// x8 shape bound.
+constexpr double kMinLegSeconds = 0.25;
 constexpr int kLive = 10;
 constexpr double kShapeBound = 8.0;
 
 void matching_is_linear_in_the_live_requests() {
-    const std::vector<Bar> bars = tape(kBars);
-    const double small = best_of_three(kLive, bars);
+    int bars_count = kInitialBars;
+    double small = 0.0;
+    while (true) {
+        const std::vector<Bar> bars = tape(bars_count);
+        small = best_of_three(kLive, bars);
+        if (small >= kMinLegSeconds || bars_count >= kMaxCalibratedBars / 2) break;
+        bars_count *= 2;
+    }
+    const std::vector<Bar> bars = tape(bars_count);
+    small = best_of_three(kLive, bars);
     const double large = best_of_three(kLive * 4, bars);
     const double ratio = small > 0.0 ? large / small : 0.0;
-    std::printf("resting orders: %d live %.4fs, %d live %.4fs, ratio %.2f (bound %.1f)\n",
-                kLive, small, kLive * 4, large, ratio, kShapeBound);
+    std::printf("resting orders: %d bars, %d live %.4fs, %d live %.4fs, ratio %.2f "
+                "(bound %.1f)\n", bars_count, kLive, small, kLive * 4, large, ratio,
+                kShapeBound);
     CHECK(small > 0.0);
+    CHECK(small >= kMinLegSeconds);
+    CHECK(large >= kMinLegSeconds);
     CHECK(ratio < kShapeBound);
 }
 

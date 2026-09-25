@@ -14,7 +14,9 @@
 //      of the unretired journal says the pre-window core did;
 //   3. a scaling row: canonicalizing and testing the members of a long
 //      replace chain costs O(log) per query, not the chain walk the journal
-//      scan made quadratic (4x the chain must cost < 5x);
+//      scan made quadratic (4x the chain must cost < 5x). The query loop is
+//      calibrated to at least 100 ms of process CPU before the ratio is read;
+//      the old sub-millisecond escape is therefore unnecessary.
 //   4. a live deferred group-adjustment chain pins the window at its head,
 //      and the arm that reads it back through collect_pending_chain answers
 //      as it does on a core that retired nothing;
@@ -24,9 +26,9 @@
 #include <pineforge/native_order.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <functional>
 #include <map>
 #include <optional>
@@ -398,7 +400,7 @@ void the_chain_index_answers_what_the_journal_did(uint64_t seed) {
 // Each query is O(log) in the chain index; the journal scan the pre-window
 // core made walked the chain back link by link, each link a backward search
 // of the journal, so the same queries cost the chain length squared.
-double chain_queries_seconds(int chain) {
+double chain_queries_seconds(int chain, int queries) {
     const no::RunIdentity run{"journal-scaling", 1};
     no::WorkingRequestCore core(run);
     uint64_t inc = 1;
@@ -413,32 +415,40 @@ double chain_queries_seconds(int chain) {
     }
     const auto cohort = core.cohort_open();
     SplitMix rng{static_cast<uint64_t>(chain)};
-    const auto start = std::chrono::steady_clock::now();
+    const std::clock_t start = std::clock();
     core.cohort_add(cohort, tail);
     std::size_t found = 0;
-    constexpr int kQueries = 2048;
-    for (int query = 0; query < kQueries; ++query) {
+    for (int query = 0; query < queries; ++query) {
         found += core.cohort_contains(cohort, members[rng.below(members.size())]) ? 1 : 0;
     }
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const double seconds = static_cast<double>(std::clock() - start) / CLOCKS_PER_SEC;
     CHECK(core.cohort_receipts().back().status == no::CohortReceiptStatus::Applied);
-    CHECK(found == static_cast<std::size_t>(kQueries));
+    CHECK(found == static_cast<std::size_t>(queries));
     return seconds;
 }
 
 void membership_is_not_a_chain_walk() {
+    constexpr double kMinLegSeconds = 0.1;
+    constexpr int kInitialQueries = 2048;
+    constexpr int kMaxQueries = 16 * 1024 * 1024;
+    int queries = kInitialQueries;
+    while (chain_queries_seconds(400, queries) < kMinLegSeconds
+           && queries < kMaxQueries / 2) {
+        queries *= 2;
+    }
     // Best of three at each size, so a scheduling hiccup does not decide it.
     double small = 1e9;
     double large = 1e9;
     for (int i = 0; i < 3; ++i) {
-        small = std::min(small, chain_queries_seconds(400));
-        large = std::min(large, chain_queries_seconds(1600));
+        small = std::min(small, chain_queries_seconds(400, queries));
+        large = std::min(large, chain_queries_seconds(1600, queries));
     }
     const double ratio = large / std::max(small, 1e-9);
-    std::printf("  2048 chain-membership queries, 400 -> 1600 replaces: %.6f s -> %.6f s "
-                "(x%.2f for 4x)\n", small, large, ratio);
-    CHECK(ratio < 5.0 || large < 0.001);
+    std::printf("  %d chain-membership queries, 400 -> 1600 replaces: %.6f s -> %.6f s "
+                "(x%.2f for 4x, bound x5)\n", queries, small, large, ratio);
+    CHECK(small >= kMinLegSeconds);
+    CHECK(large >= kMinLegSeconds);
+    CHECK(ratio < 5.0);
 }
 
 // ── 4. a deferred group-adjustment chain pins the window ─────────────────

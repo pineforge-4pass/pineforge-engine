@@ -67,14 +67,16 @@
 // without recording (ratio 10.3), retaining 7,999 and 31,999 rows, and with
 // recording 2.32 s at 1,000 bars and 36.75 s at 4,000.
 //
-// R5 INT24 sizes the re-cancel's leg without recording by time. Its bars cost
+// R5 INT24 sized the re-cancel's leg without recording by time. Its bars cost
 // about two microseconds (Mac, Release), so at 4,000 bars the small leg was a
 // few milliseconds of CPU, and noise on a shared runner decided the ratio:
 // INT23's CI run 36074490963 measured 5.66 on the hosted macOS Release runner
-// at an 18 ms small leg (the Mac itself 3.42-4.07). The small leg now doubles
-// from 4,000 bars until one run takes kMinLegSeconds, and the large leg is four
-// times that size, so a linear leg measures about four on any machine while a
-// super-linear one reaches the size sooner and still grows by its own power.
+// at an 18 ms small leg (the Mac itself 3.42-4.07). RATIO-HARDEN applies the
+// same 100 ms minimum to every workload and recording mode. Each small leg
+// doubles until its best timed sample reaches kMinLegSeconds; the large leg
+// is four times that size, so a linear leg measures about four on any machine
+// while a super-linear one reaches the size sooner and still grows by its own
+// power.
 // Two mutants of the product (Mac, Release): K1 holding every cancelled leg
 // again (V19-D step 7 undone) stopped the doubling at 4,000 bars (0.137 s) and
 // measured 20.25 at 4,000 / 16,000 bars, 7,999 and 31,999 rows retained; a
@@ -275,10 +277,11 @@ Leg best_of(Workload workload, const std::vector<Bar>& bars, bool recording) {
 
 constexpr int kBars = 1000;
 constexpr double kShapeBound = 5.0;
-// The re-cancel's calibrated small leg (see the file's comment): at least this
-// much CPU, and at most kMaxCalibratedBars bars.
+// Every ratio leg is calibrated to at least this much process CPU. The cap
+// keeps a pathological mutant from turning a normal ctest row into an
+// unbounded run.
 constexpr double kMinLegSeconds = 0.1;
-constexpr int kMaxCalibratedBars = 128000;
+constexpr int kMaxCalibratedBars = 512000;
 // What a run can still hold when it ends: its live requests, the rows the
 // current position cycle still reads, and the last bar's retirements.
 constexpr std::size_t kRowBound = 64;
@@ -307,21 +310,22 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
     const int scale = short_bars ? 4 : 1;
     int bars = (gated() ? kBars : kBars / 4) * scale;
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
-    if (gated() && workload == Workload::Recancel && !recording) {
-        while (bars * 2 <= kMaxCalibratedBars
-               && replay(workload, tape(bars, step), recording).seconds < kMinLegSeconds) {
-            bars *= 2;
-        }
-    }
-    const std::vector<Bar> small_tape = tape(bars, step);
-    const std::vector<Bar> large_tape = tape(bars * 4, step);
     Leg small;
     Leg large;
-    if (short_bars) {
-        interleaved_best(workload, small_tape, large_tape, recording, small, large);
-    } else {
-        small = best_of(workload, small_tape, recording);
-        large = best_of(workload, large_tape, recording);
+    while (true) {
+        const std::vector<Bar> small_tape = tape(bars, step);
+        const std::vector<Bar> large_tape = tape(bars * 4, step);
+        if (short_bars) {
+            interleaved_best(workload, small_tape, large_tape, recording, small, large);
+        } else {
+            small = best_of(workload, small_tape, recording);
+            large = best_of(workload, large_tape, recording);
+        }
+        if (!gated() || small.seconds >= kMinLegSeconds
+            || bars >= kMaxCalibratedBars / 2) {
+            break;
+        }
+        bars *= 2;
     }
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
     std::printf("%s (%s): %d bars %.4fs (%d trades, %zu rows retained), "
@@ -352,6 +356,8 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         std::printf("  (ratio not gated: non-Release library)\n");
         return;
     }
+    CHECK(small.seconds >= kMinLegSeconds);
+    CHECK(large.seconds >= kMinLegSeconds);
     if (workload != Workload::Churn) CHECK(ratio < kShapeBound);
 }
 

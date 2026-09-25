@@ -22,7 +22,9 @@
 // Linux aarch64 (gcc 13, one pinned core). 6 separates the two shapes with
 // more than 40 % of room above the linear one and a factor of 2.6 below the
 // quadratic one. The sample is process CPU time (std::clock), which the
-// runtime-budget ruling (A40 rev 7) found load-robust.
+// runtime-budget ruling (A40 rev 7) found load-robust. RATIO-HARDEN repeats
+// the same 4,000- and 16,000-bar legs until the best small leg has 100 ms of
+// CPU, retaining the x6 bound and the mutant margin.
 //
 // The value half pins what the selection feeds -- the driver points, the
 // fills and every hash over them -- for three feeds: a lower feed that tiles
@@ -206,38 +208,55 @@ struct Bracket final : NativeStrategyHost {
 // the run's cost is the driver's and the lookup's alone, and a scan of the
 // feed stands out against it. (Under canonical labels the per-bar calendar
 // dominates a run this short and would mask the shape.)
-double run_cpu(int count) {
-    Idle host;
-    const auto setup = host.configure_native(lower_spec(Feed::Tiling, count, true, "k24-scale"));
-    CHECK(setup.status == NativeSetupStatus::Applied);
+double run_cpu(int count, int repeats) {
+    const NativeRunSpec spec = lower_spec(Feed::Tiling, count, true, "k24-scale");
     const std::vector<Bar> bars = script_feed(count);
     const std::clock_t started = std::clock();
-    host.run(bars.data(), count);
-    const double seconds = static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
-    CHECK(host.last_error().empty());
-    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-    return seconds;
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        Idle host;
+        const auto setup = host.configure_native(spec);
+        CHECK(setup.status == NativeSetupStatus::Applied);
+        host.run(bars.data(), count);
+        CHECK(host.last_error().empty());
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    }
+    return static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
 }
 
-double best_of_three(int count) {
+double best_of_three(int count, int repeats) {
     double best = 0.0;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        const double sample = run_cpu(count);
+        const double sample = run_cpu(count, repeats);
         if (attempt == 0 || sample < best) best = sample;
     }
     return best;
 }
 
 constexpr int kBars = 4000;
+constexpr int kMaxRepeats = 256;
+constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 6.0;
 
+int calibrated_repeats() {
+    int repeats = 1;
+    while (best_of_three(kBars, repeats) < kMinLegSeconds
+           && repeats < kMaxRepeats / 2) {
+        repeats *= 2;
+    }
+    return repeats;
+}
+
 void the_lower_feed_lookup_is_linear_in_the_run() {
-    const double small = best_of_three(kBars);
-    const double large = best_of_three(kBars * 4);
+    const int repeats = calibrated_repeats();
+    const double small = best_of_three(kBars, repeats);
+    const double large = best_of_three(kBars * 4, repeats);
     const double ratio = small > 0.0 ? large / small : 0.0;
-    std::printf("lower-feed run: %d bars %.4fs, %d bars %.4fs, ratio %.2f (bound %.1f)\n",
-                kBars, small, kBars * 4, large, ratio, kShapeBound);
+    std::printf("lower-feed run: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
+                "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large,
+                ratio, kShapeBound);
     CHECK(small > 0.0);
+    CHECK(small >= kMinLegSeconds);
+    CHECK(large >= kMinLegSeconds);
     CHECK(ratio < kShapeBound);
 }
 

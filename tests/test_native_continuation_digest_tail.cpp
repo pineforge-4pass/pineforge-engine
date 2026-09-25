@@ -21,7 +21,9 @@
 // smaller leg) and about 15.7x while it is quadratic, so 8 separates the two
 // shapes with more than a factor of two of margin on either side. The sample
 // is process CPU time (std::clock), which is what the A40 rev 7 runtime-budget
-// ruling found load-robust, and each leg is the best of three.
+// ruling found load-robust, and each leg is the best of three. RATIO-HARDEN
+// repeats the 1,500-bar workload as needed so each timed leg has at least
+// 100 ms of CPU; the bar ratio and the x8 bound are unchanged.
 #include <pineforge/native_host.hpp>
 
 #include <cstdint>
@@ -85,52 +87,66 @@ std::vector<Bar> tape(int count) {
     return bars;
 }
 
-std::uint64_t replay(int count, bool read_each_bar, double* cpu_seconds) {
-    Probe host;
-    host.read_each_bar = read_each_bar;
-    const auto setup = host.configure_native(probe_spec());
-    CHECK(setup.status == NativeSetupStatus::Applied);
+std::uint64_t replay(int count, bool read_each_bar, double* cpu_seconds, int repeats = 1) {
     const std::vector<Bar> bars = tape(count);
-    const std::clock_t started = std::clock();
-    host.run(bars.data(), count);
-    if (cpu_seconds) {
-        *cpu_seconds = static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
+    double total = 0.0;
+    std::uint64_t digest = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        Probe host;
+        host.read_each_bar = read_each_bar;
+        const auto setup = host.configure_native(probe_spec());
+        CHECK(setup.status == NativeSetupStatus::Applied);
+        const std::clock_t started = std::clock();
+        host.run(bars.data(), count);
+        total += static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
+        digest = host.native_continuation_hash();
+        CHECK(host.last_error().empty());
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     }
-    CHECK(host.last_error().empty());
-    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-    return host.native_continuation_hash();
+    if (cpu_seconds) *cpu_seconds = total;
+    return digest;
 }
 
-double best_of_three(int count) {
+double best_of_three(int count, int repeats) {
     double best = 0.0;
     for (int attempt = 0; attempt < 3; ++attempt) {
         double sample = 0.0;
-        replay(count, true, &sample);
+        replay(count, true, &sample, repeats);
         if (attempt == 0 || sample < best) best = sample;
     }
     return best;
 }
 
 constexpr int kBars = 1500;
+constexpr int kMaxRepeats = 256;
+constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 8.0;
 
-void the_per_bar_read_is_linear_in_the_bar_count() {
-    const double small = best_of_three(kBars);
-    const double large = best_of_three(kBars * 4);
-    const double ratio = small > 0.0 ? large / small : 0.0;
-    if (!(small > 0.0) || !(ratio < kShapeBound)) {
-        std::fprintf(stderr,
-                     "continuation digest cost: %d bars %.4fs, %d bars %.4fs, ratio %.2f "
-                     "(bound %.1f)\n",
-                     kBars, small, kBars * 4, large, ratio, kShapeBound);
+int calibrated_repeats() {
+    int repeats = 1;
+    while (best_of_three(kBars, repeats) < kMinLegSeconds
+           && repeats < kMaxRepeats / 2) {
+        repeats *= 2;
     }
+    return repeats;
+}
+
+void the_per_bar_read_is_linear_in_the_bar_count(int repeats) {
+    const double small = best_of_three(kBars, repeats);
+    const double large = best_of_three(kBars * 4, repeats);
+    const double ratio = small > 0.0 ? large / small : 0.0;
+    std::printf("continuation digest cost: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
+                "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large, ratio,
+                kShapeBound);
     CHECK(small > 0.0);
+    CHECK(small >= kMinLegSeconds);
+    CHECK(large >= kMinLegSeconds);
     CHECK(ratio < kShapeBound);
 }
 
-void the_digest_does_not_depend_on_when_it_is_read() {
-    const std::uint64_t read_every_bar = replay(kBars, true, nullptr);
-    const std::uint64_t read_once = replay(kBars, false, nullptr);
+void the_digest_does_not_depend_on_when_it_is_read(int repeats) {
+    const std::uint64_t read_every_bar = replay(kBars, true, nullptr, repeats);
+    const std::uint64_t read_once = replay(kBars, false, nullptr, repeats);
     CHECK(read_every_bar == read_once);
     CHECK(read_once != 0);
 }
@@ -138,8 +154,9 @@ void the_digest_does_not_depend_on_when_it_is_read() {
 } // namespace
 
 int main() {
-    the_digest_does_not_depend_on_when_it_is_read();
-    the_per_bar_read_is_linear_in_the_bar_count();
+    const int repeats = calibrated_repeats();
+    the_digest_does_not_depend_on_when_it_is_read(repeats);
+    the_per_bar_read_is_linear_in_the_bar_count(repeats);
     if (failures == 0) std::printf("test_native_continuation_digest_tail: ok\n");
     return failures == 0 ? 0 : 1;
 }

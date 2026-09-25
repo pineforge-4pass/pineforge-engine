@@ -734,27 +734,30 @@ double cpu_seconds() { return static_cast<double>(std::clock()) / CLOCKS_PER_SEC
 
 // One bracket round trip every ten bars, a kernel-recorded report and the
 // per-bar broker hash recorded: the recording's cost, one run.
-double recorded_seconds(int bars) {
-    Host host;
-    host.bar_script = [](Host& h, int bar) {
-        if (bar % 10 == 0) h.submit(no::Request{no::Transact{1.0}, "in", ""});
-        if (bar % 10 == 5) h.submit(no::Request{no::Flatten{}, "out", ""});
-    };
+double recorded_seconds(int bars, int repeats) {
     auto spec = base_spec();
     spec.report_policy = NativeReportPolicy::KernelRecorded;
-    if (host.configure_native(spec).status != NativeSetupStatus::Applied) return 0.0;
-    host.set_broker_state_hash_recording(true);
     const auto input = tape(bars);
-    const double start = cpu_seconds();
-    host.run(input.data(), bars);
-    const double spent = cpu_seconds() - start;
-    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-    CHECK(host.rows().size() == static_cast<std::size_t>(bars / 10));
+    double spent = 0.0;
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        Host host;
+        host.bar_script = [](Host& h, int bar) {
+            if (bar % 10 == 0) h.submit(no::Request{no::Transact{1.0}, "in", ""});
+            if (bar % 10 == 5) h.submit(no::Request{no::Flatten{}, "out", ""});
+        };
+        if (host.configure_native(spec).status != NativeSetupStatus::Applied) return 0.0;
+        host.set_broker_state_hash_recording(true);
+        const double start = cpu_seconds();
+        host.run(input.data(), bars);
+        spent += cpu_seconds() - start;
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.rows().size() == static_cast<std::size_t>(bars / 10));
+    }
     return spent;
 }
 
 // A continuation read at a bar, timed over many reads.
-double read_seconds(int bars, int read_at) {
+double read_seconds(int bars, int read_at, int reads) {
     Host host;
     double spent = 0.0;
     host.bar_script = [&](Host& h, int bar) {
@@ -765,7 +768,7 @@ double read_seconds(int bars, int read_at) {
             std::uint64_t sink = 0;
             for (int round = 0; round < 5; ++round) {
                 const double start = cpu_seconds();
-                for (int i = 0; i < 2000; ++i) sink ^= h.native_continuation_hash();
+                for (int i = 0; i < reads; ++i) sink ^= h.native_continuation_hash();
                 best = std::min(best, cpu_seconds() - start);
             }
             spent = best;
@@ -787,43 +790,66 @@ double read_seconds(int bars, int read_at) {
 // Each bound sits between the two shapes it tells apart, a factor of two
 // from each: linear recording is x4 for 4x the bars and the quadratic walk
 // V19-A removed x16, so x8; a live-state read is x1 at 4x the history and a
-// read that walked the history x4, so x2.
+// read that walked the history x4, so x2. RATIO-HARDEN repeats each fixed
+// workload until the best timed leg has at least 100 ms of process CPU; the
+// x8 and x2 bounds stay in place.
 constexpr int kScalingRounds = 5;
+constexpr double kMinLegSeconds = 0.1;
+constexpr int kMaxTimingRepeats = 256;
 
 void recording_and_reads_scale() {
+    int recording_repeats = 1;
+    while (recorded_seconds(5000, recording_repeats) < kMinLegSeconds
+           && recording_repeats < kMaxTimingRepeats / 2) {
+        recording_repeats *= 2;
+    }
     double quarter = 1e30;
     double whole = 1e30;
     double early = 1e30;
     double late = 1e30;
     for (int round = 0; round < kScalingRounds; ++round) {
         if (round % 2 == 0) {
-            quarter = std::min(quarter, recorded_seconds(5000));
-            whole = std::min(whole, recorded_seconds(20000));
+            quarter = std::min(quarter, recorded_seconds(5000, recording_repeats));
+            whole = std::min(whole, recorded_seconds(20000, recording_repeats));
         } else {
-            whole = std::min(whole, recorded_seconds(20000));
-            quarter = std::min(quarter, recorded_seconds(5000));
+            whole = std::min(whole, recorded_seconds(20000, recording_repeats));
+            quarter = std::min(quarter, recorded_seconds(5000, recording_repeats));
         }
     }
     const double ratio = quarter > 0.0 ? whole / quarter : 0.0;
     std::printf("  kernel-recorded per-bar broker hashes, best of %d interleaved rounds: "
-                "5000 bars %.4f s, 20000 bars %.4f s (x%.2f for 4x the bars, bound x8)\n",
-                kScalingRounds, quarter, whole, ratio);
+                "5000 bars x%d %.4f s, 20000 bars x%d %.4f s (x%.2f for 4x the bars, bound x8)\n",
+                kScalingRounds, recording_repeats, quarter, recording_repeats, whole, ratio);
     CHECK(ratio > 0.0);
+    CHECK(quarter >= kMinLegSeconds);
+    CHECK(whole >= kMinLegSeconds);
     CHECK(ratio < 8.0);
+    int read_repeats = 2000;
+    while (true) {
+        const double early_probe = read_seconds(10000, 2500, read_repeats);
+        const double late_probe = read_seconds(10000, 9999, read_repeats);
+        if (std::min(early_probe, late_probe) >= kMinLegSeconds
+            || read_repeats >= 1024 * 1024) {
+            break;
+        }
+        read_repeats *= 2;
+    }
     for (int round = 0; round < kScalingRounds; ++round) {
         if (round % 2 == 0) {
-            early = std::min(early, read_seconds(10000, 2500));
-            late = std::min(late, read_seconds(10000, 9999));
+            early = std::min(early, read_seconds(10000, 2500, read_repeats));
+            late = std::min(late, read_seconds(10000, 9999, read_repeats));
         } else {
-            late = std::min(late, read_seconds(10000, 9999));
-            early = std::min(early, read_seconds(10000, 2500));
+            late = std::min(late, read_seconds(10000, 9999, read_repeats));
+            early = std::min(early, read_seconds(10000, 2500, read_repeats));
         }
     }
     const double read_ratio = early > 0.0 ? late / early : 0.0;
-    std::printf("  continuation read, 2000 reads, best of %d interleaved rounds: at bar 2500 "
+    std::printf("  continuation read, %d reads, best of %d interleaved rounds: at bar 2500 "
                 "%.4f s, at bar 9999 %.4f s (x%.2f, bound x2)\n",
-                kScalingRounds, early, late, read_ratio);
+                read_repeats, kScalingRounds, early, late, read_ratio);
     CHECK(read_ratio > 0.0);
+    CHECK(early >= kMinLegSeconds);
+    CHECK(late >= kMinLegSeconds);
     CHECK(read_ratio < 2.0);
 }
 

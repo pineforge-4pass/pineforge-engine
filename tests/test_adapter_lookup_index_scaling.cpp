@@ -14,13 +14,14 @@
 //     bracket re-issued every bar adds legs every bar. PERF-D1 measured probe
 //     044 (two quantity brackets per entry) at 55 % in exit().
 // So a run four times longer cost far more than four times as much. This row
-// holds the SHAPE of the cost: each workload at 6,000 and at 24,000 bars,
-// process CPU time (std::clock), best of five per leg, and the ratio must
-// stay under 5 -- four for a linear run, plus room for noise and for the
-// per-bar work a shorter run amortizes worse. Measured on this TU (macOS
-// arm64, load ~11-19) at the lane's base f71cd820: reversals 9.68, brackets
-// 7.68 (per bar 10.2 -> 40.0 and 6.4 -> 22.5 us from 6,000 to 48,000 bars);
-// with the lane's indexes 4.07 and 3.94 (8.2 -> 8.6 and 4.9 -> 5.4 us).
+// holds the SHAPE of the cost with process CPU time (std::clock), best of five
+// per leg, and a ratio under 5 -- four for a linear run, plus room for noise
+// and for the per-bar work a shorter run amortizes worse. The small leg is
+// calibrated independently for each workload until its best sample has at
+// least 100 ms of CPU; the large leg is four times that size. The original
+// fixed 6,000-bar leg was only 20--35 ms on this Mac and the hosted Release
+// failure measured 6.01 at that size. Keeping the bound at 5 after sizing the
+// legs preserves the old mutant margin (the scan is still well above 5).
 // What the runs produce is pinned elsewhere (test_adapter_lookup_index_
 // witness) and compared bit for bit against the reference scans
 // (test_adapter_lookup_index_differential); here only the finished state is
@@ -154,11 +155,23 @@ Leg best_of_five(Workload workload, const std::vector<Bar>& bars) {
     return best;
 }
 
-constexpr int kBars = 6000;
+constexpr int kInitialBars = 6000;
+constexpr int kMaxCalibratedBars = 96000;
+constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 5.0;
 
+int calibrated_bars(Workload workload) {
+    int bars = kInitialBars;
+    while (true) {
+        const Leg sample = best_of_five(workload, tape(bars));
+        if (sample.seconds >= kMinLegSeconds || bars >= kMaxCalibratedBars / 2)
+            return bars;
+        bars *= 2;
+    }
+}
+
 void cost_is_linear_in_the_bars(Workload workload, const char* name) {
-    const int bars = gated() ? kBars : kBars / 4;
+    const int bars = gated() ? calibrated_bars(workload) : kInitialBars / 4;
     const std::vector<Bar> small_tape = tape(bars);
     const std::vector<Bar> large_tape = tape(bars * 4);
     const Leg small = best_of_five(workload, small_tape);
@@ -176,6 +189,8 @@ void cost_is_linear_in_the_bars(Workload workload, const char* name) {
         std::printf("  (ratio not gated: non-Release library)\n");
         return;
     }
+    CHECK(small.seconds >= kMinLegSeconds);
+    CHECK(large.seconds >= kMinLegSeconds);
     CHECK(ratio < kShapeBound);
 }
 
