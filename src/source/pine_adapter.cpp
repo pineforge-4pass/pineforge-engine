@@ -11025,6 +11025,16 @@ bool PineExecutionAdapter::anchorable_relative_exit(
         ++parents;
     }
     if (parents != 1) return false;
+    // A trailing offset of a tick or more is the one relative leg exit()
+    // seeds: its running best starts AT the activation (Trail::best_seed), as
+    // TradingView's does on 13 of 13 pending-entry tapes
+    // (tests/test_pending_entry_trail_tapes.cpp). The anchored child cannot
+    // carry that seed -- the kernel's FromOwnerFill anchor installs the arm
+    // level alone -- and adopted, it rode from the raw arm print and exited 1
+    // to 24 bars late. So the definition is not anchorable, and the parent's
+    // fill point submits the seeded leg (R5 lane PAR-ORDERS).
+    for (const auto& shape : relative_leg_shapes(value, only_long))
+        if (std::holds_alternative<native_order::Trail>(shape.trigger)) return false;
     parent = only;
     parent_long = only_long;
     return true;
@@ -11052,6 +11062,8 @@ PineExecutionAdapter::relative_leg_shapes(const PendingRelativeExit& value,
         const bool has_offset = std::isfinite(value.trail_offset) && value.trail_offset >= 0.0;
         const double offset_ticks = has_offset ? std::floor(value.trail_offset) : kNaN;
         if (trail_ticks >= 1.0 && has_offset && offset_ticks >= 1.0) {
+            // Never placed: exit() seeds this leg, which the anchored child
+            // cannot carry, so anchorable_relative_exit refuses its definition.
             shapes.push_back({PineOrderFamily::ExitTrail,
                               native_order::Trail{0.0, 0.0,
                                                   native_order::TrailTicks{offset_ticks}},

@@ -1059,13 +1059,20 @@ struct Named {
 // (rel-limit-parent, rel-reissue-changed, the breakout pair, ...), a zero-
 // capacity sibling (rel-two-exits) and an unrepresentable level
 // (rel-negative-short).
+// R5 lane PAR-ORDERS re-pinned the four trailing-offset shapes (rel-trail-
+// offset, rel-short-trail, mag-rel-trail-offset, coof-rel-trail-offset) from
+// {1,1,0} to {0,0,0}: exit() seeds a trailing offset's running best at the
+// activation (Trail::best_seed), the anchored child cannot carry that seed,
+// so the definition is not anchorable and the fill point submits the seeded
+// leg (TradingView's start, tests/test_pending_entry_trail_tapes.cpp). No
+// closed row, equity figure or book digest here moved; only these counts did.
 constexpr Named kShapes[] = {
     {"RelBracketTp", "rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}},
     {"RelBracketSl", "rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}},
     {"RelBracketEveryBar", "rel-bracket-every-bar", Shape::RelBracketEveryBar, 1, {2, 2, 0}},
     {"RelExitBeforeEntry", "rel-exit-before-entry", Shape::RelExitBeforeEntry, 1, {4, 4, 0}},
     {"RelTrailOneShot", "rel-trail-one-shot", Shape::RelTrailOneShot, 1, {1, 1, 0}},
-    {"RelTrailOffset", "rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}},
+    {"RelTrailOffset", "rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}},
     {"RelTrailZero", "rel-trail-zero", Shape::RelTrailZero, 1, {1, 1, 0}},
     {"RelShort", "rel-short", Shape::RelShort, 1, {2, 2, 0}},
     {"RelThreeWay", "rel-three-way", Shape::RelThreeWay, 1, {2, 2, 0}},
@@ -1087,7 +1094,7 @@ constexpr Named kShapes[] = {
     {"RelNegativeShort", "rel-negative-short", Shape::RelNegativeShort, 1, {2, 1, 1}},
     {"RelTwoExits", "rel-two-exits", Shape::RelTwoExits, 1, {4, 2, 2}},
     {"RelGapFill", "rel-gap-fill", Shape::RelGapFill, 1, {2, 2, 0}},
-    {"RelShortTrail", "rel-short-trail", Shape::RelShortTrail, 1, {1, 1, 0}},
+    {"RelShortTrail", "rel-short-trail", Shape::RelShortTrail, 1, {0, 0, 0}},
     {"RelProfitOnly", "rel-profit-only", Shape::RelProfitOnly, 1, {1, 1, 0}},
     {"RelQtyExplicit", "rel-qty-explicit", Shape::RelQtyExplicit, 1, {0, 0, 0}},
     {"RelReissueChanged", "rel-reissue-changed", Shape::RelReissueChanged, 1, {18, 2, 16}},
@@ -1099,14 +1106,14 @@ constexpr Named kShapes[] = {
      Mode::Magnifier},
     {"MagRelBracketTp", "mag-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::Magnifier},
     {"MagRelBracketSl", "mag-rel-bracket-sl", Shape::RelBracketSl, 1, {2, 2, 0}, Mode::Magnifier},
-    {"MagRelTrailOffset", "mag-rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}, Mode::Magnifier},
+    {"MagRelTrailOffset", "mag-rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}, Mode::Magnifier},
     {"MagRelTrailOneShot", "mag-rel-trail-one-shot", Shape::RelTrailOneShot, 1, {1, 1, 0}, Mode::Magnifier},
     {"MagRelLimitParent", "mag-rel-limit-parent", Shape::RelLimitParent, 1, {12, 4, 8}, Mode::Magnifier},
     {"MagRelStopParent", "mag-rel-stop-parent", Shape::RelStopParent, 1, {2, 2, 0}, Mode::Magnifier},
     {"MagRelShort", "mag-rel-short", Shape::RelShort, 1, {2, 2, 0}, Mode::Magnifier},
     {"MagRelSlippage", "mag-rel-slippage", Shape::RelSlippage, 1, {4, 4, 0}, Mode::Magnifier},
     {"CoofRelBracketTp", "coof-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::CalcOnOrderFills},
-    {"CoofRelTrailOffset", "coof-rel-trail-offset", Shape::RelTrailOffset, 1, {1, 1, 0}, Mode::CalcOnOrderFills},
+    {"CoofRelTrailOffset", "coof-rel-trail-offset", Shape::RelTrailOffset, 1, {0, 0, 0}, Mode::CalcOnOrderFills},
     {"PoocRelBracketTp", "pooc-rel-bracket-tp", Shape::RelBracketTp, 1, {2, 2, 0}, Mode::ProcessOnClose},
     {"PoocRelShort", "pooc-rel-short", Shape::RelShort, 1, {2, 2, 0}, Mode::ProcessOnClose},
     {"RelPyramidSetOnce", "rel-pyramid-set-once", Shape::RelPyramidSetOnce, 2, {2, 2, 0}},

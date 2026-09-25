@@ -5,11 +5,12 @@
  * Every tape here issues strategy.exit(trail_points=n, trail_offset=k) on the
  * SIGNAL bar, together with the MARKET strategy.entry it names, so the exit
  * is placed while its entry is still pending; the entry fills at the next
- * bar's open. The Pine adapter lowers such an exit to the kernel's anchored
- * child (relative_leg_shapes: a Trail whose arm threshold is FromOwnerFill,
- * materialized at the parent's fill through resolve_anchored_level) and adopts
- * that child at the fill point. None of the 23 E5 / E9 / E14 tapes measured
- * this shape: every one of them issued its exit once the entry had filled.
+ * bar's open. The Pine adapter queues such an exit and submits its leg at the
+ * parent's fill, where exit() builds the Trail with its arm threshold and a
+ * best_seed. It is never the kernel's anchored child: that child cannot carry
+ * the seed (anchorable_relative_exit). None of the 23 E5 / E9 / E14 tapes
+ * measured this shape: every one of them issued its exit once the entry had
+ * filled.
  * The tapes are `lab tv` exports on NYSE:F 15m (sub-cent prints),
  * tests/fixtures/pending_entry_trail (README.md there lists them).
  *
@@ -21,19 +22,19 @@
  *    that bar at activation -/+ 1 tick, 28 of 28 (market entries 8 + 8, 11 of
  *    them on the fill bar itself; limit entries 6 + 6), so the pending-entry trail arms on the
  *    tick-quantized path exactly as lane E5 measured for a filled entry. The
- *    adapter's anchored child arms there too (source_trail_arm_level in
- *    resolve_anchored_level) and books TradingView's bar and price, 16 of 16.
+ *    fill point's leg arms there too (source_trail_arm_level in exit()) and
+ *    books TradingView's bar and price, 28 of 28.
  *
  * 2. The running best (lane E14's open measurement). Same shape, but the prints
  *    after the arm land between the two stops a best can give: TradingView's
  *    exit is the stop of a best that starts AT the activation (13 of 13), the
- *    reading lane E14 measured for a filled entry. The adapter's anchored child
- *    names no Trail::best_seed, so its best starts at the raw arm print, half a
- *    tick or less short of the activation, and its stop stays out of reach:
- *    the engine exits 1 to 24 bars later, 13 of 13. These are RECORDED
- *    divergences (the E14 protocol): each row asserts the engine DIFFERS from
- *    TradingView at exactly the bar and price listed, so the row fails loudly
- *    the day an anchored seed lands and the mask has to go, deliberately.
+ *    reading lane E14 measured for a filled entry. The fill point's leg names
+ *    that start as its Trail::best_seed, and the engine books TradingView's
+ *    bar and price, 13 of 13. Lane H-MEASURE recorded these 13 as divergences:
+ *    the adapter then adopted the kernel's anchored child, which names no
+ *    seed, so its best started at the raw arm print, half a tick or less short
+ *    of the activation, and it exited 1 to 24 bars later. Lane PAR-ORDERS
+ *    flipped them: a seeded definition is not anchorable.
  */
 
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -82,12 +83,6 @@ struct FeedBar {
 
 #include "fixtures/pending_entry_trail/bars.inc"
 
-// The engine's exit on a recorded divergence: bars after the fill bar, price.
-struct EngineExit {
-    int bars_after_fill;
-    double price;
-};
-
 enum class Question { Arm, RunningBest };
 
 constexpr double kOffsetOne[] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
@@ -102,34 +97,21 @@ struct Probe {
     int entries;
     int bars_per_entry;          // the signal bar .. past the timeout close's fill
     Question question;
-    // Entries whose engine exit is a RECORDED divergence, bit per entry index,
-    // with the engine's exit for each (nullptr: none).
-    unsigned recorded_divergences;
-    const EngineExit* engine_exits;
-};
-
-// Row 3's measured divergences (the adapter's anchored child, no best_seed).
-constexpr EngineExit kH3LongEngine[] = {
-    {7, 10.31}, {7, 10.61}, {23, 11.44}, {6, 11.74},
-    {8, 11.74}, {14, 12.27}, {25, 13.26}, {7, 11.72},
-};
-constexpr EngineExit kH3ShortEngine[] = {
-    {3, 9.94}, {17, 10.17}, {3, 13.67}, {2, 13.66}, {13, 13.68},
 };
 
 const Probe kProbes[] = {
     {"hm-orders-h4-f-long-pending-arm", true, kH4LongPoints, kH4LongOffsets, nullptr,
-     &kH4Long[0][0], 8, 28, Question::Arm, 0u, nullptr},
+     &kH4Long[0][0], 8, 28, Question::Arm},
     {"hm-orders-h4-f-short-pending-arm", false, kH4ShortPoints, kH4ShortOffsets, nullptr,
-     &kH4Short[0][0], 8, 28, Question::Arm, 0u, nullptr},
+     &kH4Short[0][0], 8, 28, Question::Arm},
     {"hm-orders-h4-f-long-pending-limit-arm", true, kH4LimitLongPoints, kOffsetOne,
-     kH4LimitLongLevels, &kH4LimitLong[0][0], 6, 30, Question::Arm, 0u, nullptr},
+     kH4LimitLongLevels, &kH4LimitLong[0][0], 6, 30, Question::Arm},
     {"hm-orders-h4-f-short-pending-limit-arm", false, kH4LimitShortPoints, kOffsetOne,
-     kH4LimitShortLevels, &kH4LimitShort[0][0], 6, 30, Question::Arm, 0u, nullptr},
+     kH4LimitShortLevels, &kH4LimitShort[0][0], 6, 30, Question::Arm},
     {"hm-orders-h3-f-long-pending-seed", true, kH3LongPoints, kH3LongOffsets, nullptr,
-     &kH3Long[0][0], 8, 28, Question::RunningBest, 0xFFu, kH3LongEngine},
+     &kH3Long[0][0], 8, 28, Question::RunningBest},
     {"hm-orders-h3-f-short-pending-seed", false, kH3ShortPoints, kH3ShortOffsets, nullptr,
-     &kH3Short[0][0], 5, 28, Question::RunningBest, 0x1Fu, kH3ShortEngine},
+     &kH3Short[0][0], 5, 28, Question::RunningBest},
 };
 
 // ── the tape ──────────────────────────────────────────────────────────
@@ -271,10 +253,10 @@ std::string utc(std::int64_t ms) {
 }
 
 // What the kernel recorded for the exit label: the accepted request (an
-// anchored Trail, and whether it names a best_seed) and its TrailArm.
+// anchored Trail, and the best_seed it names) and its TrailArm.
 struct ExitRecord {
     bool anchored_trail = false;
-    bool best_seed = false;
+    std::optional<double> best_seed;
     std::optional<int> arm_bar;
     std::optional<double> arm_reached;
 };
@@ -288,7 +270,7 @@ ExitRecord exit_record(const TapeHost& host, const char* label) {
             if (const auto* t = std::get_if<native_order::Trail>(&accepted->request().trigger)) {
                 record.anchored_trail = record.anchored_trail
                     || std::holds_alternative<native_order::FromOwnerFill>(accepted->request().anchor);
-                record.best_seed = record.best_seed || t->best_seed.has_value();
+                if (t->best_seed) record.best_seed = t->best_seed;
             }
         } else if (const auto* act = std::get_if<native_order::ActivatedEvent>(&*event.command)) {
             if (act->definition->request.label != label
@@ -338,18 +320,20 @@ void test_tapes_replay(Question question) {
             } else {
                 CHECK(fill_bar == 1 && same_price(tv.entry_price, bars[1].open));
             }
-            // The shape under test: the exit ran on the kernel's anchored child,
-            // which the fill point adopted, and that child names no best_seed.
+            // The shape under test: no anchored child (the definition is not
+            // anchorable), so the fill point submits the leg exit() builds,
+            // whose running best starts AT the activation. The fill print is
+            // short of it on every trade here, so the seed is the activation.
             const auto stats = host.anchored();
-            CHECK(stats.anchored == 1 && stats.adopted == 1 && stats.withdrawn == 0);
+            CHECK(stats.anchored == 0 && stats.adopted == 0 && stats.withdrawn == 0);
             const ExitRecord record = exit_record(host, label);
-            CHECK(record.anchored_trail);
-            CHECK(!record.best_seed);
             // TradingView's exit is the trail's (never the timeout), on the bar
             // that armed it or later, at the stop of a best that starts AT the
             // activation: activation -/+ k ticks.
             const int k = static_cast<int>(probe.trail_offsets[e]);
             const double activation = tv.entry_price + sign * probe.trail_points[e] * kTick;
+            CHECK(!record.anchored_trail);
+            CHECK(record.best_seed && same_price(*record.best_seed, activation));
             const int tv_bar = bar_of(bars, tv.exit_ms);
             CHECK(tv.exit_signal == label);
             CHECK(tv_bar >= 1);
@@ -369,22 +353,6 @@ void test_tapes_replay(Question question) {
             }
             const bool matches = host.exit_time(0) == tv.exit_ms
                 && same_price(host.exit_price(0), tv.exit_price);
-            if (probe.recorded_divergences & (1u << e)) {
-                // The anchored child's best starts at the raw arm print, so
-                // its stop sits below (a short's above) TradingView's and the
-                // engine exits later, at exactly this bar and price.
-                CHECK(!matches);
-                const EngineExit want = probe.engine_exits[e];
-                CHECK(host.exit_time(0) == bars[static_cast<std::size_t>(1 + want.bars_after_fill)].timestamp);
-                CHECK(same_price(host.exit_price(0), want.price));
-                CHECK(host.exit_time(0) > tv.exit_ms);
-                std::printf("        trade %d: RECORDED divergence — engine exit %s @%.10g "
-                            "(+%d bars after the fill), TradingView %s @%.10g (+%d)\n",
-                            e + 1, utc(host.exit_time(0)).c_str(), host.exit_price(0),
-                            bar_of(bars, host.exit_time(0)) - 1, utc(tv.exit_ms).c_str(),
-                            tv.exit_price, tv_bar - 1);
-                continue;
-            }
             CHECK(host.exit_time(0) == tv.exit_ms);
             CHECK(same_price(host.exit_price(0), tv.exit_price));
             if (matches) {
@@ -395,9 +363,8 @@ void test_tapes_replay(Question question) {
                             utc(tv.exit_ms).c_str(), tv.exit_price);
             }
         }
-        if (probe.recorded_divergences == 0)
-            std::printf("        %d of %d trades match TradingView bar and price\n", matched,
-                        probe.entries);
+        std::printf("        %d of %d trades match TradingView bar and price\n", matched,
+                    probe.entries);
     }
 }
 

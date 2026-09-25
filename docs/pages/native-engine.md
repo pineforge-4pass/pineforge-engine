@@ -984,12 +984,15 @@ functions `exit()` uses. The parent's fill point still runs the source
 same-bar ordering are facts of that point and have no kernel analogue; it
 *adopts* the armed child instead of submitting whenever that child is the
 request it was about to submit: the same trigger bits, the same OCA group, a
-host-sized close of the book. The comparison leaves out a trail's
-`best_seed`, so a pending entry's trailing exit adopts a child whose best
-starts at the raw arm print where the request `exit()` builds would start it
-at the activation; TradingView starts it at the activation, and the adapter
-exits later on 13 of 13 taped trades (`tests/test_pending_entry_trail_tapes.cpp`,
-recorded divergences). The quantized arm itself holds there, 28 of 28. Because the child is host-sized and
+host-sized close of the book. A trailing offset of a tick or more is never
+anchored: `exit()` starts that leg's running best at the activation
+(`Trail::best_seed`), the anchored child cannot carry the seed, so
+`anchorable_relative_exit` refuses the definition and the fill point submits
+the seeded leg. On the six tapes of that shape
+(`tests/test_pending_entry_trail_tapes.cpp`) the engine books TradingView's bar
+and price 41 of 41, the quantized arm 28 of 28 and the running best 13 of 13;
+the adopted unseeded child had exited 1 to 24 bars late on those 13 (lane
+PAR-ORDERS). Because the child is host-sized and
 book-scoped, that holds for every quantity the source resolves at the match
 (a percentage, a sibling's remainder) and for every book the parent's fill
 leaves (flat, a reversal, a later same-id add), under `calc_on_order_fills`
@@ -1004,12 +1007,13 @@ with its measurement (`tests/test_adapter_brackets_relower.cpp`):
 | explicit `qty=` (`rel-qty-explicit`) | `{0,0,0}` | `exit()` stages an explicit quantity per origin (`pending_bracket_legs_`) and submits it at a later flush: the fill point has no request for a child to be |
 | `strategy.cancel(exit id)` in the same evaluation (`rel-cancel-exit-id`) | `{0,0,0}` | the definition is gone before the evaluation ends: no leg exists |
 | `close_entries_rule = "ANY"`, stream runs | not anchored | the fill-point leg is cohort-bound (`BindCohort`), a scope the arm does not spell; a stream's fill point stages the leg |
+| a trailing offset of a tick or more (`rel-trail-offset`, `rel-short-trail`, `mag-rel-trail-offset`, `coof-rel-trail-offset`) | `{0,0,0}` | `exit()` starts the leg's running best at the activation (`Trail::best_seed`, TradingView's start); the kernel's anchor installs the arm level alone, so the child cannot carry the seed |
 | a parent re-issued, cancelled or declined (`rel-limit-parent` `{12,4,8}`, `rel-reissue-changed` `{18,2,16}`, `rel-breakout-pair` `{40,14,24}`, `rel-declined` `{2,0,2}`) | withdrawn | the kernel ends a waiting child with its parent (`OwnerGone`), a replaced parent included; keeping the children across a replace needs a re-parent transition in the event log, which is an epoch decision |
 | a sibling with no capacity left (`rel-two-exits` `{4,2,2}`), a level below zero (`rel-negative-short` `{2,1,1}`) | withdrawn | the fill point submits nothing for that leg |
 
 Over the 49 pending-parent scenarios the suite pins, the split is
-`{220, 123, 93}`, and every shape but the two recorded above runs on the
-kernel. The queued definition and its
+`{216, 119, 93}`, and every shape but the three `{0,0,0}` rows above runs on
+the kernel. The queued definition and its
 shadow row stay: the definition outlives parents (it may be declared before
 any entry exists and is re-anchored when a parent is replaced) and is what
 the fallback re-runs, and the shadow row is the source projection of a child
@@ -1450,7 +1454,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:14069-14093`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14081-14105`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and

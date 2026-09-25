@@ -386,11 +386,12 @@ the whole book exactly as a C++ one does.
 The Pine adapter lowers its own queued relative legs exactly this way — a
 host-sized `Book` / `AfterArmPrint` child, with `resolve_anchored_level`
 carrying only TradingView's half-tick threshold — and adopts the armed child at
-the parent's fill. An explicit `qty=`, `close_entries_rule="ANY"` and stream
-runs keep the adapter's fill-point submission. The adopted child of a trailing
-exit names no `best_seed`, so its ride starts at the raw arm print where
-TradingView's starts at the activation: a recorded divergence on 13 of 13 taped
-trades (`tests/test_pending_entry_trail_tapes.cpp`).
+the parent's fill. An explicit `qty=`, `close_entries_rule="ANY"`, stream
+runs and a trailing offset of a tick or more keep the adapter's fill-point
+submission. The trailing leg starts its running best at the activation
+(`Trail::best_seed`), as TradingView's does on 13 of 13 taped trades
+(`tests/test_pending_entry_trail_tapes.cpp`), and the anchored child cannot
+carry that seed.
 
 ## Risk limits {#pine_to_native_map_risk}
 
