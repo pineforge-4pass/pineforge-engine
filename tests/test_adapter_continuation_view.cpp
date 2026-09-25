@@ -449,12 +449,16 @@ constexpr std::uint64_t k_aggregated[] = {
 //   6106527879897255797ull -> 22607172627576334ull
 //   14842205570428090150ull -> 12265832737220737843ull
 //   6106527879897255797ull -> 22607172627576334ull
+// expectation corrected (PAR-ORDERS, k_aggregated_magnifier, 3 of 5 values), because R5 lane PAR-ORDERS dates every fill of an aggregated magnified run at its chart bar's open, as TradingView does, and the lots' dated times are Pine hash inputs; harvested with this TU's harvest switch on the lane's tree (a second harvest reproduces it):
+//   10607093485200722581ull -> 7363580706773703120ull
+//   22607172627576334ull -> 5380311451522306220ull
+//   22607172627576334ull -> 5380311451522306220ull
 constexpr std::uint64_t k_aggregated_magnifier[] = {
     14031106247497767919ull,
-    10607093485200722581ull,
-    22607172627576334ull,
+    7363580706773703120ull,
+    5380311451522306220ull,
     12265832737220737843ull,
-    22607172627576334ull,
+    5380311451522306220ull,
 };
 // expectation corrected (k_coof, 10 of 10 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
 //   10454171698854540065ull -> 8160477046829279565ull

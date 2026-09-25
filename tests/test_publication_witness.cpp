@@ -65,7 +65,14 @@
 // a new digest. Every count is unchanged, and this TU with the three hash
 // inputs taken out (the host-extension fold, the recorded broker-state hash
 // rows, the final hash) prints the same table against main 91d65ad6 and the
-// lane's library, byte for byte.
+// lane's library, byte for byte. Re-harvested once more for R5 lane
+// PAR-ORDERS (21 runs): a pending entry's trailing exit is no longer placed
+// as an anchored kernel child (17 runs: the host-extension fold, the recorded
+// broker-state hash rows and the final hash), and a process_orders_on_close
+// add stays under the pyramiding cap when the pending opposite entry is not
+// in the close pass (4 runs). With the three hash inputs taken out, this TU
+// prints INT25's table byte for byte but for Storm11 and Storm11M, whose
+// trades the cap moves.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 

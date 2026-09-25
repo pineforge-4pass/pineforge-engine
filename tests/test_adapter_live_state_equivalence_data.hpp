@@ -19,8 +19,10 @@
 
 // K-IDX Option A re-pins the v19 transcript digests once for the script/input coordinate fold.
 
+// R5 lane PAR-ORDERS re-harvested it the same way on its tree (29 of 108 digests
+// move; see the lane's hash commit for why each moves).
 constexpr std::uint64_t kTranscriptDigests[] = {
-    12303832286788334682ull,  // reversals seed 104729, 131 trades, 396 commands, 420 rows placed
+    8320704943709246891ull,  // reversals seed 104729, 131 trades, 397 commands, 426 rows placed
     3937583110602879389ull,  // reversals seed 209458, 126 trades, 382 commands, 409 rows placed
     9660742953292018077ull,  // reversals seed 314187, 208 trades, 684 commands, 653 rows placed
     14691229822702022375ull,  // reversals seed 418916, 105 trades, 378 commands, 361 rows placed
@@ -30,22 +32,22 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     15494092140752158088ull,  // reversals seed 837832, 91 trades, 401 commands, 332 rows placed
     5702736951683229543ull,  // reversals seed 942561, 98 trades, 408 commands, 356 rows placed
     10200415260680638236ull,  // reversals seed 1047290, 134 trades, 402 commands, 393 rows placed
-    15845567806271913335ull,  // reversals seed 1152019, 148 trades, 386 commands, 415 rows placed
+    6104491581818825501ull,  // reversals seed 1152019, 145 trades, 386 commands, 411 rows placed
     9826242374101611623ull,  // reversals seed 1256748, 118 trades, 402 commands, 362 rows placed
     4883135135199369800ull,  // reversals seed 1361477, 105 trades, 413 commands, 349 rows placed
     6980972530369447172ull,  // reversals seed 1466206, 151 trades, 372 commands, 393 rows placed
     419860461863827083ull,  // reversals seed 1570935, 77 trades, 357 commands, 297 rows placed
-    8598226526726960377ull,  // reversals seed 1675664, 132 trades, 397 commands, 406 rows placed
+    9695271777348687666ull,  // reversals seed 1675664, 125 trades, 398 commands, 400 rows placed
     3952138674949420146ull,  // reversals seed 1780393, 197 trades, 704 commands, 645 rows placed
     4513324373166417315ull,  // reversals seed 1885122, 113 trades, 393 commands, 388 rows placed
     18393465585117555058ull,  // reversals seed 1989851, 180 trades, 430 commands, 448 rows placed
     6120235323624511436ull,  // reversals seed 2094580, 92 trades, 384 commands, 340 rows placed
-    17071186865396902026ull,  // reversals seed 2199309, 114 trades, 375 commands, 341 rows placed
+    12243088919143375019ull,  // reversals seed 2199309, 126 trades, 398 commands, 370 rows placed
     7979846979225294549ull,  // reversals seed 2304038, 149 trades, 412 commands, 418 rows placed
     16092912242308174488ull,  // reversals seed 2408767, 139 trades, 415 commands, 404 rows placed
     1517737495207721277ull,  // reversals seed 2513496, 110 trades, 390 commands, 394 rows placed
     1610718425964291349ull,  // reversals seed 2618225, 105 trades, 411 commands, 371 rows placed
-    16169955000323314060ull,  // reversals seed 2722954, 153 trades, 390 commands, 423 rows placed
+    1694449538189143220ull,  // reversals seed 2722954, 150 trades, 390 commands, 419 rows placed
     8640229404818843386ull,  // reversals seed 2827683, 72 trades, 339 commands, 277 rows placed
     8135938306046315211ull,  // reversals seed 2932412, 96 trades, 360 commands, 318 rows placed
     9738428349677663372ull,  // reversals seed 3037141, 114 trades, 405 commands, 377 rows placed
@@ -55,7 +57,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     13691690510990974075ull,  // reversals seed 3456057, 88 trades, 373 commands, 334 rows placed
     14092552094636276530ull,  // reversals seed 3560786, 147 trades, 413 commands, 444 rows placed
     4203447471686931733ull,  // reversals seed 3665515, 133 trades, 394 commands, 397 rows placed
-    11999293368236543422ull,  // reversals seed 3770244, 53 trades, 339 commands, 240 rows placed
+    17742628010123667157ull,  // reversals seed 3770244, 53 trades, 339 commands, 239 rows placed
     5125743962394059998ull,  // brackets seed 104730, 82 trades, 521 commands, 568 rows placed
     3732927941814356572ull,  // brackets seed 209459, 77 trades, 487 commands, 551 rows placed
     10835407349126156117ull,  // brackets seed 314188, 147 trades, 866 commands, 1036 rows placed
@@ -93,39 +95,39 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     11302959202215131177ull,  // brackets seed 3665516, 86 trades, 536 commands, 566 rows placed
     5122510577651000745ull,  // brackets seed 3770245, 78 trades, 503 commands, 560 rows placed
     11244999202114714137ull,  // chains seed 104731, 59 trades, 301 commands, 286 rows placed
-    1482558061860139386ull,  // chains seed 209460, 85 trades, 390 commands, 393 rows placed
-    12647248509338936453ull,  // chains seed 314189, 107 trades, 526 commands, 446 rows placed
+    11413128619516782387ull,  // chains seed 209460, 85 trades, 390 commands, 386 rows placed
+    10134000431367652603ull,  // chains seed 314189, 107 trades, 526 commands, 444 rows placed
     3121930092179333450ull,  // chains seed 418918, 45 trades, 312 commands, 299 rows placed
     165784926829741990ull,  // chains seed 523647, 61 trades, 322 commands, 329 rows placed
-    18133723332411023357ull,  // chains seed 628376, 95 trades, 364 commands, 391 rows placed
-    15591750256092081664ull,  // chains seed 733105, 88 trades, 351 commands, 319 rows placed
+    10122741367483366791ull,  // chains seed 628376, 90 trades, 358 commands, 415 rows placed
+    13574785125744972298ull,  // chains seed 733105, 88 trades, 351 commands, 318 rows placed
     10108332716913767868ull,  // chains seed 837834, 64 trades, 359 commands, 358 rows placed
-    11616873062904594822ull,  // chains seed 942563, 59 trades, 341 commands, 322 rows placed
-    2647666278133997762ull,  // chains seed 1047292, 64 trades, 343 commands, 344 rows placed
-    10659847217212312660ull,  // chains seed 1152021, 70 trades, 342 commands, 418 rows placed
+    12836024126514275333ull,  // chains seed 942563, 59 trades, 341 commands, 322 rows placed
+    16444976724508807594ull,  // chains seed 1047292, 64 trades, 343 commands, 341 rows placed
+    6715343122935757718ull,  // chains seed 1152021, 70 trades, 342 commands, 384 rows placed
     12725802557554099964ull,  // chains seed 1256750, 65 trades, 319 commands, 302 rows placed
     1798455623603086886ull,  // chains seed 1361479, 64 trades, 312 commands, 323 rows placed
-    13767422546817055791ull,  // chains seed 1466208, 73 trades, 382 commands, 345 rows placed
-    10446321169177622098ull,  // chains seed 1570937, 90 trades, 366 commands, 419 rows placed
-    16738581318629067020ull,  // chains seed 1675666, 64 trades, 321 commands, 389 rows placed
-    12765469987058303812ull,  // chains seed 1780395, 82 trades, 480 commands, 461 rows placed
+    9973593188851025006ull,  // chains seed 1466208, 73 trades, 382 commands, 338 rows placed
+    15204985627708005050ull,  // chains seed 1570937, 90 trades, 366 commands, 370 rows placed
+    4161494051921551918ull,  // chains seed 1675666, 64 trades, 321 commands, 339 rows placed
+    632278533107602324ull,  // chains seed 1780395, 82 trades, 480 commands, 426 rows placed
     8033768331525115464ull,  // chains seed 1885124, 66 trades, 360 commands, 304 rows placed
     8033691744657508662ull,  // chains seed 1989853, 73 trades, 353 commands, 373 rows placed
-    6926029722960384835ull,  // chains seed 2094582, 75 trades, 321 commands, 365 rows placed
-    2330688028628663175ull,  // chains seed 2199311, 56 trades, 327 commands, 306 rows placed
-    6167262563711331013ull,  // chains seed 2304040, 81 trades, 342 commands, 354 rows placed
+    10675979410645833515ull,  // chains seed 2094582, 75 trades, 321 commands, 355 rows placed
+    11831052386180063129ull,  // chains seed 2199311, 56 trades, 327 commands, 278 rows placed
+    9463870180619581974ull,  // chains seed 2304040, 81 trades, 342 commands, 353 rows placed
     1057624106564667840ull,  // chains seed 2408769, 67 trades, 347 commands, 374 rows placed
-    13079047485388200520ull,  // chains seed 2513498, 66 trades, 336 commands, 338 rows placed
-    17296102854052744512ull,  // chains seed 2618227, 65 trades, 336 commands, 355 rows placed
-    5539584074139432609ull,  // chains seed 2722956, 87 trades, 363 commands, 366 rows placed
+    1646636678506043505ull,  // chains seed 2513498, 66 trades, 336 commands, 332 rows placed
+    15055331467095475975ull,  // chains seed 2618227, 65 trades, 336 commands, 331 rows placed
+    18266136563684836716ull,  // chains seed 2722956, 62 trades, 345 commands, 344 rows placed
     16845310385882942743ull,  // chains seed 2827685, 57 trades, 337 commands, 325 rows placed
-    10884597100613452852ull,  // chains seed 2932414, 65 trades, 350 commands, 331 rows placed
-    8164707371872766708ull,  // chains seed 3037143, 81 trades, 324 commands, 358 rows placed
+    6451466112212038981ull,  // chains seed 2932414, 65 trades, 350 commands, 330 rows placed
+    6296605148496367564ull,  // chains seed 3037143, 81 trades, 324 commands, 328 rows placed
     18120582394174365029ull,  // chains seed 3141872, 82 trades, 355 commands, 349 rows placed
-    5433696715667756825ull,  // chains seed 3246601, 100 trades, 485 commands, 473 rows placed
-    10570656349418425385ull,  // chains seed 3351330, 60 trades, 311 commands, 317 rows placed
-    10524873942376059207ull,  // chains seed 3456059, 59 trades, 292 commands, 298 rows placed
-    12441518321478214338ull,  // chains seed 3560788, 73 trades, 359 commands, 338 rows placed
+    17544117140908072910ull,  // chains seed 3246601, 98 trades, 485 commands, 468 rows placed
+    9531902743311875506ull,  // chains seed 3351330, 60 trades, 311 commands, 310 rows placed
+    1817828500136052373ull,  // chains seed 3456059, 59 trades, 292 commands, 289 rows placed
+    5397962162622300398ull,  // chains seed 3560788, 73 trades, 359 commands, 337 rows placed
     3084783482698433102ull,  // chains seed 3665517, 70 trades, 347 commands, 326 rows placed
     15996277680102595200ull,  // chains seed 3770246, 76 trades, 362 commands, 298 rows placed
 };
