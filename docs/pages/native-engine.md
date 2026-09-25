@@ -2734,9 +2734,11 @@ class Htf final : public pineforge::NativeStrategyHost {
 ```
 
 Only completed buckets are published, so this recipe has no lookahead by
-construction. It is the same class the kernel's own subscription evaluator and
-the Pine scheduler aggregate with (`TimeframeAggregator`
-`pine_scheduler_native.cpp:131`). What it does **not** give you is what a
+construction. It is the same class the kernel's own subscription evaluator
+aggregates with, and the one the kernel's `script_bucket_completions` query
+feeds when the Pine scheduler asks how its input span buckets
+(`TimeframeAggregator` `native_execution_consumer.cpp:7698`). What it does
+**not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
@@ -3155,12 +3157,26 @@ in the same test ("the source lot floors are not the kernel floor"). Paths whose
 sizing price is not the signal rule — a fill-time resize, a pure-stop entry
 sized at its trigger level, a typed percentage reversal sized from the
 hypothetical flatten's balance — keep `HostSized{Open}` and their own terms
-branch (same test, "pure-stop default entry keeps its own branch"), and that
-branch restates the same `cash / (price × point_value × fx)` quotient and
-percent fee reserve inline in the adapter's `resolve_execution_terms` override
-rather than calling `native_sized_units()`; so do the
+branch (same test, "pure-stop default entry keeps its own branch"), but that
+branch converts through the same query: the at-fill default resize is
+`default_sizing_units()` at the fill price, and a typed per-call quantity
+(`qty_type` cash or percent-of-equity) is `typed_quantity_units()` — the kernel's
+conversion under the source's grid floor — wherever it is read: at the fill, in
+the placement admission, and in the pending-order fill-quantity probe
+(`strategy_pending_order_fill_qty`), which answers the booked quantity at the
+price it is asked about (`tests/test_adapter_typed_entry_admission.cpp`,
+`tests/test_adapter_fill_qty_probe.cpp`). No `cash / (price × point_value × fx)`
+quotient is restated in the adapter. Two computations stay its own. The
 percentage exits: the kernel resolves a `ScopeFraction` as `scope * fraction`,
 which is not `scope * percent / 100`, and no field reconciles the association.
+And the money band's *affordable price*, `sig10(sig10(equity) / notional per
+unit of price)` compared against the sizing price at placement, at the terms
+boundary and in the paired-reversal and carried-money checks: that is not a
+conversion of money into units but TradingView's ten-significant-digit
+whole-drop price (the famr / famr3 tapes of `tests/test_tv_money_precision_l4b.cpp`
+and `tests/test_tv_money_band_l4b.cpp`), and on a decimal tie the kernel's
+conversion and plain binary64 both refuse the lot the rule admits
+(`tests/test_adapter_fill_qty_probe.cpp`, section 2; design row SZ10a).
 
 #### Previewing a basis
 
