@@ -32,8 +32,10 @@
  *   M10 (G2-12) the pre-open slice. Same money through the pre-open x4
  *       (schedule_preopen_margin_slice), through the shared rule
  *       (source_margin_units via the kernel's point) and through the kernel's
- *       AfterApplied point: they part on the one-contract band, on the +1e-6
- *       restore fudge, and on the frozen (signal-time) units.
+ *       AfterApplied point: they part on the one-contract band and on the
+ *       +1e-6 restore fudge. They parted on the frozen units too until R5
+ *       lane PAR-MARGIN froze a default-percent stop above 100 % at its
+ *       snapped level, as TradingView does (the M10 tapes below).
  *   M11 (G2-13) opening admission. AdmitWithHostMargin admits an opening the
  *       kernel's initial-margin gate declines (a percent entry fee), and
  *       refuses an add the kernel admits (signal-time equity vs marked).
@@ -81,6 +83,7 @@ struct FeedBar {
     double open, high, low, close;
 };
 #include "fixtures/margin_entry_bar/bars.inc"
+#include "fixtures/margin_entry_bar/m10_bars.inc"
 
 // ------------------------------------------------------------ TV policy
 // The twin's TradingView money and slice (test_native_margin_hooks_twin.cpp,
@@ -195,6 +198,7 @@ void check_fill(const MarginFill& f, int bar, NativePathPhase phase, double unit
 struct PineSide final : source::PineStrategyHost {
     std::function<void(PineSide&, int)> script;
     int calls = 0;
+    double last_close = 0.0;
     explicit PineSide(const Config& c) {
         auto& tv = fixture_configuration();
         tv.initial_capital = c.capital;
@@ -212,8 +216,9 @@ struct PineSide final : source::PineStrategyHost {
         set_margin_call_enabled(true);
         fixture_retain_all_events();
     }
-    void on_source_bar(const Bar&) override {
+    void on_source_bar(const Bar& bar) override {
         ++calls;
+        last_close = bar.close;
         if (script) script(*this, pine_bar_index());
     }
     void entry(const char* id, bool is_long, double limit, double stop, double qty) {
@@ -600,10 +605,14 @@ void m10_same_money(const M10Case& m) {
     check_fill(native[0], 2, NativePathPhase::Low, m.shared_units, m.low, true);
 }
 
-// The frozen tuple: signal close 100, gap-through open 102. The pre-open slice
-// sizes on the frozen 19 lots (sized at the 100 signal) while the book the
-// kernel fills holds 18 (sized at the 102 fill): 4 lots against the kernel's
-// one-contract band on the real book.
+// The frozen tuple: signal close 100, a 101 stop gapped through by the 102
+// open. Until R5 lane PAR-MARGIN the stop's units were frozen at the 100
+// signal (19) and the book sized again at the 102 fill (18), so the pre-open
+// slice sized 4 lots on a 19-lot book the run did not hold. TradingView
+// freezes a stop not yet marketable at its snapped level, above 100 % too
+// (the M10 tapes below): both are now the 101 level's 18 lots, and on them
+// the pre-open slice's own x4 sizes nothing -- the band row above, whose
+// one contract the kernel's point books (1 @90).
 void m10_frozen_units() {
     std::printf("-- M10 frozen: signal 100, fill 102, low 90\n");
     Config c;
@@ -622,9 +631,8 @@ void m10_frozen_units() {
     kernel.run_bars(pine_margin_spec("m10-frozen", c, 0.0), bars);
     const auto native = margin_fills(kernel);
     print_side("kernel", native, kernel.position(), kernel.balance());
-    REQUIRE(preopen.size() == 1);
-    CHECK(stop.position() + preopen[0].units == 18.0);   // the book is 18 lots
-    check_fill(preopen[0], 1, NativePathPhase::Low, 4.0, 90.0, false);
+    CHECK(preopen.empty());
+    CHECK(stop.position() == 18.0);   // the 101 level's 18 lots
     REQUIRE(native.size() == 1);
     check_fill(native[0], 1, NativePathPhase::Low, 1.0, 90.0, true);
 }
@@ -985,6 +993,120 @@ void m7_tradingview_tapes() {
     }
 }
 
+// ================================================================= M10 on tapes
+// Which book does TradingView size a default-percent stop entry above 100 % on,
+// and so its entry-bar margin call? Eight lab tv tapes on NYSE:F 15m
+// (tests/fixtures/margin_entry_bar/pm-m10-*, ws-report-v1, rangeProof
+// covered), margin 25, one buy stop placed on the session's last bar and
+// filled at the next session's open, closed 3 bars after the entry bar:
+//   k4-*    : 400 %, the stop at 0.9 x close -- marketable when placed;
+//   gapup-* : 390 %, the stop at round(1.002 x close, 2) -- not marketable
+//             when placed, gapped through by the open.
+// TradingView opens the quotient of the signal close (on its tick) for the
+// first and of the snapped stop level for the second -- 3427, 4219, 3144,
+// 3294 and 3896, 3475, 3987, 3757 shares -- never the fill's, and books its
+// margin calls on that book. ab9714be froze a default-percent stop only up to
+// 100 % (pine_strategy_commands.cpp:307-310) and sized a larger one at the
+// fill, and so did the adapter until R5 lane PAR-MARGIN: 0 of 8 books (3481,
+// 4385, 3200, 3358; 3842, 3430, 3947, 3728), with margin calls sized to match
+// or fired where TradingView fired none. It now freezes above 100 % too and
+// books every tape's rows: the same bars, quantities and signals, and the
+// same prices but two.
+//   The two (recorded, open): a margin call at an exact half-cent low -- 1007's
+//   12.105, 0501's 10.025 -- books a tick below TradingView (12.10 and 10.02
+//   against 12.11 and 10.03). Both decimals are stored a hair above the half
+//   cent, and TradingView rounds the stored value to its nearest tick; 0424's
+//   9.815, stored a hair below, books 9.81 on both sides.
+struct M10Tape {
+    const char* slug;
+    const FeedBar* bars;
+    double percent;
+    bool marketable;
+    int half_cent_row;   // the row booked a tick below the tape's; -1: none
+};
+
+double tape_entry_price(const char* slug) {
+    std::ifstream in(std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/" + slug + "/tv_trades.csv");
+    std::string line;
+    std::getline(in, line);
+    while (std::getline(in, line)) {
+        std::vector<std::string> cell;
+        std::stringstream fields(line);
+        std::string field;
+        while (std::getline(fields, field, ',')) cell.push_back(field);
+        if (cell.size() >= 6 && cell[1].rfind("Entry", 0) == 0) return std::stod(cell[4]);
+    }
+    return kNaN;
+}
+
+void m10_tradingview_tapes() {
+    const M10Tape tapes[] = {
+        {"pm-m10-f-k4-0402", kM10_k4_0402, 400.0, true, -1},
+        {"pm-m10-f-k4-0410", kM10_k4_0410, 400.0, true, -1},
+        {"pm-m10-f-k4-1007", kM10_k4_1007, 400.0, true, 0},
+        {"pm-m10-f-k4-0309", kM10_k4_0309, 400.0, true, -1},
+        {"pm-m10-f-gapup-0501", kM10_gapup_0501, 390.0, false, 0},
+        {"pm-m10-f-gapup-0331", kM10_gapup_0331, 390.0, false, -1},
+        {"pm-m10-f-gapup-0424", kM10_gapup_0424, 390.0, false, -1},
+        {"pm-m10-f-gapup-0527", kM10_gapup_0527, 390.0, false, -1},
+    };
+    for (const M10Tape& tape : tapes) {
+        std::printf("-- M10 tape %s (%.0f %%, a stop %s when placed)\n", tape.slug, tape.percent,
+                    tape.marketable ? "marketable" : "not yet marketable");
+        std::vector<Bar> bars;
+        for (int i = 0; i < 6; ++i) {
+            const FeedBar& r = tape.bars[i];
+            bars.push_back({r.open, r.high, r.low, r.close, 1.0, r.ts});
+        }
+        Config c;
+        c.capital = 10000.0; c.margin_long = 25.0; c.margin_short = 25.0;
+        c.qty_step = 1.0; c.mintick = 0.01;
+        c.qty_type = QtyType::PERCENT_OF_EQUITY; c.qty_value = tape.percent;
+        PineSide pine(c);
+        const bool marketable = tape.marketable;
+        pine.script = [marketable](PineSide& h, int bar) {
+            if (bar == 0) {
+                const double stop = marketable ? h.last_close * 0.9
+                                               : std::round(h.last_close * 1.002 * 100.0) / 100.0;
+                h.entry("L", true, kNaN, stop, kNaN);
+            }
+            if (h.position() > 0.0 && bar - h.entry_bar_index() >= 3) h.close("L");
+        };
+        pine.run_bars(bars);
+        const auto adapter = engine_exits(pine);
+        const auto tv = tape_exits(tape.slug, tape.bars);
+        print_rows("tape", tv);
+        print_rows("adapter", adapter);
+
+        // TradingView's book: the quotient at the signal close on its tick, or
+        // at the snapped stop level -- never at the fill.
+        const double close = tape.bars[0].close;
+        const double sizing_price = marketable ? std::round(close / 0.01) * 0.01
+                                               : std::round(close * 1.002 * 100.0) / 100.0;
+        const double frozen = std::floor(tape.percent / 100.0 * 10000.0 / sizing_price);
+        double tv_book = 0.0;
+        double adapter_book = 0.0;
+        for (const auto& r : tv) tv_book += r.qty;
+        for (const auto& r : adapter) adapter_book += r.qty;
+        CHECK(tv_book == frozen);
+        CHECK(adapter_book == frozen);
+        REQUIRE(pine.trade_count() > 0);
+        CHECK(std::abs(pine.get_trade(0).entry_price - tape_entry_price(tape.slug)) <= 5e-3);
+        REQUIRE(adapter.size() == tv.size());
+        for (std::size_t i = 0; i < tv.size(); ++i) {
+            CHECK(adapter[i].bar == tv[i].bar);
+            CHECK(std::abs(adapter[i].qty - tv[i].qty) <= 5e-5);
+            CHECK((tv[i].signal == "Margin call") == (adapter[i].signal == "Margin call"));
+            if (static_cast<int>(i) == tape.half_cent_row) {
+                // Recorded: a tick below the tape's price.
+                CHECK(std::abs(adapter[i].price - (tv[i].price - 0.01)) <= 5e-3);
+            } else {
+                CHECK(std::abs(adapter[i].price - tv[i].price) <= 5e-3);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1001,6 +1123,7 @@ int main() {
     test("M11-B add 104", [] { m11_add(104.0, true); });
     test("E20 f1 probe tail", e20_probe_tail_margin_call);
     test("M7 TradingView tapes", m7_tradingview_tapes);
+    test("M10 TradingView tapes", m10_tradingview_tapes);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

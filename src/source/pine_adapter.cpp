@@ -6374,12 +6374,17 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const bool typed_sized = !default_sized && (cash_sized || percent_sized);
     const bool fixed_priced_reverse = reverses && !default_sized && priced && !cash_sized;
     const bool cash_priced_reverse = reverses && !default_sized && priced && cash_sized;
-    const bool default_stop_scope = default_sized && pure_stop_entry
+    // A default-percent stop entry freezes its units at placement whatever
+    // the percentage (see the freeze below); ab9714be's own placement
+    // admission for it (pine_strategy_commands.cpp:307-310) is the one the
+    // percentage caps at 100, and above 100 the affordability arm admits it.
+    const bool default_stop_freeze = default_sized && pure_stop_entry
         && finite_positive(stop_price)
-        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+    const bool default_stop_scope = default_stop_freeze
         && config_.default_qty_value <= 100.0;
     double default_stop_sizing_price = kNaN;
-    if (default_stop_scope && finite_positive(staged_.syminfo.mintick)) {
+    if (default_stop_freeze && finite_positive(staged_.syminfo.mintick)) {
         stop_price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
         const double signal = source_point
             ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
@@ -6722,11 +6727,16 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (fixed_priced_reverse) {
         snapshot.frozen_reversal_transaction = std::abs(current) + normalized_qty;
     }
-    if (default_stop_scope && finite_positive(default_stop_sizing_price)) {
+    if (default_stop_freeze && finite_positive(default_stop_sizing_price)) {
         // A default-sized stop entry freezes its quantity against the
         // directionally snapped level, except an already-marketable stop
         // which is a next-open market order and therefore freezes at the
-        // source close. Neither path re-sizes at its later fill quote.
+        // source close. Neither path re-sizes at its later fill quote --
+        // above 100 % too, where ab9714be sized at the fill: eight lab tv
+        // tapes of a 390-400 % stop on NYSE:F (R5 lane PAR-MARGIN,
+        // tests/fixtures/margin_entry_bar/pm-m10-*) open the snapped level's
+        // quotient when the stop was not yet marketable and the signal
+        // close's when it was, never the fill's.
         snapshot.sizing.price = default_stop_sizing_price;
     }
     if (default_sized && finite_positive(snapshot.sizing.price)) {
@@ -6736,7 +6746,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         // ab9714be pine_fills.cpp:7139: non-pure-stop priced entries size at fill time using calc_qty(fill_price)
         snapshot.sizing.at_fill = (config_.calc_on_order_fills && coof_recalc_active_)
-            || (priced && !default_stop_scope);
+            || (priced && !default_stop_freeze);
     }
     // R5 R2: a declaration-level default quantity whose sizing price IS the
     // signal rule and whose quantity is frozen at the command is exactly what
@@ -12666,9 +12676,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                && (!(source.family == PineOrderFamily::Entry
                      && finite_positive(source.exit_levels.stop)
                      && !finite_positive(source.exit_levels.limit))
-                   || (config_.default_qty_type
-                           == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
-                       && config_.default_qty_value <= 100.0))) {
+                   || config_.default_qty_type
+                          == static_cast<int>(QtyType::PERCENT_OF_EQUITY))) {
         result.units = source.sizing.frozen_units;
     } else if (config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
         result.units = config_.default_qty_value;
@@ -18935,7 +18944,6 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         && std::isnan(snapshot.requested_qty)
         && owner_->config_.default_qty_type
             == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
-        && owner_->config_.default_qty_value <= 100.0
         && finite_positive(snapshot.sizing.frozen_units);
     const bool default_stop = default_stop_shape
         && finite_positive(fill_price)

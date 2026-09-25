@@ -1,0 +1,14 @@
+// R5 lane PAR-MARGIN M10: a default-percent (400 %) buy stop already marketable when
+// placed on the session's last bar (2026-04-01 15:45 America/New_York) fills at the
+// next session's gapped-down open. Margin 25: the entry bar's low breaches. Which book
+// does TradingView size the entry, and its entry-bar margin call, on -- the signal-time
+// units or the units the fill opens? Timeout close 3 bars after the entry bar.
+//@version=6
+strategy("pm-m10-f-k4-0402", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=400, pyramiding=1,
+     margin_long=25, margin_short=25, commission_value=0, slippage=0,
+     process_orders_on_close=false)
+if time == timestamp("America/New_York", 2026, 4, 1, 15, 45) and strategy.position_size == 0
+    strategy.entry("L", strategy.long, stop = close * 0.9)
+if strategy.position_size > 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= 3
+    strategy.close("L", comment="timeout")

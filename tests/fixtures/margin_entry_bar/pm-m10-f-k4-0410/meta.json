@@ -1,0 +1,16 @@
+{
+  "title": "pm-m10-f-k4-0410",
+  "slug": "pm-m10-f-k4-0410",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T22:20:47.352Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-02",
+    "to": "2025-04-15"
+  },
+  "pine_sha256": "405e720a1f0939f47c0e35f15422e0aa4fad80431381e32e2ab828ad78b71a33",
+  "tv_trades_sha256": "8911072fc9bfb7ad785e582d82855bde50c4c33b4c498c2d9a45ac356d02df6f",
+  "tv_trades_rows": 2
+}

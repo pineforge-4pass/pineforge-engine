@@ -1458,7 +1458,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:14133-14157`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:14100-14124`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1487,8 +1487,14 @@ market execution at the open, sized on the open's money; the kernel's mark
 check rests its slice at the remaining path's adverse extreme and
 `CalculationOnly` executes at the calculation, so no kernel check kind books
 that row. On the same money the pre-open slice and the kernel's
-`AfterApplied` point part on the one-contract band, on the restore's `+1e-6`
-floor and on the frozen signal-time units. The opening gate parts both ways:
+`AfterApplied` point part on the one-contract band and on the restore's
+`+1e-6` floor. They parted on the frozen units too until R5 lane PAR-MARGIN:
+a default-percent stop entry above 100 % was frozen at its signal but sized
+again at its fill, as `ab9714be` did. Eight `lab tv` tapes
+(`tests/fixtures/margin_entry_bar/pm-m10-*`) show TradingView freezes it at
+the snapped stop level, or at the signal close when the stop was already
+marketable, whatever the percentage, and books its margin calls on that
+book, so the adapter now does too. The opening gate parts both ways:
 the kernel declines a 1× long whose entry fee the adapter admits, and admits a
 gap-up add the adapter refuses against its signal-time equity. A leveraged
 opening (margin below 100 %) is checked on its own entry bar: four `lab tv`
@@ -2173,13 +2179,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1833`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1273`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1274`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1196-1226`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1197-1227`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.

@@ -1071,10 +1071,11 @@ typedef enum pf_fill_qty_partition_e {
  *      `pyramid_entries[0].qty - pyramid_entries[1].qty` after closing both
  *      lots (the short-seed collision path). Both kernels are
  *      modelled; each reports `close_only` 1 when it opens nothing.
- *    - `2` DEFAULT_STOP_PLACEMENT -- the DEFAULT percent_of_equity <= 100
- *      pure STOP entry's placement size (`default_stop_placement_qty`,
- *      round-7 family K), when the placement-size rule says the
- *      fill consumes it: created flat, filling from flat, positive fill.
+ *    - `2` DEFAULT_STOP_PLACEMENT -- the DEFAULT percent_of_equity pure
+ *      STOP entry's placement size, at any percentage
+ *      (`default_stop_placement_qty`, round-7 family K), when the
+ *      placement-size rule says the fill consumes it: created flat, filling
+ *      from flat, positive fill.
  *    - `3` AT_FILL -- default sizing at the slipped fill.
  *  @p close_only receives 1 when the kernel's close-only predicate fires
  *  -- the fill closes against the live opposite position and that

@@ -1,0 +1,15 @@
+// R5 lane PAR-MARGIN M10: TradingView's own OHLC of the NYSE:F 15m bars the four M10 tapes
+// trade on (each signal bar through its entry bar + 4), printed as order comments.
+//@version=6
+strategy("pm-m10-f-ohlc", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=100)
+var int k = -1
+sig = time == timestamp("America/New_York", 2026, 4, 1, 15, 45) or time == timestamp("America/New_York", 2025, 4, 9, 15, 45) or time == timestamp("America/New_York", 2025, 10, 6, 15, 45) or time == timestamp("America/New_York", 2026, 3, 6, 15, 45)
+if sig
+    k := 0
+if k >= 0 and k <= 5
+    strategy.entry("b" + str.tostring(bar_index), strategy.long, comment = str.format("{0}|{1}|{2}|{3}|{4}", str.tostring(time), str.tostring(open, "#.#####"), str.tostring(high, "#.#####"), str.tostring(low, "#.#####"), str.tostring(close, "#.#####")))
+    k += 1
+if k > 5
+    strategy.close_all(comment = "x")
+    k := -1

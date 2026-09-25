@@ -613,22 +613,22 @@ span the same rows followed by the range-end rows
 `report_open_position_at_end` native_run_spec.hpp:614 adds. In C the report's
 `pf_report_t::trades` pineforge.h:409 carries the numeric fields, and the
 strings and the cause come from `strategy_closed_trade_entry_id`
-pineforge.h:1191, `strategy_closed_trade_exit_id` pineforge.h:1204,
-`strategy_closed_trade_exit_comment` pineforge.h:1206 and
-`strategy_closed_trade_close_cause` pineforge.h:1273, which index exactly the
+pineforge.h:1192, `strategy_closed_trade_exit_id` pineforge.h:1205,
+`strategy_closed_trade_exit_comment` pineforge.h:1207 and
+`strategy_closed_trade_close_cause` pineforge.h:1274, which index exactly the
 rows of that array.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `strategy.closedtrades` | `closed_trade_count` engine.hpp:1807 | `total_trades` pineforge.h:406 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
-| `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:183 | `strategy_closed_trade_entry_id` pineforge.h:1191 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
-| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:184 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1191 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1732) before the close. |
+| `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:183 | `strategy_closed_trade_entry_id` pineforge.h:1192 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
+| `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:184 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1192 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1732) before the close. |
 | `strategy.closedtrades.entry_bar_index()` | `entry_bar_index` engine.hpp:181 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | Copied from the lot. |
 | `strategy.closedtrades.entry_time()` | `entry_time` engine.hpp:173 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | Unix ms. |
 | `strategy.closedtrades.entry_price()` | `entry_price` engine.hpp:175 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | |
-| `strategy.closedtrades.exit_id()` | `exit_id` engine.hpp:186 | `strategy_closed_trade_exit_id` pineforge.h:1204 | `native_margin_strategy.cpp` | For a kernel liquidation this is the model's own `liquidation_label` native_run_spec.hpp:251, which is how a reporting layer classifies the row. |
-| `strategy.closedtrades.exit_comment()` | `exit_comment` engine.hpp:185 | `strategy_closed_trade_exit_comment` pineforge.h:1206 | `native_margin_strategy.cpp` | |
+| `strategy.closedtrades.exit_id()` | `exit_id` engine.hpp:186 | `strategy_closed_trade_exit_id` pineforge.h:1205 | `native_margin_strategy.cpp` | For a kernel liquidation this is the model's own `liquidation_label` native_run_spec.hpp:251, which is how a reporting layer classifies the row. |
+| `strategy.closedtrades.exit_comment()` | `exit_comment` engine.hpp:185 | `strategy_closed_trade_exit_comment` pineforge.h:1207 | `native_margin_strategy.cpp` | |
 | `strategy.closedtrades.exit_bar_index()` | `exit_bar_index` engine.hpp:182 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | |
 | `strategy.closedtrades.exit_time()` | `exit_time` engine.hpp:174 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | |
 | `strategy.closedtrades.exit_price()` | `exit_price` engine.hpp:176 | `pf_trade_t` pineforge.h:225 | `native_open_lots_strategy.cpp` | |
@@ -643,7 +643,7 @@ rows of that array.
 
 Pine has no word for *why* a row closed. The native row does:
 `closed_trade_close_cause` engine.hpp:1833 (C:
-`strategy_closed_trade_close_cause` pineforge.h:1273) distinguishes a script
+`strategy_closed_trade_close_cause` pineforge.h:1274) distinguishes a script
 close, a liquidation, a risk flatten and the range end — the kernel states the
 last three itself. The bracket-leg cause (`2`) is the kernel's too for a close
 its owner's fill armed — a `WaitForApplied` owner relation with an intent that

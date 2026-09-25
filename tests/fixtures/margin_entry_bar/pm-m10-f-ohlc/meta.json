@@ -1,0 +1,16 @@
+{
+  "title": "pm-m10-f-ohlc",
+  "slug": "pm-m10-f-ohlc",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T22:24:13.672Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-04-10"
+  },
+  "pine_sha256": "67220a7e5e2664f5be255c0cfa453feda33d5dbb0b7a0fe64af1cb8860604432",
+  "tv_trades_sha256": "8b006a00aff016906276eaa53ca2fc2f569b8ec5b14988ef4481feac9da10e8a",
+  "tv_trades_rows": 48
+}

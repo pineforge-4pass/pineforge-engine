@@ -308,6 +308,12 @@ The pair context exists only inside the ordinary atomic two-stop scan.
 No callback or stable-frame ABI read occurs between its two fills.
 ```
 
+Since R5 lane PAR-MARGIN the adapter keeps the placement quantity above
+100 % as well: eight `lab tv` tapes of a 390-400 % stop on NYSE:F
+(`tests/fixtures/margin_entry_bar/pm-m10-*`) open the placement quotient, never
+the fill's (`tests/test_adapter_margin_schedule_differential.cpp`, "M10 on
+tapes").
+
 ```text
 design-declined-reversal-close-leg: called at the KI-54 reversal-decline
 site with the just-declined MARKET reversal entry. Flags every pending

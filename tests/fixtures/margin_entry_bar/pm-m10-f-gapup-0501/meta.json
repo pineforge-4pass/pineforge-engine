@@ -1,0 +1,16 @@
+{
+  "title": "pm-m10-f-gapup-0501",
+  "slug": "pm-m10-f-gapup-0501",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T22:25:53.574Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-04-24",
+    "to": "2025-05-06"
+  },
+  "pine_sha256": "954ea444c286b7ab9d9f75bc4f13a3225472a078dcb00ff166a40662c97cc18c",
+  "tv_trades_sha256": "c672eb182acd2a16837cdcc9922dbc6dfa612d3e136bd13c06dcc799097690b3",
+  "tv_trades_rows": 4
+}
