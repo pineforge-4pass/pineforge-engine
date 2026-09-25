@@ -131,7 +131,10 @@ class Scripted:
     def __call__(self, argv, *, extra_env=None, timeout=600, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
-        self.calls.append(argv)
+        # Discovery invocations are asserted through Driver stages. Keep the
+        # existing execution-call fixture stable for pre-existing tests.
+        if argv[0] != 'ctest' or '-N' not in argv:
+            self.calls.append(argv)
         extra_env = extra_env or {}
         joined = ' '.join(argv)
         secret = os.environ.get('CI_VERIFY_TEST_SECRET')
@@ -1308,6 +1311,15 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
                              (build_dir / 'ctest-junit.xml').resolve())
 
+    def test_ctest_label_exclusion_is_forwarded(self):
+        code, summary, scripted, _ = self.run_profile(
+            extra=['--exclude-label', 'l4-pending'])
+        self.assertEqual(code, 0, summary['failures'])
+        ctest_argv = next(
+            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
+        self.assertIn('-LE', ctest_argv)
+        self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
+
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
                          {'debug': 653, 'sanitizers': 653, 'native': 662})
@@ -1349,8 +1361,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
         ctest_argv = next(
-            argv for argv in scripted.calls
-            if argv[0] == 'ctest' and '--test-dir' in argv and '-N' not in argv)
+            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
         self.assertIn('-LE', ctest_argv)
         self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
 
