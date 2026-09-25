@@ -1,0 +1,17 @@
+{
+  "title": "HM CHART diff v4 pooc0 coof0 slip2 pyr3",
+  "slug": "hm-chart-diff-v4",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T18:49:28.141Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "73fa2e6034a3e52c39c61d477c3a3d056820d81475b2d6541d57b8f98494c99f",
+  "tv_trades_sha256": "5293cc0c2bc88dabba65ff73a024d88b28292845c537f0f4ccf58922e4d502a1",
+  "tv_trades_rows": 28
+}

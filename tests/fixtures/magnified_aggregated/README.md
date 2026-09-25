@@ -1,0 +1,23 @@
+# Magnified aggregated tapes (R5 lane H-MEASURE, AUDIT4 X14 "F1's magnified residual")
+
+Lane F1's differential probe (its eight variants v0..v7) as
+Pine, on NYSE:F 15m over the three days `tests/fixtures/session_islastbar/bars.inc`
+holds (2025-07-02, the 2025-07-03 half day, 2025-07-07); the script's bar counter
+starts at 2025-07-02 09:30 ET, the fixture's first bar.
+`tests/test_magnified_aggregated_tape.cpp` replays the magnifier-on tapes on the
+1m bars aggregated to 15m under the magnifier, and the magnifier-off tapes on the
+15m chart and the plain aggregation.
+
+Each directory is one `lab tv` export (`ws-report-v1`, `rangeProof: covered`,
+window 2025-07-01 .. 2025-07-08), byte-identical.
+
+| probe | variant | trades | tvTradesSha256 | note |
+|---|---|---|---|---|
+| `hm-mag-diff-v0` | plain, magnifier on | 12 | `53c28aaf8caa6ed1708a9aa42f2965db37724c87d95691fb16bbb56dbb69906e` | `tv-tape-hm-mag-diff-v0-53c28aaf` |
+| `hm-mag-diff-v2` | calc_on_order_fills, magnifier on | 12 | `444e7bc4eaac5b16e224007225bc55ed1c36fecd4453b8eab95e6c1ea70c6656` | `tv-tape-hm-mag-diff-v2-444e7bc4` |
+| `hm-mag-diff-v4` | slippage 2, pyramiding 3, magnifier on | 14 | `d18ca4ad316311a4aad91503800402f1873c927c3cadc575b3b1a1ab669d196e` | `tv-tape-hm-mag-diff-v4-d18ca4ad` |
+| `hm-chart-diff-v0` | plain, magnifier off | 12 | `b2652feb01b83236315a92112acb5b108626d11d959ed4b17effc6087454ae2c` | `tv-tape-hm-chart-diff-v0-b2652feb` |
+| `hm-chart-diff-v4` | slippage 2, pyramiding 3, magnifier off | 14 | `5293cc0c2bc88dabba65ff73a024d88b28292845c537f0f4ccf58922e4d502a1` | `tv-tape-hm-chart-diff-v4-5293cc0c` |
+
+TradingView dates every magnified fill at its chart bar's open; the rows are
+compared at chart-bar granularity. Excursions are not compared.

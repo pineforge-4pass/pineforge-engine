@@ -1,0 +1,17 @@
+{
+  "title": "HM F1e entry_bar_index POOC ETH magnifier",
+  "slug": "hm-f1e-ebi-pooc-eth-mag",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:02:06.267Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-11",
+    "to": "2025-06-13",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "e0031970763afa46c071a3dfa6c42b183f55b098ca50a84fcf9a6b78f2a62ff5",
+  "tv_trades_sha256": "0c6badea92194fe4f9c2df36a7f9aadb496f6d953d1dcdb5884cda5ec307d839",
+  "tv_trades_rows": 8
+}

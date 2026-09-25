@@ -1,0 +1,17 @@
+{
+  "title": "HM MAG diff v0 pooc0 coof0 slip0 pyr1",
+  "slug": "hm-mag-diff-v0",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T18:48:22.147Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "c95e1af263acfc999df840efa0f9c08da1f8eb2c1304d2c3c0dc01a902c287db",
+  "tv_trades_sha256": "53c28aaf8caa6ed1708a9aa42f2965db37724c87d95691fb16bbb56dbb69906e",
+  "tv_trades_rows": 24
+}

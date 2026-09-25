@@ -1,0 +1,42 @@
+//@version=6
+// H-MEASURE F1(e) probe (R5 lane H-MEASURE, research group agg).
+// Does an aggregated chart count CHART bars in strategy.opentrades.entry_bar_index
+// and strategy.closedtrades.entry_bar_index / exit_bar_index?
+// BINANCE:ETHUSDT.P 15m, process_orders_on_close: every fill is at a bar's close.
+// Entries at fixed bar opens (UTC); every exit is keyed on a bar-index difference:
+//   A long  2025-06-12 01:00, closed once bar_index - strategy.opentrades.entry_bar_index(0) >= 1
+//   B short 2025-06-12 05:00, closed once held >= 3
+//   C long  2025-06-12 09:00, closed once held >= (last closed exit_bar_index - entry_bar_index) + 2
+//   D short entered when bar_index - strategy.closedtrades.exit_bar_index(2) == 4, closed once held >= 2
+// A position still open 3 h after its entry is closed "timeout" (a guard; never fires when
+// bar indices count chart bars). Exit comments carry the held count TradingView computed.
+strategy("HM F1e entry_bar_index POOC ETH", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=true, margin_long=100, margin_short=100)
+
+tA = timestamp("UTC", 2025, 6, 12, 1, 0)
+tB = timestamp("UTC", 2025, 6, 12, 5, 0)
+tC = timestamp("UTC", 2025, 6, 12, 9, 0)
+
+int lastDur = na
+if strategy.closedtrades > 0
+    lastDur := strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) - strategy.closedtrades.entry_bar_index(strategy.closedtrades - 1)
+
+if strategy.opentrades > 0
+    held = bar_index - strategy.opentrades.entry_bar_index(0)
+    id = strategy.opentrades.entry_id(0)
+    int need = id == "A" ? 1 : id == "B" ? 3 : id == "D" ? 2 : lastDur + 2
+    if held >= need
+        strategy.close(id, comment="held" + str.tostring(held))
+    else if time - strategy.opentrades.entry_time(0) >= 3 * 60 * 60 * 1000
+        strategy.close(id, comment="timeout")
+else
+    if time == tA
+        strategy.entry("A", strategy.long)
+    else if time == tB
+        strategy.entry("B", strategy.short)
+    else if time == tC
+        strategy.entry("C", strategy.long)
+    else if strategy.closedtrades == 3 and bar_index - strategy.closedtrades.exit_bar_index(2) == 4
+        strategy.entry("D", strategy.short)

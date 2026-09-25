@@ -1338,6 +1338,12 @@ list(APPEND TEST_SOURCES test_short_seed_report_swap)
 list(APPEND TEST_SOURCES test_pine_dust_sweep_paired)
 #   G2-36 session.ismarket: the generated predicate, the kernel's in_session.
 list(APPEND TEST_SOURCES test_session_ismarket_tape)
+#   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
+list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
+#   F1's magnified residual on the aggregated chart.
+list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
+#   G2-23 every condition that keeps request.security on the source evaluator.
+list(APPEND TEST_SOURCES test_adapter_security_route_conditions)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2077,6 +2083,8 @@ foreach(_pf_hm_row IN ITEMS
         "test_short_seed_report_swap|PINEFORGE_G221_FIXTURE_DIR|g221_short_seed"
         "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
         "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
+        "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
+        "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)

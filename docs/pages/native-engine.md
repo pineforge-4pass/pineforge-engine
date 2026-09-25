@@ -2554,7 +2554,15 @@ magnifier and aggregated charts (the calling-bar deferrals), `lookahead_on`
 `request.security_lower_tf` paths, the auxiliary slice — keeps the adapter's
 own drive, unchanged. The corpus' 23 `request.security` probes are all of the
 first kind but the two lower-timeframe ones; their trades are byte-identical
-on either drive, which is the parity evidence for the kernel pump.
+on either drive, which is the parity evidence for the kernel pump. Every
+condition of the predicate is pinned, with what it changes where it can be
+tripped alone, by `tests/test_adapter_security_route_conditions.cpp`: on the
+feeds measured the magnifier and an aggregated chart change no delivered
+value (conservative exclusions, not calling-bar deferrals the kernel lacks),
+while the range-start cut, the projection's incomplete tail, `lookahead_on`
+and the OTC pins do; a registry whose `sec_id`s are not dense from 0 and a
+pairing the kernel refuses at `declare_timeframe_subscriptions` keep the
+evaluator too.
 
 **Streams.** `stream_begin` accepts a non-empty `subscriptions`, so a
 forward-execution host reads the same series a backtest of the same bars
