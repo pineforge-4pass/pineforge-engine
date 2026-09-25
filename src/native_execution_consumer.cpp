@@ -2039,7 +2039,8 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     if (recoverable_abort()) {
         const auto* aborted = std::get_if<NativeFailed>(&state_);
         if (!aborted || !aborted->spec) {
-            result.validation.error = NativeRunSpecError::CalendarFailure;
+            result.validation = {NativeRunSpecError::AbortedHostNoReusableRunSpec,
+                                 NativeRunSpecField::None};
             render(engine, "native aborted host has no reusable run spec");
             return result;
         }
@@ -2073,11 +2074,15 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         if (candidate.identity.session_key != prior_spec->identity.session_key
             && candidate.identity.session_key != bound_session_key_) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
+            result.validation = {NativeRunSpecError::SessionKeyChangedOnReuse,
+                                 NativeRunSpecField::SessionKey};
             render(engine, "native session key cannot change on a reused host");
             return result;
         }
         if (candidate.identity.run_number <= consumed_high_water_) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
+            result.validation = {NativeRunSpecError::RunNumberNotAboveConsumedHighWater,
+                                 NativeRunSpecField::RunNumber};
             render(engine, "native run number must exceed consumed high-water");
             return result;
         }
@@ -2207,6 +2212,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     }
     engine.diag_input_bars_processed_ = 0;
     engine.diag_script_bars_processed_ = 0;
+    // The magnifier counters are kernel report facts. The Pine adapter may
+    // still mirror them from its callback context, but a bare host gets the
+    // same values from this generic driver.
+    engine.diag_magnifier_sub_bars_processed_ = 0;
+    engine.diag_magnifier_sample_ticks_processed_ = 0;
     // The report's "was a magnifier active for this run": exactly when the
     // spec declares an intrabar path, which is when this consumer walks one
     // (driver_statistics_.intrabar_path_enabled below). Reporting only; a
@@ -7464,12 +7474,15 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             return;
         }
         ++driver_statistics_.sub_bars_processed;
+        engine.diag_magnifier_sub_bars_processed_ =
+            static_cast<std::int64_t>(driver_statistics_.sub_bars_processed);
         driver_statistics_.samples_per_sub_bar = static_cast<int>(samples.size());
         callback_context_.driver_statistics = driver_statistics_;
         double previous = samples.front();
         for (std::size_t sample_index = 0; sample_index < samples.size(); ++sample_index) {
             const double price = samples[sample_index];
             ++driver_statistics_.sample_ticks_processed;
+            ++engine.diag_magnifier_sample_ticks_processed_;
             callback_context_.driver_statistics = driver_statistics_;
             NativeDriverPoint point;
             point.coordinate = base;

@@ -631,7 +631,8 @@ def check_texts(files):
                   'UnorderedAuxiliaryFeedBars', 'InvalidAuxiliaryFeedBar',
                   'AuxiliaryFeedWithoutTimeframe', 'UnknownSeriesSource',
                   'SubscriptionWithoutAuxiliaryFeed', 'SubscriptionFinerThanAuxiliaryFeed',
-                  'UnknownEventRetention'):
+                  'UnknownEventRetention', 'AbortedHostNoReusableRunSpec',
+                  'SessionKeyChangedOnReuse', 'RunNumberNotAboveConsumedHighWater'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v3 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src

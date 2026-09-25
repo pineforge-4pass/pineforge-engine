@@ -83,12 +83,13 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_execution_contract",
     "strategy_configure_native_v1",
     "strategy_configure_native_fx_curve_v1",
+    "strategy_configure_native_fx_curve_ext_v1",
 })
 
-EXPECTED_PUBLIC_DECLARATIONS = 65
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 57
+EXPECTED_PUBLIC_DECLARATIONS = 66
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 58
 
-# The C-level native host API. Additive to the 57 above: every symbol here is
+# The C-level native host API. Additive to the 58 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({
@@ -124,6 +125,7 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_cohort_add_v1",
     "strategy_native_cohort_remove_v1",
     "strategy_configure_native_ext_v1",
+    "strategy_configure_native_ext_result_v1",
     "strategy_native_append_auxiliary_bars_v1",
     "strategy_native_declare_opened_lot_entry_bar_mask_v1",
     "strategy_native_margin_call_v1",
@@ -133,10 +135,11 @@ EXPECTED_NATIVE_C_API = frozenset({
     "strategy_native_sized_units_v1",
     "strategy_native_acknowledge_events_v1",
     "strategy_native_event_window_v1",
+    "strategy_native_timeframe_bar_interval_v1",
 })
 
-EXPECTED_NATIVE_C_API_DECLARATIONS = 41
-EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 41
+EXPECTED_NATIVE_C_API_DECLARATIONS = 43
+EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 43
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

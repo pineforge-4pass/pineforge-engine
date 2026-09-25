@@ -359,9 +359,12 @@ static_assert(static_cast<int>(pineforge::NativeMarginCheckKind::FxRoll)
 static_assert(PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
                   == PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 7u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 hook tail moved");
-static_assert(sizeof(pf_native_callbacks_v1)
+static_assert(PF_NATIVE_CALLBACKS_V1_POLICY_SIZE
                   == PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE + 4u * sizeof(void (*)(void)),
               "the pf_native_callbacks_v1 policy-hook tail moved");
+static_assert(sizeof(pf_native_callbacks_v1)
+                  == PF_NATIVE_CALLBACKS_V1_POLICY_SIZE + sizeof(std::uint64_t),
+              "the pf_native_callbacks_v1 lot-facts layout marker moved");
 /* The decision is PRESENTED at the length its caller's table was published
  * with, so the base length must be exactly the sizeof a base-layout caller
  * compiled: the tail starts where `quote_kind`'s trailing padding ended, and
@@ -376,6 +379,13 @@ static_assert(PF_NATIVE_DECISION_V1_BASE_SIZE
 static_assert(sizeof(pf_native_decision_v1)
                   == PF_NATIVE_DECISION_V1_BASE_SIZE + 7u * sizeof(std::int64_t) + 8u,
               "the pf_native_decision_v1 session tail moved");
+static_assert(PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE
+                  == offsetof(pf_native_lot_excursion_v1, reserved0) + sizeof(std::uint8_t)
+                      + 4u,
+              "the first pf_native_lot_excursion_v1 layout moved");
+static_assert(sizeof(pf_native_lot_excursion_v1)
+                  == PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE + sizeof(double),
+              "the pf_native_lot_excursion_v1 fee tail moved");
 /* The working readout's tail is append-only too, and it is WRITTEN, so the
  * base length must be exactly what a base-layout caller's sizeof was: the
  * tail starts where `comment` ended, and that end carried no padding. The
@@ -678,6 +688,12 @@ PF_PIN_WORD(pineforge::NativeRunSpecError::SubscriptionFinerThanAuxiliaryFeed,
 PF_PIN_WORD(pineforge::NativeRunSpecError::WrongPhase, PF_NATIVE_SPEC_ERROR_WRONG_PHASE);
 PF_PIN_WORD(pineforge::NativeRunSpecError::UnknownEventRetention,
             PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION);
+PF_PIN_WORD(pineforge::NativeRunSpecError::AbortedHostNoReusableRunSpec,
+            PF_NATIVE_SPEC_ERROR_ABORTED_HOST_NO_REUSABLE_RUN_SPEC);
+PF_PIN_WORD(pineforge::NativeRunSpecError::SessionKeyChangedOnReuse,
+            PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE);
+PF_PIN_WORD(pineforge::NativeRunSpecError::RunNumberNotAboveConsumedHighWater,
+            PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER);
 PF_PIN_WORD(pineforge::NativeRunSpecField::None, PF_NATIVE_SPEC_FIELD_NONE);
 PF_PIN_WORD(pineforge::NativeRunSpecField::SessionKey, PF_NATIVE_SPEC_FIELD_SESSION_KEY);
 PF_PIN_WORD(pineforge::NativeRunSpecField::RunNumber, PF_NATIVE_SPEC_FIELD_RUN_NUMBER);
@@ -764,6 +780,17 @@ PF_PIN_WORD(pineforge::NativeRunSpecField::AuxiliaryFeedBars,
 PF_PIN_WORD(pineforge::NativeRunSpecField::SubscriptionSource,
             PF_NATIVE_SPEC_FIELD_SUBSCRIPTION_SOURCE);
 PF_PIN_WORD(pineforge::NativeRunSpecField::EventRetention, PF_NATIVE_SPEC_FIELD_EVENT_RETENTION);
+PF_PIN_WORD(pineforge::NativeFxCurveError::None, PF_NATIVE_FX_CURVE_ERROR_NONE);
+PF_PIN_WORD(pineforge::NativeFxCurveError::LengthMismatch,
+            PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH);
+PF_PIN_WORD(pineforge::NativeFxCurveError::NotStrictlyIncreasing,
+            PF_NATIVE_FX_CURVE_ERROR_NOT_STRICTLY_INCREASING);
+PF_PIN_WORD(pineforge::NativeFxCurveError::NotFinitePositive,
+            PF_NATIVE_FX_CURVE_ERROR_NOT_FINITE_POSITIVE);
+PF_PIN_WORD(pineforge::NativeFxCurveError::AllocationFailure,
+            PF_NATIVE_FX_CURVE_ERROR_ALLOCATION_FAILURE);
+PF_PIN_WORD(pineforge::NativeFxCurveError::WrongPhase,
+            PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE);
 PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::None, PF_NATIVE_APPEND_ERROR_NONE);
 PF_PIN_WORD(pineforge::NativeAuxiliaryAppendError::HostFailed,
             PF_NATIVE_APPEND_ERROR_HOST_FAILED);
@@ -1113,6 +1140,11 @@ constexpr std::uint32_t c_word(pineforge::NativeRunSpecError value) noexcept {
         return PF_NATIVE_SPEC_ERROR_SUBSCRIPTION_FINER_THAN_AUXILIARY_FEED;
     case V::WrongPhase: return PF_NATIVE_SPEC_ERROR_WRONG_PHASE;
     case V::UnknownEventRetention: return PF_NATIVE_SPEC_ERROR_UNKNOWN_EVENT_RETENTION;
+    case V::AbortedHostNoReusableRunSpec:
+        return PF_NATIVE_SPEC_ERROR_ABORTED_HOST_NO_REUSABLE_RUN_SPEC;
+    case V::SessionKeyChangedOnReuse: return PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE;
+    case V::RunNumberNotAboveConsumedHighWater:
+        return PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER;
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -1323,6 +1355,22 @@ private:
     bool outer_;
 };
 
+/* The bucket interval is borrowed only for one C timeframe callback. Restore
+ * the outer frame even when the callback raises CallbackFailure. */
+class TimeframeIntervalFrame {
+public:
+    TimeframeIntervalFrame(const pineforge::native_calendar::NativeInterval*& slot,
+                           const pineforge::native_calendar::NativeInterval* interval) noexcept
+        : slot_(slot), outer_(slot) { slot_ = interval; }
+    ~TimeframeIntervalFrame() { slot_ = outer_; }
+    TimeframeIntervalFrame(const TimeframeIntervalFrame&) = delete;
+    TimeframeIntervalFrame& operator=(const TimeframeIntervalFrame&) = delete;
+
+private:
+    const pineforge::native_calendar::NativeInterval*& slot_;
+    const pineforge::native_calendar::NativeInterval* outer_;
+};
+
 /* Defined below, beside the other C++ value -> C POD translations; declared
  * here because the recalculation hook flattens an applied cause. */
 pf_native_applied_v1 applied_pod(const no::ExecutionAppliedEvent& applied);
@@ -1350,6 +1398,19 @@ public:
     }
 
     const pf_native_callbacks_v1& table() const noexcept { return table_; }
+
+    bool timeframe_interval(pf_native_timeframe_interval_v1& out) const noexcept {
+        if (!timeframe_interval_) return false;
+        const auto& interval = *timeframe_interval_;
+        out.struct_size = static_cast<std::uint32_t>(sizeof(out));
+        out.version = PF_NATIVE_API_VERSION;
+        out.open_ms = interval.open_ms;
+        out.eligible_open_ms = interval.eligible_open_ms;
+        out.last_traded_close_ms = interval.last_traded_close_ms;
+        out.next_period_open_ms = interval.next_period_open_ms;
+        out.next_input_open_ms = interval.next_input_open_ms;
+        return true;
+    }
 
     std::vector<pineforge::NativeWorkingRequest>& working_cache() noexcept {
         return working_cache_;
@@ -1424,6 +1485,7 @@ private:
     void on_native_timeframe_bar(const Bar& bar,
                                  const pineforge::NativeTimeframeBarContext& ctx) override {
         if (!table_.on_timeframe_bar) return;
+        const TimeframeIntervalFrame frame(timeframe_interval_, &ctx.interval);
         if (table_.on_timeframe_bar(table_.user, as_c_bar(bar),
                                     static_cast<std::uint32_t>(ctx.subscription),
                                     c_word(ctx.completion),
@@ -1598,6 +1660,11 @@ private:
         pod.is_long = facts.is_long ? 1u : 0u;
         pod.entry_bar_high_masked = facts.entry_bar_high_masked ? 1u : 0u;
         pod.entry_bar_low_masked = facts.entry_bar_low_masked ? 1u : 0u;
+        if (caller_table_size_ == sizeof(pf_native_callbacks_v1)) {
+            pod.entry_commission = facts.entry_commission;
+        } else {
+            pod.struct_size = PF_NATIVE_LOT_EXCURSION_V1_BASE_SIZE;
+        }
         double favorable = 0.0;
         double adverse = 0.0;
         if (table_.on_lot_excursion(table_.user, &pod, &favorable, &adverse)
@@ -1643,6 +1710,9 @@ private:
     mutable bool calendar_parsed_ = false;
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
     std::vector<pineforge::NativeOpenLot> open_lot_cache_;
+    /* Valid only while the C timeframe callback runs, including nested calls.
+     * Borrowed from the callback's stack frame; never durable or hashed. */
+    const pineforge::native_calendar::NativeInterval* timeframe_interval_ = nullptr;
     /* True while the C `on_applied` runs. Host-side, like the two caches:
      * never durable engine state, never hashed. */
     bool in_applied_ = false;
@@ -3206,13 +3276,14 @@ PF_API int strategy_native_api_version(void) { return PF_NATIVE_API_VERSION; }
 PF_API pf_strategy_t strategy_native_host_create_v1(const pf_native_callbacks_v1* callbacks) {
     try {
         if (!callbacks) return nullptr;
-        /* Three published layouts, and only three: the base one the lane
+        /* Four published layouts, and only four: the base one the lane
          * first shipped, that plus the six-hook tail, and the current one
-         * with the policy-hook tail. An earlier caller's tails are never
-         * read; they are zero-filled here, which is exactly "no hook
-         * installed". */
+         * with the policy-hook tail, followed by the current lot-facts marker.
+         * An earlier caller's tails are never read; they are zero-filled here,
+         * which is exactly "no hook installed". */
         const std::uint32_t caller_size = callbacks->struct_size;
         if (caller_size != sizeof(pf_native_callbacks_v1)
+            && caller_size != PF_NATIVE_CALLBACKS_V1_POLICY_SIZE
             && caller_size != PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE
             && caller_size != PF_NATIVE_CALLBACKS_V1_BASE_SIZE) {
             return nullptr;
@@ -3656,6 +3727,17 @@ PF_API int strategy_native_series_bar_v1(pf_strategy_t s, uint32_t subscription,
     });
 }
 
+PF_API int strategy_native_timeframe_bar_interval_v1(
+        pf_strategy_t s, pf_native_timeframe_interval_v1* out) {
+    return guarded([&] {
+        auto* host = host_of(s);
+        if (!host) return PF_NATIVE_E_HANDLE;
+        if (!out) return PF_NATIVE_E_ARGUMENT;
+        if (out->struct_size != sizeof(pf_native_timeframe_interval_v1)) return PF_NATIVE_E_STRUCT;
+        return host->timeframe_interval(*out) ? PF_NATIVE_OK : PF_NATIVE_E_STATE;
+    });
+}
+
 PF_API int strategy_native_marked_equity_v1(pf_strategy_t s, double mark, double* out) {
     return guarded([&] {
         auto* host = host_of(s);
@@ -3824,9 +3906,9 @@ PF_API int strategy_native_cohort_remove_v1(pf_strategy_t s, uint64_t cohort,
     });
 }
 
-PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
-                                            const pf_native_run_spec_v1* base,
-                                            const pf_native_run_spec_ext_v1* ext) {
+PF_API int strategy_configure_native_ext_result_v1(
+        pf_strategy_t s, const pf_native_run_spec_v1* base,
+        const pf_native_run_spec_ext_v1* ext, uint32_t* error, uint32_t* field) {
     return guarded([&] {
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
@@ -3848,11 +3930,22 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
             || ext->version != PF_NATIVE_API_VERSION) {
             return PF_NATIVE_E_STRUCT;
         }
-        /* The kernel configures a host exactly once and FAILS it on a second
-         * attempt (native_execution_consumer.cpp, "configure refused while
-         * ready"), so the readiness check happens here, before the kernel
-         * sees anything: a refused extension must leave the handle usable. */
-        if (host->native_state().kind != pineforge::NativeLifecycleKind::Unconfigured) {
+        /* The established spelling configures an Unconfigured host only, so
+         * its pre-kernel readiness check keeps every refusal non-mutating. The
+         * typed spelling also exposes the kernel's reuse diagnostics: a
+         * Completed host, or an aborted host whose spec is recoverable, may
+         * reach configure_native and name a changed session key or high-water
+         * run number. Ready, Running and non-recoverable Failed remain a
+         * WrongPhase refusal. */
+        const auto lifecycle = host->native_state();
+        const bool typed = error != nullptr || field != nullptr;
+        const bool reusable = lifecycle.kind == pineforge::NativeLifecycleKind::Unconfigured
+            || lifecycle.kind == pineforge::NativeLifecycleKind::Completed
+            || (lifecycle.kind == pineforge::NativeLifecycleKind::Failed
+                && lifecycle.failure.code == pineforge::NativeFailureCode::Aborted);
+        if (!reusable || (!typed && lifecycle.kind != pineforge::NativeLifecycleKind::Unconfigured)) {
+            write_validation({pineforge::NativeRunSpecError::WrongPhase,
+                              pineforge::NativeRunSpecField::None}, error, field);
             return PF_NATIVE_E_STATE;
         }
         pineforge::NativeRunSpec spec;
@@ -3867,11 +3960,21 @@ PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
          * specification is refused before the kernel sees it and the handle
          * stays usable. configure_native judges the same value again and
          * cannot disagree. */
-        if (!pineforge::validate_native_run_spec(spec)) return PF_NATIVE_E_ARGUMENT;
-        return host->configure_native(spec).status == pineforge::NativeSetupStatus::Applied
+        const auto validation = pineforge::validate_native_run_spec(spec);
+        write_validation(validation, error, field);
+        if (!validation) return PF_NATIVE_E_ARGUMENT;
+        const auto result = host->configure_native(spec);
+        write_validation(result.validation, error, field);
+        return result.status == pineforge::NativeSetupStatus::Applied
             ? PF_NATIVE_OK
             : PF_NATIVE_E_ARGUMENT;
     });
+}
+
+PF_API int strategy_configure_native_ext_v1(pf_strategy_t s,
+                                            const pf_native_run_spec_v1* base,
+                                            const pf_native_run_spec_ext_v1* ext) {
+    return strategy_configure_native_ext_result_v1(s, base, ext, nullptr, nullptr);
 }
 
 PF_API int strategy_native_append_auxiliary_bars_ext_v1(pf_strategy_t s, const pf_bar_t* bars,

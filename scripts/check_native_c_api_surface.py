@@ -128,6 +128,7 @@ ENUM_TWINS: dict[str, tuple[str, str, dict[str, str]]] = {
     "pf_native_driver_class_e": ("native_order.hpp", "DriverEligibilityClass", {}),
     "pf_native_precommit_verdict_e": ("native_host.hpp", "NativePrecommitVerdict", {}),
     "pf_native_anchored_trigger_e": ("native_host.hpp", "NativeAnchoredTrigger", {}),
+    "pf_native_fx_curve_error_e": ("native_fx_curve.hpp", "NativeFxCurveError", {}),
 }
 
 # Every C enumeration with no kernel `enum class` to mirror, and why. A

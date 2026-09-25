@@ -501,11 +501,13 @@ typedef enum pf_native_spec_optional_e {
  *  `fee_kind` is a #pf_native_fee_kind_t, `close_execution` a
  *  #pf_native_close_execution_t and `allowed_open_directions` a
  *  #pf_native_open_directions_t (zero-filled, that word admits no opening at
- *  all). #strategy_configure_native_v1 hands a word outside its enumeration
- *  to the kernel's own validation, which refuses the spec: it answers -1 and
- *  the host is Failed. #strategy_configure_native_ext_v1 refuses the same
- *  word with PF_NATIVE_E_TAG before the kernel sees it, and the host stays
- *  usable. */
+ *  all). #strategy_configure_native_v1 hands the whole value to the kernel's
+ *  validation, which refuses an invalid spec with -1 and latches the legacy
+ *  handle Failed. It has no typed out-parameters and cannot be retried. The
+ *  extended path validates before configuring: #strategy_configure_native_ext_v1
+ *  keeps the handle Unconfigured on a validation refusal, and
+ *  #strategy_configure_native_ext_result_v1 additionally writes the exact
+ *  #pf_native_spec_error_t / #pf_native_spec_field_t pair. */
 typedef struct pf_native_run_spec_v1 {
     uint32_t struct_size;
     const char *session_key; uint64_t run_number;
@@ -532,6 +534,18 @@ typedef struct pf_native_fx_curve_v1 {
     const double* account_per_quote;
 } pf_native_fx_curve_v1;
 
+/** Why a native FX curve was refused — the C twin of
+ *  `pineforge::NativeFxCurveError`. The typed additive route writes this word
+ *  beside the offending array index. */
+typedef enum pf_native_fx_curve_error_e {
+    PF_NATIVE_FX_CURVE_ERROR_NONE                    = 0,
+    PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH        = 1,
+    PF_NATIVE_FX_CURVE_ERROR_NOT_STRICTLY_INCREASING = 2,
+    PF_NATIVE_FX_CURVE_ERROR_NOT_FINITE_POSITIVE    = 3,
+    PF_NATIVE_FX_CURVE_ERROR_ALLOCATION_FAILURE     = 4,
+    PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE            = 5
+} pf_native_fx_curve_error_t;
+
 /** Stage an immutable account-currency FX curve on a Ready native handle.
  *
  *  Timestamps must be strictly increasing and rates finite and positive.
@@ -540,9 +554,20 @@ typedef struct pf_native_fx_curve_v1 {
  *  Legacy handles and non-Ready native handles refuse without mutation.
  *
  *  @return 0 only when staging is applied; -1 for invalid input, an invalid
- *  handle, a non-native or non-host native handle, or a non-Ready host. */
+ *  handle, a non-native or non-host native handle, or a non-Ready host. The
+ *  typed additive #strategy_configure_native_fx_curve_ext_v1 writes the
+ *  #pf_native_fx_curve_error_t and offending index when the kernel judged the
+ *  curve. */
 PF_API int strategy_configure_native_fx_curve_v1(
     pf_strategy_t s, const pf_native_fx_curve_v1* curve);
+
+/** Typed additive spelling of #strategy_configure_native_fx_curve_v1. On a
+ *  kernel validation refusal, writes the #pf_native_fx_curve_error_t and the
+ *  offending element index (length mismatch uses index 0). C-layer argument,
+ *  handle and layout refusals leave the out-parameters untouched. */
+PF_API int strategy_configure_native_fx_curve_ext_v1(
+    pf_strategy_t s, const pf_native_fx_curve_v1* curve,
+    pf_native_fx_curve_error_t* error, uint64_t* index);
 
 /* ───────────────────────────────────────────────────────────────────
  * STRATEGY .SO EXPORTS — implemented per compiled strategy

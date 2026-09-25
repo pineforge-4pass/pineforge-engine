@@ -1969,6 +1969,7 @@ typedef struct hook_state {
     int      call_units_view_facts;
     int      excursion_calls;
     int      excursion_facts_ok;
+    double   excursion_entry_commission;
 } hook_state;
 
 /* --- the recalculation hook --- */
@@ -2223,6 +2224,7 @@ static int excursion_on_lot(void* user, const pf_native_lot_excursion_v1* facts,
         && facts->exit_bar_index > facts->entry_bar_index) {
         state->excursion_facts_ok = 1;
     }
+    state->excursion_entry_commission = facts->entry_commission;
     if (state->forced) return PF_NATIVE_ANSWER_DEFAULT;
     *favorable = HOOK_FAVORABLE;
     *adverse = HOOK_ADVERSE;
@@ -2260,6 +2262,8 @@ static void run_excursion(int decline, hook_state* state, pf_report_t* report) {
 
     memset(state, 0, sizeof(*state));
     state->forced = decline;   /* reused as "answer DEFAULT" */
+    spec.fee_kind = PF_NATIVE_FEE_CASH_PER_EXECUTION;
+    spec.fee_value = 1.0;
     table = blank_callbacks(state);
     table.on_bar = excursion_on_bar;
     table.on_lot_excursion = excursion_on_lot;
@@ -2291,6 +2295,8 @@ static void check_excursion_hook(void) {
      * and that the row kept the answer. */
     CHECK(state.excursion_calls >= 1, "the excursion hook was never consulted");
     CHECK(state.excursion_facts_ok, "the excursion facts did not describe the closing lot");
+    CHECK(fabs(state.excursion_entry_commission - 1.0) < 1e-12,
+          "the C excursion facts did not carry the entry commission");
     CHECK(report.trades_len == 1, "the excursion run booked another number of trades");
     for (i = 0; i < report.trades_len; ++i) {
         if (report.trades[i].max_runup == HOOK_FAVORABLE) ++answered_runup;
@@ -2662,7 +2668,17 @@ static void check_callback_tail_layouts(void) {
     CHECK(PF_NATIVE_CALLBACKS_V1_BASE_SIZE < (uint32_t)sizeof(pf_native_callbacks_v1),
           "the callback tail is not past the base layout");
 
-    /* Any third length is a caller this runtime cannot read. */
+    /* The F4 policy layout remains accepted after the lot-facts marker tail. */
+    CHECK(PF_NATIVE_CALLBACKS_V1_POLICY_SIZE < (uint32_t)sizeof(pf_native_callbacks_v1),
+          "the lot-facts layout marker is not an additive tail");
+    memset(&table, 0, sizeof(table));
+    table.struct_size = PF_NATIVE_CALLBACKS_V1_POLICY_SIZE;
+    table.version = PF_NATIVE_API_VERSION;
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "the F4 policy-layout callback table was refused");
+    strategy_native_host_free(host);
+
+    /* Any other length is a caller this runtime cannot read. */
     memset(&table, 0, sizeof(table));
     table.struct_size = PF_NATIVE_CALLBACKS_V1_BASE_SIZE + 4u;
     table.version = PF_NATIVE_API_VERSION;
@@ -3237,8 +3253,17 @@ static void check_intrabar_and_policies(void) {
                  "the intrabar block was refused");
 
     bars = pf_twin_bars(&n);
-    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
+    {
+        pf_report_t report;
+        memset(&report, 0, sizeof(report));
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &report), PF_NATIVE_OK,
                  "the intrabar run did not complete");
+        CHECK(report.bar_magnifier_enabled == 1
+                  && report.magnifier_sub_bars_total > 0
+                  && report.magnifier_sample_ticks_total > 0,
+              "the kernel did not publish bare-host magnifier counters");
+        strategy_native_report_free_v1(&report);
+    }
     CHECK_EQ_INT(state.failures, 0, "in-callback intrabar rows failed");
     CHECK_EQ_INT(state.calculations, n, "the intrabar run did not calculate every bar");
     CHECK(state.sub_bars > 0, "a retained lower feed delivered no sub-bar");
@@ -3265,8 +3290,17 @@ static void check_intrabar_and_policies(void) {
     ext.intrabar_volume_weighted_max_samples = 64;
     CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
                  "the synthesized intrabar path was refused");
-    CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_OK,
-                 "the synthesized run did not complete");
+    {
+        pf_report_t report;
+        memset(&report, 0, sizeof(report));
+        CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &report), PF_NATIVE_OK,
+                     "the synthesized run did not complete");
+        CHECK(report.bar_magnifier_enabled == 1
+                  && report.magnifier_sub_bars_total > 0
+                  && report.magnifier_sample_ticks_total > 0,
+              "the synthesized kernel did not publish magnifier counters");
+        strategy_native_report_free_v1(&report);
+    }
     CHECK_EQ_INT(state.sub_bars, 0, "a synthesized path delivered a sub-bar");
     strategy_native_host_free(state.host);
 }
@@ -3574,16 +3608,29 @@ static void aux_fill(void) {
 }
 
 typedef struct aux_state {
+    pf_strategy_t host;
     int from_input;   /* buckets of row 0, the "60" series built from the input */
     int from_feed;    /* buckets of row 1, the "5" series built from the feed */
     int wrong;        /* a bucket that is not the hand-derived one */
+    int interval_checks;
+    int interval_wrong;
 } aux_state;
 
 static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscription,
                                 uint32_t completion, int64_t delivered_at_ms) {
     aux_state* state = (aux_state*)user;
+    pf_native_timeframe_interval_v1 interval;
+    memset(&interval, 0, sizeof(interval));
+    interval.struct_size = (uint32_t)sizeof(interval);
+    interval.version = PF_NATIVE_API_VERSION;
+    if (strategy_native_timeframe_bar_interval_v1(state->host, &interval) != PF_NATIVE_OK) {
+        ++state->interval_wrong;
+    } else {
+        ++state->interval_checks;
+    }
     if (subscription == 0u) {
         ++state->from_input;
+        if (interval.next_period_open_ms <= interval.open_ms) ++state->interval_wrong;
         return 0;
     }
     {
@@ -3598,6 +3645,13 @@ static int aux_on_timeframe_bar(void* user, const pf_bar_t* bar, uint32_t subscr
             /* Buckets 3j, 3j+1, 3j+2 ride on input j. */
             || delivered_at_ms != (int64_t)(k / 3) * 900000) {
             ++state->wrong;
+        }
+        if (interval.open_ms != (int64_t)k * 300000
+            || interval.eligible_open_ms != (int64_t)k * 300000
+            || interval.last_traded_close_ms != (int64_t)(k + 1) * 300000
+            || interval.next_period_open_ms != (int64_t)(k + 1) * 300000
+            || interval.next_input_open_ms != (int64_t)(k + 1) * 300000) {
+            ++state->interval_wrong;
         }
     }
     return 0;
@@ -3715,11 +3769,14 @@ static void check_auxiliary_feed(void) {
     ext = aux_ext(rows, sources, AUX_MINUTES);
     CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
                  "the auxiliary feed was refused");
+    state.host = host;
     CHECK_EQ_INT(strategy_native_run_v1(host, aux_inputs, AUX_INPUTS, NULL), PF_NATIVE_OK,
                  "the auxiliary batch did not complete");
     CHECK_EQ_INT(state.from_input, 2, "the input-built hour series");
     CHECK_EQ_INT(state.from_feed, 24, "the feed-built five-minute series");
     CHECK_EQ_INT(state.wrong, 0, "a feed-built bucket is not the hand-derived one");
+    CHECK(state.interval_checks > 0 && state.interval_wrong == 0,
+          "on_timeframe_bar did not read the C++ bucket interval");
     strategy_native_host_free(host);
 
     /* A caller compiled before the tail existed still configures its risk
@@ -3751,6 +3808,7 @@ static void check_auxiliary_feed(void) {
     ext = aux_ext(rows, sources, 60);
     CHECK_EQ_INT(strategy_configure_native_ext_v1(host, &spec, &ext), PF_NATIVE_OK,
                  "the streaming auxiliary feed was refused");
+    state.host = host;
     CHECK_EQ_INT(strategy_stream_begin(host, aux_inputs, 4, "15", "15"), 0,
                  "the auxiliary stream did not begin");
     CHECK_EQ_INT(state.from_feed, 12, "the warmup's feed-built buckets");
@@ -3770,6 +3828,8 @@ static void check_auxiliary_feed(void) {
     CHECK_EQ_INT(state.from_input, 2, "the streamed input-built hour series");
     CHECK_EQ_INT(state.from_feed, 24, "the streamed feed-built five-minute series");
     CHECK_EQ_INT(state.wrong, 0, "a streamed feed-built bucket is not the hand-derived one");
+    CHECK(state.interval_checks > 0 && state.interval_wrong == 0,
+          "stream on_timeframe_bar did not read the C++ bucket interval");
     strategy_native_host_free(host);
 }
 
@@ -3970,6 +4030,24 @@ static void check_fx_roll_margin_point(void) {
     ext.margin_liquidation_comment = FX_ROLL_COMMENT;
     CHECK_EQ_INT(strategy_configure_native_ext_v1(state.host, &spec, &ext), PF_NATIVE_OK,
                  "the fx-roll margin extension was refused");
+
+    {
+        int64_t bad_times[2] = {step_ms, step_ms - 1};
+        double bad_rates[2] = {step_rate, step_rate};
+        pf_native_fx_curve_v1 bad;
+        pf_native_fx_curve_error_t error = (pf_native_fx_curve_error_t)0xffffffffu;
+        uint64_t index = UINT64_MAX;
+        memset(&bad, 0, sizeof(bad));
+        bad.struct_size = (uint32_t)sizeof(bad);
+        bad.n = 2u;
+        bad.effective_from_ms = bad_times;
+        bad.account_per_quote = bad_rates;
+        CHECK_EQ_INT(strategy_configure_native_fx_curve_ext_v1(state.host, &bad, &error, &index),
+                     -1, "a decreasing FX curve was accepted");
+        CHECK_EQ_INT(error, PF_NATIVE_FX_CURVE_ERROR_NOT_STRICTLY_INCREASING,
+                     "the FX curve refusal did not name its validation error");
+        CHECK_EQ_INT(index, 1u, "the FX curve refusal did not name its bad element");
+    }
 
     memset(&curve, 0, sizeof(curve));
     curve.struct_size = (uint32_t)sizeof(curve);
@@ -6533,6 +6611,120 @@ static void check_typed_setup_refusals(void) {
     check_typed_appends();
 }
 
+/* Configure has two additive C contracts. The legacy base call still hands a
+ * refused value to the kernel and therefore latches Failed; the typed
+ * extension validates first and names both value refusals and the two reuse
+ * guards the C++ configure path owns. */
+static void check_typed_configure_refusals(void) {
+    pf_native_callbacks_v1 table = blank_callbacks(NULL);
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_state_v1 state;
+    uint32_t error;
+    uint32_t field;
+    pf_strategy_t host;
+    const pf_bar_t* bars;
+    int n = 0;
+
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "typed configure host create failed");
+    if (!host) return;
+    {
+        pf_native_run_spec_v1 invalid = spec;
+        invalid.initial_capital = 0.0;
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &invalid, &ext, &error, &field),
+                     PF_NATIVE_E_ARGUMENT, "typed configure accepted an invalid capital");
+        CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_NOT_FINITE_POSITIVE,
+                     "typed configure did not name the invalid capital");
+        CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_INITIAL_CAPITAL,
+                     "typed configure named another field for invalid capital");
+        memset(&state, 0, sizeof(state));
+        state.struct_size = (uint32_t)sizeof(state);
+        CHECK_EQ_INT(strategy_native_state_v1(host, &state), PF_NATIVE_OK,
+                     "typed configure state read after value refusal");
+        CHECK_EQ_INT(state.lifecycle, PF_NATIVE_LIFECYCLE_UNCONFIGURED,
+                     "typed configure value refusal changed the lifecycle");
+        error = field = TYPED_UNTOUCHED;
+        CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &spec, &ext, &error, &field),
+                     PF_NATIVE_OK, "typed configure could not apply after a value refusal");
+        CHECK(error == PF_NATIVE_SPEC_ERROR_NONE && field == PF_NATIVE_SPEC_FIELD_NONE,
+              "typed configure success did not clear its typed pair");
+    }
+    strategy_native_host_free(host);
+
+    /* The frozen base entry point keeps its historical terminal refusal. */
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "legacy configure host create failed");
+    if (host) {
+        pf_native_run_spec_v1 invalid = spec;
+        invalid.initial_capital = 0.0;
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &invalid), -1,
+                     "legacy configure accepted an invalid capital");
+        memset(&state, 0, sizeof(state));
+        state.struct_size = (uint32_t)sizeof(state);
+        CHECK_EQ_INT(strategy_native_state_v1(host, &state), PF_NATIVE_OK,
+                     "legacy configure state read");
+        CHECK_EQ_INT(state.lifecycle, PF_NATIVE_LIFECYCLE_FAILED,
+                     "legacy configure value refusal did not latch Failed");
+        CHECK_EQ_INT(state.failure_code, PF_NATIVE_FAILURE_INVALID_SPECIFICATION,
+                     "legacy configure value refusal latched another failure");
+        strategy_native_host_free(host);
+    }
+
+    bars = pf_twin_bars(&n);
+
+    /* Reused-host session key refusal: the typed route lets the kernel name it. */
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "session-key reuse host create failed");
+    if (host) {
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), PF_NATIVE_OK,
+                     "session-key reuse initial configure");
+        CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_OK,
+                     "session-key reuse initial run");
+        {
+            pf_native_run_spec_v1 changed = spec;
+            changed.session_key = "native-c-api-session-key-changed";
+            changed.run_number = 2;
+            error = field = TYPED_UNTOUCHED;
+            CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &changed, &ext,
+                                                                 &error, &field),
+                         PF_NATIVE_E_ARGUMENT, "a reused session key was accepted");
+            CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_SESSION_KEY_CHANGED_ON_REUSE,
+                         "the reused session key refusal was not typed");
+            CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_SESSION_KEY,
+                         "the reused session key refusal named another field");
+        }
+        strategy_native_host_free(host);
+    }
+
+    /* Reused-host high-water refusal: same key, consumed number again. */
+    host = strategy_native_host_create_v1(&table);
+    CHECK(host != NULL, "high-water reuse host create failed");
+    if (host) {
+        CHECK_EQ_INT(strategy_configure_native_v1(host, &spec), PF_NATIVE_OK,
+                     "high-water reuse initial configure");
+        CHECK_EQ_INT(strategy_native_run_v1(host, bars, n, NULL), PF_NATIVE_OK,
+                     "high-water reuse initial run");
+        {
+            pf_native_run_spec_v1 repeated = spec;
+            error = field = TYPED_UNTOUCHED;
+            CHECK_EQ_INT(strategy_configure_native_ext_result_v1(host, &repeated, &ext,
+                                                                 &error, &field),
+                         PF_NATIVE_E_ARGUMENT, "a consumed run number was accepted");
+            CHECK_EQ_INT(error, PF_NATIVE_SPEC_ERROR_RUN_NUMBER_NOT_ABOVE_CONSUMED_HIGH_WATER,
+                         "the high-water refusal was not typed");
+            CHECK_EQ_INT(field, PF_NATIVE_SPEC_FIELD_RUN_NUMBER,
+                         "the high-water refusal named another field");
+        }
+        strategy_native_host_free(host);
+    }
+}
+
 /* ── The arm relation and the sizing query (lane F4, item 4) ───────
  *
  * Two of the generic hooks the Pine adapter uses had no C route: the arm
@@ -8017,6 +8209,7 @@ int pf_native_c_api_checks(void) {
     check_liquidation_sizing_word();
     check_readout_words();
     check_typed_setup_refusals();
+    check_typed_configure_refusals();
     check_arm_relation_tail();
     check_sized_units_query();
     check_policy_hooks();

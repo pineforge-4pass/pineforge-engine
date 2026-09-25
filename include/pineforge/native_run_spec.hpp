@@ -773,6 +773,14 @@ enum class NativeRunSpecError : std::uint8_t {
     WrongPhase,
     // An event retention outside its enumeration.
     UnknownEventRetention,
+    // A cooperative abort left no run specification to reuse. This is a
+    // lifecycle refusal, not a calendar validation failure, so it names no
+    // field.
+    AbortedHostNoReusableRunSpec,
+    // A reused host may not change its bound session identity.
+    SessionKeyChangedOnReuse,
+    // A reused host may only consume a run number above its high-water mark.
+    RunNumberNotAboveConsumedHighWater,
 };
 
 /// Allocation-free facts suitable for the host's durable failure variant.

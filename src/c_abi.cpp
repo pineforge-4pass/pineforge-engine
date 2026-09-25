@@ -27,7 +27,8 @@
  *     strategy_script_bars_processed),
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
- *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1 — the
+ *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
+ *     strategy_configure_native_fx_curve_ext_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
@@ -44,6 +45,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <cstring>
 #include <exception>
@@ -68,6 +70,52 @@ int pf_cabi_int(Fn&& fn) noexcept {
     } catch (...) {
         return -1;
     }
+}
+
+pf_native_fx_curve_error_t fx_curve_error_word(
+        pineforge::NativeFxCurveError error) noexcept {
+    switch (error) {
+    case pineforge::NativeFxCurveError::None:
+        return PF_NATIVE_FX_CURVE_ERROR_NONE;
+    case pineforge::NativeFxCurveError::LengthMismatch:
+        return PF_NATIVE_FX_CURVE_ERROR_LENGTH_MISMATCH;
+    case pineforge::NativeFxCurveError::NotStrictlyIncreasing:
+        return PF_NATIVE_FX_CURVE_ERROR_NOT_STRICTLY_INCREASING;
+    case pineforge::NativeFxCurveError::NotFinitePositive:
+        return PF_NATIVE_FX_CURVE_ERROR_NOT_FINITE_POSITIVE;
+    case pineforge::NativeFxCurveError::AllocationFailure:
+        return PF_NATIVE_FX_CURVE_ERROR_ALLOCATION_FAILURE;
+    case pineforge::NativeFxCurveError::WrongPhase:
+        return PF_NATIVE_FX_CURVE_ERROR_WRONG_PHASE;
+    }
+    return static_cast<pf_native_fx_curve_error_t>(error);
+}
+
+int configure_native_fx_curve_cabi(
+        pf_strategy_t s, const pf_native_fx_curve_v1* curve,
+        pf_native_fx_curve_error_t* error, std::uint64_t* index) noexcept {
+    return pf_cabi_int([&] {
+        if (!s || !curve) return -1;
+        auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+        if (!engine->native_bound()) return -1;
+        if (curve->struct_size != sizeof(pf_native_fx_curve_v1)) return -1;
+        if (curve->n > 0 && (!curve->effective_from_ms || !curve->account_per_quote)) return -1;
+        auto* host = dynamic_cast<pineforge::NativeStrategyHost*>(engine);
+        if (!host) return -1;
+
+        pineforge::NativeFxCurve cpp;
+        if (curve->n > 0) {
+            const std::size_t n = curve->n;
+            cpp.effective_from_ms.assign(curve->effective_from_ms,
+                                         curve->effective_from_ms + n);
+            cpp.account_per_quote.assign(curve->account_per_quote,
+                                         curve->account_per_quote + n);
+        }
+        const auto result = host->configure_native_fx_curve(cpp);
+        if (error) *error = fx_curve_error_word(result.validation.error);
+        if (index) *index = static_cast<std::uint64_t>(result.validation.index);
+        return result.status == pineforge::NativeSetupStatus::Applied ? 0 : -1;
+    });
 }
 
 }  // namespace
@@ -891,28 +939,13 @@ PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spe
 
 PF_API int strategy_configure_native_fx_curve_v1(
         pf_strategy_t s, const pf_native_fx_curve_v1* curve) {
-    try {
-        if (!s || !curve) return -1;
-        auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-        if (!engine->native_bound()) return -1;
-        if (curve->struct_size != sizeof(pf_native_fx_curve_v1)) return -1;
-        if (curve->n > 0 && (!curve->effective_from_ms || !curve->account_per_quote)) return -1;
-        auto* host = dynamic_cast<pineforge::NativeStrategyHost*>(engine);
-        if (!host) return -1;
+    return configure_native_fx_curve_cabi(s, curve, nullptr, nullptr);
+}
 
-        pineforge::NativeFxCurve cpp;
-        if (curve->n > 0) {
-            const std::size_t n = curve->n;
-            cpp.effective_from_ms.assign(curve->effective_from_ms,
-                                         curve->effective_from_ms + n);
-            cpp.account_per_quote.assign(curve->account_per_quote,
-                                         curve->account_per_quote + n);
-        }
-        const auto result = host->configure_native_fx_curve(cpp);
-        return result.status == pineforge::NativeSetupStatus::Applied ? 0 : -1;
-    } catch (...) {
-        return -1;
-    }
+PF_API int strategy_configure_native_fx_curve_ext_v1(
+        pf_strategy_t s, const pf_native_fx_curve_v1* curve,
+        pf_native_fx_curve_error_t* error, uint64_t* index) {
+    return configure_native_fx_curve_cabi(s, curve, error, index);
 }
 
 } /* extern "C" */
