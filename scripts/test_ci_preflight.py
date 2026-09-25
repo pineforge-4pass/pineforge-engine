@@ -8,10 +8,50 @@ import sys
 import tempfile
 import unittest
 
-from ci_preflight import check_commands, run_checks
+from ci_preflight import check_commands, ci_workflow_findings, run_checks
 
 
 class PreflightFailures(unittest.TestCase):
+    def ci_sources(self):
+        root = Path(__file__).resolve().parents[1]
+        return [(root / path).read_text() for path in (
+            '.github/workflows/ci.yml', '.github/workflows/native-live.yml',
+            '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt')]
+
+    def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        mutations = (
+            (0, '  workflow_dispatch:\n', ''),
+            (0, '  native-live:\n', '  missing-native-live:\n'),
+            (0, '  sanitizers:\n', '  missing-sanitizers:\n'),
+            (0, '  build:\n', '  missing-build:\n'),
+            (0, '  kernel-only:\n', '  missing-kernel:\n'),
+            (0, '  corpus-parity-subset:\n', '  missing-subset:\n'),
+            (0, '  build-gate:\n', '  missing-gate:\n'),
+            (0, '"$SANITIZER_RESULT" == "success"', '"$SANITIZER_RESULT" != "success"'),
+            (0, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
+            (0, "matrix.build_type == 'Debug' && '--exclude-label slow'", "'--exclude-label slow'"),
+            (0, "github.event_name == 'pull_request' && '--exclude-label slow'", "'--exclude-label slow'"),
+            (0, "exclude_slow: ${{ github.event_name == 'pull_request' }}", 'exclude_slow: true'),
+            (1, '        default: false', '        default: true'),
+            (1, "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}", ''),
+            (2, '  statuses: read', '  checks: read'),
+            (2, '/commits/$HEAD_SHA/statuses?per_page=100', '/commits/$HEAD_SHA/check-runs'),
+            (2, '.["pineforge/parity"] == "success"', 'true'),
+            (2, 'if has($s.context) then . else .[$s.context] = $s.state end',
+                '.[$s.context] = $s.state'),
+            (3, '    test_chart_day_memo\n    test_ci_verify\n',
+                '    test_chart_day_memo\n'),
+            (3, 'APPEND PROPERTY LABELS slow', 'APPEND PROPERTY LABELS other'),
+        )
+        for index, before, after in mutations:
+            with self.subTest(index=index, before=before):
+                changed = original.copy()
+                self.assertIn(before, changed[index])
+                changed[index] = changed[index].replace(before, after, 1)
+                self.assertNotEqual(ci_workflow_findings(*changed), [])
+
     def run_preflight(self, commands):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

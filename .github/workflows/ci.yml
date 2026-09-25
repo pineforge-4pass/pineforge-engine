@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -66,7 +67,6 @@ jobs:
           if-no-files-found: warn
 
   build:
-    needs: preflight
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -121,7 +121,7 @@ jobs:
           # ratio -- for a runner whose CPU accounting is unusable; record the
           # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
-        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache
+        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -142,7 +142,6 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -172,7 +171,7 @@ jobs:
             ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
 
       - name: Verify (sanitizers)
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs 4 --ccache
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs 4 --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -193,7 +192,6 @@ jobs:
   # modules are built from the kernel alone, and every examples/native host
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
-    needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -234,30 +232,23 @@ jobs:
           path: ci-diagnostics/
           if-no-files-found: warn
 
-  # Reuse the full native proof once per CI run. The reusable workflow also
-  # retains manual dispatch for explicitly requested standalone verification.
+  # Reuse native proof once per CI run. Its manual dispatch runs every row.
   native-live:
-    needs: preflight
     uses: ./.github/workflows/native-live.yml
+    with:
+      exclude_slow: ${{ github.event_name == 'pull_request' }}
 
-  # TradingView parity, on the population a pull request can wait for. No
-  # ci_verify.py profile compiles a corpus strategy, so without this job
-  # nothing between a src/** change and a merge re-derives the engine's
-  # parity: the whole sweep is ~32 min and can only run nightly
-  # (corpus-parity.yml). This one re-runs the 30 probes
-  # scripts/corpus_parity_subset.txt names against the same pinned sha256
-  # rows, and feeds the required `build` context below — which is what makes
-  # a trade-moving change unmergeable rather than caught the next night.
-  # Deliberately unfiltered by path: `build` requires success, and a skipped
-  # dependency is not success.
+  # Advisory TradingView parity subset on every CI run. The maintainers post
+  # the required pineforge/parity status from their separate parity verdict.
+  # Keep this job unfiltered so build-gate reports its result on every run.
   corpus-parity-subset:
-    needs: preflight
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset
 
-  # Keep the required `build` context while making it cover every proof lane.
-  # Failure, cancellation or skipping in any dependency must fail this gate.
+  # Advisory aggregate context covering every GitHub Actions lane. The merge
+  # ruleset requires pineforge/verify and pineforge/parity, posted by the
+  # maintainers, rather than this build context.
   build-gate:
     name: build
     needs: [preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]

@@ -20,6 +20,7 @@ so neither had drift to report or anything to wait for.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -30,6 +31,88 @@ import sys
 from ci_verify import ROOT, source_guard_commands
 
 ACTIONLINT_VERSION = '1.7.12'
+# The names live only in tests/CMakeLists.txt. A digest pins that measured
+# population without maintaining a second row list in this Python guard.
+PR_SLOW_ROWS_SHA256 = '90f8932f921579c55561e1af962610e0e311d1f93f28722a4c5931d7b6f7fb53'
+
+
+def _jobs(workflow: str) -> dict[str, str]:
+    body = workflow.split('\njobs:\n', 1)
+    if len(body) != 2:
+        return {}
+    matches = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\s*$', body[1], re.MULTILINE))
+    return {match.group(1): body[1][match.end():
+                                    matches[index + 1].start() if index + 1 < len(matches)
+                                    else len(body[1])]
+            for index, match in enumerate(matches)}
+
+
+def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str) -> list[str]:
+    """Pin the PR-light/full-event split, parallel start, merge statuses and row home."""
+    findings = []
+    events = ci.split('\non:\n', 1)
+    events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
+    for trigger in ('push:\n    branches: [main]',
+                    'pull_request:\n    branches: [main]', 'workflow_dispatch:'):
+        if '  ' + trigger not in events:
+            findings.append(f'ci.yml must retain {trigger.split(":", 1)[0]}')
+    jobs = _jobs(ci)
+    proof_jobs = ('build', 'sanitizers', 'kernel-only', 'native-live',
+                  'corpus-parity-subset')
+    for job in ('preflight', *proof_jobs, 'build-gate'):
+        if job not in jobs:
+            findings.append(f'ci.yml is missing job {job}')
+    for job in proof_jobs:
+        if re.search(r'^    needs:', jobs.get(job, ''), re.MULTILINE):
+            findings.append(f'{job} must start alongside preflight')
+    gate = jobs.get('build-gate', '')
+    if ('needs: [preflight, build, sanitizers, native-live, kernel-only, '
+            'corpus-parity-subset]' not in gate or '    if: always()' not in gate
+            or '    name: build' not in gate):
+        findings.append('build-gate must aggregate every proof job and preflight')
+    for job, variable in (('preflight', 'PREFLIGHT_RESULT'), ('build', 'BUILD_RESULT'),
+                          ('sanitizers', 'SANITIZER_RESULT'), ('native-live', 'NATIVE_RESULT'),
+                          ('kernel-only', 'KERNEL_RESULT'),
+                          ('corpus-parity-subset', 'PARITY_RESULT')):
+        if (f'${{{{ needs.{job}.result }}}}' not in gate
+                or f'"${variable}" == "success"' not in gate):
+            findings.append(f'build-gate must require {job} success')
+    debug_flag = "${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}"
+    pr_flag = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
+    if debug_flag not in jobs.get('build', '') or jobs.get('build', '').count('--exclude-label slow') != 1:
+        findings.append('only PR Debug matrix jobs may exclude slow rows')
+    if pr_flag not in jobs.get('sanitizers', '') or jobs.get('sanitizers', '').count('--exclude-label slow') != 1:
+        findings.append('only PR sanitizers may exclude slow rows')
+    if 'exclude_slow: ${{ github.event_name == \'pull_request\' }}' not in jobs.get('native-live', ''):
+        findings.append('native-live must receive the PR-only exclusion input')
+    for job in ('kernel-only', 'corpus-parity-subset'):
+        if '--exclude-label' in jobs.get(job, ''):
+            findings.append(f'{job} must keep its full population')
+    if ('  workflow_call:\n    inputs:\n      exclude_slow:' not in native
+            or '        type: boolean\n        default: false' not in native
+            or '  workflow_dispatch:' not in native
+            or "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}" not in native):
+        findings.append('native-live must default to full rows for dispatch and push')
+    if ('  statuses: read' not in promote or '  checks: read' in promote
+            or '/commits/$HEAD_SHA/statuses?per_page=100' not in promote
+            or 'gh api --paginate' not in promote
+            or 'reduce (.[][]) as $s' not in promote
+            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in promote
+            or '.["pineforge/verify"] == "success"' not in promote
+            or '.["pineforge/parity"] == "success"' not in promote
+            or '/check-runs' in promote):
+        findings.append('baseline promotion must require the latest two head statuses')
+    blocks = re.findall(r'^set\(PINEFORGE_PR_SLOW_TESTS\n(.*?)^\)', cmake,
+                        re.MULTILINE | re.DOTALL)
+    names = re.findall(r'^    (test_[A-Za-z0-9_]+)$', blocks[0], re.MULTILINE) if len(blocks) == 1 else []
+    canonical = '\n'.join(names) + '\n'
+    if (len(blocks) != 1 or len(names) != 27 or len(set(names)) != 27
+            or hashlib.sha256(canonical.encode()).hexdigest() != PR_SLOW_ROWS_SHA256
+            or cmake.count('APPEND PROPERTY LABELS slow') != 1
+            or 'set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)' not in cmake
+            or 'if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})' not in cmake):
+        findings.append('measured slow rows must keep one pinned CMake label list')
+    return findings
 
 
 def docs_workflow_findings(workflow: str) -> list[str]:
@@ -70,7 +153,10 @@ def check_commands(source: Path) -> list[tuple]:
                            str(source / '.github/workflows/ci.yml'),
                            str(source / '.github/workflows/native-live.yml'),
                            str(source / '.github/workflows/corpus-parity.yml'),
-                           str(source / '.github/workflows/docs.yml')]),
+                           str(source / '.github/workflows/docs.yml'),
+                           str(source / '.github/workflows/promote-baseline.yml')]),
+        ('ci-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
+                                  '--check-ci-workflow']),
         ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
                                     '--check-docs-workflow']),
         ('docs-workflow-contract-tests',
@@ -179,7 +265,19 @@ def main() -> int:
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build-ci-preflight')
     parser.add_argument('--check-docs-workflow', action='store_true')
     parser.add_argument('--self-test-docs-workflow', action='store_true')
+    parser.add_argument('--check-ci-workflow', action='store_true')
     args = parser.parse_args()
+    if args.check_ci_workflow:
+        findings = ci_workflow_findings(
+            (ROOT / '.github/workflows/ci.yml').read_text(),
+            (ROOT / '.github/workflows/native-live.yml').read_text(),
+            (ROOT / '.github/workflows/promote-baseline.yml').read_text(),
+            (ROOT / 'tests/CMakeLists.txt').read_text())
+        for finding in findings:
+            print(finding)
+        if not findings:
+            print('CI workflow contract: PR exclusions, full events, statuses and slow rows OK')
+        return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
         workflow = (ROOT / '.github/workflows/docs.yml').read_text()
         if args.self_test_docs_workflow:

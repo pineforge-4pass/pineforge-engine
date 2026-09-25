@@ -7,11 +7,12 @@
 # On a merged PR it advances the campaign baseline one axis to the merged
 # composite, reusing the snapshot from the pr-gate run that already cleared
 # it. It promotes ONLY when the merge is exact-head (the gated commit's tree is
-# now on the base branch), CI is green on that commit, and a PASS verdict binds
+# now on the base branch), both maintainer verification statuses are green on
+# that commit, and a PASS verdict binds
 # the full (engine, codegen) pair. Otherwise it exits green without promoting.
 #
-# The gate logic (exact-head + CI-green + baseline-promote.mjs) is unchanged;
-# only the transport to the campaign plane changed. The plane is now GCP: the
+# The gate logic is exact-head + pineforge/verify + pineforge/parity +
+# baseline-promote.mjs. The plane is now GCP: the
 # promotion reads the active baseline and the gate ledger from the Postgres
 # registry through a cloud-sql-proxy, streams the pinned documents from the
 # GCS evidence bucket, and appends the new baseline row — authenticated by
@@ -72,10 +73,9 @@ on:
 
 permissions:
   contents: read
-  # "Confirm CI is green" reads check-runs, which is `checks`. The older
-  # combined-status API is not called, so no `statuses: read` is granted --
-  # this block is exactly what the steps below do, and nothing spare.
-  checks: read
+  # The two required merge-gate verdicts are commit statuses, not Actions
+  # check-runs. Inspect the PR head commit's statuses before promotion.
+  statuses: read
   # Workload identity federation mints the GCP credential from the job's own
   # OIDC token; nothing here can promote without this repo's identity.
   id-token: write
@@ -121,7 +121,7 @@ jobs:
           fi
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Confirm CI is green on the merged commit
+      - name: Confirm the merge gate on the merged PR head
         id: ci
         if: steps.exacthead.outputs.ok == 'true'
         env:
@@ -129,10 +129,18 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.merge_commit }}
         run: |
           set -euo pipefail
-          bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
-            --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
-          if [ "$bad" != "0" ]; then
-            echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
+          # GitHub lists newest statuses first. Keep the first occurrence of
+          # each context across pages, so an older success cannot mask a
+          # newer failure or pending verdict on this exact commit.
+          statuses=$(gh api --paginate \
+            "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+          if ! jq -es '
+            reduce (.[][]) as $s ({};
+              if has($s.context) then . else .[$s.context] = $s.state end)
+            | .["pineforge/verify"] == "success"
+              and .["pineforge/parity"] == "success"
+          ' <<< "$statuses" >/dev/null; then
+            echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
             echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "green=true" >> "$GITHUB_OUTPUT"
@@ -188,7 +196,7 @@ jobs:
           chmod +x /tmp/cloud-sql-proxy
           /tmp/cloud-sql-proxy --port 5433 \
             gen-lang-client-0864094636:asia-east1:pineforge-workflow-pg &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
             sleep 1
           done

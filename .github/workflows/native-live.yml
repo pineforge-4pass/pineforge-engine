@@ -2,6 +2,11 @@ name: Native live runner
 
 on:
   workflow_call:
+    inputs:
+      exclude_slow:
+        description: Exclude measured slow CTest rows in the caller's PR run
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -100,7 +105,7 @@ jobs:
           cmake --install curl-build 2>&1 | tee curl-install.log
 
       - name: Verify native live
-        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs 4 --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache --require-websocket
+        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs 4 --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache --require-websocket ${{ inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()

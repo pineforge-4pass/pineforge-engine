@@ -23,17 +23,17 @@ name: Corpus parity
 # runs nightly and on demand, plus on any pull request that touches the pin or
 # the parity tooling itself.
 #
-# AND HOW PARITY STILL BLOCKS A MERGE. The `corpus-parity-subset` job below
+# PR EARLY SIGNAL. The `corpus-parity-subset` job below
 # re-runs the 30 probes scripts/corpus_parity_subset.txt names -- in parallel,
 # they write into disjoint directories -- and judges them against the same
 # pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
 # under sibling load: derive 2 s, build the runtime + the 30 strategy .so 68 s
 # from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
 # over an up-to-date build directory, under 3 min cold.
-# .github/workflows/ci.yml calls it as a reusable workflow and
-# makes it a dependency of the required `build` context, so a src/** change that
-# moves one of those 30 probes by one byte cannot merge. Nothing about the
-# nightly job changes.
+# .github/workflows/ci.yml calls it as a reusable workflow and includes it in
+# the advisory `build` aggregate. The maintainers' separate full parity
+# verdict posts the required pineforge/parity commit status on the PR head.
+# Nothing about the nightly job changes.
 
 on:
   schedule:
@@ -44,7 +44,7 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: 'full (all 312 probes) or subset (the pull-request gate)'
+        description: 'full (all 312 probes) or subset (PR early signal)'
         type: string
         default: full
   pull_request:
@@ -156,9 +156,8 @@ jobs:
           path: corpus-parity-diagnostics/
           if-no-files-found: warn
 
-  # The blocking half: the 30 probes scripts/corpus_parity_subset.txt names,
-  # judged against the same pinned sha256 rows. Reached only through
-  # .github/workflows/ci.yml, which needs it for the required `build` context.
+  # The advisory PR subset: the 30 probes scripts/corpus_parity_subset.txt
+  # names, judged against the same pinned sha256 rows. Reached through CI.
   corpus-parity-subset:
     if: inputs.mode == 'subset'
     runs-on: ubuntu-24.04
