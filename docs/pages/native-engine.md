@@ -4076,7 +4076,31 @@ notification; the same request is `strategy_native_submit_v1` with
 `strategy_native_sized_units_v1`. A table that leaves `on_bar_open` or
 `on_precommit` out declares that hook absent when the host is created
 (`declare_native_bar_open_hook` / `declare_native_precommit_hook`, R5 lane
-D2-A), which moves no value. `scripts/check_native_c_api_surface.py`
+D2-A), which moves no value.
+
+**The same strategy through both surfaces (R5 lane H-MEASURE).**
+`tests/test_native_acid_composite.cpp` drives one Pine-free strategy through
+every feature of the G1 acid test — a fee-reserved `Sized` entry, anchored
+bracket legs on a price grid, a `keep_binding` re-issue, a trail in ticks, a
+maintenance-only margin model and its liquidation seen through the open lots,
+an FX step, a risk limit and its refusal, calc-on-fills, an hourly and an
+auxiliary subscription, session-day flags, a partial close across lots and an
+exact-sum close, a typed refusal, the magnifier counters, the kernel-recorded
+report — in batch and in stream, and runs its C port
+(`tests/test_native_acid_composite_c.c`, configured through the typed
+`strategy_configure_native_ext_result_v1`) in the same process: every shared
+ledger fact is identical, per-bar broker-state hash rows included, within one
+driving mode (a batch and a stream record the same trades, fills, equity
+curve, series deliveries and check points, and different hash rows, as the
+driving-mode rules above say). What the C port cannot read is named family by
+family: the four items ruled to 1.1.0 — a non-mutating execution preview
+(`inspect_current_execution`), the applied event's origin and label, a closed
+trade's entry comment, and a C `ReplaceOptions` word (`keep_handle` /
+`keep_binding` / `retain_trigger_state`) — plus `closes_session_day_open_ended`
+(the asymmetry the COVERAGE block records), the protected
+`broker_state_hash_from_execution_hash` fold, and two C++ readouts with no C
+field: `NativeCurrentPointView::quote_origin_ordinal` and
+`NativeDecisionContext::driver_statistics`. `scripts/check_native_c_api_surface.py`
 proves the block is exactly that class's public surface and runs as a source
 guard in every `ci_verify.py` profile, so the list cannot silently go stale;
 `scripts/test_check_native_c_api_surface.py` proves the guard can fail. A

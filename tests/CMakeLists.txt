@@ -2244,6 +2244,27 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_native_c_api_c99 test_native_c_api_c99)
 
+# R5 lane H-MEASURE (AUDIT4-codex A4-ACID-COVERAGE): the G1 composite witness.
+# One ctest row, two translation units, the test_native_c_api pattern. The C++
+# half drives one Pine-free NativeStrategyHost through every feature the G1
+# acid test names (a PASS line per feature) in batch and in stream, runs the
+# keep_binding variant and a lower_tf-magnified batch, and accounts for the
+# driving-mode hash rules line by line. The C half drives the same commands
+# through <pineforge/native_c_api.h> alone, and the C++ half compares the two
+# FIELD sets in process: every shared ledger fact identical, every C++-only
+# family named by an EXCLUDED line. Neither TU reaches a source or compat
+# header, so the row runs in the kernel-only profile too.
+add_executable(test_native_acid_composite
+    test_native_acid_composite.cpp
+    test_native_acid_composite_c.c)
+target_compile_definitions(test_native_acid_composite PRIVATE ACID_WITH_C=1 ACID_C_NO_MAIN=1)
+target_link_libraries(test_native_acid_composite PRIVATE pineforge)
+target_compile_options(test_native_acid_composite PRIVATE -UNDEBUG -ffp-contract=off)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_native_acid_composite PRIVATE ${_pf_cov_test_flags})
+endif()
+pineforge_add_twin_test(test_native_acid_composite test_native_acid_composite)
+
 add_test(NAME test_market_admission_schema COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/check_market_admission_schema.py)
 add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABLE}
