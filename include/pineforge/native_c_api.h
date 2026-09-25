@@ -1761,10 +1761,18 @@ typedef struct pf_native_state_v1 {
                                 *   PF_NATIVE_FAILURE_CALLBACK_EXCEPTION for a callback
                                 *   that returned non-zero. */
     uint32_t failure_operation; /**< #pf_native_failure_operation_t. */
-    uint32_t failure_discriminator; /**< The kernel's opaque durable failure
-                                     *   discriminator; 0 when no more specific
-                                     *   reason was recorded. Settlement
-                                     *   failures can carry a nonzero core reason. */
+    uint32_t failure_discriminator; /**< The kernel's own word beside the code, as C++
+                                     *   `NativeFailure::discriminator` holds it: the
+                                     *   request core's `native_order::CoreFailure` for a
+                                     *   refused preparation (CONTRACT or
+                                     *   SETTLEMENT_FAILURE; 7 is
+                                     *   `UnrepresentableReservation`), its `InstallError`
+                                     *   for a refused install (CONTRACT), the settlement's
+                                     *   `execution::Status` for a failed inspection or
+                                     *   commit (SETTLEMENT_FAILURE), a staged FX curve's
+                                     *   `NativeFxCurveError` (INVALID_SPECIFICATION); 0
+                                     *   when the failure carries none, as every completed
+                                     *   run does. */
     uint64_t failure_ordinal;  /**< The point the failure was latched at, 0 when absent. */
     uint64_t consumed_high_water;
     int64_t  decision_floor_ms;
