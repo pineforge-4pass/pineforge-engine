@@ -3,7 +3,7 @@
 #   ./scripts/check_corpus_parity.sh && \
 #     python3 scripts/corpus_trades_identity.py --update
 # and carry the evidence in the commit that moves it.
-# corpus eede4a22978051f5f13d791e99b2151fbbbfa073
+# corpus f989e36276d6993d862b8d392df89fc49aacee04
 
 a72ee904563a1787ca8371f37f98cec74f6fb44163a5dfac169b77755a05ed1a  validation/analyzer-anvil-percent-costs-01/engine_trades.csv
 df7fbdb2082c8982e8c38d8843fc53262df693d4ce8b32bf05bc0acd1ef41a16  validation/analyzer-cashflow-cash-costs-01/engine_trades.csv
