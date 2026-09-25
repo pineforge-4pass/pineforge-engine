@@ -502,12 +502,13 @@ declare all fail CI.
 
 Every struct is tagged and size-prefixed (`struct_size`, `version`); an unknown
 size, version or enumerator is refused with a documented negative status and
-mutates nothing. `pf_native_run_spec_ext_v1` has five published lengths — the
+mutates nothing. `pf_native_run_spec_ext_v1` has six published lengths — the
 layout the lane first shipped (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`), the same
 struct with L9's appended risk tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`), that
 plus N8's intrabar / policy tail (`PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`), the
 auxiliary-feed tail (`PF_NATIVE_RUN_SPEC_EXT_V1_AUXILIARY_SIZE`), the event-retention
-tail, and the current layout; `pf_native_callbacks_v1`
+tail (`PF_NATIVE_RUN_SPEC_EXT_V1_RETENTION_SIZE`), and the current layout with
+K-ULP4's quantity-tolerance tail; `pf_native_callbacks_v1`
 has four — the layout the lane first shipped (`PF_NATIVE_CALLBACKS_V1_BASE_SIZE`),
 that plus its six-hook tail (`PF_NATIVE_CALLBACKS_V1_HOOKS_SIZE`), that plus the
 policy-hook tail (`PF_NATIVE_CALLBACKS_V1_POLICY_SIZE`), and the current one,

@@ -106,8 +106,8 @@ finding to report, not a step to take.
    coverage claim.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:231 and
-    `RELEASE_MIN_TESTS` ci_verify.py:335. Adding rows means raising the floor
+    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:235 and
+    `RELEASE_MIN_TESTS` ci_verify.py:343. Adding rows means raising the floor
     in the same commit.
 
 ## The recipe for a lane
@@ -240,8 +240,8 @@ CMakeLists.txt:43 off.
 policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
-through `NativeStrategyHost` native_host.hpp:826, or C through the
-`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` native_c_api.h:2609.
+through `NativeStrategyHost` native_host.hpp:830, or C through the
+`strategy_native_*` surface `sha256:1a4d41202e1b32a33ab75c2e42a36285ccb1d061087a8db1c19162b244c5b29f` native_c_api.h:2639.
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be
@@ -253,7 +253,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:231, `RELEASE_MIN_TESTS` ci_verify.py:335). It
+(`KERNEL_MIN_TESTS` ci_verify.py:235, `RELEASE_MIN_TESTS` ci_verify.py:343). It
 counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared

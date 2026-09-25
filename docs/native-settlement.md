@@ -39,8 +39,20 @@ A finite quantity request can leave a positive floating residual. No native
 epsilon silently discards it. `Flatten` explicitly closes all lots without
 comparing any quantity; a request is never taken for a whole-book close because
 it is near the book's aggregate, and it closes a lot whole only where its
-binary64 FIFO sum reaches the request exactly (below). Quantities whose changes
-cannot be represented are refused before settlement.
+binary64 FIFO sum reaches the request exactly (below) -- unless the run declares
+a quantity tolerance (*Quantity tolerance*, below). A quantity whose change
+binary64 cannot represent on the book it meets is refused before settlement:
+the inspection answers `UnrepresentableQuantity`, and the execution consumer
+ends THAT request with a terminal `MatchRejectedEvent` whose reason is
+`MatchRejectReason::UnrepresentableQuantity` (C:
+`PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY`, the `reason` of a
+`PF_NATIVE_EVENT_MATCH_REJECTED` row). Nothing moves, no fee is charged, and
+the run goes on; the host submits again if it still wants the trade (R5 lane
+K-ULP4). Until then the consumer turned the same inspection into a durable
+`SettlementFailure` of the whole run -- lifecycle `Failed`, code 6,
+discriminator 5, "native settlement inspection failed". Every other status an
+inspection can answer (`InvalidBook`, `InvalidPrice`, `InvalidAccounting`, ...)
+is a broken book, price or account, and still stops the run.
 
 A close that spans lots and ends inside one of them is charged exactly its
 units. Every lot before the one it ends in closes whole, and C is the binary64
@@ -56,9 +68,20 @@ survivor. For example, lots `{fl(106/84.5), 10}` reduced by `fl(277/84.5)` close
 `fl(106/84.5)` and `fl(277/84.5 - 106/84.5)`: the two rows add up one ulp above
 the request, and the execution reports `fl(277/84.5)` closed. A whole lot whose
 sum falls short of the request is not where it ends; the rest beyond it is real
-and the next lot closes it. A split that binary64 cannot hold is still refused:
-a rest below half an ulp of its lot, a rest that a whole lot's close cannot
-decrement, and a reduction that cannot move the position.
+and the next lot closes it. A split that binary64 cannot hold is still refused
+-- a rest below half an ulp of its lot, a rest that a whole lot's close cannot
+decrement, a running sum a lot's close cannot move, and a reduction that cannot
+move the position -- and so is an opening whose book absorbs it or whose
+surviving book it absorbs; each is that request's typed refusal above, not the
+run's failure. Ordinary decimal quantities reach them. After open 1.5, Reduce
+1.3 and open 2.9 the book is `{0.19999999999999996, 2.9}`, and `Reduce 0.2`
+needs `2^-54` of the 2.9 lot, below half its ulp (`2^-52`). A close that ends a
+few ulps short of a lot keeps those ulps as a dust lot, and a dust lot at the
+head of the book then refuses the next `Reduce` whose rest it cannot decrement
+(`fl(1.0 - 2^-55)` is 1.0) and the next opening on its side, whose aggregate
+absorbs it (`fl(2^-55 + 200)` is 200). `Flatten` closes a dust book; a close of
+the lot's own quantity closes it; the quantity tolerance below books all of
+these.
 
 A close whose units are exactly the binary64 FIFO sum of the lots through one
 of them -- `fl(C + qty)` equals the units for that lot's full size, as a close
@@ -76,6 +99,61 @@ both lots close whole, the rows add up to the units, and the book is flat.
 Units strictly between two such sums still end inside a lot and keep its
 residual. A selection closed by its whole sum was already consumed whole, and
 `Flatten` needs no quantity at all.
+
+What a native host gets, then, from a quantity request on the exact settlement:
+exactly one terminal outcome, and no run stopped for a quantity. A close that spans lots
+and ends inside one is one fill charged its request (K-ULP2); a close whose
+binary64 FIFO sum reaches its request at a lot closes that lot whole (K-ULP3);
+a `Transact` that crosses the book is one fill charged its units (K-ULP1, in
+`docs/pages/native-engine.md`); a request the settlement cannot book exactly is
+refused, typed, as above, which `inspect_current_execution` shows beforehand as
+a `settlement_readiness` of `UnrepresentableQuantity`; and `Flatten` is never
+refused for a quantity. On a quantity grid (`NativeRunSpec::quantity_grid`) the
+book's own quantities are on the grid: a `ScopeFraction` whose product is its
+scope -- `fraction == 1` -- resolves to the scope's held total, which the grid
+does not floor, and a close of exactly one lot's binary64 quantity is admitted,
+at submit as a `Reduce` or a closing `Transact` and as a host-sized close's
+answered units (R5 lane K-ULP4). Before, such a fraction was floored onto the grid
+and closed up to a step short, left a dust lot, or found nothing to close, and
+the lot's own size was `OffGrid`. A close of a FIFO prefix's sum or of the
+held total of a multi-lot book is still gridded; `Flatten` and
+`ScopeFraction{1}` are its spellings.
+
+## Quantity tolerance
+
+A run that declares `NativeRunSpec::quantity_tolerance = t` (C: the
+`quantity_tolerance` tail of `pf_native_run_spec_ext_v1` under
+`PF_NATIVE_SPEC_EXT_QUANTITY_TOLERANCE`; finite and positive, else
+`NotFinitePositive` on `QuantityTolerance`) makes two quantities within `t` of
+each other one quantity to the settlement. It is opt-in and absent by default:
+an absent tolerance is the exact walk above, bit for bit, and the spec digest
+folds the value only when it is present. Under it:
+
+- A close that comes within `t` of a FIFO boundary -- the binary64 sum of the
+  scope's lots through one of them -- ends at that boundary and is charged its
+  request, as a split its rows cannot add up to is (K-ULP2). If the lot the
+  request ends in would keep at most `t`, it closes whole; if a whole lot
+  leaves a rest of at most `t` and the next member lot is larger than `t`,
+  that lot is not touched; if the next lot is itself at most `t`, it closes
+  whole instead, so dust behind a boundary is taken rather than left. The
+  scope's end is a boundary too: a `Reduce` or a crossing `Transact` at most
+  `t` past the book closes the book and opens nothing. `{0.19999999999999996,
+  2.9}` reduced by 0.2 closes the first lot, charged 0.2, and keeps 2.9.
+- A lot of at most `t` that a close reaches -- a dust lot at the head of the
+  book -- closes whole even where binary64 cannot take it off the rest or the
+  running sum, and the walk goes on: `{2^-55, 2.9}` reduced by 1.0 books the
+  rows `2^-55` and 1.0 and keeps 1.9. A surviving book of at most `t` beside a
+  same-side opening stays as it is, beside the new lot.
+- What no tolerance makes a quantity stays refused, typed as above: a rest
+  below half an ulp of the first lot it meets (a request of at most `t` against
+  a larger lot -- zero is not a boundary to snap to), a rest above `t` that a
+  lot or the running sum absorbs, a reduction the position absorbs, and an
+  opening the book absorbs.
+
+The charge is the request: a snapped close's `closed_units` and
+`filled_working` are its units, and its rows add up to the boundary, at most
+`t` away. A host picks `t` well below its smallest quantity; the Pine layer's
+own rule (next paragraph) uses 1e-10.
 
 The source `execute_partial_exit_qty` adapter retains its existing `1e-10`
 FIFO endpoint policy. After its existing whole-book Flatten check, it may
@@ -103,6 +181,12 @@ execution, `source::PineStrategyHost::on_native_applied` erases any lot of at
 most `kQtyEpsilon` (`1e-10`) without a closing row, the settle rule of the
 legacy engine it restates. That is source-layer TradingView policy, not the
 kernel's; since K-ULP3 an exact-sum close no longer leaves such a lot for it.
+The adapter does not declare the kernel's quantity tolerance (ADR-0001,
+"Kernel capabilities the Pine adapter does not declare"): its FIFO endpoint
+test settles a snapped prefix as a selected `Flatten`, charged the lots it
+holds, where the tolerance charges a `Reduce` its request, and its sweep
+erases dust without a row, where the kernel books every lot it closes. Whether
+the adapter can move onto the tolerance is a measurement for a later lane.
 
 ## Reversal to an exact exposure
 
