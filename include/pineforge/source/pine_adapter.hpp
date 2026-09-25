@@ -1286,7 +1286,6 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
-    void set_path_order(NativePathOrder path_order) noexcept;
 
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
@@ -1701,6 +1700,10 @@ private:
     // R5 lane V19-E: erases the placement rows no reader can reach again
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
+    // R5 lane V19-FIX: takes out of the kernel's cohort rosters every origin
+    // that can no longer be bound (pine_adapter.cpp explains the rule); run
+    // at every bar open.
+    void release_closed_cohort_origins();
     bool lifecycle_readable(const PlacementSnapshot&) const noexcept;
     // Writes one trade's exit phase, refolding when the write lands below the
     // final mark.
@@ -1927,10 +1930,15 @@ private:
     void suspend_coof_declined_reversal_at_open(
         const Bar&, const NativeDecisionContext&);
     void hold_reversal_pair_brackets(const SourceId&);
-    // A script cancel of a dormant exit (strategy.cancel of its id, or
-    // cancel_all when `id` is null) retires every leg of its lifecycle, so no
-    // later margin call revives it (R5 lane B-ADAPTER, V19D-P1).
-    void retire_cancelled_dormant_exits(const SourceId* id);
+    // A script cancel (strategy.cancel of an id, or cancel_all when `id` is
+    // null) retires every leg of the lifecycle of each exit it withdrew --
+    // the live requests in `cancelled` (incarnation, Cancelled event ordinal)
+    // and every other exit row it names -- so no later margin call revives
+    // one (R5 lane B-ADAPTER, V19D-P1, for the dormant ones; R5 lane V19-FIX
+    // for the rest).
+    void retire_cancelled_exits(
+        const SourceId* id,
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& cancelled);
     void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
@@ -1968,7 +1976,6 @@ private:
     NativeStrategyHost* host_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};
-    NativePathOrder path_order_ = NativePathOrder::Auto;
     mutable std::uint64_t run_counter_ = 0;
     std::uint64_t source_sequence_ = 0;
     std::uint64_t command_ordinal_ = 0;
@@ -2176,6 +2183,19 @@ private:
         // the fields the test reads never change once a row is placed, and a
         // row that could supersede the leg is newer than every row it covers.
         std::vector<std::pair<std::uint64_t, std::uint64_t>> unsuperseded;
+        // R5 lane V19-FIX: release_closed_cohort_origins()'s working sets --
+        // the chain roots of the working requests, the openings of the open
+        // lots and those no roster holds as a root, the origins leaving a
+        // roster (cohort, incarnation), and the handle a lot is looked up by
+        // (its run identity copied only when it changes) -- and whether a
+        // receipt read has seen a command event since its last pass (a memo:
+        // with none, the pass would take nothing off; a run begin sets it).
+        std::vector<std::uint64_t> working_roots;
+        std::vector<std::uint64_t> lot_openings;
+        std::vector<std::uint64_t> successor_lots;
+        std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;
+        native_order::RequestHandle lot_probe{};
+        bool roster_pass_due = true;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();

@@ -291,23 +291,40 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::EntryReissue/false/true: rows_digest 0x1781a3542d87a7c9ull -> 0xf4677e5c1916337full, final_hash 5868802478351644387ull -> 9541687758077282854ull
 //   Script::EntryReissue/true/false: rows_digest 0x592d4b5617d2b6fcull -> 0x379d985d7c93b652ull, final_hash 11220719029914513450ull -> 7904694474988279479ull
 //   Script::EntryReissue/true/true: rows_digest 0x4afd65bc6d977d03ull -> 0x2fd97b436aac3c5dull, final_hash 12913321619721074841ull -> 8582209322861755784ull
+// expectation corrected (V19-FIX, 32 values), because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; this host projects one fixed execution hash, so the continuation does not enter; the recorded row count, the trades and the trade digest did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree:
+//   Script::ExitReissue/false/false: rows_digest 0x378e8175f07c1d5dull -> 0xab588834fadd3803ull, final_hash 5455427604675993531ull -> 5699976773346796219ull
+//   Script::ExitReissue/false/true: rows_digest 0x9d581c7efdf21626ull -> 0x31d20a68825b4041ull, final_hash 5124001802418948517ull -> 5368550971089751205ull
+//   Script::ExitReissue/true/false: rows_digest 0x123a4d26c1440e48ull -> 0xcecfebbbe86fc767ull, final_hash 10475037478956129116ull -> 6863695800300943516ull
+//   Script::ExitReissue/true/true: rows_digest 0xb8720a7926815bb3ull -> 0x6209f50bb7d9d6acull, final_hash 12173222249000782328ull -> 1107562895774304952ull
+//   Script::FarReissue/false/false: rows_digest 0xdece58a579c5d8e0ull -> 0xdf6b23adbf03e66eull, final_hash 7214211385822448325ull -> 873772099948613669ull
+//   Script::FarReissue/false/true: rows_digest 0x0bb13210fd7346c1ull -> 0xa3863ebe522e6dbeull, final_hash 10717416948830322455ull -> 4285418729649473335ull
+//   Script::FarReissue/true/false: rows_digest 0xfa15c45dc0196e57ull -> 0x688ef29ae4ccdebeull, final_hash 14180767476349608391ull -> 1841254732555988423ull
+//   Script::FarReissue/true/true: rows_digest 0xdd4e85623e945fdaull -> 0xf4c8662f18c74e7bull, final_hash 12801755778883560301ull -> 462243035089940333ull
+//   Script::EntryReissue/false/false: rows_digest 0x4530d69ae4e1a298ull -> 0x80ea582d7a285f56ull, final_hash 17005496595750190628ull -> 2970596418120183524ull
+//   Script::EntryReissue/false/true: rows_digest 0xf4677e5c1916337full -> 0xa4e881bd0166e308ull, final_hash 9541687758077282854ull -> 10388992876317270182ull
+//   Script::EntryReissue/true/false: rows_digest 0x379d985d7c93b652ull -> 0xc01d27d0c8fd1cadull, final_hash 7904694474988279479ull -> 8910455723513195319ull
+//   Script::EntryReissue/true/true: rows_digest 0x2fd97b436aac3c5dull -> 0x2bf51a0396f73773ull, final_hash 8582209322861755784ull -> 5882765811046345928ull
+//   Script::TrailReissue/false/false: rows_digest 0x08a2398c615ddd5bull -> 0x27b9526d5e960dafull, final_hash 8598862747086083069ull -> 1551066713552723293ull
+//   Script::TrailReissue/false/true: rows_digest 0x56954a0db7786b71ull -> 0x12bab345b4c21bdeull, final_hash 5779925080749936105ull -> 5117488907256490505ull
+//   Script::TrailReissue/true/false: rows_digest 0x09315718e551137full -> 0xbae98e9f6da67e3dull, final_hash 269689715775399305ull -> 1320551696866588489ull
+//   Script::TrailReissue/true/true: rows_digest 0x5ef417ff409d6fadull -> 0x7e3565d7ef6b9c34ull, final_hash 3401687048604417982ull -> 12226981095802833438ull
 const Pin kPins[] = {
-    {Script::ExitReissue, false, false, 0x378e8175f07c1d5dull, 60ull, 5455427604675993531ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, false, true, 0x9d581c7efdf21626ull, 60ull, 5124001802418948517ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, true, false, 0x123a4d26c1440e48ull, 60ull, 10475037478956129116ull, 0x41e6c3b1e0481c20ull, 4},
-    {Script::ExitReissue, true, true, 0xb8720a7926815bb3ull, 60ull, 12173222249000782328ull, 0x41e6c3b1e0481c20ull, 4},
-    {Script::FarReissue, false, false, 0xdece58a579c5d8e0ull, 60ull, 7214211385822448325ull, 0x7aac154ea6a8629aull, 4},
-    {Script::FarReissue, false, true, 0x0bb13210fd7346c1ull, 60ull, 10717416948830322455ull, 0x7aac154ea6a8629aull, 4},
-    {Script::FarReissue, true, false, 0xfa15c45dc0196e57ull, 60ull, 14180767476349608391ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::FarReissue, true, true, 0xdd4e85623e945fdaull, 60ull, 12801755778883560301ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::EntryReissue, false, false, 0x4530d69ae4e1a298ull, 60ull, 17005496595750190628ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, false, true, 0xf4677e5c1916337full, 60ull, 9541687758077282854ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::EntryReissue, true, false, 0x379d985d7c93b652ull, 60ull, 7904694474988279479ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, true, true, 0x2fd97b436aac3c5dull, 60ull, 8582209322861755784ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::TrailReissue, false, false, 0x08a2398c615ddd5bull, 60ull, 8598862747086083069ull, 0xd64b560956c46b33ull, 3},
-    {Script::TrailReissue, false, true, 0x56954a0db7786b71ull, 60ull, 5779925080749936105ull, 0x5241bc8c55a4a4a3ull, 3},
-    {Script::TrailReissue, true, false, 0x09315718e551137full, 60ull, 269689715775399305ull, 0xcdcafa54f49f508aull, 3},
-    {Script::TrailReissue, true, true, 0x5ef417ff409d6fadull, 60ull, 3401687048604417982ull, 0x45d4c2aceeb466faull, 3},
+    {Script::ExitReissue, false, false, 0xab588834fadd3803ull, 60ull, 5699976773346796219ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, false, true, 0x31d20a68825b4041ull, 60ull, 5368550971089751205ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, true, false, 0xcecfebbbe86fc767ull, 60ull, 6863695800300943516ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::ExitReissue, true, true, 0x6209f50bb7d9d6acull, 60ull, 1107562895774304952ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::FarReissue, false, false, 0xdf6b23adbf03e66eull, 60ull, 873772099948613669ull, 0x7aac154ea6a8629aull, 4},
+    {Script::FarReissue, false, true, 0xa3863ebe522e6dbeull, 60ull, 4285418729649473335ull, 0x7aac154ea6a8629aull, 4},
+    {Script::FarReissue, true, false, 0x688ef29ae4ccdebeull, 60ull, 1841254732555988423ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::FarReissue, true, true, 0xf4c8662f18c74e7bull, 60ull, 462243035089940333ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::EntryReissue, false, false, 0x80ea582d7a285f56ull, 60ull, 2970596418120183524ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, false, true, 0xa4e881bd0166e308ull, 60ull, 10388992876317270182ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::EntryReissue, true, false, 0xc01d27d0c8fd1cadull, 60ull, 8910455723513195319ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, true, true, 0x2bf51a0396f73773ull, 60ull, 5882765811046345928ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::TrailReissue, false, false, 0x27b9526d5e960dafull, 60ull, 1551066713552723293ull, 0xd64b560956c46b33ull, 3},
+    {Script::TrailReissue, false, true, 0x12bab345b4c21bdeull, 60ull, 5117488907256490505ull, 0x5241bc8c55a4a4a3ull, 3},
+    {Script::TrailReissue, true, false, 0xbae98e9f6da67e3dull, 60ull, 1320551696866588489ull, 0xcdcafa54f49f508aull, 3},
+    {Script::TrailReissue, true, true, 0x7e3565d7ef6b9c34ull, 60ull, 12226981095802833438ull, 0x45d4c2aceeb466faull, 3},
 };
 
 void the_scripts_produce_the_values_pinned_before_the_lane() {

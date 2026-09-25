@@ -320,7 +320,6 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         ? NativePathOrder::HighFirst
         : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
                                  : NativePathOrder::Auto);
-    adapter_.set_path_order(path_order);
     const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
     const auto setup = configure_native(spec);
     if (setup.status != NativeSetupStatus::Applied)

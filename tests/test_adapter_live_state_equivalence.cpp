@@ -969,6 +969,15 @@ int reissue_binding_main() {
 //     origin is opened) and its first re-placement (K3) while the second
 //     and third are erased, and the revival skips the leg as the reference
 //     does.
+// R5 lane V19-FIX: a leg the script withdrew (strategy.cancel, live or
+// dormant: every leg retired) is no revival candidate, and K1 holds it only
+// while its origin is live or opened. So variant 2's erasing run no longer
+// holds the cancelled dynamic leg (it has no origin; expectation corrected:
+// held dormant -> erased), while variant 4's, bound to the opened short, is
+// held as before; and variant 3's cancel on bar 4 withdraws the dormant leg,
+// so K3 keeps no re-placement for it and the first one goes with the others
+// (expectation corrected: held -> erased). Every run still equals its
+// retaining twin, and no trade moves.
 // The seeded runs play the same moves on random tapes, both sides; across
 // them margin calls land, revivals restore legs, and dormant candidates the
 // reference still holds are gone from the erasing run.
@@ -1044,18 +1053,27 @@ int margin_revival_main() {
             CHECK(find(at_erased, 4, 129.0) == nullptr);
         }
         if (variant == 3) {
-            // K1 keeps the leg (its origin is opened), K3 its first
-            // re-placement.
+            // K1 keeps the leg (its origin is opened); the cancel withdrew it,
+            // so K3 keeps no re-placement for it (R5 lane V19-FIX: the
+            // first re-placement was held before).
             CHECK(leg_erased && leg_erased->dormant && !leg_erased->restored);
-            CHECK(find(at_erased, 4, 129.0) != nullptr);
+            CHECK(find(at_erased, 4, 129.0) == nullptr);
         }
         if (variant == 2 || variant == 4) {
             // Cancelled: still dormant, never restored, and the margin call's
             // is the one trade (expectation corrected: restored, 2 trades ->
             // not restored, 1 trade -- see the note above).
             CHECK(leg_kept->dormant && !leg_kept->restored);
-            CHECK(leg_erased && leg_erased->dormant && !leg_erased->restored);
             CHECK(erased.trades == 1);
+        }
+        if (variant == 2) {
+            // Withdrawn and bound to no origin: K1 released it (R5 lane
+            // V19-FIX; it was held dormant before).
+            CHECK(leg_erased == nullptr);
+        }
+        if (variant == 4) {
+            // Withdrawn, but bound to the opened short: K1 holds it.
+            CHECK(leg_erased && leg_erased->dormant && !leg_erased->restored);
         }
         if (variant == 5 || variant == 6) {
             // Left standing: restored in both runs, and it closed the rest of

@@ -57,6 +57,15 @@ bool same_exit_levels(const PineExitLevels& left, const PineExitLevels& right) n
         && same_double_bits(left.loss_ticks, right.loss_ticks);
 }
 
+// Every leg of an exit's lifecycle retired: the script withdrew the exit
+// (strategy.cancel / strategy.cancel_all, retire_cancelled_exits), a state no
+// suspension produces (Suspend retires at most the trail leg). No margin call
+// revives such an exit.
+bool withdrawn(const exit_legs::Lifecycle& legs) noexcept {
+    return legs.retired(exit_legs::Leg::Stop) && legs.retired(exit_legs::Leg::Limit)
+        && legs.retired(exit_legs::Leg::Trail);
+}
+
 bool finite_positive(double value) noexcept {
     return std::isfinite(value) && value > 0.0;
 }
@@ -1782,23 +1791,68 @@ void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entr
     }
 }
 
-// strategy.cancel / strategy.cancel_all withdraw an exit whatever its state,
-// and a dormant exit -- one a declined reversal held (finding-311) -- is no
-// exception: TradingView never brings a cancelled exit back. The lab tv tapes
-// badapter-v19dp1-control / -cancel (NYSE:F 15, 2025-04-30 .. 05-06) show one
-// script with and without strategy.cancel("X"): the margin call revives the
-// standing dormant X and closes the position through it; after the cancel it
-// does not, and a second margin call follows. The legacy engine skipped a
-// cancelled order in the same pass (ab9714be pine_fills.cpp:2065-2076). The
-// lifecycle records it where the revival reads it: every leg retired, a state
-// no suspension produces (Suspend retires at most the trail leg).
-void PineExecutionAdapter::retire_cancelled_dormant_exits(const SourceId* id) {
+// strategy.cancel / strategy.cancel_all withdraw an exit whatever its state:
+// a live exit the cancel takes off the book, and a dormant one -- an exit a
+// declined reversal held (finding-311) -- alike. TradingView never brings a
+// cancelled exit back. The lab tv tapes badapter-v19dp1-control / -cancel
+// (NYSE:F 15, 2025-04-30 .. 05-06) show one script with and without
+// strategy.cancel("X") on 05-01, while X is dormant: the margin call revives
+// the standing dormant X and closes the position through it; after the cancel
+// it does not, and a second margin call follows. The tapes
+// v19fix-cancel-before-pair and v19fix-cancel-at-1000 (R5 lane V19-FIX) cancel
+// X while it is still live -- on 04-30 15:45 before the reversal pair, and on
+// 04-30 10:00 -- and book the same two margin-call slices, 836 left open: the
+// declined pair's suspension still makes the cancelled leg dormant on 05-01,
+// and the revival must not read that as a standing exit. The legacy engine
+// skipped any cancelled order in the same pass (ab9714be
+// pine_fills.cpp:2065-2076). The lifecycle records the withdrawal where the
+// revival reads it: every leg retired (`withdrawn`), a state no suspension
+// produces. `cancelled` names the live requests this cancel withdrew, each
+// with the ordinal of its Cancelled event: that event is the cause, so the
+// withdrawal lands after whatever the same callback did to the lifecycle
+// before (a pair hold at the callback's own ordinal would otherwise make it a
+// conflicting replay, and the lifecycle would refuse it). Every other exit
+// row the cancel names -- a dormant one, or one the adapter itself took off
+// the book on the script's behalf -- is found by id, caused at the callback,
+// or just past the lifecycle's last step when that step is no older.
+//
+// The adapter takes an exit off the book on the script's behalf where
+// TradingView keeps it pending: a gapped exit stop a declined reversal
+// retires waits in pending_margin_revivals_ for the next margin-call slice
+// (apply_reversal_gap_bracket_policy), and the declined pair's suspension
+// can still make its row dormant. A cancel drops the waiting revival and
+// withdraws the row -- the lab tv tapes v19fix-gapped-stop-control / -cancel
+// (stop 10.15, which the 05-01 open gaps through) close 928 through X at the
+// margin call without the cancel and book the cancel tape's trades with it.
+void PineExecutionAdapter::retire_cancelled_exits(
+        const SourceId* id,
+        const std::vector<std::pair<std::uint64_t, std::uint64_t>>& cancelled) {
     const auto point = detail::callback_point(require_host());
     if (!point) return;
     const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
                                                     : exit_legs::Domain::Ordinary;
-    const exit_legs::Frame cause{point->decision.coordinate.ordinal,
-        point->decision.coordinate.interval_index, domain, exit_legs::Phase::Observation};
+    const auto retire_legs = [&](PlacementSnapshot& candidate, std::uint64_t event) {
+        const bool exit = candidate.family == PineOrderFamily::ExitLimit
+            || candidate.family == PineOrderFamily::ExitStop
+            || candidate.family == PineOrderFamily::ExitTrail;
+        if (!exit || !candidate.legs.target().incarnation || withdrawn(candidate.legs)) return;
+        // Never at or before the lifecycle's last step: a dormant row a pair
+        // hold suspended earlier in this callback took the callback's own
+        // ordinal, and the lifecycle refuses a second, different action there
+        // (a conflicting replay) as it refuses an older one.
+        if (const auto& last = candidate.legs.last_action(); last && last->cause.event >= event)
+            event = last->cause.event + 1;
+        const exit_legs::Frame cause{event, point->decision.coordinate.interval_index, domain,
+                                     exit_legs::Phase::Observation};
+        const exit_legs::Action action{candidate.legs.target(), candidate.legs.revision(),
+            cause, exit_legs::Cancel{{exit_legs::Leg::Stop, exit_legs::Leg::Limit,
+                                      exit_legs::Leg::Trail}}};
+        (void)candidate.legs.apply(candidate.legs.target(), action);
+    };
+    for (const auto& [incarnation, event] : cancelled) {
+        const auto found = placement_.find(incarnation);
+        if (found != placement_.end()) retire_legs(found->second, event);
+    }
     // As in hold_reversal_pair_brackets: no erased lifecycle is read again.
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
         [&](std::uint64_t, const PlacementSnapshot& candidate) {
@@ -1806,17 +1860,8 @@ void PineExecutionAdapter::retire_cancelled_dormant_exits(const SourceId* id) {
         });
     for (auto row : placement_) {
         auto& candidate = row.second;
-        const bool exit = candidate.family == PineOrderFamily::ExitLimit
-            || candidate.family == PineOrderFamily::ExitStop
-            || candidate.family == PineOrderFamily::ExitTrail;
-        if (!exit || (id && candidate.source_id != *id) || !candidate.legs.dormant()
-            || !candidate.legs.target().incarnation) {
-            continue;
-        }
-        const exit_legs::Action action{candidate.legs.target(), candidate.legs.revision(),
-            cause, exit_legs::Cancel{{exit_legs::Leg::Stop, exit_legs::Leg::Limit,
-                                      exit_legs::Leg::Trail}}};
-        (void)candidate.legs.apply(candidate.legs.target(), action);
+        if (id && candidate.source_id != *id) continue;
+        retire_legs(candidate, point->decision.coordinate.ordinal);
     }
 }
 
@@ -1890,19 +1935,22 @@ void PineExecutionAdapter::revive_brackets_after_margin(
     std::optional<PlacementSnapshot> marketable;
     native_order::RequestHandle marketable_handle{};
     // No erased row is a revival candidate (K1 keeps every lifecycle of the
-    // current cycle), and no candidate's superseded answer rests on an erased
+    // current cycle the script has not withdrawn, and the revival skips a
+    // withdrawn one), and no candidate's superseded answer rests on an erased
     // row: K2 keeps every row that names it as its predecessor, K3 the first
     // re-issue that supersedes it, and one supersessor answers the test.
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
         [&](std::uint64_t, const PlacementSnapshot& candidate) {
             return candidate.placement_cycle == current_position_cycle_
-                && candidate.legs.dormant() && candidate.legs.target().incarnation != 0;
+                && candidate.legs.dormant() && candidate.legs.target().incarnation != 0
+                && !withdrawn(candidate.legs);
         });
 #if PINEFORGE_PLACEMENT_AUDIT
     for (const auto& retained : placement_) {
         const auto& candidate = retained.second;
         if (retained.second.placement_cycle != current_position_cycle_
-            || !candidate.legs.dormant() || !candidate.legs.target().incarnation) {
+            || !candidate.legs.dormant() || !candidate.legs.target().incarnation
+            || withdrawn(candidate.legs)) {
             continue;
         }
         const auto inc = retained.first;
@@ -1941,13 +1989,10 @@ void PineExecutionAdapter::revive_brackets_after_margin(
             || !candidate.legs.target().incarnation) {
             continue;
         }
-        // The script cancelled it (retire_cancelled_dormant_exits): every leg
-        // is retired, and a cancelled exit is never revived (V19D-P1).
-        if (candidate.legs.retired(exit_legs::Leg::Stop)
-            && candidate.legs.retired(exit_legs::Leg::Limit)
-            && candidate.legs.retired(exit_legs::Leg::Trail)) {
-            continue;
-        }
+        // The script cancelled it, live or dormant (retire_cancelled_exits):
+        // every leg is retired, and a cancelled exit is never revived
+        // (V19D-P1, R5 lane V19-FIX).
+        if (withdrawn(candidate.legs)) continue;
         // A same-id exit re-issued after the slice REPLACED this bracket: the
         // successor carries the cycle's legs, and reviving the superseded parent
         // here would fire the finished cycle's already-touched level against the
@@ -2048,6 +2093,7 @@ void PineExecutionAdapter::reset_for_run() {
     pine_view_host_ = nullptr;
     // Incarnations start over with the run.
     retired_row_scratch_.unsuperseded.clear();
+    retired_row_scratch_.roster_pass_due = true;
     if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
         index->clear();
     admission_journal.reset();
@@ -2156,7 +2202,6 @@ void PineExecutionAdapter::reset_for_run() {
     trail_state_at_open_.clear();
     stream_mode_ = false;
     bar_magnifier_ = false;
-    path_order_ = NativePathOrder::Auto;
     short_seed_ = {};
     pending_short_seed_ = {};
     short_seed_long_candidate_ = {};
@@ -2179,9 +2224,6 @@ void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& s
 void PineExecutionAdapter::set_begin_mode(bool is_stream, bool bar_magnifier) noexcept {
     stream_mode_ = is_stream;
     bar_magnifier_ = bar_magnifier;
-}
-void PineExecutionAdapter::set_path_order(NativePathOrder path_order) noexcept {
-    path_order_ = path_order;
 }
 
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
@@ -2776,10 +2818,13 @@ std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memo
 // pair hold rewrite lifecycles for it), and exit() asks whether a leg bound to
 // an origin that is live or opened was consumed. A row of an ended cycle
 // bound to any other origin stays unreadable: cycles only advance, and an
-// origin opens only while its request works.
+// origin opens only while its request works. So does a leg the script
+// withdrew (R5 lane V19-FIX), whatever its cycle, unless it is bound to such
+// an origin: the revival never picks it, so what the suspension and the hold
+// write into it is read by nobody but that consumed-leg question.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
     if (row.legs.target().incarnation == 0) return false;
-    if (row.placement_cycle >= current_position_cycle_) return true;
+    if (row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs)) return true;
     const std::uint64_t origin = row.bracket_origin.incarnation;
     if (origin == 0) return false;
     for (const auto& handle : live_handles_)
@@ -2853,8 +2898,18 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // as the leg is a candidate, so a leg superseded now stays superseded for the
 // rest of its cycle: the revival never picks it again, and the suspension and
 // the pair hold only rewrite its own lifecycle, which nothing else reads. A
-// cycle that cancels and re-places its exits every bar (the cancelled legs
-// keep their target) no longer holds a row per bar.
+// cycle that cancels and re-places its exits every bar at a moving level no
+// longer holds a row per bar.
+//
+// R5 lane V19-FIX: nor a leg the script withdrew (every leg retired, by
+// strategy.cancel or strategy.cancel_all whether it was live or dormant:
+// retire_cancelled_exits), whatever its cycle, unless it is bound to an
+// askable origin. The revival skips a withdrawn leg, so it is no candidate
+// and K2/K3 keep nothing for it; the suspension and the pair hold only
+// rewrite its own lifecycle, which only origin_leg_consumed reads, and only
+// for an origin that is live or opened. A cycle that cancels and re-places an
+// exit every bar at the same level -- no re-issue at another stop supersedes
+// it -- no longer holds a row per bar either.
 void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& context) {
     // The previous bars' trades are final: their exit phases fold once.
     for (; exit_phase_final_ < trade_exit_phase_.size(); ++exit_phase_final_) {
@@ -2889,9 +2944,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                           askable_origins.end());
     // The pins a row's own fields decide, whatever else names it.
     const auto pinned_by_itself = [&](const PlacementSnapshot& value) {
-        // K1
+        // K1 (a withdrawn leg by its origin alone)
         if (value.legs.target().incarnation != 0
-            && (value.placement_cycle >= cycle
+            && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
                 || contains(askable_origins, value.bracket_origin.incarnation))) {
             return true;
         }
@@ -2904,11 +2959,12 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
             && value.projection_created_bar >= interval - 1;
     };
-    // K1's cycle clause alone: a leg lifecycle of the current cycle bound to
-    // no askable origin (a live one is askable itself).
+    // K1's cycle clause alone: a leg lifecycle of the current cycle, not
+    // withdrawn, bound to no askable origin (a live one is askable itself).
     const auto held_by_cycle = [&](const PlacementSnapshot& value) {
         return value.legs.target().incarnation != 0 && value.placement_cycle == cycle
             && exit_family(value.family) && !value.from_entry.empty()
+            && !withdrawn(value.legs)
             && !contains(askable_origins, value.bracket_origin.incarnation);
     };
     auto& held = sweep.held;
@@ -3121,8 +3177,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     }
 
     // What the live rows contribute to the scan pins (K7, K8), and the
-    // current-cycle revival candidates (K2, K3): rows with a leg lifecycle,
-    // which K1 keeps.
+    // current-cycle revival candidates (K2, K3): rows with a leg lifecycle
+    // the script has not withdrawn, which K1 keeps.
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
@@ -3141,7 +3197,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     for (const auto& row : placement_) {
         const auto& value = row.second;
         if (value.legs.target().incarnation == 0 || value.placement_cycle != cycle
-            || !exit_family(value.family) || value.from_entry.empty()) {
+            || !exit_family(value.family) || value.from_entry.empty()
+            || withdrawn(value.legs)) {
             continue;
         }
         if (unpinned && !contains(askable_origins, row.first)
@@ -3256,6 +3313,139 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         });
     }
     placement_.compact();
+}
+
+// R5 lane V19-FIX: the kernel's cohort rosters hold what can still be bound.
+//
+// Every opening this adapter accepts joins its id's kernel roster
+// (cohort_add, submit_or_replace), and the kernel folds every member of every
+// roster into each continuation read (hash_cohorts), so a run that recorded a
+// hash per bar paid for every opening it ever made at every bar. A roster is
+// matching authority for the lots it names and nothing else: a CohortClose or
+// BindCohort request reads it only through the open lots
+// (NativeExecutionConsumer::cohort_contains over the book's lots). An origin
+// whose chain has no working request and no open lot can never be bound
+// again -- nothing opens a lot under a request that stopped working -- so at
+// every bar open, after observe_terminal_receipts, each such origin leaves
+// its kernel roster (cohort_remove). The adapter's own roster
+// (CohortFacts::origins) keeps it: its questions are about every origin the
+// id ever had. The roster then costs what is live.
+//
+// A roster holds chain roots; a working request names its root in its
+// definition, and a lot names the request that filled it, which is the root
+// unless it is a replace successor. The root of a successor's lot is not a
+// public fact, but it is older than the successor (incarnations only grow):
+// while such a lot is open, every member of its roster older than it stays.
+//
+// A member can only become unbindable through a command event -- a request
+// ends, a lot closes -- and observe_terminal_receipts reads every one of them
+// on its full path, which marks the pass due; a bar open after quiet reads
+// only has nothing to take off, and skips the pass.
+void PineExecutionAdapter::release_closed_cohort_origins() {
+    auto& scratch = retired_row_scratch_;
+    if (!scratch.roster_pass_due) return;
+    scratch.roster_pass_due = false;
+    IExecutionConsumer* consumer = bound_consumer();
+    if (!consumer) return;
+    auto* pine = pine_view_of(host_);
+    if (!pine) return;
+    const auto& core = as_native_consumer(*consumer).request_core();
+    std::size_t members = 0;
+    for (const auto& roster : core.cohorts()) members += roster.origins.size();
+    if (members == 0) return;
+    // The common case, in a direct scan with nothing allocated or sorted:
+    // every member still opened a lot that is open, or roots a working
+    // request, so none can go.
+    const auto root_of = [](const native_order::LiveRequest& row) {
+        return row.definition->root ? row.definition->root->incarnation
+                                    : row.handle().incarnation;
+    };
+    constexpr std::size_t kDirectScan = 64;
+    if (members * (pine->pyramid_entries_.size() + core.live().size()) <= kDirectScan) {
+        bool every_member_bound = true;
+        for (const auto& roster : core.cohorts()) {
+            for (const auto& origin : roster.origins) {
+                const std::uint64_t incarnation = origin.incarnation;
+                const bool bound = std::any_of(pine->pyramid_entries_.begin(),
+                        pine->pyramid_entries_.end(), [&](const PyramidEntry& lot) {
+                            return lot.entry_incarnation == incarnation;
+                        })
+                    || std::any_of(core.live().begin(), core.live().end(),
+                        [&](const native_order::LiveRequest& row) {
+                            return root_of(row) == incarnation;
+                        });
+                if (!bound) {
+                    every_member_bound = false;
+                    break;
+                }
+            }
+            if (!every_member_bound) break;
+        }
+        if (every_member_bound) return;
+    }
+    auto& working = scratch.working_roots;
+    auto& lots = scratch.lot_openings;
+    auto& successor_lots = scratch.successor_lots;
+    auto& released = scratch.released_origins;
+    working.clear();
+    lots.clear();
+    successor_lots.clear();
+    released.clear();
+    for (const auto& live : core.live()) working.push_back(root_of(live));
+    std::sort(working.begin(), working.end());
+    for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
+    std::sort(lots.begin(), lots.end());
+    lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
+    const auto member = [](const std::vector<native_order::RequestHandle>& origins,
+                           std::uint64_t incarnation) {
+        const auto at = std::lower_bound(origins.begin(), origins.end(), incarnation,
+            [](const native_order::RequestHandle& origin, std::uint64_t value) {
+                return origin.incarnation < value;
+            });
+        return at != origins.end() && at->incarnation == incarnation;
+    };
+    // The lots no roster names as a root: a replace successor's (or an
+    // opening no roster holds).
+    for (const auto opening : lots) {
+        if (opening == 0) continue;
+        bool root = false;
+        for (const auto& roster : core.cohorts()) {
+            if (member(roster.origins, opening)) {
+                root = true;
+                break;
+            }
+        }
+        if (!root) successor_lots.push_back(opening);
+    }
+    auto& probe = scratch.lot_probe;
+    for (const auto& roster : core.cohorts()) {
+        const auto& origins = roster.origins;
+        if (origins.empty()) continue;
+        if (probe.run != origins.front().run) probe.run = origins.front().run;
+        // The newest open successor lot this roster binds: every member older
+        // than it may be its root.
+        std::uint64_t kept_below = 0;
+        for (const auto opening : successor_lots) {
+            probe.incarnation = opening;
+            if (core.cohort_contains(roster.handle, probe)) kept_below = opening;
+        }
+        for (const auto& origin : origins) {
+            const std::uint64_t incarnation = origin.incarnation;
+            if (incarnation < kept_below
+                || std::binary_search(working.begin(), working.end(), incarnation)
+                || std::binary_search(lots.begin(), lots.end(), incarnation)) {
+                continue;
+            }
+            released.emplace_back(roster.handle, incarnation);
+        }
+    }
+    if (released.empty()) return;
+    auto& host = require_host();
+    for (const auto& [cohort, incarnation] : released) {
+        native_order::RequestHandle origin = probe;
+        origin.incarnation = incarnation;
+        host.cohort_remove(cohort, std::move(origin));
+    }
 }
 
 void PineExecutionAdapter::maybe_activate_short_seed_plan() {
@@ -5199,6 +5389,9 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             return;
         }
     }
+    // A command event may have ended a request or closed a lot: the next bar
+    // open's roster pass has work (release_closed_cohort_origins).
+    retired_row_scratch_.roster_pass_due = true;
     const auto state = detail::run_state(host);
     const bool in_place = consumer != nullptr;
     // The terminal watermark is folded into the broker-state hash
@@ -11187,25 +11380,40 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
         [&](const PendingBracketLeg& leg) { return leg.snapshot.source_id == id; }),
         pending_bracket_legs_.end());
+    // A gapped stop waiting for a margin-call revival is withdrawn with the
+    // rest of the id (retire_cancelled_exits).
+    pending_margin_revivals_.erase(std::remove_if(pending_margin_revivals_.begin(),
+        pending_margin_revivals_.end(), [&](const PendingMarginRevival& revival) {
+            return revival.snapshot.source_id == id;
+        }), pending_margin_revivals_.end());
     std::vector<native_order::RequestHandle> matches;
     for (const auto& handle : live_handles_) {
         const auto snapshot = placement_.find(handle.incarnation);
         if (snapshot != placement_.end() && snapshot->second.source_id == id) matches.push_back(handle);
     }
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> cancelled;
     for (const auto& handle : matches) {
         const auto result = require_host().cancel(handle);
-        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) {
+            retire(handle);
+            cancelled.emplace_back(handle.incarnation, result.event_ordinal);
+        }
     }
-    retire_cancelled_dormant_exits(&id);
+    retire_cancelled_exits(&id, cancelled);
 }
 
 void PineExecutionAdapter::cancel_all() {
     const auto handles = live_handles_;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> cancelled;
     for (const auto& handle : handles) {
         const auto result = require_host().cancel(handle);
-        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) {
+            retire(handle);
+            cancelled.emplace_back(handle.incarnation, result.event_ordinal);
+        }
     }
-    retire_cancelled_dormant_exits(nullptr);
+    retire_cancelled_exits(nullptr, cancelled);
+    pending_margin_revivals_.clear();
     bracket_families_.clear();
     pending_bracket_legs_.clear();
     pending_entries_.clear();
@@ -15896,6 +16104,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // per-origin bracket legs cannot close a different cohort member.
     observe_terminal_receipts();
     erase_retired_rows(context);
+    release_closed_cohort_origins();
     trail_state_at_open_.clear();
     for (const auto& handle : live_handles_) {
         const auto placement = placement_.find(handle.incarnation);

@@ -1293,8 +1293,9 @@ list(APPEND TEST_SOURCES test_adapter_range_end_fx)
 list(APPEND TEST_SOURCES test_native_script_bucket_completions)
 # R5 lane B-ADAPTER (item 7, V19D-P1): a margin call revives a dormant exit
 # the script left standing and never one it cancelled -- the lab tv tapes
-# badapter-v19dp1-control / -cancel replayed on their NYSE:F bars.
-# Source-bound.
+# badapter-v19dp1-control / -cancel replayed on their NYSE:F bars; R5 lane
+# V19-FIX adds the tapes v19fix-cancel-before-pair / -at-1000 (an exit
+# cancelled while live) and the other cancel spellings. Source-bound.
 list(APPEND TEST_SOURCES test_adapter_margin_revival_cancel)
 # R5 lane B-ADAPTER (item 5, F3 finding 2): a current execution converts at its
 # cursor's rate, threaded through the terms facts, inspection, preview and

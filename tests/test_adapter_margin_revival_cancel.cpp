@@ -26,6 +26,47 @@
  * second "Margin call" 92 @10.57 on 05-06 10:00, and 836 still open when the
  * chart ends -- the cancelled X never comes back. Both runs below replay the
  * same script on the same bars (the fixture) and must book exactly the tape.
+ *
+ * R5 lane V19-FIX (audit X2): the adapter still revived an exit the script
+ * cancelled while it was LIVE. strategy.cancel retired the lifecycle of a
+ * dormant exit only, so once the declined pair's suspension made the
+ * cancelled leg dormant on 05-01, the margin call read it as a standing exit
+ * and closed 928 through it. Two more lab tv tapes on the same chart and
+ * window decide it, each the cancel tape's script with the cancel moved:
+ *   - v19fix-cancel-before-pair: strategy.cancel("X") on 04-30 15:45, before
+ *     the pair (tv_trades sha256 662ce8c8..., pine 1d6c305b..., range proof
+ *     covered);
+ *   - v19fix-cancel-at-1000: strategy.cancel("X") on 04-30 10:00, the bar
+ *     after the short fills (tv_trades sha256 662ce8c8..., pine 13ed512b...,
+ *     range proof covered).
+ * Both book exactly the cancel tape (the same tv_trades.csv bytes): margin
+ * calls 12 @10.39 and 92 @10.57, 836 open. The other spellings of the audit's
+ * variants follow the same rule and book the same trades: strategy.cancel_all
+ * on the cancel tape's bar and before the pair, and strategy.cancel after the
+ * pair on its bar. The cancel now retires the lifecycle of every exit it takes
+ * off the book as well as every dormant one it names.
+ *
+ * The adapter has a second road back. When the 05-01 open gaps through X's
+ * stop, the declined reversal takes X off the book at the pair's command and
+ * parks it for the next margin-call slice (apply_reversal_gap_bracket_policy,
+ * pending_margin_revivals_). Three more tapes with X's stop at 10.15, which
+ * the 05-01 09:30 open (10.15) gaps through:
+ *   - v19fix-gapped-stop-control: no cancel -- "Margin call" 12 @10.39 and X
+ *     928 @10.39 on 05-02 (tv_trades sha256 bdf3d470...);
+ *   - v19fix-gapped-stop-cancel: strategy.cancel("X") on 05-01 09:30;
+ *   - v19fix-gapped-stop-cancel-after-pair: strategy.cancel("X") on 04-30
+ *     15:45 after the pair, in the callback that parked X;
+ * both cancels book the cancel tape's file again (662ce8c8...). A cancel now
+ * drops the parked revival and withdraws every exit row its id names.
+ *
+ * A chart with no quantity grid moves the pair's hold to the command itself
+ * (strategy.close's all-in reversal pair holds the standing bracket at once),
+ * so there the hold and the cancel share one callback: before the lane a
+ * cancel after the pair was refused by the lifecycle as a conflicting replay
+ * of the hold's step, and one before it was overwritten by the hold. No tape
+ * covers such a chart; the rows below hold the tapes' rule on it -- every
+ * cancel spelling books what the cancel on the dormant exit books there, and
+ * the same chart without a cancel still closes through X.
  */
 
 #include <cmath>
@@ -81,14 +122,40 @@ bool at(const Clock& c, int month, int day, int hour, int minute) {
     return c.month == month && c.day == day && c.hour == hour && c.minute == minute;
 }
 
+// Where the script cancels X, and how.
+enum class Cancel {
+    None,          // tape badapter-v19dp1-control
+    Dormant,       // tape badapter-v19dp1-cancel: strategy.cancel("X"), 05-01 09:30
+    DormantAll,    // strategy.cancel_all(), 05-01 09:30
+    BeforePair,    // tape v19fix-cancel-before-pair: strategy.cancel("X"), 04-30 15:45
+    AfterPair,     // strategy.cancel("X"), 04-30 15:45, after the pair
+    AllBeforePair, // strategy.cancel_all(), 04-30 15:45, before the pair
+    Earlier,       // tape v19fix-cancel-at-1000: strategy.cancel("X"), 04-30 10:00
+};
+
+const char* spelling(Cancel cancel) {
+    switch (cancel) {
+    case Cancel::None: return "no cancel";
+    case Cancel::Dormant: return "strategy.cancel on 05-01 09:30 (X dormant)";
+    case Cancel::DormantAll: return "strategy.cancel_all on 05-01 09:30 (X dormant)";
+    case Cancel::BeforePair: return "strategy.cancel on 04-30 15:45 before the pair (X live)";
+    case Cancel::AfterPair: return "strategy.cancel on 04-30 15:45 after the pair";
+    case Cancel::AllBeforePair: return "strategy.cancel_all on 04-30 15:45 before the pair";
+    case Cancel::Earlier: return "strategy.cancel on 04-30 10:00 (X live)";
+    }
+    return "?";
+}
+
 // The tapes' script: 10 000 of capital, percent-of-equity 100 by default,
-// margin 100 both ways, no fee, a one-share grid (NYSE:F's lot).
+// margin 100 both ways, no fee, a one-share grid (NYSE:F's lot) unless
+// `grid` is false.
 class Host : public pineforge::source::PineStrategyHost {
 public:
-    explicit Host(bool cancel) : cancel_(cancel) {
+    explicit Host(Cancel cancel, bool grid = true, double stop = 10.25)
+        : cancel_(cancel), stop_(stop) {
         initial_capital_ = 10000.0;
         syminfo_mintick_ = 0.01;
-        qty_step_ = 1.0;
+        qty_step_ = grid ? 1.0 : 0.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
         commission_type_ = CommissionType::PERCENT;
@@ -104,17 +171,23 @@ public:
         const Clock c = new_york(bar.timestamp);
         if (at(c, 4, 29, 15, 45)) {
             strategy_entry("S", false, kNaN, kNaN, 940.0);
-            strategy_exit("X", "S", kNaN, 10.25);
+            strategy_exit("X", "S", kNaN, stop_);
         }
+        if (cancel_ == Cancel::Earlier && at(c, 4, 30, 10, 0)) strategy_cancel("X");
         if (at(c, 4, 30, 15, 45)) {
+            if (cancel_ == Cancel::BeforePair) strategy_cancel("X");
+            if (cancel_ == Cancel::AllBeforePair) strategy_cancel_all();
             strategy_entry("L", true);
             strategy_close("S", "Reverse to Long");
+            if (cancel_ == Cancel::AfterPair) strategy_cancel("X");
         }
-        if (cancel_ && at(c, 5, 1, 9, 30)) strategy_cancel("X");
+        if (cancel_ == Cancel::Dormant && at(c, 5, 1, 9, 30)) strategy_cancel("X");
+        if (cancel_ == Cancel::DormantAll && at(c, 5, 1, 9, 30)) strategy_cancel_all();
     }
     using BacktestEngine::range_end_trades_;
 private:
-    bool cancel_;
+    Cancel cancel_;
+    double stop_;
 };
 
 std::vector<Bar> bars() {
@@ -166,7 +239,7 @@ void check_rows(const Host& host, const std::vector<Row>& tape) {
 
 void the_revival_closes_through_a_live_dormant_exit() {
     const auto feed = bars();
-    Host host(false);
+    Host host(Cancel::None);
     host.run(feed.data(), static_cast<int>(feed.size()));
     CHECK(host.last_error().empty());
     // badapter-v19dp1-control.
@@ -177,12 +250,14 @@ void the_revival_closes_through_a_live_dormant_exit() {
     CHECK(host.live_position_size() == 0.0);
 }
 
-void a_cancelled_exit_is_not_revived() {
+// badapter-v19dp1-cancel, v19fix-cancel-before-pair and v19fix-cancel-at-1000
+// (one tv_trades.csv): two margin-call slices, X never closes, 836 open.
+void books_the_cancel_tape(Cancel cancel, double stop = 10.25) {
     const auto feed = bars();
-    Host host(true);
+    Host host(cancel, true, stop);
     host.run(feed.data(), static_cast<int>(feed.size()));
     CHECK(host.last_error().empty());
-    // badapter-v19dp1-cancel: two margin-call slices, X never closes.
+    std::printf("   %s, stop %.2f\n", spelling(cancel), stop);
     check_rows(host, {
         {12.0, 10.39, 5, 2, 9, 30, "__margin_call__", "Margin call", -3.48},
         {92.0, 10.57, 5, 6, 10, 0, "__margin_call__", "Margin call", -43.24},
@@ -191,6 +266,107 @@ void a_cancelled_exit_is_not_revived() {
     CHECK(host.live_position_size() == -836.0);
     CHECK(host.range_end_trades_.size() == 1);
     CHECK(!host.range_end_trades_.empty() && host.range_end_trades_[0].qty == 836.0);
+}
+
+void a_cancelled_exit_is_not_revived() { books_the_cancel_tape(Cancel::Dormant); }
+
+void an_exit_cancelled_live_before_the_pair_is_not_revived() {
+    books_the_cancel_tape(Cancel::BeforePair);
+}
+
+void an_exit_cancelled_live_on_an_earlier_bar_is_not_revived() {
+    books_the_cancel_tape(Cancel::Earlier);
+}
+
+void every_cancel_spelling_books_the_cancel_tape() {
+    for (Cancel cancel : {Cancel::DormantAll, Cancel::AfterPair, Cancel::AllBeforePair})
+        books_the_cancel_tape(cancel);
+}
+
+// The gapped stop: without a cancel the parked X closes the rest at the
+// margin call (v19fix-gapped-stop-control) ...
+void a_gapped_stop_parked_for_the_margin_call_closes_through_x() {
+    const auto feed = bars();
+    Host host(Cancel::None, true, 10.15);
+    host.run(feed.data(), static_cast<int>(feed.size()));
+    CHECK(host.last_error().empty());
+    check_rows(host, {
+        {12.0, 10.39, 5, 2, 9, 30, "__margin_call__", "Margin call", -3.48},
+        {928.0, 10.39, 5, 2, 9, 30, "X", "", -269.12},
+    });
+    CHECK(host.live_position_size() == 0.0);
+}
+
+// ... and a cancel keeps it parked for good (v19fix-gapped-stop-cancel,
+// v19fix-gapped-stop-cancel-after-pair; cancel_all and the cancel before the
+// pair untaped).
+void a_cancelled_gapped_stop_is_not_revived() {
+    for (Cancel cancel : {Cancel::Dormant, Cancel::AfterPair, Cancel::DormantAll,
+                          Cancel::AllBeforePair, Cancel::BeforePair})
+        books_the_cancel_tape(cancel, 10.15);
+}
+
+struct Booked {
+    std::vector<Trade> trades;
+    double open = 0.0;
+    int through_x = 0;
+    std::string error;
+};
+
+Booked run_without_grid(Cancel cancel) {
+    const auto feed = bars();
+    Host host(cancel, false);
+    host.run(feed.data(), static_cast<int>(feed.size()));
+    Booked out;
+    for (int k = 0; k < host.trade_count(); ++k) {
+        out.trades.push_back(host.get_trade(k));
+        if (out.trades.back().exit_id == "X") ++out.through_x;
+    }
+    out.open = host.live_position_size();
+    out.error = host.last_error();
+    return out;
+}
+
+bool same_trades(const Booked& a, const Booked& b) {
+    if (a.trades.size() != b.trades.size() || a.open != b.open) return false;
+    for (std::size_t k = 0; k < a.trades.size(); ++k) {
+        const Trade& x = a.trades[k];
+        const Trade& y = b.trades[k];
+        if (x.is_long != y.is_long || x.qty != y.qty || x.entry_price != y.entry_price
+            || x.exit_price != y.exit_price || x.entry_time != y.entry_time
+            || x.exit_time != y.exit_time || x.exit_id != y.exit_id || x.pnl != y.pnl) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// No quantity grid: the pair holds X at the command, in the cancel's callback.
+void without_a_grid_every_cancel_books_the_dormant_cancel() {
+    const Booked standing = run_without_grid(Cancel::None);
+    const Booked dormant = run_without_grid(Cancel::Dormant);
+    CHECK(standing.error.empty());
+    CHECK(dormant.error.empty());
+    std::printf("   no cancel: %zu trades, %d through X, open %.4f\n", standing.trades.size(),
+                standing.through_x, standing.open);
+    std::printf("   dormant cancel: %zu trades, %d through X, open %.4f\n",
+                dormant.trades.size(), dormant.through_x, dormant.open);
+    // Not vacuous: without a cancel the margin call closes through X ...
+    CHECK(standing.through_x == 1);
+    CHECK(standing.open == 0.0);
+    // ... and the cancel on the dormant exit keeps it closed.
+    CHECK(dormant.through_x == 0);
+    CHECK(dormant.open < 0.0);
+    CHECK(dormant.trades.size() >= 2);
+    for (Cancel cancel : {Cancel::BeforePair, Cancel::AfterPair, Cancel::AllBeforePair,
+                          Cancel::Earlier, Cancel::DormantAll}) {
+        const Booked booked = run_without_grid(cancel);
+        std::printf("   %s: %zu trades, %d through X, open %.4f\n", spelling(cancel),
+                    booked.trades.size(), booked.through_x, booked.open);
+        CHECK(booked.error.empty());
+        CHECK(booked.through_x == 0);
+        CHECK(same_trades(booked, dormant));
+    }
 }
 
 void test(const char* name, void (*fn)()) {
@@ -207,7 +383,19 @@ int main() {
          the_revival_closes_through_a_live_dormant_exit);
     test("a margin call does not revive an exit the script cancelled (tape: cancel)",
          a_cancelled_exit_is_not_revived);
-    std::printf("R5 B-ADAPTER margin revival after a cancel: %d checks, %d failures\n", checks,
-                failures);
+    test("nor one it cancelled while live, before the pair (tape: v19fix-cancel-before-pair)",
+         an_exit_cancelled_live_before_the_pair_is_not_revived);
+    test("nor one it cancelled while live, on an earlier bar (tape: v19fix-cancel-at-1000)",
+         an_exit_cancelled_live_on_an_earlier_bar_is_not_revived);
+    test("cancel_all, and a cancel after the pair, book the cancel tape too",
+         every_cancel_spelling_books_the_cancel_tape);
+    test("a gapped stop parked for the margin call closes through X (tape: gapped-stop-control)",
+         a_gapped_stop_parked_for_the_margin_call_closes_through_x);
+    test("a cancelled gapped stop is not revived (tapes: gapped-stop-cancel, -cancel-after-pair)",
+         a_cancelled_gapped_stop_is_not_revived);
+    test("without a quantity grid (the pair holds X at the command) no cancel is revived",
+         without_a_grid_every_cancel_books_the_dormant_cancel);
+    std::printf("R5 B-ADAPTER / V19-FIX margin revival after a cancel: %d checks, %d failures\n",
+                checks, failures);
     return failures ? 1 : 0;
 }

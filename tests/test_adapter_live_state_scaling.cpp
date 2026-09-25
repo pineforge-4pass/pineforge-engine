@@ -21,10 +21,11 @@
 // groups re-issued around the fill price every bar, one filling within a few
 // bars and cancelling its sibling, the other closing the rest), so rows die
 // by replacement, by fill and by cancellation, cycle after cycle. The ratio
-// gate is the replay's: the churn's recorded rows also carry the kernel's
-// continuation, whose cohort rosters keep every opening the adapter accepted
-// (the adapter never removes one, a V19-A finding outside this extension),
-// so its ratio is printed, and its retained rows are held to the same bound.
+// gate was the replay's alone: the churn's recorded rows also carry the
+// kernel's continuation, whose cohort rosters kept every opening the adapter
+// accepted (a V19-A finding outside this extension), so its ratio was only
+// printed. Since R5 lane V19-FIX the adapter takes an origin that can no
+// longer be bound off its roster, and the churn's ratio is gated too.
 //
 // Fail-before, this TU compiled unchanged against the base tree be372243
 // (macOS arm64, Release): it builds, and fails both bounds -- the replay took
@@ -83,10 +84,44 @@
 // bar-open walk over every earlier bar of the run, rows still bounded (5),
 // measured 8.27 at 32,000 / 128,000 -- each fails the ratio gate.
 //
+// R5 lane V19-FIX (audit X2, X9) adds three workloads, each timed at a
+// calibrated small leg (bars doubling until one run takes kMinLegSeconds of
+// CPU) and four times that size, their sizes in turn:
+//   - the re-cancel at a CONSTANT level: the held long's exit cancelled and
+//     re-placed every bar at one stop, with recording off and on. The
+//     cancelled leg kept its lifecycle target, no re-issue at another stop
+//     superseded it, so K1 held one row per bar for the whole cycle and the
+//     sweep walked them all at every bar open. A cancel now retires every leg
+//     of what it withdrew, and K1 lets a withdrawn leg go;
+//   - strategy.cancel_all() and a re-placed exit at position_avg_price() x
+//     0.95 (a constant level too), with recording off: the same rows;
+//   - a flip with recording on: an entry every second bar, closed on the
+//     next. Every accepted opening joined its id's kernel roster for good,
+//     and the kernel folds every roster member into each continuation read,
+//     so each recorded row cost the openings the run had made. The adapter
+//     now takes an origin that can no longer be bound out of the kernel's
+//     roster at the next bar open; the rows below also hold the roster to
+//     what is live when the run ends, and the churn's ratio is gated now.
+// Fail-before, this TU against the lane's base 91d65ad6 (macOS arm64,
+// Release, a git archive; the base is too slow for whole rows, so single legs,
+// --leg): the constant level without recording took 2.23 s at 16,000 bars and
+// 57.13 s at 64,000 (x25.6), retaining 16,000 and 64,000 rows; cancel_all
+// 1.89 s and 51.93 s (x27.4), the same rows; the constant level with
+// recording 1.36 s at 1,000 bars; the flip 0.207 s at 4,000 bars and 1.427 s
+// at 16,000 (x6.9), its rosters ending with 2,000 and 8,000 members. Three
+// mutants of the product (Mac, Release, --row): K1 holding a withdrawn leg
+// again fails the cancel_all row at x25.88 with 8,000 and 32,000 rows; no
+// roster removal fails the flip at x6.96 with 2,000 and 8,000 members; the
+// removal kept but a walk over every origin the run accepted at every bar
+// fails the flip at x11.99, on the ratio alone.
+//
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
-// replay|churn|straddle|recancel <bars> [--no-recording]` runs one leg and
-// prints its CPU time, retained rows and ru_maxrss.
+// replay|churn|straddle|recancel|constant|cancelall|flip <bars>
+// [--no-recording]` runs one leg and prints its CPU time, retained rows and
+// ru_maxrss.
 #include <pineforge/source/pine_strategy_host.hpp>
+
+#include "../src/native_execution_consumer.hpp"
 
 #include <sys/resource.h>
 
@@ -124,7 +159,7 @@ int failures = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T = 1736121600000LL;
 
-enum class Workload { Replay, Churn, Straddle, Recancel };
+enum class Workload { Replay, Churn, Straddle, Recancel, Constant, CancelAll, Flip };
 
 long triangle(int index, int period) {
     const int phase = index % (2 * period);
@@ -186,6 +221,32 @@ public:
             }
             return;
         }
+        if (workload_ == Workload::Constant) {
+            // The same, at one stop far below the tape: no re-issue at
+            // another stop ever supersedes a cancelled leg.
+            if (i == 0) strategy_entry("L", true, kNa, kNa, 1.0);
+            if (position > 0.0) {
+                strategy_cancel("X");
+                strategy_exit("X", "L", kNa, 10.0);
+            }
+            return;
+        }
+        if (workload_ == Workload::CancelAll) {
+            // cancel_all, then the exit again at 95 % of the entry price
+            // (below the tape's lowest low): a constant level as well.
+            if (i == 0) strategy_entry("L", true, kNa, kNa, 1.0);
+            if (position > 0.0) {
+                strategy_cancel_all();
+                strategy_exit("X", "L", kNa, position_avg_price() * 0.95);
+            }
+            return;
+        }
+        if (workload_ == Workload::Flip) {
+            // One opening every second bar, closed on the next.
+            if (i % 2 == 0) strategy_entry("L", true, kNa, kNa, 1.0);
+            else strategy_close("L");
+            return;
+        }
         if (workload_ == Workload::Straddle) {
             // One trade, then one flat position cycle for the rest of the run:
             // the entry opens at bar 8 and its take-profit, a quarter above the
@@ -221,6 +282,13 @@ public:
 
     std::size_t retained_rows() const { return (adapter_.*access(PlacementTag{})).size(); }
     std::size_t recorded_rows() const { return broker_state_hashes_.size(); }
+    // The origins the kernel's cohort rosters still hold (R5 lane V19-FIX).
+    std::size_t roster_members() const {
+        std::size_t members = 0;
+        for (const auto& roster : as_native_consumer(execution_consumer()).request_core().cohorts())
+            members += roster.origins.size();
+        return members;
+    }
 
 private:
     Workload workload_;
@@ -232,6 +300,7 @@ struct Leg {
     int trades = 0;
     std::size_t rows = 0;
     std::size_t recorded = 0;
+    std::size_t roster = 0;
 };
 
 Leg replay(Workload workload, const std::vector<Bar>& bars, bool recording = true) {
@@ -243,6 +312,7 @@ Leg replay(Workload workload, const std::vector<Bar>& bars, bool recording = tru
     leg.trades = host.trade_count();
     leg.rows = host.retained_rows();
     leg.recorded = host.recorded_rows();
+    leg.roster = host.roster_members();
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     // Recording mode read the hash once per script bar.
@@ -285,6 +355,9 @@ constexpr int kMaxCalibratedBars = 512000;
 // What a run can still hold when it ends: its live requests, the rows the
 // current position cycle still reads, and the last bar's retirements.
 constexpr std::size_t kRowBound = 64;
+// The kernel roster members a run can still hold when it ends: the openings
+// that still work or hold a lot, and the last bar's closes (R5 lane V19-FIX).
+constexpr std::size_t kRosterBound = 8;
 
 // The straddle's two sizes, timed in turn round after round (which goes first
 // alternates), each keeping its best round: its legs are milliseconds long, so
@@ -304,9 +377,12 @@ void interleaved_best(Workload workload, const std::vector<Bar>& small_tape,
 }
 
 void cost_and_rows_are_live(Workload workload, const char* name, bool recording = true) {
-    // The straddle and the re-cancel run four times longer: their bars cost
+    // The straddle and the re-cancels run four times longer: their bars cost
     // microseconds.
-    const bool short_bars = workload == Workload::Straddle || workload == Workload::Recancel;
+    const bool lane_rows = workload == Workload::Constant || workload == Workload::CancelAll
+        || workload == Workload::Flip;
+    const bool short_bars = workload == Workload::Straddle || workload == Workload::Recancel
+        || lane_rows;
     const int scale = short_bars ? 4 : 1;
     int bars = (gated() ? kBars : kBars / 4) * scale;
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
@@ -328,12 +404,12 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         bars *= 2;
     }
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
-    std::printf("%s (%s): %d bars %.4fs (%d trades, %zu rows retained), "
-                "%d bars %.4fs (%d trades, %zu rows retained), ratio %.2f (bound %.1f), "
-                "rows bound %zu\n",
+    std::printf("%s (%s): %d bars %.4fs (%d trades, %zu rows retained, %zu roster members), "
+                "%d bars %.4fs (%d trades, %zu rows retained, %zu roster members), "
+                "ratio %.2f (bound %.1f), rows bound %zu, roster bound %zu\n",
                 name, recording ? "recording" : "no recording", bars, small.seconds,
-                small.trades, small.rows, bars * 4, large.seconds, large.trades, large.rows,
-                ratio, kShapeBound, kRowBound);
+                small.trades, small.rows, small.roster, bars * 4, large.seconds, large.trades,
+                large.rows, large.roster, ratio, kShapeBound, kRowBound, kRosterBound);
     CHECK(small.seconds > 0.0);
     // The workloads did what they describe.
     if (workload == Workload::Churn) {
@@ -344,27 +420,39 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         CHECK(small.trades == 1);
         CHECK(large.trades == 1);
     }
-    if (workload == Workload::Recancel) {
+    if (workload == Workload::Recancel || workload == Workload::Constant
+        || workload == Workload::CancelAll) {
         // The position is held to the end: no trade closes.
         CHECK(small.trades == 0);
         CHECK(large.trades == 0);
     }
-    // Memory: what the adapter retains does not grow with the run.
+    if (workload == Workload::Flip) {
+        // One round trip per two bars; the last opening may still be open.
+        CHECK(small.trades >= bars / 2 - 1);
+        CHECK(large.trades >= 2 * bars - 1);
+    }
+    // Memory: what the adapter retains does not grow with the run, and
+    // neither do the kernel's rosters.
     CHECK(small.rows <= kRowBound);
     CHECK(large.rows <= kRowBound);
+    CHECK(small.roster <= kRosterBound);
+    CHECK(large.roster <= kRosterBound);
     if (!gated()) {
         std::printf("  (ratio not gated: non-Release library)\n");
         return;
     }
     CHECK(small.seconds >= kMinLegSeconds);
     CHECK(large.seconds >= kMinLegSeconds);
-    if (workload != Workload::Churn) CHECK(ratio < kShapeBound);
+    CHECK(ratio < kShapeBound);
 }
 
 int single_leg(const char* workload_name, const char* bars_text, bool recording) {
     const Workload workload = std::strcmp(workload_name, "churn") == 0 ? Workload::Churn
         : std::strcmp(workload_name, "straddle") == 0                 ? Workload::Straddle
         : std::strcmp(workload_name, "recancel") == 0                 ? Workload::Recancel
+        : std::strcmp(workload_name, "constant") == 0                 ? Workload::Constant
+        : std::strcmp(workload_name, "cancelall") == 0                ? Workload::CancelAll
+        : std::strcmp(workload_name, "flip") == 0                     ? Workload::Flip
                                                                       : Workload::Replay;
     const int bars = std::atoi(bars_text);
     if (bars <= 0) return 2;
@@ -373,26 +461,39 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
     struct rusage usage {};
     getrusage(RUSAGE_SELF, &usage);
     std::printf("leg %s bars=%d recording=%d cpu_seconds=%.6f trades=%d rows_retained=%zu "
-                "recorded=%zu ru_maxrss=%ld\n",
+                "roster_members=%zu recorded=%zu ru_maxrss=%ld\n",
                 workload_name, bars, recording ? 1 : 0, leg.seconds, leg.trades, leg.rows,
-                leg.recorded, static_cast<long>(usage.ru_maxrss));
+                leg.roster, leg.recorded, static_cast<long>(usage.ru_maxrss));
     return failures == 0 ? 0 : 1;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    // --leg <replay|churn|straddle|recancel> <bars> [--no-recording]
+    // --leg <replay|churn|straddle|recancel|constant|cancelall|flip> <bars> [--no-recording]
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--leg") == 0)
         return single_leg(argv[2], argv[3],
                           !(argc == 5 && std::strcmp(argv[4], "--no-recording") == 0));
-    cost_and_rows_are_live(Workload::Replay, "exit re-issued every bar");
-    cost_and_rows_are_live(Workload::Churn, "position cycles with brackets");
-    cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle",
-                           false);
-    cost_and_rows_are_live(Workload::Straddle, "two exits re-issued every bar through a flat cycle");
-    cost_and_rows_are_live(Workload::Recancel, "an exit cancelled and re-placed every bar", false);
-    cost_and_rows_are_live(Workload::Recancel, "an exit cancelled and re-placed every bar");
+    // --row <name>: only that workload's rows (a mutant is timed row by row).
+    const char* only = argc == 3 && std::strcmp(argv[1], "--row") == 0 ? argv[2] : nullptr;
+    const auto row = [&](const char* key, Workload workload, const char* name,
+                         bool recording = true) {
+        if (!only || std::strcmp(only, key) == 0)
+            cost_and_rows_are_live(workload, name, recording);
+    };
+    row("replay", Workload::Replay, "exit re-issued every bar");
+    row("churn", Workload::Churn, "position cycles with brackets");
+    row("straddle", Workload::Straddle, "two exits re-issued every bar through a flat cycle",
+        false);
+    row("straddle", Workload::Straddle, "two exits re-issued every bar through a flat cycle");
+    row("recancel", Workload::Recancel, "an exit cancelled and re-placed every bar", false);
+    row("recancel", Workload::Recancel, "an exit cancelled and re-placed every bar");
+    row("constant", Workload::Constant, "an exit cancelled and re-placed every bar at one stop",
+        false);
+    row("constant", Workload::Constant, "an exit cancelled and re-placed every bar at one stop");
+    row("cancelall", Workload::CancelAll,
+        "cancel_all and an exit at the entry price x 0.95 every bar", false);
+    row("flip", Workload::Flip, "an opening every second bar, closed on the next");
     if (failures == 0) std::printf("test_adapter_live_state_scaling: ok\n");
     return failures == 0 ? 0 : 1;
 }

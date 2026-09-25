@@ -58,6 +58,14 @@
 // the adapter's day ledger that sums it, the recorded broker-state hash rows
 // and the final hash move with them. Every count and the other 153 runs keep
 // their digest, and the rule fires in exactly those three runs (its census).
+// Re-harvested once more for R5 lane V19-FIX's hash step: the source layer's
+// fold (pineforge-source-adapter/v4) no longer folds the dead
+// PineExecutionAdapter::path_order_, a script cancel retires every leg of
+// each exit it withdraws and K1 lets a withdrawn leg go, so all 156 runs pin
+// a new digest. Every count is unchanged, and this TU with the three hash
+// inputs taken out (the host-extension fold, the recorded broker-state hash
+// rows, the final hash) prints the same table against main 91d65ad6 and the
+// lane's library, byte for byte.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -750,8 +758,9 @@ void harvest() {
     std::printf("// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one\n"
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
                 "// recorded broker-state hash rows).\n"
-                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23) and\n"
-                "// once for K-ULP3's whole-lot close: see the provenance note in the test.\n"
+                "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23),\n"
+                "// once for K-ULP3's whole-lot close and once for V19-FIX's hash step: see\n"
+                "// the provenance note in the test.\n"
                 "// Generated -- never edit a row by hand.\n");
     std::printf("constexpr Pinned kPinned[] = {\n");
     for (const Scenario& s : battery()) {

@@ -243,7 +243,6 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
     f.i(config_.slippage); f.d(config_.margin_long); f.d(config_.margin_short);
     f.b(config_.close_entries_rule_any); f.b(config_.src_series_active);
-    f.i(static_cast<std::int64_t>(path_order_));
     f.s(staged_.syminfo.ticker); f.s(staged_.syminfo.tickerid); f.s(staged_.syminfo.currency);
     f.s(staged_.syminfo.basecurrency); f.s(staged_.syminfo.type); f.s(staged_.syminfo.timezone);
     f.s(staged_.syminfo.session); f.s(staged_.syminfo.volumetype); f.s(staged_.syminfo.description);
