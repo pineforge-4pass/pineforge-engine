@@ -1154,6 +1154,16 @@ list(APPEND TEST_SOURCES test_native_handle_stable_replace)
 # split can carry are still refused. Source-free, so it also runs in the
 # kernel-only profile.
 list(APPEND TEST_SOURCES test_native_partial_close_split)
+# R5 lane K-ULP3: a close whose binary64 running sum reaches its request exactly
+# at a lot -- a Reduce or Transact of the book's own sum, of a FIFO prefix of
+# it, or of a prefix of a bound selection; execute_current; a C host; the
+# settlement's own calls on an opening scope; a seeded battery of books sized
+# from cash at tick prices -- closes that lot whole: one terminal fill of the
+# request, rows that are the whole lots and add up to it, no dust lot (it kept
+# fl(q - r) on 07249e3b). Flatten, a selection's exact consume, a one-lot book
+# and the refusals of unrepresentable splits are controls. Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_exact_sum_close)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs

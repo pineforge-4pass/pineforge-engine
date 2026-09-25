@@ -127,6 +127,19 @@ struct CloseSplit {
 // below, a 2^-51 rest was left over. A sum that is the request is unchanged.
 // A whole lot whose sum falls short is not where the request ends: the rest
 // beyond it is real, and the walk goes on (R5 lane K-ULP2).
+//
+// One exception to closing r: when the lot's full size brings the sum exactly
+// to the request, fl(C + qty) == requested -- the request is the binary64 sum
+// of the lots through this one, as a close of the book's own held total or of
+// a FIFO prefix of it is -- the lot closes whole even if r comes out below its
+// size. A binary64 then brings C to the request, so fl(C + r) does too (the
+// tie above is the only way it misses): both splits add up to the request and
+// differ only by fl(qty - r), at most one ulp of it -- the rounding of
+// requested - C or of the request itself, not a quantity the request asked to
+// keep. Kept, it was a dust lot, and a dust position after a close of the
+// whole book. The rows are now the whole lots and add up to the request;
+// closed, remaining and every other lot are what the walk gave before
+// (R5 lane K-ULP3).
 CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
                             double requested, double& closed, double& remaining) {
     const double amount = !closes ? 0.0
@@ -143,6 +156,12 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
             closed = requested;
             remaining = 0.0;
             return {execution::Status::Applied, amount, kept};
+        }
+        // Here a kept part means next_closed == requested.
+        if (kept != 0.0 && closed + lot.qty == requested) {
+            closed = requested;
+            remaining = 0.0;
+            return {execution::Status::Applied, lot.qty, 0.0};
         }
         const double next_remaining = requested - next_closed;
         if (next_remaining == remaining)

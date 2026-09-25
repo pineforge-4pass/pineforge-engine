@@ -36,9 +36,11 @@ resulting position and weighted entry price. For example, reducing lots
 binary64 arithmetic as `aggregate_before - reduction` differs by one ulp.
 
 A finite quantity request can leave a positive floating residual. No native
-epsilon silently discards it. `Flatten` explicitly closes all lots and avoids
-using rounded aggregate equality to mean a whole-book close. Quantities whose
-changes cannot be represented are refused before settlement.
+epsilon silently discards it. `Flatten` explicitly closes all lots without
+comparing any quantity; a request is never taken for a whole-book close because
+it is near the book's aggregate, and it closes a lot whole only where its
+binary64 FIFO sum reaches the request exactly (below). Quantities whose changes
+cannot be represented are refused before settlement.
 
 A close that spans lots and ends inside one of them is charged exactly its
 units. Every lot before the one it ends in closes whole, and C is the binary64
@@ -57,6 +59,23 @@ sum falls short of the request is not where it ends; the rest beyond it is real
 and the next lot closes it. A split that binary64 cannot hold is still refused:
 a rest below half an ulp of its lot, a rest that a whole lot's close cannot
 decrement, and a reduction that cannot move the position.
+
+A close whose units are exactly the binary64 FIFO sum of the lots through one
+of them -- `fl(C + qty)` equals the units for that lot's full size, as a close
+of the book's own held total or of a FIFO prefix of it does -- closes that lot
+whole. Its rest `r = fl(units - C)` can come out below the lot's size: the
+units are themselves a rounded sum, and `units - C` is rounded again when `C`
+is below half of them. The lot then kept `fl(qty - r)`, at most one ulp of the
+units (2^-55 to 2^-50 for lots near one unit). Both splits add up to the units
+exactly, so neither the charge nor the rows told them apart, yet the kept part
+stayed in the book as a dust lot, and after a close of the whole book as a dust
+position (before R5 lane K-ULP3). For example, lots
+`{fl(80/84.5), fl(92/84.5)}` reduced by their own sum `0x1.048b5c670183cp+1`
+closed `0x1.16b8ce030792ep+0` of the second lot and kept `2^-52` of it; now
+both lots close whole, the rows add up to the units, and the book is flat.
+Units strictly between two such sums still end inside a lot and keep its
+residual. A selection closed by its whole sum was already consumed whole, and
+`Flatten` needs no quantity at all.
 
 The source `execute_partial_exit_qty` adapter retains its existing `1e-10`
 FIFO endpoint policy. After its existing whole-book Flatten check, it may
