@@ -431,6 +431,10 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 
 ## Public C ABI
 
+What the version number promises from 1.0.0 — for this C ABI, the native C++
+API, the script ABI epoch and the pairing with codegen — is the
+[public contract](docs/pages/public-contract.md).
+
 A built strategy `.so` exposes 66 compiled-strategy `PF_API` declarations
 (58 runtime implementations plus eight generated exports) plus 43 native-host
 declarations: 109 `PF_API` exports in total. `nm -gU` also shows libc++'s
@@ -580,7 +584,7 @@ docs/                   coverage map, Pine v6 audit, Doxygen site (cdocs.pinefor
 cmake/                  PineForgeConfig.cmake.in + the find_package smoke consumer
 ```
 
-Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting started](https://cdocs.pineforge.dev/getting_started.html) · [MACD tutorial](https://cdocs.pineforge.dev/tutorial_macd.html) · [Streaming](https://cdocs.pineforge.dev/streaming.html) · [Metrics reference](https://cdocs.pineforge.dev/metrics.html) · [FFI from Python](https://cdocs.pineforge.dev/ffi_python.html) · [Rust](https://cdocs.pineforge.dev/examples_rust.html) · [CMake integration](https://cdocs.pineforge.dev/integration_cmake.html) · [ABI stability](https://cdocs.pineforge.dev/abi_stability.html) · [Coverage](https://cdocs.pineforge.dev/coverage.html). The site rebuilds on every push to `main`.
+Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting started](https://cdocs.pineforge.dev/getting_started.html) · [MACD tutorial](https://cdocs.pineforge.dev/tutorial_macd.html) · [Streaming](https://cdocs.pineforge.dev/streaming.html) · [Metrics reference](https://cdocs.pineforge.dev/metrics.html) · [FFI from Python](https://cdocs.pineforge.dev/ffi_python.html) · [Rust](https://cdocs.pineforge.dev/examples_rust.html) · [CMake integration](https://cdocs.pineforge.dev/integration_cmake.html) · [ABI stability](https://cdocs.pineforge.dev/abi_stability.html) · [Public contract](https://cdocs.pineforge.dev/public_contract.html) · [Coverage](https://cdocs.pineforge.dev/coverage.html). The site rebuilds on every push to `main`.
 
 ---
 

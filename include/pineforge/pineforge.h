@@ -775,8 +775,10 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s);
  *  Excludes the consumable queue and arbitrary private strategy members.
  *  This is a replay check, not a complete state snapshot or cryptographic hash.
  *  Fresh replay must use deterministic strategy code, the same pinned engine
- *  build and configuration. Fingerprint representations may change between builds.
- *  Returns 0 for NULL. */
+ *  build and configuration. The fingerprint's recipe belongs to the script
+ *  ABI epoch: from 1.0.0 it is fixed for every 1.x engine
+ *  (engine_script_run_v19), and a new recipe is a new epoch; a value from a
+ *  build before 1.0.0 is not comparable. Returns 0 for NULL. */
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s);
 
 /** Push one normalized realtime trade. Returns 0 on success, -1 on failure. */
@@ -995,10 +997,11 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on);
 /** Return the broker-state hash of the FINAL state after the most recent
  *  run() (see #strategy_set_broker_state_hash_recording's doc and
  *  pf_report_t::broker_state_hash for the per-bar recording; this accessor
- *  works whether or not recording was enabled). Compare only within the same
- *  pinned engine build and configuration; this is not a serialized checkpoint.
- *  Returns 0 when @p s is
- *  NULL. */
+ *  works whether or not recording was enabled). Compare runs of one
+ *  configuration: the recipe belongs to the script ABI epoch, fixed from 1.0.0
+ *  for every 1.x engine (engine_script_run_v19), so two values differ only
+ *  when the states they fold differ. This is not a serialized checkpoint.
+ *  Returns 0 when @p s is NULL. */
 PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s);
 /** Number of orders resting in the engine's pending-order book after the
  *  most recent run() (ABI v4 live-runtime surface, task 7, spec 3.6): the

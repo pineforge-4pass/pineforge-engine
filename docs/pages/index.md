@@ -219,6 +219,7 @@ Build the generated strategy module with the repository recipe (or
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
 | [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |
+| [Public contract for 1.0](@ref public_contract) | What the version number promises from 1.0.0: the C ABI, the native C++ API, the script ABI epoch, the C-surface boundary, and the pairing with codegen. |
 | [ABI v4 live surface](@ref live_surface) | The default-off live accessors: abort, realtime tail, broker-state hash, pending-order mirror. |
 | [FFI from Python](@ref ffi_python) | A ctypes mirror of every POD in `pineforge.h`. |
 

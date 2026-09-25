@@ -56,7 +56,9 @@ ABI back-compat — see [ABI stability](@ref abi_stability) — so a minimum `1.
 as `PineForge_VERSION` `1.0.0` with `PineForge_VERSION_FULL` `1.0.0-rc.1`, so
 `find_package(PineForge 1.0.0 EXACT)` accepts `1.0.0-rc.1` as well; a project
 that must tell a candidate from its release compares `PineForge_VERSION_FULL`,
-the value `pf_version_string()` returns.
+the value `pf_version_string()` returns. Generated strategy code pairs with
+exactly that full version of the engine (see
+[Public contract](@ref public_contract)).
 
 ## Linking from a hand-written Makefile
 

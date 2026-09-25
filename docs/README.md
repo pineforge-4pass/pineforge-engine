@@ -18,8 +18,9 @@ docs/
 ├── coverage.md           # the canonical Pine v6 coverage map
 ├── pine_v6_audit_master.md, pine_v6_coverage_detail.md
 │                         # the per-builtin inventory the coverage map summarises
-├── pages/                # the narrative pages (31 files; see the site index)
+├── pages/                # the narrative pages (32 files; see the site index)
 │   ├── index.md             # @mainpage, and the index of every page
+│   ├── public-contract.md   # what the version number promises from 1.0.0
 │   ├── native-engine.md     # the native host reference
 │   ├── pine-to-native.md    # the Pine -> native migration map
 │   ├── contributing-llm.md  # contributor onboarding written for an agent

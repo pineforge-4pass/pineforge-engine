@@ -141,6 +141,7 @@ INPUT                  = groups.dox \
                          pages/examples-magnifier.md \
                          pages/examples-rust.md \
                          pages/abi-stability.md \
+                         pages/public-contract.md \
                          pages/coverage.md \
                          pages/exit-leg-activation.md \
                          pages/quantity-intent.md \

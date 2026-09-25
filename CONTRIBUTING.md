@@ -323,3 +323,12 @@ License 2.0 (the same license as the rest of the project). See
 4. **Benchmark AGPL** — optional `benchmarks/` tooling installs AGPL-covered
    PineTS. Default CI stays on ctest only so a minimal clone is not forced to
    pull AGPL into the library build.
+5. **Cut the release** — dispatch `.github/workflows/release.yml` (Actions →
+   Release → Run workflow); rehearse with `dry_run` first. A dry run computes
+   the version with `scripts/release_version.py`, builds, installs, verifies
+   and packs every prebuilt tarball, and commits, tags, releases, uploads and
+   dispatches nothing. A release candidate is `override` `X.Y.Z-rc.N`: a
+   GitHub prerelease, dispatched to the hub with `prerelease: true`. The final
+   release is `override` `X.Y.Z` (a candidate has no `bump`). From 1.0.0 the
+   engine and codegen release one version number, prerelease included; see
+   the [public contract](docs/pages/public-contract.md).
