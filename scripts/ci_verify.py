@@ -212,7 +212,14 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # All five register in release too; the lanes' other rows reach the source
 # layer (see RELEASE_MIN_TESTS). 263 registered, 262 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 262
+# 264 run = those 262 plus the two source-free TUs of R5 lane B-ADAPTER --
+# measured on the lane's tree (ctest -N):
+#   +1 test_native_script_bucket_completions (item 4, M26)
+#   +1 test_native_current_execution_rate    (item 5, F3 finding 2)
+# Both register in release too; the lane's other four rows reach the source
+# layer (see RELEASE_MIN_TESTS). 265 registered, 264 run: the WebSocket row
+# still skips on a system libcurl.
+KERNEL_MIN_TESTS = 264
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -304,7 +311,15 @@ KERNEL_MIN_TESTS = 262
 #   +3 V19-D test_adapter_reissue_binding, test_bracket_roster_parking,
 #            test_adapter_margin_revival_erasure
 # No release row skips, so 658 registered is 658 run.
-RELEASE_MIN_TESTS = 658
+# 664 = those 658 plus the two B-ADAPTER rows KERNEL_MIN_TESTS lists above,
+# which register here too, and four source-bound rows the kernel profile does
+# not build, counted with ctest -N on the lane's tree:
+#   +4 B-ADAPTER test_adapter_fill_qty_probe,
+#                test_adapter_typed_entry_admission,
+#                test_adapter_range_end_fx,
+#                test_adapter_margin_revival_cancel
+# No release row skips, so 664 registered is 664 run.
+RELEASE_MIN_TESTS = 664
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
