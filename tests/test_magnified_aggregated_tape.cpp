@@ -23,8 +23,32 @@
  *   since K-IDX the kernel books lots and rows in script-bar space.
  *
  * Variants kept here are the ones the magnified run books exactly as TradingView:
- * v0 (plain), v2 (calc_on_order_fills), v4 (slippage 2, pyramiding 3); controls:
- * the chart and plain-aggregated paths against hm-chart-diff-v0 / v4.
+ * v0 (plain), v1 (process_orders_on_close), v2 (calc_on_order_fills), v4
+ * (slippage 2, pyramiding 3), v5 (process_orders_on_close, slippage 2,
+ * pyramiding 3); controls: the chart and plain-aggregated paths against
+ * hm-chart-diff-v0 / v1 / v4 / v5.
+ *
+ * v1 and v5 (R5 lane PAR-ORDERS): under process_orders_on_close a stop entry
+ * whose stop the placing close already reached fills at that close, the
+ * close's tick slipped like any stop fill -- five entries per tape, which the
+ * engine used to fill a bar late at the next open, on every path. The
+ * aggregated and magnified paths also needed the close pass itself: its
+ * quiet-bar gate read the script-bar index where the pass reads the input
+ * slot, and skipped it on every such run. The same stop entries under
+ * calc_on_order_fills fill there too: v3 (all three paths) and v7 (chart and
+ * aggregated) book them at TradingView's bar and price. Their other rows are
+ * RECORDED divergences, each asserted to differ, so a fix flips them
+ * deliberately:
+ *   - v3 / v7 row 5 (chart, aggregated): the calc_on_order_fills market entry
+ *     the fill at bar 19's high re-issues books the close (11.71 / 11.73)
+ *     where TradingView books that high (11.72 / 11.74);
+ *   - v7 rows 8 and 9 (chart, aggregated): after bar 33's close_all and
+ *     same-bar add TradingView keeps the add (ML 11.86) and fills bar 38's
+ *     stop entry at 11.83, the engine drops the add and books 11.82;
+ *   - v3 row 2 (magnified): a fill recalculation's market entry books 11.58
+ *     where TradingView books 11.54.
+ * v7's magnified run is not replayed: TradingView books two more ML rows at
+ * bar 59 there (16 against 14).
  *
  * The pyramiding cap (R5 lane PAR-ORDERS): no path of any variant ever holds
  * more lots than its pyramiding setting at a script call. Under the magnifier,
@@ -42,6 +66,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -259,7 +284,7 @@ void run_path(MagDiffHost& host, Path path) {
     }
 }
 
-void replay(const char* slug, const Variant& v, Path path) {
+void replay(const char* slug, const Variant& v, Path path, unsigned recorded = 0u) {
     std::printf("-- %s  [%s, %s]\n", slug, v.tag, path_name(path));
     std::vector<TapeTrade> tape;
     for (const TapeTrade& t : read_tape(slug))
@@ -287,7 +312,9 @@ void replay(const char* slug, const Variant& v, Path path) {
             && r.entry_bar == chart_bar_of(tv.entry_ms)
             && r.exit_bar == chart_bar_of(tv.exit_ms)
             && r.exit_bar - r.entry_bar == tv.duration_bars;
-        CHECK(ok);
+        const bool divergence = (recorded & (1u << (i + 1))) != 0;
+        CHECK(ok != divergence);
+        if (divergence) std::printf("      row %zu: RECORDED divergence\n", i + 1);
         if (!ok) {
             std::printf("      row %zu: TradingView %s %s bar %d @%.2f -> bar %d @%.2f %s dur %d pnl %.4f\n"
                         "              engine      %s %s bar %d @%.2f -> bar %d @%.2f %s dur %d pnl %.4f"
@@ -335,23 +362,36 @@ void pyramiding_cap_holds(const Variant (&variants)[8]) {
 
 int main() {
     const Variant v0{"v0 plain", false, false, 0, 1};
+    const Variant v1{"v1 process_orders_on_close", true, false, 0, 1};
     const Variant v2{"v2 calc_on_order_fills", false, true, 0, 1};
     const Variant v4{"v4 slippage 2, pyramiding 3", false, false, 2, 3};
+    const Variant v3{"v3 process_orders_on_close, calc_on_order_fills", true, true, 0, 1};
+    const Variant v5{"v5 process_orders_on_close, slippage 2, pyramiding 3", true, false, 2, 3};
+    const Variant v7{"v7 process_orders_on_close, calc_on_order_fills, slippage 2, pyramiding 3",
+                     true, true, 2, 3};
     const Variant all[8] = {
-        v0, {"v1 process_orders_on_close", true, false, 0, 1}, v2,
-        {"v3 process_orders_on_close, calc_on_order_fills", true, true, 0, 1}, v4,
-        {"v5 process_orders_on_close, slippage 2, pyramiding 3", true, false, 2, 3},
-        {"v6 calc_on_order_fills, slippage 2, pyramiding 3", false, true, 2, 3},
-        {"v7 process_orders_on_close, calc_on_order_fills, slippage 2, pyramiding 3",
-         true, true, 2, 3}};
+        v0, v1, v2, v3, v4, v5,
+        {"v6 calc_on_order_fills, slippage 2, pyramiding 3", false, true, 2, 3}, v7};
+    const auto rows = [](std::initializer_list<int> list) {
+        unsigned mask = 0;
+        for (const int row : list) mask |= 1u << row;
+        return mask;
+    };
     // 1. the magnified run against TradingView's magnifier tapes
     replay("hm-mag-diff-v0", v0, Path::Magnified);
+    replay("hm-mag-diff-v1", v1, Path::Magnified);
     replay("hm-mag-diff-v2", v2, Path::Magnified);
     replay("hm-mag-diff-v4", v4, Path::Magnified);
+    replay("hm-mag-diff-v5", v5, Path::Magnified);
+    replay("hm-mag-diff-v3", v3, Path::Magnified, rows({2}));
     // 2. controls: the chart and plain-aggregated paths against the magnifier-off tapes
     for (const Path path : {Path::Chart, Path::Aggregated}) {
         replay("hm-chart-diff-v0", v0, path);
+        replay("hm-chart-diff-v1", v1, path);
         replay("hm-chart-diff-v4", v4, path);
+        replay("hm-chart-diff-v5", v5, path);
+        replay("hm-chart-diff-v3", v3, path, rows({5}));
+        replay("hm-chart-diff-v7", v7, path, rows({5, 8, 9}));
     }
     // 3. the pyramiding cap
     pyramiding_cap_holds(all);

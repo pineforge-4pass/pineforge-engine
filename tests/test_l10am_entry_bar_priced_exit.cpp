@@ -107,7 +107,11 @@ void test_traderhayz_entry_bar_stop() {
 // Trade #18:
 // On bar 0 (2025-04-16 16:45 UTC), strategy places stop buy entry @ 3327.38
 // and exit limit @ 3337.46, stop @ 3320.00.
-// On bar 1 (2025-04-16 17:00 UTC), buy stop fills @ 3327.38.
+// The buy stop fills @ 3327.38 at bar 0's close: under process_orders_on_close
+// the placing close (3327.38) already reaches it. TradingView's own trade 18
+// enters at 2025-04-16 16:45 UTC, Duration 6 bars; the owner (ab9714be) filled
+// it a bar later, on bar 1 (2025-04-16 17:00 UTC), and so did this engine until
+// R5 lane PAR-ORDERS, which moved the pin to TradingView's bar.
 // On bar 6 (2025-04-16 18:15 UTC): O 3332.235, H 3338.895, L 3331.735, C 3338.375.
 // Exit long limit fills @ 3337.46.
 // Owner literals: entry 3327.38, exit 3337.46, qty 1.0, pnl 10.08.
@@ -144,9 +148,9 @@ public:
 
 std::vector<Bar> vasudevshenoy_bars() {
     return {
-        // 0: 2025-04-16 16:45 UTC (signal bar)
+        // 0: 2025-04-16 16:45 UTC (signal bar; the stop fills at its close)
         mk(1744821900000LL, 3322.59, 3327.38, 3322.34, 3327.38),
-        // 1: 2025-04-16 17:00 UTC (entry bar, stop fills at 3327.38)
+        // 1: 2025-04-16 17:00 UTC (the owner's entry bar)
         mk(1744822800000LL, 3327.355, 3328.865, 3325.475, 3326.87),
         // 2: 2025-04-16 17:15 UTC
         mk(1744823700000LL, 3326.855, 3330.53, 3326.675, 3330.105),
@@ -171,7 +175,7 @@ void test_vasudevshenoy_priced_exit() {
     if (host.trade_count() == 1) {
         const auto& t = host.get_trade(0);
         CHECK(t.is_long);
-        CHECK(t.entry_time == 1744822800000LL);
+        CHECK(t.entry_time == 1744821900000LL);
         CHECK(near(t.entry_price, 3327.38));
         CHECK(t.exit_time == 1744827300000LL);
         CHECK(near(t.exit_price, 3337.46));

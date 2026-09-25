@@ -16510,13 +16510,22 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // at bar_fill_price(bar.close) with no slippage; otherwise it rests and
     // gets the ordinary touch evaluation from the next bar on. Scoped to the
     // ordinary (non-COOF, non-stream) route and a flat book.
-    if (config_.calc_on_order_fills || !config_.process_orders_on_close
-        || stream_mode_ || coof_recalc_active_) {
-        return;
-    }
+    // A pure STOP entry the close already reached fills there too, with or
+    // without calc_on_order_fills (R5 lane PAR-ORDERS): TradingView books it
+    // at that bar's close, the close's tick slipped like any stop fill, on
+    // every path -- the five such entries of each of H-MEASURE's
+    // hm-{chart,mag}-diff-v1 / -v3 / -v5 / -v7 tapes, which the resting stop
+    // filled a bar late at the next open. The stop is reached when the close's
+    // tick is at or through it (a raw close half a tick short prints it). Only
+    // a lone marketable entry: when a second entry of this bar is marketable at
+    // the same close, which fills first is unmeasured, and the stops keep the
+    // next open's both-marketable arbitration (lane L9b's P0-B shapes).
+    if (!config_.process_orders_on_close || stream_mode_ || coof_recalc_active_) return;
     if (detail::run_position(require_host()).signed_units != 0.0) return;
     const double raw_close = bar.close;
     if (!finite_positive(raw_close)) return;
+    const double tick = staged_.syminfo.mintick;
+    const double close_tick = source_bar_fill_tick(raw_close, tick);
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> marketable;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -16527,13 +16536,27 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         if (row.projection_created_bar != projection_bar_index(context)) continue;
         if (row.projection_position_side
             != static_cast<std::int32_t>(PositionSide::FLAT)) continue;
-        if (!finite_positive(row.exit_levels.limit)
-            || std::isfinite(row.exit_levels.stop)) continue;
+        const bool pure_limit = !config_.calc_on_order_fills
+            && finite_positive(row.exit_levels.limit)
+            && !std::isfinite(row.exit_levels.stop);
+        const bool pure_stop = finite_positive(row.exit_levels.stop)
+            && !std::isfinite(row.exit_levels.limit);
+        if (!pure_limit && !pure_stop) continue;
         if (row.direction_gate || row.terms_priced_reverse
             || row.paired_flat_market_candidate) continue;
-        const bool at_close = row.is_long ? raw_close <= row.exit_levels.limit
-                                          : raw_close >= row.exit_levels.limit;
+        const bool at_close = pure_limit
+            ? (row.is_long ? raw_close <= row.exit_levels.limit
+                           : raw_close >= row.exit_levels.limit)
+            : (finite_positive(close_tick)
+               && (row.is_long ? close_tick >= row.exit_levels.stop
+                               : close_tick <= row.exit_levels.stop));
         if (at_close) marketable.emplace_back(handle, row);
+    }
+    if (marketable.size() > 1) {
+        marketable.erase(std::remove_if(marketable.begin(), marketable.end(),
+            [](const std::pair<native_order::RequestHandle, PlacementSnapshot>& candidate) {
+                return finite_positive(candidate.second.exit_levels.stop);
+            }), marketable.end());
     }
     for (auto& candidate : marketable) {
         // An earlier fill of this pass leaves the book non-flat; the owner's
@@ -16559,9 +16582,13 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         immediate.cancellation = {};
         immediate.market_admission = {};
         // bar_fill_price(bar.close): the raw close, nearest-tick rounded
-        // (pine_fills.cpp:8038-8041); a limit fill is never slipped.
-        immediate.forced_execution_price = source_bar_fill_tick(
-            raw_close, staged_.syminfo.mintick);
+        // (pine_fills.cpp:8038-8041); a limit fill is never slipped, a stop
+        // fill is, after the rounding.
+        const bool stop_entry = finite_positive(row.exit_levels.stop);
+        immediate.forced_execution_price = stop_entry && config_.slippage != 0
+            ? nearest_tick(close_tick + (row.is_long ? 1.0 : -1.0)
+                               * config_.slippage * tick, tick)
+            : close_tick;
         const auto accepted = submit_or_replace(
             std::move(request), std::move(immediate), true, row.source_id);
         if (accepted) {
@@ -16761,11 +16788,17 @@ void PineExecutionAdapter::on_bar_close(
     const bool bound = host_ != nullptr;
     // Quiet: the close fills are a process_orders_on_close pass outside fill
     // recalculation and streams, and fill only what this bar placed -- an
-    // opening entry, or a limit or stop exit leg.
+    // opening entry, or a limit or stop exit leg. "This bar" is the index
+    // both passes test, projection_bar_index (the named input slot): on an
+    // aggregated or magnified run it is not the script-bar interval_index,
+    // and a gate reading that one skipped both passes there (R5 lane
+    // PAR-ORDERS).
     const bool close_fill_pass = config_.process_orders_on_close
         && !config_.calc_on_order_fills && !stream_mode_ && !coof_recalc_active_;
-    const int bar_index = context.coordinate.interval_index;
-    if (!skip_quiet(QuietHook::PoocLimitEntryFills, bound && (!close_fill_pass
+    const bool entry_close_fill_pass = config_.process_orders_on_close
+        && !stream_mode_ && !coof_recalc_active_;
+    const int bar_index = projection_bar_index(context);
+    if (!skip_quiet(QuietHook::PoocLimitEntryFills, bound && (!entry_close_fill_pass
             || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
                    return row.family == PineOrderFamily::Entry && row.opening
                        && row.projection_created_bar == bar_index;

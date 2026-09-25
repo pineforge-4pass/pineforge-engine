@@ -1,0 +1,43 @@
+//@version=6
+// H-MEASURE F1 magnified residual (R5 lane H-MEASURE, research group agg): lane F1's
+// differential script (exec/F1-scratch/f1-scratch/diff_probe.cpp) as Pine, variant 5:
+// process_orders_on_close=1, calc_on_order_fills=0, slippage=2, pyramiding=3,
+// with the bar magnifier ON. NYSE:F 15m, the three replayed days of
+// tests/fixtures/session_islastbar (2025-07-02, 07-03 half day, 07-07). The script's bar
+// counter k is the chart bar since 2025-07-02 09:30 ET (the fixture's first bar), so
+// k == bar_index of the replay. No new order after the last replayed bar (07-07 15:45 ET);
+// whatever is open is closed on the next bar, outside the replay.
+strategy("HM MAG diff v5 pooc1 coof0 slip2 pyr3", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=3, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=2, process_orders_on_close=true, calc_on_order_fills=false,
+     margin_long=100, margin_short=100, use_bar_magnifier=true)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+units = strategy.position_size
+if k >= 0 and time < tEnd
+    // priced long entry with a same-bar bracket
+    if k % 7 == 3 and units == 0
+        strategy.entry("PL", strategy.long, stop=high - 0.02)
+        strategy.exit("PX", "PL", limit=close + 0.06, stop=close - 0.06)
+    // limit short entry with a bracket
+    if k % 9 == 4 and units == 0
+        strategy.entry("PS", strategy.short, limit=close + 0.02)
+        strategy.exit("SX", "PS", limit=close - 0.05, stop=close + 0.07)
+    // market long, then a market pyramid add under a priced from_entry leg
+    if k % 13 == 6 and units == 0
+        strategy.entry("ML", strategy.long)
+        strategy.exit("MX", "ML", limit=close + 0.08, stop=close - 0.08)
+    if k % 13 == 7 and units > 0
+        strategy.entry("ML", strategy.long)
+    // close whatever is left every 17 bars
+    if k % 17 == 16 and units != 0
+        strategy.close_all()
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")

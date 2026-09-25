@@ -154,7 +154,7 @@ b1c6e2f74a263c3ed0402b20cca655b329326c68b9e91405bf874d74be0e8fe0  validation/ord
 c9d1428ff858ea15fb8634b4634e4f438e0ff38b39e19f27e94d552ed98b821c  validation/order-cross-exit-close-same-pass-01/engine_trades.csv
 5804e69d5646d827f6c300b54d02c063c54e8071e999db3e4cbe9458b9c5413e  validation/order-crosscurrent-opposite-market-pair-01/engine_trades.csv
 b71d4a6a1d3c177473f041e56504820f9c06c3ba4588fc8b8827c44f24503ed6  validation/order-deferred-flip-guaranteed-gap-stops-01/engine_trades.csv
-60df427d47535da3fd9525410c58503e33090068dfdd7d447ab627faaf23c27a  validation/order-deferred-flip-pooc-cross-bar-01/engine_trades.csv
+602febda64b40ac5b089ddc13b8810ee6ac11ea4f82b86725789496bf8b3d9a2  validation/order-deferred-flip-pooc-cross-bar-01/engine_trades.csv
 12c029df1fbe1b2b071e6ee2b9f43039d0359ae02bf2ad0ed3260bb3adadda1e  validation/order-dual-four-bar-stop-no-close-01/engine_trades.csv
 560e75eadf284e4374e77479fa13edf0629cfad1bfa5d76f1cfb5dbe619eb8c4  validation/order-dual-side-same-id-stop-no-cancel-01/engine_trades.csv
 a03be8fcb680efdaaf09d4e38f7c7dc9c2f5a74948feb9db6cc57c7c9188a5db  validation/order-dual-stop-both-touch-priority-01/engine_trades.csv
