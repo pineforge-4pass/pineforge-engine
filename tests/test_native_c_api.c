@@ -8650,16 +8650,46 @@ typedef struct csurface_postrun_state {
 typedef struct csurface_failure_state {
     pf_strategy_t host;
     int submit_rc;
+    int leg_rc;
+    int calculations;
+    uint64_t parent;
+    uint64_t leg;
 } csurface_failure_state;
 
-static int csurface_nonrepresentable_on_begin(void* user) {
+/* R5 lane K-ULP4 made a quantity the settlement cannot book that request's
+ * typed MatchRejected refusal, so this row takes its settlement failure from
+ * a level the kernel's representability check refuses instead: the host
+ * answers an anchored leg's arm with a negative level (INT25). */
+static int csurface_nonrepresentable_level(void* user, const pf_native_anchored_level_view_v1* view,
+                                           double* level) {
+    (void)user;
+    (void)view;
+    *level = -1.0;
+    return PF_NATIVE_ANSWER_PROVIDED;
+}
+
+static int csurface_nonrepresentable_on_bar(void* user, const pf_bar_t* bar,
+                                            const pf_native_decision_v1* at) {
     csurface_failure_state* state = (csurface_failure_state*)user;
-    pf_native_request_v1 request = blank_request();
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (state->calculations++ != 0) return 0;
+    request = blank_request();
     request.intent = PF_NATIVE_INTENT_TRANSACT;
-    request.intent_value = 0x1p60;
-    request.capacity = PF_NATIVE_CAPACITY_POINT_BUDGET;
-    request.capacity_units = 1.0;
-    state->submit_rc = strategy_native_submit_v1(state->host, &request, NULL, NULL);
+    request.intent_value = 2.0;
+    request.trigger = PF_NATIVE_TRIGGER_MARKET;
+    state->submit_rc = strategy_native_submit_v1(state->host, &request, &state->parent, NULL);
+    request = blank_request();
+    request.intent = PF_NATIVE_INTENT_REDUCE;
+    request.reduce_size = PF_NATIVE_REDUCE_OWNER_OPENED;
+    request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+    request.anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL;
+    request.anchor_offset = 2.0;
+    request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+    request.owner_n = 1u;
+    request.owner_incarnations = &state->parent;
+    state->leg_rc = strategy_native_submit_v1(state->host, &request, &state->leg, NULL);
     return 0;
 }
 
@@ -8672,7 +8702,8 @@ static void check_csurface_failure_discriminator(void) {
     int n = 0;
     memset(&state, 0, sizeof(state));
     table = blank_callbacks(&state);
-    table.on_run_begin = csurface_nonrepresentable_on_begin;
+    table.on_bar = csurface_nonrepresentable_on_bar;
+    table.on_anchored_level = csurface_nonrepresentable_level;
     state.host = strategy_native_host_create_v1(&table);
     CHECK(state.host != NULL, "discriminator host create failed");
     if (!state.host) return;
@@ -8681,9 +8712,11 @@ static void check_csurface_failure_discriminator(void) {
                  "discriminator host configure failed");
     bars = pf_twin_bars(&n);
     CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, NULL), PF_NATIVE_E_RUN_FAILED,
-                 "nonrepresentable request did not fail settlement");
+                 "nonrepresentable level did not fail settlement");
     CHECK_EQ_INT(state.submit_rc, PF_NATIVE_OK,
-                 "nonrepresentable request was rejected at submission");
+                 "the anchored leg's owner was rejected at submission");
+    CHECK_EQ_INT(state.leg_rc, PF_NATIVE_OK,
+                 "the anchored leg was rejected at submission");
     memset(&result, 0, sizeof(result));
     result.struct_size = (uint32_t)sizeof(result);
     CHECK_EQ_INT(strategy_native_state_v1(state.host, &result), PF_NATIVE_OK,
