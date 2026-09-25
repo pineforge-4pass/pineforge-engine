@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-21 short seed",
+  "slug": "hm-g221-short-seed",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:17:12.049Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-02",
+    "to": "2025-06-06"
+  },
+  "pine_sha256": "743d8a23dea3b530f1a04af7570387ed57d075150f72de5e6064037ae8a9a04e",
+  "tv_trades_sha256": "9a842c022746bc393650fc3f09f363808a53f7c078c05dde00f65e408f1734e8",
+  "tv_trades_rows": 26
+}

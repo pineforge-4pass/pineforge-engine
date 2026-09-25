@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-36 session.ismarket",
+  "slug": "hm-g236-eurusd-60-dst-mar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:01:34.199Z",
+  "chart": {
+    "symbol": "OANDA:EURUSD",
+    "interval": "60",
+    "from": "2025-03-02",
+    "to": "2025-03-14"
+  },
+  "pine_sha256": "7c5b7e36130c230e6ad26f5525ab527486a008e2d6eaa1a5e41da41cfa256a1d",
+  "tv_trades_sha256": "60713d2c22442ffe14070fddb1c5cd7fbf6fc6054c0b532b4c4275de305decf1",
+  "tv_trades_rows": 440
+}

@@ -1,0 +1,25 @@
+// H-MEASURE (R5 wave H) row G2-21: finding 272's short-seed collision under
+// percent-of-equity default sizing, once a day (UTC). A SHORT seed opens from
+// the 00:15 signal; the 00:30 bar then sends, in this order,
+// entry(Long), entry(Short), close(Long), close(Short); the remnant is closed
+// from the 01:00 signal and anything left from the 01:30 signal. TradingView
+// numbers the trades of the collision fill; the engine's report numbers them
+// by entry incarnation (project_short_seed_report_rows).
+//@version=6
+strategy("HM G2-21 short seed", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+m = hour * 60 + minute
+if m == 15 and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+if m == 30 and strategy.position_size < 0
+    strategy.entry("Long", strategy.long)
+    strategy.entry("Short", strategy.short)
+    strategy.close("Long")
+    strategy.close("Short")
+if m == 60 and strategy.position_size != 0
+    strategy.close("Short")
+if m == 90 and strategy.position_size != 0
+    strategy.close_all()

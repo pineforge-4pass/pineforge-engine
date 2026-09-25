@@ -220,9 +220,17 @@ it -- the closes the exact-sum rule above now closes lot by lot (R5 lane
 K-ULP3).
 The Pine source host keeps one quantity rule of its own: after every applied
 execution, `source::PineStrategyHost::on_native_applied` erases any lot of at
-most `kQtyEpsilon` (`1e-10`) without a closing row, the settle rule of the
-legacy engine it restates. That is source-layer TradingView policy, not the
-kernel's; since K-ULP3 an exact-sum close no longer leaves such a lot for it.
+most `kQtyEpsilon` (`1e-10`) from the book it shares with the kernel, with no
+closing row or event, and resets the position when nothing is left. It is
+broader than the legacy engine's settle rule: `ab9714be` reset only a whole
+book at or under `kQtyEpsilon` and kept a dust lot beside a live one, where the
+sweep erases it inside a live book too. It is measured source-layer
+TradingView policy, not the kernel's: TradingView's decimal quantities leave no
+remnant row (`lab tv` tape `hm-g232-decimal-dust`), which the Pine host books
+row for row while a bare host books four 2.8e-17-unit dust rows beside them
+(`tests/test_pine_dust_sweep_paired.cpp`). Since K-ULP3 an exact-sum close no
+longer leaves such a lot, but a decimal sum binary64 misses (0.1 + 0.2 closed
+by 0.3) still does.
 The adapter does not declare the kernel's quantity tolerance (ADR-0001,
 "Kernel capabilities the Pine adapter does not declare"): its FIFO endpoint
 test settles a snapped prefix as a selected `Flatten`, charged the lots it

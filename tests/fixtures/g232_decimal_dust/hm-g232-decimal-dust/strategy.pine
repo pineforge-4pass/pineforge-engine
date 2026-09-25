@@ -1,0 +1,24 @@
+// H-MEASURE (R5 wave H) row G2-32: a decimal close that binary64 cannot reach.
+// Every day (UTC): long lots A 0.1 (00:15 signal), B 0.2 (00:30) and C 1.0
+// (00:45); at 01:00 one strategy.order sells 0.3, which TradingView closes as
+// A and B whole (decimal arithmetic: 0.1 + 0.2 == 0.3). In binary64
+// 0.1 + 0.2 = 0.30000000000000004 > 0.3, so the kernel's FIFO split leaves a
+// 2.8e-17 remnant of B beside C. At 02:00 close_all flattens what is left:
+// on TradingView that is C alone, one row.
+//@version=6
+strategy("HM G2-32 decimal dust", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=3,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+m = hour * 60 + minute
+if m == 15 and strategy.position_size == 0
+    strategy.entry("A", strategy.long, qty=0.1)
+if m == 30 and strategy.position_size > 0
+    strategy.entry("B", strategy.long, qty=0.2)
+if m == 45 and strategy.position_size > 0
+    strategy.entry("C", strategy.long, qty=1.0)
+if m == 60 and strategy.position_size > 0
+    strategy.order("S", strategy.short, qty=0.3)
+if m == 120 and strategy.position_size != 0
+    strategy.close_all()

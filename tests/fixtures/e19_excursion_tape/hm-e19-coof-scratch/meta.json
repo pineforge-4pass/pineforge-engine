@@ -1,0 +1,16 @@
+{
+  "title": "HM E19 coof scratch",
+  "slug": "hm-e19-coof-scratch",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:21:34.577Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-02",
+    "to": "2025-06-06"
+  },
+  "pine_sha256": "92e3ba6a638eb205f9633ae651a3c0f567cb7bd395f2034220fda0267a13881e",
+  "tv_trades_sha256": "fe94432eb27eb032cb318c0e74ff6b6f95a925bfff2a56bd7217f48cca306244",
+  "tv_trades_rows": 8
+}

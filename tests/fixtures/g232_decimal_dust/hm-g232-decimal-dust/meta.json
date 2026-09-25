@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-32 decimal dust",
+  "slug": "hm-g232-decimal-dust",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:10:55.236Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-06-02",
+    "to": "2025-06-06"
+  },
+  "pine_sha256": "e9acfa7dac32e8ec5539c56c99fdee635e4cdabb88ee6e712fc637626be05f30",
+  "tv_trades_sha256": "3a7568a1da42bff6e93eb212a5453116f468e6bb56cae0fe7ae2e3c9929b4e64",
+  "tv_trades_rows": 24
+}

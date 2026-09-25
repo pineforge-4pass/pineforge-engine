@@ -1,0 +1,17 @@
+// H-MEASURE (R5 wave H) row G2-36: which chart bars does TradingView flag
+// session.ismarket on? process_orders_on_close=true: every bar reverses the
+// position at its own close, so every trade's ENTRY is one chart bar (TradingView
+// dates a process_orders_on_close fill at the bar's open) and the entry's Signal
+// (its comment) is the flag TradingView evaluated on that bar: "M1" when
+// session.ismarket is true, "M0" when it is false.
+//@version=6
+strategy("HM G2-36 session.ismarket", overlay=true, initial_capital=1000000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1,
+     commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+     process_orders_on_close=true, margin_long=100, margin_short=100)
+
+flag = session.ismarket ? "M1" : "M0"
+if bar_index % 2 == 0
+    strategy.entry("L" + flag, strategy.long, comment=flag)
+else
+    strategy.entry("S" + flag, strategy.short, comment=flag)

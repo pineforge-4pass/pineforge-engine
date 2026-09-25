@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-36 session.ismarket",
+  "slug": "hm-g236-eth-60-24x7",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:01:29.897Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "60",
+    "from": "2025-03-07",
+    "to": "2025-03-11"
+  },
+  "pine_sha256": "7c5b7e36130c230e6ad26f5525ab527486a008e2d6eaa1a5e41da41cfa256a1d",
+  "tv_trades_sha256": "96b7e8890b41a9e8aa60698a43cdffd5f42c55bb8d2d0223f7985c13b5040b74",
+  "tv_trades_rows": 194
+}

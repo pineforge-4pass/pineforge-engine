@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-36 session.ismarket",
+  "slug": "hm-g236-xauusd-60-dst-mar",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:01:37.880Z",
+  "chart": {
+    "symbol": "OANDA:XAUUSD",
+    "interval": "60",
+    "from": "2025-03-02",
+    "to": "2025-03-14"
+  },
+  "pine_sha256": "7c5b7e36130c230e6ad26f5525ab527486a008e2d6eaa1a5e41da41cfa256a1d",
+  "tv_trades_sha256": "ebc226aea010125fb66b7cda3a86563846a243463723816ee529f8f044c54cf6",
+  "tv_trades_rows": 420
+}

@@ -1,0 +1,16 @@
+{
+  "title": "HM G2-36 session.ismarket",
+  "slug": "hm-g236-es1-60-dst-nov",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:01:22.037Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "60",
+    "from": "2025-10-26",
+    "to": "2025-11-07"
+  },
+  "pine_sha256": "7c5b7e36130c230e6ad26f5525ab527486a008e2d6eaa1a5e41da41cfa256a1d",
+  "tv_trades_sha256": "a7fbd62928dc49caf7bcdc6c9d8569139eab036860aa375aa0fc2c7db9b408b9",
+  "tv_trades_rows": 418
+}

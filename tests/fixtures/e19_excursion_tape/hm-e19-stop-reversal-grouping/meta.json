@@ -1,0 +1,16 @@
+{
+  "title": "PF probe 57 - stop reversal grouping",
+  "slug": "hm-e19-stop-reversal-grouping",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-25T19:05:16.756Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2026-05-01"
+  },
+  "pine_sha256": "2777345294950c2701f702f0200ae42eba1e5413eb5515c609edd225eef61d7b",
+  "tv_trades_sha256": "1748651d9064e7844e67ed1075a0bc43488600720878cd4a46c61be8fce44a5d",
+  "tv_trades_rows": 3160
+}

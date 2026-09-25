@@ -1330,6 +1330,14 @@ list(APPEND TEST_SOURCES test_pyramiding_count_differential)
 list(APPEND TEST_SOURCES test_zero_trail_sibling_stop)
 #   E5's pending-entry arm and E14's anchored-leg seed (AUDIT3 H6 tapes).
 list(APPEND TEST_SOURCES test_pending_entry_trail_tapes)
+#   G2-22 / E19 the host-owned excursion model against the kernel sampler.
+list(APPEND TEST_SOURCES test_e19_excursion_tape)
+#   G2-21 the short-seed report swaps against the kernel's lot identities.
+list(APPEND TEST_SOURCES test_short_seed_report_swap)
+#   G2-32 the 1e-10 dust sweep against a bare host on the same fills.
+list(APPEND TEST_SOURCES test_pine_dust_sweep_paired)
+#   G2-36 session.ismarket: the generated predicate, the kernel's in_session.
+list(APPEND TEST_SOURCES test_session_ismarket_tape)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2066,6 +2074,9 @@ foreach(_pf_hm_row IN ITEMS
         "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
         "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
         "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
+        "test_short_seed_report_swap|PINEFORGE_G221_FIXTURE_DIR|g221_short_seed"
+        "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
+        "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
