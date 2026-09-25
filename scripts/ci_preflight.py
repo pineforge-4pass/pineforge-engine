@@ -175,7 +175,8 @@ def check_commands(source: Path) -> list[tuple]:
                            str(source / '.github/workflows/native-live.yml'),
                            str(source / '.github/workflows/corpus-parity.yml'),
                            str(source / '.github/workflows/docs.yml'),
-                           str(source / '.github/workflows/promote-baseline.yml')]),
+                           str(source / '.github/workflows/promote-baseline.yml'),
+                           str(source / '.github/workflows/release.yml')]),
         ('ci-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
                                   '--check-ci-workflow']),
         ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
@@ -207,9 +208,12 @@ def check_commands(source: Path) -> list[tuple]:
         # every mutation of the recorded battery the full sweep caught.
         ('corpus-parity-subset-cover-tests',
          [sys.executable, str(source / 'scripts/test_corpus_parity_subset_cover.py')]),
-        # Lane REL10: the JSON report keys outlive the removed C spellings.
+        # Lane REL10: the JSON report keys outlive the removed C spellings, and
+        # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
+        ('release-version-tests',
+         [sys.executable, str(source / 'scripts/test_release_version.py')]),
         ('design-inventory-tests',
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',

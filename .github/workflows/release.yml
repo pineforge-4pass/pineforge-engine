@@ -1,18 +1,32 @@
 name: Release
 
-# Bump version, tag, build & push the Docker image to GHCR, and cut a
-# GitHub Release with auto-generated notes — all from a single
-# workflow_dispatch click. The choice of bump (major/minor/patch) is the
-# only required input.
+# Bump VERSION, tag, cut a GitHub Release with generated notes, attach the
+# prebuilt static-lib tarballs, and notify the pineforge-release hub — all
+# from a single workflow_dispatch click. This workflow publishes no container
+# image: the GHCR image is the hub's, built from these tarballs.
 #
-# Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump.
+# Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump, or
+# name the exact version in `override` (a release candidate is
+# X.Y.Z-rc.N, then the final release is override X.Y.Z). Tick `dry_run` to
+# rehearse: it computes the version, builds, installs, verifies and packs
+# every tarball (kept as workflow artifacts), and commits, tags, releases,
+# uploads and dispatches nothing.
+#
+# A release candidate (X.Y.Z-rc.N) is created as a GitHub prerelease, and
+# the hub dispatch carries it: client_payload = {version: "vX.Y.Z-rc.N",
+# prerelease: true, run_id}; a final release sends prerelease: false. The
+# engine and codegen release one version number from 1.0.0; the hub pairs
+# them (docs/pages/public-contract.md).
+#
+# The version arithmetic is scripts/release_version.py (unit tests:
+# scripts/test_release_version.py, a ci_preflight stage), not YAML.
 #
 # Security notes:
-#   - The only user input is `bump`, a `choice` enum constrained to
-#     {patch,minor,major} — no free-text reaches a shell. Even so, it is
-#     piped through an `env:` block (BUMP) and matched in a `case`.
+#   - `bump` is a `choice` enum. `override` is free text: it reaches only
+#     scripts/release_version.py, through an `env:` block, which refuses
+#     anything but X.Y.Z or X.Y.Z-rc.N before any later step reads it.
 #   - All other interpolations are GitHub-controlled context (repo, actor,
-#     sha, secrets) or values we computed ourselves from the VERSION file.
+#     sha, secrets) or values the script computed from VERSION and the tags.
 
 on:
   workflow_dispatch:
@@ -26,6 +40,16 @@ on:
           - patch
           - minor
           - major
+      override:
+        description: 'Exact version, X.Y.Z or X.Y.Z-rc.N (for example 1.0.0-rc.1); wins over bump'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Rehearse: build and verify the tarballs; commit, tag, release, upload and dispatch nothing'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,8 +59,9 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      tag:     ${{ steps.bump.outputs.tag }}
-      version: ${{ steps.bump.outputs.next }}
+      tag:        ${{ steps.bump.outputs.tag }}
+      version:    ${{ steps.bump.outputs.next }}
+      prerelease: ${{ steps.bump.outputs.prerelease }}
 
     steps:
       # Org GitHub App token (no PAT — never expires). Authorizes the version
@@ -64,32 +89,20 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # current / next / tag / prerelease / previous (the release-notes base),
+      # validated; see scripts/release_version.py.
       - name: Compute next version
         id: bump
         env:
-          BUMP: ${{ inputs.bump }}
+          BUMP:     ${{ inputs.bump }}
+          OVERRIDE: ${{ inputs.override }}
         run: |
           set -euo pipefail
-          current="$(tr -d '[:space:]' < VERSION)"
-          if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "VERSION file malformed: '$current'" >&2
-            exit 1
-          fi
-          maj="${BASH_REMATCH[1]}"
-          min="${BASH_REMATCH[2]}"
-          pat="${BASH_REMATCH[3]}"
-          case "$BUMP" in
-            major) maj=$((maj + 1)); min=0; pat=0 ;;
-            minor) min=$((min + 1)); pat=0 ;;
-            patch) pat=$((pat + 1)) ;;
-            *) echo "unknown bump: $BUMP" >&2; exit 1 ;;
-          esac
-          next="${maj}.${min}.${pat}"
-          tag="v${next}"
-          echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "next=$next"       >> "$GITHUB_OUTPUT"
-          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
-          echo "Bumping ${current} -> ${next} (${BUMP})"
+          git tag --list 'v*' > "${RUNNER_TEMP}/tags.txt"
+          python3 scripts/release_version.py next \
+            --bump "${BUMP}" --override "${OVERRIDE}" \
+            --tags-file "${RUNNER_TEMP}/tags.txt" \
+            --github-output "${GITHUB_OUTPUT}"
 
       - name: Refuse if tag already exists
         env:
@@ -101,6 +114,7 @@ jobs:
           fi
 
       - name: Write bumped VERSION, commit, tag, push
+        if: ${{ !inputs.dry_run }}
         env:
           NEXT: ${{ steps.bump.outputs.next }}
           TAG:  ${{ steps.bump.outputs.tag }}
@@ -113,25 +127,16 @@ jobs:
           git push origin HEAD
           git push origin "${TAG}"
 
-      - name: Resolve previous tag for changelog range
-        id: prev
-        env:
-          TAG: ${{ steps.bump.outputs.tag }}
-        run: |
-          set -euo pipefail
-          prev="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n1 || true)"
-          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
-          if [[ -n "$prev" ]]; then
-            echo "Changelog range: ${prev}..${TAG}"
-          else
-            echo "No prior tag -- full history will be used"
-          fi
-
+      # The range starts at scripts/release_version.py's `previous`: the last
+      # tag below this release in semver order (git's v:refname sort puts
+      # X.Y.Z-rc.N above X.Y.Z), and the last final release for a final one.
+      # A dry run has no tag yet and ends the range at the dispatched commit.
       - name: Generate release notes
         id: notes
         env:
-          TAG:      ${{ steps.bump.outputs.tag }}
-          PREV:     ${{ steps.prev.outputs.prev }}
+          TAG:       ${{ steps.bump.outputs.tag }}
+          PREV:      ${{ steps.bump.outputs.previous }}
+          RANGE_END: ${{ inputs.dry_run && github.sha || steps.bump.outputs.tag }}
         run: |
           set -euo pipefail
           {
@@ -140,11 +145,11 @@ jobs:
             if [[ -n "$PREV" ]]; then
               echo "### Changes since ${PREV}"
               echo
-              git log --pretty=format:'- %s (%h)' "${PREV}..${TAG}"
+              git log --pretty=format:'- %s (%h)' "${PREV}..${RANGE_END}"
             else
               echo "### Initial release"
               echo
-              git log --pretty=format:'- %s (%h)' "${TAG}"
+              git log --pretty=format:'- %s (%h)' "${RANGE_END}"
             fi
             echo
             echo
@@ -155,16 +160,47 @@ jobs:
           } > RELEASE_NOTES.md
           echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
 
+      # A release candidate is a GitHub prerelease, which GitHub never marks
+      # "Latest".
       - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG:      ${{ steps.bump.outputs.tag }}
-          NOTES:    ${{ steps.notes.outputs.path }}
+          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
         run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "${PRERELEASE}" == "true" ]]; then prerelease=(--prerelease); fi
           gh release create "${TAG}" \
             --title "${TAG}" \
             --notes-file "${NOTES}" \
-            --verify-tag
+            --verify-tag \
+            "${prerelease[@]}"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        env:
+          CURRENT:    ${{ steps.bump.outputs.current }}
+          NEXT:       ${{ steps.bump.outputs.next }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          PREV:       ${{ steps.bump.outputs.previous }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          RUN_ID:     ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Dry run: ${CURRENT} -> ${NEXT}"
+            echo
+            echo "- would commit VERSION=${NEXT} and push the tag ${TAG}"
+            echo "- would create the GitHub release ${TAG} (prerelease: ${PRERELEASE}), notes since ${PREV:-the first commit}"
+            echo "- would dispatch engine-release to pineforge-release with client_payload {\"version\": \"${TAG}\", \"prerelease\": ${PRERELEASE}, \"run_id\": ${RUN_ID}}"
+            echo
+            cat "${NOTES}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          cat "${GITHUB_STEP_SUMMARY}"
 
   # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
   # to the GitHub Release created above. Tarball layout:
@@ -199,11 +235,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
+      # A dry run has no tag yet: it builds the dispatched commit.
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
-          fetch-depth: 0   # version helper wants tags for `git describe`
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.tag }}
+          fetch-depth: 0   # the version helper still observes the git sha
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
 
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux'
@@ -226,12 +269,17 @@ jobs:
           set -euo pipefail
           stage="stage/pineforge-${TAG}-${TRIPLE}"
           echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
           # CMAKE_EXTRA is unquoted so multi-flag strings (e.g. mac fat
           # archive flag) split into separate argv entries.
+          # shellcheck disable=SC2086
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
             -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}" \
             ${CMAKE_EXTRA}
 
@@ -240,6 +288,15 @@ jobs:
 
       - name: Install to staging
         run: cmake --install build
+
+      # The generated version.h and the CMake package files must carry the
+      # full version, -rc.N included, and its numeric X.Y.Z.
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
 
       - name: Bundle docs into tarball root
         run: |
@@ -265,6 +322,7 @@ jobs:
           echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
 
       - name: Upload to release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG:     ${{ needs.release.outputs.tag }}
@@ -273,6 +331,16 @@ jobs:
         run: |
           gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
 
+      - name: Keep the dry run's tarball as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.tarball }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          retention-days: 7
+
   # Notify the pineforge-release hub AFTER the tarballs are uploaded — the hub
   # builds FROM the engine static-lib tarball, so it must exist first. The hub
   # bumps its ENGINE_VERSION pin, rebuilds the combined image, and fans out to
@@ -280,6 +348,7 @@ jobs:
   # never rebuilds. Credential is the org GitHub App (no PAT).
   notify-hub:
     needs: [release, prebuilt]
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
       - name: Mint org App token (hub dispatch)
@@ -291,15 +360,22 @@ jobs:
           owner: pineforge-4pass
           repositories: pineforge-release
 
+      # client_payload = {version: vX.Y.Z[-rc.N], prerelease: true|false,
+      # run_id}. -F sends prerelease as a JSON boolean and run_id as a
+      # number. The hub never publishes a prerelease to its stable or
+      # `latest` channels and pairs the engine with codegen of the same
+      # version (lane REL10-HUB).
       - name: Dispatch engine-release -> pineforge-release
         env:
           GH_TOKEN:   ${{ steps.app.outputs.token }}
           ENGINE_TAG: ${{ needs.release.outputs.tag }}
+          PRERELEASE: ${{ needs.release.outputs.prerelease }}
           RUN_ID:     ${{ github.run_id }}
         run: |
           set -euo pipefail
           gh api repos/pineforge-4pass/pineforge-release/dispatches \
             -f event_type=engine-release \
             -F "client_payload[version]=${ENGINE_TAG}" \
+            -F "client_payload[prerelease]=${PRERELEASE}" \
             -F "client_payload[run_id]=${RUN_ID}"
-          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG})"
+          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG}, prerelease=${PRERELEASE})"
