@@ -5,6 +5,7 @@
  * <pineforge/pineforge.h>; docs/pages/report-schema.md summarizes them.
  */
 #include <pineforge/metrics.hpp>
+#include <pineforge/native_calendar.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -78,15 +79,8 @@ int month_key_utc(int64_t ts_ms) {
     constexpr int64_t kCivilSpan = int64_t{1} << 40;
     if (secs > -kCivilSpan && secs < kCivilSpan) {
         const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
-        const int64_t z = days + 719468;
-        const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-        const int64_t doe = z - era * 146097;
-        const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-        const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        const int64_t mp = (5 * doy + 2) / 153;
-        const int64_t month = mp < 10 ? mp + 3 : mp - 9;
-        const int64_t year = yoe + era * 400 + (month <= 2 ? 1 : 0);
-        return static_cast<int>(year * 12 + month - 1);
+        const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
+        return static_cast<int>(date.year * 12 + date.month - 1);
     }
     struct tm tb {};
     gmtime_r(&secs, &tb);
@@ -106,23 +100,13 @@ int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
     constexpr int64_t kCivilSpan = int64_t{1} << 40;
     if (secs > -kCivilSpan && secs < kCivilSpan) {
         const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
-        const int64_t z = days + 719468;
-        const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-        const int64_t doe = z - era * 146097;
-        const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-        const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        const int64_t mp = (5 * doy + 2) / 153;
-        // The March-based year starts `doy` days back; its month mp starts at
-        // day (153 * mp + 2) / 5 of it, and its last month (February) runs to
-        // the year's end, 366 days on when the civil year holding that
-        // February -- yoe + 1 modulo 400 -- is a leap year.
-        const int64_t march_first = days - doy;
-        const int64_t civil = yoe + 1;
-        const bool leap = civil % 4 == 0 && (civil % 100 != 0 || civil % 400 == 0);
-        const int64_t next = mp < 11 ? march_first + (153 * (mp + 1) + 2) / 5
-                                     : march_first + (leap ? 366 : 365);
-        const int64_t lo = std::max((march_first + (153 * mp + 2) / 5) * 86400,
-                                    -kCivilSpan + 1);
+        // The civil month of the floor day, and the first day of the next.
+        const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
+        const int64_t first = native_calendar::native_civil_days(date.year, date.month, 1);
+        const int64_t next = date.month < 12
+            ? native_calendar::native_civil_days(date.year, date.month + 1, 1)
+            : native_calendar::native_civil_days(date.year + 1, 1, 1);
+        const int64_t lo = std::max(first * 86400, -kCivilSpan + 1);
         const int64_t hi = std::min(next * 86400, kCivilSpan);
         if (month_key_utc(lo * 1000) == key && month_key_utc((hi - 1) * 1000) == key) {
             memo.lo = lo;

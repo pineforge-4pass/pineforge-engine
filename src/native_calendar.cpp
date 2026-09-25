@@ -96,28 +96,16 @@ int64_t floor_div(int64_t a, int64_t b) {
     return q;
 }
 
-// Howard Hinnant days_from_civil / civil_from_days.
+// Howard Hinnant's days_from_civil / civil_from_days, in this file's types:
+// native_civil_days / native_civil_date (native_calendar.hpp) are the one copy
+// of the arithmetic.
 int64_t days_from_civil(int y, unsigned m, unsigned d) {
-    y -= m <= 2;
-    const int64_t era = (y >= 0 ? y : y - 399) / 400;
-    const unsigned yoe = static_cast<unsigned>(y - era * 400);
-    const unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+    return native_civil_days(y, static_cast<int>(m), static_cast<int>(d));
 }
 
 CivilDate civil_from_days(int64_t z) {
-    z += 719468;
-    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const unsigned doe = static_cast<unsigned>(z - era * 146097);
-    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int y = static_cast<int>(yoe) + static_cast<int>(era * 400);
-    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const unsigned mp = (5 * doy + 2) / 153;
-    unsigned d = doy - (153 * mp + 2) / 5 + 1;
-    unsigned m = mp < 10 ? mp + 3 : mp - 9;
-    y += (m <= 2);
-    return CivilDate{y, static_cast<int>(m), static_cast<int>(d)};
+    const NativeCivilDate date = native_civil_date(z);
+    return CivilDate{static_cast<int>(date.year), date.month, date.day};
 }
 
 bool valid_civil_date(int y, int m, int d) {

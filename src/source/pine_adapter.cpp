@@ -4,6 +4,7 @@
 
 #include <pineforge/pending_order_mirror.hpp>
 
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
@@ -13839,21 +13840,15 @@ namespace {
 constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
 
 // chart_day_key on a UTC chart for a second `secs` inside the arithmetic's
-// span: gmtime_r's day and month by Howard Hinnant's civil_from_days on the
-// floor day. Everything below reads the floor day alone, so the day's seconds
-// all answer its key, and `index` (when there is one) keeps them with it.
+// span: gmtime_r's day and month, the kernel's civil date of the floor day
+// (native_calendar::native_civil_date). Everything below reads the floor day
+// alone, so the day's seconds all answer its key, and `index` (when there is
+// one) keeps them with it.
 [[gnu::noinline]] std::int64_t civil_chart_day_key(AdapterLookupIndex* index,
                                                    std::int64_t secs) noexcept {
     const std::int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
-    const std::int64_t z = days + 719468;
-    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const std::int64_t doe = z - era * 146097;
-    const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const std::int64_t mp = (5 * doy + 2) / 153;
-    const std::int64_t day = doy - (153 * mp + 2) / 5 + 1;
-    const std::int64_t month = mp < 10 ? mp + 3 : mp - 9;
-    const std::int64_t key = day * 100 + month;
+    const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
+    const std::int64_t key = std::int64_t{date.day} * 100 + date.month;
     if (index != nullptr) {
         index->day_lo = std::max(days * 86400, -kChartDayCivilSpan + 1);
         index->day_hi = std::min(days * 86400 + 86400, kChartDayCivilSpan);

@@ -1,4 +1,5 @@
 #include <pineforge/session_time.hpp>
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/timeframe.hpp>
 #include "timezone.hpp"
@@ -39,26 +40,20 @@ bool in_civil_span(int64_t secs) {
     return secs > -kCivilSpan && secs < kCivilSpan;
 }
 
-// gmtime_r's nine ISO fields of `secs` (in_civil_span only).
+// gmtime_r's nine ISO fields of `secs` (in_civil_span only): the date is
+// native_calendar::native_civil_date of the floor day.
 void civil_fields(int64_t secs, struct tm& out) {
     const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
     const int64_t second_of_day = secs - days * 86400;
-    const int64_t z = days + 719468;
-    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const int64_t doe = z - era * 146097;
-    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);  // from March 1
-    const int64_t mp = (5 * doy + 2) / 153;                       // 0 = March
-    const int64_t year = yoe + era * 400 + (mp >= 10 ? 1 : 0);
-    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
     out.tm_sec = static_cast<int>(second_of_day % 60);
     out.tm_min = static_cast<int>(second_of_day / 60 % 60);
     out.tm_hour = static_cast<int>(second_of_day / 3600);
-    out.tm_mday = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
-    out.tm_mon = static_cast<int>(mp < 10 ? mp + 2 : mp - 10);
-    out.tm_year = static_cast<int>(year - 1900);
+    out.tm_mday = date.day;
+    out.tm_mon = date.month - 1;
+    out.tm_year = static_cast<int>(date.year - 1900);
     out.tm_wday = static_cast<int>(((days + 4) % 7 + 7) % 7);  // 1970-01-01: Thursday
-    out.tm_yday = static_cast<int>(mp < 10 ? doy + 59 + (leap ? 1 : 0) : doy - 306);
+    out.tm_yday = static_cast<int>(days - native_calendar::native_civil_days(date.year, 1, 1));
     out.tm_isdst = 0;
 }
 
@@ -70,12 +65,7 @@ bool same_civil_fields(const struct tm& a, const struct tm& b) {
 
 // Days from 1970-01-01 to (year, month 1-12, day): civil_fields' inverse.
 int64_t days_from_civil(int64_t year, int64_t month, int64_t day) {
-    year -= month <= 2;
-    const int64_t era = (year >= 0 ? year : year - 399) / 400;
-    const int64_t yoe = year - era * 400;
-    const int64_t doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
-    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + doe - 719468;
+    return native_calendar::native_civil_days(year, static_cast<int>(month), static_cast<int>(day));
 }
 
 // The zone name gmtime_r reports ("UTC" on macOS, "GMT" on glibc): libc's own

@@ -331,6 +331,42 @@ bool in_session(const SessionCalendar& calendar, int64_t ms);
 // ---------------------------------------------------------------------------
 // Civil conversion
 // ---------------------------------------------------------------------------
+// A proleptic-Gregorian civil date: month 1-12, day 1-31.
+struct NativeCivilDate {
+    int64_t year = 1970;
+    int month = 1;
+    int day = 1;
+};
+
+// The civil date `days` days after 1970-01-01 (before it when negative):
+// Howard Hinnant's civil_from_days, integer arithmetic exact for every day
+// count whose year fits int64_t. The one copy of this arithmetic: the
+// calendar, the time-of-day helpers, the report's month keys and a host's
+// own day keys all read it.
+constexpr NativeCivilDate native_civil_date(int64_t days) noexcept {
+    const int64_t z = days + 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const int64_t doe = z - era * 146097;                                   // [0, 146096]
+    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;  // [0, 399]
+    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);            // from March 1
+    const int64_t mp = (5 * doy + 2) / 153;                                 // 0 = March
+    const int64_t month = mp < 10 ? mp + 3 : mp - 9;
+    return NativeCivilDate{yoe + era * 400 + (month <= 2 ? 1 : 0),
+                           static_cast<int>(month),
+                           static_cast<int>(doy - (153 * mp + 2) / 5 + 1)};
+}
+
+// Its inverse: the days from 1970-01-01 to (year, month 1-12, day)
+// (Hinnant's days_from_civil). Out-of-range months and days are not refused;
+// the arithmetic continues through them.
+constexpr int64_t native_civil_days(int64_t year, int month, int day) noexcept {
+    year -= month <= 2;
+    const int64_t era = (year >= 0 ? year : year - 399) / 400;
+    const int64_t yoe = year - era * 400;                                        // [0, 399]
+    const int64_t doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;  // [0, 365]
+    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;                  // [0, 146096]
+    return era * 146097 + doe - 719468;
+}
 
 enum class CivilKind { Unique, Gap, Fold };
 

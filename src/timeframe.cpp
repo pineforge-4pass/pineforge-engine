@@ -1,5 +1,6 @@
 #include <pineforge/timeframe.hpp>
 #include <pineforge/session_time.hpp>
+#include <pineforge/native_calendar.hpp>
 #include "runtime_ambient.hpp"
 #include <cctype>
 #include <ctime>
@@ -437,14 +438,9 @@ static const std::string& empty_session() {
 }
 
 /// Epoch day (days since 1970-01-01) of a proleptic-Gregorian civil date
-/// (Howard Hinnant's days_from_civil; m is 1-based).
+/// (native_calendar::native_civil_days; m is 1-based).
 static long days_from_civil(int y, int m, int d) {
-    y -= (m <= 2);
-    long era = (y >= 0 ? y : y - 399) / 400;
-    unsigned yoe = (unsigned)(y - era * 400);
-    unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097L + (long)doe - 719468L;
+    return static_cast<long>(native_calendar::native_civil_days(y, m, d));
 }
 
 /// Monday that starts the ISO week of a wall-clock decomposition
