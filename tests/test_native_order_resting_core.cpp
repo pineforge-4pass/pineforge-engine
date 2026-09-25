@@ -485,7 +485,14 @@ EventId fill_group_source(WorkingRequestCore& core, RequestHandle handle, double
     return EventId{kRun, std::get<ExecutionAppliedEvent>(core.history().back()).ordinal};
 }
 
-void checked_reservation_failure() {
+// A group deduction's arithmetic. DBL_MAX pending plus DBL_MAX overflows
+// binary64 and is still refused with UnrepresentableReservation: no sub-ulp
+// deduction, which R5 lane K-ULP5's ruling does not absorb. The two sub-ulp
+// deductions -- 1 into a 2^60 pending total, 1 off 2^60 remaining units --
+// were refused the same way before K-ULP5; now each is absorbed, on the staged
+// and the direct path alike: one event that deducts 0, the recipient as it
+// was, and a receipt, so a second preparation is AlreadyApplied.
+void checked_reservation_arithmetic() {
     const double maxv = std::numeric_limits<double>::max();
     const double p60 = 0x1p60;
     {
@@ -522,7 +529,7 @@ void checked_reservation_failure() {
                       .total
               == maxv);
     }
-    {
+    for (const bool direct : {false, true}) {
         WorkingRequestCore core(kRun);
         uint64_t inc = 1;
         uint64_t ord = 1;
@@ -535,20 +542,44 @@ void checked_reservation_failure() {
         const auto waiting = core.submit(child, 1, inc, ord);
         const EventId cause = fill_group_source(core, *parent.handle, p60, inc, ord);
         commit_mutation(core, core.prepare_group_effect(cause, *waiting.handle, ord), ord);
+        const auto chain = std::get<pineforge::native_order::PendingDeferred>(
+                core.find_live(*waiting.handle)->pending);
         Request filler2{Transact{1.0}, "f2", ""};
         filler2.group = Member{4, 1, GroupEffect::Reduce};
         const auto parent2 = core.submit(filler2, 1, inc, ord);
         const EventId cause2 = fill_group_source(core, *parent2.handle, 1.0, inc, ord);
-        auto second = core.prepare_group_effect(cause2, *waiting.handle, ord);
-        CHECK(std::holds_alternative<PreparationError>(second));
-        CHECK(std::get<PreparationError>(second).code
-              == pineforge::native_order::CoreFailure::UnrepresentableReservation);
-        CHECK(std::get<pineforge::native_order::PendingDeferred>(
-                      core.find_live(*waiting.handle)->pending)
-                      .total
-              == p60);
+        const std::size_t hist = core.history().size();
+        if (direct) {
+            auto second = core.apply_group_effect(cause2, *waiting.handle, ord);
+            CHECK(std::holds_alternative<Installed>(second));
+            if (std::holds_alternative<Installed>(second)) {
+                CHECK(std::get<Installed>(second).events.count == 1);
+                ord += std::get<Installed>(second).events.count;
+            }
+        } else {
+            CHECK(commit_mutation(core, core.prepare_group_effect(cause2, *waiting.handle, ord), ord)
+                  == 1);
+        }
+        // fl(2^60 + 1) is 2^60: the fill joins no chain and defers nothing.
+        CHECK(core.history().size() == hist + 1);
+        const auto& absorbed = std::get<DeferredGroupAdjustmentEvent>(core.history().back());
+        CHECK(absorbed.cause == cause2 && absorbed.recipient == *waiting.handle);
+        CHECK(absorbed.deferred_delta == 0.0);
+        const auto* before =
+                std::get_if<pineforge::native_order::PendingDeferred>(&absorbed.pending_before);
+        CHECK(before && before->total == p60 && before->count == 1
+              && before->tail_receipt == chain.tail_receipt);
+        CHECK(absorbed.pending_after.total == p60 && absorbed.pending_after.count == 1
+              && absorbed.pending_after.tail_receipt == chain.tail_receipt);
+        CHECK(!absorbed.previous_pending_receipt);
+        const auto after = std::get<pineforge::native_order::PendingDeferred>(
+                core.find_live(*waiting.handle)->pending);
+        CHECK(after.total == p60 && after.count == 1 && after.tail_receipt == chain.tail_receipt);
+        auto again = core.prepare_group_effect(cause2, *waiting.handle, ord);
+        CHECK(std::holds_alternative<NoChange>(again)
+              && std::get<NoChange>(again).reason == NoChangeReason::AlreadyApplied);
     }
-    {
+    for (const bool direct : {false, true}) {
         WorkingRequestCore core(kRun);
         uint64_t inc = 1;
         uint64_t ord = 1;
@@ -563,12 +594,28 @@ void checked_reservation_failure() {
         const auto parent = core.submit(filler, 1, inc, ord);
         const EventId cause = fill_group_source(core, *parent.handle, 1.0, inc, ord);
         const std::size_t hist = core.history().size();
-        auto reduce = core.prepare_group_effect(cause, *dest.handle, ord);
-        CHECK(std::holds_alternative<PreparationError>(reduce));
-        CHECK(std::get<PreparationError>(reduce).code
-              == pineforge::native_order::CoreFailure::UnrepresentableReservation);
-        CHECK(core.history().size() == hist);
+        if (direct) {
+            auto reduce = core.apply_group_effect(cause, *dest.handle, ord);
+            CHECK(std::holds_alternative<Installed>(reduce));
+            if (std::holds_alternative<Installed>(reduce)) {
+                CHECK(std::get<Installed>(reduce).events.count == 1);
+                ord += std::get<Installed>(reduce).events.count;
+            }
+        } else {
+            CHECK(commit_mutation(core, core.prepare_group_effect(cause, *dest.handle, ord), ord)
+                  == 1);
+        }
+        // fl(2^60 - 1) is 2^60: requested 1, deducted 0, the units stand.
+        CHECK(core.history().size() == hist + 1);
+        const auto& reduced = std::get<ReservationReducedEvent>(core.history().back());
+        CHECK(reduced.cause == cause && reduced.recipient == *dest.handle);
+        CHECK(reduced.requested_delta == 1.0 && reduced.actual_deduction == 0.0);
+        CHECK(reduced.before.q == p60);
+        CHECK(std::get<pineforge::native_order::RemainingProjectionUnits>(reduced.after).q == p60);
         CHECK(std::get<RemainingUnits>(core.find_live(*dest.handle)->remaining).q == p60);
+        auto again = core.prepare_group_effect(cause, *dest.handle, ord);
+        CHECK(std::holds_alternative<NoChange>(again)
+              && std::get<NoChange>(again).reason == NoChangeReason::AlreadyApplied);
     }
 }
 
@@ -1037,7 +1084,7 @@ int main() {
     partial_retain_and_target_exhaust();
     group_reduce_defer_and_quantity_bound();
     owner_applied_wait_through_close_only();
-    checked_reservation_failure();
+    checked_reservation_arithmetic();
     stale_prepare_and_parent_terminal();
     stop_activation_and_receipt_dedup();
     wrong_core_token_and_move_invalidation();

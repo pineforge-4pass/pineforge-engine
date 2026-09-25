@@ -361,7 +361,13 @@ void check_group_failure(Host& h, const no::RequestHandle& filler,
     CHECK(account_seen);
 }
 
-void group_subtraction_failure(double sign) {
+// A one-unit fill cannot move a 2^60-unit sibling's remaining units
+// (fl(2^60 - 1) is 2^60). Since R5 lane K-ULP5 that deduction is absorbed: a
+// ReservationReducedEvent that requests the fill and deducts 0, before and after
+// both 2^60, and the run goes on. The request core answered
+// UnrepresentableReservation after the fill was booked, and the run failed with
+// SettlementFailure / discriminator 7, before.
+void group_subtraction_absorbed(double sign) {
     Host h; start(h,sign > 0 ? "G5-subtract-long" : "G5-subtract-short",1,2);
     auto waiting = tx(sign * 0x1p60,"large-recipient");
     waiting.trigger = no::Limit{sign > 0 ? 1.0 : 200.0};
@@ -369,16 +375,39 @@ void group_subtraction_failure(double sign) {
     const auto recipient = put(h,waiting);
     auto emit = tx(sign,"committed-filler"); emit.group = no::Member{7,1,no::GroupEffect::Reduce};
     const auto filler = put(h,emit);
-    CHECK(!h.input(0,100)); check_group_failure(h,filler,recipient);
+    CHECK(h.input(0,100)); CHECK(h.native_state().kind == NativeLifecycleKind::Running);
     REQUIRE(fills(h,filler).size() == 1);
+    CHECK(fills(h,filler)[0].terminal);
     CHECK(fills(h,filler)[0].filled_working == 1 && fills(h,filler)[0].current_ticket == 2);
-    CHECK(events<no::ReservationReducedEvent>(h).empty());
+    const auto reduced = events<no::ReservationReducedEvent>(h); REQUIRE(reduced.size() == 1);
+    CHECK(reduced[0].recipient == recipient);
+    CHECK(reduced[0].cause.ordinal == fills(h,filler)[0].ordinal);
+    CHECK(reduced[0].requested_delta == 1 && reduced[0].actual_deduction == 0);
+    CHECK(reduced[0].before.q == 0x1p60);
+    CHECK(std::get<no::RemainingProjectionUnits>(reduced[0].after).q == 0x1p60);
     CHECK(events<no::CancelledEvent>(h).empty());
+    CHECK(fills(h,recipient).empty());
+    bool kept = false;   // the recipient keeps its units
+    for (const auto& row : h.native_working_requests()) {
+        if (!row.definition || row.definition->handle != recipient) continue;
+        const auto* units = std::get_if<no::RemainingProjectionUnits>(&row.remaining);
+        kept = units && units->q == 0x1p60;
+    }
+    CHECK(kept);
     near(h.physical_position().signed_units,sign); near(h.native_marked_equity(100),9998);
-    failed_is_permanent(h,1,100);
+    // The run goes on: the next request fills and the stream completes.
+    const auto next = put(h,tx(sign,"next"));
+    CHECK(h.input(1,100)); CHECK(fills(h,next).size() == 1);
+    finish(h);
 }
 
-void pending_addition_failure(bool overflow) {
+// 2^60 pending and a second fill of 1: fl(2^60 + 1) is 2^60. Since R5 lane
+// K-ULP5 that fill is absorbed -- a DeferredGroupAdjustmentEvent that defers 0
+// and leaves the pending total, its count and its tail as they were -- and the
+// run goes on; it failed with discriminator 7 before. DBL_MAX pending plus
+// DBL_MAX overflows binary64 instead: no sub-ulp deduction, which K-ULP5's
+// ruling does not absorb, so that sum still fails the run.
+void pending_addition(bool overflow) {
     Host h;
     const double first = overflow ? std::numeric_limits<double>::max() : 0x1p60;
     const double second = overflow ? std::numeric_limits<double>::max() : 1.0;
@@ -401,16 +430,41 @@ void pending_addition_failure(bool overflow) {
     near(h.physical_position().signed_units,0);
     emit = tx(second,"second-delta"); emit.group = no::Member{7,1,no::GroupEffect::Reduce};
     const auto second_filler = put(h,emit);
-    CHECK(!h.input(2,price)); check_group_failure(h,second_filler,recipient);
-    const auto after = events<no::DeferredGroupAdjustmentEvent>(h); REQUIRE(after.size() == 1);
+    if (overflow) {
+        CHECK(!h.input(2,price)); check_group_failure(h,second_filler,recipient);
+        const auto after = events<no::DeferredGroupAdjustmentEvent>(h); REQUIRE(after.size() == 1);
+        CHECK(after[0].ordinal == prior[0].ordinal && after[0].cause == prior[0].cause);
+        CHECK(events<no::QuantityBoundEvent>(h).empty());
+        CHECK(events<no::ReservationReducedEvent>(h).empty());
+        CHECK(events<no::CancelledEvent>(h).empty());
+        CHECK(fills(h,parent).empty());
+        CHECK(h.physical_position().signed_units == second);
+        CHECK(fills(h,second_filler)[0].filled_working == second);
+        failed_is_permanent(h,3,price);
+        return;
+    }
+    CHECK(h.input(2,price)); CHECK(h.native_state().kind == NativeLifecycleKind::Running);
+    const auto after = events<no::DeferredGroupAdjustmentEvent>(h); REQUIRE(after.size() == 2);
     CHECK(after[0].ordinal == prior[0].ordinal && after[0].cause == prior[0].cause);
+    REQUIRE(fills(h,second_filler).size() == 1);
+    CHECK(fills(h,second_filler)[0].terminal);
+    CHECK(after[1].recipient == recipient);
+    CHECK(after[1].cause.ordinal == fills(h,second_filler)[0].ordinal);
+    CHECK(after[1].deferred_delta == 0);
+    const auto* before = std::get_if<no::PendingDeferred>(&after[1].pending_before);
+    REQUIRE(before);
+    CHECK(before->total == first && before->count == 1);
+    CHECK(before->tail_receipt.ordinal == prior[0].ordinal);
+    CHECK(after[1].pending_after.total == first && after[1].pending_after.count == 1);
+    CHECK(after[1].pending_after.tail_receipt == before->tail_receipt);
+    CHECK(!after[1].previous_pending_receipt);
     CHECK(events<no::QuantityBoundEvent>(h).empty());
     CHECK(events<no::ReservationReducedEvent>(h).empty());
     CHECK(events<no::CancelledEvent>(h).empty());
     CHECK(fills(h,parent).empty());
     CHECK(h.physical_position().signed_units == second);
     CHECK(fills(h,second_filler)[0].filled_working == second);
-    failed_is_permanent(h,3,price);
+    finish(h);
 }
 
 void run_case(const char* name, const std::function<void()>& body) {
@@ -434,10 +488,10 @@ int main() {
         run_case(sign>0?"C9 long transaction first":"C9 short transaction first",[&]{flat_incarnation_order(sign,true);});
         run_case(sign>0?"C9 long close first":"C9 short close first",[&]{flat_incarnation_order(sign,false);});
         run_case(sign>0?"C8 long precommit arithmetic refusal":"C8 short precommit arithmetic refusal",[&]{capacity_progress_failure(sign);});
-        run_case(sign>0?"G5 long postcommit subtraction failure":"G5 short postcommit subtraction failure",[&]{group_subtraction_failure(sign);});
+        run_case(sign>0?"G5 long postcommit subtraction absorbed":"G5 short postcommit subtraction absorbed",[&]{group_subtraction_absorbed(sign);});
     }
-    run_case("G5 pending 2^60 plus 1",[]{pending_addition_failure(false);});
-    run_case("G5 pending DBL_MAX plus DBL_MAX",[]{pending_addition_failure(true);});
+    run_case("G5 pending 2^60 plus 1 absorbed",[]{pending_addition(false);});
+    run_case("G5 pending DBL_MAX plus DBL_MAX overflow",[]{pending_addition(true);});
     std::printf("%s native resting acceptance: %d cases, %d checks, %d failures\n",
                 failures?"FAIL":"PASS",cases,checks,failures);
     return failures?1:0;

@@ -166,6 +166,36 @@ bool checked_sub_cap(double before, double deduct, double* after, bool* exhauste
     return true;
 }
 
+// A group deduction binary64 cannot take off what it is taken from: `deduct`
+// is below `before`, and fl(before - deduct) is `before` again -- at most half
+// an ulp of it (R5 lane K-ULP5). The deduction is absorbed: the units stay as
+// they are, which is the exact binary64 result of the subtraction, and the
+// event that records it deducts nothing.
+bool absorbed_deduction(double before, double deduct) noexcept {
+    return std::isfinite(before) && std::isfinite(deduct) && deduct > 0.0 && deduct < before
+        && before - deduct == before;
+}
+
+// A deferred recipient's pending total is the binary64 sum of the fills
+// deducted into it, in commit order. A delta the total absorbs is not added
+// (absorbed_pending_delta); a total below half an ulp of a later delta rounds
+// into it, as the addition does; only a sum that overflows is unrepresentable
+// (R5 lane K-ULP5; until then both absorbing sums stopped the run too).
+bool pending_sum(double total, double delta, double* out) noexcept {
+    if (!std::isfinite(total) || !std::isfinite(delta) || total < 0.0 || !(delta > 0.0)) {
+        return false;
+    }
+    const double sum = total + delta;
+    if (!std::isfinite(sum) || !(sum > total)) return false;
+    *out = sum;
+    return true;
+}
+
+bool absorbed_pending_delta(double total, double delta) noexcept {
+    return std::isfinite(total) && std::isfinite(delta) && total > 0.0 && delta > 0.0
+        && total + delta == total;
+}
+
 TriggerState trigger_state_from(const Trigger& trigger) {
     if (std::holds_alternative<Market>(trigger)) return MarketReady{};
     if (std::holds_alternative<Limit>(trigger)) return LimitReady{};
@@ -1345,7 +1375,8 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
     std::reverse(ids->begin(), ids->end());
     // Reproduce the exact accumulation order used when each receipt was
     // committed. Reassociating these additions tail-first changes binary64
-    // totals for valid chains such as 0.1, 0.2, 0.3.
+    // totals for valid chains such as 0.1, 0.2, 0.3. An absorbed delta joined
+    // no chain, so every link here moved the total (pending_sum).
     double sum = 0.0;
     for (std::size_t i = 0; i < ids->size(); ++i) {
         const CommandEvent* event = event_at((*ids)[i]);
@@ -1358,7 +1389,7 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
             if (!before || before->total != sum || before->count != i
                 || before->tail_receipt != (*ids)[i - 1]) return false;
         }
-        if (!checked_add_positive(sum, payload->deferred_delta, &sum)) return false;
+        if (!pending_sum(sum, payload->deferred_delta, &sum)) return false;
         if (payload->pending_after.total != sum || payload->pending_after.count != i + 1
             || payload->pending_after.tail_receipt != (*ids)[i]) return false;
     }
@@ -2876,11 +2907,14 @@ bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
         if (!std::isfinite(pending_total) || pending_total < 0.0) return false;
     }
 
-    const double computed_deduction = std::min(pending_total, resolved_units);
+    double computed_deduction = std::min(pending_total, resolved_units);
     double computed_after = resolved_units;
     bool computed_exhausted = computed_deduction == resolved_units;
     if (resolved_units == 0.0 || computed_exhausted) {
         computed_after = 0.0;
+    } else if (absorbed_deduction(resolved_units, computed_deduction)) {
+        // Absorbed (K-ULP5): the resolved units stand and nothing is deducted.
+        computed_deduction = 0.0;
     } else if (computed_deduction > 0.0) {
         if (!checked_sub_cap(resolved_units, computed_deduction, &computed_after,
                              &computed_exhausted)) {
@@ -4923,12 +4957,19 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         PendingDeferred after;
         PendingAdjustments before = live.pending;
+        // A fill the pending total absorbs (K-ULP5) joins no chain: the total,
+        // its count and its tail stay, and the event defers nothing.
+        bool absorbed = false;
         if (const auto* pending = std::get_if<PendingDeferred>(&live.pending)) {
-            if (!checked_add_positive(pending->total, payload->filled_working, &after.total)) {
+            if (absorbed_pending_delta(pending->total, payload->filled_working)) {
+                absorbed = true;
+                after = *pending;
+            } else if (!pending_sum(pending->total, payload->filled_working, &after.total)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
+            } else {
+                after.count = pending->count + 1;
+                after.tail_receipt = EventId{identity_, ordinal};
             }
-            after.count = pending->count + 1;
-            after.tail_receipt = EventId{identity_, ordinal};
         } else {
             after.total = payload->filled_working;
             after.count = 1;
@@ -4943,18 +4984,20 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         deferred.cause = applied;
         deferred.recipient = recipient;
         deferred.effect = GroupEffect::Reduce;
-        deferred.deferred_delta = payload->filled_working;
+        deferred.deferred_delta = absorbed ? 0.0 : payload->filled_working;
         deferred.pending_before = before;
         deferred.pending_after = after;
         if (const auto* pending = std::get_if<PendingDeferred>(&before)) {
-            deferred.previous_pending_receipt = pending->tail_receipt;
+            if (!absorbed) deferred.previous_pending_receipt = pending->tail_receipt;
         }
-        LiveRequest updated = live;
-        updated.pending = after;
         plan.events.emplace_back(std::move(deferred));
-        plan.live_change = kLiveUpdate;
-        plan.live_index = live_index;
-        plan.live_row = std::move(updated);
+        if (!absorbed) {
+            LiveRequest updated = live;
+            updated.pending = after;
+            plan.live_change = kLiveUpdate;
+            plan.live_index = live_index;
+            plan.live_row = std::move(updated);
+        }
         plan.receipt_outcome = ordinal;
         return finish_mutation(std::move(plan));
     }
@@ -4971,9 +5014,13 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
 
     const double before_q = working_units(live.remaining);
     const double deduct = std::min(payload->filled_working, before_q);
-    double after_q = 0.0;
+    double after_q = before_q;
     bool exhausted = false;
-    if (!checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
+    // A deduction binary64 cannot take off the remaining units is absorbed
+    // (K-ULP5): the units stand, the event records a deduction of 0, and the
+    // row is not touched.
+    const bool absorbed = absorbed_deduction(before_q, deduct);
+    if (!absorbed && !checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
         return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
     }
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
@@ -4984,7 +5031,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     reduced.recipient = recipient;
     reduced.effect = GroupEffect::Reduce;
     reduced.requested_delta = payload->filled_working;
-    reduced.actual_deduction = deduct;
+    reduced.actual_deduction = absorbed ? 0.0 : deduct;
     reduced.before = RemainingUnits{before_q};
     reduced.after = RemainingProjectionUnits{after_q};
     plan.events.emplace_back(std::move(reduced));
@@ -5000,7 +5047,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         plan.events.emplace_back(make_cancelled(cancel_ord, snapshot, CancelReason::Group, applied));
         plan.live_change = kLiveErase;
         plan.live_index = live_index;
-    } else {
+    } else if (!absorbed) {
         LiveRequest updated = live;
         updated.remaining = RemainingUnits{after_q};
         plan.live_change = kLiveUpdate;
@@ -5080,12 +5127,18 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         PendingDeferred after;
         PendingAdjustments before = live.pending;
+        // prepare_group_effect, step for step: an absorbed fill joins no chain.
+        bool absorbed = false;
         if (const auto* pending = std::get_if<PendingDeferred>(&live.pending)) {
-            if (!checked_add_positive(pending->total, filled_working, &after.total)) {
+            if (absorbed_pending_delta(pending->total, filled_working)) {
+                absorbed = true;
+                after = *pending;
+            } else if (!pending_sum(pending->total, filled_working, &after.total)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
+            } else {
+                after.count = pending->count + 1;
+                after.tail_receipt = EventId{identity_, ordinal};
             }
-            after.count = pending->count + 1;
-            after.tail_receipt = EventId{identity_, ordinal};
         } else {
             after.total = filled_working;
             after.count = 1;
@@ -5100,16 +5153,16 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
         deferred.cause = applied;
         deferred.recipient = recipient;
         deferred.effect = GroupEffect::Reduce;
-        deferred.deferred_delta = filled_working;
+        deferred.deferred_delta = absorbed ? 0.0 : filled_working;
         deferred.pending_before = before;
         deferred.pending_after = after;
         if (const auto* pending = std::get_if<PendingDeferred>(&before)) {
-            deferred.previous_pending_receipt = pending->tail_receipt;
+            if (!absorbed) deferred.previous_pending_receipt = pending->tail_receipt;
         }
         seal_direct(1, false, true, false);
         const std::size_t first = history_end();
         append_direct(std::move(deferred), false);
-        live.pending = after;
+        if (!absorbed) live.pending = after;
         receipt(ordinal);
         return Installed{finish_direct(first)};
     }
@@ -5123,9 +5176,10 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
 
     const double before_q = working_units(live.remaining);
     const double deduct = std::min(filled_working, before_q);
-    double after_q = 0.0;
+    double after_q = before_q;
     bool exhausted = false;
-    if (!checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
+    const bool absorbed = absorbed_deduction(before_q, deduct);
+    if (!absorbed && !checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
         return PreparationError{CoreFailure::UnrepresentableReservation, applied, recipient};
     }
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
@@ -5136,7 +5190,7 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
     reduced.recipient = recipient;
     reduced.effect = GroupEffect::Reduce;
     reduced.requested_delta = filled_working;
-    reduced.actual_deduction = deduct;
+    reduced.actual_deduction = absorbed ? 0.0 : deduct;
     reduced.before = RemainingUnits{before_q};
     reduced.after = RemainingProjectionUnits{after_q};
     if (exhausted) {
@@ -5160,7 +5214,7 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
     seal_direct(1, false, true, false);
     const std::size_t first = history_end();
     append_direct(std::move(reduced), false);
-    live.remaining = RemainingUnits{after_q};
+    if (!absorbed) live.remaining = RemainingUnits{after_q};
     receipt(ordinal);
     return Installed{finish_direct(first)};
 }
@@ -5286,11 +5340,14 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         if (!collect_pending_chain(live.pending, child, &ids, &pending_total)) {
             return PreparationError{CoreFailure::ConflictingReceipt, applied, child};
         }
-        const double deduct = std::min(pending_total, source);
+        double deduct = std::min(pending_total, source);
         double after = source;
         bool exhausted = deduct == source;
         if (deduct > 0.0 && !exhausted) {
-            if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
+            if (absorbed_deduction(source, deduct)) {
+                // Absorbed (K-ULP5): the owner's units stand, nothing deducted.
+                deduct = 0.0;
+            } else if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, child};
             }
         } else if (exhausted) {
@@ -5476,11 +5533,13 @@ Preparation<Installed> WorkingRequestCore::apply_owner_applied(
         if (!collect_pending_chain(live.pending, child, &ids, &pending_total)) {
             return PreparationError{CoreFailure::ConflictingReceipt, applied, child};
         }
-        const double deduct = std::min(pending_total, source);
+        double deduct = std::min(pending_total, source);
         double after = source;
         bool exhausted = deduct == source;
         if (deduct > 0.0 && !exhausted) {
-            if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
+            if (absorbed_deduction(source, deduct)) {
+                deduct = 0.0;   // absorbed, as prepare_owner_applied
+            } else if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, child};
             }
         } else if (exhausted) {

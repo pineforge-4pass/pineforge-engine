@@ -470,14 +470,29 @@ void authenticated_deduction_and_terminals() {
     CHECK(!exhausted_group.fixture.core.find_live(exhausted_group.b));
 }
 
-void numeric_failure_and_chain_authentication() {
-    PendingGroup unrepresentable;
-    const auto* live = unrepresentable.fixture.core.find_live(unrepresentable.b);
+// 0.1 pending against 1e16 resolved units: fl(1e16 - 0.1) is 1e16. Since R5
+// lane K-ULP5 the deduction is absorbed -- effective_host_units answers a
+// deduction of 0 and the units standing, and the receipt spends the chain with
+// effective_deduction 0, on the staged and the direct path alike. Before
+// K-ULP5 effective_host_units refused it and prepare_terms answered
+// UnrepresentableReservation, leaving the request as it was. Invalid inputs
+// are still refused with the outputs untouched.
+void numeric_absorption_and_chain_authentication() {
+    PendingGroup absorbed;
+    const auto* live = absorbed.fixture.core.find_live(absorbed.b);
     REQUIRE(live);
     double deduction = 17.0;
     double after = 19.0;
     bool exhausted = true;
-    CHECK(!no::WorkingRequestCore::effective_host_units(live->pending, 1e16,
+    CHECK(no::WorkingRequestCore::effective_host_units(live->pending, 1e16,
+                                                       &deduction, &after, &exhausted));
+    CHECK(deduction == 0.0 && after == 1e16 && !exhausted);
+    deduction = 17.0;
+    after = 19.0;
+    exhausted = true;
+    CHECK(!no::WorkingRequestCore::effective_host_units(
+        live->pending, std::numeric_limits<double>::quiet_NaN(), &deduction, &after, &exhausted));
+    CHECK(!no::WorkingRequestCore::effective_host_units(live->pending, -1.0,
                                                         &deduction, &after, &exhausted));
     CHECK(deduction == 17.0 && after == 19.0 && exhausted);
     CHECK(no::WorkingRequestCore::effective_host_units(live->pending, 0.0,
@@ -487,28 +502,39 @@ void numeric_failure_and_chain_authentication() {
                                                        &deduction, &after, &exhausted));
     CHECK(deduction == 0.0 && after == 0.5 && !exhausted);
 
-    const auto history_size = unrepresentable.fixture.core.history().size();
-    const auto ordinal = unrepresentable.fixture.ordinal;
-    const auto pending = live->pending;
-    const auto remaining = live->remaining;
-    const auto allowance = live->allowance;
-    const auto failed = unrepresentable.fixture.core.prepare_terms(
-        unrepresentable.b, unrepresentable.b_context, terms(100.0, 1e16),
-        unrepresentable.fixture.ordinal);
-    check_error(failed, no::CoreFailure::UnrepresentableReservation);
-    const auto& error = std::get<no::PreparationError>(failed);
-    CHECK(error.cause.run == unrepresentable.fixture.run && error.cause.ordinal == 0);
-    CHECK(unrepresentable.fixture.core.history().size() == history_size);
-    CHECK(unrepresentable.fixture.ordinal == ordinal);
-    const auto* after_failure = unrepresentable.fixture.core.find_live(unrepresentable.b);
-    REQUIRE(after_failure);
-    CHECK(after_failure->pending.index() == pending.index());
-    CHECK(after_failure->remaining.index() == remaining.index());
-    CHECK(after_failure->allowance.index() == allowance.index());
+    for (const bool direct : {false, true}) {
+        PendingGroup group;
+        const auto history_size = group.fixture.core.history().size();
+        if (direct) {
+            auto installed = group.fixture.core.apply_terms(
+                group.b, group.b_context, terms(100.0, 1e16), group.fixture.ordinal);
+            REQUIRE(std::holds_alternative<no::Installed>(installed));
+            CHECK(std::get<no::Installed>(installed).events.count == 1);
+            group.fixture.ordinal += std::get<no::Installed>(installed).events.count;
+        } else {
+            const auto installed = group.fixture.install_mutation(group.fixture.core.prepare_terms(
+                group.b, group.b_context, terms(100.0, 1e16), group.fixture.ordinal));
+            CHECK(installed.events.count == 1);
+        }
+        CHECK(group.fixture.core.history().size() == history_size + 1);
+        const auto& receipt =
+            std::get<no::TermsResolvedEvent>(group.fixture.core.history().back());
+        CHECK(receipt.pending_total == 0.1);
+        CHECK(receipt.effective_deduction == 0.0);
+        CHECK(receipt.prior_adjustment_ids.size() == 1);
+        REQUIRE(std::holds_alternative<no::RemainingProjectionUnits>(receipt.remaining_after));
+        CHECK(std::get<no::RemainingProjectionUnits>(receipt.remaining_after).q == 1e16);
+        const auto* bound = group.fixture.core.find_live(group.b);
+        REQUIRE(bound);
+        REQUIRE(std::holds_alternative<no::RemainingUnits>(bound->remaining));
+        CHECK(std::get<no::RemainingUnits>(bound->remaining).q == 1e16);
+        CHECK(std::holds_alternative<no::PendingNone>(bound->pending));
+    }
 
-    const auto invalid = unrepresentable.fixture.core.prepare_terms(
-        unrepresentable.b, unrepresentable.b_context,
-        terms(100.0, std::numeric_limits<double>::quiet_NaN()), unrepresentable.fixture.ordinal);
+    PendingGroup unresolved;
+    const auto invalid = unresolved.fixture.core.prepare_terms(
+        unresolved.b, unresolved.b_context,
+        terms(100.0, std::numeric_limits<double>::quiet_NaN()), unresolved.fixture.ordinal);
     check_error(invalid, no::CoreFailure::InvalidProposal);
 
     PendingGroup corrupt;
@@ -663,7 +689,7 @@ int main() {
         deferred_allowance_and_binding();
         zero_paths_and_rejections();
         authenticated_deduction_and_terminals();
-        numeric_failure_and_chain_authentication();
+        numeric_absorption_and_chain_authentication();
         plan_keyed_accounting_and_shape_validation();
     } catch (const std::exception& error) {
         ++failures;

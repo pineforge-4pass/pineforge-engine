@@ -1184,6 +1184,14 @@ list(APPEND TEST_SOURCES test_native_unrepresentable_refusal)
 # absent, pinned from 91d65ad6), and the C extension's tail. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_quantity_tolerance)
+# R5 lane K-ULP5: an OCA-Reduce deduction binary64 cannot take off its
+# recipient -- off its remaining units, into its pending total, at its terms or
+# at its owner's fill -- is absorbed and the run goes on (it stopped with code 6
+# / discriminator 7 on f1af50dc): K-ULP4's p5b probe, each of the four sites,
+# a pending total that rounds into a later fill, the overflow that still stops,
+# and a seeded battery of OCA-Reduce groups at ulp scale, staged and direct.
+# Source-free, so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_group_absorption)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs
@@ -2446,6 +2454,7 @@ set(PINEFORGE_PR_SLOW_TESTS
     test_native_definition_index
     test_native_direct_mutation
     test_native_event_retention
+    test_native_group_absorption
     test_native_handle_stable_replace
     test_native_host_reads
     test_native_lookup_memos

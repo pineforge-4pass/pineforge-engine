@@ -488,7 +488,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2728-2778`), under the same legality rule; see *Driving the
+(`native_c_api.h:2730-2780`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -2884,7 +2884,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2678`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2680`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
@@ -3098,9 +3098,9 @@ a 2^-49-unit remainder that a second fill opened as a dust lot.
 ### What a host gets from a quantity
 
 Every quantity request ends in exactly one terminal outcome, and no ordinary
-quantity stops the run (one OCA-group case is left, last below). The FIFO
-rules are the settlement's (`docs/native-settlement.md`, "Physical lots and
-quantities"); what a host sees:
+quantity stops the run, nor does a sibling's share of it (last below). The
+FIFO rules are the settlement's (`docs/native-settlement.md`, "Physical lots
+and quantities"); what a host sees:
 
 - A close that spans lots and ends inside one is one terminal fill whose
   `closed_units` and `filled_working` are its request, even where the rows,
@@ -3137,12 +3137,29 @@ quantities"); what a host sees:
   meet the refusal above. A C host sets it in the `quantity_tolerance` tail of
   `pf_native_run_spec_ext_v1`. The Pine adapter does not declare it and keeps
   its own `1e-10` rule (`docs/native-settlement.md`, "Quantity tolerance").
-- Still a run failure, as before K-ULP4: in an OCA group with
-  `GroupEffect::Reduce`, a member's fill smaller than half an ulp of a
-  sibling's remaining units cannot be deducted from them, and after the fill
-  is booked the run fails with code 6, discriminator 7
-  (`CoreFailure::UnrepresentableReservation`) -- a dust-sized fill beside a far
-  larger resting sibling.
+- A deduction an OCA-Reduce sibling cannot take is absorbed, and the run goes
+  on (R5 lane K-ULP5). In a group with `GroupEffect::Reduce` a member's fill is
+  deducted from every live sibling: from its remaining units (a
+  `ReservationReducedEvent`; C `PF_NATIVE_EVENT_RESERVATION_REDUCED`), or,
+  while its units are not known, into its pending total (a
+  `DeferredGroupAdjustmentEvent`; C `PF_NATIVE_EVENT_DEFERRED_GROUP`), which
+  its terms (`TermsResolvedEvent`) or its owner's fill (`QuantityBoundEvent`)
+  later takes off the units they bind. A deduction too small to move what it
+  is taken from -- `fl(units - d)` is the units again, at most half an ulp of
+  them -- leaves the sibling's units, or its pending total, as they were, the
+  exact binary64 result; the member's fill stands, and the event says it took
+  nothing: `actual_deduction` 0 with `after` equal to `before`, or
+  `deferred_delta` 0 with `pending_after` equal to `pending_before` (it joins
+  no chain), or `effective_deduction` 0 beside a positive `pending_total`; a C
+  row's `closed_units` is 0. After open 0.5, open 1000.1 and a bound close of
+  1000, one group of a resting `Reduce 1000`, a `Reduce 0.3` and a
+  `ScopeFraction 1`: the fraction closes 2.2759572004815709e-14, below half an
+  ulp of the resting member's 999.7, which keeps 999.70000000000005. A pending
+  total below half an ulp of a later fill rounds into it, as binary64 addition
+  does. Until K-ULP5 each of these failed the run after the fill was booked,
+  with code 6, discriminator 7 (`CoreFailure::UnrepresentableReservation`); a
+  pending total that overflows binary64 -- fills near the largest finite
+  double -- still does.
 
 ### Sizing without a host override
 

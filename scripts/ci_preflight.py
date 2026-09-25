@@ -33,7 +33,7 @@ from ci_verify import ROOT, source_guard_commands
 ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
-PR_SLOW_ROWS_SHA256 = '90f8932f921579c55561e1af962610e0e311d1f93f28722a4c5931d7b6f7fb53'
+PR_SLOW_ROWS_SHA256 = 'c1abd9bdd0c540398eb5e0870a0f652b12743d653eafb5c4ee9ee94ca6dc4cf0'
 
 
 def _jobs(workflow: str) -> dict[str, str]:
@@ -127,7 +127,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str) -> list
                         re.MULTILINE | re.DOTALL)
     names = re.findall(r'^    (test_[A-Za-z0-9_]+)$', blocks[0], re.MULTILINE) if len(blocks) == 1 else []
     canonical = '\n'.join(names) + '\n'
-    if (len(blocks) != 1 or len(names) != 27 or len(set(names)) != 27
+    if (len(blocks) != 1 or len(names) != 28 or len(set(names)) != 28
             or hashlib.sha256(canonical.encode()).hexdigest() != PR_SLOW_ROWS_SHA256
             or cmake.count('APPEND PROPERTY LABELS slow') != 1
             or 'set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)' not in cmake

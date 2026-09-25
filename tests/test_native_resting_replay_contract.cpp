@@ -874,25 +874,6 @@ void units_after(const no::ExecutionAppliedEvent& e, double before, double after
     same_d(std::get<no::RemainingProjectionUnits>(e.remaining_after).q, after);
 }
 
-void failed_is_permanent(Host& h, int64_t next_offset) {
-    REQUIRE(h.native_state().kind == NativeLifecycleKind::Failed);
-    const auto before = h.native_state().failure;
-    const auto hash = h.native_continuation_hash();
-    const auto count = h.native_events(0).size();
-    const auto position = h.physical_position();
-    CHECK(!h.input(next_offset, 100));
-    CHECK(!h.stream_advance_time(T + next_offset + 100));
-    CHECK(!h.stream_end(false));
-    bool threw = false;
-    try { (void)h.submit(tx(1)); } catch (const std::exception&) { threw = true; }
-    CHECK(threw);
-    CHECK(h.native_state().kind == NativeLifecycleKind::Failed);
-    same_failure(h.native_state().failure, before);
-    CHECK(h.native_events(0).size() == count);
-    CHECK(h.native_continuation_hash() == hash);
-    same_d(h.physical_position().signed_units, position.signed_units);
-}
-
 void replay_partial_budget(double sign) {
     Host a, b;
     const char* key = sign > 0 ? "P2-budget-L" : "P2-budget-S";
@@ -1285,7 +1266,13 @@ void replay_failed_capacity(double sign) {
     CHECK(hb.incarnation == ha.incarnation);
 }
 
-void replay_failed_group(double sign) {
+// A one-unit fill cannot move a 2^60-unit sibling's remaining units
+// (fl(2^60 - 1) is 2^60). Since R5 lane K-ULP5 that deduction is absorbed -- a
+// ReservationReducedEvent that requests the fill and deducts 0, the recipient's
+// units 2^60 before and after -- and the run goes on; the request core answered
+// UnrepresentableReservation and the run failed with discriminator 7 before.
+// Both replays absorb identically.
+void replay_absorbed_group(double sign) {
     Host a, b;
     const char* key = sign > 0 ? "P2-G5-L" : "P2-G5-S";
     start(a, key, 1, 2); start(b, key, 1, 2);
@@ -1296,22 +1283,31 @@ void replay_failed_group(double sign) {
     auto emit = tx(sign, "filler"); emit.group = no::Member{7, 1, no::GroupEffect::Reduce};
     const auto fa = put(a, emit), fb = put(b, emit);
     same_hosts("accepted", a, b);
-    CHECK(!a.input(0, 100)); CHECK(!b.input(0, 100));
-    same_hosts("failed", a, b);
+    CHECK(a.input(0, 100)); CHECK(b.input(0, 100));
+    same_hosts("absorbed", a, b);
+    CHECK(a.native_state().kind == NativeLifecycleKind::Running);
     REQUIRE(fills(a, fa).size() == 1);
     CHECK(fills(a, fa)[0].terminal);
     CHECK(fills(a, ra).empty());
-    CHECK(events_of<no::ReservationReducedEvent>(a).empty());
-    const auto failure = a.native_state().failure;
-    CHECK(failure.discriminator == static_cast<uint32_t>(no::CoreFailure::UnrepresentableReservation));
-    CHECK(native_failure_has_cause(failure.context) && native_failure_has_recipient(failure.context));
-    CHECK(failure.context.cause.ordinal == fills(a, fa)[0].ordinal);
-    CHECK(failure.context.recipient.incarnation == ra.incarnation);
+    const auto reduced = events_of<no::ReservationReducedEvent>(a);
+    REQUIRE(reduced.size() == 1);
+    CHECK(reduced[0].recipient == ra);
+    CHECK(reduced[0].cause.ordinal == fills(a, fa)[0].ordinal);
+    same_d(reduced[0].requested_delta, 1);
+    same_d(reduced[0].actual_deduction, 0);
+    same_d(reduced[0].before.q, 0x1p60);
+    same_remaining_proj(reduced[0].after, no::RemainingProjectionUnits{0x1p60});
+    CHECK(cancellations(a, ra).empty());
     same_d(a.physical_position().signed_units, sign);
-    failed_is_permanent(a, 1);
-    failed_is_permanent(b, 1);
-    same_hosts("refused", a, b);
+    // The run goes on: the same next fill on both, and both complete.
+    const auto na = put(a, tx(sign, "next")), nb = put(b, tx(sign, "next"));
+    CHECK(a.input(1, 100)); CHECK(b.input(1, 100));
+    CHECK(fills(a, na).size() == 1);
+    same_hosts("continued", a, b);
+    finish(a); finish(b);
+    same_hosts("complete", a, b);
     CHECK(fb.incarnation == fa.incarnation && rb.incarnation == ra.incarnation);
+    CHECK(nb.incarnation == na.incarnation);
 }
 
 void perturb_one_field(double sign) {
@@ -1806,8 +1802,8 @@ int main() {
                  [&] { replay_confirmed_bar(sign); });
         run_case(sign > 0 ? "refused capacity prefix long" : "refused capacity prefix short",
                  [&] { replay_failed_capacity(sign); });
-        run_case(sign > 0 ? "failed group prefix long" : "failed group prefix short",
-                 [&] { replay_failed_group(sign); });
+        run_case(sign > 0 ? "absorbed group prefix long" : "absorbed group prefix short",
+                 [&] { replay_absorbed_group(sign); });
         run_case(sign > 0 ? "perturb fields long" : "perturb fields short",
                  [&] { perturb_one_field(sign); });
         run_case(sign > 0 ? "perturb owner long" : "perturb owner short",

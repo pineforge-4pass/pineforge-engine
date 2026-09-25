@@ -1566,7 +1566,9 @@ typedef struct pf_native_applied_v1 {
  *     bound to, `cycle_after` its cycle, cursor fields.
  *   - RESERVATION_REDUCED / DEFERRED_GROUP: `incarnation` is the recipient,
  *     `reason` its #pf_native_group_effect_t, `closed_units` the deduction
- *     (applied, or deferred).
+ *     (applied, or deferred); 0 when it was absorbed -- too small to move the
+ *     recipient's remaining units, or its pending total, in binary64, which
+ *     stay as they were (R5 lane K-ULP5).
  *   - QUANTITY_BOUND: `incarnation`, `opened_units` = the source units.
  *   - TERMS_RESOLVED: `raw_price`, `resolved_price` (= `price`), cursor fields.
  *   - MARGIN_CALL: `reason` is the #pf_native_side_t of the liquidated

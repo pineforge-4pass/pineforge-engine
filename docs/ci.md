@@ -100,9 +100,9 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors at INT25 are 658 for Debug
-and sanitizers and 667 for native (653 and 662 at the INT24 base, plus wave G's
-five rows). The full-run release and kernel floors are 677 and 276 rows that
+missing label fails. The PR registration floors at INT25 are 659 for Debug
+and sanitizers and 668 for native (653 and 662 at the INT24 base, plus wave G's
+six rows). The full-run release and kernel floors are 678 and 277 rows that
 ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
@@ -520,7 +520,7 @@ Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
 use distinct concurrency groups and remain uncanceled. A PR runs preflight,
 both Release jobs, kernel-only and the parity subset with their full sets;
 both Debug jobs, sanitizers and native-live run the registered set excluding
-the 27 CTest rows labelled `slow` in `tests/CMakeLists.txt`. These rows were
+the 28 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and all proof jobs start in
 parallel. The advisory `build` aggregate succeeds only if every job succeeds.
@@ -528,7 +528,9 @@ INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
 DOC-TRUTH-4 rows) in a full sanitizers and Debug run on the maintainers' x86-64
 verification host (twelve parallel CTest jobs): none crosses either threshold,
-so the 27 labelled rows stand. The largest unlabelled rows there were
+so the 27 labelled rows stand. K-ULP5's `test_native_group_absorption`,
+picked after that run, took 70.4 s under sanitizers (17.4 s Debug) in its own
+run on the same host and is the 28th. The largest unlabelled rows there were
 `test_adapter_quiet_bar_differential` (39.3 s sanitizers),
 `test_native_state_continuation` (34.7 s sanitizers, 18.9 s Debug) and
 `test_adapter_lookup_index_scaling` (24.3 s sanitizers); the whole sanitizers

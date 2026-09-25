@@ -1458,6 +1458,238 @@ static void check_unrepresentable_quantity(void) {
                  "a negative tolerance named another field");
 }
 
+/* ── R5 lane K-ULP5: an OCA-Reduce deduction binary64 cannot take ───
+ *
+ * K-ULP4's p5b probe through the C surface. A book {0.5, fl(1000.1 - 1000)}
+ * and three members of one OCA-Reduce group: a resting Reduce 1000 (a sell
+ * limit at 150 the run never reaches), a market Reduce 0.3 and a market
+ * ScopeFraction 1. The 0.3 fill lowers the resting member to fl(1000 - 0.3)
+ * and becomes the fraction's pending deduction; the fraction then closes
+ * 2.2759572004815709e-14, below half an ulp of 999.7. That deduction is
+ * absorbed -- a RESERVATION_REDUCED row whose closed_units is 0, the resting
+ * member's remaining units unchanged -- and the run completes (it failed with
+ * code 6 before the lane). The pending case: a bracket child waiting on an
+ * owner that never fills holds 2^60 pending, and a fill of 1 is absorbed into
+ * it -- a DEFERRED_GROUP row whose closed_units is 0. */
+typedef struct kulp5_state {
+    pf_strategy_t host;
+    int bar;
+    int error;
+    int pending_case;
+    uint64_t open1000;
+    int64_t cycle;
+    uint64_t resting;
+    uint64_t fraction;
+    uint64_t owner;
+    uint64_t child;
+} kulp5_state;
+
+static uint64_t kulp5_submit(kulp5_state* state, const pf_native_request_v1* request) {
+    uint64_t incarnation = 0;
+    uint32_t reject = 0;
+    if (strategy_native_submit_v1(state->host, request, &incarnation, &reject) != PF_NATIVE_OK
+        && state->error == 0) {
+        state->error = 1;
+    }
+    return incarnation;
+}
+
+static pf_native_request_v1 kulp5_request(uint32_t intent, uint32_t reduce_size, double value,
+                                          int64_t cohort) {
+    pf_native_request_v1 request = blank_request();
+    request.intent = intent;
+    request.reduce_size = reduce_size;
+    request.intent_value = value;
+    if (cohort != 0) {
+        request.group_kind = PF_NATIVE_GROUP_MEMBER;
+        request.group_effect = PF_NATIVE_GROUP_REDUCE;
+        request.group_id = 9;
+        request.group_cohort = cohort;
+    }
+    request.label = "k-ulp5";
+    request.comment = "";
+    return request;
+}
+
+static int kulp5_on_bar(void* user, const pf_bar_t* bar, const pf_native_decision_v1* at) {
+    kulp5_state* state = (kulp5_state*)user;
+    const int b = state->bar++;
+    pf_native_request_v1 request;
+    (void)bar;
+    (void)at;
+    if (state->pending_case) {
+        if (b == 0) {
+            request = kulp5_request(PF_NATIVE_INTENT_TRANSACT, 0u, 1.0, 0);
+            request.trigger = PF_NATIVE_TRIGGER_STOP;
+            request.p1 = 200.0;
+            state->owner = kulp5_submit(state, &request);
+            request = kulp5_request(PF_NATIVE_INTENT_REDUCE, PF_NATIVE_REDUCE_OWNER_OPENED, 0.0, 2);
+            request.owner = PF_NATIVE_OWNER_WAIT_FOR_APPLIED;
+            request.owner_n = 1u;
+            request.owner_incarnations = &state->owner;
+            state->child = kulp5_submit(state, &request);
+            request = kulp5_request(PF_NATIVE_INTENT_TRANSACT, 0u, 0x1p60, 1);
+            (void)kulp5_submit(state, &request);
+        } else if (b == 2) {
+            request = kulp5_request(PF_NATIVE_INTENT_FLATTEN, 0u, 0.0, 0);
+            (void)kulp5_submit(state, &request);
+        } else if (b == 4) {
+            request = kulp5_request(PF_NATIVE_INTENT_TRANSACT, 0u, 1.0, 3);
+            (void)kulp5_submit(state, &request);
+        }
+        return 0;
+    }
+    if (b == 0) {
+        request = kulp5_request(PF_NATIVE_INTENT_TRANSACT, 0u, 0.5, 0);
+        (void)kulp5_submit(state, &request);
+    } else if (b == 2) {
+        request = kulp5_request(PF_NATIVE_INTENT_TRANSACT, 0u, 1000.1, 0);
+        state->open1000 = kulp5_submit(state, &request);
+    } else if (b == 4) {
+        request = kulp5_request(PF_NATIVE_INTENT_REDUCE, PF_NATIVE_REDUCE_EXPLICIT_UNITS, 1000.0, 0);
+        request.owner = PF_NATIVE_OWNER_BIND_OPENING;
+        request.owner_n = 1u;
+        request.owner_incarnations = &state->open1000;
+        request.owner_cycle = state->cycle;
+        (void)kulp5_submit(state, &request);
+    } else if (b == 6) {
+        request = kulp5_request(PF_NATIVE_INTENT_REDUCE, PF_NATIVE_REDUCE_EXPLICIT_UNITS, 1000.0, 3);
+        request.trigger = PF_NATIVE_TRIGGER_LIMIT;
+        request.p1 = 150.0;
+        state->resting = kulp5_submit(state, &request);
+        request = kulp5_request(PF_NATIVE_INTENT_REDUCE, PF_NATIVE_REDUCE_EXPLICIT_UNITS, 0.3, 1);
+        (void)kulp5_submit(state, &request);
+        request = kulp5_request(PF_NATIVE_INTENT_REDUCE, PF_NATIVE_REDUCE_SCOPE_FRACTION, 1.0, 2);
+        state->fraction = kulp5_submit(state, &request);
+    }
+    return 0;
+}
+
+static int kulp5_on_applied(void* user, const pf_native_applied_v1* applied,
+                            const pf_native_decision_v1* at) {
+    kulp5_state* state = (kulp5_state*)user;
+    (void)at;
+    if (applied->incarnation == state->open1000) state->cycle = applied->cycle_after;
+    return 0;
+}
+
+/* Runs one case; answers the lifecycle and the rows. */
+static uint32_t kulp5_run(kulp5_state* state, int pending_case, pf_native_event_v1* rows,
+                          int capacity, int* got) {
+    pf_native_callbacks_v1 table;
+    pf_native_run_spec_v1 spec = twin_spec();
+    pf_native_run_spec_ext_v1 ext;
+    pf_native_state_v1 run_state;
+    pf_bar_t bars[12];
+    int i;
+
+    memset(state, 0, sizeof(*state));
+    state->pending_case = pending_case;
+    table = blank_callbacks(state);
+    table.on_bar = kulp5_on_bar;
+    table.on_applied = kulp5_on_applied;
+    state->host = strategy_native_host_create_v1(&table);
+    CHECK(state->host != NULL, "K-ULP5 host create failed");
+    *got = 0;
+    if (!state->host) return 0u;
+    spec.session_key = pending_case ? "native-c-api-k-ulp5-pending" : "native-c-api-k-ulp5-p5b";
+    spec.initial_capital = 1e9;
+    spec.fee_kind = PF_NATIVE_FEE_CASH_PER_EXECUTION;
+    memset(&ext, 0, sizeof(ext));
+    ext.struct_size = (uint32_t)sizeof(ext);
+    ext.version = PF_NATIVE_API_VERSION;
+    ext.present_mask = PF_NATIVE_SPEC_EXT_EVENT_RETENTION;
+    ext.event_retention = PF_NATIVE_EVENT_RETENTION_FULL;
+    CHECK_EQ_INT(strategy_configure_native_ext_v1(state->host, &spec, &ext), PF_NATIVE_OK,
+                 "the K-ULP5 spec was refused");
+    for (i = 0; i < 12; ++i) {
+        bars[i].open = bars[i].high = bars[i].low = bars[i].close = 100.0;
+        bars[i].volume = 5.0;
+        bars[i].timestamp = (int64_t)i * 300000;
+    }
+    CHECK_EQ_INT(strategy_native_run_v1(state->host, bars, 12, NULL), PF_NATIVE_OK,
+                 "the K-ULP5 run stopped");
+    CHECK_EQ_INT(state->error, 0, "a K-ULP5 submit was refused");
+    memset(&run_state, 0, sizeof(run_state));
+    run_state.struct_size = (uint32_t)sizeof(run_state);
+    run_state.version = PF_NATIVE_API_VERSION;
+    CHECK_EQ_INT(strategy_native_state_v1(state->host, &run_state), PF_NATIVE_OK,
+                 "K-ULP5 state read");
+    memset(rows, 0, sizeof(*rows) * (size_t)capacity);
+    for (i = 0; i < capacity; ++i) {
+        rows[i].struct_size = (uint32_t)sizeof(rows[i]);
+        rows[i].version = PF_NATIVE_API_VERSION;
+    }
+    *got = strategy_native_events_v1(state->host, 0, rows, capacity);
+    return run_state.lifecycle;
+}
+
+static void check_reservation_absorbed(void) {
+    static pf_native_event_v1 rows[256];
+    kulp5_state state;
+    pf_native_working_v1 working;
+    const double resting_units = 1000.0 - 0.3;
+    int got = 0;
+    int i, n;
+    int reduced = 0, absorbed = 0, deferred = 0;
+    double first_reduction = -1.0;
+    uint32_t lifecycle;
+
+    lifecycle = kulp5_run(&state, 0, rows, 256, &got);
+    CHECK_EQ_INT(lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the absorbed deduction stopped the run");
+    for (i = 0; i < got; ++i) {
+        if (rows[i].kind == PF_NATIVE_EVENT_RESERVATION_REDUCED
+            && rows[i].incarnation == state.resting) {
+            CHECK_EQ_INT(rows[i].reason, PF_NATIVE_GROUP_REDUCE, "a reduction named another effect");
+            if (reduced == 0) first_reduction = rows[i].closed_units;
+            if (rows[i].closed_units == 0.0) ++absorbed;
+            ++reduced;
+        }
+        if (rows[i].kind == PF_NATIVE_EVENT_DEFERRED_GROUP && rows[i].incarnation == state.fraction) {
+            CHECK(rows[i].closed_units == 0.3, "the fraction deferred another deduction");
+            ++deferred;
+        }
+    }
+    CHECK_EQ_INT(reduced, 2, "the resting member saw another number of reductions");
+    CHECK(first_reduction == 0.3, "the 0.3 fill was not deducted");
+    CHECK_EQ_INT(absorbed, 1, "the dust fill's deduction was not the absorbed row");
+    CHECK_EQ_INT(deferred, 1, "the fraction saw another number of deferred deductions");
+    n = strategy_native_working_len_v1(state.host);
+    reduced = 0;
+    for (i = 0; i < n; ++i) {
+        memset(&working, 0, sizeof(working));
+        working.struct_size = (uint32_t)sizeof(working);
+        working.version = PF_NATIVE_API_VERSION;
+        if (strategy_native_working_get_v1(state.host, i, &working) != PF_NATIVE_OK) continue;
+        if (working.incarnation != state.resting) continue;
+        CHECK_EQ_INT(working.remaining_kind, PF_NATIVE_REMAINING_UNITS,
+                     "the resting member lost its units");
+        CHECK(working.remaining_units == resting_units,
+              "the absorbed deduction moved the resting member's units");
+        ++reduced;
+    }
+    CHECK_EQ_INT(reduced, 1, "the resting member is no longer working");
+    CHECK_EQ_INT(strategy_native_open_lot_count_v1(state.host, NAN), 2,
+                 "the fraction's fill did not stand");
+    strategy_native_host_free(state.host);
+
+    lifecycle = kulp5_run(&state, 1, rows, 256, &got);
+    CHECK_EQ_INT(lifecycle, PF_NATIVE_LIFECYCLE_COMPLETED, "the absorbed pending fill stopped the run");
+    deferred = 0;
+    absorbed = 0;
+    for (i = 0; i < got; ++i) {
+        if (rows[i].kind != PF_NATIVE_EVENT_DEFERRED_GROUP || rows[i].incarnation != state.child) {
+            continue;
+        }
+        if (deferred == 0) CHECK(rows[i].closed_units == 0x1p60, "the first delta was not deferred");
+        if (rows[i].closed_units == 0.0) ++absorbed;
+        ++deferred;
+    }
+    CHECK_EQ_INT(deferred, 2, "the child saw another number of deferred deductions");
+    CHECK_EQ_INT(absorbed, 1, "the fill of 1 was not the absorbed row");
+    strategy_native_host_free(state.host);
+}
+
 /* ── L9's risk limits, read back through the C event history ────── */
 
 /* One opening per calculation, with a limit of one applied fill per day: the
@@ -8913,6 +9145,7 @@ int pf_native_c_api_checks(void) {
     check_event_polling();
     check_event_retention();
     check_unrepresentable_quantity();
+    check_reservation_absorbed();
     check_risk_event();
     check_absent_accessors();
     check_live_accessors();

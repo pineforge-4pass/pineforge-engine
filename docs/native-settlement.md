@@ -107,11 +107,11 @@ residual. A selection closed by its whole sum was already consumed whole, and
 `Flatten` needs no quantity at all.
 
 What a native host gets, then, from a quantity request on the exact settlement:
-exactly one terminal outcome, and no run stopped for its quantity (one group
-case is left, below). A close that spans lots and ends inside one is one fill
-charged its request (K-ULP2); a close whose binary64 FIFO sum reaches its
-request at a lot closes that lot whole (K-ULP3); a `Transact` that crosses the
-book is one fill charged its units (K-ULP1, in
+exactly one terminal outcome, and no run stopped for its quantity -- a
+sibling's share of it included (below). A close that spans lots and ends
+inside one is one fill charged its request (K-ULP2); a close whose binary64
+FIFO sum reaches its request at a lot closes that lot whole (K-ULP3); a
+`Transact` that crosses the book is one fill charged its units (K-ULP1, in
 `docs/pages/native-engine.md`); a request the settlement cannot book exactly is
 refused, typed, as above -- the settlement's own refusal shows beforehand in
 `inspect_current_execution` as a `settlement_readiness` of
@@ -139,15 +139,22 @@ lot, or found nothing to close, and the book's own sizes were `OffGrid`. A
 that is no boundary of its scope: a later lot's size would be taken FIFO from
 the head lot and split it off the grid.
 
-One case still stops the run, as it did before K-ULP4, and it is the request
-core's, not the settlement's: in an OCA group whose effect is
-`GroupEffect::Reduce`, a member's fill smaller than half an ulp of a sibling's
-remaining units cannot be deducted from them, and after the fill is booked the
-run fails with code 6, discriminator 7 (`CoreFailure::UnrepresentableReservation`).
-It takes a dust-sized fill -- the close of a dust lot -- beside a far larger
-resting sibling. A sibling's fill also lowers a member's remaining units
-without regard to the quantity grid; the grid's re-check above holds only the
-`Reduce` it admitted as a boundary.
+A sibling's share of a fill does not stop the run either, and it is the
+request core's, not the settlement's. In an OCA group whose effect is
+`GroupEffect::Reduce` a member's fill is deducted from every live sibling --
+from its remaining units, or, while they are not known, into its pending
+total, which its terms or its owner's fill later takes off the units they bind
+-- and a deduction too small to move what it is taken from (`fl(units - d)` is
+the units again: at most half an ulp of them) is absorbed. The sibling keeps
+its units, the exact binary64 result of the subtraction; the member's fill
+stands; and the event that records the deduction took nothing (R5 lane K-ULP5;
+`docs/pages/native-engine.md`, "What a host gets from a quantity"). It takes a
+dust-sized fill -- the close of a dust lot -- beside a far larger sibling, and
+until K-ULP5 it failed the run after the fill was booked, with code 6,
+discriminator 7 (`CoreFailure::UnrepresentableReservation`); only a pending
+total that overflows binary64 still does. A sibling's fill also lowers a
+member's remaining units without regard to the quantity grid; the grid's
+re-check above holds only the `Reduce` it admitted as a boundary.
 
 ## Quantity tolerance
 
