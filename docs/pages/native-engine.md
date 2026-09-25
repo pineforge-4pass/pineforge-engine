@@ -115,7 +115,9 @@ Configure:
   setup.
 - `Completed` → same session key, `run_number` above high-water → `Ready`.
   Prior-run records stay inspectable until the next successful begin.
-- `Running` or `Failed` → refused; `Failed` keeps the first failure.
+- `Running` → refused. A non-aborted `Failed` handle keeps its first failure
+  and refuses configure; an `Aborted` handle may be reused with the same
+  session key and a higher run number.
 
 Begin (`run` / `stream_begin`) is allowed only from `Ready`. Success consumes
 the run number, projects the spec onto execution storage, **resets once**
@@ -1981,7 +1983,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2126`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2127`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
@@ -1993,8 +1995,10 @@ one row follows each point, after the extremes that point just folded
 broker_state_hash_len == equity_curve_len == script_bars_processed
 ```
 
-in batch and across a stream's warmup and realtime legs alike. That length
-identity is the only part of the array that holds across drivings.
+on a completed run in batch and across a stream's warmup and realtime legs
+alike. A Failed or Aborted run may expose only a recorded prefix, whose last
+row need not equal the final scalar. That length identity is the only part of
+the array that holds across drivings.
 
 **What a row is, and what it is for.** A row is the run's *continuation
 identity* at that bar, not its trade outcome. `broker_state_hash()` is
@@ -2110,13 +2114,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1833`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1271`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1273`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1194-1224`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1196-1226`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3783,7 +3787,9 @@ refuses a Running handle without changing its state, including when a callback
 calls it. It also refuses a Completed host's
 `on_hash_extension` callback during a read-only hash query. A Completed handle or one Failed by a
 cooperative abort may be configured for another run; the kernel judges reuse
-constraints and can fail a refused reuse with `PF_NATIVE_FAILURE_CONTRACT`.
+constraints and can fail a refused reuse with `PF_NATIVE_FAILURE_CONTRACT`. An
+Aborted handle is reusable with the same session key and a higher run number; a
+handle whose configure call failed remains Failed and cannot be configured again.
 The call has no typed out-parameters.
 
 `strategy_configure_native_ext_result_v1` is the typed spelling of
@@ -3806,11 +3812,11 @@ by anything but an abort, answer `PF_NATIVE_E_STATE` with
 cooperative abort latches only while a run holds its spec, and the Failed
 state keeps it, so no public call reaches it.
 
-`pf_native_run_spec_ext_v1`'s third of five published lengths,
+`pf_native_run_spec_ext_v1`'s third of six published lengths,
 `PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`, ends the tail after the base layout
 (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`) and the risk tail
 (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`); the runtime accepts it and the other
-four. That tail appends what the header used to list as unrepresentable — the retained intrabar path
+five. That tail appends what the header used to list as unrepresentable — the retained intrabar path
 (`PF_NATIVE_SPEC_EXT_INTRABAR`), the four feed-shape and presentation
 policies (`PF_NATIVE_SPEC_EXT_FEED_POLICY`: slot labels, feed tolerance, the
 forced path order, abort reporting), and the margin model's remaining knobs

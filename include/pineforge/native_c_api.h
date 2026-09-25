@@ -2396,12 +2396,12 @@ typedef struct pf_native_run_spec_ext_v1 {
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, risk_has_max_drawdown))
 
 /** Byte length of #pf_native_run_spec_ext_v1 with L9's risk tail but without
- *  N8's intrabar / policy tail — the second of its five published layouts. */
+ *  N8's intrabar / policy tail — the second of its six published layouts. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE \
     ((uint32_t)offsetof(pf_native_run_spec_ext_v1, intrabar_kind))
 
 /** Byte length of #pf_native_run_spec_ext_v1 with N8's intrabar / policy tail
- *  but before the `auxiliary_*` tail was appended — the third of its five
+ *  but before the `auxiliary_*` tail was appended — the third of its six
  *  published layouts. It is the offset of the first auxiliary field, for the
  *  same reason #PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE is an offset. */
 #define PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE \

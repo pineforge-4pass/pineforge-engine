@@ -448,11 +448,11 @@ typedef struct pf_report_s {
     pf_metrics_t        metrics;
     /* Per-script-bar equity curve (bare host: KernelRecorded); time_ms is the script-bar OPEN
      * timestamp; equity = initial_capital + net_profit + open_profit at
-     * bar close. Free via #report_free or #strategy_native_report_free_v1. len ==
-     * script_bars_processed, EXCEPT after a mid-run error (check
-     * strategy_get_last_error): an exception can truncate the curve, and
-     * metrics then describe the truncated prefix. NOTE int64_t length
-     * (ctypes: c_int64). */
+     * bar close. Free via #report_free or #strategy_native_report_free_v1.
+     * On a completed KernelRecorded run len == script_bars_processed; a
+     * Failed or Aborted run can expose a shorter prefix (check
+     * strategy_get_last_error), and metrics describe that prefix. NOTE int64_t
+     * length (ctypes: c_int64). */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
     /* Per-script-bar broker-state hash when recording is on and report
@@ -521,7 +521,9 @@ typedef enum pf_native_spec_optional_e {
  *  the kernel's Contract rule. A Running handle is refused at the C boundary
  *  without changing its native state, including from a callback. A Completed
  *  handle or one Failed by a cooperative abort may be configured for another
- *  run outside callbacks; the kernel judges reuse constraints. A Completed
+ *  run outside callbacks; the kernel judges reuse constraints (an aborted
+ *  handle is reused with the same session key and a higher run number), and a
+ *  handle whose configure call failed remains Failed. A Completed
  *  host's `on_hash_extension` callback cannot reconfigure it during a read-only hash query.
  *  This call has no typed out-parameters. The
  *  extended path validates before configuring: #strategy_configure_native_ext_v1
@@ -993,7 +995,7 @@ PF_API void strategy_set_path_order(pf_strategy_t s, int mode);
  *  value; it is a silent no-op under the COOF scheduler, mirroring
  *  #strategy_set_probe_suppress_tail_logic's dispatch-path-scope caveat. */
 PF_API int strategy_last_bar_dual_entry_path(pf_strategy_t s);
-/** Toggle per-script-bar broker-state hash recording (spec §3.4, ABI v4).
+/** Toggle per-report-point broker-state hash recording (spec §3.4, ABI v4).
  *
  *  When @p on is non-zero, every subsequent run() appends
  *  #strategy_broker_state_hash's value to pf_report_t::broker_state_hash

@@ -54,8 +54,9 @@ typedef struct pf_report_s {
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;   /* NOTE: int64, not int */
 
-    /* Per-script-bar broker-state hash (ABI v4; NULL / 0-length unless
-     * strategy_set_broker_state_hash_recording is on) */
+    /* Per-report-point broker-state hash (ABI v4; a bare native host records
+     * it under NativeReportPolicy::KernelRecorded; NULL / 0-length when the
+     * switch is off or no report point exists) */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
 } pf_report_t;
@@ -243,10 +244,12 @@ typedef struct pf_equity_point_s {
 } pf_equity_point_t;
 ```
 
-`equity_curve_len` equals `script_bars_processed` on a clean run (an
-exception mid-run can truncate the curve — check
-`strategy_get_last_error`). The array is heap-allocated and freed by
-#report_free. Note the length field is `int64_t`, not `int`.
+`equity_curve_len` equals `script_bars_processed` on a completed
+`KernelRecorded` run (an exception, cooperative abort or other failure
+mid-run can truncate the recorded prefix — check `strategy_get_last_error`). A
+bare native host using the default `HostRecorded` policy has no kernel-owned
+curve. The array is heap-allocated and freed by #report_free. Note the length
+field is `int64_t`, not `int`.
 
 ## Lifetime and ownership
 

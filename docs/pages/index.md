@@ -152,10 +152,11 @@ The public C surface is **109 `PF_API` declarations** across two headers:
 | Diagnostics | `strategy_get_last_error` | #strategy_get_last_error |
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
-| Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` | `native_c_api.h` |
+| Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
 A built PineForge strategy `.so` exports 109 `PF_API` symbols (66 compiled-strategy
-declarations plus 43 native-host declarations) and the toolchain
+declarations plus 41 `strategy_native_*` declarations and two
+`strategy_configure_native_ext_*` declarations) and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 

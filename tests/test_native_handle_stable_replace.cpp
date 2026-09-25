@@ -1,7 +1,8 @@
 // R5 lane V19-D witness: a replace that keeps the handle
 // (ReplaceOptions::keep_handle) or carries a close's book binding
-// (ReplaceOptions::keep_binding) changes what the run records, never what it
-// matches, nor any ordinal of its timeline.
+// (ReplaceOptions::keep_binding) changes what the run records and, when a
+// re-priced parent has waiting children, whether those children remain
+// matchable; outside that ownership case it preserves the fill timeline.
 //
 // 1. The differential. One seeded bare host plays randomized re-issue scripts
 //    on gapped tapes -- exits of every closing intent (explicit units,

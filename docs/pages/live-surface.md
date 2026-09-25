@@ -28,7 +28,7 @@ these recomputation controls.
 | `strategy_set_probe_suppress_tail_logic` | Run only the broker's pre-`on_bar` steps on the last bar and stop (§3.2 below). | Off (`on == 0`). | No |
 | `strategy_set_path_order` | Force the intrabar leg order used by every OHLC-path helper (§3.3 below). | `0` AUTO (the unchanged TV-emulator "nearer-to-open" rule). | No |
 | `strategy_last_bar_dual_entry_path` | Read which side won a same-bar dual-entry-stop arbitration on the last dispatched bar (`0` none, `1` long-first, `2` short-first, `-1` if `s` is `NULL`). | N/A — read-only per-bar snapshot. | No |
-| `strategy_set_broker_state_hash_recording` | Toggle a 64-bit broker-state hash appended to `pf_report_t::broker_state_hash` after every dispatched script bar (§3.4 below). | Off (`on == 0`); `broker_state_hash` stays `NULL`/0-length. | No |
+| `strategy_set_broker_state_hash_recording` | Toggle a 64-bit broker-state hash appended to `pf_report_t::broker_state_hash` after each report point (§3.4 below). A bare native host gets points under `KernelRecorded`. | Off (`on == 0`); `broker_state_hash` stays `NULL`/0-length. | No |
 | `strategy_broker_state_hash` | The final broker-state hash of the most recent `run()`, whether or not recording was on. `0` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_pending_orders_len` | Count of orders resting in the pending-order book after the most recent `run()` — the book in force for the next bar. `0` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_pending_order_get` | Copy the *i*-th resting order into a `pf_pending_order_v1_t` snapshot (see [The pending-order mirror](#live_surface_pending_mirror)). | N/A — read-only. | No |
@@ -223,15 +223,19 @@ before this flag existed.
 
 ### §3.4 — `strategy_set_broker_state_hash_recording(s, on)`
 
-When `on` is non-zero, every subsequent `run()` appends
-`strategy_broker_state_hash`'s value to `pf_report_t::broker_state_hash`
-immediately after each script bar is dispatched, so the array's length
-matches `pf_report_t::script_bars_processed`. Cleared (the recorded array
-emptied, not the flag) at the start of every `run()`; the flag is
-persistent configuration, like `strategy_set_realtime_tail`. Also covers a
-stream's warmup `run()` and every script bar the realtime tick stream
-dispatches afterward — set this **before** `strategy_stream_begin` to also
-record the warmup leg.
+When `on` is non-zero, every subsequent report point appends
+`strategy_broker_state_hash`'s value to `pf_report_t::broker_state_hash`.
+For a bare native host, report points come from
+`NativeReportPolicy::KernelRecorded`; a host using `HostRecorded` must append
+its own report rows and does not get kernel rows. On a completed run the
+recorded length matches the number of report points, and under
+`KernelRecorded` it matches `pf_report_t::script_bars_processed`. A Failed or
+Aborted run can expose a shorter prefix, whose last row need not equal the
+final scalar. Cleared (the recorded array emptied, not the flag) at the start
+of every `run()`; the flag is persistent configuration, like
+`strategy_set_realtime_tail`. Also covers a stream's warmup `run()` and every
+report point the realtime tick stream dispatches afterward — set this
+**before** `strategy_stream_begin` to also record the warmup leg.
 
 Default off (`on == 0`): `pf_report_t::broker_state_hash` is `NULL`/
 0-length and every historical run stays byte-identical to before this flag
@@ -283,16 +287,17 @@ ABI v4 appends two fields to `pf_report_t`, directly after
 `equity_curve_len` (append-only, per the struct's stability guarantee):
 
 ```c
-uint64_t* broker_state_hash;      /* per-script-bar hash, ABI v4 */
+uint64_t* broker_state_hash;      /* per-report-point hash, ABI v4 */
 int64_t   broker_state_hash_len;  /* length of broker_state_hash */
 ```
 
 `NULL` / 0-length when `strategy_set_broker_state_hash_recording` was off
-(the default) or no script bars were dispatched. When populated,
-`broker_state_hash_len == script_bars_processed` and the last element
-equals `strategy_broker_state_hash`'s value at the end of the run. Heap
-array, freed by `report_free` — same ownership rule as `trades` /
-`equity_curve` / `trace`.
+(the default), no report points were recorded, or a bare host kept
+`HostRecorded`. When populated on a completed `KernelRecorded` run,
+`broker_state_hash_len == script_bars_processed` and the last element equals
+`strategy_broker_state_hash`'s value at the end of the run. A Failed or
+Aborted run can have a shorter prefix. Heap array, freed by `report_free` —
+same ownership rule as `trades` / `equity_curve` / `trace`.
 
 ## The pending-order mirror {#live_surface_pending_mirror}
 

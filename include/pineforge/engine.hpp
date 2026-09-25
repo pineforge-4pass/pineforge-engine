@@ -2079,16 +2079,17 @@ public:
     // realtime tick-driven bar after strategy_stream_begin.
     int64_t script_bars_processed() const { return diag_script_bars_processed_; }
 
-    // ABI v4 live-runtime surface (task 6): when on, every script bar's
-    // report point appends broker_state_hash() to broker_state_hashes_
+    // ABI v4 live-runtime surface (task 6): when on, every report point
+    // appends broker_state_hash() to broker_state_hashes_
     // immediately after that bar's record_equity_point() call -- under
     // KernelRecorded the execution consumer's record_script_report_point,
     // which every script calculation it delivers reaches (confirmed,
     // intrabar and aggregated bars, in a batch run and across a stream's
     // warmup and realtime legs); a host that records or marks its own report
-    // points appends its own row at each -- so the recorded array's length
-    // matches script_bars_processed and pf_report_t::broker_state_hash_len
-    // 1:1 -- including on strategy_stream_fill_report, whose report is the
+    // points appends its own row at each -- so a completed run's recorded
+    // array has one row per report point (and, under KernelRecorded, matches
+    // script_bars_processed and pf_report_t::broker_state_hash_len 1:1) --
+    // including on strategy_stream_fill_report, whose report is the
     // cumulative warmup + realtime run. Default off: broker_state_hashes_
     // stays empty, fill_report emits a null/zero-length array, and every
     // historical run stays byte-identical to before this flag existed.
