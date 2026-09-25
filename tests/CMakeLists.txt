@@ -1271,6 +1271,11 @@ list(APPEND TEST_SOURCES test_adapter_range_end_fx)
 # sessions and 1D/1W/1M; plus why the calendar's sealing is not that answer.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_script_bucket_completions)
+# R5 lane B-ADAPTER (item 7, V19D-P1): a margin call revives a dormant exit
+# the script left standing and never one it cancelled -- the lab tv tapes
+# badapter-v19dp1-control / -cancel replayed on their NYSE:F bars.
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_margin_revival_cancel)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

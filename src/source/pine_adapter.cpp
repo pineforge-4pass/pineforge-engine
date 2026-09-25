@@ -1782,6 +1782,44 @@ void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entr
     }
 }
 
+// strategy.cancel / strategy.cancel_all withdraw an exit whatever its state,
+// and a dormant exit -- one a declined reversal held (finding-311) -- is no
+// exception: TradingView never brings a cancelled exit back. The lab tv tapes
+// badapter-v19dp1-control / -cancel (NYSE:F 15, 2025-04-30 .. 05-06) show one
+// script with and without strategy.cancel("X"): the margin call revives the
+// standing dormant X and closes the position through it; after the cancel it
+// does not, and a second margin call follows. The legacy engine skipped a
+// cancelled order in the same pass (ab9714be pine_fills.cpp:2065-2076). The
+// lifecycle records it where the revival reads it: every leg retired, a state
+// no suspension produces (Suspend retires at most the trail leg).
+void PineExecutionAdapter::retire_cancelled_dormant_exits(const SourceId* id) {
+    const auto point = detail::callback_point(require_host());
+    if (!point) return;
+    const auto domain = config_.calc_on_order_fills ? exit_legs::Domain::FillRecalc
+                                                    : exit_legs::Domain::Ordinary;
+    const exit_legs::Frame cause{point->decision.coordinate.ordinal,
+        point->decision.coordinate.interval_index, domain, exit_legs::Phase::Observation};
+    // As in hold_reversal_pair_brackets: no erased lifecycle is read again.
+    PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
+        [&](std::uint64_t, const PlacementSnapshot& candidate) {
+            return lifecycle_readable(candidate);
+        });
+    for (auto row : placement_) {
+        auto& candidate = row.second;
+        const bool exit = candidate.family == PineOrderFamily::ExitLimit
+            || candidate.family == PineOrderFamily::ExitStop
+            || candidate.family == PineOrderFamily::ExitTrail;
+        if (!exit || (id && candidate.source_id != *id) || !candidate.legs.dormant()
+            || !candidate.legs.target().incarnation) {
+            continue;
+        }
+        const exit_legs::Action action{candidate.legs.target(), candidate.legs.revision(),
+            cause, exit_legs::Cancel{{exit_legs::Leg::Stop, exit_legs::Leg::Limit,
+                                      exit_legs::Leg::Trail}}};
+        (void)candidate.legs.apply(candidate.legs.target(), action);
+    }
+}
+
 void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         const PlacementSnapshot& reversal) {
     const bool prior_long = reversal.projection_position_side
@@ -1901,6 +1939,13 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         if (!exit || !candidate.legs.dormant() || candidate.from_entry.empty()
             || !(cohort_exposure_for(candidate.from_entry) > 0.0)
             || !candidate.legs.target().incarnation) {
+            continue;
+        }
+        // The script cancelled it (retire_cancelled_dormant_exits): every leg
+        // is retired, and a cancelled exit is never revived (V19D-P1).
+        if (candidate.legs.retired(exit_legs::Leg::Stop)
+            && candidate.legs.retired(exit_legs::Leg::Limit)
+            && candidate.legs.retired(exit_legs::Leg::Trail)) {
             continue;
         }
         // A same-id exit re-issued after the slice REPLACED this bracket: the
@@ -11142,6 +11187,7 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
+    retire_cancelled_dormant_exits(&id);
 }
 
 void PineExecutionAdapter::cancel_all() {
@@ -11150,6 +11196,7 @@ void PineExecutionAdapter::cancel_all() {
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
+    retire_cancelled_dormant_exits(nullptr);
     bracket_families_.clear();
     pending_bracket_legs_.clear();
     pending_entries_.clear();

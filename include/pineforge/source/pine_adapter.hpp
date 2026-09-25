@@ -1923,6 +1923,10 @@ private:
     void suspend_coof_declined_reversal_at_open(
         const Bar&, const NativeDecisionContext&);
     void hold_reversal_pair_brackets(const SourceId&);
+    // A script cancel of a dormant exit (strategy.cancel of its id, or
+    // cancel_all when `id` is null) retires every leg of its lifecycle, so no
+    // later margin call revives it (R5 lane B-ADAPTER, V19D-P1).
+    void retire_cancelled_dormant_exits(const SourceId* id);
     void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);

@@ -135,7 +135,8 @@ struct Config {
     bool calc_on_fills = false;
     int pyramiding = 1;
     // Family::Revival (R5 lane V19-D, --margin-revival): 0 plays a seeded
-    // script, 1-4 a directed one on a fixed tape.
+    // script, 1-6 a directed one on a fixed tape (5 and 6 are 2 and 4
+    // without the strategy.cancel, R5 lane B-ADAPTER).
     int variant = 0;
 };
 
@@ -728,8 +729,12 @@ private:
         const int i = pine_bar_index();
         const double position = live_position_size();
         if (config_.variant != 0) {
-            const bool quantity = config_.variant >= 3;
-            const bool again = config_.variant == 1 || config_.variant == 3;
+            // 5 and 6 play 2 and 4 with the exit left standing.
+            const bool keep = config_.variant >= 5;
+            const int shape = config_.variant == 5 ? 2 : config_.variant == 6 ? 4
+                                                        : config_.variant;
+            const bool quantity = shape >= 3;
+            const bool again = shape == 1 || shape == 3;
             const auto place = [&](double stop) {
                 ++commands;
                 if (quantity) strategy_exit("X", "S", kNa, stop, kNa, kNa, kNa, 100.0, {}, 80.0);
@@ -746,7 +751,7 @@ private:
                 strategy_entry("L", true);
                 strategy_close("S", "Reverse to Long");
             }
-            if (i == 4) { ++commands; strategy_cancel("X"); }
+            if (i == 4 && !keep) { ++commands; strategy_cancel("X"); }
             if (again && i >= 4 && i <= 7 && position < 0.0) place(125.0 + i);
             return;
         }
@@ -952,8 +957,14 @@ int reissue_binding_main() {
 //   1 the reference revival skips the dormant leg for its re-placements; the
 //     erasing run released the leg itself (K1) and every re-placement but
 //     the live one before the margin call;
-//   2 and 4 nothing supersedes the leg: both runs restore it, and it closes
-//     the rest of the short at the margin-call price;
+//   2 and 4 nothing supersedes the leg, but the script cancelled it on bar
+//     4: neither run restores it, and the margin call's is the one trade
+//     (expectation corrected: restored, 2 trades -> not restored, 1 trade,
+//     because TradingView never revives an exit strategy.cancel withdrew --
+//     lab tv tapes badapter-v19dp1-control / -cancel, R5 lane B-ADAPTER's
+//     V19D-P1, tests/test_adapter_margin_revival_cancel.cpp);
+//   5 and 6 are 2 and 4 with the exit left standing: both runs restore it,
+//     and it closes the rest of the short at the margin-call price;
 //   3 the gap INT21 named: the erasing run holds the dormant leg (K1: its
 //     origin is opened) and its first re-placement (K3) while the second
 //     and third are erased, and the revival skips the leg as the reference
@@ -989,7 +1000,7 @@ int margin_revival_main() {
         return same;
     };
     constexpr std::size_t kMarginBar = 8;
-    for (int variant = 1; variant <= 4; ++variant) {
+    for (int variant = 1; variant <= 6; ++variant) {
         Config config;
         config.family = Family::Revival;
         config.variant = variant;
@@ -1039,7 +1050,16 @@ int margin_revival_main() {
             CHECK(find(at_erased, 4, 129.0) != nullptr);
         }
         if (variant == 2 || variant == 4) {
-            // Restored in both runs, and it closed the rest of the short.
+            // Cancelled: still dormant, never restored, and the margin call's
+            // is the one trade (expectation corrected: restored, 2 trades ->
+            // not restored, 1 trade -- see the note above).
+            CHECK(leg_kept->dormant && !leg_kept->restored);
+            CHECK(leg_erased && leg_erased->dormant && !leg_erased->restored);
+            CHECK(erased.trades == 1);
+        }
+        if (variant == 5 || variant == 6) {
+            // Left standing: restored in both runs, and it closed the rest of
+            // the short.
             CHECK(leg_kept->restored);
             CHECK(leg_erased && leg_erased->restored);
             CHECK(erased.trades == 2);
@@ -1080,7 +1100,7 @@ int margin_revival_main() {
     CHECK(margin_calls > kRevivalSeeds);
     CHECK(restored > 0);
     CHECK(released > 0);
-    std::printf("test_adapter_margin_revival_erasure: 4 directed runs, %d seeded (%ld trades, "
+    std::printf("test_adapter_margin_revival_erasure: 6 directed runs, %d seeded (%ld trades, "
                 "%ld margin calls, %ld legs restored, %ld dormant-candidate bar-rows erased); "
                 "%d checks, %d failures\n",
                 kRevivalSeeds, trades, margin_calls, restored, released, checks, failures);
