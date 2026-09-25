@@ -454,7 +454,9 @@ python3 scripts/check_doc_anchors.py --fix      # re-anchor what is provable
 label on a published page, a `there is no … yet / in this slice / today` claim <!-- verified HEAD -->
 whose line carries no `<!-- verified HEAD -->` marker, a stale epoch or hash
 domain, a relative markdown link whose file or `#anchor` is missing, a cited
-`tests/…`, `examples/…` or `scripts/…` path that does not exist, a count the
+`tests/…`, `examples/…`, `scripts/…`, `src/…` or `include/…` path that does not
+exist, a `PF_ABI_VERSION` / `PF_NATIVE_API_VERSION` number the headers do not
+define or a "current release" that is not `VERSION`'s, a count the
 tree derives stated wrong (the `PF_API` declarations of the two C headers,
 `KERNEL_MIN_TESTS` / `RELEASE_MIN_TESTS`, the example manifest of
 `check_native_include_independence.py`), and the marker itself sitting on a
@@ -462,8 +464,8 @@ sentence that states a non-live epoch as today's. The
 marker on the line above is the escape hatch itself: this sentence names the
 pattern rather than claiming it, and the guard has no way to tell those apart,
 so somebody has to say so where the diff will show it. The
-live epoch set is read out of the tree — every `inline namespace <family>_v<n>`
-and every `"pineforge-…/v<n>"` domain — so the rule needs no edit when an epoch
+live epoch set is read out of the tree — every `inline namespace <family>_v<n>`,
+every `"pineforge-…/v<n>"` domain and every `"native-…/v<n>"` domain — so the rule needs no edit when an epoch
 bumps and does not flag a live epoch of a family whose other members moved on.
 
 ```sh

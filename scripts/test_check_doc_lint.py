@@ -401,9 +401,11 @@ class MustNotFire(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 0, out)
             # expectation corrected: "no lane labels, stale negatives, stale epochs or dead
-            # links" -> the line below, because lane F2 added three rules to the summary.
+            # links" -> the line below, because lane F2 added three rules to the summary,
+            # and R5 lane H-DOCGATES the ABI-number and release rules.
             self.assertIn('no lane labels, stale negatives, stale epochs, dead links, dead '
-                          'paths, stale counts or markers on a stale present', out)
+                          'paths, stale counts, stale ABI numbers or releases, or markers on '
+                          'a stale present', out)
 
     def test_cited_paths_that_exist(self) -> None:
         body = ('Pinned by `tests/test_native_order_core.cpp`; the hosts live in '
@@ -472,6 +474,85 @@ class MustNotFire(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 0, out)
 
+
+
+# R5 lane H-DOCGATES: a tree that declares the ABI numbers, the release and
+# the kernel's `native-*` hash domains the new families read.
+H_FILES = {
+    'include__pineforge__pineforge.h': '#pragma once\n#define PF_ABI_VERSION 4\n',
+    'include__pineforge__native_c_api.h': '#pragma once\n#define PF_NATIVE_API_VERSION 1\n',
+    'include__pineforge__market_driver.hpp':
+        '#pragma once\nconstexpr const char* kDriver = "native-driver/v5";\n'
+        'constexpr const char* kConsumer = "native-consumer/v9";\n',
+    'VERSION': '0.14.0\n',
+}
+
+
+def h_tree(page: str, **extra: str):
+    return tree(**H_FILES, **{PAGE: page}, **extra)
+
+
+class MustFailH(unittest.TestCase):
+    """AUDIT4-opus docs-a GAP-6: the lint probes P19, P20 and P29-P32 passed."""
+
+    def assert_offends(self, page: str, rule: str, **extra: str) -> None:
+        with h_tree(page, **extra) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn(f'[{rule}]', out)
+
+    def test_p19_a_dead_src_path(self) -> None:
+        self.assert_offends('The mechanism is `src/does_not_exist_probe.cpp`.\n', 'dead-path')
+
+    def test_p20_a_dead_include_path(self) -> None:
+        self.assert_offends('The header is `include/pineforge/does_not_exist_probe.hpp`.\n',
+                            'dead-path')
+
+    def test_p29_a_stale_continuation_domain(self) -> None:
+        self.assert_offends('The continuation domain is `native-consumer/v8`.\n', 'stale-epoch')
+
+    def test_p30_a_stale_driver_domain(self) -> None:
+        self.assert_offends('The driver domain is `native-driver/v4`.\n', 'stale-epoch')
+
+    def test_p31_a_stale_abi_number(self) -> None:
+        self.assert_offends('`PF_ABI_VERSION` is 3.\n', 'stale-abi')
+        self.assert_offends('The C API reports PF_NATIVE_API_VERSION == 0 here.\n', 'stale-abi')
+
+    def test_p32_a_stale_release(self) -> None:
+        self.assert_offends('Install PineForge 0.13.1, the current release.\n', 'stale-release')
+
+    def test_a_marker_on_a_native_domain_stated_as_now(self) -> None:
+        self.assert_offends('The consumer now hashes under `native-consumer/v8`. '
+                            '<!-- verified HEAD -->\n', 'verified-stale-epoch')
+
+    def test_a_forward_abi_number_stated_as_current(self) -> None:
+        self.assert_offends('The current `PF_ABI_VERSION` is now 5.\n', 'stale-abi')
+
+
+class MustNotFireH(unittest.TestCase):
+    def assert_clean(self, page: str, **extra: str) -> None:
+        with h_tree(page, **extra) as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_live_numbers_domains_and_paths(self) -> None:
+        self.assert_clean('`PF_ABI_VERSION` is 4 and `PF_NATIVE_API_VERSION` is 1; the '
+                          'continuation domain is `native-consumer/v9` and the driver\'s '
+                          '`native-driver/v5`. Install PineForge 0.14.0, the current release. '
+                          'The header is `include/pineforge/pineforge.h`.\n')
+
+    def test_forward_and_historical_numbers(self) -> None:
+        self.assert_clean('The alias is removed at `PF_ABI_VERSION` 5. The layout was frozen '
+                          'at `PF_ABI_VERSION` 3 until the append. <!-- verified HEAD -->\n'
+                          'The codegen tracks it since v0.6.4.\n')
+
+    def test_git_object_paths_generated_files_and_foreign_crates(self) -> None:
+        self.assert_clean('The retired rule is `git show ab9714be:src/source/pine_risk.cpp`. '
+                          'The build writes `include/pineforge/version.h`, generated version '
+                          'macros.\n\n## src/main.rs\n')
+
+    def test_a_native_domain_recorded_as_history(self) -> None:
+        self.assert_clean('The baseline stood at `native-consumer/v7`. <!-- verified HEAD -->\n')
 
 class Derivation(unittest.TestCase):
     """The live epoch set and the stated counts come from the tree, never from a list."""

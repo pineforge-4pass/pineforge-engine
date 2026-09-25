@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep seven kinds of rot out of the published documentation.
+"""Keep nine kinds of rot out of the published documentation.
 
 Why a second script rather than a mode of ``check_doc_anchors.py``
 ------------------------------------------------------------------
@@ -12,8 +12,8 @@ Keeping them apart means the anchor gate can go binding on its own schedule
 and this one's offender list reads as a work list rather than as noise inside
 another report.
 
-The seven rules
----------------
+The nine rules
+--------------
 1. ``lane L<n>`` in a published page (``docs/pages/*.md``, ``README.md``).
    A roadmap label is a promise about the future.  Fifteen of them in
    ``pine-to-native.md`` describe work that landed campaigns ago, so a reader
@@ -29,8 +29,10 @@ The seven rules
 
 3. A stale epoch or hash-domain token anywhere under ``docs/`` or in
    ``README.md``.  The live set is read out of the tree itself - every
-   ``inline namespace <name>_v<n>`` and every ``"pineforge-…/v<n>"`` hash
-   domain - and any *other* version of a live family is stale.  Deriving it
+   ``inline namespace <name>_v<n>``, every ``"pineforge-…/v<n>"`` hash
+   domain and, since R5 lane H-DOCGATES, every ``"native-…/v<n>"`` domain
+   (``native-consumer/v9``, ``native-driver/v5``) - and any *other* version of
+   a live family is stale.  Deriving it
    beats a hardcoded range: it needs no edit when an epoch bumps, and it does
    not flag ``native_order_v1``, which is the live identity epoch even though
    ``native_order.hpp`` is at v6.  The same ``<!-- verified HEAD -->`` marker
@@ -49,7 +51,10 @@ The seven rules
    link (``[`docs/ci.md`](docs/ci.md)``) is still read as one.
 
 5. A cited ``tests/…``, ``examples/…`` or ``scripts/…`` path that does not
-   exist, anywhere the rules above look.  A migration table's "Runs in"
+   exist, anywhere the rules above look -- and, since R5 lane H-DOCGATES, a
+   ``src/…`` or ``include/…`` path to a C/C++ source or header (a ``git show
+   <ref>:path`` object path is history by its spelling, and a file the
+   clause calls *generated* exists only in a build or an install).  A migration table's "Runs in"
    column and a reference page's "pinned by" clause are the reader's way to
    the witness; a file that never existed sends them nowhere (four of them on
    ``pine-to-native.md`` did).  A ``<placeholder>`` or ``*`` in a path is a
@@ -88,6 +93,17 @@ The seven rules
    marker from exempting it.  A version *above* every live one is a forward
    reference (``removed at lifecycle_v2``) and is judged by its framing only.
 
+8. A stated ``PF_ABI_VERSION`` or ``PF_NATIVE_API_VERSION`` that is not the
+   number the header defines (R5 lane H-DOCGATES).  A lower number is history
+   and needs the marker and a history framing; a higher one is a forward
+   reference (``removed at PF_ABI_VERSION 5``) unless the clause states it as
+   today's (``is now``, ``current``).
+
+9. A PineForge release stated as the current one (``the current release``,
+   ``the latest release``, ``this tree's version``) that is not the ``VERSION``
+   file's (R5 lane H-DOCGATES).  A version framed as history (``since``,
+   ``was``, a release-notes link) is not a claim about this tree.
+
 Exit status
 -----------
 0 when no offender is found, 1 otherwise.  ``ci_preflight`` runs it as a
@@ -124,13 +140,31 @@ FENCE_RE = re.compile(r'^\s*(```|~~~)')
 CODE_SPAN_RE = re.compile(r'(`+)(.+?)\1')
 INLINE_NS_RE = re.compile(r'\binline namespace\s+([a-z][a-z0-9_]*_v[0-9]+)')
 LITERAL_DOMAIN_RE = re.compile(r'"pineforge-([a-z-]+)/v([0-9]+)')
+# Rule 3's second domain family (R5 lane H-DOCGATES): the kernel's own
+# `native-<name>/v<n>` hash domains (market_driver.hpp).
+NATIVE_DOMAIN_RE = re.compile(r'(?<![\w-])native-([a-z]+(?:-[a-z]+)*)/v([0-9]+)\b')
+LITERAL_NATIVE_DOMAIN_RE = re.compile(r'"native-([a-z]+(?:-[a-z]+)*)/v([0-9]+)')
+# Rule 8: the ABI numbers the C headers define, and a page stating one.
+ABI_DEFINE_RE = re.compile(r'^\s*#\s*define\s+(PF_ABI_VERSION|PF_NATIVE_API_VERSION)\s+(\d+)\b',
+                           re.MULTILINE)
+ABI_STATED_RE = re.compile(r'\b(PF_ABI_VERSION|PF_NATIVE_API_VERSION)`?'
+                           r'(?:\s*(?:==|=|:|is|was|stays|remains|still|now|currently|of|at)){0,3}'
+                           r'\s*\(?`?\s*(\d+)\b')
+# Rule 9: a release version on a page, and the words that make it the current one.
+RELEASE_RE = re.compile(r'(?<![\w.])v?(\d+\.\d+\.\d+)(?![\w.]*\d)')
+CURRENT_RELEASE_RE = re.compile(r'\b(?:current|latest|this tree|this release|newest)\b', re.I)
+PINEFORGE_RE = re.compile(r'\b(?:PineForge|pineforge-engine|VERSION)\b')
 
 TREE_GLOBS = ('include/pineforge/**/*.hpp', 'include/pineforge/**/*.h',
               'src/**/*.cpp', 'src/**/*.hpp')
 
 # Rule 5.  A path starts at a token boundary, so `./build/examples/native/x`
 # (a build output) and `runner/examples/strategy.cpp` are not read as rooted.
-CITED_PATH_RE = re.compile(r'(?<![\w/.\-])((?:tests|examples|scripts)/[A-Za-z0-9_./*<>+\-]*[A-Za-z0-9_*/>])')
+CITED_PATH_RE = re.compile(r'(?<![\w/.\-:])((?:tests|examples|scripts|src|include)/'
+                           r'[A-Za-z0-9_./*<>+\-]*[A-Za-z0-9_*/>])')
+# A src/ or include/ citation is this tree's only when it names a C/C++ file or
+# a directory (`src/main.rs` on the Rust page is the example crate's).
+TREE_SOURCE_RE = re.compile(r'^(?:src|include)/(?:.*\.(?:cpp|hpp|h|c|cc|inc|ipp)|.*/)$')
 # Words that say a path is gone on purpose (rule 5), or that a clause is about
 # the past (rule 7).
 HISTORY_RE = re.compile(
@@ -218,7 +252,68 @@ def live_epochs(root: Path) -> tuple[set[str], set[str]]:
             namespaces.update(INLINE_NS_RE.findall(text))
             domains.update(f'pineforge-{family}/v{number}'
                            for family, number in LITERAL_DOMAIN_RE.findall(text))
+            domains.update(f'native-{family}/v{number}'
+                           for family, number in LITERAL_NATIVE_DOMAIN_RE.findall(text))
     return namespaces, domains
+
+
+def domain_tokens(line: str):
+    """(token, family key, version) of every hash-domain token on a line."""
+    for match in DOMAIN_RE.finditer(line):
+        yield match, f'pineforge-{match.group(1)}', int(match.group(2))
+    for match in NATIVE_DOMAIN_RE.finditer(line):
+        yield match, f'native-{match.group(1)}', int(match.group(2))
+
+
+def abi_numbers(root: Path) -> dict[str, int]:
+    """Rule 8: the ABI numbers the C headers #define."""
+    found: dict[str, int] = {}
+    for rel in ('include/pineforge/pineforge.h', 'include/pineforge/native_c_api.h'):
+        path = root / rel
+        if path.is_file():
+            for name, number in ABI_DEFINE_RE.findall(path.read_text(errors='replace')):
+                found[name] = int(number)
+    return found
+
+
+def release_version(root: Path) -> str | None:
+    path = root / 'VERSION'
+    return path.read_text().strip() if path.is_file() else None
+
+
+def stale_numbers(page: Path, text: str, abi: dict[str, int],
+                  version: str | None) -> list[Offender]:
+    """Rules 8 and 9 over the page's prose."""
+    out: list[Offender] = []
+    for number, line in code_free(text):
+        verified = VERIFIED in line
+        for match in ABI_STATED_RE.finditer(line):
+            name, stated = match.group(1), int(match.group(2))
+            live = abi.get(name)
+            if live is None or stated == live:
+                continue
+            clause = re.sub(r'<!--.*?-->', ' ', clause_around(line, match.start(), match.end()))
+            if stated > live:
+                if not re.search(r'\b(?:is now|current(?:ly)?)\b', clause, re.I):
+                    continue                           # a forward reference
+            elif verified and HISTORY_RE.search(clause):
+                continue                               # history, said so and marked
+            out.append(Offender(page, number, 'stale-abi', line.strip(),
+                                f'`{name}` is {live} in the header; the line states {stated}'))
+        if version is None:
+            continue
+        for match in RELEASE_RE.finditer(line):
+            if match.group(1) == version:
+                continue
+            clause = re.sub(r'<!--.*?-->', ' ', clause_around(line, match.start(), match.end()))
+            if not (CURRENT_RELEASE_RE.search(clause) and PINEFORGE_RE.search(clause)):
+                continue
+            if HISTORY_RE.search(clause) or re.search(r'\bsince\b', clause, re.I):
+                continue
+            out.append(Offender(page, number, 'stale-release', line.strip(),
+                                f'{match.group(0)} is stated as the current release; '
+                                f'`VERSION` is {version}'))
+    return out
 
 
 def families(tokens: set[str], splitter) -> dict[str, set[str]]:
@@ -387,8 +482,13 @@ def dead_paths(root: Path, page: Path, text: str) -> list[Offender]:
     for number, line in code_free(text):
         for match in CITED_PATH_RE.finditer(line):
             cited = match.group(1)
+            if cited.startswith(('src/', 'include/')) and not TREE_SOURCE_RE.match(cited):
+                continue                               # not a C/C++ file of this tree
             if cited.endswith('/') and (root / cited).is_dir():
                 continue
+            if re.search(r'\bgenerated\b', clause_around(line, match.start(), match.end()),
+                         re.I):
+                continue                               # exists in a build or an install
             pattern = re.sub(r'<[^<>]*>', '*', cited)
             if '*' in pattern:
                 if any(root.glob(pattern.rstrip('/'))):
@@ -432,12 +532,11 @@ def verified_live_claims(page: Path, body: str, live_ns_families: dict[str, set[
             if live and match.group(0) not in live:
                 newest = max(int(t.rsplit('_v', 1)[1]) for t in live)
                 tokens.append((match, version > newest))
-        for match in DOMAIN_RE.finditer(line):
-            key = f'pineforge-{match.group(1)}'
+        for match, key, version in domain_tokens(line):
             live = live_domain_families.get(key)
             if live and match.group(0) not in live:
                 newest = max(int(t.rsplit('/v', 1)[1]) for t in live)
-                tokens.append((match, int(match.group(2)) > newest))
+                tokens.append((match, version > newest))
         for match, forward in tokens:
             at, until = offsets[index] + match.start(), offsets[index] + match.end()
             clause = re.sub(r'<!--.*?-->', ' ', clause_around(body, at, until))
@@ -463,10 +562,12 @@ def check(root: Path) -> list[Offender]:
     published = set(pages(root, PUBLISHED_GLOBS))
     anchors_cache: dict[Path, set[str]] = {}
     counts = derived_counts(root)
+    abi, version = abi_numbers(root), release_version(root)
 
     for page in pages(root, DOC_GLOBS):
         text = page.read_text(errors='replace')
         anchors_cache[page] = headings(text)
+        found.extend(stale_numbers(page, text, abi, version))
         for number, line in code_free(text):
             verified = VERIFIED in line
             if page in published and LANE_RE.search(line):
@@ -481,9 +582,8 @@ def check(root: Path) -> list[Offender]:
                             page, number, 'stale-epoch', line.strip(),
                             f'`{token}` is not live; the tree declares '
                             + ', '.join(sorted(live_ns_families[family]))))
-                for family, number_text in DOMAIN_RE.findall(line):
-                    token = f'pineforge-{family}/v{number_text}'
-                    key = f'pineforge-{family}'
+                for match, key, _ in domain_tokens(line):
+                    token = match.group(0)
                     if key in live_domain_families and token not in live_domain_families[key]:
                         found.append(Offender(
                             page, number, 'stale-epoch', line.strip(),
@@ -565,7 +665,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not found:
         print('\nno lane labels, stale negatives, stale epochs, dead links, dead paths, '
-              'stale counts or markers on a stale present')
+              'stale counts, stale ABI numbers or releases, or markers on a stale present')
         return 0
     print(f'\n{len(found)} offenders:')
     for offender in found:
