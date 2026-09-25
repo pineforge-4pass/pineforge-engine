@@ -935,7 +935,9 @@ trigger alternative, and a retained best must still produce a representable
 level for the successor's offset; otherwise the replacement is rejected and
 the predecessor stays live.
 
-Two more options change what a replacement consumes, never what it matches.
+Two more options change what a replacement keeps. `keep_handle` can also
+change matching when a re-priced parent has waiting children: they retain
+their owner and may fill, whereas a plain replace ends that ownership.
 `keep_handle` re-prices the request in place: the successor keeps the
 predecessor's handle, its place in the chain (no chain-root pair is folded
 again), its children and cohort members, and a trail's arm ordinal, and takes
@@ -1898,7 +1900,7 @@ spec digest folds a retention other than the default.
 
 | retention | what the kernel keeps | memory |
 |---|---|---|
-| `Window` (the default) | the command journal, only until the host has read it; no driver point, no account row | O(live) |
+| `Window` (the default) | the command journal, only until the host has read it; no driver point, no account row | O(live + replaces) |
 | `Commands` | the whole command journal and every account row; no driver point | O(run) |
 | `Full` | the whole command journal, every driver point and every account row — the record every run kept before the field existed | O(run) |
 
@@ -2890,8 +2892,10 @@ native contract is legacy and cannot take `--native-config`.
 | Submit/replace/cancel outside the allowed phase | throws; not a fill | command only from callbacks or between realtime inputs |
 | Cooperative abort | `Failed` (`Aborted`) | reuse with `configure_native` using the same session key and a higher run number |
 
-`last_run_status()` is not failure authority. After `Failed`, later `run` /
-`stream_*` / `configure_native` refuse (`native host already failed`).
+`last_run_status()` is not failure authority. After a cooperative `Aborted`
+failure, `configure_native` can reuse the host with the same session key and
+a higher run number. Other failures remain latched: subsequent `run`,
+`stream_*` and `configure_native` calls refuse (`native host already failed`).
 
 ## C++ example
 
@@ -2948,6 +2952,7 @@ pineforge::NativeRunSpec make_spec() {
     spec.fee_value = 6.0;
     spec.close_execution = pineforge::NativeCloseExecution::NextEligiblePoint;
     spec.allowed_open_directions = pineforge::NativeOpenDirections::Both;
+    spec.event_retention = pineforge::NativeEventRetention::Full;
     return spec;
 }
 
@@ -3244,10 +3249,9 @@ its `resolve_execution_terms` override; and its own placement-time money-band
 and affordability gates, which consume a quantity before any request exists and
 so cannot be a kernel decision. The percentage fee reserve is the kernel's
 (`reserve_percent_fee`). The generic conversion is available through
-`native_sized_units()`, while source paths that keep `HostSized{Open}` restate
-their source-specific quotient and floor in `resolve_execution_terms`; this
-paragraph does not claim that every source conversion is implemented at one
-call site. The two
+`native_sized_units()`. Source paths that keep `HostSized{Open}` retain their
+source-specific floor in `resolve_execution_terms`, while the cash or equity
+quotient comes from the kernel's sizing query. The two
 lot floors stay the adapter's because neither is the kernel's `SnapToGrid` on
 every input — the cash floor keeps a quotient a millionth of a lot under a
 boundary raw, and the percent floor has no on-grid tolerance, so an exact lot
@@ -3802,11 +3806,11 @@ by anything but an abort, answer `PF_NATIVE_E_STATE` with
 cooperative abort latches only while a run holds its spec, and the Failed
 state keeps it, so no public call reaches it.
 
-`pf_native_run_spec_ext_v1`'s third published length,
+`pf_native_run_spec_ext_v1`'s third of five published lengths,
 `PF_NATIVE_RUN_SPEC_EXT_V1_POLICY_SIZE`, ends the tail after the base layout
 (`PF_NATIVE_RUN_SPEC_EXT_V1_BASE_SIZE`) and the risk tail
 (`PF_NATIVE_RUN_SPEC_EXT_V1_RISK_SIZE`); the runtime accepts it and the other
-three. That tail appends what the header used to list as unrepresentable — the retained intrabar path
+four. That tail appends what the header used to list as unrepresentable — the retained intrabar path
 (`PF_NATIVE_SPEC_EXT_INTRABAR`), the four feed-shape and presentation
 policies (`PF_NATIVE_SPEC_EXT_FEED_POLICY`: slot labels, feed tolerance, the
 forced path order, abort reporting), and the margin model's remaining knobs
@@ -3821,12 +3825,14 @@ The intrabar block is also what makes `on_sub_bar` reachable: only
 has sub-bars of its own. A `PF_NATIVE_SLOT_LABEL_FEED_TOLERANT` run keeps the
 caller's own labels and delivers none.
 
-`pf_native_request_v1` likewise has four published lengths now — base, plus
+`pf_native_request_v1` likewise has five published lengths now — base, plus
 the anchored-leg tail (`PF_NATIVE_REQUEST_V1_ANCHOR_SIZE`), plus the
 sizing detail (`PF_NATIVE_REQUEST_V1_SIZING_SIZE`): `size_price` (`SizePrice`:
 `RESOLVED`, `SIGNAL`, `SIGNAL_ON_TICK`) and `reduce_basis` (`ScopeBasis`:
-`AT_MATCH`, `AT_ACCEPTANCE`), plus the trail seed: `trail_best_seed` and
-`trail_has_best_seed` (`Trail::best_seed`, where the running best starts).
+`AT_MATCH`, `AT_ACCEPTANCE`), plus the trail seed
+(`PF_NATIVE_REQUEST_V1_SEED_SIZE`): `trail_best_seed` and
+`trail_has_best_seed` (`Trail::best_seed`, where the running best starts),
+and the current arm-relation tail.
 
 `pf_native_working_v1` is the first **readout** with an additive tail:
 `trail_has_arm_price`, the request's own flag read back, so a trail with no

@@ -7,7 +7,8 @@
 // exit leg bound to the position keeps its binding across the re-issue and the
 // kernel records no CloseBoundEvent for it at its next point (the kernel binds
 // it exactly as a plain replace would whenever the position has moved). The
-// adapter witness (tests/test_adapter_reissue_binding.cpp) runs every script
+// adapter witness (tests/test_adapter_live_state_equivalence.cpp,
+// --reissue-binding) runs every script
 // twice -- carrying, and with every re-issue a plain replace as before V19-D --
 // and holds the two runs' transcripts equal bar for bar, CloseBoundEvents and
 // the ordinals they shift aside. The shipped library never clears the switch.

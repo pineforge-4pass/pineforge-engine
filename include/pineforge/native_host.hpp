@@ -23,8 +23,8 @@ inline namespace engine_script_run_v19 {
 /// Unconfigured is a fresh host, Ready a staged spec, Running a consumed begin
 /// (with NativeRunPhase saying which driving), Completed a finished run whose
 /// lots and live requests stay visible but not actionable, and Failed a durable
-/// first failure: discard the host, replay on a fresh instance, never reconfigure
-/// in place. Pinned by tests/test_native_host_repairs.cpp.
+/// first failure. Cooperative Aborted permits same-key, higher-run reuse;
+/// other failures need a new host. Pinned by tests/test_native_host_repairs.cpp.
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
     Ready = 1,
@@ -58,8 +58,8 @@ enum class NativeCompletion : std::uint8_t {
 /// driver refused, UnsupportedSource a source-only setter or command on a bare
 /// host, CallbackException a host callback that threw or a C callback that
 /// returned non-zero, and Aborted a cooperative abort. The rest are internal
-/// exhaustion states with no rollback promise. Set once and latched: later run /
-/// stream_* / configure_native calls refuse.
+/// exhaustion states with no rollback promise. Later run/stream_* calls refuse;
+/// only Aborted permits configure_native with the same key and higher run.
 enum class NativeFailureCode : std::uint16_t {
     None = 0,
     InvalidSpecification = 1,

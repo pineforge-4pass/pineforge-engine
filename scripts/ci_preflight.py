@@ -188,6 +188,8 @@ def check_commands(source: Path) -> list[tuple]:
         ('native-tempdir-tests',
          [sys.executable, str(source / 'scripts/check_native_cpp_versions.py'),
           '--self-test-tempdir']),
+        ('dangling-comment-names-tests',
+         [sys.executable, str(source / 'scripts/test_check_dangling_comment_names.py')]),
         ('doc-anchors-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',

@@ -157,7 +157,7 @@ _SENTENCE_BREAK = re.compile(r'\.\s|\n\s*\n|\|')
 COUNT_PHRASINGS = (
     ('native-c-api', re.compile(r'\b' + _N + r'\s+(?:additive|further)\s+(?:PF_API\s+)?'
                                 r'(?:symbols|functions)\b', re.I), None),
-    ('native-c-api', re.compile(r'\b' + _N + r'\s+strategy_native_\*\s+(?:symbols|functions)\b',
+    ('native-prefix', re.compile(r'\b' + _N + r'\s+strategy_native_\*\s+(?:symbols|functions)\b',
                                 re.I), None),
     ('native-c-api', re.compile(r'native_c_api\.h>?\s*(?:\([^)]*\))?\s*[—–]+\s*' + _N + r'\b',
                                 re.I), None),
@@ -191,6 +191,7 @@ COUNT_PHRASINGS = (
 PARTIAL_COUNT_RE = re.compile(r'\b(?:new|more|another|further|extra|other)\s*$', re.I)
 COUNT_SOURCES = {
     'native-c-api': 'include/pineforge/native_c_api.h',
+    'native-prefix': 'include/pineforge/native_c_api.h',
     'pineforge-h': 'include/pineforge/pineforge.h',
     'runtime': 'scripts/check_c_abi_runtime.py',
     'pf-api-total': 'include/pineforge/native_c_api.h + include/pineforge/pineforge.h',
@@ -301,6 +302,9 @@ def derived_counts(root: Path) -> dict[str, int | None]:
     public = read('include/pineforge/pineforge.h')
     if native is not None:
         counts['native-c-api'] = len(re.findall(r'^PF_API\b', native, re.MULTILINE))
+        counts['native-prefix'] = len(re.findall(
+            r'^PF_API[^\n]*\bstrategy_native_[A-Za-z0-9_]+\s*\(',
+            native, re.MULTILINE))
     if public is not None:
         counts['pineforge-h'] = len(re.findall(r'^PF_API\b', public, re.MULTILINE))
     if native is not None and public is not None:

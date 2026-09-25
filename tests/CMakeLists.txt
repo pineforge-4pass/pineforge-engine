@@ -2257,6 +2257,30 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_pine_to_native_worked COMMAND test_pine_to_native_worked)
 
+# DOC-TRUTH-4: compile the guide's Complete host block verbatim. The CTest
+# wrapper also checks that the built source still matches the live page.
+set(_pf_ne_page ${PROJECT_SOURCE_DIR}/docs/pages/native-engine.md)
+set(_pf_ne_complete ${CMAKE_CURRENT_BINARY_DIR}/native_engine_complete_host.cpp)
+add_custom_command(
+    OUTPUT ${_pf_ne_complete}
+    COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/extract_native_engine_complete_host.py
+            --page ${_pf_ne_page} --out ${_pf_ne_complete}
+    DEPENDS ${_pf_ne_page} ${CMAKE_CURRENT_SOURCE_DIR}/extract_native_engine_complete_host.py
+    COMMENT "Extracting Complete host from docs/pages/native-engine.md"
+    VERBATIM)
+add_executable(test_native_engine_complete_host ${_pf_ne_complete})
+target_link_libraries(test_native_engine_complete_host PRIVATE PineForge::kernel)
+target_compile_options(test_native_engine_complete_host PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_native_engine_complete_host PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_native_engine_complete_host
+    COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/extract_native_engine_complete_host.py
+            --page ${_pf_ne_page} --out ${_pf_ne_complete}
+            --run $<TARGET_FILE:test_native_engine_complete_host>)
+
 # Independent native vertical contract fixture identity.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"
      PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256)

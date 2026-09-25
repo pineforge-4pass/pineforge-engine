@@ -233,7 +233,9 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +2 K-ULP4 test_native_unrepresentable_refusal, test_native_quantity_tolerance
 # All four register in release too. 276 registered, 275 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 275
+# DOC-TRUTH-4 adds the extracted Complete host (test_native_engine_complete_host):
+# 277 registered, 276 run.
+KERNEL_MIN_TESTS = 276
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -340,8 +342,8 @@ KERNEL_MIN_TESTS = 275
 # 676 = those 674 plus the two R5 lane K-ULP4 rows KERNEL_MIN_TESTS lists
 # above, which register here too (ctest -N on the lane's tree); its C-language
 # checks are rows inside test_native_c_api. No release row skips, so 676
-# registered is 676 run.
-RELEASE_MIN_TESTS = 676
+# registered is 676 run. DOC-TRUTH-4 adds the Complete host in release: 677.
+RELEASE_MIN_TESTS = 677
 # PR-only registration floors. These are the complete CTest populations at
 # 91d65ad6 (INT24); the ordinary full-run floors above remain unchanged.
 # An excluded run must still discover at least this many rows before -LE.
@@ -376,6 +378,7 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-native-c-surface', ['scripts/check_native_c_api_surface.py']),
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
     ('source-guard-adapter-spec-shadowing', ['scripts/check_adapter_spec_shadowing.py']),
+    ('source-guard-dangling-comment-names', ['scripts/check_dangling_comment_names.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 # The kernel-only archive must name no TradingView vocabulary outside ADR-0001's

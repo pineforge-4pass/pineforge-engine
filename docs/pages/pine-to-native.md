@@ -315,8 +315,8 @@ when a rejection's `RequestRejectReason` native_order.hpp:821 matters.
 | --- | --- | --- | --- | --- |
 | `limit=` | `Limit` native_order.hpp:237 | `PF_NATIVE_TRIGGER_LIMIT` native_c_api.h:387 | `native_calc_on_fills_strategy.cpp` | `fill_through` native_order.hpp:239 makes it market-if-touched: the level gates when the request becomes executable, and the fill is no longer bounded by it. |
 | `stop=` | `Stop` native_order.hpp:246 | `PF_NATIVE_TRIGGER_STOP` native_c_api.h:388 | `native_price_grid_strategy.cpp` | Stop-limit is `StopLimit` native_order.hpp:252. |
-| `trail_points` | `FromOwnerFill{+ticks, true}` native_order.hpp:331 | `arm_scope` / `arm_first_match` native_c_api.h:2176-2177 | `native_bracket_strategy.cpp` | Pine points are the arm distance from the entry, in ticks. The adapter lowers that anchor distance separately from the ride offset; it is not `TrailTicks`. |
-| `trail_offset` | `TrailTicks` native_order.hpp:293 (resolved into `Trail::offset` native_order.hpp:291) | `p1` native_c_api.h:2111 | `native_trail_risk_strategy.cpp` | Pine offset is the ride distance behind the running best, also expressed in ticks. Zero is legal and means "ride the best"; the first adverse move past it exits. |
+| `trail_points` | `FromOwnerFill{+ticks, true}` native_order.hpp:331 | `anchor = PF_NATIVE_ANCHOR_FROM_OWNER_FILL`, `anchor_offset = ticks`, `anchor_offset_in_ticks = 1` native_c_api.h:2093-2100 | `native_bracket_strategy.cpp` | Pine points are the arm distance from the entry, in ticks. The adapter lowers that anchor distance separately from the ride offset; it is not `TrailTicks`. |
+| `trail_offset` | `TrailTicks` native_order.hpp:293 (resolved into `Trail::offset` native_order.hpp:291) | `p1 = ticks`, `trail_offset_in_ticks = 1` native_c_api.h:2094-2098 | `native_trail_risk_strategy.cpp` | Pine offset is the ride distance behind the running best, also expressed in ticks. Zero is legal and means "ride the best"; the first adverse move past it exits. |
 | `trail_price` | `Trail::arm_price` native_order.hpp:292 | `trail_has_arm_price` native_c_api.h:2116 | `native_trail_risk_strategy.cpp` | The absolute level the trail arms at. Read the live projection with `trail_state` native_host.hpp:1072 (C: `strategy_native_trail_state_v1` native_c_api.h:2986). The kernel compares `arm_price` with the **raw** path. TradingView tests the activation on the **tick-quantized** bar, with or without an offset and the placement close included (R5 lanes E5 and E9's tapes), so the Pine adapter arms at the activation's half-tick threshold — a placement close whose tick reaches the activation arms there — and books from a running best that starts at the activation; a one-shot (`trail_offset` 0) books the tick its resting threshold stands for, rounded away from the position. Since R5 lane E14 that running best is the **kernel's** own: the trailing leg names the activation — or the favourable one of the activation and the placement print when that print armed it — in the generic `Trail::best_seed` native_order.hpp:294, so the ride no longer starts half a tick short of the activation. |
 
 `limit=` and `stop=` are listed once here rather than once per command,
@@ -493,18 +493,40 @@ host on the default reads them truthfully without recording a curve.
 prints the difference; recording books no cash and places no order, so the two
 runs close the same trades for the same money.
 
+For event readback, C++ `NativeRunSpec::event_retention` defaults to `Window`:
+the kernel retires events at script-bar boundaries, so a host that inspects
+`native_events(0)` only after a run must request `Full`. A host that consumes
+events during the run can keep `Window` and acknowledge its cursor with
+`native_acknowledge_events` native_host.hpp:1309. A C caller that omits the
+extension's retention word keeps `Full` for ABI compatibility.
+
+Pine's `strategy.openprofit` is the **gross** mark-to-market move of open
+positions; `strategy.equity` adds that gross amount to realized equity. A
+native open lot's `unrealized_pnl` and `native_marked_equity(mark)` deduct its
+remaining entry commission. To recover the Pine figures from those native
+values, add the open lots' `entry_commission` once, at the same mark.
+
+The report's trade statistics (`pf_trade_stats_t` in the all, long and short
+blocks) count **report-only range-end rows** when
+`report_open_position_at_end` is enabled. Protected `BacktestEngine` closed
+trade accessors count booked closes only. To compare any of the C trade
+statistics below with Pine's closed-trade statistics, aggregate C
+`pf_trade_t` rows with `open_at_end == 0`; the direct values and the
+`gross_loss` sign conversion apply to the report as printed only when
+range-end reporting is off.
+
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
 | `strategy.account_currency` | `currency` native_run_spec.hpp:570 | `currency` pineforge.h:535 | `hello_kernel.cpp` / `native_fx_roll_strategy.cpp` | Declared, never inferred. `account_fx` native_run_spec.hpp:581 is the one positive scalar that converts quote to account; a timestamped curve is `configure_native_fx_curve` native_host.hpp:1182. The FX-roll example runs a JPY account on a USD-quoted stock through such a curve, and a step of it is a margin check point of its own. |
 | `strategy.initial_capital` | `initial_capital` native_run_spec.hpp:579 | `initial_capital` pineforge.h:537 | `hello_kernel.cpp` | The value you declared, unchanged by the run. |
-| `strategy.equity` | `native_marked_equity` native_host.hpp:1281 | `strategy_native_marked_equity_v1` native_c_api.h:3011 | `native_open_lots_strategy.cpp` | Pine marks at the current `close`; the native call takes the mark explicitly, so the caller says what "now" means. It equals the balance plus the open lots' `unrealized_pnl` native_host.hpp:341, which the example asserts at every calculation. |
+| `strategy.equity` | `current_equity() + open_profit(mark)` engine.hpp:970-1024; or `native_marked_equity(mark)` native_host.hpp:1281 plus open entry commissions | `strategy_native_marked_equity_v1` native_c_api.h:3011 plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine marks at the current `close`. The native marked call takes the mark explicitly and returns balance plus open lots' **net** `unrealized_pnl` native_host.hpp:341; add their remaining entry commissions to reproduce Pine's gross-open-profit equity. |
 | `strategy.netprofit` | `net_profit` engine.hpp:967 | `net_profit` pineforge.h:412 | `native_open_lots_strategy.cpp` | Realized only. |
 | `strategy.netprofit_percent` | derive: `net_profit` engine.hpp:967 over `initial_capital` native_run_spec.hpp:579 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | The kernel keeps the facts, not the ratio. |
 | `strategy.grossprofit` | `gross_profit` engine.hpp:968 | `pf_trade_stats_t` pineforge.h:291 | `native_open_lots_strategy.cpp` | |
 | `strategy.grossprofit_percent` | `grossprofit_percent` engine.hpp:975 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | Of initial capital. |
-| `strategy.grossloss` | `gross_loss` engine.hpp:969 | `pf_trade_stats_t::gross_loss` pineforge.h:246 | `native_open_lots_strategy.cpp` | The protected C++ accessor is signed (negative for losses), while the C report stores `gross_loss` as a positive magnitude. Convert C to the protected sign with `-gross_loss`; then `netprofit == grossprofit - C.gross_loss`. |
+| `strategy.grossloss` | `gross_loss` engine.hpp:969 | `pf_trade_stats_t::gross_loss` pineforge.h:246 | `native_open_lots_strategy.cpp` | For booked closed trades the protected C++ accessor is signed (negative for losses), while the C report stores a positive loss magnitude. With range-end reporting off, `-C.gross_loss == gross_loss()` and `netprofit == grossprofit - C.gross_loss`. With it on, C trade statistics include the report-only range-end rows; filter `open_at_end == 0` before comparing to Pine's closed-trade statistics. |
 | `strategy.grossloss_percent` | `grossloss_percent` engine.hpp:978 | `pf_metrics_t` pineforge.h:358 | `native_sized_report_strategy.cpp` | |
-| `strategy.openprofit` | `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | `strategy_native_marked_equity_v1` native_c_api.h:3011 less the balance | `native_open_lots_strategy.cpp` | Takes the price to mark at, like every other native mark. |
+| `strategy.openprofit` | `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | `strategy_native_marked_equity_v1` native_c_api.h:3011 less realized balance, plus open lots' `entry_commission` | `native_open_lots_strategy.cpp` | Pine's open profit is gross of remaining entry fees. The native marked equity and open-lot `unrealized_pnl` are net of them; use the same explicit mark for every term. |
 | `strategy.openprofit_percent` | derive from `open_profit` `sha256:0490e46ca24b81c82c9549ce38af81be1ea888a60277263108cd26bf3f01e0c7` engine.hpp:1024 | — | `native_open_lots_strategy.cpp` | Pine's denominator is the realized equity. |
 | `strategy.max_drawdown` | `max_drawdown_` engine.hpp:581 | `max_equity_drawdown` pineforge.h:296 | `native_open_lots_strategy.cpp` | Folded under **every** report policy — see the rule above. The scalar is the run's own; the `pf_equity_stats_t` figure derived from the recorded curve still needs `KernelRecorded` native_run_spec.hpp:63. |
 | `strategy.max_drawdown_percent` | `max_drawdown_percent` engine.hpp:1507 | `max_equity_drawdown_pct` pineforge.h:296 | `native_sized_report_strategy.cpp` | Same rule. |
@@ -927,7 +949,10 @@ them (`tests/test_pine_to_native_worked.cpp`), and runs them on sixteen
 as `CancelReason::OwnerGone`, because the lots they close are gone; the row's
 commission is 0.1 % of both notionals, 5.2423. The row computes every one of those numbers
 from the Pine block at the top of this section, so a block that stops
-configuring, or stops charging what the Pine declares, fails it.
+configuring, or stops charging what the Pine declares, fails it. Two further
+tapes drive the same extracted host: one arms the trail at
+`101 + 30 × 0.25 = 108.5` and closes at its best minus eight ticks; the other
+closes the stop at `101 - 20 × 0.25 = 96`.
 
 ### What a Pine author gets wrong the first time
 

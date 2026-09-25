@@ -95,7 +95,7 @@ NATIVE_C_API = """#pragma once
 PF_API int strategy_native_a_v1(void);
 PF_API int strategy_native_b_v1(void);
 /* PF_API in a comment is not a declaration */
-PF_API void strategy_native_c_v1(void);
+PF_API void strategy_configure_native_ext_v1(void);
 """
 PINEFORGE_H = """#pragma once
 PF_API int pf_abi_version(void);
@@ -247,6 +247,14 @@ class MustFailF2(unittest.TestCase):
             code, out = t.run()
             self.assertEqual(code, 1, out)
             self.assertIn('derives 5', out)
+
+    def test_native_prefix_is_not_the_whole_header(self) -> None:
+        with tree(**counted('The 2 `strategy_native_*` functions are declared there.\n')) as t:
+            self.assertEqual(t.run()[0], 0)
+        with tree(**counted('The 3 `strategy_native_*` functions are declared there.\n')) as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('derives 2', out)
 
     def test_the_public_and_runtime_counts(self) -> None:
         body = 'It declares exactly 65 public `PF_API` functions: 57 runtime implementations.\n'
@@ -471,7 +479,8 @@ class Derivation(unittest.TestCase):
     def test_counts_read_their_sources(self) -> None:
         with tree(**counted('x\n')) as t:
             counts = guard.derived_counts(t.root)
-        self.assertEqual(counts, {'native-c-api': 3, 'pineforge-h': 2, 'runtime': 1,
+        self.assertEqual(counts, {'native-c-api': 3, 'native-prefix': 2,
+                                  'pineforge-h': 2, 'runtime': 1,
                                   'pf-api-total': 5, 'kernel-floor': 202,
                                   'release-floor': 572, 'examples': 3, 'examples-cpp': 1,
                                   'examples-c': 2})

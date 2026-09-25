@@ -528,7 +528,7 @@ struct NativeAuxiliaryFeed {
 /// every script-bar end. The kernel never drops an event its own live state
 /// still reads -- a deferred group-adjustment chain, an applied notification
 /// not yet delivered -- and keeps no driver point and no account observation.
-/// Memory is O(live), not O(run).
+/// Memory is O(live + replaces): plain replaces retain a small chain index.
 ///
 /// Commands keeps the whole command journal and every account observation,
 /// and no driver point. Full keeps everything: the command journal, every

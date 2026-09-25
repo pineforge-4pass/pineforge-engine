@@ -2888,9 +2888,9 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 //      and the pair hold rewrite lifecycles, and exit() asks whether an
 //      opened origin's leg was consumed;
 //   K2 a current-cycle row naming a revival candidate as its predecessor,
-//   K3 the first current-cycle leg re-issuing a revival candidate at a later
-//      bar at another stop: the revival's superseded test asks whether ANY
-//      such re-issue exists, and a row's family, ids, placement bar and stop
+//   K3 the first later-bar current-cycle exit of the same family, source id
+//      and from-entry id with different stop bits: the revival's superseded
+//      test asks whether ANY such re-issue exists, and a row's family, ids, placement bar and stop
 //      never change, so the lowest-incarnation one answers for every later
 //      one (pinning them all kept two rows per exit per bar through a flat
 //      cycle that re-issues its exits every bar, each walked at every bar
@@ -2910,8 +2910,8 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 //
 // R5 lane V19-D: nor does K1 keep a leg of the current cycle bound to no
 // askable origin once the revival's superseded test answers for it -- some
-// row of the cycle names it (or its target) as its predecessor, or re-issues
-// it at a later bar at another stop. K2 and K3 keep one such row for as long
+// row of the cycle names it (or its target) as its predecessor, or a later-bar
+// exit of the same family and ids has a different stop. K2 and K3 keep one such row for as long
 // as the leg is a candidate, so a leg superseded now stays superseded for the
 // rest of its cycle: the revival never picks it again, and the suspension and
 // the pair hold only rewrite its own lifecycle, which nothing else reads. A

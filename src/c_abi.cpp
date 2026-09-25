@@ -310,7 +310,7 @@ extern "C" {
  * failed closed on the identity gate and the verifier ladder rejected the
  * TV-identical trim candidate for ena-grid (XAUUSD 1D), even though the
  * engine's per-lot range-end rows themselves matched TV (xau-grid 6/6,
- * silicon 9/9 rows). The row is built by build_close_trade from the open
+ * silicon 9/9 rows). The row is built from the open
  * pyramid lot, so it carries that lot's entry_incarnation like any other
  * close. No struct changed by this accessor (PF_ABI_VERSION is 4 since the native lowering). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(

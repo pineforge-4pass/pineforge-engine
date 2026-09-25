@@ -16,9 +16,10 @@
 //   * no request is refused, at submission or at a match;
 //   * the entry is Sized by cash with the fee reserved, so it buys
 //     default_qty_value / (price * (1 + commission_value / 100)) units;
-//   * the take-profit leg ("tp", +profit ticks) closes it, and its two
-//     siblings ("sl", "trail") are withdrawn with it: the lots they close are
-//     gone, so the kernel cancels them as CancelReason::OwnerGone;
+//   * three tapes close by take-profit, trail and stop respectively; the
+//     take-profit's siblings are withdrawn as CancelReason::OwnerGone;
+//   * armed levels use the Pine block's profit, loss, trail_points and
+//     trail_offset values as tick counts on the declared price grid;
 //   * the row's commission is commission_value percent of both notionals.
 //
 // The binary re-reads the page and refuses to run when the page changed
@@ -97,6 +98,87 @@ std::vector<pineforge::Bar> tape() {
         bars.push_back({open, close + 0.25, open - 0.25, close, 1000.0, t0 + i * step});
     }
     return bars;
+}
+
+std::vector<pineforge::Bar> variant_tape(bool trailing) {
+    std::vector<pineforge::Bar> bars = tape();
+    bars.resize(5);  // Keep the same first hourly close and entry signal.
+    const auto add = [&bars](double open, double high, double low, double close) {
+        bars.push_back({open, high, low, close, 1000.0,
+                        bars.back().timestamp + 15LL * 60 * 1000});
+    };
+    if (trailing) {
+        add(101.0, 105.0, 100.75, 105.0);
+        add(105.0, 109.5, 105.0, 109.5);
+        add(109.5, 110.5, 109.5, 110.5);
+        add(110.5, 110.5, 107.0, 107.0);
+        add(107.0, 107.0, 107.0, 107.0);
+    } else {
+        add(101.0, 101.5, 95.5, 96.0);
+        add(96.0, 96.0, 96.0, 96.0);
+    }
+    return bars;
+}
+
+void check_variant(const pineforge::NativeRunSpec& spec, bool trailing) {
+    WorkedMigration host;
+    const auto setup = host.configure_native(spec);
+    check(setup.status == pineforge::NativeSetupStatus::Applied,
+          "variant configures the page's extracted spec");
+    if (setup.status != pineforge::NativeSetupStatus::Applied) return;
+    const auto bars = variant_tape(trailing);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    check(host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
+          "variant run completes");
+
+    std::optional<double> take_profit, stop_loss, trail_arm, trail_offset;
+    int rejected = 0;
+    namespace no = pineforge::native_order;
+    for (const auto& event : host.native_events(0)) {
+        if (!event.command) continue;
+        rejected += std::holds_alternative<no::RejectedEvent>(*event.command)
+                 || std::holds_alternative<no::MatchRejectedEvent>(*event.command);
+        if (const auto* armed = std::get_if<no::ArmedEvent>(&*event.command)) {
+            if (!armed->definition) continue;
+            const auto& trigger = armed->definition->request.trigger;
+            if (const auto* limit = std::get_if<no::Limit>(&trigger))
+                take_profit = limit->price;
+            if (const auto* stop = std::get_if<no::Stop>(&trigger))
+                stop_loss = stop->price;
+            if (const auto* trail = std::get_if<no::Trail>(&trigger)) {
+                trail_arm = trail->arm_price;
+                trail_offset = trail->offset;
+            }
+        }
+    }
+    const double fill = kSignalClose;
+    check(rejected == 0, "variant has no refused request");
+    check(take_profit && near(*take_profit,
+          fill + PF_P2N_PINE_PROFIT_TICKS * spec.price_tick),
+          "take-profit arms at fill plus Pine profit ticks");
+    check(stop_loss && near(*stop_loss,
+          fill - PF_P2N_PINE_LOSS_TICKS * spec.price_tick),
+          "stop arms at fill minus Pine loss ticks");
+    check(trail_arm && near(*trail_arm,
+          fill + PF_P2N_PINE_TRAIL_POINTS_TICKS * spec.price_tick),
+          "trail arms at fill plus Pine trail_points ticks");
+    check(trail_offset && near(*trail_offset,
+          PF_P2N_PINE_TRAIL_OFFSET_TICKS * spec.price_tick),
+          "trail rides Pine trail_offset ticks");
+    check(host.trade_count() == 1, "variant closes exactly one trade");
+    if (host.trade_count() != 1) return;
+    const auto& trade = host.get_trade(0);
+    const double expected_exit = trailing
+        ? 110.5 - PF_P2N_PINE_TRAIL_OFFSET_TICKS * spec.price_tick
+        : fill - PF_P2N_PINE_LOSS_TICKS * spec.price_tick;
+    std::printf("%s tape: entry=%.4f exit=%.4f exit_id=%s; armed tp=%.4f sl=%.4f trail=%.4f offset=%.4f\n",
+                trailing ? "trail" : "stop", trade.entry_price, trade.exit_price,
+                trade.exit_id.c_str(), take_profit.value_or(-1), stop_loss.value_or(-1),
+                trail_arm.value_or(-1), trail_offset.value_or(-1));
+    check(trade.exit_id == (trailing ? "trail" : "sl")
+          && near(trade.exit_price, expected_exit),
+          trailing ? "trail closes at running best minus Pine offset ticks"
+                   : "stop closes at fill minus Pine loss ticks");
 }
 
 }  // namespace
@@ -180,6 +262,9 @@ int main() {
         check(near(t.commission, commission),
               "commission == commission_value percent of both notionals");
     }
+
+    check_variant(spec, true);
+    check_variant(spec, false);
 
     std::printf("pine-to-native worked migration: %s\n",
                 failures == 0 ? "every check passed" : "checks failed");

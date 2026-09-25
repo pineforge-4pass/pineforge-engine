@@ -225,9 +225,9 @@ struct TradeC {
     double pnl;
     double pnl_pct;
     int is_long;
-    // Max Adverse/Favorable Excursion expressed as $ move per unit qty.
-    // max_runup is peak favorable move (price travel in direction of trade).
-    // max_drawdown is peak adverse move (price travel against trade).
+    // Max Adverse/Favorable Excursion for the whole trade in account currency,
+    // net of entry fees. max_runup is the peak favorable amount;
+    // max_drawdown is the peak adverse amount.
     double max_runup;
     double max_drawdown;
     double qty;
@@ -2113,7 +2113,7 @@ public:
     //   * different driving -- run(), stream_begin(warmup=1)+push and
     //     stream_begin(warmup=all) over the same bars booking the same trades
     //     record different rows from index 0; only the length identity above
-    //     survives. Two streams share exactly their common Warmup prefix.
+    //     survives. Without subscriptions, streams share their Warmup prefix.
     //   * the broker half alone IS driving-mode invariant: factor the
     //     continuation out with broker_state_hash_from_execution_hash(fixed)
     //     and the remaining fold is identical at every bar in every driving.

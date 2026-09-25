@@ -613,8 +613,8 @@ std::optional<double> representable_units(double units,
 // fee reserve.
 //
 // NativeRunSpec::fee_value is a PERCENT for NativeFeeKind::Percent
-// (native_run_spec.hpp:560): the charge is fee_value / 100 of the account
-// notional (engine.hpp calc_commission). The reserve is the exact inverse of
+// (native_run_spec.hpp:589): the charge is fee_value / 100 of the account
+// notional. The reserve is the exact inverse of
 // that charge, so it divides by 1 + fee_value / 100 and a 0.1 % fee reserves
 // 0.1 %, not 10 %.
 std::optional<double> sized_basis_units(const native_order::Sized& sized, double price,
