@@ -433,7 +433,8 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 
 What the version number promises from 1.0.0 — for this C ABI, the native C++
 API, the script ABI epoch and the pairing with codegen — is the
-[public contract](docs/pages/public-contract.md).
+[public contract](docs/pages/public-contract.md); what a 0.x user must act on
+is in [CHANGELOG.md](CHANGELOG.md).
 
 A built strategy `.so` exposes 66 compiled-strategy `PF_API` declarations
 (58 runtime implementations plus eight generated exports) plus 43 native-host
@@ -590,6 +591,7 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Releases
 
+- **1.0.0** — the release notes are [CHANGELOG.md](CHANGELOG.md), and what 1.x promises is the [public contract](docs/pages/public-contract.md).
 - **Unreleased** (branch `live/abi-v4`) — ABI v4 live surface for `pineforge-live`: 24 new default-off exports (cooperative abort, realtime tail, probe-suppress tail logic, forced path order, a per-bar broker-state hash, the pending-order book as a generated POD mirror, closed-trade id/comment/close-cause, position and equity accessors). No flag changes a historical run: `scripts/live_flags_off_identity.py` (312 corpus probes, 0 differ vs the pre-v4 branch point), `scripts/live_flags_lane.py` (312 probes, 0 positives, 130 open-at-end trades subtracted), and `scripts/bar_identity_lane.py` (row 1: 222,295 bars compared, 2 explained open divergences, 0 else) all pass. 56 symbols.
 - **v0.13.0** (2026-09-05) — the parity campaign, rounds 1–11: TradingView's broker rules pinned with sensor exports and landed with replay tests — ten-significant-digit money, trailing-stop restarts, zero-offset trails, declined-reversal bracket legs, the surviving `strategy.close`, sparse `ta.atr`/`ta.tr`, pivot tick snap, same-bar entry/close transactions, early-close higher-timeframe buckets, 64-bit epoch arrays. Closed test 3,880/3,881; corpus 309/309. ABI v3, 32 symbols, 198 tests.
 - **v0.7 – v0.12** (June–August 2026) — native and auxiliary `request.security()` feeds, ABI v2 metrics + equity curve, streaming mode, range-end accounting. See [GitHub releases](https://github.com/pineforge-4pass/pineforge-engine/releases).
