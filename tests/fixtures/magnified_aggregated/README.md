@@ -16,8 +16,13 @@ window 2025-07-01 .. 2025-07-08), byte-identical.
 | `hm-mag-diff-v0` | plain, magnifier on | 12 | `53c28aaf8caa6ed1708a9aa42f2965db37724c87d95691fb16bbb56dbb69906e` | `tv-tape-hm-mag-diff-v0-53c28aaf` |
 | `hm-mag-diff-v2` | calc_on_order_fills, magnifier on | 12 | `444e7bc4eaac5b16e224007225bc55ed1c36fecd4453b8eab95e6c1ea70c6656` | `tv-tape-hm-mag-diff-v2-444e7bc4` |
 | `hm-mag-diff-v4` | slippage 2, pyramiding 3, magnifier on | 14 | `d18ca4ad316311a4aad91503800402f1873c927c3cadc575b3b1a1ab669d196e` | `tv-tape-hm-mag-diff-v4-d18ca4ad` |
+| `hm-mag-diff-v3` | process_orders_on_close, calc_on_order_fills, magnifier on | 12 | `23a25293ac35ce433214a7719e26cc58cf90471e5848bb7610e7485f1b3d079b` | `tv-tape-hm-mag-diff-v3-23a25293` |
 | `hm-chart-diff-v0` | plain, magnifier off | 12 | `b2652feb01b83236315a92112acb5b108626d11d959ed4b17effc6087454ae2c` | `tv-tape-hm-chart-diff-v0-b2652feb` |
 | `hm-chart-diff-v4` | slippage 2, pyramiding 3, magnifier off | 14 | `5293cc0c2bc88dabba65ff73a024d88b28292845c537f0f4ccf58922e4d502a1` | `tv-tape-hm-chart-diff-v4-5293cc0c` |
 
 TradingView dates every magnified fill at its chart bar's open; the rows are
 compared at chart-bar granularity. Excursions are not compared.
+
+`hm-mag-diff-v3` (added by R5 lane PAR-ORDERS from H-MEASURE's evidence,
+`exec/H-MEASURE-scratch/agg/tapes`) witnesses the pyramiding cap: 12 rows and a
+flat book, where the engine once opened 85 lots on one bar with pyramiding=1.

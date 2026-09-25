@@ -6114,6 +6114,33 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 && existing->second.family == PineOrderFamily::Entry
                 && existing->second.is_long != is_long;
         });
+    // Under process_orders_on_close a pending opposite opening defers the
+    // pyramiding cap below to the close pass, where ab9714be counted the
+    // entries then filled (add_to_pyramid_market's position_entry_count_) and
+    // TradingView counts the trades then open. That pass fills the opposite
+    // opening BEFORE this entry only when it processes it -- a market entry,
+    // or one this script bar's own calculation placed -- and the add may be a
+    // reversal by then. A priced opposite entry resting from an earlier bar is
+    // not in that pass, so the add is held to the lots open now. (Deferred
+    // without that bound, every fill's recalculation under the magnifier and
+    // calc_on_order_fills re-issued such an add past pyramiding=1: 85 lots on
+    // one bar where TradingView's tape books none -- R5 lane PAR-ORDERS.)
+    const bool opposite_opening_in_close_pass = std::any_of(
+        live_handles_.begin(), live_handles_.end(),
+        [&](const native_order::RequestHandle& handle) {
+            const auto existing = placement_.find(handle.incarnation);
+            if (existing == placement_.end()) return false;
+            const auto& row = existing->second;
+            if (!row.opening || row.family != PineOrderFamily::Entry
+                || row.is_long == is_long) {
+                return false;
+            }
+            const bool market = !finite_positive(row.exit_levels.limit)
+                && !finite_positive(row.exit_levels.stop);
+            return market
+                || (source_point
+                    && row.placement_script_open_ms == source_point->decision.script_bar_open_ms);
+        });
     // ab9714be src/compat/pine/market_admission.cpp:33-37: the explicit
     // flat-pair scope (explicit_pair_scope) carries no commission term;
     // a commissioned pyramiding=2 pair keeps the gross transaction.
@@ -6207,7 +6234,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             && accepted_in_cycle >= static_cast<std::size_t>(config_.pyramiding)
             && !short_seed_final_candidate && !paired_all_in_reentry
             && !default_gross_over_cap_candidate
-            && !(config_.process_orders_on_close && opposite_opening_pending)) {
+            && !(config_.process_orders_on_close && opposite_opening_pending
+                 && (opposite_opening_in_close_pass
+                     || detail::run_position(require_host()).lot_count
+                         < static_cast<std::size_t>(config_.pyramiding)))) {
             // Source replacement erases the older same-id priced entry before
             // judging the replacement's pyramiding admission.  A rejected
             // over-cap reissue therefore leaves neither the old nor the new

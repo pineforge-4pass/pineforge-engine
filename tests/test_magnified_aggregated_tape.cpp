@@ -25,6 +25,13 @@
  * Variants kept here are the ones the magnified run books exactly as TradingView:
  * v0 (plain), v2 (calc_on_order_fills), v4 (slippage 2, pyramiding 3); controls:
  * the chart and plain-aggregated paths against hm-chart-diff-v0 / v4.
+ *
+ * The pyramiding cap (R5 lane PAR-ORDERS): no path of any variant ever holds
+ * more lots than its pyramiding setting at a script call. Under the magnifier,
+ * process_orders_on_close and calc_on_order_fills (v3, pyramiding=1) a resting
+ * opposite limit entry used to lift the cap from every fill recalculation's
+ * market add: 85 lots on one bar, where TradingView's tape (hm-mag-diff-v3)
+ * books 12 rows and ends flat.
  */
 
 #include <pineforge/bar.hpp>
@@ -155,6 +162,7 @@ public:
     void on_source_bar(const Bar& b) override {
         const int k = bar_index_;  // the replay's first bar is the Pine counter's origin
         const double units = signed_position_size();
+        max_lots = std::max(max_lots, physical_position().lot_count);
         if (k % 7 == 3 && units == 0.0) {
             strategy_entry("PL", true, kNaN, b.high - 0.02);
             strategy_exit("PX", "PL", b.close + 0.06, b.close - 0.06);
@@ -198,6 +206,7 @@ public:
         return out;
     }
     double open_units() const { return physical_position().signed_units; }
+    std::size_t max_lots = 0;  // the most lots open at any script call
 };
 
 enum class Path { Chart, Aggregated, Magnified };
@@ -240,20 +249,24 @@ std::string exit_signal(const MagDiffHost::Row& r) {
 
 bool near(double a, double b, double tol) { return std::fabs(a - b) <= tol; }
 
-void replay(const char* slug, const Variant& v, Path path) {
+void run_path(MagDiffHost& host, Path path) {
     static const std::vector<Bar> fifteen = feed(kFord15);
     static const std::vector<Bar> one = feed(kFord1m);
+    if (path == Path::Chart) {
+        host.run(fifteen.data(), static_cast<int>(fifteen.size()), "15", "15", false);
+    } else {
+        host.run(one.data(), static_cast<int>(one.size()), "1", "15", path == Path::Magnified);
+    }
+}
+
+void replay(const char* slug, const Variant& v, Path path) {
     std::printf("-- %s  [%s, %s]\n", slug, v.tag, path_name(path));
     std::vector<TapeTrade> tape;
     for (const TapeTrade& t : read_tape(slug))
         if (t.exit_ms < kWindowEnd) tape.push_back(t);
     const bool after_window = read_tape(slug).size() != tape.size();
     MagDiffHost host(v);
-    if (path == Path::Chart) {
-        host.run(fifteen.data(), static_cast<int>(fifteen.size()), "15", "15", false);
-    } else {
-        host.run(one.data(), static_cast<int>(one.size()), "1", "15", path == Path::Magnified);
-    }
+    run_path(host, path);
     CHECK(host.last_error().empty());
     const auto rows = host.rows();
     CHECK(!tape.empty());
@@ -290,12 +303,47 @@ void replay(const char* slug, const Variant& v, Path path) {
     }
 }
 
+// The cap on every path of every variant, and the v3 magnified run against its
+// tape: TradingView's 12 rows, the book flat at the end.
+void pyramiding_cap_holds(const Variant (&variants)[8]) {
+    for (const Variant& v : variants) {
+        for (const Path path : {Path::Chart, Path::Aggregated, Path::Magnified}) {
+            MagDiffHost host(v);
+            run_path(host, path);
+            CHECK(host.last_error().empty());
+            const bool within = host.max_lots <= static_cast<std::size_t>(v.pyramiding);
+            CHECK(within);
+            if (!within)
+                std::printf("      %s, %s: %zu lots open at once, pyramiding %d\n", v.tag,
+                            path_name(path), host.max_lots, v.pyramiding);
+        }
+    }
+    MagDiffHost host(variants[3]);
+    run_path(host, Path::Magnified);
+    std::vector<TapeTrade> tape;
+    for (const TapeTrade& t : read_tape("hm-mag-diff-v3"))
+        if (t.exit_ms < kWindowEnd) tape.push_back(t);
+    CHECK(tape.size() == 12);
+    CHECK(host.rows().size() == tape.size());
+    CHECK(host.open_units() == 0.0);
+    std::printf("-- the pyramiding cap: v3 magnified books %zu rows (TradingView %zu), "
+                "%zu lots at most, %g units open at the end\n", host.rows().size(),
+                tape.size(), host.max_lots, host.open_units());
+}
+
 }  // namespace
 
 int main() {
     const Variant v0{"v0 plain", false, false, 0, 1};
     const Variant v2{"v2 calc_on_order_fills", false, true, 0, 1};
     const Variant v4{"v4 slippage 2, pyramiding 3", false, false, 2, 3};
+    const Variant all[8] = {
+        v0, {"v1 process_orders_on_close", true, false, 0, 1}, v2,
+        {"v3 process_orders_on_close, calc_on_order_fills", true, true, 0, 1}, v4,
+        {"v5 process_orders_on_close, slippage 2, pyramiding 3", true, false, 2, 3},
+        {"v6 calc_on_order_fills, slippage 2, pyramiding 3", false, true, 2, 3},
+        {"v7 process_orders_on_close, calc_on_order_fills, slippage 2, pyramiding 3",
+         true, true, 2, 3}};
     // 1. the magnified run against TradingView's magnifier tapes
     replay("hm-mag-diff-v0", v0, Path::Magnified);
     replay("hm-mag-diff-v2", v2, Path::Magnified);
@@ -305,6 +353,8 @@ int main() {
         replay("hm-chart-diff-v0", v0, path);
         replay("hm-chart-diff-v4", v4, path);
     }
+    // 3. the pyramiding cap
+    pyramiding_cap_holds(all);
     std::printf("\n%s magnified aggregated tape: %d checks, %d failures\n",
                 tests_failed == 0 ? "PASS" : "FAIL", tests_passed + tests_failed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
