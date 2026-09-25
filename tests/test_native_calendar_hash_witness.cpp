@@ -574,7 +574,13 @@ const Pinned kPinned[] = {
     {"fixed_offset", 0x484ca66d57dc239dULL, 900, 900, 900, 0, 0, 3600, 136, 19},
     // expectation corrected (KERNEL-EDGE, v19): the calendar-closed final
     // daily bucket is calculated at batch end, including its last trade.
-    {"ny_daily_over_hourly", 0xfa85a7f9a92aea39ULL, 13, 13, 300, 0, 0, 52, 14, 2},
+    // expectation corrected (INT25): digest 0xfa85a7f9a92aea39 -> 0xe4365dfe9a898fbd,
+    // harvested once on the INT25 tree (PINEFORGE_K1_HARVEST): KERNEL-EDGE's
+    // final calendar-closed bucket and K-IDX's script-bar coordinate fold meet
+    // in this scenario, and each lane pinned a tree without the other. The
+    // calculated bars, opens, inputs, series, prints, driver and other rows
+    // and trades did not move.
+    {"ny_daily_over_hourly", 0xe4365dfe9a898fbdULL, 13, 13, 300, 0, 0, 52, 14, 2},
     {"ny_hourly_series", 0x284026ee6aa32186ULL, 234, 234, 234, 21, 0, 936, 42, 6},
     {"tolerant_aggregating", 0xfa838ffaa5666c82ULL, 200, 200, 600, 0, 0, 800, 63, 9},
     {"tolerant_stream_night", 0x8aa785e43e2916d0ULL, 34, 34, 34, 0, 0, 136, 21, 3},
