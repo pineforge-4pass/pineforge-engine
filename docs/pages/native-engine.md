@@ -27,26 +27,26 @@ default that is the established behaviour. The surface is **not** close-only.
 | `on_native_timeframe_bar` (`native_host.hpp:873`) | once per delivered bucket of a declared series | *Higher-timeframe series for native hosts* |
 | `on_native_bar_open` (`native_host.hpp:877`) | at the modeled opening, before that point's matching pass | *Native requests* (and its lookahead warning) |
 | `on_native_bar` (`native_host.hpp:881`) | the script bar's own calculation | *Calculation timing* |
-| `on_native_recalculate` (`native_host.hpp:900`) | every calculation of the run, tagged with its reason; the default forwards to `on_native_bar` | *Calculation timing* |
-| `on_native_sub_bar` (`native_host.hpp:915`) | after each retained lower-timeframe sub-bar's whole path | *Sub-bars* |
-| `on_native_applied` (`native_host.hpp:925`) | after each applied execution — the calculate-on-fill point | *Native requests* |
-| `on_native_margin_call` (`native_host.hpp:988`) | right after the `on_native_applied` of a kernel liquidation's own fill | *Margin and liquidation* |
+| `on_native_recalculate` (`native_host.hpp:901`) | every calculation of the run, tagged with its reason; the default forwards to `on_native_bar` | *Calculation timing* |
+| `on_native_sub_bar` (`native_host.hpp:916`) | after each retained lower-timeframe sub-bar's whole path | *Sub-bars* |
+| `on_native_applied` (`native_host.hpp:926`) | after each applied execution — the calculate-on-fill point | *Native requests* |
+| `on_native_margin_call` (`native_host.hpp:989`) | right after the `on_native_applied` of a kernel liquidation's own fill | *Margin and liquidation* |
 
 **The answering hooks** — each is consulted, and each has a default that is
-the kernel's own answer: `resolve_execution_terms` (`native_host.hpp:934`),
-`validate_execution_precommit` (`native_host.hpp:947`),
-`resolve_margin_requirement` (`native_host.hpp:963`), `margin_check_allowed`
-(`native_host.hpp:975`), `resolve_margin_call_units` (`native_host.hpp:982`),
-`resolve_anchored_level` (`native_host.hpp:999`), `owns_lot_excursions` /
-`closed_lot_excursion` (`native_host.hpp:1017`) and the hash seam
+the kernel's own answer: `resolve_execution_terms` (`native_host.hpp:935`),
+`validate_execution_precommit` (`native_host.hpp:948`),
+`resolve_margin_requirement` (`native_host.hpp:964`), `margin_check_allowed`
+(`native_host.hpp:976`), `resolve_margin_call_units` (`native_host.hpp:983`),
+`resolve_anchored_level` (`native_host.hpp:1000`), `owns_lot_excursions` /
+`closed_lot_excursion` (`native_host.hpp:1018`) and the hash seam
 `hash_host_extension`. Each is documented beside the feature it shapes.
 
 **Declaring a hook the host does not have.** Two of those defaults still cost
 the kernel work at every bar or fill. A host whose `on_native_bar_open` does
 nothing says so with `declare_native_bar_open_hook(false)`
-(`native_host.hpp:1034`), and one that keeps the default
+(`native_host.hpp:1035`), and one that keeps the default
 `validate_execution_precommit` with `declare_native_precommit_hook(false)`
-(`native_host.hpp:1042`). The kernel then makes no bar-open call, and neither
+(`native_host.hpp:1043`). The kernel then makes no bar-open call, and neither
 consults the precommit hook nor builds the settlement preview it would have been
 shown, unless the host owns lot excursions, which that preview's closing rows
 consult. It keeps every effect of its own that the skipped call's boundary has,
@@ -634,9 +634,9 @@ pass (`native_execution_consumer.cpp:7066-7068`). **Lookahead warning:** the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
-`current_partial_bar()` (`native_host.hpp:1053`; C:
-`strategy_native_partial_bar_v1`), the lookahead-free bar so far at this
-cursor, or declares `NativeOpenBarView::OpenOnly`, which masks this one
+`current_partial_bar()` (`native_host.hpp:1061`; C:
+`strategy_native_partial_bar_v1`), the lookahead-free bar so far (at the bar
+open, the open alone), or declares `NativeOpenBarView::OpenOnly`, which masks this one
 callback's bar down to its open. Both are under *The bar so far, and the
 open-bar view* below.
 
@@ -1664,14 +1664,21 @@ and a request born there follows the ordinary birth rule.
 std::optional<Bar> current_partial_bar() const;   // non-virtual
 ```
 
-answers the lookahead-free bar so far at the current cursor: the open of this
-script bar's first modeled point, the running high/low, and the close at the
-cursor. `volume` accrues only activity actually consumed — the completed
-lower-timeframe sub-bars of an intrabar path, or the observed prints of a
-stream — and stays 0 for a modeled path that carries no intrabar volume of its
-own. It is valid in the bar-open, applied, tick, sub-bar and recalculation
-callbacks, and is `nullopt` outside a path walk, including in the bar's own
-close calculation, where the host already holds the complete bar.
+answers the lookahead-free bar so far: the open of this script bar's first
+modeled point, the running high/low, and the close at the last path point the
+walk has consumed. A discrete point — the open of the bar or of a sub-bar, a
+sample of a `DistributionSamples` magnifier, an observed print of a stream — is
+folded before its callbacks run, so there the bar so far closes at the cursor.
+A fill inside a segment (a trigger crossed between two path points) happens
+before the walk reaches the segment's destination, so that fill's
+`on_native_applied` and its `OrderFill` recalculation read a bar that still
+ends at the segment's origin: it never runs ahead of the cursor, and it does
+not yet hold the fill price. `volume` accrues only activity actually consumed —
+the completed lower-timeframe sub-bars of an intrabar path, or the observed
+prints of a stream — and stays 0 for a modeled path that carries no intrabar
+volume of its own. It is valid in the bar-open, applied, tick, sub-bar and
+recalculation callbacks, and is `nullopt` outside a path walk, including in the
+bar's own close calculation, where the host already holds the complete bar.
 
 This matters because the mid-bar callbacks are handed the **complete** script
 bar: `on_native_bar_open` receives the whole bar by default, and so does every
@@ -1822,11 +1829,11 @@ says otherwise, and the C spellings are in
 | `current_execution_point()` | `NativeCurrentPointView` `native_host.hpp:646`: the active callback's decision context, its price, the `NativeCurrentQuoteKind` `native_host.hpp:451` and the ordinal the quote came from; `nullopt` outside a decision point | `pf_native_decision_v1::price` / `::quote_kind` |
 | `native_risk_state()` | `NativeRiskState` `native_host.hpp:631`: whether openings are blocked and why, the risk day, the fills counted in it, the loss-day streak, the peak equity and the day's opening equity | `strategy_native_risk_state_v1` |
 | `native_liquidation_price()` | the solved level `L`, or `nullopt` | `strategy_native_liquidation_price_v1` |
-| `current_partial_bar()` | the lookahead-free bar so far at this cursor | `strategy_native_partial_bar_v1` |
+| `current_partial_bar()` | the lookahead-free bar so far, through the last path point consumed | `strategy_native_partial_bar_v1` |
 | `native_series_bar(i)` | the latest delivered bucket of subscription `i` | `strategy_native_series_bar_v1` |
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
-| `native_decision_floor()` (`native_host.hpp:1335`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
-| `native_consumed_high_water()` (`native_host.hpp:1340`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
+| `native_decision_floor()` (`native_host.hpp:1343`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
+| `native_consumed_high_water()` (`native_host.hpp:1348`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
 | `native_continuation_hash()` | the consumer's continuation identity: a fold of its live state (*What the continuation and the broker-state hash fold*), the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:685` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
@@ -1883,8 +1890,8 @@ decision context plus the print's sequence, where zero keeps the public
 
 **Cohorts.** A cohort is a host-built roster of openings a later close binds
 to: `cohort_open()` answers a `native_order::CohortHandle`, `cohort_add`
-(`native_host.hpp:1265`) enrolls one accepted opening's handle,
-`cohort_remove` (`native_host.hpp:1268`) takes it back off, and a request with
+(`native_host.hpp:1273`) enrolls one accepted opening's handle,
+`cohort_remove` (`native_host.hpp:1276`) takes it back off, and a request with
 `owner = native_order::BindCohort{cohort}` closes what the roster holds at
 the match. The C spellings are `strategy_native_cohort_open_v1` / `_add_v1` /
 `_remove_v1`; in C the pairing is fixed — a `BindCohort` owner is reachable
@@ -3699,8 +3706,8 @@ such field matches.
 **Reading the kernel back.** Eight accessors answer what the C++ host reads
 off itself. Four of them are `std::optional` in C++, and `PF_NATIVE_ABSENT`
 (1, a non-negative *outcome*, not an error) is the C spelling of that empty:
-`strategy_native_partial_bar_v1` (`current_partial_bar()` — the bar so far at
-this cursor, absent in the bar's own close calculation, where the callback
+`strategy_native_partial_bar_v1` (`current_partial_bar()` — the bar so far
+through the last path point consumed, absent in the bar's own close calculation, where the callback
 already holds the complete bar), `_series_bar_v1` (`native_series_bar()` — the
 latest completed bucket of a declared subscription, absent before its first
 delivery and on every bar a `PF_NATIVE_GAPS_CLEAR` series publishes nothing on),

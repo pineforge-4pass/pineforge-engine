@@ -2960,11 +2960,15 @@ PF_API int strategy_native_declare_auxiliary_feed_v1(pf_strategy_t s, const char
                                                      const pf_bar_t* bars, int32_t n,
                                                      uint32_t* error, uint32_t* field);
 
-/** The bar so far at the current cursor — `current_partial_bar()`.
+/** The bar so far — `current_partial_bar()`.
  *
  *  Open of the script bar's first modeled point, running high/low, close at
- *  the cursor; volume is the activity actually consumed so far. Valid in the
- *  bar-open, applied, tick, sub-bar and recalculation callbacks.
+ *  the last path point the walk has consumed: the cursor itself at a discrete
+ *  point (the open of the bar or of a sub-bar, a distribution sample, an
+ *  observed print), and the segment's origin at a fill inside a segment,
+ *  whose `on_applied` and ORDER_FILL recalculation read the bar before the
+ *  fill price is folded in. Volume is the activity actually consumed so far.
+ *  Valid in the bar-open, applied, tick, sub-bar and recalculation callbacks.
  *  @return PF_NATIVE_OK when @p out was written, #PF_NATIVE_ABSENT outside a
  *  path walk — including in the bar's own close calculation, where the
  *  callback already holds the complete bar — leaving @p out untouched. */

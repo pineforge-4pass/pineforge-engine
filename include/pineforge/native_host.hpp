@@ -895,7 +895,8 @@ public:
     /// `bar` is the bar the calculation is about: the script bar under
     /// delivery in batch, the print's value bar for a stream Tick. It is the
     /// COMPLETE script bar even mid-path; current_partial_bar() is the
-    /// lookahead-free bar so far at this cursor. Commands and
+    /// lookahead-free bar so far, through the last path point consumed (at an
+    /// OrderFill inside a segment, the segment's origin). Commands and
     /// execute_current are legal here exactly as in on_native_applied.
     virtual void on_native_recalculate(const Bar& bar, const NativeDecisionContext& ctx,
                                        NativeCalculationReason reason,
@@ -1041,15 +1042,22 @@ public:
     /// declares it.
     void declare_native_precommit_hook(bool implemented);
 
-    /// The bar so far at the current cursor, folded from the modeled points
-    /// this script bar has already presented: open of its first point,
-    /// running high/low, close at the cursor. Volume is the activity actually
-    /// consumed so far — the completed lower-timeframe sub-bars of an
-    /// intrabar path, or the prints of an observed stream — and stays 0 for a
-    /// modeled path with no intrabar volume of its own. Valid in the bar-open,
-    /// applied, tick, sub-bar and recalculation callbacks; nullopt outside a
-    /// path walk, including in the bar's own close calculation, where the host
-    /// already holds the complete bar.
+    /// The bar so far, folded from the path points this script bar has
+    /// already consumed: open of its first point, running high/low, close at
+    /// the last point consumed. A discrete point — the open of the bar or of a
+    /// sub-bar, a distribution sample, an observed print — is folded before
+    /// its callbacks run, so there the bar closes at the cursor. A fill inside
+    /// a segment (a trigger crossed between two path points) comes before the
+    /// walk reaches the segment's destination: its on_native_applied and its
+    /// OrderFill recalculation read a bar that still ends at the segment's
+    /// origin and does not hold the fill price. It never runs ahead of the
+    /// cursor. Volume is the activity actually consumed so far — the completed
+    /// lower-timeframe sub-bars of an intrabar path, or the prints of an
+    /// observed stream — and stays 0 for a modeled path with no intrabar
+    /// volume of its own. Valid in the bar-open, applied, tick, sub-bar and
+    /// recalculation callbacks; nullopt outside a path walk, including in the
+    /// bar's own close calculation, where the host already holds the complete
+    /// bar.
     std::optional<Bar> current_partial_bar() const;
     /// How many recalculations the kernel has driven this run, and how many it
     /// suppressed because a point had already spent its

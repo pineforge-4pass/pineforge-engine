@@ -72,15 +72,15 @@ summary of it.
 
 - **Lifecycle.** `Unconfigured → Ready → Running → Completed | Failed` (`native_host.hpp:20-26`);
   phases `Batch | Warmup | Realtime` (`native_host.hpp:28-32`) — one path runs the batch, then
-  continues live. Configure with `configure_native(spec)` (`native_host.hpp:1176`), then feed.
+  continues live. Configure with `configure_native(spec)` (`native_host.hpp:1184`), then feed.
 - **Callbacks are not close-only.** `on_native_bar` is the pure-virtual script-bar calculation
   (`native_host.hpp:881`); also `on_native_input` (`native_host.hpp:863`), `on_native_tick`
   (`native_host.hpp:866`), `on_native_timeframe_bar` (`native_host.hpp:873`),
   `on_native_bar_open` — at the modeled opening, before its matching pass
   (`native_host.hpp:877`, `on_native_bar_open` `native_execution_consumer.cpp:7066-7068`) —
-  `on_native_recalculate` for every calculation of the run (`native_host.hpp:900`),
-  `on_native_sub_bar` (`native_host.hpp:915`) and post-fill
-  `on_native_applied` (`native_host.hpp:925`). `on_bar` is `final` (`native_host.hpp:845`).
+  `on_native_recalculate` for every calculation of the run (`native_host.hpp:901`),
+  `on_native_sub_bar` (`native_host.hpp:916`) and post-fill
+  `on_native_applied` (`native_host.hpp:926`). `on_bar` is `final` (`native_host.hpp:845`).
 - **Aggregated coordinates (K-IDX, Option A).** The kernel's
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
@@ -95,8 +95,8 @@ summary of it.
   (`pine_adapter.cpp:845-851`) where Pine still needs input cadence, and
   does not rewrite the kernel's lot or row indices.
 - **Requests.** `submit` / `replace` / `cancel` / `submit_market` / `replace_market`
-  (`native_host.hpp:1207-1212`), plus `cancel_all` (`native_host.hpp:1247`) and `cancel_where`
-  (`native_host.hpp:1252`). A request carries one of five triggers — Market, Limit (with a
+  (`native_host.hpp:1215-1220`), plus `cancel_all` (`native_host.hpp:1255`) and `cancel_where`
+  (`native_host.hpp:1260`). A request carries one of five triggers — Market, Limit (with a
   generic market-if-touched `fill_through`, `native_order.hpp:239-242`), Stop, StopLimit, Trail
   (`Trigger` `native_order.hpp:296`); one of **six** intents — `Flatten`, `Reduce`, `Transact`,
   `ReverseTo`, `HostSized` and the kernel-resolved `Sized` (`OrderIntent`
@@ -109,12 +109,12 @@ summary of it.
   fills with slippage, fees, admission and settlement. Sizing has **two** routes: `Sized`
   (`native_order.hpp:164`) is resolved by the kernel from a cash or equity-fraction basis, so a
   bare host needs no override at all, while `HostSized` hands the units to the host — and an
-  unresolved `HostSized` whose `resolve_execution_terms` (`native_host.hpp:934`) returns no
+  unresolved `HostSized` whose `resolve_execution_terms` (`native_host.hpp:935`) returns no
   units is a `TermsUnresolved` rejection
   (`TermsUnresolved` `native_execution_consumer.cpp:4963`).
-- **Observing executions.** Implement `on_native_applied` (`native_host.hpp:925`) — notifications
+- **Observing executions.** Implement `on_native_applied` (`native_host.hpp:926`) — notifications
   drain FIFO after the outer callback returns — and/or poll `native_events(after_ordinal)`
-  (`native_host.hpp:1309`). Do *not* implement
+  (`native_host.hpp:1317`). Do *not* implement
   `NativeExecutionConsumer`: it is the kernel's internal matcher, declared `final`
   (`src/native_execution_consumer.hpp:58`) and bound by the host.
 - **The rest of the host surface**, all on `NativeStrategyHost`:
@@ -123,12 +123,12 @@ summary of it.
   |---|---|
   | Run state | `native_state()` → `NativeStateView` — kind, phase, `NativeCompletion` BatchComplete / StreamEnded, failure, high water (`NativeCompletion` `native_host.hpp:50`, `NativeStateView` `:282`, `NativeRunPhase` `:41`) |
   | Failure model | `NativeFailureCode` (`native_host.hpp:63-77`); `Failed` is latched, nothing resumes. A throwing callback latches `CallbackException` (`CallbackException` `native_execution_consumer.cpp:4936`) |
-  | Cohorts | `cohort_open` (`native_host.hpp:1262`) / `cohort_add` (`:1265`) / `cohort_remove` (`:1268`) — the handle a `BindCohort` owner names |
-  | Mid-callback execution | `current_execution_point` (`native_host.hpp:1067`), `inspect_current_execution` (`native_host.hpp:1079`) / `execute_current` (`native_host.hpp:1084`) |
-  | Margin seams | four, not one: the run spec's own `margin` model (`NativeMarginModel` `native_run_spec.hpp:240`) with its three hooks — `resolve_margin_requirement` (`native_host.hpp:963`), `margin_check_allowed` (`native_host.hpp:975`), `resolve_margin_call_units` (`native_host.hpp:982`) — and `validate_execution_precommit` (`native_host.hpp:947`), whose `AdmitWithHostMargin` verdict hands the opening check to the host |
-  | Risk seam | `NativeRiskLimits` (`native_run_spec.hpp:310`) with `native_risk_state()` (`native_host.hpp:1303`); the breach appends a `NativeRiskEvent` to the command history |
-  | State reads | `physical_position()` (`native_host.hpp:1272`) / `native_marked_equity(mark)` (`native_host.hpp:1281`) / `native_open_lots(mark)` (`native_host.hpp:1277`), `trail_state(handle)` (`native_host.hpp:1072`), and the rest of the query surface in `docs/pages/native-engine.md`, "Reading the run back" |
-  | Lookahead hazard | the `Bar` given to `on_native_bar_open` is the *complete* script bar; `current_partial_bar()` (`native_host.hpp:1053`) is the lookahead-free bar so far, and `NativeOpenBarView::OpenOnly` (`native_run_spec.hpp:109`) masks that one callback |
+  | Cohorts | `cohort_open` (`native_host.hpp:1270`) / `cohort_add` (`:1273`) / `cohort_remove` (`:1276`) — the handle a `BindCohort` owner names |
+  | Mid-callback execution | `current_execution_point` (`native_host.hpp:1075`), `inspect_current_execution` (`native_host.hpp:1087`) / `execute_current` (`native_host.hpp:1092`) |
+  | Margin seams | four, not one: the run spec's own `margin` model (`NativeMarginModel` `native_run_spec.hpp:240`) with its three hooks — `resolve_margin_requirement` (`native_host.hpp:964`), `margin_check_allowed` (`native_host.hpp:976`), `resolve_margin_call_units` (`native_host.hpp:983`) — and `validate_execution_precommit` (`native_host.hpp:948`), whose `AdmitWithHostMargin` verdict hands the opening check to the host |
+  | Risk seam | `NativeRiskLimits` (`native_run_spec.hpp:310`) with `native_risk_state()` (`native_host.hpp:1311`); the breach appends a `NativeRiskEvent` to the command history |
+  | State reads | `physical_position()` (`native_host.hpp:1280`) / `native_marked_equity(mark)` (`native_host.hpp:1289`) / `native_open_lots(mark)` (`native_host.hpp:1285`), `trail_state(handle)` (`native_host.hpp:1080`), and the rest of the query surface in `docs/pages/native-engine.md`, "Reading the run back" |
+  | Lookahead hazard | the `Bar` given to `on_native_bar_open` is the *complete* script bar; `current_partial_bar()` (`native_host.hpp:1061`) is the lookahead-free bar so far, and `NativeOpenBarView::OpenOnly` (`native_run_spec.hpp:109`) masks that one callback |
 - **The run spec is generic, and no longer narrow.** `NativeRunSpec`
   (`native_run_spec.hpp:553`) owns instrument and clock facts, fees
   (`NativeFeeKind` `native_run_spec.hpp:19`), a scalar account FX, close timing, the quantity
@@ -155,9 +155,9 @@ summary of it.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
   run's own symbol: `NativeRunSpec::subscriptions`, or `declare_timeframe_subscriptions`
-  (`native_host.hpp:1116`) from inside `on_native_run_begin`, with
+  (`native_host.hpp:1124`) from inside `on_native_run_begin`, with
   `on_native_timeframe_bar` (`native_host.hpp:873`) and `native_series_bar`
-  (`native_host.hpp:1099`) reading them back, and `NativeAuxiliaryFeed` +
+  (`native_host.hpp:1107`) reading them back, and `NativeAuxiliaryFeed` +
   `NativeSeriesSource::AuxiliaryFeed` for a series finer than the input. The kernel owns the
   aggregation, the `lookahead`/`gaps` delivery rules and the lazy-seal chronology; TradingView's
   `request.security` *semantics* are not in it. `prepare_native_security_feeds` stays protected
@@ -167,7 +167,7 @@ summary of it.
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:78`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
-  `configure_native_fx_curve` (`native_host.hpp:1182`).
+  `configure_native_fx_curve` (`native_host.hpp:1190`).
 - **Reporting.** `fill_report` (`engine.hpp:1843`, `src/engine_report.cpp:40`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
@@ -180,7 +180,7 @@ summary of it.
   `compute_equity_stats` answers its all-NaN value with no error (`src/engine_metrics.cpp:219`,
   consumed at `src/engine_report.cpp:119-139`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
-  (`native_host.hpp:1350`) returns the consumer's event/continuation hash. **A digest names
+  (`native_host.hpp:1358`) returns the consumer's event/continuation hash. **A digest names
   the run's inputs** (rule 2): the timezone identity enters it as the zone's *content* —
   kind, effective definition and `TimezoneIdentityDescriptor::resource_digest`, an FNV-1a
   over the zone files the resolver read (`native_calendar.hpp:233`) — and never as
@@ -593,7 +593,7 @@ number names its symbol on this tree.
 | C++ hook | C route | witness in `tests/test_native_c_api.c` |
 |---|---|---|
 | `WaitForApplied::first_match` / `WaitForApplied::scope` | `arm_first_match` (`native_c_api.h:2176`), `pf_native_request_v1`'s fifth published layout; a Book-scoped child may be the host-sized close `on_close_units` sizes | the arm-relation scenario |
-| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:3047`), reading a SIZED request's own sizing block | the sizing-query scenario |
+| `native_sized_units` | `strategy_native_sized_units_v1` (`native_c_api.h:3051`), reading a SIZED request's own sizing block | the sizing-query scenario |
 | `resolve_execution_terms`, price half | `on_execution_terms` (`native_c_api.h:2562`): price, opening shape, grid policy, beside the units half `on_close_units` | the terms-hook scenario |
 | `validate_execution_precommit` | `on_precommit` (`native_c_api.h:2571`): the plan, the inspection and the projected account, the closed rows' P&L borrowed for the call | the precommit scenario |
 | `resolve_anchored_level` | `on_anchored_level` (`native_c_api.h:2578`) | the anchored-level scenario |
@@ -603,9 +603,9 @@ number names its symbol on this tree.
 
 | surface | ruling | reason |
 |---|---|---|
-| `cancel_all` (`native_host.hpp:1247`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2744`). |
-| `cohort_add` (`native_host.hpp:1265`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`hash_cohort_receipt` `native_execution_consumer.cpp:881`, since v19 once, at the enrolment, into the running digest the continuation carries), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
-| `native_sized_units` (`native_host.hpp:1294`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:3019`). |
+| `cancel_all` (`native_host.hpp:1255`) / `cancel_where` answer a count, not a `CancelResult` per request (E12 f7) | **retained** | A bulk cancel is many commands in one call, and each withdrawn request records its own `CancelledEvent` with its own `CancelReason` — dependants of a cancelled owner included — in the history a host already polls (`strategy_native_events_v1`). That is the per-request answer; the count is the call's summary. A result vector would restate the history in a second, allocating shape that C could not take without a caller-sized array. The C spellings answer the same count (`strategy_native_cancel_all_v1` `native_c_api.h:2744`). |
+| `cohort_add` (`native_host.hpp:1273`) / `cohort_remove` answer `void` (E12 f7) | **retained; the typed receipt is a named follow-up** | The kernel judges every enrolment into a `CohortReceipt` (Applied, InvalidHandle, UnknownOrigin, TerminalOrigin) and folds it into the continuation (`hash_cohort_receipt` `native_execution_consumer.cpp:881`, since v19 once, at the enrolment, into the running digest the continuation carries), so a replay that diverges there diverges in the hash. Nothing that matches or settles reads it: a roster is a relation the close reads at its match, and a refused enrolment is a member the close does not take. A host that needs the receipt AT the call needs `NativeStrategyHost::cohort_add_result` first, a kernel-header change outside this lane; its C spelling would then be an `_ext_v1` with a receipt word. Until then `strategy_native_cohort_add_v1`'s `PF_NATIVE_OK` means the enrolment was issued. |
+| `native_sized_units` (`native_host.hpp:1302`) / `native_liquidation_price` answer `std::optional<double>` (E12 f7) | **retained** | Observation queries, not commands: each empty is documented cause by cause in its own comment (unconfigured, non-positive money or denominator, a below-one-step quotient; no margin model, no maintenance fraction for the side, a flat book, no finite solution), and every cause is a fact the host can read itself. A typed reason would name what the caller already knows. C answers `PF_NATIVE_ABSENT` and NaN (`strategy_native_liquidation_price_v1` `native_c_api.h:3023`). |
 | `pf_native_working_v1` without the leg's anchor or owner relation (E13 f4) | **carried** | The C++ host reads them off `NativeWorkingRequest::definition`, so the C readout's relation tail carries them: `anchor` (`native_c_api.h:1681`) through `arm_scope`, the request as the kernel holds it now (an armed leg reads ABSOLUTE with its installed level). |
 | `hash_source_extension` (`engine.hpp:411`) | **C++-only** | The deprecated spelling of `hash_host_extension`, kept so an existing C++ subclass compiles and folds unchanged. A C host has only ever had the current spelling, `on_hash_extension`. |
 | `NativeReportPolicy::KernelRecordedAtHostMarks` (`native_run_spec.hpp:64`) | **C++-only** (lane E22's ruling, restated) | Under it the host names each report point from inside its own callbacks, and the C table has no call that marks one: a C host could only declare a series nobody records. `pf_native_report_policy_e` (`native_c_api.h:657`) leaves its value unnamed, and the enum guard holds that exclusion. A C++ host now reaches the same kernel producer through `NativeStrategyHost::mark_native_report_point`; a mark outside a running HostMarks run returns false. |
@@ -756,7 +756,7 @@ no new kernel policy.
 1. TradingView/Pine parity for *new* work goes only in `src/source/` / `src/compat/pine/` or in
    codegen — never add a new Pine-specific rule to the kernel.
 2. The kernel changes only for a *generic* capability with a recorded ruling (e.g. per-lot
-   excursion ownership, `owns_lot_excursions` `native_host.hpp:1010`; the market-if-touched
+   excursion ownership, `owns_lot_excursions` `native_host.hpp:1011`; the market-if-touched
    `fill_through` flag, `native_order.hpp:239-242`). **The test is not whether the word
    "TradingView" appears — a calibrated number has to say what calibrated it. The test is this
    pair, and both halves must pass:**
