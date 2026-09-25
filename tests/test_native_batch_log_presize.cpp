@@ -422,30 +422,30 @@ struct Pinned {
 //   k24-bracket-stream: continuation 1886979334084681129ull -> 12255391317148595120ull, broker 15380761345244795255ull -> 2630080329691288926ull
 const Pinned kPinned[] = {
     {"k24-idle-raw", {Mode::Idle, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 7064720261992521123ull, 12470590214657723820ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 0ull, 15485047192637436775ull, 1933090248169669312ull}},
     {"k24-market-raw", {Mode::Market, true, Path::None, false, false, false}, 3000,
-     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 2807188055616340417ull, 3421832422185525800ull}},
+     {149, 0xffd16e3a42465223ull, 12000ull, 748ull, 15718429073431250401ull, 11927358717542670328ull}},
     {"k24-reissue-raw", {Mode::Reissue, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 138574470264575484ull, 14041681273026148620ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 11996ull, 10152750287253952536ull, 13027128603243255810ull}},
     {"k24-bracket-raw", {Mode::Bracket, true, Path::None, false, false, false}, 3000,
-     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 1047605911260740056ull, 8878901545577481248ull}},
+     {499, 0x48a8aa3386174115ull, 12000ull, 4494ull, 9506515407418689311ull, 2934912856132406640ull}},
     {"k24-burst-raw", {Mode::Burst, true, Path::None, false, false, false}, 3000,
-     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 6235366456615652126ull, 16639775381939621756ull}},
+     {0, 0x14650fb0739d0383ull, 12000ull, 200ull, 13168892258055562412ull, 4125448607067718245ull}},
     {"k24-bracket-synth", {Mode::Bracket, true, Path::Synthesized, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 7762032925305995059ull, 9762893318044456255ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 103001943591208460ull, 18101407798730592483ull}},
     {"k24-bracket-synth-volume",
      {Mode::Bracket, true, Path::SynthesizedVolume, false, false, false}, 3000,
-     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 5528847174455583299ull, 8396626339752131633ull}},
+     {499, 0xab07e4f5c19135baull, 15000ull, 4494ull, 14348902017929607696ull, 3509548862157985120ull}},
     {"k24-market-after-calc", {Mode::Market, true, Path::None, true, false, false}, 3000,
-     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 14566427108214292414ull, 752215177105200869ull}},
+     {150, 0xe4072fd20cf282f3ull, 15000ull, 750ull, 15568230906391022010ull, 11458602482202484137ull}},
     {"k24-bracket-aggregated", {Mode::Bracket, true, Path::None, false, true, false}, 3000,
-     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 7891820420429602791ull, 7321557278893600124ull}},
+     {99, 0x4967ca06278a2d63ull, 2400ull, 845ull, 12529398627084087264ull, 6200526233732972992ull}},
     {"k24-reissue-canonical", {Mode::Reissue, false, Path::None, false, false, false}, 240,
-     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 3609935701573586264ull, 10739619068307988300ull}},
+     {0, 0x14650fb0739d0383ull, 960ull, 956ull, 5551559802372503035ull, 8520370268542286847ull}},
     {"k24-bracket-canonical", {Mode::Bracket, false, Path::None, false, false, false}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 15506983471220809652ull, 13995092185068427530ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 8530355310871831166ull, 15387242329923191668ull}},
     {"k24-bracket-stream", {Mode::Bracket, false, Path::None, false, false, true}, 240,
-     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 12255391317148595120ull, 2630080329691288926ull}},
+     {39, 0x5a55f2e6071c7686ull, 960ull, 354ull, 2837811687237632977ull, 14310862830168009855ull}},
 };
 
 void the_pump_feeds_the_same_run() {
@@ -479,6 +479,8 @@ void the_pump_feeds_the_same_run() {
 int main() {
     the_pump_feeds_the_same_run();
 #ifndef PINEFORGE_K24_HARVEST
+// K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
+
     a_structural_batch_asks_for_its_driver_log_once();
     a_longer_batch_holds_only_the_points_it_recorded();
 #endif

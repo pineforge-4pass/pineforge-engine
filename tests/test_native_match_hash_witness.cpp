@@ -87,6 +87,7 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 }
 
 #ifndef PINEFORGE_K3_HARVEST
+// K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
 // expectation corrected: the three hash columns of every scenario moved once,
 // because v19 folds the continuation over live state word-wise
 // (native-consumer/v9) and the broker-state hash folds a running closed-row
@@ -109,11 +110,11 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 //   scenario 3: trace 0xbe543a454300ded7ull -> 0x359cc22165da6d96ull, continuation 0xdd2049d30f042dacull -> 0x01e03db6f203e11eull, broker 0x23cdee2a26ae76fcull -> 0x071b47fad3d98bf7ull
 //   scenario 4: trace 0xe947a05c6802cc68ull -> 0xad4443d75ee5d3bcull, continuation 0xa1b0cd08a0745aceull -> 0xc8d5da5d64e610d6ull, broker 0xd229c4059b4b3e02ull -> 0x874121590b093b20ull
 const Pin kPins[kScenarios] = {
-    {0x136dcf16c6fa5351ull, 0x4691676bcf0aa127ull, 0x329da07804463d91ull, 309, 0xd46895e4cb220464ull, 4636, 0x2f871fcdc8768b61ull, 1080, 647, 446},
-    {0x4e8e642c6c4f5571ull, 0x4be23aedc760df3bull, 0x1abd121fb23e8f41ull, 249, 0x7cc7976babca3c43ull, 2681, 0x7d16f612ee716310ull, 589, 142, 352},
-    {0x39e317e0536c5304ull, 0xe9e168e352f9f8d4ull, 0xda88af88ef6027d6ull, 1342, 0x58b908db693694bcull, 16128, 0x6366cacce74b3948ull, 4400, 1950, 1779},
-    {0x359cc22165da6d96ull, 0x01e03db6f203e11eull, 0x071b47fad3d98bf7ull, 430, 0x76f5a9cacb8e69deull, 3362, 0xce2d56d15c6cf10cull, 891, 102, 549},
-    {0xad4443d75ee5d3bcull, 0xc8d5da5d64e610d6ull, 0x874121590b093b20ull, 502, 0x696bcd30b1e40f3bull, 4081, 0x572e1013d4fadde4ull, 1165, 94, 665},
+    {0xa37d3f4c2f65a80dull, 0x40151bfbedfb2642ull, 0x4bd66a9c1fb260f4ull, 309, 0xd46895e4cb220464ull, 4636, 0x2f871fcdc8768b61ull, 1080, 647, 446},
+    {0x8f0581e371bf7980ull, 0x599b9bdd575b3b54ull, 0x6948570858eeee2dull, 249, 0x7cc7976babca3c43ull, 2681, 0x7d16f612ee716310ull, 589, 142, 352},
+    {0xf5b5613a3f58e1f5ull, 0x818556a05ad62374ull, 0x51985203758a2339ull, 1342, 0x58b908db693694bcull, 16128, 0x6366cacce74b3948ull, 4400, 1950, 1779},
+    {0xcb145539f0f10e88ull, 0x011b0b80b2505b9cull, 0xaa5261315d1cd0e7ull, 430, 0x76f5a9cacb8e69deull, 3362, 0xce2d56d15c6cf10cull, 891, 102, 549},
+    {0x826a0a26736b1485ull, 0x957b12374f396702ull, 0x615f80420a9a6d24ull, 502, 0x696bcd30b1e40f3bull, 4081, 0x572e1013d4fadde4ull, 1165, 94, 665},
 };
 #endif
 

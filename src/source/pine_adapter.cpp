@@ -842,6 +842,23 @@ PineStrategyHost* PineExecutionAdapter::pine_view_of(NativeStrategyHost* host) c
     return pine_view_;
 }
 
+int PineExecutionAdapter::projection_bar_index(
+        const NativeDecisionContext& context) const noexcept {
+    // Pine's pending projection historically keyed this source-side field to
+    // the input slot the kernel presented (including magnifier sub-bars).
+    // Keep that policy on the named input coordinate while the kernel's public
+    // interval_index remains script-bar space.
+    return context.coordinate.input_interval_index;
+}
+
+int PineExecutionAdapter::projection_bar_index(
+        const NativeCoordinate& coordinate) const noexcept {
+    NativeDecisionContext context;
+    context.coordinate = coordinate;
+    context.script_bar_open_ms = last_broker_open_ms_;
+    return projection_bar_index(context);
+}
+
 namespace {
 [[noreturn]] void refuse_unbound_adapter() {
     throw std::logic_error("Pine execution adapter is not bound to a native host");
@@ -3728,7 +3745,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         // compares created_bar with the current bar. Submitting the staged leg
         // when its parent entry applies must not re-stamp the bar.
         if (!snapshot.projection_created_bar_pinned) {
-            snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+            snapshot.projection_created_bar = projection_bar_index(point->decision);
         }
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
@@ -5641,7 +5658,7 @@ bool PineExecutionAdapter::suppress_grouped_stop_recalc(
     if (filled == placement_.end()) return false;
     const auto eligible = [&](const PlacementSnapshot& row) {
         return row.family == PineOrderFamily::ExitStop
-            && row.projection_created_bar < context.coordinate.interval_index
+            && row.projection_created_bar < projection_bar_index(context)
             && row.from_entry == filled->second.from_entry && !row.from_entry.empty()
             && std::isfinite(row.requested_qty) && row.requested_qty > 0.0
             && row.oca_name.empty() && std::isnan(row.exit_levels.trail_points)
@@ -6055,7 +6072,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         shadow.command_sequence = ++source_command_sequence_;
         shadow.source_sequence = ++source_sequence_;
         shadow.projection_created_bar = source_point
-            ? source_point->decision.coordinate.interval_index : -1;
+            ? projection_bar_index(source_point->decision) : -1;
         shadow.sizing = sizing_snapshot();
         source_shadow_pending_.push_back({std::move(shadow), id});
         return;
@@ -7011,7 +7028,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             }
             snapshot.retained_parent_topology = true;
             if (const auto point = detail::callback_point(require_host())) {
-                snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+                snapshot.projection_created_bar = projection_bar_index(point->decision);
                 snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
             }
             snapshot.source_sequence = source_sequence_ + 1;
@@ -9059,7 +9076,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.placement_cycle = current_position_cycle_;
             if (source_point) {
                 snapshot.projection_created_bar =
-                    source_point->decision.coordinate.interval_index;
+                    projection_bar_index(source_point->decision);
                 snapshot.projection_position_side = physical.signed_units > 0.0
                     ? static_cast<std::int32_t>(PositionSide::LONG)
                     : (physical.signed_units < 0.0
@@ -9178,7 +9195,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     throw std::overflow_error("source delayed market epoch exhausted");
                 if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar =
-                        point->decision.coordinate.interval_index;
+                        projection_bar_index(point->decision);
                     snapshot.placement_script_open_ms =
                         point->decision.script_bar_open_ms;
                     snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
@@ -9289,7 +9306,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 snapshot.defer_until_post_parent_calculation = true;
                 if (const auto point = detail::callback_point(require_host())) {
                     snapshot.projection_created_bar =
-                        point->decision.coordinate.interval_index;
+                        projection_bar_index(point->decision);
                     snapshot.projection_position_side =
                         static_cast<std::int32_t>(PositionSide::FLAT);
                 }
@@ -9374,7 +9391,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     retire(predecessor);
                 }
                 if (const auto point = detail::callback_point(require_host())) {
-                    snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+                    snapshot.projection_created_bar = projection_bar_index(point->decision);
                     snapshot.projection_created_bar_pinned = true;
                     snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
                 }
@@ -9839,7 +9856,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         snapshot.command_sequence = command_sequence;
         snapshot.source_sequence = ++source_sequence_;
         snapshot.projection_created_bar = detail::callback_point(require_host())
-            ? detail::callback_point(require_host())->decision.coordinate.interval_index : -1;
+            ? projection_bar_index(detail::callback_point(require_host())->decision) : -1;
         snapshot.projection_position_side = physical.signed_units > 0.0
             ? static_cast<std::int32_t>(PositionSide::LONG)
             : (physical.signed_units < 0.0
@@ -11622,7 +11639,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         if (broker_open_epoch_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("source delayed market epoch exhausted");
         if (const auto point = detail::callback_point(require_host())) {
-            snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+            snapshot.projection_created_bar = projection_bar_index(point->decision);
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
             snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
         }
@@ -12674,7 +12691,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     == static_cast<std::int32_t>(PositionSide::FLAT)
                 && !source.projection_after_close && source.projection_predecessor == 0
                 && facts.position.signed_units == 0.0
-                && source.projection_created_bar == facts.cursor.point.interval_index
+                && source.projection_created_bar == projection_bar_index(facts.cursor.point)
                 && !source.birth.from_fill() && source.oca_name.empty()
                 && config_.pyramiding >= 0 && config_.pyramiding <= 1
                 && config_.commission_value == 0.0 && config_.slippage >= 0
@@ -12987,7 +13004,7 @@ bool PineExecutionAdapter::carried_long_money_precedes_priced_exit(
         exit = &leg;
     }
     if (!exit || exit->from_entry.empty() || exit->legs.dormant()
-        || exit->projection_created_bar >= view.cursor.point.interval_index
+        || exit->projection_created_bar >= projection_bar_index(view.cursor.point)
         || !exit->oca_name.empty() || exit->oca_type != 0
         || !std::isnan(exit->exit_levels.trail_points)
         || !std::isnan(exit->exit_levels.trail_offset)
@@ -13281,7 +13298,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         && source.family == PineOrderFamily::Entry
         && std::holds_alternative<native_order::Market>(view.definition->request.trigger)
         && source.is_long && source.opening
-        && source.projection_created_bar == view.cursor.point.interval_index
+        && source.projection_created_bar == projection_bar_index(view.cursor.point)
         && source.projection_position_side == static_cast<std::int32_t>(PositionSide::FLAT)
         && !source.projection_after_close && !source.birth.from_fill()
         && source.projection_predecessor == 0 && !source.replaced_opening
@@ -13342,7 +13359,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 == static_cast<std::int32_t>(PositionSide::FLAT)
             && !source.projection_after_close && source.projection_predecessor == 0
             && source.oca_type == 0 && source.oca_name.empty()
-            && view.cursor.point.interval_index == source.projection_created_bar + 1
+            && projection_bar_index(view.cursor.point) == source.projection_created_bar + 1
             && live_handles_.size() == 1
             && config_.margin_long == 100.0 && config_.margin_short == 100.0
             && staged_.quantity_grid && *staged_.quantity_grid > 0.0
@@ -13389,7 +13406,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             : (finite_positive(source.sizing.equity)
                 ? source.sizing.equity : view.account.marked_equity);
         const bool pooc_slipped_signal = config_.process_orders_on_close
-            && source.projection_created_bar == view.cursor.point.interval_index
+            && source.projection_created_bar == projection_bar_index(view.cursor.point)
             && source.projection_position_side
                 == static_cast<std::int32_t>(PositionSide::FLAT)
             && physical.signed_units == 0.0
@@ -14581,7 +14598,7 @@ bool PineExecutionAdapter::market_orders_pending_at_close(
             || row.family == PineOrderFamily::CloseAll;
         if (!market_family) continue;
         if (std::isfinite(row.exit_levels.limit) || std::isfinite(row.exit_levels.stop)) continue;
-        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        if (row.projection_created_bar != projection_bar_index(context)) continue;
         return true;
     }
     return false;
@@ -15149,7 +15166,7 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
     snapshot.projection_position_side = is_long
         ? static_cast<std::int32_t>(PositionSide::LONG)
         : static_cast<std::int32_t>(PositionSide::SHORT);
-    snapshot.projection_created_bar = context.coordinate.interval_index;
+    snapshot.projection_created_bar = projection_bar_index(context);
     snapshot.source_sequence = source_sequence_;
     const auto clock = cap_clock(context);
     const auto calculation = cap_calculation(context);
@@ -15257,7 +15274,7 @@ void PineExecutionAdapter::refresh_pending_sizing_after_margin(
         auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         auto& snapshot = found->second;
-        if (snapshot.projection_created_bar != context.coordinate.interval_index
+        if (snapshot.projection_created_bar != projection_bar_index(context)
             || !snapshot.market_admission.observation()) {
             continue;
         }
@@ -15980,7 +15997,7 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         if (found == placement_.end()) continue;
         const auto& row = found->second;
         if (!row.opening || row.family != PineOrderFamily::Entry
-            || row.projection_created_bar != context.coordinate.interval_index
+            || row.projection_created_bar != projection_bar_index(context)
             || !finite_positive(row.requested_qty)
             || finite_positive(row.exit_levels.limit)
             || finite_positive(row.exit_levels.stop)
@@ -16307,14 +16324,14 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             if (pending.opening
                 && (pending.family == PineOrderFamily::Entry
                     || pending.family == PineOrderFamily::Order)
-                && pending.projection_created_bar < context.coordinate.interval_index
+                && pending.projection_created_bar < projection_bar_index(context)
                 && pending.is_long != (opening_position.signed_units > 0.0)) {
                 opposite_entry_waits = true;
             }
             const bool market_close = pending.family == PineOrderFamily::Close
                 || pending.family == PineOrderFamily::CloseAll;
             if (!market_close
-                || pending.projection_created_bar >= context.coordinate.interval_index
+                || pending.projection_created_bar >= projection_bar_index(context)
                 || finite_positive(pending.exit_levels.limit)
                 || finite_positive(pending.exit_levels.stop)
                 || finite_positive(pending.exit_levels.trail_offset)) {
@@ -16465,7 +16482,7 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
         const auto& row = found->second;
         if (row.family != PineOrderFamily::Entry || !row.opening) continue;
         if (row.birth.from_fill()) continue;
-        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        if (row.projection_created_bar != projection_bar_index(context)) continue;
         if (row.projection_position_side
             != static_cast<std::int32_t>(PositionSide::FLAT)) continue;
         if (!finite_positive(row.exit_levels.limit)
@@ -16594,7 +16611,7 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
         if (row.family != PineOrderFamily::ExitLimit
             && row.family != PineOrderFamily::ExitStop) continue;
         if (row.birth.from_fill()) continue;
-        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        if (row.projection_created_bar != projection_bar_index(context)) continue;
         const bool stop_leg = row.family == PineOrderFamily::ExitStop;
         const double level = stop_leg ? row.exit_levels.stop : row.exit_levels.limit;
         if (!finite_positive(level)) continue;
@@ -16940,7 +16957,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 continue;
             }
             const bool resting_limit =
-                pending.projection_created_bar < context.coordinate.interval_index
+                pending.projection_created_bar < projection_bar_index(context)
                 && finite_positive(pending.exit_levels.limit)
                 && !finite_positive(pending.exit_levels.stop);
             const bool coqueued_within_cap =
@@ -18105,7 +18122,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                             continue;
                         }
                         if (row.projection_created_bar < 0
-                            || row.projection_created_bar > context.coordinate.interval_index) {
+                            || row.projection_created_bar > projection_bar_index(context)) {
                             continue;
                         }
                         // ab9714be pine_fills.cpp:7671-7674 removes an exit

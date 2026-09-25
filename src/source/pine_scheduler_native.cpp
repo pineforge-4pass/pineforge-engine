@@ -494,7 +494,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         if (!retained_.bar_magnifier)
             host.scheduler_publish_security_boundary();
     }
-    const int chart_index = context.coordinate.interval_index;
+    const int chart_index = context.coordinate.input_interval_index;
     if (uses_aux_security_feed_) host.scheduler_feed_aux_security(chart_index);
     if (coof) {
         restore_coof_script_state(host);

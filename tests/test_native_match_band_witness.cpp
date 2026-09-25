@@ -95,6 +95,7 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 }
 
 #ifndef PINEFORGE_L5_HARVEST
+// K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
 // expectation corrected (18 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19) -- the trace digest folds the continuation read at every bar and every applied fill; trades, trade digest, events, event digest and the three counters did not move; re-harvested the same way on INT19's tree; V19-A's tip (6211dc94) gives the same rows:
 //   row 0: trace 0x5c761f86ff8d6a59ull -> 0x8852dd52b2c3124dull, continuation 0x35be49c9dc0b1619ull -> 0x68316c350be98cfbull, broker 0x14820045351f6701ull -> 0x90e94b9aec984bc5ull
 //   row 1: trace 0x003b6725f65cb1faull -> 0xb5706e0ff07be4bdull, continuation 0x9d7830a827dd26b0ull -> 0x7f333242de11f484ull, broker 0xd7654c2d887c1b39ull -> 0x6be1f81fcd8e9742ull
@@ -110,12 +111,12 @@ std::uint64_t trace_digest(const Outcome& outcome) {
 //   row 4: trace 0xae4b8cb389aa3517ull -> 0x4b4999f299d0cdf3ull, continuation 0x9dee6504b9ff28e3ull -> 0xaa0755381473b53cull, broker 0x4c877db8ad75552aull -> 0x967cdded2c9e5e51ull
 //   row 5: trace 0xa2e515d9e6a92028ull -> 0x26b2fd0950cfaa95ull, continuation 0xde4f0d477a50d037ull -> 0xcde555440af68284ull, broker 0xad01cca35d41947cull -> 0x927c73b7c3989d27ull
 const Pin kPins[kScenarios] = {
-    {0xdd9e87bdc6914dd1ull, 0x80ae17b22e291018ull, 0xc4976ba64466ea54ull, 343, 0xfc50af70e6fbd178ull, 3189, 0x50636c7134e712ddull, 681, 181, 470},
-    {0x9357ba93afee02cbull, 0xfd9e640c63f97913ull, 0x497fbb874818970eull, 419, 0x035061384ce4a851ull, 5591, 0xef4765aaa4df6c96ull, 1315, 905, 598},
-    {0xea689c70123a3583ull, 0x891d3ed17fa5cf91ull, 0x92215cce5130a7faull, 391, 0xad63f1fa3d34f58bull, 3234, 0xc28c69a705a28b32ull, 774, 123, 528},
-    {0xbd398693fbb24cb2ull, 0xad5d0efcb9c5967cull, 0x27238a870ac857fcull, 794, 0x553432ba5afb0756ull, 8826, 0xc007afd9f1d0e5a0ull, 2211, 1214, 1050},
-    {0x4b4999f299d0cdf3ull, 0xaa0755381473b53cull, 0x967cdded2c9e5e51ull, 366, 0x07b8afde66beb2bcull, 3116, 0xe793f91e55f5fa44ull, 666, 158, 500},
-    {0x26b2fd0950cfaa95ull, 0xcde555440af68284ull, 0x927c73b7c3989d27ull, 630, 0x419d9f6ff7266f85ull, 4772, 0xd9400e11c835ee59ull, 1231, 161, 846},
+    {0x68912227e638409cull, 0xca8da297a9d36a42ull, 0x45ca10800a39237cull, 343, 0xfc50af70e6fbd178ull, 3189, 0x50636c7134e712ddull, 681, 181, 470},
+    {0x25a6f03e405389b1ull, 0x87ef6a5457e2a044ull, 0xb928bebcf8b7b3f0ull, 419, 0x035061384ce4a851ull, 5591, 0xef4765aaa4df6c96ull, 1315, 905, 598},
+    {0xab7e6b982584d43full, 0xb463b4435067c9a9ull, 0xe1302517ccf5a37eull, 391, 0xad63f1fa3d34f58bull, 3234, 0xc28c69a705a28b32ull, 774, 123, 528},
+    {0xe8010d4ed5bb803eull, 0x630b685c961a963cull, 0xc981f558a7c4a8fcull, 794, 0x553432ba5afb0756ull, 8826, 0xc007afd9f1d0e5a0ull, 2211, 1214, 1050},
+    {0x9f93851aa161ad64ull, 0x115caaaa6e7fec40ull, 0x27313426de630a99ull, 366, 0x07b8afde66beb2bcull, 3116, 0xe793f91e55f5fa44ull, 666, 158, 500},
+    {0xfabf941108307d2cull, 0x66c6139cb1e3ef13ull, 0x71698a08ab391603ull, 630, 0x419d9f6ff7266f85ull, 4772, 0xd9400e11c835ee59ull, 1231, 161, 846},
 };
 #endif
 

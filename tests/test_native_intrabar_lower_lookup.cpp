@@ -331,11 +331,11 @@ struct Pinned {
 //   1957262624383604956ull -> 4486098428384108224ull
 const Pinned kPinned[] = {
     {Feed::Tiling, false, "k24-lower-tiling",
-     {39, 0xd2ac6e3a775d5206ull, 4800ull, 12678158763721467250ull, 82279288603700875ull}},
+     {39, 0xd2ac6e3a775d5206ull, 4800ull, 13919656791735621389ull, 141878967005553741ull}},
     {Feed::Ragged, false, "k24-lower-ragged",
-     {39, 0xd1675820a42f7e8cull, 2520ull, 27817212454474162ull, 11026420420329913868ull}},
+     {39, 0xd1675820a42f7e8cull, 2520ull, 402609933629186166ull, 16362418212088187476ull}},
     {Feed::Tiling, true, "k24-lower-raw",
-     {39, 0xd1675820a42f7e8cull, 960ull, 10331922125992720379ull, 4486098428384108224ull}},
+     {39, 0xd1675820a42f7e8cull, 960ull, 3468495986851218144ull, 6617510645695267944ull}},
 };
 
 void the_selected_sub_bars_feed_the_same_run() {
@@ -372,6 +372,7 @@ void the_selected_sub_bars_feed_the_same_run() {
 int main() {
     the_selected_sub_bars_feed_the_same_run();
 #ifndef PINEFORGE_K24_HARVEST
+// K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
     the_lower_feed_lookup_is_linear_in_the_run();
 #endif
     if (failures == 0) std::printf("test_native_intrabar_lower_lookup: ok\n");

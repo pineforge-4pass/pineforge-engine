@@ -1,3 +1,4 @@
+// K-IDX follow-up: re-pins v19 broker-state hashes after the coordinate fold.
 // Harvested by test_adapter_host_view_memo at the lane's base (fc7aad62) with
 // PF_HOST_VIEW_MEMO_DUMP=1.
 // expectation corrected: every run's broker-state hash moved once, because v19

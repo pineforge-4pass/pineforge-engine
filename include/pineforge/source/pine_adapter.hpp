@@ -1282,6 +1282,11 @@ public:
                          compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
 
     void bind(NativeStrategyHost& host) noexcept;
+    // Pine source state counts chart/source bars. The kernel coordinate is
+    // script-bar space, so projection rows use this explicit source index and
+    // never rewrite a kernel lot or trade row.
+    int projection_bar_index(const NativeDecisionContext&) const noexcept;
+    int projection_bar_index(const NativeCoordinate&) const noexcept;
     void reset_for_run();
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);

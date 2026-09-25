@@ -140,13 +140,14 @@ constexpr int kBooks = 3;
 // window, when every run kept everything -- by the same fold
 // (V19-B-scratch/failbefore/event_rows_harvest.cpp, event_rows_harvest_base.txt).
 const event_rows::Record kFullRecord[kBooks] = {
-    {889u, 564u, 240u, 85u, 0x7fefdaa9e896c070ull},
-    {7928u, 6910u, 160u, 858u, 0x55453199a45ef807ull},
-    {1162u, 833u, 160u, 169u, 0x57f5593ec230c07eull},
+    {889u, 564u, 240u, 85u, 0x1f9ed57a1e3b3980ull},
+    {7928u, 6910u, 160u, 858u, 0x6dcae2e18cbfc033ull},
+    {1162u, 833u, 160u, 169u, 0x53aa0ab250ce515eull},
 };
 
 enum class Reader { None, Poll };
 
+// K-IDX follow-up: re-pins v19 event-record digests after the coordinate fold.
 // The book, a chosen retention, and optionally a reader that polls
 // native_events() above its own cursor at every script bar, acknowledging
 // what it read until bar `acknowledge_until`.

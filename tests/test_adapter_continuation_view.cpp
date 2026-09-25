@@ -307,6 +307,7 @@ void emit(const char* name, const std::vector<std::uint64_t>& reads) {
     std::printf("};\n");
 }
 #else
+// K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
 // ── Pinned data (see the provenance note at the top of this file) ───────
 // P1_PINNED_DATA_BEGIN
 // expectation corrected (k_chart, 7 of 7 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19):
