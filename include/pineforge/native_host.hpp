@@ -1076,6 +1076,14 @@ public:
     /// C spelling: strategy_native_execute_current_v1.
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
+    /// Append one kernel-owned equity point at this host's report mark.
+    /// Returns true only in a running KernelRecordedAtHostMarks run; false
+    /// changes nothing. Call at the desired mark inside a native callback.
+    /// This is reporting only: it does not book cash or place an order. A
+    /// host that records per-point broker hashes still owns those hash rows.
+    /// No C spelling: the C spec cannot select KernelRecordedAtHostMarks.
+    bool mark_native_report_point(int64_t report_ts);
+
     /// The latest completed bucket delivered for a declared subscription, or
     /// nullopt before its first delivery / for an unknown index. Legal inside
     /// every native callback, including on_native_timeframe_bar itself. A

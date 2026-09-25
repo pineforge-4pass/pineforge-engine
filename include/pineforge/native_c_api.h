@@ -103,6 +103,8 @@
  *                                          strategy_native_execute_current_v1 answers the same verdicts as
  *                                          pf_native_execute_outcome_e and pf_native_refusal_e
  *   [C]  execute_current                   strategy_native_execute_current_v1
+ *   [--] mark_native_report_point          the C spec does not name KernelRecordedAtHostMarks,
+ *                                          so a C host cannot select its mark cadence
  *   [C]  native_series_bar                 strategy_native_series_bar_v1
  *   [C]  declare_timeframe_subscriptions   strategy_native_declare_subscriptions_v1 -- a row is
  *                                          pf_native_subscription_v1, whose `lookahead` / `gaps` bools are

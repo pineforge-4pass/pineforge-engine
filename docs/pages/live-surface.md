@@ -68,7 +68,7 @@ configuration**, not one-shot: it stays in effect until a caller passes
    day), pinned to agree with the `i+1` lookahead on every interior bar of
    the 24x7 lanes. Since R5 lane F5 that is the kernel's answer, not the
    host's: the tail bar reads `NativeDecisionContext::closes_session_day_open_ended`
-   (`market_driver.hpp:157`), the same fact as `closes_session_day` on every
+   (`market_driver.hpp:158`), the same fact as `closes_session_day` on every
    bar except a batch's final one, which it reads off the calendar instead
    of the run end. Historical bars read early closes correctly from the
    session day alone, with no holiday calendar; a *forming* tail bar

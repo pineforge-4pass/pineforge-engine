@@ -1740,7 +1740,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         }
         f.u(margin_point_ordinal_);
         f.u(margin_point_calls_);
-        // v19-B: the last two driver points' instants, which the FX-roll
+        // v19-B: the last two walked driver points' instants, which the FX-roll
         // check reads for its previous point now that no driver log is
         // kept. Only a staged curve reads them, so only it folds them.
         if (staged_fx_curve_) {
@@ -2524,11 +2524,14 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
     // stress switch (set_retire_every_point); by default it closes at
     // script-bar boundaries only.
     if (retire_every_point_) retire_journal();
-    // The FX-roll check's previous point, and the stream's high water, are
-    // kept whatever the retention.
-    driver_marks_[0] = driver_marks_[1];
-    driver_marks_[1] = DriverMark{point.coordinate.ordinal, point.coordinate.effective_time_ms};
-    if (driver_mark_count_ < 2) ++driver_mark_count_;
+    // FX rolls compare successive walked path points. A synchronous current
+    // execution has its own cursor (sometimes at the decision floor ahead of
+    // this path point), so it cannot become the path's FX predecessor.
+    if (point.coordinate.provenance != NativePriceProvenance::CurrentExecution) {
+        driver_marks_[0] = driver_marks_[1];
+        driver_marks_[1] = DriverMark{point.coordinate.ordinal, point.coordinate.effective_time_ms};
+        if (driver_mark_count_ < 2) ++driver_mark_count_;
+    }
     last_driver_ordinal_ = point.coordinate.ordinal;
     // The driver log is an owning readback surface (native_events), kept only
     // under NativeEventRetention::Full; since v19 no hash folds it.
@@ -3449,9 +3452,10 @@ void NativeExecutionConsumer::calculation_margin_check_at(
 //
 // The account converts at account_currency_fx_at(effective time), so the rate
 // a driver point is walked under is a function of the immutable curve and of
-// that point alone. A roll is a point whose rate is not its predecessor's in
-// the driver log -- both already durable, digested state, so the detection
-// adds none of its own and no continuation identity moves. The point is
+// that point alone. A roll is a walked point whose rate is not its walked
+// predecessor's -- both already durable, digested state, so the detection
+// adds no new state. Its existing folded predecessor marks change in v19
+// only when a current execution occurred under a staged curve. The point is
 // offered immediately before it is matched, where the walk still stands: a
 // discrete point at its own price, a segment at its origin with its
 // destination among the waypoints that remain, so a level the new rate moved
@@ -7105,12 +7109,10 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 // HOLDS on that side when it holds one -- the pumped batch input or stream
 // warmup -- because the input, not the schedule, says where a trading day
 // actually stopped (an early close the session string does not declare, a
-// holiday). With nothing held, the neighbour is the calendar's slot one script
-// width away, except at the run's own edges: its first bar opens its session
-// day, and a batch's final bar closes it, because a batch is complete input.
-// A stream's bars read on, because the stream continues. "Opens" reads the bar
-// before exactly as "closes" reads the bar after, so every path that holds a
-// bar agrees on the pair by construction.
+// holiday). With nothing held, the neighbour is the calendar's previous or
+// next eligible input slot, except at the run's own edges: its first bar opens
+// its session day, and a batch's final bar closes it because batch input is
+// complete. A stream reads on. A declared break does not split a session day.
 void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context,
                                                   int64_t label) const {
     context.in_session = false;
@@ -7126,22 +7128,25 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
         context.closes_session_day_open_ended = true;
         return;
     }
-    const SessionPoint here = session_point(label);
+    // The nominal script label may itself be in a declared break (an hourly
+    // interval can reopen at 13:30 while its grid label is 13:00). Resolve
+    // its first eligible instant and next input opening from the calendar,
+    // even when a FeedTolerant host partitions by raw provider labels.
+    const auto slot = native_calendar::interval_containing(
+        calendar_, script_tf_, input_tf_, label, calendar_memo_);
+    const int64_t here_ms = slot ? slot->eligible_open_ms : label;
+    const SessionPoint here = session_point(here_ms);
     if (!here.in_session) return;
     context.in_session = true;
     // In session on this bar's own session day.
     const auto same_day = [&](int64_t other) {
-        const SessionPoint there = session_point(other);
+        const auto other_slot = native_calendar::interval_containing(
+            calendar_, script_tf_, input_tf_, other, calendar_memo_);
+        const SessionPoint there = session_point(
+            other_slot ? other_slot->eligible_open_ms : other);
         return there.in_session && there.ordinal && here.ordinal
             && *there.ordinal == *here.ordinal;
     };
-    const int64_t width = script_width_ms();
-    std::optional<int64_t> step_before;
-    std::optional<int64_t> step_after;
-    if (width > 0) {
-        if (label >= std::numeric_limits<int64_t>::min() + width) step_before = label - width;
-        if (label <= std::numeric_limits<int64_t>::max() - width) step_after = label + width;
-    }
     // The bucket this bar's inputs went into, when any have: its first and
     // last input indices place it in the run. A stream whose warmup ended
     // inside a script bar seals that bar in realtime, and it is still the
@@ -7156,7 +7161,31 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
             ? std::optional<int64_t>(pumped_last_label_)
             : pumped_script_label(script_.first_index - 1);
     }
-    if (!run_start && !before) before = step_before;
+    if (!run_start && !before && slot) {
+        // A previous eligible input slot ON THIS session day suffices to
+        // establish that this bar does not open it. If none exists, the
+        // predecessor is on another day (or absent). Walk this day's spans
+        // backwards, skipping any declared closed window, then resolve the
+        // slot at the last eligible instant before this script interval.
+        if (!session_day_memo_ || !session_day_memo_->holds(here_ms)) {
+            session_day_memo_ = native_calendar::session_day_at(
+                calendar_, here_ms, calendar_memo_);
+        }
+        if (session_day_memo_) {
+            for (auto it = session_day_memo_->spans.rbegin();
+                 it != session_day_memo_->spans.rend(); ++it) {
+                if (it->first >= here_ms) continue;
+                const int64_t end = std::min(here_ms, it->second);
+                if (end <= it->first) continue;
+                const int64_t instant = end - 1;
+                const auto previous = native_calendar::interval_containing(
+                    calendar_, input_tf_, instant, calendar_memo_);
+                if (previous && previous->eligible_open_ms < here_ms)
+                    before = previous->eligible_open_ms;
+                break;
+            }
+        }
+    }
     context.opens_session_day = run_start || !before || !same_day(*before);
 
     std::optional<int64_t> after;
@@ -7175,9 +7204,9 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
         context.closes_session_day = !same_day(*after);
         context.closes_session_day_open_ended = context.closes_session_day;
     } else {
-        // Nothing held after the bar: the calendar's next slot, which is also
-        // the open-ended reading of a batch's final bar.
-        const bool scheduled = step_after && !same_day(*step_after);
+        // Nothing held after the bar: the calendar's next eligible input
+        // slot, which jumps across a declared break without ending the day.
+        const bool scheduled = slot && !same_day(slot->next_input_open_ms);
         context.closes_session_day = run_end || scheduled;
         context.closes_session_day_open_ended = scheduled;
     }
@@ -7225,16 +7254,6 @@ std::optional<int64_t> NativeExecutionConsumer::pumped_script_label(int index) c
     const auto script = script_interval_at(input->open_ms);
     if (!script) return std::nullopt;
     return script->open_ms;
-}
-
-// One script bar's width on a fixed (second / minute) timeframe, 0 otherwise.
-int64_t NativeExecutionConsumer::script_width_ms() const noexcept {
-    if (!script_tf_.valid() || !script_tf_.is_fixed()) return 0;
-    const int64_t unit = script_tf_.unit() == native_calendar::TimeframeUnit::Second
-        ? 1000 : 60'000;
-    const int64_t count = script_tf_.count();
-    if (count <= 0 || count > std::numeric_limits<int64_t>::max() / unit) return 0;
-    return count * unit;
 }
 
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
@@ -7652,11 +7671,13 @@ void NativeExecutionConsumer::record_script_report_point(
 // read the curve. Recording is still the kernel's: the host names when, not
 // what. Inert under every other policy, so a host that records its own
 // report, or one that asked for the per-calculation cadence, is unaffected.
-void NativeExecutionConsumer::mark_script_report_point(
+bool NativeExecutionConsumer::mark_script_report_point(
         BacktestEngine& engine, int64_t script_bar_ts) const {
     const auto* spec = spec_ptr();
-    if (!spec || spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return;
+    if (!std::holds_alternative<NativeRunning>(state_) || !spec
+        || spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks) return false;
     record_report_point(engine, script_bar_ts);
+    return true;
 }
 
 // The fold and the append together, at one instant: the shape a policy whose
@@ -7823,6 +7844,16 @@ void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompleti
     }
     script_.sealed = true;
     script_.has_data = false;
+}
+
+bool NativeExecutionConsumer::final_script_session_closed() const noexcept {
+    // A nominally unfinished bucket can be complete at the calendar's final
+    // traded input. Its last contributor reaches the script interval's
+    // last-traded close; a feed that merely stops mid-interval does not.
+    return script_.has_data && !script_.sealed && last_accepted_input_
+        && script_.interval.last_traded_close_ms > script_.interval.eligible_open_ms
+        && last_accepted_input_->last_traded_close_ms
+            >= script_.interval.last_traded_close_ms;
 }
 
 bool NativeExecutionConsumer::contribute_input(
@@ -8873,6 +8904,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             if (!check_abort(engine, NativeFailureOperation::Input)) return;
             presize_logs(static_cast<std::size_t>(i) + 1);
         }
+        // stream_begin uses this pump for Warmup too. Its pending bucket must
+        // carry into Realtime; only a complete batch ends its input here.
+        const auto* running = std::get_if<NativeRunning>(&state_);
+        if (running && running->phase == NativeRunPhase::Batch
+            && final_script_session_closed()) {
+            seal_script(engine, NativeCompletionKind::Confirmed);
+            if (failed()) return;
+            script_ = ScriptBucket{};
+        }
     }
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
@@ -9503,15 +9543,24 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
             return false;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
-        if (finalize_partial_input_bar && has_forming_) {
+        if (finalize_partial_input_bar) {
             PumpScope pump(*this);
-            auto forming_interval = native_calendar::interval_containing(
-                calendar_, input_tf_, forming_.timestamp, calendar_memo_);
-            if (forming_interval) {
-                if (!finalize_observed_tick_slot(engine, *forming_interval,
-                                                 NativeCompletionKind::PartialFinalized)) {
-                    return false;
+            if (has_forming_) {
+                auto forming_interval = native_calendar::interval_containing(
+                    calendar_, input_tf_, forming_.timestamp, calendar_memo_);
+                if (forming_interval) {
+                    if (!finalize_observed_tick_slot(engine, *forming_interval,
+                                                     NativeCompletionKind::PartialFinalized)) {
+                        return false;
+                    }
                 }
+            }
+            if (final_script_session_closed()) {
+                processing_input_ = true;
+                seal_script(engine, NativeCompletionKind::Confirmed);
+                processing_input_ = false;
+                if (failed()) return false;
+                script_ = ScriptBucket{};
             }
         }
         if (failed()) return false;
@@ -10337,6 +10386,10 @@ NativeCurrentExecutionPreview NativeStrategyHost::inspect_current_execution(
 
 NativeCurrentExecutionResult NativeStrategyHost::execute_current(const NativeCurrentExecution& command) {
     return NativeExecutionConsumer::bound(*this).execute_current(*this, command);
+}
+
+bool NativeStrategyHost::mark_native_report_point(int64_t report_ts) {
+    return NativeExecutionConsumer::bound(*this).mark_script_report_point(*this, report_ts);
 }
 
 NativePhysicalPosition NativeStrategyHost::physical_position() const {

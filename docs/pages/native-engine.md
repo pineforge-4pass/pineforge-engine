@@ -226,13 +226,13 @@ refusal. Each is generic, and all four are folded into the continuation identity
 unconditionally, including their defaults; changing any of them changes the
 identity.
 
-- `slot_label_policy` (`NativeSlotLabelPolicy` `native_run_spec.hpp:323`) —
+- `slot_label_policy` (`NativeSlotLabelPolicy` `native_run_spec.hpp:324`) —
   `Canonical` (default) requires every confirmed input to carry its calendar
   slot label (`interval.open_ms`, or the scheduled clipped
   `eligible_open_ms`). `FeedTolerant` accepts a provider's own strictly
   increasing labels instead. `LegacyTolerant` is the deprecated spelling of
   the same value and hashes identically.
-- `legacy_tolerance` (`NativeFeedTolerance` `native_run_spec.hpp:344`) — a bit
+- `legacy_tolerance` (`NativeFeedTolerance` `native_run_spec.hpp:345`) — a bit
   mask of admission exceptions for a tolerated feed shape, separate from slot
   labels because a host may want the tolerant price admission and canonical
   labels. `BatchStructuralBars` admits finite but non-positive OHLC and reads
@@ -240,7 +240,7 @@ identity.
   finite non-negative interim warmup values, while the final warmup close
   stays strictly positive. `native_feed_tolerance_enabled` tests one bit.
   `NativeLegacyTolerance` is the deprecated spelling of the type.
-- `path_order` (`NativePathOrder` `native_run_spec.hpp:334`) — `Auto`
+- `path_order` (`NativePathOrder` `native_run_spec.hpp:335`) — `Auto`
   (default) keeps the open-proximity rule that decides whether a modeled bar
   walks its high or its low first. `HighFirst` / `LowFirst` state it, so a
   replay or a live host does not depend on that inference.
@@ -257,7 +257,7 @@ explicitly instead of inventing a clock literal. It is incompatible with
 
 ### The intrabar path
 
-`NativeRunSpec::intrabar` (`IntrabarPath` `native_run_spec.hpp:377`) is a
+`NativeRunSpec::intrabar` (`IntrabarPath` `native_run_spec.hpp:378`) is a
 `std::variant` the spec owns — deliberately a spec value, not a caller borrow,
 because matching may need the finer bars later, while sealing an aggregated
 script bar:
@@ -284,12 +284,12 @@ the sub-bar sections of `tests/test_native_calc_timing.cpp`.
 
 ### Validating a spec
 
-`validate_native_run_spec(spec)` (`native_run_spec.hpp:805`) answers a
-`NativeRunSpecValidation` (`native_run_spec.hpp:788`): a
-`NativeRunSpecError` (`native_run_spec.hpp:677`) and the
-`NativeRunSpecField` (`native_run_spec.hpp:645`) it first failed on, with
+`validate_native_run_spec(spec)` (`native_run_spec.hpp:806`) answers a
+`NativeRunSpecValidation` (`native_run_spec.hpp:789`): a
+`NativeRunSpecError` (`native_run_spec.hpp:678`) and the
+`NativeRunSpecField` (`native_run_spec.hpp:646`) it first failed on, with
 `ok()` and an explicit `operator bool`. `normalize_native_run_spec(spec)`
-(`native_run_spec.hpp:815`) validates and rewrites the one admitted literal —
+(`native_run_spec.hpp:816`) validates and rewrites the one admitted literal —
 a numeric `-0` fee becomes `+0` — leaving every other literal alone. Neither
 allocates on the failure path, neither changes a spec it rejects, and the
 field order is deterministic, so a host can report "which field" rather than
@@ -307,7 +307,7 @@ field order is deterministic, so a host can report "which field" rather than
 valid and clear the curve. `validate_native_fx_curve`
 (`native_fx_curve.hpp:48`) is the same judgement as a pure query.
 
-`native_run_spec_digest(spec)` (`native_run_spec.hpp:891`) is the portable
+`native_run_spec_digest(spec)` (`native_run_spec.hpp:892`) is the portable
 constant described under *Lifecycle and run identity*: exactly the fields the
 consumer folds into a run's continuation identity, and nothing else. Each
 feature suite pins the refusals of the fields it owns — the eighteen
@@ -454,7 +454,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:8954-8994`), which admits the begin, checks the
+(`native_execution_consumer.cpp:8994-9034`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -482,7 +482,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2696-2746`), under the same legality rule; see *Driving the
+(`native_c_api.h:2698-2748`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -618,13 +618,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5463-5467`). Requests accepted before the
+`native_execution_consumer.cpp:5467-5471`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:6910-6912`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:6913-6915`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6802`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6806`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1300,8 +1300,8 @@ liquidated immediately as a current execution. Nothing fills mid-path.
 **The FX roll (`NativeMarginCheckKind::FxRoll`).** `required(P)` carries the
 account rate, so under a declared `NativeFxCurve` an account can cross its
 maintenance line while every price stands still. A step of the curve is
-therefore a check point of its own: the first driver point the account
-converts at a different rate than the point before it, offered immediately
+therefore a check point of its own: the first walked driver point the account
+converts at a different rate than the previous walked point, offered immediately
 before that point is matched. The walk has not moved yet — a discrete point is
 measured at its own price, a segment at its origin with its destination among
 the waypoints that remain — so the mark is the unchanged price and only the
@@ -1808,8 +1808,8 @@ says otherwise, and the C spellings are in
 | `current_partial_bar()` | the lookahead-free bar so far at this cursor | `strategy_native_partial_bar_v1` |
 | `native_series_bar(i)` | the latest delivered bucket of subscription `i` | `strategy_native_series_bar_v1` |
 | `native_recalculation_count()` / `native_recalculations_skipped()` | the calculations the cadence drove and the ones its per-point bound dropped | `strategy_native_recalculations_v1` |
-| `native_decision_floor()` (`native_host.hpp:1320`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
-| `native_consumed_high_water()` (`native_host.hpp:1325`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
+| `native_decision_floor()` (`native_host.hpp:1328`) | the run's monotonic decision floor in epoch ms — the same value `NativeStateView::decision_floor_ms` carries, and the lower bound every request's birth is compared against | `pf_native_state_v1::decision_floor_ms` |
+| `native_consumed_high_water()` (`native_host.hpp:1333`) | the highest `run_number` this host has consumed. It lives **outside** per-run reset, so the next configure on the same host needs a strictly larger number; a fresh host reads 0 | `pf_native_state_v1::consumed_high_water` |
 | `native_continuation_hash()` | the consumer's continuation identity: a fold of its live state (*What the continuation and the broker-state hash fold*), the timezone folded by its content, so the same spec over the same bars and zone rules answers the same value on every host | `strategy_native_continuation_hash_v1` |
 | `native_sized_units(sized, price, equity, fx)` | the kernel's own `Sized` resolution as a pure query | none — see *Previewing a basis* |
 | `inspect_current_execution(cmd)` | `NativeCurrentExecutionPreview`, with a `NativeCurrentRefusal` `native_host.hpp:685` when the command cannot be consumed here | none — `strategy_native_execute_current_v1` answers the same verdicts |
@@ -1835,20 +1835,21 @@ rather than relabelled. Failure copy and move do not allocate.
 `NativeCoordinate` (`market_driver.hpp:71` — ordinal, the interval stamps,
 the effective time, the `NativePathPhase` and the `NativeCompletionKind`),
 the decision floor, both calendar intervals, and the script bar's
-session-day facts (R5 lane F5): `in_session` (`market_driver.hpp:154`),
+session-day facts (R5 lane F5): `in_session` (`market_driver.hpp:155`),
 `opens_session_day`, `closes_session_day` and
 `closes_session_day_open_ended`. They read the run's own calendar and
 session day — the cycle that rolls at the session's first window start,
 keyed to its trading date, so an overnight session is one day across local
 midnight — and the bar before or after the script bar: the one the run
-holds (its batch input or stream warmup), otherwise the calendar's slot one
-script width away. A run's first bar opens its session day and a batch's
+holds (its batch input or stream warmup), otherwise the calendar's previous
+or next eligible input slot, across declared breaks. A run's first bar opens
+its session day and a batch's
 final bar closes it; the open-ended close reads the calendar at that final
 bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:1441`). The kernel resolves each session day once through
+(`native_c_api.h:1444`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -1863,8 +1864,8 @@ decision context plus the print's sequence, where zero keeps the public
 
 **Cohorts.** A cohort is a host-built roster of openings a later close binds
 to: `cohort_open()` answers a `native_order::CohortHandle`, `cohort_add`
-(`native_host.hpp:1250`) enrolls one accepted opening's handle,
-`cohort_remove` (`native_host.hpp:1253`) takes it back off, and a request with
+(`native_host.hpp:1258`) enrolls one accepted opening's handle,
+`cohort_remove` (`native_host.hpp:1261`) takes it back off, and a request with
 `owner = native_order::BindCohort{cohort}` closes what the roster holds at
 the match. The C spellings are `strategy_native_cohort_open_v1` / `_add_v1` /
 `_remove_v1`; in C the pairing is fixed — a `BindCohort` owner is reachable
@@ -1969,7 +1970,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7631`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7650`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2024,9 +2025,11 @@ appends its own rows.
 `NativeReportPolicy::KernelRecordedAtHostMarks` records the very same series
 at the points the host marks, for a host whose report cadence is not one point
 per calculation. The consumer never records on its own initiative under it:
-the host calls the kernel's report mark from inside its own callback, naming
-the label the point carries, and the kernel performs the extremes fold and the
-curve append. The Pine adapter is that host — its report has one point per
+the host calls `mark_native_report_point(report_ts)` from inside its own
+callback, naming the label the point carries. The kernel performs the extremes
+fold and curve append. The call returns `true` when it appends; it returns
+`false` and changes nothing outside a running `KernelRecordedAtHostMarks` run.
+The Pine adapter is one marking host — its report has one point per
 published *source* slot, which is not the same series of instants: a
 `calc_on_order_fills` re-entry marks the slot it opened at the fill and the
 bar's ordinary close calculation then marks nothing, and a suppressed probe
@@ -2237,8 +2240,9 @@ binding a ledger). Stream D/W uses civil/session next-open stepping.
 Each confirmed input is attributed **wholly** to the script period that
 contains its input open (OHLC/volume are not split across a calendar
 boundary). Script calculation time is not earlier than the latest included
-contributor close. An unfinished trailing coarser script bucket does not
-become complete merely because batch input ended.
+contributor close. A trailing coarser script bucket is calculated at batch
+end when its final contributor reaches the calendar's last-traded close.
+Input that stops inside the interval leaves its bucket unfinished.
 
 Session strings: empty or `"24x7"`; comma-separated `HHMM-HHMM` windows;
 `2400` as a legal end; overnight wrap; equal start/end as a full day from
@@ -2250,8 +2254,12 @@ IANA aliases.
 
 **Batch** may be sparse (missing in-session slots are allowed; no synthetic
 prices). **Stream warmup** requires at least one input and every **provided**
-input slot to be a complete confirmed interval; missing in-session bars are
-refused. An unfinished coarser **script** bucket is retained through
+input slot to be a complete confirmed interval. Under `Canonical`, missing
+in-session bars are refused; under `FeedTolerant`, warmup may omit them,
+including an entire trading day. Realtime `stream_push_bar` still refuses an
+in-session gap under either policy. A calendar day mask must exclude days a
+stream is expected to skip, such as weekends. An unfinished coarser **script**
+bucket is retained through
 Warmup → Realtime. The handoff does not invent a script callback, a future
 exclusive close, or a raised floor to a future seal. Empty batch is a valid
 completed run with no events.
@@ -2756,7 +2764,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7711`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7732`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -2803,8 +2811,9 @@ synthesize neither bars nor matching points.
 `stream_advance_time(ms)` finishes elapsed intervals and raises the accepted
 time floor; it is not an extra print. `stream_end(false)` completes without
 inventing a final callback or fill. `stream_end(true)` may partial-finalize
-an existing forming observed input; it does not synthesize a missing input
-or force an incomplete coarser script bucket complete.
+an existing forming observed input and calculates a pending script bucket
+when its final contributor reached the calendar's last-traded close. It does
+not synthesize a missing input or complete a bucket whose session is still open.
 
 The decision floor is monotonic (delivered event time, accepted input
 completion, tick time, time-advance). A refused preflight does not raise it.
@@ -2841,7 +2850,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (`sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (`native_c_api.h:2646`) obeys the one legality
+`strategy_native_submit_v1` (`native_c_api.h:2648`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the

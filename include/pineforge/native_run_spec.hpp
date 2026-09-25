@@ -57,6 +57,7 @@ enum class NativeAbortReporting : std::uint32_t {
 /// what a report point is. The consumer never records on its own initiative
 /// under it, so it leaves the continuation identity exactly where
 /// HostRecorded leaves it (see hash_spec in native_execution_consumer.cpp).
+/// A C++ host marks through NativeStrategyHost::mark_native_report_point.
 enum class NativeReportPolicy : std::uint32_t {
     HostRecorded = 0,
     KernelRecorded = 1,

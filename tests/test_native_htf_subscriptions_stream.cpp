@@ -8,7 +8,7 @@
 //      produces, compared element by element (both publication modes);
 //   2. live pushes continue the very bucket the warmup left open and deliver
 //      it before the calculation of the bar that completed it;
-//   3. a bucket still open when the stream ends is never delivered;
+//   3. a bucket still open when stream_end(false) runs is never delivered;
 //   4. native_series_bar answers with the latest delivered bucket on both
 //      sides of the warmup -> live boundary;
 //   5. a stream whose spec declares no series keeps this tree's event
@@ -32,7 +32,8 @@
 //      nominal end, so the NEXT session's first bar seals it lazily -- once
 //      inside the warmup, once live -- and that calculation reads the series
 //      as its own session left them, before the new session's first bar
-//      reaches any of them (seal(k) -> deliver(i+1) -> calc(i+1)).
+//      reaches any of them (seal(k) -> deliver(i+1) -> calc(i+1)). A complete
+//      batch calculates its final clipped bar at its calendar close.
 
 #include <pineforge/native_host.hpp>
 
@@ -886,9 +887,13 @@ void test_lazy_seal_precedes_the_pump() {
             want_completions.push_back(NativeCompletionKind::Confirmed);
         }
     }
-    // Seven script bars a day; the last session's clipped one has no
-    // successor to seal it, in a batch and on a stream alike.
+    // Seven script bars a day. A complete batch calculates its final clipped
+    // bar at the calendar close; stream_end(false) leaves that bar pending.
     CHECK(want_completions.size() == 20);
+    std::vector<std::string> want_batch_log = want_log;
+    want_batch_log.push_back("bar@" + stamp(2 * per_session + 24));
+    std::vector<NativeCompletionKind> want_batch_completions = want_completions;
+    want_batch_completions.push_back(NativeCompletionKind::Confirmed);
 
     SeriesHost batch;
     batch.probes = 3;
@@ -921,19 +926,21 @@ void test_lazy_seal_precedes_the_pump() {
         }
     }
 
-    // The stream is the batch, and both are the hand-built sequence.
-    check_logs_equal(batch.log, want_log);
+    // The two modes share every input and series delivery; batch alone
+    // calculates the calendar-closed final script bucket at run end.
+    check_logs_equal(batch.log, want_batch_log);
     check_logs_equal(stream.log, want_log);
     check_deliveries_equal(stream.deliveries, batch.deliveries);
-    CHECK(batch.completions == want_completions);
+    CHECK(batch.completions == want_batch_completions);
     CHECK(stream.completions == want_completions);
 
     // What the two lazily sealed calculations read, and how many script bars
     // had been calculated when the sealing input's own bucket arrived: the
     // clipped bar's calculation is already among them.
     for (const SeriesHost* host : {&batch, &stream}) {
-        CHECK(host->series_at_bar.size() == 20);
-        if (host->series_at_bar.size() != 20) continue;
+        const std::size_t expected = host == &batch ? 21 : 20;
+        CHECK(host->series_at_bar.size() == expected);
+        if (host->series_at_bar.size() != expected) continue;
         for (int day = 0; day < 2; ++day) {
             const std::size_t calc = static_cast<std::size_t>(day) * 7 + 6;
             const int last = day * per_session + 25;
@@ -958,6 +965,20 @@ void test_lazy_seal_precedes_the_pump() {
             }
             CHECK(found);
         }
+    }
+
+    const int last = 3 * per_session - 1;
+    const Bar final_clipped_hour = hand_aggregate(
+        bars, last - 1, 2, bars[static_cast<std::size_t>(last - 1)].timestamp);
+    const auto& final_series = batch.series_at_bar.back();
+    CHECK(final_series.size() == 3);
+    if (final_series.size() == 3) {
+        check_series(final_series[0], bars[static_cast<std::size_t>(last)],
+                     "batch final clipped bar reads 15");
+        check_series(final_series[1], final_clipped_hour,
+                     "batch final clipped bar reads 60 gaps");
+        check_series(final_series[2], final_clipped_hour,
+                     "batch final clipped bar reads 60");
     }
 
     // stream_end seals nothing and delivers nothing.

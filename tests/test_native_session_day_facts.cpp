@@ -19,7 +19,8 @@
  * rolls at the session's first window start, keyed to its trading date, so an
  * overnight session is ONE day across local midnight. The bar before / after
  * is the one the run holds when it holds one — a batch's input, a stream's
- * warmup — and otherwise the calendar's, one script width away. The run's
+ * warmup — and otherwise the calendar's previous or next eligible input
+ * slot, across declared breaks. The run's
  * own edges keep the convention a bar with nothing held beyond it has: the
  * first bar of a run opens its session day, and the final bar of a batch
  * closes it (a batch is complete input); a stream's bars read on, because

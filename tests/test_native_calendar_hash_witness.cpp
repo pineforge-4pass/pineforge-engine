@@ -571,7 +571,9 @@ const Pinned kPinned[] = {
     {"london_dst", 0x36decf92d3c95856ULL, 400, 400, 400, 0, 0, 1600, 80, 11},
     {"posix_overnight", 0x82af75049101b94aULL, 140, 140, 140, 0, 0, 560, 67, 9},
     {"fixed_offset", 0x7be69391f0425aadULL, 900, 900, 900, 0, 0, 3600, 136, 19},
-    {"ny_daily_over_hourly", 0x12d290fd048a6c7cULL, 12, 12, 300, 0, 0, 48, 11, 1},
+    // expectation corrected (KERNEL-EDGE, v19): the calendar-closed final
+    // daily bucket is calculated at batch end, including its last trade.
+    {"ny_daily_over_hourly", 0xfa85a7f9a92aea39ULL, 13, 13, 300, 0, 0, 52, 14, 2},
     {"ny_hourly_series", 0x9237cf98641532f4ULL, 234, 234, 234, 21, 0, 936, 42, 6},
     {"tolerant_aggregating", 0x0110dff138377266ULL, 200, 200, 600, 0, 0, 800, 63, 9},
     {"tolerant_stream_night", 0x7de1da848e8cb622ULL, 34, 34, 34, 0, 0, 136, 21, 3},

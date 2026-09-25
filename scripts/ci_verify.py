@@ -227,7 +227,8 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # B-C-SURFACE and B-DOCS add no row. 272 registered, 271 run: the WebSocket
 # row still skips on a system libcurl.
 # C-SURFACE-1 adds the INT23 frozen-header decision-tail witness.
-KERNEL_MIN_TESTS = 272
+# Wave G KERNEL-EDGE adds the source-free test_native_kernel_edge row.
+KERNEL_MIN_TESTS = 273
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -329,8 +330,9 @@ KERNEL_MIN_TESTS = 272
 #   +1 INT24     test_adapter_dual_entry_tie (the ruling on B-ADAPTER's
 #                finding 1)
 # B-C-SURFACE's witnesses are rows inside test_native_c_api. C-SURFACE-1 adds
-# the INT23 frozen-header decision-tail row. No release row skips: 673 run.
-RELEASE_MIN_TESTS = 673
+# the INT23 frozen-header decision-tail row. Wave G KERNEL-EDGE adds the same
+# test_native_kernel_edge row in release. No release row skips: 674 run.
+RELEASE_MIN_TESTS = 674
 # PR-only registration floors. These are the complete CTest populations at
 # 91d65ad6 (INT24); the ordinary full-run floors above remain unchanged.
 # An excluded run must still discover at least this many rows before -LE.
