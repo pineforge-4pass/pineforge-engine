@@ -1255,6 +1255,11 @@ list(APPEND TEST_SOURCES test_str_number_format)
 # books at that fill -- fee 0 / 0.1 %, grid none / 0.001, limit and slipped
 # stop entries (differential). Source-bound.
 list(APPEND TEST_SOURCES test_adapter_fill_qty_probe)
+# R5 lane B-ADAPTER (item 1): a typed per-call entry (qty_type cash /
+# percent_of_equity) is admitted, booked and probed as the contracts its money
+# buys -- the run that declares the same type and value as its default books
+# the same contracts, bit for bit (differential). Source-bound.
+list(APPEND TEST_SOURCES test_adapter_typed_entry_admission)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep

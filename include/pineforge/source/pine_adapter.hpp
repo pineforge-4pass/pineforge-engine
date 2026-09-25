@@ -1859,6 +1859,16 @@ private:
     double default_sizing_cash(const PineSizingSnapshot&) const noexcept;
     bool default_sizing_reserves_percent_fee() const noexcept;
     double default_sizing_lot_floor(double units) const noexcept;
+    // A typed quantity (qty_type cash / percent_of_equity) names money, not
+    // units: `money` converted at `price` by the core (native_sized_units:
+    // CashValue, the percentage fee reserve) and floored onto the quantity
+    // grid. typed_entry_units picks the money a typed entry's fill books --
+    // the cash itself, or a percentage of the source's sizing equity at
+    // `price` (of the hypothetical Flatten's realized balance for a typed
+    // reversal); std::nullopt where that projection has no Pine host.
+    double typed_quantity_units(double money, bool percent, double price, double fx) const;
+    std::optional<double> typed_entry_units(const PlacementSnapshot&, double price, double fx,
+                                            native_order::RequestHandle target) const;
     // The core intent a default-quantity declaration spells -- the source
     // money as a CashValue basis, the core's fee reserve, the raw quotient --
     // and the sided intent a re-lowerable opening carries.  std::nullopt keeps

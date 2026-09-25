@@ -2497,6 +2497,46 @@ double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizi
     return quotient ? default_sizing_lot_floor(*quotient) : 0.0;
 }
 
+// A typed quantity's units at `price`: the core converts the money the source
+// chose, and reserves a percentage fee out of a percentage's money, exactly as
+// for a default quantity; the source floors the quotient onto its grid, as
+// ab9714be calc_qty_for_type (pine_orders.cpp:130-170) did for both types.
+double PineExecutionAdapter::typed_quantity_units(double money, bool percent, double price,
+                                                  double fx) const {
+    native_order::Sized sized;
+    sized.basis = native_order::CashValue{money};
+    sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+    sized.reserve_percent_fee = percent
+        && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && config_.commission_value > 0.0;
+    return floor_quantity_grid(
+        require_host().native_sized_units(sized, price, 0.0, fx).value_or(0.0),
+        staged_.quantity_grid);
+}
+
+// What a typed entry opens when it fills at `price`: its cash, or its
+// percentage of the source's sizing equity -- of the hypothetical Flatten's
+// realized balance when it was placed as a reversal (ab9714be
+// pine_orders.cpp:96-191: the old opening fee and this close's fee are
+// realized once, before the new opening's percentage fee is reserved).
+std::optional<double> PineExecutionAdapter::typed_entry_units(
+        const PlacementSnapshot& source, double price, double fx,
+        native_order::RequestHandle target) const {
+    const double qty = source.requested_qty;
+    if (source.qty_type == static_cast<int>(QtyType::CASH))
+        return typed_quantity_units(qty, false, price, fx);
+    if (source.qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)) return qty;
+    if (source.terms_priced_reverse) {
+        const auto* pine_host = pine_view_of(&require_host());
+        if (!pine_host) return std::nullopt;
+        const auto projection = pine_host->adapter_project_flatten(
+            price, source.source_id, source.comment, target.incarnation);
+        return typed_quantity_units(projection.realized_balance * qty / 100.0, true, price, fx);
+    }
+    return typed_quantity_units(percent_commission_live_equity(price) * qty / 100.0, true,
+                                price, fx);
+}
+
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
         const PineSizingSnapshot& sizing, bool is_long) const noexcept {
     // The core converts at the run's own point value; whether it also converts
@@ -5714,7 +5754,18 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 ? active_staged_fx(source_point->decision.sub_bar_open_ms) : staged_.account_fx;
             const double equity = source_point
                 ? require_host().native_marked_equity(source_point->price) : kNaN;
-            const double required = std::abs(normalized_qty) * mark
+            // A typed quantity names money, not units: the admission prices
+            // the units that money buys at the mark -- the conversion its fill
+            // books (typed_entry_units), taken at the signal. Reading the cash
+            // as units dropped a 1000-cash entry at 125 on 100 000 of equity.
+            double units = std::abs(normalized_qty);
+            if (qty_type == static_cast<int>(QtyType::CASH)) {
+                units = typed_quantity_units(std::abs(qty), false, mark, fx);
+            } else if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
+                units = typed_quantity_units(
+                    percent_commission_live_equity(mark) * std::abs(qty) / 100.0, true, mark, fx);
+            }
+            const double required = units * mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
             // R4-D L10ad: ab9714be pine_strategy_commands.cpp:344-346 gates the
             // whole placement affordability half on margin_pct > 0.0 ("margin_pct
@@ -6411,12 +6462,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             own_units = finite_positive(snapshot.sizing.frozen_units)
                 ? snapshot.sizing.frozen_units : config_.default_qty_value;
         } else if (qty_type == static_cast<int>(QtyType::CASH)) {
-            const double denominator = signal * staged_.syminfo.pointvalue * snapshot.sizing.fx;
-            own_units = finite_positive(denominator) ? normalized_qty / denominator : 0.0;
+            own_units = typed_quantity_units(std::abs(normalized_qty), false, signal,
+                                             snapshot.sizing.fx);
         } else if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            const double denominator = signal * staged_.syminfo.pointvalue * snapshot.sizing.fx;
-            own_units = finite_positive(denominator)
-                ? snapshot.sizing.equity * normalized_qty / 100.0 / denominator : 0.0;
+            own_units = typed_quantity_units(
+                snapshot.sizing.equity * std::abs(normalized_qty) / 100.0, true, signal,
+                snapshot.sizing.fx);
         }
         const double held = reverses ? 0.0
             : std::max(0.0, std::abs(current) - preceding_close_qty);
@@ -12157,19 +12208,13 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         return result;
     }
     // A typed quantity (qty_type cash / percent_of_equity) names its own money.
-    // The source chooses that money and keeps its lot floor; the conversion
-    // cash / (fill price * point value * fx) and a percentage's fee reserve
-    // are the kernel's (native_sized_units), as for a default quantity.
-    const auto typed_units = [&](double cash, bool percent) {
-        native_order::Sized sized;
-        sized.basis = native_order::CashValue{cash};
-        sized.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
-        sized.reserve_percent_fee = percent
-            && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-            && config_.commission_value > 0.0;
-        return require_host().native_sized_units(sized, result.resolved_price, 0.0,
-                                                 facts.active_fx).value_or(0.0);
-    };
+    // The source chooses that money and floors the units onto its grid; the
+    // conversion cash / (fill price * point value * fx) and a percentage's fee
+    // reserve are the kernel's (native_sized_units), as for a default
+    // quantity. typed_entry_units is also what the placement admission prices
+    // and what the fill-quantity probe answers.
+    const bool typed_quantity = source.qty_type == static_cast<int>(QtyType::CASH)
+        || source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
     if (source.family == PineOrderFamily::Entry && source.terms_priced_reverse) {
         const bool opposite_now = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
@@ -12180,22 +12225,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             return result;
         }
         double own_units = source.requested_qty;
-        if (source.qty_type == static_cast<int>(QtyType::CASH)) {
-            own_units = floor_quantity_grid(typed_units(source.requested_qty, false),
-                                            staged_.quantity_grid);
-        } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            // ab9714be pine_orders.cpp:96-191: a typed percentage reversal
-            // sizes from the hypothetical Flatten's realized balance.  The
-            // old opening fee and this close's fee are thereby realized once,
-            // before reserving the new percentage opening commission.
-            const auto* pine_host = pine_view_of(&require_host());
-            if (!pine_host) return result;
-            const auto projection = pine_host->adapter_project_flatten(
-                result.resolved_price, source.source_id, source.comment,
-                facts.target.incarnation);
-            own_units = floor_quantity_grid(
-                typed_units(projection.realized_balance * source.requested_qty / 100.0, true),
-                staged_.quantity_grid);
+        if (typed_quantity) {
+            const auto typed = typed_entry_units(source, result.resolved_price,
+                                                 facts.active_fx, facts.target);
+            if (!typed) return result;
+            own_units = *typed;
         }
         result.units = own_units;
         const auto created_side = static_cast<PositionSide>(
@@ -12226,16 +12260,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         return result;
     }
     if (source.family == PineOrderFamily::Entry && finite_positive(source.requested_qty)) {
-        if (source.qty_type == static_cast<int>(QtyType::CASH)) {
-            result.units = typed_units(source.requested_qty, false);
-        } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            result.units = floor_quantity_grid(
-                typed_units(percent_commission_live_equity(result.resolved_price)
-                                * source.requested_qty / 100.0, true),
-                staged_.quantity_grid);
-        } else {
-            result.units = source.requested_qty;
-        }
+        result.units = typed_quantity
+            ? typed_entry_units(source, result.resolved_price, facts.active_fx, facts.target)
+                  .value_or(0.0)
+            : source.requested_qty;
     } else if (core_sized) {
         // The core resolved cash / (signal price * point value * fx) with the
         // fee reserve at acceptance and published the quotient as this
@@ -18420,8 +18448,24 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         && std::isnan(snapshot.exit_levels.stop)
         && std::isnan(snapshot.exit_levels.trail_offset)
         && std::isnan(snapshot.exit_levels.trail_price);
+    const bool limit_route = (snapshot.family == PineOrderFamily::Entry
+                               || snapshot.family == PineOrderFamily::Order)
+        && !std::isnan(snapshot.exit_levels.limit);
+    double sized_price = fill_price;
+    if (!limit_route && std::isfinite(sized_price)) {
+        sized_price += (snapshot.is_long ? 1.0 : -1.0)
+            * owner_->config_.slippage * owner_->staged_.syminfo.mintick;
+    }
+    const bool typed_entry = snapshot.family == PineOrderFamily::Entry
+        && (snapshot.qty_type == static_cast<int>(QtyType::CASH)
+            || snapshot.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY));
     if (!sized && finite_positive(snapshot.requested_qty)) {
-        *qty = snapshot.requested_qty;
+        // A typed quantity is money: the units its fill books at this price
+        // (resolve_terms), not the cash or percentage number itself.
+        *qty = typed_entry
+            ? owner_->typed_entry_units(snapshot, sized_price,
+                                        owner_->sizing_snapshot().fx, handle).value_or(0.0)
+            : snapshot.requested_qty;
         *partition = 0;
         sized = true;
     } else if (!sized && default_stop) {
@@ -18435,14 +18479,6 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
         sized = true;
     }
     if (!sized) {
-        const bool limit_route = (snapshot.family == PineOrderFamily::Entry
-                                   || snapshot.family == PineOrderFamily::Order)
-            && !std::isnan(snapshot.exit_levels.limit);
-        double sized_price = fill_price;
-        if (!limit_route && std::isfinite(sized_price)) {
-            sized_price += (snapshot.is_long ? 1.0 : -1.0)
-                * owner_->config_.slippage * owner_->staged_.syminfo.mintick;
-        }
         const int type = owner_->config_.default_qty_type;
         if (type == static_cast<int>(QtyType::CASH)
             || type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
