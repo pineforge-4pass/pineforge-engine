@@ -54,9 +54,9 @@ Three layers:
 
 ## Symbol inventory
 
-A built strategy `.so` exposes 65 compiled-strategy `PF_API` declarations
-(57 runtime implementations plus eight generated exports) plus 41 native-host
-declarations: 106 `PF_API` exports in total. `nm -gU` also reports libc++'s
+A built strategy `.so` exposes 66 compiled-strategy `PF_API` declarations
+(58 runtime implementations plus eight generated exports) plus 43 native-host
+declarations: 109 `PF_API` exports in total. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The historical 28-symbol module
 sentence was not a current module count; the grouped table below is a guide,
 not the complete inventory:
@@ -94,7 +94,7 @@ not the complete inventory:
 | `pf_version_string` | @ref pf_version |
 
 Eight per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 57 runtime implementations, including the
+functions. The remaining 58 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

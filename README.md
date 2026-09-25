@@ -171,7 +171,7 @@ report. Each is a CTest row: `ctest --test-dir build -R example_`.
 Hand the runtime a callback table and drive the kernel from any language with
 a C FFI — no C++ in your own code. The complete file is
 [`examples/native/hello_kernel_c.c`](examples/native/hello_kernel_c.c); the
-41 `strategy_native_*` functions are declared in
+43 `strategy_native_*` functions are declared in
 [`include/pineforge/native_c_api.h`](include/pineforge/native_c_api.h) and
 summarised in [Driving the kernel from C](#driving-the-kernel-from-c) below.
 
@@ -425,9 +425,9 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 
 ## Public C ABI
 
-A built strategy `.so` exposes 65 compiled-strategy `PF_API` declarations
-(57 runtime implementations plus eight generated exports) plus 41 native-host
-declarations: 106 `PF_API` exports in total. `nm -gU` also shows libc++'s
+A built strategy `.so` exposes 66 compiled-strategy `PF_API` declarations
+(58 runtime implementations plus eight generated exports) plus 43 native-host
+declarations: 109 `PF_API` exports in total. `nm -gU` also shows libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The two
 inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
@@ -463,7 +463,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 
 ### Driving the kernel from C
 
-`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **41 further
+`<pineforge/native_c_api.h>` (included by `pineforge.h`) adds **43 further
 `PF_API` functions** for the other direction: a host that is not written in
 C++ hands the runtime a callback table and drives the kernel itself — submit,
 replace, cancel, execute, read the book — instead of loading a compiled
