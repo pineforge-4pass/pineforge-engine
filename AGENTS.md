@@ -140,6 +140,9 @@ dispatch run the full CI profiles. A campaign PASS verdict still binds the
 exact engine and codegen HEADs for baseline promotion.
 
 Merged single-axis PRs advance the campaign baseline automatically through
-`.github/workflows/promote-baseline.yml` only when the exact-head guard, both
-required statuses on that head, and the campaign verdict pass. A squash or
-rebase that rewrites the SHA defers promotion and needs new verification.
+`.github/workflows/promote-baseline.yml` only when the exact-tree guard (the
+merge commit on `main` carries the verified PR head's tree, and `main` has not
+moved past it), both required statuses on the PR head, and the campaign verdict
+pass. PRs are squash-merged, so the workflow hands the campaign tool the squash
+commit and the verified PR head; while that tool requires the merge commit to be
+the gated head itself, a squash defers promotion and needs new verification.

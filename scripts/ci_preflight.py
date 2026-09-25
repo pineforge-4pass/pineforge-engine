@@ -102,6 +102,27 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str) -> list
             or '.["pineforge/parity"] == "success"' not in promote
             or '/check-runs' in promote):
         findings.append('baseline promotion must require the latest two head statuses')
+    # PRs are squash-merged, so the PR head is never an ancestor of the base
+    # branch. The merge commit (the event's merge_commit_sha, or the dispatch
+    # input) must be on the base branch, carry the verified PR head's tree and
+    # still be the base branch's tree; every skip exits before promotion.
+    merge_env = ('MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha'
+                 ' || github.event.inputs.merge_commit }}')
+    head_env = 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.pr_head }}'
+    if (promote.count(merge_env) != 2 or promote.count(head_env) != 3
+            or 'github.event.pull_request.head.sha || github.event.inputs.merge_commit' in promote
+            or '      pr_head:\n' not in promote
+            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in promote
+            or '--is-ancestor "$HEAD_SHA"' in promote
+            or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in promote
+            or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in promote
+            or 'base_tree=$(git rev-parse "origin/$BASE_REF^{tree}")' not in promote
+            or 'if [ "$merge_tree" != "$head_tree" ]; then' not in promote
+            or 'if [ "$base_tree" != "$merge_tree" ]; then' not in promote
+            or promote.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 4
+            or '--merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --ci-head "$HEAD_SHA"'
+            not in promote):
+        findings.append('baseline promotion must admit a squash merge by tree equality only')
     blocks = re.findall(r'^set\(PINEFORGE_PR_SLOW_TESTS\n(.*?)^\)', cmake,
                         re.MULTILINE | re.DOTALL)
     names = re.findall(r'^    (test_[A-Za-z0-9_]+)$', blocks[0], re.MULTILINE) if len(blocks) == 1 else []

@@ -533,8 +533,12 @@ Their parity verdict posts `pineforge/parity`, reporting no regression or that
 the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
 requires these two commit statuses. GitHub Actions jobs, including `build`,
 `sanitizers`, docs and the parity subset, are advisory. Baseline promotion
-requires both statuses to be successful on the exact merged PR head, as well
-as its existing exact-head and campaign verdict guards.
+requires both statuses to be successful on the verified PR head and a merge
+commit on `main` that carries exactly that head's tree while `main` still does
+(PRs are squash-merged, so the head itself never lands on `main`), as well as
+its campaign verdict guard. The workflow hands the campaign tool the squash
+commit and the verified PR head; while that tool requires the merge commit to
+be the gated head itself, a squash defers promotion and needs new verification.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
