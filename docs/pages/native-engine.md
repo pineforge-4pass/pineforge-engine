@@ -284,12 +284,12 @@ the sub-bar sections of `tests/test_native_calc_timing.cpp`.
 
 ### Validating a spec
 
-`validate_native_run_spec(spec)` (`native_run_spec.hpp:797`) answers a
-`NativeRunSpecValidation` (`native_run_spec.hpp:780`): a
+`validate_native_run_spec(spec)` (`native_run_spec.hpp:805`) answers a
+`NativeRunSpecValidation` (`native_run_spec.hpp:788`): a
 `NativeRunSpecError` (`native_run_spec.hpp:677`) and the
 `NativeRunSpecField` (`native_run_spec.hpp:645`) it first failed on, with
 `ok()` and an explicit `operator bool`. `normalize_native_run_spec(spec)`
-(`native_run_spec.hpp:807`) validates and rewrites the one admitted literal —
+(`native_run_spec.hpp:815`) validates and rewrites the one admitted literal —
 a numeric `-0` fee becomes `+0` — leaving every other literal alone. Neither
 allocates on the failure path, neither changes a spec it rejects, and the
 field order is deterministic, so a host can report "which field" rather than
@@ -307,7 +307,7 @@ field order is deterministic, so a host can report "which field" rather than
 valid and clear the curve. `validate_native_fx_curve`
 (`native_fx_curve.hpp:48`) is the same judgement as a pure query.
 
-`native_run_spec_digest(spec)` (`native_run_spec.hpp:883`) is the portable
+`native_run_spec_digest(spec)` (`native_run_spec.hpp:891`) is the portable
 constant described under *Lifecycle and run identity*: exactly the fields the
 consumer folds into a run's continuation identity, and nothing else. Each
 feature suite pins the refusals of the fields it owns — the eighteen
@@ -452,9 +452,9 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:1590-1601`) is **not** refused as a source mutation: it
+overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:8906-8946`), which admits the begin, checks the
+(`native_execution_consumer.cpp:8954-8994`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -482,7 +482,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. A host written in C issues the same
 five commands through `strategy_native_submit_v1` / `_replace_v1` /
 `_cancel_v1` / `_cancel_all_v1` / `_cancel_where_v1`
-(`native_c_api.h:2640-2690`), under the same legality rule; see *Driving the
+(`native_c_api.h:2689-2739`), under the same legality rule; see *Driving the
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
@@ -618,13 +618,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5437-5441`). Requests accepted before the
+`native_execution_consumer.cpp:5463-5467`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:6885-6887`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:6910-6912`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6777`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6802`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1410,7 +1410,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:13757-13781`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:13844-13868`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1837,7 +1837,7 @@ bar instead, for a host whose last input is still forming; a D/W/M bar holds
 whole days, so all four are true. Every callback of one script bar carries
 the same four, fills and fill recalculations included, and a C host reads
 the first three from `pf_native_decision_v1`'s session bytes
-(`native_c_api.h:1419`). The kernel resolves each session day once through
+(`native_c_api.h:1440`). The kernel resolves each session day once through
 `native_calendar::session_day_at` (`native_calendar.hpp:407`), which a host
 may call too. `tests/test_native_session_day_facts.cpp` replays the
 TradingView session tapes through a bare host. It is a presentation snapshot
@@ -1927,10 +1927,10 @@ host that marks its own equity keeps this default and owns the whole series.
 
 **The scalar extremes are not part of that bargain.** `max_drawdown_`,
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
-through `max_drawdown_percent()` (`engine.hpp:1473`), `max_runup_percent()`
-(`engine.hpp:943`) and `max_contracts_held_all/long/short()`
-(`max_contracts_held_all` `engine.hpp:1802-1804`) — are a property of the RUN: what it drew down, what
-it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1328`) at every script
+through `max_drawdown_percent()` (`engine.hpp:1507`), `max_runup_percent()`
+(`engine.hpp:972`) and `max_contracts_held_all/long/short()`
+(`max_contracts_held_all` `engine.hpp:1836-1838`) — are a property of the RUN: what it drew down, what
+it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1362`) at every script
 calculation under `HostRecorded` and `KernelRecorded`. Under
 `KernelRecordedAtHostMarks`, it folds them at the host-mark callbacks instead, so
 the host controls the cadence. A `HostRecorded` host reads them truthfully without
@@ -1952,13 +1952,13 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(``sha256:0fa957d2cea7acf800cce5bda68165d2505eab9650ec024c99dad417359364d9` engine.hpp:2091`; C: `strategy_set_broker_state_hash_recording`), off by
+(``sha256:0fa957d2cea7acf800cce5bda68165d2505eab9650ec024c99dad417359364d9` engine.hpp:2125`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7603`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7631`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2078,14 +2078,14 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (``sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` engine.hpp:1800`) is the C++ read and
-`strategy_closed_trade_close_cause` (``sha256:be247fcc9dd52b9a9faf460176dd5576d839e616f6acc024d3389d04b2d523b3` pineforge.h:1223`) the C one, with the
+`closed_trade_close_cause(i)` (``sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` engine.hpp:1834`) is the C++ read and
+`strategy_closed_trade_close_cause` (``sha256:be247fcc9dd52b9a9faf460176dd5576d839e616f6acc024d3389d04b2d523b3` pineforge.h:1251`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1146-1176`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1176-1206`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -2110,11 +2110,11 @@ struct RegimeHost : pineforge::NativeStrategyHost {
 };
 ```
 
-- `hash_host_extension` (`engine.hpp:401`, protected virtual on
+- `hash_host_extension` (`engine.hpp:405`, protected virtual on
   `BacktestEngine`) is called exactly once per hash, last, after the kernel's
   fold. What it writes is part of the scalar `broker_state_hash()`, of every
   per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
-- `BrokerStateHashSink` (`engine.hpp:346`) is a complete public type: FNV-1a
+- `BrokerStateHashSink` (`engine.hpp:350`) is a complete public type: FNV-1a
   over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
   NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
 - An override **replaces** the default. A host that overrides nothing folds
@@ -2739,14 +2739,14 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7698`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7711`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:1696`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:1730`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
@@ -2824,7 +2824,7 @@ These are existing refusals, not implied future features:
 A C host has the same stream and the same commands. Streaming needs no new
 symbol — `strategy_stream_begin` and its family (``sha256:2e963d6ab1630db1535bd944dc7406ba649e9d14a589065db25347569fbad150` native_c_api.h:37-39`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
-`strategy_native_submit_v1` (``sha256:9b2a62efb044f5b285a824d5fb15be418b459ffd83c5dd4e1013cf798c8a9a32` native_c_api.h:2590`) obeys the one legality
+`strategy_native_submit_v1` (``sha256:9b2a62efb044f5b285a824d5fb15be418b459ffd83c5dd4e1013cf798c8a9a32` native_c_api.h:2648`) obeys the one legality
 rule its C++ spelling does.
 
 Rebuild strategy libraries against this engine. An ABI-v4 module without the
