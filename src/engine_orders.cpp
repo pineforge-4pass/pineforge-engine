@@ -81,8 +81,12 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // applies the same fx factor internally for its PERCENT case; cash-per-*
     // is account-currency by construction), so it is NOT scaled again here.
     const double pv = syminfo_.pointvalue;
+    // The row converts at the rate its execution names, or at the presented
+    // clock's when it names none (PhysicalExecutionContext::account_fx).
+    const double fx = context.account_fx ? *context.account_fx
+                                         : active_account_currency_fx();
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
-                 * close_qty * pv * active_account_currency_fx();
+                 * close_qty * pv * fx;
     pnl -= entry_commission + exit_commission;
     // Percent P&L is the NET pnl (after both commissions, so computed AFTER
     // the subtraction above -- order matters) over the entry cost,
@@ -94,7 +98,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // a TradingView export (2026-06-12, trade #258 short: 102.44 USD on a
     // 2276.66 entry is 4.50%).
     const double entry_cost = pe.price * close_qty * pv
-                              * active_account_currency_fx();
+                              * fx;
     double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
 
     Trade trade;
@@ -146,6 +150,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         facts.entry_bar_high_masked = pe.skip_entry_bar_high;
         facts.entry_bar_low_masked = pe.skip_entry_bar_low;
         facts.entry_commission = entry_commission;
+        facts.account_fx = fx;
         const ClosedLotExcursion owned = lot_excursion_hook_(facts);
         trade.max_runup = owned.favorable;
         trade.max_drawdown = owned.adverse;
@@ -180,12 +185,12 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // combining with entry_commission, which is already account-currency
     // (see calc_commission) — same convention as pnl above.
     trade.max_runup = std::max(
-        0.0, runup * pv * active_account_currency_fx() - entry_commission);
+        0.0, runup * pv * fx - entry_commission);
     // Excursion columns are nonnegative magnitudes even when an observed
     // entry rebate is negative. Keep positive-fee behavior unchanged while
     // preventing a rebate from producing an impossible negative drawdown.
     trade.max_drawdown = std::max(
-        0.0, drawdown * pv * active_account_currency_fx()
+        0.0, drawdown * pv * fx
                  + entry_commission);
     return trade;
 }

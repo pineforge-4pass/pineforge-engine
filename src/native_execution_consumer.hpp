@@ -357,9 +357,13 @@ public:
     // from them. That is what lets the kernel's own run-end producer below
     // and a host with a different report shape share one loop instead of
     // each carrying its own (R5 audit lane Q6, first-round duplicate D5).
+    //
+    // The rows convert at `account_fx`, the rate the caller names for the
+    // mark (a host whose mark is its own report point passes that point's
+    // rate); nothing here reads the engine's presented clock.
     double append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
-        int interval_index) const;
+        int interval_index, double account_fx) const;
 
     // match_path reuses the candidate rows it scanned instead of rescanning
     // the whole working book after an allowance refresh (R5 lane PERF-K3).

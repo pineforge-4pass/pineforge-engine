@@ -82,11 +82,14 @@ struct Result {
 
 // Stack-bound physical coordinates for one settlement. Native supplies time
 // and index from the matching point and leaves the trail carry empty; the
-// settling path fills it in for a trail exit.
+// settling path fills it in for a trail exit. `account_fx` is the
+// account-currency rate the execution's rows convert at; empty, they convert
+// at the engine's rate at its presented clock (active_account_currency_fx()).
 struct PhysicalExecutionContext {
     int64_t effective_time_ms = 0;
     int interval_index = 0;
     std::optional<double> preceding_exit_trail_peak;
+    std::optional<double> account_fx;
 };
 
 // Stack-local inspect facts. Destroyed at the end of one matching step.

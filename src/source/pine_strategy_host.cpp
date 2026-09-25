@@ -809,12 +809,13 @@ ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
     // (build_close_trade_with_costs) -- the price-point magnitudes converted
     // to account currency, the entry fee share taken off the favorable side
     // (floored at zero) and added to the adverse side.
+    // The row's currency is the rate the row converts at (facts.account_fx).
     const ClosedLotExcursion owned = owner_lot_excursion(facts);
     const double pv = syminfo_.pointvalue;
     return ClosedLotExcursion{
-        std::max(0.0, owned.favorable * pv * active_account_currency_fx()
+        std::max(0.0, owned.favorable * pv * facts.account_fx
                           - facts.entry_commission),
-        std::max(0.0, owned.adverse * pv * active_account_currency_fx()
+        std::max(0.0, owned.adverse * pv * facts.account_fx
                           + facts.entry_commission)};
 }
 
@@ -1714,21 +1715,21 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     if (stream_warmup_mode_ || realtime_tail_
         || position_side_ == PositionSide::FLAT || equity_curve_.empty()
         || !std::isfinite(terminal_bar.close)) return;
-    const Bar saved = current_bar_;
-    current_bar_ = terminal_bar;
-    const double fill_price = bar_fill_price(current_bar_.close);
-    const auto saved_timestamp = current_bar_.timestamp;
-    current_bar_.timestamp = equity_curve_.back().time_ms;
+    const double fill_price = bar_fill_price(terminal_bar.close);
     // R5 audit lane Q6 (duplicate D5): the row loop itself is the kernel's
     // generic producer, called here at TradingView's own mark instead of
     // being restated. What stays below is the part that is report SHAPE and
     // not a mark-to-market row — the reason the kernel's run-end producer is
-    // gated out of every Pine run (pine_adapter.cpp project()).
+    // gated out of every Pine run (pine_adapter.cpp project()). The rows are
+    // dated on the curve's last point and convert at that instant's rate,
+    // handed to the producer: the presented clock is never rewritten (R5
+    // lane B-ADAPTER; E21's rule -- thread the rate, never the clock).
+    const std::int64_t mark_time = equity_curve_.back().time_ms;
     excursion_range_end_projection_ = true;
     const double range_end_pnl = as_native_consumer(execution_consumer())
-        .append_open_position_report_rows(*this, fill_price, current_bar_.timestamp, bar_index_);
+        .append_open_position_report_rows(*this, fill_price, mark_time, bar_index_,
+                                          account_currency_fx_at(mark_time));
     excursion_range_end_projection_ = false;
-    current_bar_.timestamp = saved_timestamp;
     auto& last = equity_curve_.back();
     last.open_profit = 0.0;
     last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
@@ -1741,7 +1742,6 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
     }
-    current_bar_ = saved;
 }
 
 // ab9714be pine_fills.cpp:664-670: same-bar bracket exit trades sort by script command sequence created_seq

@@ -106,6 +106,10 @@ struct ClosedLotExcursionFacts {
     // The closed slice's share of the lot's entry commission, in account
     // currency: the entry half of the closing row's `commission`.
     double entry_commission = 0.0;
+    // The account-currency rate the closing row converts at: the rate its
+    // P&L and its own excursion columns take, so an owner answering in the
+    // row's currency converts at it too.
+    double account_fx = 1.0;
 };
 
 struct ClosedLotExcursion {
@@ -848,10 +852,18 @@ protected:
     // trader configures "$20 per contract" in their own currency), so they
     // are untouched.
     double calc_commission(double fill_price, double qty) const {
+        // Only a percentage converts, so only it reads the presented clock.
+        return calc_commission_at(fill_price, qty,
+                                  commission_type_ == CommissionType::PERCENT
+                                      ? active_account_currency_fx() : 1.0);
+    }
+    // calc_commission at an explicit account-currency rate `fx`: what a row
+    // that converts at a rate of its own charges.
+    double calc_commission_at(double fill_price, double qty, double fx) const {
         switch (commission_type_) {
             case CommissionType::PERCENT:
                 return fill_price * qty * syminfo_.pointvalue
-                       * active_account_currency_fx()
+                       * fx
                        * (commission_value_ / 100.0);
             case CommissionType::CASH_PER_ORDER:
                 return commission_value_;

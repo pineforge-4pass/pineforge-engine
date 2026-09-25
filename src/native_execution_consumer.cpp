@@ -7652,19 +7652,20 @@ void NativeExecutionConsumer::record_report_point(
 // the branch inert rather than absent.
 double NativeExecutionConsumer::append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
-        int interval_index) const {
+        int interval_index, double account_fx) const {
     const bool was_long = engine.position_side_ == PositionSide::LONG;
     double marked = 0.0;
     for (const auto& lot : engine.pyramid_entries_) {
         execution::PhysicalExecutionContext context;
         context.effective_time_ms = mark_time_ms;
         context.interval_index = interval_index;
+        context.account_fx = account_fx;
         if (!std::isnan(engine.fold_exit_trail_peak_))
             context.preceding_exit_trail_peak = engine.fold_exit_trail_peak_;
         Trade row = engine.build_close_trade_with_costs(
             lot, lot.qty, mark_price, was_long,
             engine.allocated_entry_commission(lot, lot.qty),
-            engine.calc_commission(mark_price, lot.qty), context);
+            engine.calc_commission_at(mark_price, lot.qty, account_fx), context);
         row.open_at_end = true;
         marked += row.pnl;
         engine.range_end_trades_.push_back(std::move(row));
@@ -7691,7 +7692,7 @@ void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& e
         engine, engine.bar_fill_price(engine.current_bar_.close),
         engine.equity_curve_.empty() ? engine.current_bar_.timestamp
                                      : engine.equity_curve_.back().time_ms,
-        engine.bar_index_);
+        engine.bar_index_, engine.active_account_currency_fx());
 }
 
 void NativeExecutionConsumer::deliver_aggregate_calculation(
