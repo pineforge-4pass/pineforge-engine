@@ -1,6 +1,6 @@
 # Local verification and CI
 
-Start with the fast preflight used by GitHub Actions. Install actionlint 1.7.12
+Start with the preflight used by GitHub Actions. Install actionlint 1.7.12
 and ShellCheck, then run:
 
 ```sh
@@ -9,7 +9,8 @@ python3 scripts/ci_preflight.py
 
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
-failure blocks all compilation lanes and retains logs in `build-ci-preflight/`.
+failure fails the advisory aggregate `build` job and retains logs in
+`build-ci-preflight/`. The compilation lanes start alongside preflight.
 It does not compile the engine or replace any complete verification profile.
 
 Then use the same verification entrypoint as GitHub Actions before publishing:
@@ -92,6 +93,17 @@ default build fails too; `debug` and `sanitizers` register a subset of the
 release rows. Raise the constant when a row lands, and pass `--min-tests N` to
 override it for one run (the flag gates any profile; `kernel` and `release`
 have a default).
+
+For PR runs with `--exclude-label slow`, the verifier asks CTest to enumerate
+the registered rows both with `ctest -N` and with `ctest -N -LE slow`. It then
+requires the rows that actually ran to equal the second count, and records
+`registered`, `labelled = registered - selected`, and `ran` in
+`ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
+registration below the PR registration floor, unreadable enumeration, or
+missing label fails. The PR registration floors at the INT24 base are 653
+for Debug and sanitizers and 662 for native. The existing full-run release and
+kernel floors remain 672 and 271 rows that ran; full runs do not exclude a
+label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
@@ -316,18 +328,19 @@ probe, machine load average 100–160 from sibling builds). Judging the result
 and the dominant term is single-core serial work that a 4-vCPU hosted runner
 runs slower, not faster.
 
-So the whole population cannot be held to the ~25 min a required pull-request
-check is budgeted for, and it runs nightly (01:30 UTC), on `workflow_dispatch`,
+So the whole population cannot be held to the ~25 min pull-request CI target,
+and it runs nightly (01:30 UTC), on `workflow_dispatch`,
 and on pull requests that touch the corpus pin or the parity tooling. ccache
 (2 GB, keyed per commit with a prefix restore) makes a re-run at an unchanged
 pin almost entirely cache hits; the Git-LFS chart feed (~176 MB, one
 full-history 1m CSV) is pulled once per job.
 
-### The subset that does block a merge
+### The advisory pull-request subset
 
-A nightly gate cannot stop a merge: a `src/**` change that moves a TradingView
-trade merges green and is caught the next night at the earliest. The blocking
-half is a named population, not a weaker oracle:
+The GitHub Actions subset gives early feedback on a `src/**` change that moves
+a TradingView trade. The maintainers' separate parity verdict posts the
+required `pineforge/parity` status on the exact PR head. The subset is a named
+population using the same byte oracle:
 
 ```sh
 ./scripts/check_corpus_parity.sh --subset
@@ -365,19 +378,18 @@ judge <1 s — **94 s** end to end over an up-to-date build directory, against
 1792 s for the run phase alone in full mode.
 
 `corpus-parity.yml` exposes it as a reusable workflow (`mode: subset`) and
-`ci.yml` calls it on every CI run and lists it in `build-gate`'s `needs`. The
-"PineForge strict CI base" ruleset requires the contexts `build` and
-`sanitizers`; `build` **is** `build-gate`, so the parity subset blocks a merge
-through the context that is already required, with no ruleset change. A
-skipped dependency is not a success, so the job is deliberately unfiltered by
-path.
+`ci.yml` calls it on every CI run and lists it in `build-gate`'s `needs`. A
+skipped dependency fails that advisory aggregate job, so the subset remains
+unfiltered by path. The merge ruleset requires `pineforge/verify` and
+`pineforge/parity`, posted by the maintainers' `lab verify` tooling after
+full verification on the PR head's exact tree.
 
 What the subset does not prove, and what therefore stays with the nightly
 sweep: the other 282 probes, and the tier headline —
 `scripts/verify_corpus.py` grades the whole population, so 30 re-runs cannot
 print its line, and grading the 282 untouched tapes beside them would judge the
-corpus's own older generation rather than this engine. The subset is a blocking
-floor, not a replacement.
+corpus's own older generation rather than this engine. The subset is an early
+signal alongside the full parity verdict.
 
 The subset job checks the submodule out with `GIT_LFS_SKIP_SMUDGE=1` and
 restores `corpus/data` from a cache keyed by the gitlink, so the ~176 MB feed
@@ -504,14 +516,51 @@ identity are retained even if preparation fails before the verifier starts.
 Compiler objects, binaries and dependency caches are not uploaded
 as diagnostics.
 
-Superseded pull-request runs are canceled. CI/native main/post-merge and manual proof runs
-use distinct concurrency groups and remain uncanceled. Native verification is a
-reusable workflow called once by CI, with a separate concurrency namespace; it
-also supports manual dispatch. The required `build` check passes only when
-preflight, all four standard builds, sanitizers, native verification and the
-TradingView parity subset succeed. A failed, canceled or skipped dependency
-cannot produce a green `build` check.
-The separate required `sanitizers` status remains available.
+Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
+use distinct concurrency groups and remain uncanceled. A PR runs preflight,
+both Release jobs, kernel-only and the parity subset with their full sets;
+both Debug jobs, sanitizers and native-live run the registered set excluding
+the 27 CTest rows labelled `slow` in `tests/CMakeLists.txt`. These rows were
+chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
+over 30 seconds in either Debug run. Preflight and all proof jobs start in
+parallel. The advisory `build` aggregate succeeds only if every job succeeds.
 
-These checks do not run the parity campaign. Fixed-population Cloud measurement,
-the actual gate and post-merge evidence remain separate acceptance steps.
+A push to `main` and a manual dispatch of `ci.yml` run every profile without
+the exclusion. Standalone manual dispatch of `native-live.yml` is also full.
+The maintainers run the full `ci_verify.py` profiles on their x86-64 build
+hosts before the PR merge gate and post `pineforge/verify` to the PR head.
+Their parity verdict posts `pineforge/parity`, reporting no regression or that
+the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
+requires these two commit statuses. GitHub Actions jobs, including `build`,
+`sanitizers`, docs and the parity subset, are advisory. Baseline promotion
+requires both statuses to be successful on the exact merged PR head, as well
+as its existing exact-head and campaign verdict guards.
+
+The full corpus sweep remains a separate acceptance step. The nightly and
+manual corpus workflow, and the maintainers' full parity verification, keep
+the broader population running.
+
+### CI-LITE timing estimate
+
+The INT24 PR run `36105656107` measured 9.1 min preflight, 30.2/27.8 min
+macOS/Ubuntu Debug, 25.1 min native, 20.5/16.5 min Ubuntu/macOS Release,
+15.8 min kernel, and 3.8 min parity subset. Its sanitizer job ran 61.5 min
+and hit the verifier's 30 min CTest timeout. The complete INT23 sanitizer
+job `107895095058` measured 42.1 min: 20.0 min CTest and 22.1 min outside
+CTest, including a 21.1 min build. The 27 labelled rows consumed 34.8 and
+42.3 min of summed test time in the INT24 Ubuntu and macOS Debug jobs. The
+26 rows then present in INT23 sanitizers consumed 57.5 of its 76.7 min of
+summed test time; the 27th row landed by INT24.
+
+At four concurrent CTest jobs, the remaining rows have scheduling lower
+bounds of 1.1 min Ubuntu Debug, 1.6 min macOS Debug, 0.5 min native, and
+4.8 min INT23 sanitizers. Adding observed non-CTest time and a small CTest
+scheduling allowance estimates about 19 min Ubuntu Debug, 20 min macOS
+Debug, 16 min native, and 28 min sanitizer on the complete INT23 run. Release
+and kernel keep their measured full durations. With preflight running in
+parallel, the modeled PR wall time is about 28 min on INT23 conditions. The
+INT24 sanitizer build-to-CTest interval alone was 30.3 min, so its conditions
+imply a wall time above 35 min even after excluding the rows. The 25 min
+target needs a measured sanitizer build improvement; the current job logs do
+not separate compile from link time or report a ccache hit rate, so CI-LITE
+does not assume a build optimization without evidence.

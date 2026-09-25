@@ -165,6 +165,8 @@ Publish reviewed increments in an evolving draft PR so implementation and
 open decisions are reviewable. Draft and CI-first publication may precede
 the full compatibility sweep. Before merge, require native proof, unchanged
 fixed-population compatibility evidence, the actual gate result, independent
-review of the final candidate, and green CI. Squash merge and verify the
+review of the final candidate, and successful `pineforge/verify` and
+`pineforge/parity` statuses on the exact PR head. GitHub Actions CI is an
+advisory signal. Squash merge and verify the
 resulting tree and post-merge checks separately. Never translate a neutral
 gate failure into PASS or force baseline promotion.

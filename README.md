@@ -260,7 +260,7 @@ Every script is exported from TradingView as-is (its own inputs, its own default
 - **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
 - **moderate / weak** — ≥ 75% coverage, or less.
 
-Published parity results use a fixed population and reproducible Cloud Run measurements. The formal gate requires **no hard-surface regression** and strictly positive pooled movement across the target excellent and excellent+strong bands. A documented native-correctness exception permits exactly zero target-band movement with no individual regression, after full comparison, independent review and CI; its actual FAIL remains recorded and baseline promotion is deferred. Negative movement is outside this exception. Baseline promotion requires a recorded PASS and an exact-head merge with green CI.
+Published parity results use a fixed population and reproducible Cloud Run measurements. The formal gate requires **no hard-surface regression** and strictly positive pooled movement across the target excellent and excellent+strong bands. A documented native-correctness exception permits exactly zero target-band movement with no individual regression, after full comparison and independent review; its actual FAIL remains recorded and baseline promotion is deferred. Negative movement is outside this exception. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
 
 ### What the closed test taught the engine
 

@@ -6,6 +6,13 @@
 
 Both C++ unit tests and full corpus verification must pass.
 
+The merge ruleset requires `pineforge/verify` and `pineforge/parity` commit
+statuses on the PR head's exact tree. The maintainers' `lab verify` tooling
+posts them after full verification on their x86-64 build hosts and a parity
+verdict. GitHub Actions is advisory: PR Debug, sanitizers and native jobs
+exclude the measured `slow` CTest rows; push-to-main and manual CI dispatch
+run every row. The commands below run the full sets.
+
 ```bash
 # Fast workflow/source checks first (requires actionlint 1.7.12 + ShellCheck).
 # This does not replace either verification step below.
@@ -122,23 +129,17 @@ dispatches, reviews and measures; this section is what binds you here.
   engine closer to an independent backtest + forward-execution state
   machine, and Pine-parity behaviour kept in codegen with this kernel clean.
 
-## Parity campaign gate (applies on EVERY harness)
+## Merge gate and parity campaign
 
-Pushes and PRs from this repo are gated by the PineForge parity campaign: a
-fresh (≤6h) PASS verdict must bind the exact (engine, codegen) HEADs, recorded
-on the campaign registry. Under Claude Code a PreToolUse hook
-(`.claude/settings.json`, calls `pineforge-workflow/campaign/hooks/pr-gate.mjs`)
-enforces this on `git push` / `gh pr create|ready|merge`. Codex, OpenCode, and
-other harnesses run NO hook — the discipline is exactly as binding there: before
-any push, run the gate and record the verdict (see the `pr-gate` skill in
-`pineforge-workflow/.claude/skills/` — plain markdown, readable anywhere):
+The `PineForge strict CI base` ruleset requires `pineforge/verify` (full
+`ci_verify.py` profiles on the PR head's exact tree) and `pineforge/parity`
+(no parity regression, or no engine behaviour change). The maintainers'
+`lab verify` tooling posts both commit statuses; GitHub Actions does not post them.
+Its PR jobs provide faster advisory feedback, while push-to-main and manual
+dispatch run the full CI profiles. A campaign PASS verdict still binds the
+exact engine and codegen HEADs for baseline promotion.
 
-```sh
-gcloud run jobs execute pineforge-pr-gate --project gen-lang-client-0864094636 \
-  --region asia-east1 --args '^|^--pipeline|pr_gate|--conf|<conf-json>'
-lab gate record --verdict <verdict.json> --engine <sha> --codegen <sha>
-```
-
-Merged single-axis PRs advance the campaign baseline automatically
-(`.github/workflows/promote-baseline.yml`); a squash/rebase that rewrites the
-sha defers and must be re-gated.
+Merged single-axis PRs advance the campaign baseline automatically through
+`.github/workflows/promote-baseline.yml` only when the exact-head guard, both
+required statuses on that head, and the campaign verdict pass. A squash or
+rebase that rewrites the SHA defers promotion and needs new verification.
