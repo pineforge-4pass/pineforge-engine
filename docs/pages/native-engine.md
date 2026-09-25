@@ -947,7 +947,12 @@ predecessor's handle, its place in the chain (no chain-root pair is folded
 again), its children and cohort members, and a trail's arm ordinal, and takes
 the number a plain successor would have taken as its priority -- queue ties
 still rank a re-priced request newest, and the next request is numbered as
-after a plain replace. `keep_binding` carries a close's book binding: at its
+after a plain replace. A group member's fill reaches it where the queue holds
+it, behind every sibling accepted or re-priced before it, as it reaches a
+plain successor: the group's events and receipts come in that order whatever
+the handles' numbers (R5 lane K-OCA-KEEP; until then a re-priced member
+drained behind a younger sibling failed the run with code 2, discriminator 1,
+`CoreFailure::InvalidCause`). `keep_binding` carries a close's book binding: at its
 next point the successor binds, with no `CloseBoundEvent`, to exactly the book
 close the event would have installed when the position has not moved (taking
 the timeline ordinal the event would have taken, so every later ordinal is the

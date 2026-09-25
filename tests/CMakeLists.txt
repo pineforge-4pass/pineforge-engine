@@ -1192,6 +1192,15 @@ list(APPEND TEST_SOURCES test_native_quantity_tolerance)
 # and a seeded battery of OCA-Reduce groups at ulp scale, staged and direct.
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_group_absorption)
+# R5 lane K-OCA-KEEP: a re-price that keeps its handle inside a group, then a
+# sibling's fill, drains the group in queue order and the run goes on (it
+# stopped with code 2 / discriminator 1 on 2a03c658): K-ULP5's keep_handle
+# probe under Cancel and Reduce, a retained trail and a carried binding, the
+# order core's receipts in queue order and in reverse, and a seeded battery of
+# groups re-priced in random subsets and orders under every option set against
+# the plain replace, staged and direct. Source-free, so it also runs in the
+# kernel-only profile.
+list(APPEND TEST_SOURCES test_native_group_keep_handle)
 # R5 lane D2-A (PB): the consumer's O(1) has_command_after against the two
 # journal searches the Pine adapter's quiet receipt read compared, for every
 # kind of cursor, at every callback of windowed randomized runs

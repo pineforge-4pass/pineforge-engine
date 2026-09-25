@@ -490,19 +490,6 @@ const ExecutionAppliedEvent* as_applied(const CommandEvent& event) noexcept {
     return std::get_if<ExecutionAppliedEvent>(&event);
 }
 
-int receipt_cmp(uint64_t oa, uint64_t ia, GroupEffect ea, uint64_t ob, uint64_t ib,
-                GroupEffect eb) noexcept {
-    if (oa < ob) return -1;
-    if (oa > ob) return 1;
-    if (ia < ib) return -1;
-    if (ia > ib) return 1;
-    const auto a = static_cast<std::uint8_t>(ea);
-    const auto b = static_cast<std::uint8_t>(eb);
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
-}
-
 // A trail offset is a finite price distance. Zero is the "ride the best"
 // spelling: the level is the best itself and only a move strictly past it
 // exits. Negative and nonfinite offsets stay rejected.
@@ -1403,17 +1390,22 @@ GroupEffectReceipt WorkingRequestCore::group_effect_receipt(std::size_t index) c
     return GroupEffectReceipt{key.cause, key.recipient, key.effect, key.outcome_ordinal};
 }
 
+// The receipts are in cause order, and one cause's stand in the order they
+// were applied -- the consumer's drain applies them in the queue order
+// group_recipients walks, which is not incarnation order once a re-price has
+// kept its handle (R5 lane K-OCA-KEEP). So the cause is bisected and its
+// receipts are walked: a drain of k recipients makes about k*k/2 comparisons.
 WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
         const EventId& cause, const RequestHandle& recipient, GroupEffect effect,
         uint64_t* outcome) const {
-    ReceiptKey needle{cause, recipient, effect, 0};
-    const auto it = std::lower_bound(
-            receipts_.begin(), receipts_.end(), needle,
-            [](const ReceiptKey& a, const ReceiptKey& b) {
-                return receipt_cmp(a.cause.ordinal, a.recipient.incarnation, a.effect,
-                                   b.cause.ordinal, b.recipient.incarnation, b.effect)
-                    < 0;
-            });
+    auto it = std::lower_bound(receipts_.begin(), receipts_.end(), cause.ordinal,
+                               [](const ReceiptKey& key, uint64_t ordinal) {
+                                   return key.cause.ordinal < ordinal;
+                               });
+    while (it != receipts_.end() && it->cause.ordinal == cause.ordinal
+           && (it->recipient.incarnation != recipient.incarnation || it->effect != effect)) {
+        ++it;
+    }
     if (it == receipts_.end()) return ReceiptLookup::Absent;
     if (it->cause != cause || it->recipient != recipient || it->effect != effect) {
         return ReceiptLookup::Absent;
@@ -4918,13 +4910,10 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     if (lookup == ReceiptLookup::Conflict) {
         return PreparationError{CoreFailure::ConflictingReceipt, applied, recipient};
     }
-    if (!receipts_.empty()) {
-        const auto& last = receipts_.back();
-        if (receipt_cmp(applied.ordinal, recipient.incarnation, member->effect, last.cause.ordinal,
-                        last.recipient.incarnation, last.effect)
-            < 0) {
-            return PreparationError{CoreFailure::InvalidCause, applied, recipient};
-        }
+    // Receipts commit in cause order; one cause's in the order they are
+    // applied, whatever the recipients' incarnations (receipt_lookup).
+    if (!receipts_.empty() && applied.ordinal < receipts_.back().cause.ordinal) {
+        return PreparationError{CoreFailure::InvalidCause, applied, recipient};
     }
     std::size_t live_index = 0;
     if (classify(recipient, &live_index) != TargetKind::Live) {
@@ -5081,13 +5070,8 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
     if (lookup == ReceiptLookup::Conflict) {
         return PreparationError{CoreFailure::ConflictingReceipt, applied, recipient};
     }
-    if (!receipts_.empty()) {
-        const auto& last = receipts_.back();
-        if (receipt_cmp(applied.ordinal, recipient.incarnation, member->effect, last.cause.ordinal,
-                        last.recipient.incarnation, last.effect)
-            < 0) {
-            return PreparationError{CoreFailure::InvalidCause, applied, recipient};
-        }
+    if (!receipts_.empty() && applied.ordinal < receipts_.back().cause.ordinal) {
+        return PreparationError{CoreFailure::InvalidCause, applied, recipient};
     }
     std::size_t live_index = 0;
     if (classify(recipient, &live_index) != TargetKind::Live) {

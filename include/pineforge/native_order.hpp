@@ -1736,7 +1736,12 @@ public:
     uint64_t last_incarnation() const noexcept { return last_incarnation_; }
     /// The group-effect receipts, in commit order: the idempotence keys a later
     /// drain consults. Read-only; the consumer's state continuation folds each
-    /// once, when it commits.
+    /// once, when it commits. Commit order is cause order, and one cause's
+    /// receipts stand in the order they were applied, whatever the recipients'
+    /// incarnations: the consumer's drain applies them in the queue order
+    /// group_recipients answers, which is not incarnation order once a re-price
+    /// has kept its handle (R5 lane K-OCA-KEEP). A receipt for a cause older
+    /// than the newest one's is refused CoreFailure::InvalidCause.
     std::size_t group_effect_receipt_count() const noexcept { return receipts_.size(); }
     GroupEffectReceipt group_effect_receipt(std::size_t index) const;
     /// The incarnations this run issued -- every accepted request and every
@@ -1880,6 +1885,12 @@ public:
                                      bool* exhausted) noexcept;
 
     void reserve(std::size_t expected_events);
+    /// The live siblings an applied member's fill reaches -- its group, another
+    /// cohort, born before the fill; none for a fill with no effect, such as a
+    /// Cancel member's nonterminal one -- in queue order (live()): a request
+    /// re-priced with its handle kept stands behind every sibling accepted or
+    /// re-priced before it, where a plain replace's successor stands (R5 lane
+    /// K-OCA-KEEP).
     std::vector<RequestHandle> group_recipients(const EventId& applied) const;
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
     bool has_waiting_children(const RequestHandle& parent) const noexcept;
@@ -2217,6 +2228,8 @@ private:
         GroupEffect effect = GroupEffect::Reduce;
         uint64_t outcome_ordinal = 0;
     };
+    // In commit order: non-decreasing cause ordinal, one cause's in the order
+    // they were applied (receipt_lookup bisects the cause, then walks it).
     std::vector<ReceiptKey> receipts_;
     std::uint64_t next_cohort_handle_ = 1;
     std::vector<CohortRoster> cohorts_;
