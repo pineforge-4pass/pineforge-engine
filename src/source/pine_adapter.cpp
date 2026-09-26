@@ -6851,8 +6851,17 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // one double-rounding of the equity snapshot and must not be dropped.
         const double stop_epsilon = std::max(
             1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
-        if (margin > 0.0 && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
-            || required > snapshot.sizing.equity + stop_epsilon)) {
+        const bool unfunded = margin > 0.0 && (!std::isfinite(required)
+            || !std::isfinite(snapshot.sizing.equity)
+            || required > snapshot.sizing.equity + stop_epsilon);
+        if (unfunded && reverses) {
+            // The same placement arm keeps a reversal's closing leg
+            // (pine_strategy_commands.cpp:408-419): a sell stop sized at its
+            // level and priced at the higher close cannot fund 100 % of
+            // equity, so TradingView closes the long at the stop and opens
+            // nothing (lane TVDEF-DROPS, tests/fixtures/tvdef_drops R1).
+            snapshot.affordability_close_only = true;
+        } else if (unfunded) {
             // Legacy replacement first removes the prior same-id resting
             // stop, then leaves the rejected re-issue absent from the book.
             std::optional<native_order::RequestHandle> prior_handle;

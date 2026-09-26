@@ -860,6 +860,10 @@ list(APPEND TEST_SOURCES test_pooc_fill_stamp_aggregation)
 # the configuration the generated constructor declares.
 list(APPEND TEST_SOURCES test_tv_strategy_defaults)
 
+# Lane TVDEF-DROPS: the three reversal rules a 100%-of-equity default exposed
+# (tests/fixtures/tvdef_drops), on TradingView's tapes.
+list(APPEND TEST_SOURCES test_tvdef_drops_tapes)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -2281,6 +2285,12 @@ endif()
 if(TARGET test_tv_strategy_defaults)
     target_compile_definitions(test_tv_strategy_defaults PRIVATE
         PINEFORGE_TVD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tv_strategy_defaults")
+endif()
+
+# Lane TVDEF-DROPS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_tvdef_drops_tapes)
+    target_compile_definitions(test_tvdef_drops_tapes PRIVATE
+        PINEFORGE_TVDEF_DROPS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tvdef_drops")
 endif()
 
 # K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape

@@ -1,0 +1,5 @@
+﻿Trade number,Type,Date and time,Signal,Price USDT,Size (qty),Size (value),Net PnL USDT,Return %,Commission USDT,Favorable excursion USDT,Favorable excursion %,Adverse excursion USDT,Adverse excursion %,Cumulative PnL USDT,Cumulative PnL %,Duration (bars)
+1,Exit long,2025-04-08 08:30,A reverse short stop,1548,64.1387,99999.929944,-713.22235,-0.71,0,225.12683,0.23,-713.22235,-0.71,-713.22235,-0.71,1
+1,Entry long,2025-04-08 08:15,A seed long,1559.12,64.1387,99999.929944,-713.22235,-0.71,0,225.12683,0.23,-713.22235,-0.71,-713.22235,-0.71,1
+2,Exit long,2025-04-10 08:30,C reverse short stop,1640,59.8942,99286.61534,-1060.1273,-1.07,0,361.76096,0.36,-1060.1273,-1.07,-1773.3497,-1.77,1
+2,Entry long,2025-04-10 08:15,C seed long,1657.7,59.8942,99286.61534,-1060.1273,-1.07,0,361.76096,0.36,-1060.1273,-1.07,-1773.3497,-1.77,1

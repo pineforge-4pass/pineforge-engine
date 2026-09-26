@@ -1,0 +1,26 @@
+//@version=6
+strategy("TVDEF-DROPS R1 default-percent stop reversal", overlay=true)
+
+// Lane TVDEF-DROPS, rule R1. The order size is Pine v6's default (100% of
+// equity). A pure STOP entry opposite a held long reverses it; sized at the
+// stop level and priced at the signal close, the new short needs more margin
+// than the equity because a sell stop sits below the close, so only the
+// closing half executes.
+
+// A -- LONG -> SHORT stop below the close (unfunded opening).
+if time == timestamp("UTC", 2025, 4, 8, 0, 0)
+    strategy.entry("A-L", strategy.long, comment="A seed long")
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("A-S", strategy.short, stop=1548.0, comment="A reverse short stop")
+
+// C -- LONG -> SHORT stop below the close again, two days later.
+if time == timestamp("UTC", 2025, 4, 10, 0, 0)
+    strategy.entry("C-L", strategy.long, comment="C seed long")
+if time == timestamp("UTC", 2025, 4, 10, 0, 15)
+    strategy.entry("C-S", strategy.short, stop=1640.0, comment="C reverse short stop")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or
+     time == timestamp("UTC", 2025, 4, 10, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")
