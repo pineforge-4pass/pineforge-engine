@@ -1,5 +1,6 @@
 /*
- * test_second_extreme_order_tapes.cpp -- R5 lane PAR-ORDERS-2 (items 2 and 4).
+ * test_second_extreme_order_tapes.cpp -- R5 lanes PAR-ORDERS-2 (items 2 and 4)
+ * and PAR-ORDERS-3 (findings 1 and 2).
  *
  * Under calc_on_order_fills, the recalculation a fill starts may sit exactly
  * on the bar's SECOND extreme -- the end of the leg that approaches it, the
@@ -50,23 +51,14 @@
  *                      above (long j = 4, 25, 40; short j = 2, 32, 44).
  * TradingView: point-w2 books AX at the second extreme and C at the close /
  * next open; level-w1 books AX at its own level on the leg to the second
- * extreme and C at that extreme. The short point-w2 tapes are exact.
- *
- * What the boundary rows record (RECORDED divergences, older than this lane:
- * the lane's base answers every one of them alike):
- *   - level-w1, rows 1-6 (long) and 1, 2, 5, 6 (short): the exit a
- *     recalculation places on the matcher's fill AT the first extreme is
- *     forced onto the second one (exit(): the in-flight remainder of a
- *     leg-end fill is the whole next leg), so AX books that extreme instead
- *     of its level and C, placed at a forced fill, the close / next open;
- *     the process_orders_on_close short tape is compared on its first cycle:
- *     on bar 31 TradingView fills A's sell limit at the close its high
- *     already reached, where the engine fills it on bar 32;
- *   - point-w2 long, rows 2, 3, 5, 6 (row 6 agrees under
- *     process_orders_on_close, where the close is the extreme): A books the
- *     off-grid low's tick (11.425 -> 11.43, 11.645 -> 11.65), which
- *     next_source_path_waypoint reads as a fill short of the low, so AX is a
- *     plain limit at its level and C fills at the second extreme.
+ * extreme and C at that extreme. Exact since R5 lane PAR-ORDERS-3 (findings 1
+ * and 2): exit() reads the recalculating fill -- the matcher's fill at a
+ * resting request's own level on the extreme leaves no remainder of its leg in
+ * flight, and a fill forced onto the extreme starts the next leg, read from
+ * the extreme itself, whose booked tick an off-grid low (11.425 -> 11.43,
+ * 11.645 -> 11.65) does not equal. The process_orders_on_close short tape is
+ * compared on its first cycle: on bar 31 TradingView fills A's sell limit at
+ * the close its high already reached, where the engine fills it on bar 32.
  *
  * What the rows record:
  *   - the exit tapes' rows 5 and 7 (long, both variants) and row 1 (short, both
@@ -76,10 +68,13 @@
  *     on the leg to it. RECORDED divergences, asserted to differ.
  * Everything else is exact: side, instants, prices, quantity, signals.
  *
- * Fail-before, this TU against the lane's base (6945fc19): every row of the
- * long exit tapes (8 of 8; 7 of 8 with process_orders_on_close) exits A at the
- * next open, and every close tape row closes A at the next open (or, under
- * process_orders_on_close, at the bar's close, then B by the re-issued close).
+ * Fail-before, this TU against R5 lane PAR-ORDERS-2's base (6945fc19): every
+ * row of the long exit tapes (8 of 8; 7 of 8 with process_orders_on_close)
+ * exits A at the next open, and every close tape row closes A at the next open
+ * (or, under process_orders_on_close, at the bar's close, then B by the
+ * re-issued close). Against R5 lane PAR-ORDERS-3's base (9f7a025c): 25 of 132
+ * checks fail -- every level-w1 row and point-w2 long's rows 2, 3, 5, 6 (2, 3,
+ * 5 under process_orders_on_close).
  */
 
 #include <pineforge/bar.hpp>
@@ -425,18 +420,12 @@ int main() {
         {"pa2-i4-close-w2-long-pooc", true, false, true, 8, 0u},
         {"pa2-i4-close-w2-short", false, false, false, 2, 0u},
         {"pa2-i4-close-w2-short-pooc", false, false, true, 2, 0u},
-        {"pa2-i2-level-w1-long", true, true, false, 6, rows({1, 2, 3, 4, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-long-pooc", true, true, true, 6, rows({1, 2, 3, 4, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-short", false, true, false, 6, rows({1, 2, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-short-pooc", false, true, true, 2, rows({1, 2}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-point-w2-long", true, true, false, 6, rows({2, 3, 5, 6}),
-         Probe::PointSecondExtreme},
-        {"pa2-i2-point-w2-long-pooc", true, true, true, 6, rows({2, 3, 5}),
-         Probe::PointSecondExtreme},
+        {"pa2-i2-level-w1-long", true, true, false, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-long-pooc", true, true, true, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-short", false, true, false, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-short-pooc", false, true, true, 2, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-point-w2-long", true, true, false, 6, 0u, Probe::PointSecondExtreme},
+        {"pa2-i2-point-w2-long-pooc", true, true, true, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-short", false, true, false, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-short-pooc", false, true, true, 6, 0u, Probe::PointSecondExtreme},
     };

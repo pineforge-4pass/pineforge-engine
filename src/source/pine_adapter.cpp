@@ -9006,10 +9006,29 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto point = detail::callback_point(require_host());
             if (ordinary_path && point && finite_positive(point->price)) {
                 const auto phase = coof_context_.coordinate.path_phase;
-                const double endpoint = next_source_path_waypoint(
-                    coof_script_bar_, phase, point->price,
-                    source_path_uses_high_first(coof_script_bar_),
+                const bool high_first = source_path_uses_high_first(coof_script_bar_);
+                double endpoint = next_source_path_waypoint(
+                    coof_script_bar_, phase, point->price, high_first,
                     staged_.syminfo.mintick, config_.slippage);
+                // The recalculating fill AT its leg's extreme: the matcher's
+                // fill at a resting request's own level there ends the leg, so
+                // no remainder of it is left in flight and a marketable level
+                // is reached at the point itself (lab tv pa2-i2-level-w1-*,
+                // pa3-f4-level-w1-xstop-*); a fill the adapter forced onto it
+                // starts the next leg -- read from the extreme itself, whose
+                // booked tick an off-grid extreme (11.425 -> 11.43) does not
+                // equal (pa2-i2-point-w2-long*; R5 lane PAR-ORDERS-3).
+                const double own_extreme = phase == NativePathPhase::High
+                    ? coof_script_bar_.high
+                    : (phase == NativePathPhase::Low ? coof_script_bar_.low : kNaN);
+                const bool at_own_extreme = finite_positive(own_extreme)
+                    && coof_fill_at_path_point(own_extreme);
+                const bool fill_ends_leg = at_own_extreme && !coof_fill_forced_;
+                if (at_own_extreme && coof_fill_forced_) {
+                    endpoint = next_source_path_waypoint(
+                        coof_script_bar_, phase, own_extreme, high_first,
+                        staged_.syminfo.mintick, config_.slippage);
+                }
 
                 const bool closing_long = physical.signed_units > 0.0;
                 if (family == PineOrderFamily::ExitLimit
@@ -9028,7 +9047,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         ? endpoint >= limit_price : endpoint <= limit_price;
                     const bool endpoint_ahead = closing_long
                         ? endpoint > point->price : endpoint < point->price;
-                    const bool in_flight_remainder = !marketable
+                    const bool in_flight_remainder = !fill_ends_leg && !marketable
                         && endpoint_satisfies && endpoint_ahead;
                     const bool later_same_open = phase == NativePathPhase::Open
                         && marketable;
