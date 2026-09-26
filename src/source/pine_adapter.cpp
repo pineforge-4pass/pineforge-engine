@@ -16407,11 +16407,16 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // pine_fills.cpp:8022-8043 (evaluate_fill_price): under
     // process_orders_on_close, a pure LIMIT entry (no stop, no trail) placed by
     // this bar's source calc is evaluated in the post-calculation fill pass
-    // (pine_scheduler.cpp:259 step 4) against THIS bar's close. When the close
-    // is on the marketable side of the limit it fills there, limit-or-better,
-    // at bar_fill_price(bar.close) with no slippage; otherwise it rests and
-    // gets the ordinary touch evaluation from the next bar on. Scoped to the
-    // ordinary (non-COOF, non-stream) route and a flat book.
+    // (pine_scheduler.cpp:259 step 4) against THIS bar's close. When the
+    // close's tick is on the marketable side of the limit, or on it, it fills
+    // there, limit-or-better, at bar_fill_price(bar.close) with no slippage;
+    // otherwise it rests and gets the ordinary touch evaluation from the next
+    // bar on, however far the bar's range reached. TradingView reads the
+    // close's tick, not the raw close (a sell limit at 11.76 over a raw 11.755
+    // close fills at that close; a buy limit at 11.65 over 11.655, whose tick
+    // is 11.66, rests), with or without calc_on_order_fills (lab tv
+    // pa3-f3-pooc-limit-{long,short}{,-coof}; R5 lane PAR-ORDERS-3). Scoped
+    // to the non-stream route and a flat book.
     // A pure STOP entry the close already reached fills there too, with or
     // without calc_on_order_fills (R5 lane PAR-ORDERS): TradingView books it
     // at that bar's close, the close's tick slipped like any stop fill, on
@@ -16460,8 +16465,7 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         if (row.family != PineOrderFamily::Entry || !row.opening) continue;
         if (row.birth.from_fill()) continue;
         if (row.projection_created_bar != projection_bar_index(context)) continue;
-        const bool pure_limit = !config_.calc_on_order_fills
-            && finite_positive(row.exit_levels.limit)
+        const bool pure_limit = finite_positive(row.exit_levels.limit)
             && !std::isfinite(row.exit_levels.stop);
         const bool pure_stop = finite_positive(row.exit_levels.stop)
             && !std::isfinite(row.exit_levels.limit);
@@ -16477,12 +16481,11 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         if (placed_flat ? (after_close || book_before != 0.0) : !reversing_stop) continue;
         if (row.direction_gate || row.paired_flat_market_candidate) continue;
         if (row.terms_priced_reverse && !reversing_stop) continue;
-        const bool at_close = pure_limit
-            ? (row.is_long ? raw_close <= row.exit_levels.limit
-                           : raw_close >= row.exit_levels.limit)
-            : (finite_positive(close_tick)
-               && (row.is_long ? close_tick >= row.exit_levels.stop
-                               : close_tick <= row.exit_levels.stop));
+        const bool at_close = finite_positive(close_tick) && (pure_limit
+            ? (row.is_long ? close_tick <= row.exit_levels.limit
+                           : close_tick >= row.exit_levels.limit)
+            : (row.is_long ? close_tick >= row.exit_levels.stop
+                           : close_tick <= row.exit_levels.stop));
         if (at_close) marketable.emplace_back(handle, row);
     }
     if (marketable.size() > 1) {

@@ -56,9 +56,10 @@
  * resting request's own level on the extreme leaves no remainder of its leg in
  * flight, and a fill forced onto the extreme starts the next leg, read from
  * the extreme itself, whose booked tick an off-grid low (11.425 -> 11.43,
- * 11.645 -> 11.65) does not equal. The process_orders_on_close short tape is
- * compared on its first cycle: on bar 31 TradingView fills A's sell limit at
- * the close its high already reached, where the engine fills it on bar 32.
+ * 11.645 -> 11.65) does not equal. The process_orders_on_close short tape's
+ * second cycle holds since the lane's finding 3
+ * (tests/test_pooc_limit_close_tapes.cpp): on bar 31 TradingView fills A's
+ * sell limit at the close its high already reached.
  *
  * R5 lane PAR-ORDERS-3 carries the rule to the FIRST extreme (finding 4):
  * after the matcher's fill at a resting request's own level ON a bar's first
@@ -86,7 +87,7 @@
  * row of the long exit tapes (8 of 8; 7 of 8 with process_orders_on_close)
  * exits A at the next open, and every close tape row closes A at the next open
  * (or, under process_orders_on_close, at the bar's close, then B by the
- * re-issued close). Against R5 lane PAR-ORDERS-3's base (9f7a025c): 79 of 285
+ * re-issued close). Against R5 lane PAR-ORDERS-3's base (9f7a025c): 82 of 288
  * checks fail -- every level-w1 row, point-w2 long's rows 2, 3, 5, 6 (2, 3, 5
  * under process_orders_on_close), the exit tapes' rows 5, 7 / 1, and every
  * pa3-f4 order but the point-w1 controls'.
@@ -562,7 +563,7 @@ int main() {
         {"pa2-i2-level-w1-long", true, true, false, 6, 0u, Probe::LevelFirstExtreme},
         {"pa2-i2-level-w1-long-pooc", true, true, true, 6, 0u, Probe::LevelFirstExtreme},
         {"pa2-i2-level-w1-short", false, true, false, 6, 0u, Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-short-pooc", false, true, true, 2, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-short-pooc", false, true, true, 5, 0u, Probe::LevelFirstExtreme},
         {"pa2-i2-point-w2-long", true, true, false, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-long-pooc", true, true, true, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-short", false, true, false, 6, 0u, Probe::PointSecondExtreme},

@@ -1432,6 +1432,9 @@ list(APPEND TEST_SOURCES test_magnifier_tradingview_intrabars)
 # tapes and calc_on_order_fills refill cascades replayed through the adapter.
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_magnifier_intrabar_tapes)
+# R5 lane PAR-ORDERS-3: a process_orders_on_close limit entry at the close that
+# placed it (TradingView's tapes, tests/fixtures/pooc_limit_close). Source-bound.
+list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2179,7 +2182,9 @@ foreach(_pf_hm_row IN ITEMS
         "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders"
         "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop"
         # R5 lane MAG-INTRABAR's tape row.
-        "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars")
+        "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
+        # R5 lane PAR-ORDERS-3's tape row.
+        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)

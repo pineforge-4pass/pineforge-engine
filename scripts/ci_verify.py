@@ -415,7 +415,10 @@ KERNEL_MIN_TESTS = 288
 #   +1 MAG-INTRABAR test_magnifier_tradingview_intrabars (the table, the
 #                   grid and the ownership of TradingView's intrabars)
 #   +1 MAG-INTRABAR test_adapter_magnifier_intrabar_tapes (TradingView's tapes)
-RELEASE_MIN_TESTS = 709
+# 710 = those 709 plus lane PAR-ORDERS-3's source-bound tape row:
+#   +1 PAR-ORDERS-3 test_pooc_limit_close_tapes (a process_orders_on_close
+#                   limit entry at the close that placed it)
+RELEASE_MIN_TESTS = 710
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -440,11 +443,11 @@ ADR_RULED_TEXTS_MIN = 40
 # at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
 # +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way;
-# 684/684/693 with INT26 round 2's tape row; 690/690/699 with lane
-# K-RUNERR's, lane PERF-ZONED's and lane TV-DEFAULTS' rows (+1 each) and
-# lane MAG-INTRABAR's three (+3).
+# 684/684/693 with INT26 round 2's tape row; 691/691/700 with lane
+# K-RUNERR's, lane PERF-ZONED's and lane TV-DEFAULTS' rows (+1 each), lane
+# MAG-INTRABAR's three (+3) and lane PAR-ORDERS-3's (+1).
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 690, 'sanitizers': 690, 'native': 699}
+EXCLUDED_REGISTERED_MIN = {'debug': 691, 'sanitizers': 691, 'native': 700}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a
