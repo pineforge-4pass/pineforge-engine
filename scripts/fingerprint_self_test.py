@@ -292,6 +292,56 @@ struct GeneratedStrategy : Strategy {
 '''
 
 
+# The constructor pineforge-codegen emits since R4-C: it fills a
+# source::PineStrategyConfig, enum members stored as int, and hands it to
+# configure_pine_strategy; set_strategy_override writes a StrategyOverrides
+# (a decoy `overrides.initial_capital =` line, outside the constructor). The
+# margins are declared but are not part of the provenance's strategy block.
+FIXTURE_CFG_CPP = '''
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
+public:
+    explicit GeneratedStrategy() : _ta_sma_1(23), _ta_sma_2(71) {
+#if defined(PINEFORGE_HAS_EXPLICIT_PINE_EXECUTION_ADAPTER_V1)
+        pineforge::source::PineStrategyHost::attach_pine_execution_adapter();
+#endif
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.process_orders_on_close = true;
+        cfg.initial_capital = 100000.0;
+        cfg.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        cfg.default_qty_value = 7.5;
+        cfg.pyramiding = 0;
+        cfg.commission_type = static_cast<int>(CommissionType::CASH_PER_CONTRACT);
+        cfg.commission_value = 0.08;
+        cfg.slippage = 2;
+        cfg.margin_long = 100.0;
+        cfg.margin_short = 100.0;
+        cfg.close_entries_rule_any = true;
+        configure_pine_strategy(cfg);
+    }
+    void set_strategy_override(const std::string& key, const std::string& value) {
+        pineforge::source::StrategyOverrides overrides{};
+        if (key == "initial_capital") {
+            overrides.initial_capital = std::stod(value);
+        }
+    }
+};
+'''
+
+# The same constructor for a script that declares only its order size: every
+# other field is PineStrategyConfig's own default, which the seed supplies.
+FIXTURE_CFG_SPARSE_CPP = '''
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
+public:
+    explicit GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.default_qty_type = static_cast<int>(QtyType::CASH);
+        cfg.default_qty_value = 100.0;
+        configure_pine_strategy(cfg);
+    }
+};
+'''
+
+
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
@@ -344,6 +394,27 @@ def main() -> int:
         check(f"{label}: override wins (pyramiding=5)", eff_ovr.get("pyramiding") == "5")
         check(f"{label}: override wins (process_orders_on_close=true)",
               eff_ovr.get("process_orders_on_close") == "true")
+
+        # --- the PineStrategyConfig the generated constructor fills -------
+        cfg = m.parse_strategy_params(FIXTURE_CFG_CPP)
+        check(f"{label}: cfg form: every declared field read",
+              cfg == {"process_orders_on_close": True, "initial_capital": 100000.0,
+                      "default_qty_type": "percent_of_equity", "default_qty_value": 7.5,
+                      "pyramiding": 0, "commission_type": "cash_per_contract",
+                      "commission_value": 0.08, "slippage": 2, "close_entries_rule": "ANY"})
+        check(f"{label}: cfg form: margins stay out of the strategy block",
+              "margin_long" not in cfg and "margin_short" not in cfg)
+        eff_cfg = m.effective_strategy(FIXTURE_CFG_CPP, {"initial_capital": "5000"})
+        check(f"{label}: cfg form: the declared values, not the seed",
+              eff_cfg.get("default_qty_type") == "percent_of_equity"
+              and eff_cfg.get("default_qty_value") == 7.5
+              and eff_cfg.get("close_entries_rule") == "ANY")
+        check(f"{label}: cfg form: override wins (initial_capital=5000)",
+              eff_cfg.get("initial_capital") == "5000")
+        sparse = m.effective_strategy(FIXTURE_CFG_SPARSE_CPP, {})
+        check(f"{label}: cfg form: undeclared fields are the struct's defaults",
+              sparse == dict(m.STRATEGY_SEED, default_qty_type="cash",
+                             default_qty_value=100.0))
 
         # --- inputs ------------------------------------------------------
         inp = m.parse_inputs(FIXTURE_CPP)
@@ -961,6 +1032,9 @@ def main() -> int:
     check("copies agree: effective_strategy",
           rj.effective_strategy(FIXTURE_CPP, {"pyramiding": "5"})
           == rs.effective_strategy(FIXTURE_CPP, {"pyramiding": "5"}))
+    check("copies agree: effective_strategy (cfg form)",
+          rj.effective_strategy(FIXTURE_CFG_CPP, {"pyramiding": "5"})
+          == rs.effective_strategy(FIXTURE_CFG_CPP, {"pyramiding": "5"}))
     check("copies agree: effective_inputs",
           rj.effective_inputs(FIXTURE_CPP, {"Fast EMA": "8"})
           == rs.effective_inputs(FIXTURE_CPP, {"Fast EMA": "8"}))
