@@ -1390,6 +1390,11 @@ list(APPEND TEST_SOURCES test_flat_coof_exit_tapes)
 list(APPEND TEST_SOURCES test_second_extreme_order_tapes)
 #   A process_orders_on_close stop entry placed while the book is still open.
 list(APPEND TEST_SOURCES test_pooc_reversing_stop_tapes)
+# R5 lane PAR-CASHFEE: a percent-of-equity default quantity under a cash
+# commission (per order, per contract) against TradingView's own trades -- the
+# `lab tv` tapes under tests/fixtures/cash_fee_sizing (README.md there names
+# them) replayed on their bars through the Pine adapter. Source-bound.
+list(APPEND TEST_SOURCES test_cash_fee_sizing_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2145,6 +2150,12 @@ foreach(_pf_hm_row IN ITEMS
             ${_pf_hm_macro}="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_pf_hm_dir}")
     endif()
 endforeach()
+
+# R5 lane PAR-CASHFEE reads its TradingView tapes from the fixture tree too.
+if(TARGET test_cash_fee_sizing_tapes)
+    target_compile_definitions(test_cash_fee_sizing_tapes PRIVATE
+        PINEFORGE_CASH_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing")
+endif()
 
 # R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
 # is the one implementation of the marked equity. Kernel files only, so the

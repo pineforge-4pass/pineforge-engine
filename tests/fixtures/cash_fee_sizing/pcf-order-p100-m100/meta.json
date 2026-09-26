@@ -1,0 +1,17 @@
+{
+  "title": "PAR-CASHFEE pcf-order-p100-m100",
+  "slug": "pcf-order-p100-m100",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:39:59.658Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-04-01",
+    "to": "2025-05-01",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "939f4c83899e13675679082dd7bed3ab4e8c0d4ea6ea1fe03b3e63146b21e652",
+  "tv_trades_sha256": "5fe7fb71f114a7ecc08a295cd373d4cfd93d1f6f8be9545875d32e876620bab4",
+  "tv_trades_rows": 22
+}

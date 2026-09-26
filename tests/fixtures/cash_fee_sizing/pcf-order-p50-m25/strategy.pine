@@ -1,0 +1,69 @@
+// R5 lane PAR-CASHFEE: TradingView's percent-of-equity default sizing under
+// a cash commission (cash_per_order 1000), default_qty_value 50, margin 25/25,
+// pyramiding 3. Each scenario is flat at its start (its own UTC day) and is
+// closed by strategy.close_all; orders fill at the next bar's open.
+//   A 2025-04-02: flat long L1, then adds L2 and L3 while the earlier lots are open
+//   B 2025-04-04: flat short S1, then adds S2 and S3 while the earlier lots are open
+//   C 2025-04-08: long C1, strategy.close(C1, qty_percent=50), then add C2 on the half lot
+//   D 2025-04-10: long D1, then a default short D2 reverses it
+//   E 2025-04-15: short E1, then a default long E2 reverses it
+//   F 2025-04-17: flat long F1 alone
+//   G 2025-04-22: flat short G1 alone
+//@version=6
+strategy("PAR-CASHFEE pcf-order-p50-m25", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50, pyramiding=3,
+     commission_type=strategy.commission.cash_per_order, commission_value=1000,
+     process_orders_on_close=false, margin_long=25, margin_short=25)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 2, 10, 0)
+    strategy.entry("A1", strategy.long)
+if at(2025, 4, 2, 10, 30)
+    strategy.entry("A2", strategy.long)
+if at(2025, 4, 2, 11, 0)
+    strategy.entry("A3", strategy.long)
+if at(2025, 4, 2, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 4, 10, 0)
+    strategy.entry("B1", strategy.short)
+if at(2025, 4, 4, 10, 30)
+    strategy.entry("B2", strategy.short)
+if at(2025, 4, 4, 11, 0)
+    strategy.entry("B3", strategy.short)
+if at(2025, 4, 4, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 8, 10, 0)
+    strategy.entry("C1", strategy.long)
+if at(2025, 4, 8, 10, 30)
+    strategy.close("C1", qty_percent=50)
+if at(2025, 4, 8, 11, 0)
+    strategy.entry("C2", strategy.long)
+if at(2025, 4, 8, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 10, 10, 0)
+    strategy.entry("D1", strategy.long)
+if at(2025, 4, 10, 10, 30)
+    strategy.entry("D2", strategy.short)
+if at(2025, 4, 10, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 15, 10, 0)
+    strategy.entry("E1", strategy.short)
+if at(2025, 4, 15, 10, 30)
+    strategy.entry("E2", strategy.long)
+if at(2025, 4, 15, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 17, 10, 0)
+    strategy.entry("F1", strategy.long)
+if at(2025, 4, 17, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 22, 10, 0)
+    strategy.entry("G1", strategy.short)
+if at(2025, 4, 22, 12, 0) and strategy.position_size != 0
+    strategy.close_all()

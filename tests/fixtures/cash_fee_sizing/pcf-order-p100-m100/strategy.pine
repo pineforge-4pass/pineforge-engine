@@ -1,0 +1,43 @@
+// R5 lane PAR-CASHFEE: TradingView's percent-of-equity default sizing under
+// a cash commission (cash_per_order 1000), default_qty_value 100, margin 100/100,
+// pyramiding 1. Each scenario is flat at its start (its own UTC day) and is
+// closed by strategy.close_all; orders fill at the next bar's open.
+//   P 2025-04-02: flat long, next open below the signal close
+//   Q 2025-04-03: flat long, next open above the signal close
+//   R 2025-04-04: flat short
+//   T 2025-04-10: long T1, then a default short T2 reverses it
+//   U 2025-04-12: flat long, next open equal to the signal close
+//@version=6
+strategy("PAR-CASHFEE pcf-order-p100-m100", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100, pyramiding=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=1000,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 2, 10, 0)
+    strategy.entry("P1", strategy.long)
+if at(2025, 4, 2, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 3, 10, 0)
+    strategy.entry("Q1", strategy.long)
+if at(2025, 4, 3, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 4, 10, 0)
+    strategy.entry("R1", strategy.short)
+if at(2025, 4, 4, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 10, 10, 0)
+    strategy.entry("T1", strategy.long)
+if at(2025, 4, 10, 10, 30)
+    strategy.entry("T2", strategy.short)
+if at(2025, 4, 10, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 12, 10, 0)
+    strategy.entry("U1", strategy.long)
+if at(2025, 4, 12, 12, 0) and strategy.position_size != 0
+    strategy.close_all()

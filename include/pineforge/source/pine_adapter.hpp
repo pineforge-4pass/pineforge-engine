@@ -151,6 +151,11 @@ struct PineSizingSnapshot {
     double mark = std::numeric_limits<double>::quiet_NaN();
     double frozen_units = std::numeric_limits<double>::quiet_NaN();
     bool at_fill = false;
+    // strategy.equity at `mark`: every open entry fee charged, the cash ones
+    // included, which `equity` restores for the money gates. Recorded only
+    // where a percent-of-equity default quantity converts it -- a cash
+    // commission (default_sizing_reserves_cash_fee); NaN everywhere else.
+    double strategy_equity = std::numeric_limits<double>::quiet_NaN();
 };
 
 // Source placement evidence keyed by the native request handle, read by the
@@ -1695,6 +1700,14 @@ private:
     // execution converts at, which its terms facts carry
     // (NativeExecutionTermsFacts::active_fx); none, the presented clock's.
     double percent_commission_live_equity(double, std::optional<double> fx) const noexcept;
+    // The kernel's marked equity at `mark` (every open entry fee charged),
+    // at `fx` when given: strategy.equity under a cash commission.
+    double strategy_equity_at(double mark, std::optional<double> fx) const noexcept;
+    // Records both equities a sizing snapshot carries at `mark`: `equity`
+    // (percent_commission_live_equity) and, for a cash-fee percent-of-equity
+    // default quantity, `strategy_equity`.
+    void mark_sizing_equity(PineSizingSnapshot&, double mark,
+                            std::optional<double> fx = std::nullopt) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
                                        double available) const noexcept;
@@ -1848,6 +1861,10 @@ private:
     // reserved out of it, and the lot floor applied to the core's quotient.
     double default_sizing_cash(const PineSizingSnapshot&) const noexcept;
     bool default_sizing_reserves_percent_fee() const noexcept;
+    // A percent-of-equity default quantity under a cash commission (per
+    // order or per contract) takes its percentage of strategy.equity and
+    // leaves out the fee its own order pays (R5 lane PAR-CASHFEE).
+    bool default_sizing_reserves_cash_fee() const noexcept;
     double default_sizing_lot_floor(double units) const noexcept;
     // A typed quantity (qty_type cash / percent_of_equity) names money, not
     // units: `money` converted at `price` by the core (native_sized_units:

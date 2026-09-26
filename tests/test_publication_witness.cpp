@@ -85,6 +85,20 @@
 // books a short limit's call at its fill bar's high
 // (tests/fixtures/margin_entry_bar/pm2-m7-slim-*, pm2-m7-s1lim-*). The other 155
 // runs keep their digest and every count.
+// Re-harvested once more for R5 lane PAR-CASHFEE's hash step: a
+// percent-of-equity default quantity under a cash commission takes its
+// percentage of strategy.equity, the open entries' cash fees charged, and
+// leaves out the fee its own order pays (tests/fixtures/cash_fee_sizing), and
+// the source layer's fold folds the sizing snapshot's strategy.equity wherever
+// such a quantity is recorded. 34 of the 156 runs pin a new digest: exactly
+// the Config runs whose configuration sweep passes through a percent-of-equity
+// default quantity with a positive cash fee (counted over the battery by an
+// instrumented copy of this TU); six of them close a different number of
+// trades (Config03 50 -> 48, Config03M 48 -> 44, ConfigFlags103 65 -> 63,
+// ConfigFlags103M 66 -> 65, ConfigFlags104 and ConfigFlags104M 12 -> 13). The
+// same harvest against the base 09f0bbda reproduces every old row. (The
+// counts are the lane's tree's; INT26 pins the integrated tree's trades with
+// this pick and moves the digests in its v19 hash re-pin.)
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 

@@ -1,0 +1,17 @@
+{
+  "title": "PAR-CASHFEE pcf-es-contract-p50-m25",
+  "slug": "pcf-es-contract-p50-m25",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:47:05.872Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-06-01",
+    "to": "2025-07-01",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "0a6e7ceaad6aa4846bc769ee9d2002857788b08e7ace4dc6cff699a5e297622c",
+  "tv_trades_sha256": "953754c5e1e3ed239f9375b3834f3d20c89026b53d69edb9cbc911ff13a31a5e",
+  "tv_trades_rows": 14
+}

@@ -1,0 +1,50 @@
+// R5 lane PAR-CASHFEE: TradingView's percent-of-equity default sizing under
+// a cash commission (cash_per_order 1000) for PRICED default entries (limit, stop) and
+// for strategy.order; default_qty_value 50, margin 25/25, pyramiding 1. Each
+// scenario is flat at its start (its own UTC day) and is closed by
+// strategy.close_all.
+//   O 2025-04-23: strategy.order long O1 from flat, then strategy.order long O2 while O1 is open
+//   M 2025-04-24: limit short M1 at the signal close + 3
+//   N 2025-04-25: stop long N1 at the signal close + 3
+//   V 2025-04-28: stop short V1 at the signal close - 3
+//   K 2025-04-29: limit long K1 at the signal close - 3
+//   W 2025-04-30: strategy.order short W1 from flat
+//@version=6
+strategy("PAR-CASHFEE pcf-order-priced-m25", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50, pyramiding=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=1000,
+     process_orders_on_close=false, margin_long=25, margin_short=25)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 23, 10, 0)
+    strategy.order("O1", strategy.long)
+if at(2025, 4, 23, 10, 30)
+    strategy.order("O2", strategy.long)
+if at(2025, 4, 23, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 24, 10, 0)
+    strategy.entry("M1", strategy.short, limit=close + 3)
+if at(2025, 4, 24, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 25, 10, 0)
+    strategy.entry("N1", strategy.long, stop=close + 3)
+if at(2025, 4, 25, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 28, 10, 0)
+    strategy.entry("V1", strategy.short, stop=close - 3)
+if at(2025, 4, 28, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 29, 10, 0)
+    strategy.entry("K1", strategy.long, limit=close - 3)
+if at(2025, 4, 29, 12, 0) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 30, 10, 0)
+    strategy.order("W1", strategy.short)
+if at(2025, 4, 30, 12, 0) and strategy.position_size != 0
+    strategy.close_all()

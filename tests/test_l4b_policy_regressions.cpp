@@ -276,10 +276,17 @@ public:
     }
 };
 
-void cash_entry_fee_is_not_subtracted_from_percent_sizing_equity() {
+// expectation corrected (R5 lane PAR-CASHFEE): 20.0 -> 19.79, and the row's
+// name with it (was cash_entry_fee_is_not_subtracted_from_percent_sizing_equity).
+// TradingView sizes a percent-of-equity default quantity under a cash commission
+// from strategy.equity, the open entries' cash fees charged, less the fee its
+// own order pays (`lab tv` tapes, tests/fixtures/cash_fee_sizing): the first
+// entry is (10 % of 10 000 - 10) / 100 = 9.9, the second, with the first's fee
+// charged, (10 % of 9 990 - 10) / 100 = 9.89.
+void cash_entry_fee_is_charged_and_reserved_by_percent_sizing() {
     CashCommissionSizing host;
     run(host, {bar(1'000), bar(2'000), bar(3'000), bar(4'000)}, symbol(0.01));
-    CHECK(near(host.live_position_size(), 20.0));
+    CHECK(near(host.live_position_size(), 19.79));
 }
 
 class MagnifierCapProbe final : public source::PineNativeHost {
@@ -376,7 +383,7 @@ int main() {
     blocked_direction_waits_for_its_fill();
     maximum_position_size_is_live_and_inclusive();
     deferred_percent_close_resolves_the_grown_cohort_at_fill();
-    cash_entry_fee_is_not_subtracted_from_percent_sizing_equity();
+    cash_entry_fee_is_charged_and_reserved_by_percent_sizing();
     volume_weighted_cap_is_provider_supplied();
     empty_close_drop_changes_the_hashed_adapter_receipts();
     f8_sequential_transaction_bits_are_carried_by_the_native_route();

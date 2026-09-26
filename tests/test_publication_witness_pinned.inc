@@ -45,6 +45,15 @@
 //   Storm19M: trades 22 -> 23
 //   Storm23: trades 27 -> 26
 //   Storm23M: trades 27 -> 26
+// R5 lane PAR-CASHFEE moves the closed trades of five runs (INT26: the behaviour
+// half of its hash step 214c082c, harvested on the integrated tree, each value
+// equal to the lane's; its Config03 50 -> 48 was already pinned with R5 lane
+// PAR-MARGIN-2); every digest moves once, in the INT26 v19 hash re-pin:
+//   ConfigFlags103: trades 65 -> 63
+//   Config03M: trades 48 -> 44
+//   ConfigFlags103M: trades 66 -> 65
+//   ConfigFlags104: trades 12 -> 13
+//   ConfigFlags104M: trades 12 -> 13
 constexpr Pinned kPinned[] = {
     {"Config01", 0x13599d44631228e2ull, 144, 44, 144},
     {"ConfigFlags101", 0x9d75aa3c41307c6aull, 145, 45, 144},
@@ -55,13 +64,13 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0xd04764a2d7139486ull, 48, 11, 48},
     {"ConfigFlags102M", 0x854413a4a59d0d33ull, 144, 52, 144},
     {"Config03", 0x461a919ebdcd41e9ull, 144, 48, 144},
-    {"ConfigFlags103", 0xcf60de51b3acfcc3ull, 184, 65, 144},
-    {"Config03M", 0x4511d5cd864e706full, 144, 48, 144},
-    {"ConfigFlags103M", 0xdd7937eb65073a91ull, 184, 66, 144},
+    {"ConfigFlags103", 0xcf60de51b3acfcc3ull, 184, 63, 144},
+    {"Config03M", 0x4511d5cd864e706full, 144, 44, 144},
+    {"ConfigFlags103M", 0xdd7937eb65073a91ull, 184, 65, 144},
     {"Config04", 0xa0a03448564c9be0ull, 144, 21, 144},
-    {"ConfigFlags104", 0xaf23be135bf66e22ull, 48, 12, 48},
+    {"ConfigFlags104", 0xaf23be135bf66e22ull, 48, 13, 48},
     {"Config04M", 0xe0f138c9c848b160ull, 144, 21, 144},
-    {"ConfigFlags104M", 0xbf637ed723b215beull, 48, 12, 48},
+    {"ConfigFlags104M", 0xbf637ed723b215beull, 48, 13, 48},
     {"Config05", 0x17fc80e7cecd9737ull, 48, 14, 48},
     {"ConfigFlags105", 0x270ebbdd8cfa9d63ull, 48, 13, 48},
     {"Config05M", 0x3e5a9fcbb1fdcd5eull, 48, 14, 48},

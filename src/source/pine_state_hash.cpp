@@ -4,6 +4,7 @@
 #include "../broker_state_hash_internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <type_traits>
 #include <variant>
 
@@ -107,7 +108,12 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.projection_affordability_held_qty);
     f.d(value.sizing.equity); f.d(value.sizing.price);
     f.d(value.sizing.fx); f.d(value.sizing.mark); f.d(value.sizing.frozen_units);
-    f.b(value.sizing.at_fill); f.d(value.exit_levels.limit); f.d(value.exit_levels.stop);
+    f.b(value.sizing.at_fill);
+    // Recorded only under a cash commission with a percent-of-equity default
+    // quantity (the folded run configuration decides), so every other run
+    // keeps its digest (R5 lane PAR-CASHFEE).
+    if (!std::isnan(value.sizing.strategy_equity)) f.d(value.sizing.strategy_equity);
+    f.d(value.exit_levels.limit); f.d(value.exit_levels.stop);
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);

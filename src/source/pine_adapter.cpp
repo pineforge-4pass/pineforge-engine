@@ -2353,7 +2353,7 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
         // for frozen sizing, money-band admission and the paired FX fact.
         snapshot.mark = nearest_tick(point->price, staged_.syminfo.mintick);
         snapshot.price = snapshot.mark;
-        snapshot.equity = percent_commission_live_equity(snapshot.mark);
+        mark_sizing_equity(snapshot, snapshot.mark);
     }
     snapshot.fx = staged_.account_fx;
     if (const auto point = detail::callback_point(host))
@@ -2369,15 +2369,37 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
 // generic EquityFraction basis deliberately does not model, so the source
 // hands the core the money and the core converts it.  Any other declaration
 // has no money of its own and returns NaN.
+//
+// Under a cash commission the percentage is taken of strategy.equity -- every
+// open entry fee charged, the cash fees percent_commission_live_equity
+// restores included -- and the fee the order itself pays is left out of the
+// money: the value per order, or the value per unit, so that the units' notional
+// and their fee together spend the money (units = pct * E / (price * pointvalue
+// + fee)).  R5 lane PAR-CASHFEE, `lab tv` tapes tests/fixtures/cash_fee_sizing:
+// every sized entry of the thirteen tapes there (percentages 50, 100 and 200,
+// long and short, flat, pyramided, after a partial close, reversing, priced
+// entries and strategy.order, point values 1 and 50) and all 366 trades of
+// corpus order-percent-equity-cash-commission-01.
 double PineExecutionAdapter::default_sizing_cash(
         const PineSizingSnapshot& sizing) const noexcept {
     if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
         return config_.default_qty_value;
     }
-    if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
-        || !finite_positive(sizing.equity)) {
-        return kNaN;
+    if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)) return kNaN;
+    if (default_sizing_reserves_cash_fee()) {
+        if (!finite_positive(sizing.strategy_equity)) return kNaN;
+        const double equity = staged_.quantity_grid ? source_money_round(sizing.strategy_equity)
+                                                    : sizing.strategy_equity;
+        const double money = config_.default_qty_value / 100.0 * equity;
+        if (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_ORDER))
+            return money - config_.commission_value;
+        // The core converts cash / unit_cost; this cash leaves
+        // units * (unit_cost + fee) == money.
+        const double unit_cost = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
+        if (!finite_positive(unit_cost)) return kNaN;
+        return money * unit_cost / (unit_cost + config_.commission_value);
     }
+    if (!finite_positive(sizing.equity)) return kNaN;
     const double equity = staged_.quantity_grid ? source_money_round(sizing.equity) : sizing.equity;
     return config_.default_qty_value / 100.0 * equity;
 }
@@ -2389,6 +2411,13 @@ double PineExecutionAdapter::default_sizing_cash(
 bool PineExecutionAdapter::default_sizing_reserves_percent_fee() const noexcept {
     return config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && config_.commission_value > 0.0;
+}
+
+bool PineExecutionAdapter::default_sizing_reserves_cash_fee() const noexcept {
+    return config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_ORDER)
+            || config_.commission_type == static_cast<int>(CommissionType::CASH_PER_CONTRACT))
         && config_.commission_value > 0.0;
 }
 
@@ -2505,7 +2534,7 @@ bool PineExecutionAdapter::core_sizes_default_opening(bool is_long) const {
     PineSizingSnapshot sizing = sizing_snapshot();
     if (!finite_positive(sizing.mark)) return false;
     sizing.price = default_market_sizing_price(sizing.mark, is_long);
-    sizing.equity = percent_commission_live_equity(sizing.mark);
+    mark_sizing_equity(sizing, sizing.mark);
     return finite_positive(default_sizing_units(sizing))
         && default_sizing_intent(sizing, is_long).has_value()
         && core_sizing_price_matches(sizing, is_long);
@@ -4184,14 +4213,15 @@ double PineExecutionAdapter::percent_commission_live_equity(
             return (pine->current_equity() + open) - paid_open_commission;
         }
     }
-    const auto* pine = pine_view_of(host_);
-    const double marked = fx && pine ? pine->marked_equity_at(mark, *fx)
-                                     : host_->native_marked_equity(mark);
+    const double marked = strategy_equity_at(mark, fx);
     if (!std::isfinite(marked)) return marked;
-    // `marked_equity()` accounts for every open entry fee.  Pine's sizing
-    // basis subtracts only surviving PERCENT entry commissions, so restore the
-    // adapter-recorded cash-per-order/contract fees without changing generic
-    // accounting or marked equity itself.
+    // `marked_equity()` accounts for every open entry fee.  The money gates
+    // and the margin money read an equity that subtracts only surviving
+    // PERCENT entry commissions, so restore the adapter-recorded
+    // cash-per-order/contract fees without changing generic accounting or
+    // marked equity itself.  A percent-of-equity default QUANTITY does not
+    // read this: TradingView sizes it from strategy.equity, cash fees charged
+    // (default_sizing_cash, R5 lane PAR-CASHFEE).
     double restored = 0.0;
     for (const auto& fact : open_entry_fees_) {
         if (!std::isfinite(fact.nonpercent_fee))
@@ -4200,6 +4230,20 @@ double PineExecutionAdapter::percent_commission_live_equity(
     }
     return std::isfinite(restored) ? marked + restored
                                    : std::numeric_limits<double>::quiet_NaN();
+}
+
+double PineExecutionAdapter::strategy_equity_at(
+        double mark, std::optional<double> fx) const noexcept {
+    if (!host_) return std::numeric_limits<double>::quiet_NaN();
+    const auto* pine = pine_view_of(host_);
+    return fx && pine ? pine->marked_equity_at(mark, *fx) : host_->native_marked_equity(mark);
+}
+
+void PineExecutionAdapter::mark_sizing_equity(
+        PineSizingSnapshot& sizing, double mark, std::optional<double> fx) const noexcept {
+    sizing.equity = percent_commission_live_equity(mark, fx);
+    sizing.strategy_equity = default_sizing_reserves_cash_fee()
+        ? strategy_equity_at(mark, fx) : kNaN;
 }
 
 void PineExecutionAdapter::record_opening_fee(
@@ -6498,7 +6542,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     if (default_sized && !priced && finite_positive(snapshot.sizing.mark)) {
         snapshot.sizing.price = default_market_sizing_price(snapshot.sizing.mark, is_long);
-        snapshot.sizing.equity = percent_commission_live_equity(snapshot.sizing.mark);
+        mark_sizing_equity(snapshot.sizing, snapshot.sizing.mark);
     }
     const auto predecessor = live_by_source_key_.find(key_for(id));
     snapshot.replaced_opening = predecessor != live_by_source_key_.end();
@@ -12539,16 +12583,18 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     } else if (config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
         result.units = config_.default_qty_value;
     } else {
-        const double equity = source.sizing.at_fill
-            ? percent_commission_live_equity(result.resolved_price, facts.active_fx)
-            : source.sizing.equity;
         const double price = source.sizing.at_fill ? result.resolved_price : source.sizing.price;
         const double fx = source.sizing.at_fill ? facts.active_fx : source.sizing.fx;
         PineSizingSnapshot sizing;
         sizing.price = price;
         sizing.fx = fx;
         sizing.mark = price;
-        sizing.equity = equity;
+        if (source.sizing.at_fill) {
+            mark_sizing_equity(sizing, result.resolved_price, facts.active_fx);
+        } else {
+            sizing.equity = source.sizing.equity;
+            sizing.strategy_equity = source.sizing.strategy_equity;
+        }
         // ab9714be pine_policy_members.cpp:282: default sizing units divides equity by price, pointvalue, and currency fx
         result.units = default_sizing_units(sizing);
     }
@@ -15056,8 +15102,8 @@ void PineExecutionAdapter::refresh_pending_sizing_after_margin(
         const NativeDecisionContext& context) {
     const double mark = policy_script_bar_valid_
         ? policy_script_bar_.close : event.resolved_price;
-    const double marked_equity = percent_commission_live_equity(
-        nearest_tick(mark, staged_.syminfo.mintick));
+    PineSizingSnapshot marked;
+    mark_sizing_equity(marked, nearest_tick(mark, staged_.syminfo.mintick));
     const double active_fx = active_staged_fx(context.sub_bar_open_ms);
     const std::uint64_t cause_fill =
         static_cast<PineStrategyHost&>(require_host()).broker_fill_event_seq_;
@@ -15080,7 +15126,8 @@ void PineExecutionAdapter::refresh_pending_sizing_after_margin(
             && !finite_positive(snapshot.exit_levels.limit)
             && !finite_positive(snapshot.exit_levels.stop);
         if (market_entry && std::isfinite(snapshot.sizing.frozen_units)) {
-            snapshot.sizing.equity = marked_equity;
+            snapshot.sizing.equity = marked.equity;
+            snapshot.sizing.strategy_equity = marked.strategy_equity;
             snapshot.sizing.fx = active_fx;
             snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
             revised = true;
@@ -18668,8 +18715,12 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
             PineSizingSnapshot sizing = owner_->sizing_snapshot();
             sizing.price = sized_price;
             sizing.mark = sized_price;
-            sizing.equity = finite_positive(sized_price)
-                ? owner_->percent_commission_live_equity(sized_price) : kNaN;
+            if (finite_positive(sized_price)) {
+                owner_->mark_sizing_equity(sizing, sized_price);
+            } else {
+                sizing.equity = kNaN;
+                sizing.strategy_equity = kNaN;
+            }
             *qty = owner_->default_sizing_units(sizing);
         } else {
             *qty = floor_quantity_grid(owner_->config_.default_qty_value,

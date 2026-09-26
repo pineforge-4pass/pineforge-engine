@@ -1,0 +1,17 @@
+{
+  "title": "PAR-CASHFEE pcf-es-order-p50-m25",
+  "slug": "pcf-es-order-p50-m25",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:47:01.381Z",
+  "chart": {
+    "symbol": "CME_MINI:ES1!",
+    "interval": "15",
+    "from": "2025-06-01",
+    "to": "2025-07-01",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "14975cf40b8a600753f792130d2c7c1bb2722ae4247eda4af92201f406991c4b",
+  "tv_trades_sha256": "05882d7a78e3a8ca6a3e8a49249ff66169b30cbe23982c547f977e2fae387f44",
+  "tv_trades_rows": 14
+}

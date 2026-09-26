@@ -1,0 +1,49 @@
+// R5 lane H-THIN, X15(b): which open-entry fees does TradingView's
+// percent-of-equity sizing basis keep after a FIFO strategy.exit(from_entry)
+// closes an OLDER lot of another id? Cash per order 1000, 50 % of equity,
+// pyramiding 5, FIFO; each scenario is flat at its start and closed by
+// strategy.close_all. N* is the entry whose quantity reads the basis.
+//   A 2025-04-08: L2A qty 1, then LA (50 %), then XA from LA with qty = LA's
+//     units (position - 1): FIFO closes L2A and all of LA but 1 unit
+//   B 2025-04-10: the same with XB's default quantity
+//   C 2025-04-14: control, LC (50 %) is the older lot, then L2C qty 1
+//@version=6
+strategy("H-THIN X15b FIFO exit fee basis", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50, pyramiding=5,
+     commission_type=strategy.commission.cash_per_order, commission_value=1000,
+     process_orders_on_close=false, margin_long=100, margin_short=100)
+
+at(int y, int mo, int d, int h, int mi) => time == timestamp("UTC", y, mo, d, h, mi)
+
+if at(2025, 4, 8, 10, 0)
+    strategy.entry("L2A", strategy.long, qty=1)
+if at(2025, 4, 8, 10, 30)
+    strategy.entry("LA", strategy.long)
+if at(2025, 4, 8, 11, 0)
+    strategy.exit("XA", "LA", qty=strategy.position_size - 1, limit=close * 0.9)
+if at(2025, 4, 8, 11, 30)
+    strategy.entry("NA", strategy.long)
+if at(2025, 4, 8, 12, 30) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 10, 10, 0)
+    strategy.entry("L2B", strategy.long, qty=1)
+if at(2025, 4, 10, 10, 30)
+    strategy.entry("LB", strategy.long)
+if at(2025, 4, 10, 11, 0)
+    strategy.exit("XB", "LB", limit=close * 0.9)
+if at(2025, 4, 10, 11, 30)
+    strategy.entry("NB", strategy.long)
+if at(2025, 4, 10, 12, 30) and strategy.position_size != 0
+    strategy.close_all()
+
+if at(2025, 4, 14, 10, 0)
+    strategy.entry("LC", strategy.long)
+if at(2025, 4, 14, 10, 30)
+    strategy.entry("L2C", strategy.long, qty=1)
+if at(2025, 4, 14, 11, 0)
+    strategy.exit("XC", "LC", limit=close * 0.9)
+if at(2025, 4, 14, 11, 30)
+    strategy.entry("NC", strategy.long)
+if at(2025, 4, 14, 12, 30) and strategy.position_size != 0
+    strategy.close_all()
