@@ -45,6 +45,7 @@
 #include <pineforge/native_host.hpp>
 
 #include "../src/native_execution_consumer.hpp"
+#include "ratio_timing.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -792,30 +793,40 @@ double read_seconds(int bars, int read_at, int reads) {
 // V19-A removed x16, so x8; a live-state read is x1 at 4x the history and a
 // read that walked the history x4, so x2. RATIO-HARDEN repeats each fixed
 // workload until the best timed leg has at least 100 ms of process CPU; the
-// x8 and x2 bounds stay in place.
+// x8 and x2 bounds stay in place. A timed leg that still comes in under it
+// doubles the repeats and times both legs again (R5 lane CI-FLAKE,
+// tests/ratio_timing.hpp).
 constexpr int kScalingRounds = 5;
 constexpr double kMinLegSeconds = 0.1;
-constexpr int kMaxTimingRepeats = 256;
+// The recorded runs repeat at most this many times (an Apple M4 Max needs
+// 32), and the reads grow to at most kMaxReads (it needs 512,000).
+constexpr int kMaxTimingRepeats = 512;
+constexpr int kMaxReads = 8192000;
 
 void recording_and_reads_scale() {
-    int recording_repeats = 1;
-    while (recorded_seconds(5000, recording_repeats) < kMinLegSeconds
-           && recording_repeats < kMaxTimingRepeats / 2) {
-        recording_repeats *= 2;
-    }
+    int recording_repeats = ratio_timing::presized(
+        1, kMaxTimingRepeats, kMinLegSeconds,
+        [](int count) { return recorded_seconds(5000, count); });
     double quarter = 1e30;
     double whole = 1e30;
     double early = 1e30;
     double late = 1e30;
-    for (int round = 0; round < kScalingRounds; ++round) {
-        if (round % 2 == 0) {
-            quarter = std::min(quarter, recorded_seconds(5000, recording_repeats));
-            whole = std::min(whole, recorded_seconds(20000, recording_repeats));
-        } else {
-            whole = std::min(whole, recorded_seconds(20000, recording_repeats));
-            quarter = std::min(quarter, recorded_seconds(5000, recording_repeats));
+    const auto time_recording = [&](int count) {
+        quarter = 1e30;
+        whole = 1e30;
+        for (int round = 0; round < kScalingRounds; ++round) {
+            if (round % 2 == 0) {
+                quarter = std::min(quarter, recorded_seconds(5000, count));
+                whole = std::min(whole, recorded_seconds(20000, count));
+            } else {
+                whole = std::min(whole, recorded_seconds(20000, count));
+                quarter = std::min(quarter, recorded_seconds(5000, count));
+            }
         }
-    }
+        return std::min(quarter, whole);
+    };
+    ratio_timing::time_measurable_legs(recording_repeats, kMaxTimingRepeats, kMinLegSeconds,
+                                       time_recording);
     const double ratio = quarter > 0.0 ? whole / quarter : 0.0;
     std::printf("  kernel-recorded per-bar broker hashes, best of %d interleaved rounds: "
                 "5000 bars x%d %.4f s, 20000 bars x%d %.4f s (x%.2f for 4x the bars, bound x8)\n",
@@ -824,25 +835,26 @@ void recording_and_reads_scale() {
     CHECK(quarter >= kMinLegSeconds);
     CHECK(whole >= kMinLegSeconds);
     CHECK(ratio < 8.0);
-    int read_repeats = 2000;
-    while (true) {
-        const double early_probe = read_seconds(10000, 2500, read_repeats);
-        const double late_probe = read_seconds(10000, 9999, read_repeats);
-        if (std::min(early_probe, late_probe) >= kMinLegSeconds
-            || read_repeats >= 1024 * 1024) {
-            break;
+    int read_repeats = ratio_timing::presized(2000, kMaxReads, kMinLegSeconds, [](int count) {
+        const double early_probe = read_seconds(10000, 2500, count);
+        const double late_probe = read_seconds(10000, 9999, count);
+        return std::min(early_probe, late_probe);
+    });
+    const auto time_reads = [&](int count) {
+        early = 1e30;
+        late = 1e30;
+        for (int round = 0; round < kScalingRounds; ++round) {
+            if (round % 2 == 0) {
+                early = std::min(early, read_seconds(10000, 2500, count));
+                late = std::min(late, read_seconds(10000, 9999, count));
+            } else {
+                late = std::min(late, read_seconds(10000, 9999, count));
+                early = std::min(early, read_seconds(10000, 2500, count));
+            }
         }
-        read_repeats *= 2;
-    }
-    for (int round = 0; round < kScalingRounds; ++round) {
-        if (round % 2 == 0) {
-            early = std::min(early, read_seconds(10000, 2500, read_repeats));
-            late = std::min(late, read_seconds(10000, 9999, read_repeats));
-        } else {
-            late = std::min(late, read_seconds(10000, 9999, read_repeats));
-            early = std::min(early, read_seconds(10000, 2500, read_repeats));
-        }
-    }
+        return std::min(early, late);
+    };
+    ratio_timing::time_measurable_legs(read_repeats, kMaxReads, kMinLegSeconds, time_reads);
     const double read_ratio = early > 0.0 ? late / early : 0.0;
     std::printf("  continuation read, %d reads, best of %d interleaved rounds: at bar 2500 "
                 "%.4f s, at bar 9999 %.4f s (x%.2f, bound x2)\n",

@@ -23,11 +23,16 @@
 // full rescan (test_native_match_row_reuse); here only the finished state is
 // checked, so a leg that failed or placed fewer orders cannot pass as cheap.
 // RATIO-HARDEN calibrates the tape length until the best small-leg sample has
-// at least 100 ms of CPU. The four-to-one live-order ratio and the x8 bound
+// at least 250 ms of CPU. The four-to-one live-order ratio and the x8 bound
 // stay unchanged; sizing the legs, rather than widening the bound, keeps the
-// old full-rescan mutant above the gate.
+// old full-rescan mutant above the gate. A timed leg under the minimum
+// doubles the tape and times both legs again (R5 lane CI-FLAKE,
+// tests/ratio_timing.hpp).
 #include <pineforge/native_host.hpp>
 
+#include "ratio_timing.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -122,7 +127,8 @@ double best_of_three(int live, const std::vector<Bar>& bars) {
 }
 
 constexpr int kInitialBars = 3000;
-constexpr int kMaxCalibratedBars = 384000;
+// The tape grows to at most this many bars; an Apple M4 Max needs 192,000.
+constexpr int kMaxCalibratedBars = 1536000;
 // The original 100 ms floor was enough for a single run but one loaded-Mac
 // repetition still let the best-of-three ratio escape. A 250 ms floor keeps
 // the process-CPU sample away from that scheduling edge without changing the
@@ -132,17 +138,19 @@ constexpr int kLive = 10;
 constexpr double kShapeBound = 8.0;
 
 void matching_is_linear_in_the_live_requests() {
-    int bars_count = kInitialBars;
+    int bars_count = ratio_timing::presized(
+        kInitialBars, kMaxCalibratedBars, kMinLegSeconds,
+        [](int count) { return best_of_three(kLive, tape(count)); });
     double small = 0.0;
-    while (true) {
-        const std::vector<Bar> bars = tape(bars_count);
+    double large = 0.0;
+    const auto time_legs = [&](int count) {
+        const std::vector<Bar> bars = tape(count);
         small = best_of_three(kLive, bars);
-        if (small >= kMinLegSeconds || bars_count >= kMaxCalibratedBars / 2) break;
-        bars_count *= 2;
-    }
-    const std::vector<Bar> bars = tape(bars_count);
-    small = best_of_three(kLive, bars);
-    const double large = best_of_three(kLive * 4, bars);
+        large = best_of_three(kLive * 4, bars);
+        return std::min(small, large);
+    };
+    ratio_timing::time_measurable_legs(bars_count, kMaxCalibratedBars, kMinLegSeconds,
+                                       time_legs);
     const double ratio = small > 0.0 ? large / small : 0.0;
     std::printf("resting orders: %d bars, %d live %.4fs, %d live %.4fs, ratio %.2f "
                 "(bound %.1f)\n", bars_count, kLive, small, kLive * 4, large, ratio,

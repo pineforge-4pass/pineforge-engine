@@ -21,13 +21,18 @@
 // least 100 ms of CPU; the large leg is four times that size. The original
 // fixed 6,000-bar leg was only 20--35 ms on this Mac and the hosted Release
 // failure measured 6.01 at that size. Keeping the bound at 5 after sizing the
-// legs preserves the old mutant margin (the scan is still well above 5).
+// legs preserves the old mutant margin (the scan is still well above 5). A
+// timed leg under the minimum doubles the bars and times both legs again (R5
+// lane CI-FLAKE, tests/ratio_timing.hpp).
 // What the runs produce is pinned elsewhere (test_adapter_lookup_index_
 // witness) and compared bit for bit against the reference scans
 // (test_adapter_lookup_index_differential); here only the finished state is
 // checked, so a leg that failed or traded less cannot pass as cheap.
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "ratio_timing.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -156,26 +161,30 @@ Leg best_of_five(Workload workload, const std::vector<Bar>& bars) {
 }
 
 constexpr int kInitialBars = 6000;
-constexpr int kMaxCalibratedBars = 96000;
+// The small leg grows to at most this many bars; an Apple M4 Max needs 48,000.
+constexpr int kMaxCalibratedBars = 384000;
 constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 5.0;
 
 int calibrated_bars(Workload workload) {
-    int bars = kInitialBars;
-    while (true) {
-        const Leg sample = best_of_five(workload, tape(bars));
-        if (sample.seconds >= kMinLegSeconds || bars >= kMaxCalibratedBars / 2)
-            return bars;
-        bars *= 2;
-    }
+    return ratio_timing::presized(
+        kInitialBars, kMaxCalibratedBars, kMinLegSeconds,
+        [&](int bars) { return best_of_five(workload, tape(bars)).seconds; });
 }
 
 void cost_is_linear_in_the_bars(Workload workload, const char* name) {
-    const int bars = gated() ? calibrated_bars(workload) : kInitialBars / 4;
-    const std::vector<Bar> small_tape = tape(bars);
-    const std::vector<Bar> large_tape = tape(bars * 4);
-    const Leg small = best_of_five(workload, small_tape);
-    const Leg large = best_of_five(workload, large_tape);
+    int bars = gated() ? calibrated_bars(workload) : kInitialBars / 4;
+    Leg small;
+    Leg large;
+    const auto time_legs = [&](int count) {
+        small = best_of_five(workload, tape(count));
+        large = best_of_five(workload, tape(count * 4));
+        return std::min(small.seconds, large.seconds);
+    };
+    if (gated())
+        ratio_timing::time_measurable_legs(bars, kMaxCalibratedBars, kMinLegSeconds, time_legs);
+    else
+        time_legs(bars);
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
     std::printf("%s: %d bars %.4fs (%d trades), %d bars %.4fs (%d trades), ratio %.2f "
                 "(bound %.1f)\n", name, bars, small.seconds, small.trades, bars * 4,

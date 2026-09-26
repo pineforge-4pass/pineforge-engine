@@ -77,7 +77,7 @@
 // doubles until its best timed sample reaches kMinLegSeconds; the large leg
 // is four times that size, so a linear leg measures about four on any machine
 // while a super-linear one reaches the size sooner and still grows by its own
-// power.
+// power (the doubling is tests/ratio_timing.hpp's since R5 lane CI-FLAKE).
 // Two mutants of the product (Mac, Release): K1 holding every cancelled leg
 // again (V19-D step 7 undone) stopped the doubling at 4,000 bars (0.137 s) and
 // measured 20.25 at 4,000 / 16,000 bars, 7,999 and 31,999 rows retained; a
@@ -122,9 +122,11 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "../src/native_execution_consumer.hpp"
+#include "ratio_timing.hpp"
 
 #include <sys/resource.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -351,6 +353,7 @@ constexpr double kShapeBound = 5.0;
 // keeps a pathological mutant from turning a normal ctest row into an
 // unbounded run.
 constexpr double kMinLegSeconds = 0.1;
+// The small leg grows to at most this many bars; an Apple M4 Max needs 128,000.
 constexpr int kMaxCalibratedBars = 512000;
 // What a run can still hold when it ends: its live requests, the rows the
 // current position cycle still reads, and the last bar's retirements.
@@ -388,21 +391,21 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
     Leg small;
     Leg large;
-    while (true) {
-        const std::vector<Bar> small_tape = tape(bars, step);
-        const std::vector<Bar> large_tape = tape(bars * 4, step);
+    const auto time_legs = [&](int count) {
+        const std::vector<Bar> small_tape = tape(count, step);
+        const std::vector<Bar> large_tape = tape(count * 4, step);
         if (short_bars) {
             interleaved_best(workload, small_tape, large_tape, recording, small, large);
         } else {
             small = best_of(workload, small_tape, recording);
             large = best_of(workload, large_tape, recording);
         }
-        if (!gated() || small.seconds >= kMinLegSeconds
-            || bars >= kMaxCalibratedBars / 2) {
-            break;
-        }
-        bars *= 2;
-    }
+        return std::min(small.seconds, large.seconds);
+    };
+    if (gated())
+        ratio_timing::time_measurable_legs(bars, kMaxCalibratedBars, kMinLegSeconds, time_legs);
+    else
+        time_legs(bars);
     const double ratio = small.seconds > 0.0 ? large.seconds / small.seconds : 0.0;
     std::printf("%s (%s): %d bars %.4fs (%d trades, %zu rows retained, %zu roster members), "
                 "%d bars %.4fs (%d trades, %zu rows retained, %zu roster members), "

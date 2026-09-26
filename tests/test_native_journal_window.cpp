@@ -25,6 +25,8 @@
 //      retired event, and a successor that retained the ride answers 0.
 #include <pineforge/native_order.hpp>
 
+#include "ratio_timing.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -427,22 +429,29 @@ double chain_queries_seconds(int chain, int queries) {
     return seconds;
 }
 
+// The queries double until a leg has at least 100 ms of CPU; a timed leg that
+// still comes in under it doubles them and times both legs again (R5 lane
+// CI-FLAKE, tests/ratio_timing.hpp).
 void membership_is_not_a_chain_walk() {
     constexpr double kMinLegSeconds = 0.1;
     constexpr int kInitialQueries = 2048;
-    constexpr int kMaxQueries = 16 * 1024 * 1024;
-    int queries = kInitialQueries;
-    while (chain_queries_seconds(400, queries) < kMinLegSeconds
-           && queries < kMaxQueries / 2) {
-        queries *= 2;
-    }
+    // The queries grow to at most this many; an Apple M4 Max needs 8,388,608.
+    constexpr int kMaxQueries = 128 * 1024 * 1024;
+    int queries = ratio_timing::presized(
+        kInitialQueries, kMaxQueries, kMinLegSeconds,
+        [](int count) { return chain_queries_seconds(400, count); });
     // Best of three at each size, so a scheduling hiccup does not decide it.
     double small = 1e9;
     double large = 1e9;
-    for (int i = 0; i < 3; ++i) {
-        small = std::min(small, chain_queries_seconds(400, queries));
-        large = std::min(large, chain_queries_seconds(1600, queries));
-    }
+    ratio_timing::time_measurable_legs(queries, kMaxQueries, kMinLegSeconds, [&](int count) {
+        small = 1e9;
+        large = 1e9;
+        for (int i = 0; i < 3; ++i) {
+            small = std::min(small, chain_queries_seconds(400, count));
+            large = std::min(large, chain_queries_seconds(1600, count));
+        }
+        return std::min(small, large);
+    });
     const double ratio = large / std::max(small, 1e-9);
     std::printf("  %d chain-membership queries, 400 -> 1600 replaces: %.6f s -> %.6f s "
                 "(x%.2f for 4x, bound x5)\n", queries, small, large, ratio);

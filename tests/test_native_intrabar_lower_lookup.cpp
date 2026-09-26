@@ -24,7 +24,9 @@
 // quadratic one. The sample is process CPU time (std::clock), which the
 // runtime-budget ruling (A40 rev 7) found load-robust. RATIO-HARDEN repeats
 // the same 4,000- and 16,000-bar legs until the best small leg has 100 ms of
-// CPU, retaining the x6 bound and the mutant margin.
+// CPU, retaining the x6 bound and the mutant margin. A timed leg that still
+// comes in under it doubles the repeats and times both legs again (R5 lane
+// CI-FLAKE, tests/ratio_timing.hpp).
 //
 // The value half pins what the selection feeds -- the driver points, the
 // fills and every hash over them -- for three feeds: a lower feed that tiles
@@ -41,6 +43,9 @@
 // them. Rebuild them the same way; never edit one by hand to make a run pass.
 #include <pineforge/native_host.hpp>
 
+#include "ratio_timing.hpp"
+
+#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -233,23 +238,25 @@ double best_of_three(int count, int repeats) {
 }
 
 constexpr int kBars = 4000;
-constexpr int kMaxRepeats = 256;
+// The repeats grow to at most this many; an Apple M4 Max needs 64.
+constexpr int kMaxRepeats = 1024;
 constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 6.0;
 
 int calibrated_repeats() {
-    int repeats = 1;
-    while (best_of_three(kBars, repeats) < kMinLegSeconds
-           && repeats < kMaxRepeats / 2) {
-        repeats *= 2;
-    }
-    return repeats;
+    return ratio_timing::presized(1, kMaxRepeats, kMinLegSeconds,
+                                  [](int repeats) { return best_of_three(kBars, repeats); });
 }
 
 void the_lower_feed_lookup_is_linear_in_the_run() {
-    const int repeats = calibrated_repeats();
-    const double small = best_of_three(kBars, repeats);
-    const double large = best_of_three(kBars * 4, repeats);
+    int repeats = calibrated_repeats();
+    double small = 0.0;
+    double large = 0.0;
+    ratio_timing::time_measurable_legs(repeats, kMaxRepeats, kMinLegSeconds, [&](int count) {
+        small = best_of_three(kBars, count);
+        large = best_of_three(kBars * 4, count);
+        return std::min(small, large);
+    });
     const double ratio = small > 0.0 ? large / small : 0.0;
     std::printf("lower-feed run: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
                 "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large,

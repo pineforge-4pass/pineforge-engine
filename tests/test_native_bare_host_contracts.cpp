@@ -9,6 +9,8 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/native_toolkit.hpp>
 
+#include "ratio_timing.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -537,7 +539,10 @@ void owned_excursion_is_recorded_verbatim() {
 // re-walks the 10 000 path bars at every read measured about 40x when this row
 // was written and 440-460x on the INT17 tree. RATIO-HARDEN repeats the fixed
 // 2,000-bar legs until the cheaper read-once leg has at least 100 ms of CPU;
-// the x20 bound stays in place so the old fold mutant still fails.
+// the x20 bound stays in place so the old fold mutant still fails. A timed leg
+// under that minimum doubles the repeats and times both legs again (R5 lane
+// CI-FLAKE, tests/ratio_timing.hpp): macOS Release CI had timed the read-once
+// leg at 0.0991 s with the repeats a 0.1 s calibration sample chose.
 struct LowerPathReader final : NativeStrategyHost {
     bool read_each_bar = false;
     std::uint64_t last_read = 0;
@@ -593,15 +598,19 @@ ReadCost lower_path_read_cost(int script_bars, bool read_each_bar, int repeats) 
 
 void continuation_read_is_linear_in_the_feed() {
     constexpr int kScriptBars = 2000;
-    constexpr int kMaxRepeats = 256;
+    // The repeats grow to at most this many; an Apple M4 Max needs 64.
+    constexpr int kMaxRepeats = 1024;
     constexpr double kMinLegSeconds = 0.1;
-    int repeats = 1;
-    while (lower_path_read_cost(kScriptBars, false, repeats).seconds < kMinLegSeconds
-           && repeats < kMaxRepeats / 2) {
-        repeats *= 2;
-    }
-    const ReadCost every_bar = lower_path_read_cost(kScriptBars, true, repeats);
-    const ReadCost once = lower_path_read_cost(kScriptBars, false, repeats);
+    int repeats = ratio_timing::presized(1, kMaxRepeats, kMinLegSeconds, [&](int count) {
+        return lower_path_read_cost(kScriptBars, false, count).seconds;
+    });
+    ReadCost every_bar;
+    ReadCost once;
+    ratio_timing::time_measurable_legs(repeats, kMaxRepeats, kMinLegSeconds, [&](int count) {
+        every_bar = lower_path_read_cost(kScriptBars, true, count);
+        once = lower_path_read_cost(kScriptBars, false, count);
+        return std::min(every_bar.seconds, once.seconds);
+    });
     const double ratio = every_bar.seconds / std::max(once.seconds, 1e-6);
     std::printf("  %d bars x%d over a lower-timeframe path: continuation read every bar %.4f s,"
                 " read once %.4f s, ratio %.2f (bound x20)\n", kScriptBars, repeats,

@@ -23,9 +23,15 @@
 // is process CPU time (std::clock), which is what the A40 rev 7 runtime-budget
 // ruling found load-robust, and each leg is the best of three. RATIO-HARDEN
 // repeats the 1,500-bar workload as needed so each timed leg has at least
-// 100 ms of CPU; the bar ratio and the x8 bound are unchanged.
+// 100 ms of CPU; the bar ratio and the x8 bound are unchanged. A timed leg
+// under that minimum doubles the repeats and times both legs again (R5 lane
+// CI-FLAKE, tests/ratio_timing.hpp): macOS Debug CI had timed 0.0964 s at the
+// repeats a 0.1 s calibration sample chose, and failed the row.
 #include <pineforge/native_host.hpp>
 
+#include "ratio_timing.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -118,22 +124,24 @@ double best_of_three(int count, int repeats) {
 }
 
 constexpr int kBars = 1500;
-constexpr int kMaxRepeats = 256;
+// The repeats grow to at most this many; an Apple M4 Max needs 128.
+constexpr int kMaxRepeats = 2048;
 constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 8.0;
 
 int calibrated_repeats() {
-    int repeats = 1;
-    while (best_of_three(kBars, repeats) < kMinLegSeconds
-           && repeats < kMaxRepeats / 2) {
-        repeats *= 2;
-    }
-    return repeats;
+    return ratio_timing::presized(1, kMaxRepeats, kMinLegSeconds,
+                                  [](int repeats) { return best_of_three(kBars, repeats); });
 }
 
 void the_per_bar_read_is_linear_in_the_bar_count(int repeats) {
-    const double small = best_of_three(kBars, repeats);
-    const double large = best_of_three(kBars * 4, repeats);
+    double small = 0.0;
+    double large = 0.0;
+    ratio_timing::time_measurable_legs(repeats, kMaxRepeats, kMinLegSeconds, [&](int count) {
+        small = best_of_three(kBars, count);
+        large = best_of_three(kBars * 4, count);
+        return std::min(small, large);
+    });
     const double ratio = small > 0.0 ? large / small : 0.0;
     std::printf("continuation digest cost: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
                 "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large, ratio,
