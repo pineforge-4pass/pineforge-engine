@@ -157,7 +157,17 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
                                              syminfo_.session),
                   syminfo_.timezone, syminfo_.session, chart_period)
             : chart_bars[i].timestamp;
-        if (!chart_route_keys.empty() && key <= chart_route_keys.back()) {
+        // A calendar bar may share its covered-session key with the native
+        // bar after it: an NSE Muhurat session held after the regular close
+        // (Sunday 2023-11-12 18:15 IST, Monday 2022-10-24 18:15 IST on the
+        // nifty-1d lane) covers the NEXT regular session. The calendar route
+        // below partitions by the native timestamps, which are strictly
+        // increasing (checked above), so the two keep their own slices; only
+        // a key that runs backwards is refused there. Intraday keys are the
+        // routing labels themselves and stay strictly increasing.
+        if (!chart_route_keys.empty()
+            && (calendar_chart ? key < chart_route_keys.back()
+                               : key <= chart_route_keys.back())) {
             throw std::runtime_error(
                 "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed");
         }

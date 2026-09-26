@@ -22,7 +22,10 @@
 //      "1" site beside them is served as before.
 //   2. 1D chart + 1m auxiliary slice: the same for "5S".
 //   3. single 1m input aggregated to a 15m script: the same for "5S".
-//   4. a 15m chart fed alone (input == script) still refuses "5S" and "5" with
+//   4. NSE:NIFTY 1D + 1m auxiliary slice across an after-close Muhurat
+//      session: each native bar keeps its own slice (the split feed used to
+//      stop on the Muhurat bar's duplicate trading-period identity).
+//   5. a 15m chart fed alone (input == script) still refuses "5S" and "5" with
 //      the unchanged message.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
@@ -192,6 +195,52 @@ void test_single_minute_input_aggregated_chart() {
     report("single 1m input, 15m script", before);
 }
 
+// The nifty-1d lane's chart feed (TradingView's own NSE:NIFTY 1D bars) holds
+// Muhurat sessions after the regular close -- Sunday 2023-11-12 18:15 IST,
+// Monday 2022-10-24 18:15 IST. Keyed by the session it covers, such a bar
+// claims the NEXT regular session's key, the key of the native bar after it.
+// The native bars are the partition (each routes [its timestamp, the next
+// one's)), so both keep their own slices; the split feed used to stop on the
+// duplicate identity -- where karmasantosh773-growwithcare-final-5s-master-
+// strategy on nifty-1d stopped once its "5S" sites stopped refusing.
+void test_after_close_muhurat_keeps_its_own_slice() {
+    const int before = g_failures;
+    constexpr int64_t friday = 1699587900000;   // 2023-11-10 09:15 IST
+    constexpr int64_t muhurat = 1699793100000;  // 2023-11-12 18:15 IST, Sunday
+    constexpr int64_t monday = 1699847100000;   // 2023-11-13 09:15 IST
+    const Bar chart[] = {
+        {100.0, 160.0, 90.0, 150.0, 1000.0, friday},
+        {200.0, 260.0, 190.0, 250.0, 2000.0, muhurat},
+        {300.0, 360.0, 290.0, 350.0, 3000.0, monday},
+    };
+    const Bar aux[] = {
+        {10.0, 11.5, 9.5, 11.0, 10.0, friday},
+        {11.0, 12.5, 10.5, 12.0, 11.0, friday + kMinute},
+        {20.0, 21.5, 19.5, 21.0, 20.0, muhurat},
+        {21.0, 22.5, 20.5, 22.0, 21.0, muhurat + kMinute},
+        {30.0, 31.5, 29.5, 31.0, 30.0, monday},
+        {31.0, 32.5, 30.5, 32.0, 31.0, monday + kMinute},
+    };
+    FinerProbe probe({{"1", false, false}, {"5S", false, false}});
+    strategy_set_syminfo_timezone(static_cast<pf_strategy_t>(&probe), "Asia/Kolkata");
+    strategy_set_syminfo_session(static_cast<pf_strategy_t>(&probe), "0915-1530");
+    CHECK(strategy_set_aux_security_feed(
+              static_cast<pf_strategy_t>(&probe),
+              reinterpret_cast<const pf_bar_t*>(aux), 6, "1") == 0);
+    probe.run(chart, 3, "1D", "1D", false, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(probe.last_error().empty());
+    if (!probe.last_error().empty()) std::printf("  error: %s\n", probe.last_error().c_str());
+    CHECK(probe.at_chart_bar.size() == 3);
+    if (probe.at_chart_bar.size() == 3) {
+        CHECK(probe.at_chart_bar[0][0] == 12.0);
+        CHECK(probe.at_chart_bar[1][0] == 22.0);
+        CHECK(probe.at_chart_bar[2][0] == 32.0);
+    }
+    CHECK(probe.dispatches[1] == 0);
+    CHECK(all_na(probe.at_chart_bar, 1));
+    report("nifty 1D, after-close Muhurat", before);
+}
+
 void test_chart_without_intrabar_bars_still_refuses() {
     const int before = g_failures;
     const Bar chart[] = {
@@ -221,6 +270,7 @@ int main() {
     test_split_feed_intraday_chart();
     test_split_feed_daily_chart();
     test_single_minute_input_aggregated_chart();
+    test_after_close_muhurat_keeps_its_own_slice();
     test_chart_without_intrabar_bars_still_refuses();
     std::printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
     return g_failures == 0 ? 0 : 1;
