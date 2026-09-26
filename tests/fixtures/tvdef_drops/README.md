@@ -62,13 +62,16 @@ declined it and cancelled the bracket.
 | `tdd-r3-reversal-voids-global-exit` | 6 | nothing (v6: percent_of_equity, 100) | each reversed side exits later by its own exit, never by the prior side's; margin calls trim the 100% shorts on their entry bars | `38b5fe54c5bc6865f516dcc2394d961fbc69d75693424fcb14f875f5dbad3374` |
 | `tdd-r3-reversal-voids-global-exit-half` | 4 | `default_qty_type = strategy.percent_of_equity, default_qty_value = 50` | the same, without margin calls | `99291b37185dedb19d5675e294428f2db7b05ffd8143580f61dc19033018f94b` |
 | `tdd-r3-reversal-voids-global-exit-fixed1` | 4 | `default_qty_type = strategy.fixed, default_qty_value = 1` | the same timing at one contract | `c4856aabf8d16a69f33a3699de44a16407b82fab24520fd0ecae26788347966f` |
+| `tdd-r3b-reversal-voids-right-side-exit` | 7 | nothing (v6: percent_of_equity, 100) | the reversal-bar exit, placed once with levels on the new side's correct side (A: stop 1540 / limit 1570 for the long; B: stop 1490 / limit 1440 for the short), is void too: both ride to the cleanup; C's exit, placed with an entry from flat, closes it at 1640 | `bd15a8cb437bbd2d923923e7a6e5bf18d7947af16120b4ce9d4a5f1b0230d151` |
 
 While a side is held the script re-issues a `from_entry=""` exit for it every
 bar (`strategy.position_avg_price` -15 / +15 for a short, +20 / -20 for a
 long). On the bar a MARKET entry for the other side is placed, that exit is
 issued again after the entry, still for the held side; at the reversal's open
 fill its levels are marketable against the new side. TradingView never applies
-it there or later. Under a fixed default the lowering batched the reversal
+it there or later, and `tdd-r3b-reversal-voids-right-side-exit` shows the same
+for an exit whose levels suit the new side: the exit belongs to the position it
+was placed under. Under a fixed default the lowering batched the reversal
 behind the bar's commands, so the kernel bound the exit to the held book and
 cancelled it with that book; under a percent default the reversal reached the
 kernel first and the exit bound to the new position and closed it at its

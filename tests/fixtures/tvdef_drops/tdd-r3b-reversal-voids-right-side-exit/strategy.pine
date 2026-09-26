@@ -1,0 +1,32 @@
+//@version=6
+strategy("TVDEF-DROPS R3b reversal and a right-side global exit", overlay=true)
+
+// Lane TVDEF-DROPS, rule R3's scope. The order size is Pine v6's default.
+// On the bar a MARKET entry reverses a held side, a from_entry="" exit is
+// placed once, after the entry, while the old side is still held -- with
+// levels on the correct side for the NEW position (A: stop below / limit
+// above a long; B: stop above / limit below a short). C places the same kind
+// of exit together with an entry from flat.
+
+if time == timestamp("UTC", 2025, 4, 8, 0, 0)
+    strategy.entry("A-S", strategy.short, comment="A seed short")
+if time == timestamp("UTC", 2025, 4, 8, 0, 15)
+    strategy.entry("A-L", strategy.long, comment="A reverse long")
+    strategy.exit("A-X", from_entry="", stop=1540.0, limit=1570.0, comment="A right-side exit")
+
+if time == timestamp("UTC", 2025, 4, 9, 0, 0)
+    strategy.entry("B-L", strategy.long, comment="B seed long")
+if time == timestamp("UTC", 2025, 4, 9, 0, 15)
+    strategy.entry("B-S", strategy.short, comment="B reverse short")
+    strategy.exit("B-X", from_entry="", stop=1490.0, limit=1440.0, comment="B right-side exit")
+
+if time == timestamp("UTC", 2025, 4, 10, 0, 0)
+    strategy.entry("C-L", strategy.long, comment="C flat long")
+    strategy.exit("C-X", from_entry="", stop=1640.0, limit=1680.0, comment="C flat-born exit")
+
+cleanup = time == timestamp("UTC", 2025, 4, 8, 2, 0) or
+     time == timestamp("UTC", 2025, 4, 9, 2, 0) or
+     time == timestamp("UTC", 2025, 4, 10, 2, 0)
+if cleanup
+    strategy.cancel_all()
+    strategy.close_all(comment="cleanup")

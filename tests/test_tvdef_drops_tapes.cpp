@@ -18,9 +18,10 @@
  *       at the reversal's open.
  *   R3  A from_entry="" exit placed while a position is open belongs to that
  *       position: when a MARKET entry reverses it, TradingView never applies
- *       the exit to the new side. Under a non-fixed default the lowered
- *       reversal reached the kernel ahead of the bar's re-issued exit, which
- *       then bound to the new position and closed it at its entry open.
+ *       the exit to the new side, whatever side of the new position its
+ *       levels are on. Under a non-fixed default the lowered reversal reached
+ *       the kernel ahead of the bar's re-issued exit, which then bound to the
+ *       new position and closed it at its entry open.
  *
  * Each row replays TradingView's own tape of a synthetic probe
  * (tests/fixtures/tvdef_drops, lab tv exports on BINANCE:ETHUSDT.P 15) through
@@ -175,7 +176,7 @@ Tape tape_trades(const std::string& tape, std::int64_t end_ms) {
     return out;
 }
 
-enum class Probe { R1, R2, R3 };
+enum class Probe { R1, R2, R3, R3b };
 
 // The probes, as their generated TUs lower them (fixtures/.../strategy.pine).
 class ProbeHost final : public source::PineStrategyHost {
@@ -192,6 +193,7 @@ public:
         case Probe::R1: stop_reversal(t); break;
         case Probe::R2: explicit_reversal_bracket(t); break;
         case Probe::R3: reversal_voids_global_exit(t); break;
+        case Probe::R3b: reversal_voids_right_side_exit(t); break;
         }
     }
 
@@ -241,6 +243,29 @@ private:
             strategy_exit("XL", "", avg + 20.0, avg - 20.0, kNaN, kNaN, kNaN, 100.0, "long exit",
                           kNaN, "", kNaN, kNaN);
         if (t == at(8, 2, 0) || t == at(9, 2, 0)) cleanup();
+    }
+
+    // The reversal-bar exit once, its levels on the NEW side's correct side;
+    // C places the same kind of exit together with an entry from flat.
+    void reversal_voids_right_side_exit(std::int64_t t) {
+        if (t == at(8, 0, 0)) strategy_entry("A-S", false, kNaN, kNaN, kNaN, "A seed short");
+        if (t == at(8, 0, 15)) {
+            strategy_entry("A-L", true, kNaN, kNaN, kNaN, "A reverse long");
+            strategy_exit("A-X", "", 1570.0, 1540.0, kNaN, kNaN, kNaN, 100.0, "A right-side exit",
+                          kNaN, "", kNaN, kNaN);
+        }
+        if (t == at(9, 0, 0)) strategy_entry("B-L", true, kNaN, kNaN, kNaN, "B seed long");
+        if (t == at(9, 0, 15)) {
+            strategy_entry("B-S", false, kNaN, kNaN, kNaN, "B reverse short");
+            strategy_exit("B-X", "", 1440.0, 1490.0, kNaN, kNaN, kNaN, 100.0, "B right-side exit",
+                          kNaN, "", kNaN, kNaN);
+        }
+        if (t == at(10, 0, 0)) {
+            strategy_entry("C-L", true, kNaN, kNaN, kNaN, "C flat long");
+            strategy_exit("C-X", "", 1680.0, 1640.0, kNaN, kNaN, kNaN, 100.0, "C flat-born exit",
+                          kNaN, "", kNaN, kNaN);
+        }
+        if (t == at(8, 2, 0) || t == at(9, 2, 0) || t == at(10, 2, 0)) cleanup();
     }
 
     Probe probe_;
@@ -318,6 +343,8 @@ int main() {
          config(kPercent, 50.0), 4},
         {"tdd-r3-reversal-voids-global-exit-fixed1", Probe::R3, "fixed, 1",
          config(kFixed, 1.0), 4},
+        {"tdd-r3b-reversal-voids-right-side-exit", Probe::R3b,
+         "nothing (v6: percent_of_equity, 100)", config(kPercent, 100.0), 7},
     };
 
     std::map<std::string, Tape> tapes;
@@ -383,6 +410,23 @@ int main() {
                 CHECK(tape.signals[i] == (std::get<1>(tape.trades[i]) ? "long exit" : "short exit"));
             }
         }
+        // ...nor by one whose levels suit the new side: the reversal-bar exit
+        // is void, the position rides to the cleanup; placed from flat, the
+        // same kind of exit is the new position's.
+        const Tape& right = tapes["tdd-r3b-reversal-voids-right-side-exit"];
+        CHECK(right.trades.size() == 7);
+        std::size_t cleaned = 0, flat_born = 0;
+        for (std::size_t i = 0; i < right.trades.size(); ++i) {
+            const bool opened_by_reversal = std::get<0>(right.trades[i]) == at(8, 0, 30)
+                || std::get<0>(right.trades[i]) == at(9, 0, 30);
+            if (opened_by_reversal && right.signals[i] != "Margin call") {
+                CHECK(right.signals[i] == "cleanup");
+                ++cleaned;
+            }
+            if (right.signals[i] == "C flat-born exit") ++flat_born;
+        }
+        CHECK(cleaned == 2);
+        CHECK(flat_born == 1);
     }
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
