@@ -238,7 +238,8 @@ C_V1_EXCLUSIONS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
         ("@declarations", r"\bstrategy_(?:native_)?(?:trace|declare_\w*hook)\w*"),)),
     "library_facilities": ("native_run_spec.hpp", "std::uint64_t native_run_spec_digest(", (
         ("@declarations", r"\b\w*(?:spec_digest|fx_curve_digest|validate_native|preflight_native"
-                          r"|parse_timeframe|parse_session|quantity_on_grid)\w*"),)),
+                          r"|parse_timeframe|parse_session|quantity_on_grid|civil_date|civil_days"
+                          r"|pairing_aggregates)\w*"),)),
     "toolkit": ("native_toolkit.hpp", "inline BracketReceipt submit_bracket", (
         ("@declarations", r"\b\w*(?:bracket|order_book)\w*"),)),
 }
