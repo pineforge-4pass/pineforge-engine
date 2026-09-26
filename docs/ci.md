@@ -500,8 +500,11 @@ to a wording the page held before, must be named by the commit's message: by the
 lane label or the hash of the commit that introduced it, by six consecutive
 words of it, or by the key of its table row (`OL7`). A fresh rewrite and a
 re-anchor need no name. It judges the non-merge commits since the merge base
-with `main`; with no `main` ref (the lab's remote hosts) it walks back from
-`HEAD`, and a commit whose tree predates the gate is never judged.
+with `main`; with no `main` ref (the lab's remote hosts) since the newest
+ancestor whose subject ends in a pull request number (`... (#N)`, the commit a
+merged pull request left on `main`, whose branch was judged commit by commit
+before it merged), else it walks back from `HEAD`; a commit whose tree predates
+the gate is never judged.
 `--base R --head R [--message-file F]` judges one replayed change instead:
 lane B-C-SURFACE's pages replayed onto `db98990c` (the rebase that dropped
 V19-D's `keep_handle` row and put D2-C's runtime-block wording back) fail it,

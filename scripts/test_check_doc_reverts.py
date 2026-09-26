@@ -7,8 +7,10 @@ script (so the gate binds them), writes a page, and drives the real
 and is passed once the commit's message names it by the introducing lane, by
 its commit's hash or by its own words; older text restored over newer text is
 a revert and fails the same way; a fresh rewrite and a re-anchor pass without
-a name; a commit that predates the gate is not judged; and the replay mode the
-audit's acceptance uses reads only the message it is given.
+a name; a commit that predates the gate is not judged; a checkout with no main
+ref starts after the newest merged pull request, as CI's merge base does, and
+still judges what came after it; and the replay mode the audit's acceptance uses
+reads only the message it is given.
 
 R5 lane H-DOCGATES (AUDIT4-opus X13, docs-a GAP-2).
 """
@@ -130,6 +132,15 @@ class MustFail(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn('deferred form of a request', out)
 
+    def test_a_deletion_after_a_merged_pull_request_fails(self) -> None:
+        with repo() as r:
+            r.commit(BASE_PAGE, 'docs: the guide')
+            r.commit(with_keep_handle(), 'Docs: keep_handle on the guide (R5 lane V19-D) (#12)')
+            r.commit(BASE_PAGE, 'docs: tidy the guide')           # no main ref: walk mode
+            code, out = r.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('unnamed deletion', out)
+
     def test_replay_reads_only_the_message_it_is_given(self) -> None:
         with repo() as r:
             base, added = self.setup_history(r)
@@ -180,6 +191,24 @@ class MustPass(unittest.TestCase):
                      + '\nThe host reads `x` engine.hpp:40 for the price.\n', 'docs: wording')
             code, out = r.run('--base', base)
             self.assertEqual(code, 0, out)
+
+    def test_a_merged_pull_request_is_the_base_without_a_main_ref(self) -> None:
+        """A squash merge on main carries a whole branch's deletions under the pull
+        request's title; its branch was judged commit by commit before it merged, so
+        a checkout with no main ref (a lab remote host) starts after it, as CI's merge
+        base with main does -- and still judges what came after."""
+        with repo() as r:
+            r.commit(BASE_PAGE, 'docs: the guide', gate=False)
+            r.commit(with_keep_handle(), 'Docs: keep_handle (R5 lane V19-D)')
+            squash = r.commit(BASE_PAGE, 'INT26: wave H and the late picks (#290)')
+            r.commit(BASE_PAGE + '\nA new sentence the next lane writes on the guide.\n',
+                     'Docs: the next lane')
+            code, out = r.run()
+            self.assertEqual(code, 0, out)
+            self.assertIn('1 commits since ' + squash[:guard.SHA_CHARS], out)
+            code, out = r.run('--base', squash + '~1')             # the squash judged alone
+            self.assertEqual(code, 1, out)
+            self.assertIn('unnamed deletion', out)
 
     def test_a_commit_before_the_gate_is_not_judged(self) -> None:
         with repo() as r:
