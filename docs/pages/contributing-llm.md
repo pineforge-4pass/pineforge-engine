@@ -93,7 +93,7 @@ finding to report, not a step to take.
    `static_assert`s in `src/c_abi.cpp` pin the layouts — if one fails on your
    branch, find what changed in the C++ representation. Adding a runtime
    `PF_API` export means the implementation, the declaration,
-   `EXPECTED_RUNTIME` check_c_abi_runtime.py:28, the ctypes harnesses and the
+   `EXPECTED_RUNTIME` check_c_abi_runtime.py:29, the ctypes harnesses and the
    README table, all in one commit. *Enforced:*
    `scripts/check_c_abi_runtime.py`.
 
@@ -230,12 +230,12 @@ decision, and removing one is a regression:
 
 | Looks duplicated | Why both exist | Ruling of record |
 |---|---|---|
-| the kernel's price grid (`NativeRunSpec::price_grid`) and the adapter's own tick rules | TradingView quantizes per *order kind* — stop and limit legs on the quantized bar, the trail stop and the `calc_on_order_fills` cursors raw — and the kernel grid is one rule for the run. A per-kind mask would spell that inconsistency into the kernel. | ADR 0001 ruling table, row `price_grid`; design `native-feature-parity.md:527` |
-| the kernel's risk limits (`NativeRunSpec::risk`) and the adapter's `strategy.risk.*` | structurally, Pine's risk calls are per-bar statements that arrive after the spec has been digested; substantively, four measured divergences in the latch, the streak, the close price and the day key. | ADR 0001 ruling table, row `risk`; design `native-feature-parity.md:438` |
+| the kernel's price grid (`NativeRunSpec::price_grid`) and the adapter's own tick rules | TradingView quantizes per *order kind* — stop and limit legs on the quantized bar, the trail stop and the `calc_on_order_fills` cursors raw — and the kernel grid is one rule for the run. A per-kind mask would spell that inconsistency into the kernel. | ADR 0001 ruling table, row `price_grid`; design `native-feature-parity.md:532` |
+| the kernel's risk limits (`NativeRunSpec::risk`) and the adapter's `strategy.risk.*` | structurally, Pine's risk calls are per-bar statements that arrive after the spec has been digested; substantively, four measured divergences in the latch, the streak, the close price and the day key. | ADR 0001 ruling table, row `risk`; design `native-feature-parity.md:443` |
 | the kernel's `max_abs_units` and the adapter's `max_position_size` | the kernel caps the *resulting* book, TradingView gates the *live* book before the fill. | ADR 0001 ruling table, row `max_abs_units` |
 | the kernel's `max_open_lots` and Pine's `pyramiding` | the adapter counts *entries per cycle*, the kernel counts *physical lots*. Measured against TradingView the kernel's count is the closer one (14 of 15 tape scenarios against the adapter's 8, `tests/test_pyramiding_count_differential.cpp`): TradingView checks an entry once, at its first eligible point, against the trades then open. Lowered onto the cap, four corpus probes move away from TradingView, for want of that rule, so the adapter keeps its count. | ADR 0001 ruling table, row `max_open_lots` |
 | the kernel's margin model and the adapter's money admission | the adapter answers TradingView's ten-significant-digit admission itself and declares a *maintenance-only* model, because a positive initial requirement would decline openings TradingView takes and admit adds it refuses (measured both ways, `tests/test_adapter_margin_schedule_differential.cpp`). | ADR 0001 ruling table, row `initial_margin_fraction` |
-| `NativeRunSpec::report_open_position_at_end` and the adapter's range-end rows | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it: report *shape*, not a mark-to-market row. | ADR 0001 ruling table, row `report_open_position_at_end`; design `native-feature-parity.md:624` |
+| `NativeRunSpec::report_open_position_at_end` and the adapter's range-end rows | TradingView's range-end report re-marks the curve's last point and re-folds every extreme from it: report *shape*, not a mark-to-market row. | ADR 0001 ruling table, row `report_open_position_at_end`; design `native-feature-parity.md:629` |
 | `subscriptions` in the spec and the adapter's begin-time declaration | the adapter declares the same kernel subscriptions through a hook instead of the field, so a plain `request.security` site really is a kernel subscription. | ADR 0001 ruling table, row `subscriptions` |
 | the kernel's auxiliary feed and the adapter's auxiliary drive | the adapter's chart slice leaves pre-range coverage inert where the kernel folds by time, and evaluates after the bar's matching pass where the kernel delivers before it. | ADR 0001 ruling table, row `auxiliary_feed` |
 | `FeedTolerant` / `LegacyTolerant`, `NativeFeedTolerance` / `NativeLegacyTolerance` | deprecated spellings kept as exact aliases so existing hosts and the adapter compile unchanged; same value, same hash. | native_run_spec.hpp:311 and native_run_spec.hpp:353 |
@@ -252,7 +252,7 @@ policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
 through `NativeStrategyHost` native_host.hpp:845, or C through the
-`strategy_native_*` surface (`strategy_native_host_create_v1` native_c_api.h:2598).
+`strategy_native_*` surface (`strategy_native_host_create_v1` native_c_api.h:2658).
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be

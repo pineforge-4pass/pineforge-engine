@@ -65,7 +65,7 @@ Two consequences that are easy to miss:
 | Add a generic broker/matching capability | the kernel (`src/engine_*`, `src/native_*`) | make it opt-in, add its ADR 0001 ruling row, add a kernel-only test, and add an `examples/native/` host if the ruling is *native-only* |
 | Add or change a TA class | the right `ta_*.cpp` partition + its declaration in `<pineforge/ta.hpp>` | add a unit test against a hand-computed series |
 | Change what codegen may emit | the contract, not this repo's runtime | say so in the PR; the transpiler lives in `pineforge-codegen-oss` |
-| Add a runtime `PF_API` export | `src/c_abi.cpp` + `include/pineforge/pineforge.h` | update `EXPECTED_RUNTIME` check_c_abi_runtime.py:28, the ctypes harnesses, and the README symbol table — all in the same commit |
+| Add a runtime `PF_API` export | `src/c_abi.cpp` + `include/pineforge/pineforge.h` | update `EXPECTED_RUNTIME` check_c_abi_runtime.py:29, the ctypes harnesses, and the README symbol table — all in the same commit |
 | Add a C kernel-driving export | `src/native_c_host.cpp` + `include/pineforge/native_c_api.h` | update that header's COVERAGE block, and retire the 1.0 C boundary row the export closes; `scripts/check_native_c_api_surface.py` proves the block is exactly the host's public surface and fails on a closed gap |
 | Document something | `docs/pages/`, `README.md`, this file | cite the tree by `file:line`; the anchor guard checks that the line still holds the symbol |
 
