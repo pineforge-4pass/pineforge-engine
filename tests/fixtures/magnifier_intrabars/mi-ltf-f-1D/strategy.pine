@@ -1,0 +1,32 @@
+// R5 lane MAG-INTRABAR: TradingView's own "60" intrabars (the bar magnifier's intrabar
+// timeframe for a 1D chart in TradingView's table) inside two NYSE:F daily bars, read through
+// request.security_lower_tf and printed as order comments: open and close times (minutes since
+// the UTC day's start), then open, high, low, close -- the session's hourly grid at its edges.
+//@version=6
+strategy("mi-ltf-f-1D", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=100)
+t = request.security_lower_tf(syminfo.tickerid, "60", time)
+tc = request.security_lower_tf(syminfo.tickerid, "60", time_close)
+o = request.security_lower_tf(syminfo.tickerid, "60", open)
+h = request.security_lower_tf(syminfo.tickerid, "60", high)
+l = request.security_lower_tf(syminfo.tickerid, "60", low)
+c = request.security_lower_tf(syminfo.tickerid, "60", close)
+mins(a) =>
+    out = array.new_float()
+    for v in a
+        array.push(out, (v % 86400000) / 60000)
+    out
+show(tag) =>
+    strategy.entry(tag + "n", strategy.long, comment = tag + " n=" + str.tostring(array.size(t)) + " t" + str.tostring(time / 1000) + " tc" + str.tostring(time_close / 1000) + " O" + str.tostring(open) + " H" + str.tostring(high) + " L" + str.tostring(low) + " C" + str.tostring(close))
+    strategy.entry(tag + "t", strategy.long, comment = tag + "t" + str.tostring(mins(t)))
+    strategy.entry(tag + "e", strategy.long, comment = tag + "e" + str.tostring(mins(tc)))
+    strategy.entry(tag + "o", strategy.long, comment = tag + "o" + str.tostring(o))
+    strategy.entry(tag + "h", strategy.long, comment = tag + "h" + str.tostring(h))
+    strategy.entry(tag + "l", strategy.long, comment = tag + "l" + str.tostring(l))
+    strategy.entry(tag + "c", strategy.long, comment = tag + "c" + str.tostring(c))
+if year == 2025 and month == 10 and dayofmonth == 7
+    show("b0")
+if year == 2025 and month == 10 and dayofmonth == 8
+    show("b1")
+if strategy.position_size > 0 and bar_index > strategy.opentrades.entry_bar_index(0) + 1
+    strategy.close_all(comment = "done")

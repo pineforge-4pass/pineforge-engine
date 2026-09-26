@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F4 level-w1 bstop long",
+  "slug": "pa3-f4-level-w1-bstop-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:50:54.530Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "b2fb5a82fc280858b4ad9f51b6a2b3094fc22a47610e423a5b5100ad93aba3c4",
+  "tv_trades_sha256": "36f906204c94f80a15cbd599c1b0464640d29da7b40756338ece0bed280608de",
+  "tv_trades_rows": 12
+}

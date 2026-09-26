@@ -279,7 +279,11 @@ script bar:
   waypoint (`NativeMarginCheckKind::IntrabarSample`, below).
   `IntrabarPath::SampleEligibility::ContinuousSegments` (default) keeps
   continuous matching between generated samples; `DistributionSamples`
-  restricts eligibility to the sample points themselves.
+  restricts eligibility to the sample points themselves. Each retained bar is
+  walked through its own four turning points, a repeated one included when a
+  leg has zero length (an open at its own low), and a bar that traded nothing
+  at one price (volume 0, open = high = low = close) is one discrete point,
+  walked once (`tests/test_native_intrabar_turning_points.cpp`).
 - `IntrabarPath::synthesized{…}` — the same sampler over the script bar's own
   OHLC path, with no retained feed. Its eligibility is point-only by
   construction, so it carries no `sample_eligibility` member and delivers no
@@ -463,7 +467,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9229-9269`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9325-9365`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -619,7 +623,7 @@ pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
 with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:242`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:257`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
@@ -1316,7 +1320,8 @@ lower-timeframe low that crosses, sized there
 (`tests/fixtures/intrabar_margin`). TradingView's lower timeframe is its own:
 on a 15-minute chart its bar magnifier walks 2-minute intrabars, each owned by
 the chart bar that holds its last minute, so the samples a run declares decide
-where its calls land.
+where its calls land. A compiled Pine strategy declares exactly those: its host
+builds TradingView's intrabars from the finer feed (@ref magnifier_intrabars).
 
 `basis` chooses the equity side of that comparison, at every check point.
 `MarkedEquity` (the default) is `marked_equity(mark)` itself, which the open
@@ -1484,7 +1489,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:13898-13931`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:13972-14005`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -1542,12 +1547,11 @@ crosses the reduced book's line, on a leveraged long (plain, under
 `process_orders_on_close` or under `calc_on_order_fills`) and on a short at any
 margin, plain or under `calc_on_order_fills` (`tests/fixtures/intrabar_margin`,
 20 magnified tapes). It checks at its own 2-minute intrabars (above), which
-TradingView's `request.security_lower_tf` prints, and a model of that check
-books all 20 tapes' calls; the adapter checks the samples its host feeds, one
-minute on the corpus, so six tapes part where the two grids resolve a crossing
-differently -- recorded, not fixed here: sampling the magnifier at
-TradingView's intrabar timeframe moves every magnified fill, not only margin
-calls. A full-margin long (its one-contract money call) and a short under
+TradingView's `request.security_lower_tf` prints. Since R5 lane MAG-INTRABAR
+the adapter walks those intrabars, built from its host's finer feed
+(@ref magnifier_intrabars), and books all 20 tapes' calls; walking the feed's
+own minutes, it parted on six where the two grids resolve a crossing
+differently. A full-margin long (its one-contract money call) and a short under
 `process_orders_on_close` keep their routes there. A margin call is a market
 execution at the print it fired at, so an off-grid print books its nearest
 tick (12.105 books 12.11), as every TradingView market fill does, while a stop
@@ -2099,7 +2103,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7881`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7977`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2910,7 +2914,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7963`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:8059`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -4310,14 +4314,14 @@ The standalone native host has no Pine decision path at runtime, and the
 constructor/member cut has since landed: `engine.hpp` has **zero** references to
 `CapAttachment`, `OrderPriority` or `IntradayCap`. `NativeStrategyHost` is
 zero-argument (`native_host.hpp:845`); the `CapAttachment` constructor belongs
-to `source::PineStrategyHost` (`pine_strategy_host.hpp:241-244`), and the cap
+to `source::PineStrategyHost` (`pine_strategy_host.hpp:256-259`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:83`).
 
 Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all ten `src/source/` ones, and
-`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:113`) holds the kernel's own
-thirty-five, which are what `add_library` (`CMakeLists.txt:153`) compiles into
+`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:114`) holds the kernel's own
+thirty-five, which are what `add_library` (`CMakeLists.txt:154`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

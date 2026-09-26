@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 
@@ -2282,8 +2283,18 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             // A18: a genuinely finer supplied feed remains a retained
             // lower-timeframe path. The generic validator owns duration and
             // divisibility rejection for any non-finer malformed pairing.
+            // TradingView's magnifier walks its own intrabars at its table's
+            // timeframe, not the feed: on a 15-minute chart 2-minute bars,
+            // each owned by the chart bar holding its last minute, between
+            // the chart bar's own open and close (R5 lane MAG-INTRABAR,
+            // tests/fixtures/magnifier_intrabars). The path is built from the
+            // feed and stays on its grid, so its literal is the input's.
             IntrabarPath::lower_tf path;
-            if (args.bars && args.n > 0) path.bars.assign(args.bars, args.bars + args.n);
+            if (args.bars && args.n > 0) {
+                path.bars = tradingview_magnifier_bars(
+                    args.bars, args.n, spec.input_tf, spec.script_tf, spec.session,
+                    spec.timezone);
+            }
             path.tf = spec.input_tf;
             path.samples = args.magnifier_samples;
             path.distribution = args.magnifier_distribution;
@@ -5673,6 +5684,20 @@ bool PineExecutionAdapter::coof_fill_at_path_point(double waypoint) const noexce
         && coof_fill_on_path_point();
 }
 
+// On a magnified path TradingView's next fill point after an intrabar's
+// second extreme, or after the chart bar's own open print, is the next
+// intrabar's opening (PineScheduler::next_input_waypoint). A plain market
+// order reaches exactly that point -- the kernel fills a newborn market
+// request at the path's next discrete point -- even when it prints the price
+// the fill recalculation stands at, where a waypoint trigger would fill at
+// once.
+bool PineExecutionAdapter::coof_waits_for_next_sub_bar() const noexcept {
+    const auto* pine_host = pine_view_of(host_);
+    if (!pine_host) return false;
+    const auto next = pine_host->scheduler_.next_input_waypoint(*pine_host, coof_context_);
+    return next && next->next_open;
+}
+
 // The leg order the kernel walks `bar` in -- the run's declared
 // NativeRunSpec::path_order, the open-proximity rule under Auto
 // (NativeExecutionConsumer::path_high_first). The source layer asks rather
@@ -5723,10 +5748,9 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
     const auto state = detail::run_state(require_host());
     if (state.spec && state.spec->intrabar.lower()) {
         if (const auto* pine_host = pine_view_of(&require_host())) {
-            const auto point = detail::callback_point(require_host());
             const auto next = pine_host->scheduler_.next_input_waypoint(
-                *pine_host, coof_context_, point ? point->price : kNaN);
-            if (next) return *next;
+                *pine_host, coof_context_);
+            if (next) return next->price;
         }
     }
     const bool high_first = source_path_uses_high_first(coof_script_bar_);
@@ -5765,6 +5789,18 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
             : point && point->price == path_price[index];
         if (index > 0 && point && finite_positive(point->price)
             && !at_waypoint && !forced_waypoint) {
+            if (path_index) *path_index = index;
+            return path_price[index];
+        }
+        // The matcher's fill of a resting request at its own level ON an
+        // extreme ends the leg there: the recalculation's orders act from that
+        // point, as TradingView books them -- a market order, a close or
+        // close_all fills at it, a priced order is live at its own level from
+        // it (lab tv pa3-f4-level-w1-*; the second extreme, H-MEASURE Finding
+        // 6d, pa2-i2-exit-w2-*). A fill the adapter forced onto the point
+        // starts the next leg (pa3-f4-point-w1-mkt-*; R5 lane PAR-ORDERS-3).
+        if (index > 0 && index < 3 && at_waypoint && !forced_waypoint
+            && !coof_fill_forced_) {
             if (path_index) *path_index = index;
             return path_price[index];
         }
@@ -6346,6 +6382,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         coof_market_next_open = coof_fill_forced_;
         coof_market_at_second_extreme = !coof_fill_forced_;
     }
+    const bool coof_market_next_sub_bar = coof_recalc_active_ && !coof_first_open_
+        && coof_lower_path && !priced && coof_waits_for_next_sub_bar();
     double native_limit = limit_price;
     double native_stop = stop_price;
     if (finite_positive(limit_price) && !finite_positive(stop_price)) {
@@ -6371,7 +6409,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         : trigger_for(native_limit, native_stop);
     double coof_market_fill = kNaN;
     if (coof_recalc_active_ && !coof_first_open_ && !coof_market_next_open
-        && coof_script_bar_valid_
+        && !coof_market_next_sub_bar && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger)
         && (coof_market_at_second_extreme || !defer_coof_tail())) {
         // ab9714be pine_scheduler.cpp:398-619: a MARKET request born by a
@@ -8118,6 +8156,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // still advances (coof_fill_at_second_extreme; R5 lane PAR-ORDERS-2).
     bool coof_close_next_open = false;
     bool coof_close_at_second_extreme = false;
+    bool coof_close_next_sub_bar = false;
     if (coof_recalc_active_ && !coof_first_open_ && !immediately) {
         const auto state = detail::run_state(require_host());
         const bool lower_path = state.spec && state.spec->intrabar.lower();
@@ -8131,10 +8170,13 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 coof_close_fill = source_bar_fill_tick(endpoint, staged_.syminfo.mintick)
                     + (buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
             }
+        } else if (lower_path) {
+            coof_close_next_sub_bar = coof_waits_for_next_sub_bar();
         }
     }
     if (coof_recalc_active_ && !coof_first_open_ && !immediately
         && !coof_close_next_open && !coof_close_at_second_extreme
+        && !coof_close_next_sub_bar
         && coof_script_bar_valid_) {
         int next_waypoint_index = -1;
         const double next_waypoint = coof_next_waypoint(&next_waypoint_index);
@@ -8966,6 +9008,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     auto submit_leg = [&](PineOrderFamily family, native_order::Trigger trigger) {
         bool defer_marketable_coof_stop = false;
+        // A stop reached at the point its recalculating fill ended the leg on:
+        // executed there, so never staged behind the recalculation.
+        bool coof_stop_at_leg_end = false;
         bool coof_limit_waypoint_qualified = false;
         double coof_limit_waypoint_price = kNaN;
         double coof_stop_waypoint_price = kNaN;
@@ -8976,10 +9021,29 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto point = detail::callback_point(require_host());
             if (ordinary_path && point && finite_positive(point->price)) {
                 const auto phase = coof_context_.coordinate.path_phase;
-                const double endpoint = next_source_path_waypoint(
-                    coof_script_bar_, phase, point->price,
-                    source_path_uses_high_first(coof_script_bar_),
+                const bool high_first = source_path_uses_high_first(coof_script_bar_);
+                double endpoint = next_source_path_waypoint(
+                    coof_script_bar_, phase, point->price, high_first,
                     staged_.syminfo.mintick, config_.slippage);
+                // The recalculating fill AT its leg's extreme: the matcher's
+                // fill at a resting request's own level there ends the leg, so
+                // no remainder of it is left in flight and a marketable level
+                // is reached at the point itself (lab tv pa2-i2-level-w1-*,
+                // pa3-f4-level-w1-xstop-*); a fill the adapter forced onto it
+                // starts the next leg -- read from the extreme itself, whose
+                // booked tick an off-grid extreme (11.425 -> 11.43) does not
+                // equal (pa2-i2-point-w2-long*; R5 lane PAR-ORDERS-3).
+                const double own_extreme = phase == NativePathPhase::High
+                    ? coof_script_bar_.high
+                    : (phase == NativePathPhase::Low ? coof_script_bar_.low : kNaN);
+                const bool at_own_extreme = finite_positive(own_extreme)
+                    && coof_fill_at_path_point(own_extreme);
+                const bool fill_ends_leg = at_own_extreme && !coof_fill_forced_;
+                if (at_own_extreme && coof_fill_forced_) {
+                    endpoint = next_source_path_waypoint(
+                        coof_script_bar_, phase, own_extreme, high_first,
+                        staged_.syminfo.mintick, config_.slippage);
+                }
 
                 const bool closing_long = physical.signed_units > 0.0;
                 if (family == PineOrderFamily::ExitLimit
@@ -8998,7 +9062,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         ? endpoint >= limit_price : endpoint <= limit_price;
                     const bool endpoint_ahead = closing_long
                         ? endpoint > point->price : endpoint < point->price;
-                    const bool in_flight_remainder = !marketable
+                    const bool in_flight_remainder = !fill_ends_leg && !marketable
                         && endpoint_satisfies && endpoint_ahead;
                     const bool later_same_open = phase == NativePathPhase::Open
                         && marketable;
@@ -9034,7 +9098,17 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                            && finite_positive(stop_price)) {
                     const bool marketable = closing_long
                         ? point->price <= stop_price : point->price >= stop_price;
-                    if (marketable && phase != NativePathPhase::Open
+                    if (marketable && fill_ends_leg) {
+                        // Reached at the point the fill ended its leg on: it
+                        // fills there, as a market close does.  A stop at the
+                        // point itself, not a market leg: the recalculation
+                        // executes market newborns at their point, which a
+                        // cohort-bound leg (close_entries_rule "any") cannot
+                        // take, so it would book this price on a later bar.
+                        trigger = native_order::Stop{point->price};
+                        coof_stop_waypoint_price = point->price;
+                        coof_stop_at_leg_end = true;
+                    } else if (marketable && phase != NativePathPhase::Open
                         && std::isfinite(qty) && finite_positive(endpoint)
                         && !source_same_point(point->price, endpoint, staged_.syminfo.mintick)) {
                         trigger = native_order::Stop{endpoint};
@@ -9285,7 +9359,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         point->decision.coordinate.interval_index);
                     return !direct_partial;
                 };
-                if ((wrong_stop || wrong_limit)
+                if ((wrong_stop || wrong_limit) && !coof_stop_at_leg_end
                     && (coof_first_open_ || wrong_stop || !qualified_recross())) {
                     snapshot.defer_until_post_parent_calculation = true;
                     delayed_market_orders_.push_back({
@@ -9297,7 +9371,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto native = detail::run_state(require_host());
             const bool stage_chart_tick_scope = config_.calc_on_order_fills
                 && !config_.process_orders_on_close
-                && coof_recalc_active_ && !defer_coof_tail()
+                && coof_recalc_active_ && !defer_coof_tail() && !coof_stop_at_leg_end
                 && (!native.spec || native.spec->intrabar.is_none())
                 && (family == PineOrderFamily::ExitLimit
                     || family == PineOrderFamily::ExitStop);
@@ -15007,7 +15081,8 @@ void PineExecutionAdapter::observe_intraday_cap(
     const auto position = detail::run_position(require_host());
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
     if (const auto* pine_host = pine_view_of(&require_host())) {
-        if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
+        if (const auto broker = pine_host->scheduler_.broker_bar(*pine_host, context))
+            prices = *broker;
     }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
         position.signed_units > 0.0 ? compat::pine::Side::Long
@@ -15048,7 +15123,8 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
     const auto position = detail::run_position(require_host());
     Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
     if (const auto* pine_host = pine_view_of(&require_host())) {
-        if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
+        if (const auto broker = pine_host->scheduler_.broker_bar(*pine_host, context))
+            prices = *broker;
     }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
         position.signed_units > 0.0 ? compat::pine::Side::Long
@@ -16331,11 +16407,16 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // pine_fills.cpp:8022-8043 (evaluate_fill_price): under
     // process_orders_on_close, a pure LIMIT entry (no stop, no trail) placed by
     // this bar's source calc is evaluated in the post-calculation fill pass
-    // (pine_scheduler.cpp:259 step 4) against THIS bar's close. When the close
-    // is on the marketable side of the limit it fills there, limit-or-better,
-    // at bar_fill_price(bar.close) with no slippage; otherwise it rests and
-    // gets the ordinary touch evaluation from the next bar on. Scoped to the
-    // ordinary (non-COOF, non-stream) route and a flat book.
+    // (pine_scheduler.cpp:259 step 4) against THIS bar's close. When the
+    // close's tick is on the marketable side of the limit, or on it, it fills
+    // there, limit-or-better, at bar_fill_price(bar.close) with no slippage;
+    // otherwise it rests and gets the ordinary touch evaluation from the next
+    // bar on, however far the bar's range reached. TradingView reads the
+    // close's tick, not the raw close (a sell limit at 11.76 over a raw 11.755
+    // close fills at that close; a buy limit at 11.65 over 11.655, whose tick
+    // is 11.66, rests), with or without calc_on_order_fills (lab tv
+    // pa3-f3-pooc-limit-{long,short}{,-coof}; R5 lane PAR-ORDERS-3). Scoped
+    // to the non-stream route and a flat book.
     // A pure STOP entry the close already reached fills there too, with or
     // without calc_on_order_fills (R5 lane PAR-ORDERS): TradingView books it
     // at that bar's close, the close's tick slipped like any stop fill, on
@@ -16384,8 +16465,7 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         if (row.family != PineOrderFamily::Entry || !row.opening) continue;
         if (row.birth.from_fill()) continue;
         if (row.projection_created_bar != projection_bar_index(context)) continue;
-        const bool pure_limit = !config_.calc_on_order_fills
-            && finite_positive(row.exit_levels.limit)
+        const bool pure_limit = finite_positive(row.exit_levels.limit)
             && !std::isfinite(row.exit_levels.stop);
         const bool pure_stop = finite_positive(row.exit_levels.stop)
             && !std::isfinite(row.exit_levels.limit);
@@ -16401,12 +16481,11 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         if (placed_flat ? (after_close || book_before != 0.0) : !reversing_stop) continue;
         if (row.direction_gate || row.paired_flat_market_candidate) continue;
         if (row.terms_priced_reverse && !reversing_stop) continue;
-        const bool at_close = pure_limit
-            ? (row.is_long ? raw_close <= row.exit_levels.limit
-                           : raw_close >= row.exit_levels.limit)
-            : (finite_positive(close_tick)
-               && (row.is_long ? close_tick >= row.exit_levels.stop
-                               : close_tick <= row.exit_levels.stop));
+        const bool at_close = finite_positive(close_tick) && (pure_limit
+            ? (row.is_long ? close_tick <= row.exit_levels.limit
+                           : close_tick >= row.exit_levels.limit)
+            : (row.is_long ? close_tick >= row.exit_levels.stop
+                           : close_tick <= row.exit_levels.stop));
         if (at_close) marketable.emplace_back(handle, row);
     }
     if (marketable.size() > 1) {

@@ -18,6 +18,16 @@ recalculation places between the extremes gap-fills at the second, and AX's reca
 places the market entry C -- long j = 3, 41, short j = 2, 30), and a limit entry A AT the
 first extreme with the same AX and C (level-w1 -- long j = 4, 25, 40, short j = 2, 32, 44).
 
+The `pa3-f4-*` tapes (R5 lane PAR-ORDERS-3, finding 4) carry the rule to a bar's FIRST
+extreme: lot A's limit entry exactly on it (long j = 4, 25, 40; short j = 2, 44), and the
+recalculation A's fill starts places a market entry B, strategy.close("A"), close_all, a
+market strategy.order, A's exit stop already through A's price, or a stop entry B between
+the extremes (pyramiding 2); a STOP entry A exactly on it with the market add B, and E's
+EXIT limit X exactly on it with the market re-entry (and that re-entry's own exit limit
+X2 already through) -- the two shapes ab9714be's rows pin (long j = 2, 32, 44 on high-first
+bars; short j = 4, 25, 40 on low-first ones); and the control, a point fill forced onto the
+first extreme (P's stop exit on the leg to it, the market entry A, then B).
+
 Each directory is one `lab tv` export (pineforge-workflow, channel `ws-report-v1`,
 `rangeProof: covered`, NYSE:F 15, window 2025-07-01 .. 2025-07-08), byte-identical:
 `strategy.pine`, `tv_trades.csv` (times UTC+8), `meta.json`, `metrics.json`. The
@@ -42,3 +52,23 @@ scripts count chart bars from 2025-07-02 09:30 ET, the first bar of
 | `pa2-i2-level-w1-long-pooc` | the same, process_orders_on_close | 6 | `7f7a332d07202c8a1814a7119b9f6cd70dda335fb563d40403d1e7e23ab3be89` | `tv-tape-pa2-i2-level-w1-long-pooc-7f7a332d` |
 | `pa2-i2-level-w1-short` | limit entry at the first extreme, short | 6 | `8d4893ade201e54203b7723abe267e211a26c92480620fea341d73882f12014d` | `tv-tape-pa2-i2-level-w1-short-8d4893ad` |
 | `pa2-i2-level-w1-short-pooc` | the same, process_orders_on_close | 5 | `c092e35ad56281fdc114e0923e9e24e3c47ea7f7a93ddce883b2cde07d69fd99` | `tv-tape-pa2-i2-level-w1-short-pooc-c092e35a` |
+| `pa3-f4-level-w1-mkt-long` | level fill on the first extreme, market entry B, long | 6 | `3a1d2405c1917c4b952affb50f59479af56218cc82401a20d8216860dc05b2ae` | `tv-tape-pa3-f4-level-w1-mkt-long-3a1d2405` |
+| `pa3-f4-level-w1-mkt-short` | the same, short | 4 | `fd73b977c8688f0e96f2e48b7ee1ed3c303dbf2b2c2977ea400536f50981ac24` | `tv-tape-pa3-f4-level-w1-mkt-short-fd73b977` |
+| `pa3-f4-level-w1-close-long` | level fill on the first extreme, strategy.close("A"), long | 3 | `749d04f062676b2651d347b52467b4f912f472defa39657e3a3caf8ffa23a02a` | `tv-tape-pa3-f4-level-w1-close-long-749d04f0` |
+| `pa3-f4-level-w1-close-short` | the same, short | 2 | `b2b84ed4a42804cf96449f6039c82af7f9c216984de25c20bd31aef912345a8a` | `tv-tape-pa3-f4-level-w1-close-short-b2b84ed4` |
+| `pa3-f4-level-w1-closeall-long` | level fill on the first extreme, strategy.close_all(), long | 3 | `2b6a49e04cfd2624dd5606a5a665e49ae779b65e500af722c077c7392d3374b7` | `tv-tape-pa3-f4-level-w1-closeall-long-2b6a49e0` |
+| `pa3-f4-level-w1-closeall-short` | the same, short | 2 | `d4aed65ee4962cd54cc3508165345d9efdcd3e7f9c9ec59ac93061c8a1b7f35b` | `tv-tape-pa3-f4-level-w1-closeall-short-d4aed65e` |
+| `pa3-f4-level-w1-order-long` | level fill on the first extreme, market strategy.order B, long | 6 | `3a1d2405c1917c4b952affb50f59479af56218cc82401a20d8216860dc05b2ae` | `tv-tape-pa3-f4-level-w1-order-long-3a1d2405` |
+| `pa3-f4-level-w1-order-short` | the same, short | 4 | `fd73b977c8688f0e96f2e48b7ee1ed3c303dbf2b2c2977ea400536f50981ac24` | `tv-tape-pa3-f4-level-w1-order-short-fd73b977` |
+| `pa3-f4-level-w1-xstop-long` | level fill on the first extreme, A's exit stop already through, long | 3 | `049be702a2c8a5f8c20df4e77e4ea1872881953d54201a02cb7626f9b45dd729` | `tv-tape-pa3-f4-level-w1-xstop-long-049be702` |
+| `pa3-f4-level-w1-xstop-short` | the same, short | 2 | `15afb3ed286c0119dcd2d1a3ab7720a7f607d4a6380e226e4f42a2a7301d8d35` | `tv-tape-pa3-f4-level-w1-xstop-short-15afb3ed` |
+| `pa3-f4-level-w1-bstop-long` | level fill on the first extreme, stop entry B between the extremes, long | 6 | `36f906204c94f80a15cbd599c1b0464640d29da7b40756338ece0bed280608de` | `tv-tape-pa3-f4-level-w1-bstop-long-36f90620` |
+| `pa3-f4-level-w1-bstop-short` | the same, short | 4 | `d928448f99563acb3db1d51515a57c300b791f68ca63c27f5a782af3ea09fb7c` | `tv-tape-pa3-f4-level-w1-bstop-short-d928448f` |
+| `pa3-f4-stop-w1-mkt-long` | stop entry A exactly on the first extreme, market entry B, long | 6 | `61e651ebb9a9cb8409981292eab3e2ddcf0dc85996b20f414c4842ecd83fd12e` | `tv-tape-pa3-f4-stop-w1-mkt-long-61e651eb` |
+| `pa3-f4-stop-w1-mkt-short` | the same, short | 6 | `831409ef2c4ec829e3067ed262d9d881b94fbc45f16ad9794e29506747b35d75` | `tv-tape-pa3-f4-stop-w1-mkt-short-831409ef` |
+| `pa3-f4-xlimit-w1-reentry-long` | E's exit limit X exactly on the first extreme, market re-entry, long | 6 | `056d2b5de34c807a1af837f6e312b7cfef04abbab8eb0d3d265fac0984f23aba` | `tv-tape-pa3-f4-xlimit-w1-reentry-long-056d2b5d` |
+| `pa3-f4-xlimit-w1-reentry-short` | the same, short | 6 | `a3205f035e9216bd0d30e74a8bbd6e70654b7486cbc041a66cf1bfba69455dda` | `tv-tape-pa3-f4-xlimit-w1-reentry-short-a3205f03` |
+| `pa3-f4-xlimit-w1-reentry-tp-long` | the same, and the re-entry's exit limit X2 already through, long | 6 | `b44f5702fe7b13f6e67cb56dc9d9be378057529a1f96da45d3cdfb34c1d6f0ec` | `tv-tape-pa3-f4-xlimit-w1-reentry-tp-long-b44f5702` |
+| `pa3-f4-xlimit-w1-reentry-tp-short` | the same, short | 6 | `3c4561c2b5a4fe900e368c14b244ea8019be64cc95f6f90b7294dcb5a6abd90b` | `tv-tape-pa3-f4-xlimit-w1-reentry-tp-short-3c4561c2` |
+| `pa3-f4-point-w1-mkt-long` | point fill forced onto the first extreme, market entry B, long | 6 | `4a0c3d450ec01bb70b6e8341391e9babf4319a7eb53316a523d7c7cf3a323d35` | `tv-tape-pa3-f4-point-w1-mkt-long-4a0c3d45` |
+| `pa3-f4-point-w1-mkt-short` | the same, short | 6 | `b85b054c0c53200c9db1f8fd5c0c1bb6008bb38277034ed05ba0d5f3155666ff` | `tv-tape-pa3-f4-point-w1-mkt-short-b85b054c` |

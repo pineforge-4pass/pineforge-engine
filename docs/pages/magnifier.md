@@ -46,6 +46,50 @@ Add volume-weighted sample density as a sticky toggle on the handle:
 strategy_set_magnifier_volume_weighted(s, 1);
 ```
 
+## The intrabars a Pine strategy walks {#magnifier_intrabars}
+
+When the input feed is finer than the script timeframe, a compiled Pine
+strategy's magnifier does not walk the input bars: it walks the intrabars
+TradingView's bar magnifier walks, which the Pine host builds from the input
+(`tradingview_magnifier_bars` magnifier_intrabars.hpp:44). TradingView's help
+centre ("What is bar magnifier backtesting mode") fixes the intrabar timeframe
+per chart timeframe, each row covering the charts from it up to the next row
+(`tradingview_intrabar_timeframe` magnifier_intrabars.hpp:19):
+
+| Chart | Intrabar | Buildable from 1-minute bars |
+| --- | --- | --- |
+| 1 minute | 10 seconds | no — needs a 10-second feed |
+| 5 minutes | 30 seconds | no — needs a 30-second feed |
+| 10 minutes | 1 minute | yes (the feed itself) |
+| 15 minutes | 2 minutes | yes |
+| 30 minutes | 5 minutes | yes |
+| 1 hour | 10 minutes | yes |
+| 4 hours | 30 minutes | yes |
+| 1 day | 1 hour | yes |
+| 3 days | 4 hours | yes |
+| 1 week and up | 1 day | yes |
+
+Each intrabar is the symbol's regular bar of that timeframe — anchored at the
+session day's open (00:00 UTC on a 24x7 symbol, 09:15 on NSE, 09:30 on NYSE)
+and cut at the session's close — and belongs to the chart bar that holds its
+**last** minute. On a 15-minute chart the 2-minute intrabar from 10:14 to 10:16
+belongs to the 10:15 bar, so a chart bar's path is its own open, the intrabars
+it owns (each an open, its nearer extreme, its other extreme, its close), then
+its own close. The host marks the chart bar's open and close as one-price bars
+that traded nothing where an intrabar straddles its first minute or leaves its
+last one to the next bar, and the kernel walks such a bar as one point. The
+rows from 1 minute to 1 day were measured against TradingView's own
+`request.security_lower_tf` bars and magnified exports (R5 lane MAG-INTRABAR:
+`tests/test_adapter_magnifier_intrabar_tapes.cpp`,
+`tests/fixtures/magnifier_intrabars`).
+
+The host walks the input bars themselves when it cannot build TradingView's:
+an intrabar finer than the input or not a multiple of it (a 1- or 5-minute
+chart on 1-minute bars), or a session it cannot resolve. A daily chart of an
+exchange-listed stock is built from the minutes, but TradingView prices that
+chart bar's open and close from its daily feed (the official open and close),
+which a 1-minute feed does not carry.
+
 ## Distribution modes
 
 @see #pf_magnifier_distribution_t for the enum.
@@ -74,8 +118,10 @@ a bar that was assigned no lower-feed bars counts nothing. The Pine host
 mirrors the same counts at its bar callbacks, and no state hash folds them.
 
 Quick sanity check: with `magnifier_samples = 4` and
-`PF_MAGNIFIER_ENDPOINTS`, expect roughly
-`magnifier_sample_ticks_total ≈ 4 * input_bars_processed`.
+`PF_MAGNIFIER_ENDPOINTS`, expect four sample ticks per sub-bar and one per
+one-price bar that traded nothing. A Pine strategy walks TradingView's
+intrabars, not the input bars (above): a 15-minute chart on 1-minute bars
+visits about `4 * 7.5 + 1` ticks per chart bar, not `4 * 15`.
 
 ## How it interacts with request.security()
 

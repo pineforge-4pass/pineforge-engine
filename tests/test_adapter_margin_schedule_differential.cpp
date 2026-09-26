@@ -46,12 +46,13 @@
  *       docs/pages/live-surface.md §3.2).
  *   Intrabar margin on TradingView's tapes (tests/fixtures/intrabar_margin):
  *       a carried leveraged long under the bar magnifier crosses its line at
- *       a 1-minute low inside a 15m bar. TradingView books the call there,
- *       sized there, and again at each later 1-minute low that crosses the
+ *       an intrabar low inside a 15m bar. TradingView books the call there,
+ *       sized there, and again at each later intrabar low that crosses the
  *       reduced book's line; with the magnifier off, once at the chart bar's
  *       low. Since R5 lane PAR-MARGIN the kernel offers an IntrabarSample
  *       point at every delivered sample and the adapter admits it on a
- *       magnified run's leveraged book.
+ *       magnified run's leveraged book; since R5 lane MAG-INTRABAR the
+ *       samples are TradingView's own 2-minute intrabars.
  *   M7 on TradingView's tapes (tests/fixtures/margin_entry_bar): a leveraged
  *       opening whose entry bar breaches. TradingView books the margin call
  *       on the entry bar at its low (4 of 4 tapes), and so does the kernel's
@@ -68,9 +69,9 @@
  *       way down faces the bar's low, a short filled on its way up its high);
  *     intrabar shapes: the magnifier under COOF and POOC and on a full-margin
  *       short -- TradingView checks at its own 2-minute intrabars (a model of
- *       which books all 16 tapes' calls), the adapter at the host's 1-minute
- *       samples (the same model on those books the adapter's); 10 agree, six
- *       recorded, plus 8 chart controls;
+ *       which books all 16 tapes' calls), and since R5 lane MAG-INTRABAR so
+ *       does the adapter, which books every tape's rows; the host's 1-minute
+ *       samples would part on six; plus 8 chart controls;
  *     TradingView intrabars: its own request.security_lower_tf "2" arrays
  *       equal the feed's minute pairs owned by the chart bar of their last
  *       minute;
@@ -1180,26 +1181,25 @@ void m10_tradingview_tapes() {
 //     inside the bar; since the lane the kernel offers an IntrabarSample point
 //     at every later sample and the adapter admits it on a leveraged book, and
 //     it books every row on 0622 (three calls), 0824 and 0406.
-//   Recorded, open: on 0130 TradingView books its second call at the 01:43
-//     low (0.4824 @2673.33) on the book the first call left, though the 01:42
-//     low (2690) already crosses that book's line; the adapter books it there
-//     (0.3228 @2690), and nothing at 01:43. The first call and the chart-path
-//     control agree; the tape repeats over three other windows, and
-//     TradingView's own 1-minute lows (pm-i3-eth-ltf-lows) are the feed's.
+//   0130: TradingView books its second call at 2673.33 (0.4824), where the
+//     feed's 01:42 low (2690) already crosses the reduced book's line: its
+//     magnifier walks 2-minute intrabars on a 15-minute chart, and the
+//     01:42-01:43 one has a single low, 2673.33. Walking the feed's minutes
+//     the adapter booked 0.3228 @2690 there (recorded until R5 lane
+//     MAG-INTRABAR); walking TradingView's intrabars it books the tape's rows.
 struct IntrabarTape {
     const char* tag;
     const FeedBar* one;   // 90 one-minute bars: the signal bar .. the entry bar + 4
     double leverage;
-    bool recorded;        // 0130: pinned rows instead of the tape's
 };
 
 void intrabar_margin_tapes() {
     const std::string dir = std::string(PINEFORGE_HM_M7A_FIXTURE_DIR) + "/../intrabar_margin";
     const IntrabarTape tapes[] = {
-        {"0622", kI3_0622, 4.608, false},
-        {"0130", kI3_0130, 4.743, true},
-        {"0824", kI3_0824, 4.694, false},
-        {"0406", kI3_0406, 4.657, false},
+        {"0622", kI3_0622, 4.608},
+        {"0130", kI3_0130, 4.743},
+        {"0824", kI3_0824, 4.694},
+        {"0406", kI3_0406, 4.657},
     };
     for (const IntrabarTape& tape : tapes) {
         std::vector<Bar> one;
@@ -1248,24 +1248,8 @@ void intrabar_margin_tapes() {
             REQUIRE(!tv.empty());
             CHECK(tv[0].bar == 2);
             CHECK(tv[0].signal == "Margin call");
-            if (!magnified) {
-                CHECK(std::abs(tv[0].price - fifteen_rows[2].low) <= 5e-3);
-                CHECK(same_rows(adapter, tv));
-                continue;
-            }
-            if (!tape.recorded) {
-                CHECK(same_rows(adapter, tv));
-                continue;
-            }
-            // 0130, recorded: the first call agrees; the second parts.
-            REQUIRE(adapter.size() == 3);
-            REQUIRE(tv.size() == 3);
-            CHECK(same_rows({adapter[0]}, {tv[0]}));
-            CHECK(adapter[1].bar == 2 && same_value(adapter[1].price, 2690.0)
-                  && std::abs(adapter[1].qty - 0.3228) <= 5e-5);
-            CHECK(tv[1].bar == 2 && std::abs(tv[1].price - 2673.33) <= 5e-3
-                  && std::abs(tv[1].qty - 0.4824) <= 5e-5);
-            CHECK(adapter[2].bar == tv[2].bar && std::abs(adapter[2].price - tv[2].price) <= 5e-3);
+            if (!magnified) CHECK(std::abs(tv[0].price - fifteen_rows[2].low) <= 5e-3);
+            CHECK(same_rows(adapter, tv));
         }
     }
 }
@@ -1697,17 +1681,15 @@ void print_model(const char* side, const std::vector<ModelCall>& rows) {
 // and the chart-path controls pm2-i3-pooc-chart-* / pm2-i3-s1x-chart-*, one
 // call at the chart bar's extreme, which the adapter books as before (8 of 8).
 // On every magnified tape here (16) TradingView's calls are the model's at
-// its 2-minute intrabars; the adapter books the model's at the feed's 1-minute
-// samples (the lane admits the kernel's IntrabarSample point under POOC,
-// COOF and on a full-margin short, as it was on the plain leveraged long). The
-// two sample grids agree on 10 of the 16 (and on the four pm2-m7-mag-* above)
-// and part on six -- 0130 plain and COOF (TradingView's 01:42-01:43 intrabar
-// has one low, 2673.33; the feed's 01:42 minute crosses at 2690 first), pooc
-// 0109, 0402 (the straddling 20:14-20:16 intrabar's 1908.17 is the signal
-// bar's last minute), 0707 and s1x 0623 -- which stay recorded: the adapter
-// samples what its host feeds (1 minute), not TradingView's intrabar
-// timeframe. Landing that is a magnifier capability (every magnified fill, not
-// only margin), not this lane's.
+// its 2-minute intrabars, and since R5 lane MAG-INTRABAR the adapter's are
+// too: its magnified path is TradingView's intrabars built from the feed
+// (source::tradingview_magnifier_bars), so the adapter books every tape's
+// rows. The model at the feed's own 1-minute samples, which the adapter
+// walked before, parts from TradingView on six of the 16 -- 0130 plain and
+// COOF (TradingView's 01:42-01:43 intrabar has one low, 2673.33; the feed's
+// 01:42 minute crosses at 2690 first), pooc 0109, 0402 (the straddling
+// 20:14-20:16 intrabar's 1908.17 is the signal bar's last minute), 0707 and
+// s1x 0623; it stays here as the contrast.
 struct IntrabarShape {
     const char* slug;
     const FeedBar* one;          // 90 one-minute bars from the signal bar
@@ -1730,7 +1712,7 @@ void intrabar_shapes_on_tapes() {
         {"pm2-i3-s1x-chart-0623-2130", kPm2S1x_0623_2130}, {"pm2-i3-s1x-chart-1104-2130", kPm2S1x_1104_2130},
     };
     int agree = 0;
-    int recorded = 0;
+    int one_minute_parts = 0;
     for (const IntrabarShape& tape : tapes) {
         std::printf("-- intrabar shape %s\n", tape.slug);
         const std::string at = dir + "/" + tape.slug;
@@ -1760,32 +1742,24 @@ void intrabar_shapes_on_tapes() {
                                                  e.is_long, false);
         print_model("2m", tv_rule);
         print_model("1m", feed_rule);
-        // TradingView's rule, on all 20: the per-sample check at its intrabars.
+        // TradingView's rule, on all 16: the per-sample check at its intrabars;
+        // the adapter's calls are that rule's, and so are its rows.
         CHECK(same_calls(tv_rule, tv));
-        // The adapter's calls: the same rule at the feed's one-minute samples.
-        CHECK(same_calls(feed_rule, adapter));
+        CHECK(same_calls(tv_rule, adapter));
+        CHECK(same_exits(adapter, tv));
         bool grids_agree = tv_rule.size() == feed_rule.size();
         for (std::size_t i = 0; grids_agree && i < tv_rule.size(); ++i) {
             grids_agree = tv_rule[i].bar == feed_rule[i].bar
                 && std::abs(tv_rule[i].price - feed_rule[i].price) <= 5e-3
                 && std::abs(tv_rule[i].qty - feed_rule[i].qty) <= 5e-5;
         }
-        if (grids_agree) {
-            ++agree;
-            CHECK(same_exits(adapter, tv));
-        } else {
-            ++recorded;
-            // Recorded: the call lands on TradingView's bar, at a sample the
-            // one-minute grid resolves differently.
-            CHECK(!adapter.empty() && adapter.front().margin_call);
-            CHECK(!tv.empty() && tv.front().margin_call);
-            CHECK(!adapter.empty() && !tv.empty() && adapter.front().bar == tv.front().bar);
-        }
+        if (grids_agree) ++agree;
+        else ++one_minute_parts;
     }
-    std::printf("  magnified tapes: %d on both grids, %d recorded (2-minute intrabars)\n", agree,
-                recorded);
+    std::printf("  magnified tapes: %d on both grids, %d where 1-minute samples part\n", agree,
+                one_minute_parts);
     CHECK(agree == 10);
-    CHECK(recorded == 6);
+    CHECK(one_minute_parts == 6);
 }
 
 // ---- TradingView's own intrabars (tests/fixtures/intrabar_margin/pm2-ltf-*):

@@ -1844,6 +1844,7 @@ private:
     bool source_path_uses_high_first(const Bar&) const noexcept;
     bool coof_fill_on_path_point() const noexcept;
     bool coof_fill_at_path_point(double waypoint) const noexcept;
+    bool coof_waits_for_next_sub_bar() const noexcept;
     bool coof_current_fill_was_forced_waypoint() const noexcept;
     double coof_next_waypoint(int* path_index = nullptr) const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;

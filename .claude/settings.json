@@ -2,11 +2,17 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings \"$HOME/code/pineforge-workflow/campaign/hooks/pr-gate.mjs\""
+            "timeout": 120,
+            "command": "node --no-warnings \"$HOME/code/pineforge-workflow/campaign/hooks/pr-gate.mjs\" || exit 2"
+          },
+          {
+            "type": "command",
+            "timeout": 120,
+            "command": "node --no-warnings \"$HOME/code/pineforge-workflow/campaign/hooks/merge-gate.mjs\" || exit 2"
           }
         ]
       }

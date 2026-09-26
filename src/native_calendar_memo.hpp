@@ -50,6 +50,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace pineforge::native_calendar {
 inline namespace native_calendar_v2 {
@@ -81,6 +83,9 @@ public:
     // or was reset, as opposed to answered from the last few it holds: a cost
     // reading, derived like everything else here and folded nowhere.
     std::uint64_t interval_resolutions() const noexcept;
+    // How many times, since then, it read libc's local time for its calendar's
+    // zone. The same kind of cost reading.
+    std::uint64_t libc_local_reads() const noexcept;
 
 private:
     State& bind(const SessionCalendar& calendar);
@@ -118,6 +123,33 @@ bool in_session(const SessionCalendar& calendar, int64_t ms, SessionDayMemo& mem
 // fixed daily cycles [date + origin, next date + origin), which tile time, so
 // every instant it can represent has one session day, and every lookup finds it.
 bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo);
+
+// The session day holding `ms` as this memo's lookups resolve it -- its cycle
+// [origin_ms, next_origin_ms), the ordinal its instants key to and its
+// in-session spans -- when that cycle is CERTIFIED: every lookup of every
+// instant of the cycle (session_day_at, interval_containing for fixed
+// timeframes, in_session) is this day, no other day holds any of its
+// instants, and the calendar resolves every civil time within 22 days of it
+// the same way whatever it was asked before. A UTC or fixed-offset zone
+// certifies every cycle; a TZif zone under glibc or macOS, every cycle whose
+// reach its table covers with transitions that are small, far apart and never
+// a backward move that keeps the daylight-saving flag, each read back from
+// libc (native_calendar.cpp, "Certified session-day cycles"). nullopt
+// otherwise -- the zone alone decided that, and nothing was resolved -- and
+// when no session day holds `ms`.
+struct CycleCertificate {
+    int64_t origin_ms = 0;
+    int64_t next_origin_ms = 0;
+    int64_t ordinal = 0;
+    std::vector<std::pair<int64_t, int64_t>> spans;
+};
+std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
+                                                  int64_t ms,
+                                                  SessionDayMemo& memo);
+
+// The bucket interval_containing divides a session day into for the fixed
+// timeframe `tf`, in ms; 0 for a timeframe that is not valid or not fixed.
+int64_t fixed_bucket_ms(const Timeframe& tf);
 
 }  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

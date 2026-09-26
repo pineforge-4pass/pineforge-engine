@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F4 stop-w1 mkt long",
+  "slug": "pa3-f4-stop-w1-mkt-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T04:10:20.303Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "c2694009940ff46b41d3f02864b5dbd09d5d50ceae1d63e73adad64345339b1d",
+  "tv_trades_sha256": "61e651ebb9a9cb8409981292eab3e2ddcf0dc85996b20f414c4842ecd83fd12e",
+  "tv_trades_rows": 12
+}

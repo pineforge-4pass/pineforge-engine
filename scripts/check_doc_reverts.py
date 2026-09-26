@@ -52,9 +52,14 @@ V19-A's stated revert of PERF-P1's view, must pass with its own message). With
 Without ``--head`` the gate walks the non-merge commits of ``base..HEAD`` one
 by one, each against its parent and with its own message. ``base`` is
 ``--base``, else ``$PINEFORGE_DOC_REVERT_BASE``, else the merge base with
-``origin/main`` or ``main``; where none resolves (a detached checkout with no
-branch refs, as the lab's remote hosts have) the walk starts at ``HEAD`` and
-stops at the first commit that predates this gate. A commit whose own tree
+``origin/main`` or ``main``, else -- in a checkout with no branch refs, as the
+lab's remote hosts have -- the newest first-parent ancestor of ``HEAD`` whose
+subject ends in a pull request number, `` (#N)``: the squash or merge commit
+GitHub wrote on ``main``, which is the merge base CI would find (its branch's
+commits were judged one by one, with their own messages, before it merged; a
+squash commit's message is the pull request's title and cannot name them
+again). Where none resolves, the walk starts at ``HEAD`` and stops at the first
+commit that predates this gate. A commit whose own tree
 has no ``scripts/check_doc_reverts.py`` is never judged: the rule binds from
 the commit that introduced it on. At most ``MAX_COMMITS`` commits are walked.
 
@@ -97,6 +102,8 @@ LANE_LABELS = (
     re.compile(r'\b(INT\d+[a-z]?)\b'),
 )
 CHERRY = re.compile(r'\(cherry picked from commit ([0-9a-f]{7,40})\)')
+# The subject GitHub gives the commit a pull request merges as on main.
+MERGED_PULL_REQUEST = re.compile(r' \(#\d+\)$')
 ROW_KEY = re.compile(r'^(?:[A-Za-z]+[0-9]+[A-Za-z]?(?:-[A-Za-z0-9]+)?|`[^`]+`)$')
 
 
@@ -352,6 +359,18 @@ def default_base(root: Path) -> str | None:
             base = git('merge-base', 'HEAD', tip, root=root, check=False).strip()
             if base:
                 return base
+    return merged_pull_request(root)
+
+
+def merged_pull_request(root: Path) -> str | None:
+    """With no branch ref, the newest first-parent ancestor of HEAD a pull request
+    merged as (subject `... (#N)`), HEAD itself included: the merge base with main."""
+    log = git('log', '--first-parent', f'--max-count={MAX_COMMITS}', '--format=%H %s', 'HEAD',
+              root=root, check=False)
+    for line in log.splitlines():
+        sha, _, subject = line.partition(' ')
+        if MERGED_PULL_REQUEST.search(subject):
+            return sha
     return None
 
 

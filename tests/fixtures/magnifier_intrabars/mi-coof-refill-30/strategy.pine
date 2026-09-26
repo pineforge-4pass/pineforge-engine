@@ -1,0 +1,19 @@
+// R5 lane MAG-INTRABAR: where TradingView's bar magnifier fills a calc_on_order_fills
+// cascade. At a signal bar (flat, :15 of an even hour, so the cascade runs on a :30 bar) one market long; every
+// fill's recalculation adds another while fewer than six are open, so each lot books
+// the next tick of the magnified path -- on a :15 bar the chart bar's own open, then
+// the straddling 2-minute intrabar's open, extremes and close. Closed 3 bars later.
+//@version=6
+strategy("mi-coof-refill-30", overlay=true, calc_on_order_fills=true, use_bar_magnifier=true,
+     pyramiding=10, initial_capital=1000000, default_qty_type=strategy.fixed,
+     default_qty_value=1, commission_value=0, slippage=0)
+inWindow = time >= timestamp("UTC", 2026, 1, 30, 0, 0) and time < timestamp("UTC", 2026, 2, 2, 0, 0)
+var int cascadeBar = -1
+if inWindow and strategy.position_size == 0 and cascadeBar < 0 and minute(time) == 15 and hour(time) % 2 == 0
+    cascadeBar := bar_index
+if cascadeBar >= 0 and bar_index <= cascadeBar + 1 and strategy.opentrades < 6
+    strategy.entry("L" + str.tostring(strategy.opentrades), strategy.long)
+if cascadeBar >= 0 and bar_index >= cascadeBar + 3 and strategy.position_size > 0
+    strategy.close_all(comment = "done")
+if cascadeBar >= 0 and bar_index >= cascadeBar + 3 and strategy.position_size == 0
+    cascadeBar := -1

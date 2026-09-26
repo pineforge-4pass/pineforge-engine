@@ -317,6 +317,12 @@ void source::PineStrategyHost::on_native_bar_open(
     scheduler_.bar_open(bar, context, *this);
 }
 
+void source::PineStrategyHost::on_native_sub_bar(
+        const Bar&, const NativeDecisionContext&) {
+    if (source_prepare_failed_) return;
+    scheduler_.sub_bar_complete();
+}
+
 void source::PineStrategyHost::on_native_bar(
         const Bar& bar, const NativeDecisionContext& context) {
     if (source_prepare_failed_) return;

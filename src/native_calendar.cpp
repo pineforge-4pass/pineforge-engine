@@ -860,36 +860,42 @@ void tz_fnv_bytes(std::uint64_t& h, const void* p, std::size_t n) {
 
 void tz_fnv_u64(std::uint64_t& h, std::uint64_t v) { tz_fnv_bytes(h, &v, sizeof v); }
 
+// The whole of one zone resource, false when it cannot be read back or is
+// larger than any zone file.
+bool tz_read_resource(const std::string& path, std::string& bytes) {
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char buffer[4096];
+    bool failed = false;
+    for (;;) {
+        const ssize_t n = ::read(fd, buffer, sizeof buffer);
+        if (n == 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            failed = true;
+            break;
+        }
+        try {
+            bytes.append(buffer, static_cast<std::size_t>(n));
+        } catch (...) {
+            failed = true;
+            break;
+        }
+        if (bytes.size() > kTzResourceByteCap) {
+            failed = true;
+            break;
+        }
+    }
+    ::close(fd);
+    return !failed;
+}
+
 std::optional<std::uint64_t> tz_resource_digest(const std::vector<std::string>& paths) {
     std::uint64_t h = kTzFnvOffsetBasis;
     tz_fnv_u64(h, static_cast<std::uint64_t>(paths.size()));
     for (const std::string& path : paths) {
-        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-        if (fd < 0) return std::nullopt;
         std::string bytes;
-        char buffer[4096];
-        bool failed = false;
-        for (;;) {
-            const ssize_t n = ::read(fd, buffer, sizeof buffer);
-            if (n == 0) break;
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                failed = true;
-                break;
-            }
-            try {
-                bytes.append(buffer, static_cast<std::size_t>(n));
-            } catch (...) {
-                failed = true;
-                break;
-            }
-            if (bytes.size() > kTzResourceByteCap) {
-                failed = true;
-                break;
-            }
-        }
-        ::close(fd);
-        if (failed) return std::nullopt;
+        if (!tz_read_resource(path, bytes)) return std::nullopt;
         tz_fnv_u64(h, static_cast<std::uint64_t>(bytes.size()));
         tz_fnv_bytes(h, bytes.data(), bytes.size());
     }
@@ -1165,7 +1171,10 @@ timezone_identity_descriptor(std::string_view timezone) {
 
     auto finish = [&]() -> std::optional<TimezoneIdentityDescriptor> {
         // The resources are digested where they are still known to be
-        // readable: identity time. Nothing downstream opens a file.
+        // readable: identity time. Nothing downstream opens a file for the
+        // run's identity; cycle_certificate reads a TZif zone's file once
+        // more, for its transitions, and certifies nothing from it that
+        // libc's own readings do not bear out.
         auto digest = tz_resource_digest(d.resource_paths);
         if (!digest) return std::nullopt;
         d.resource_digest = *digest;
@@ -1604,6 +1613,28 @@ struct SessionDayMemo::State {
     std::size_t next_interval = 0;
     // Intervals resolved rather than answered from `intervals`.
     std::uint64_t interval_resolutions = 0;
+    // Times libc's local time was read for this calendar.
+    std::uint64_t libc_local_reads = 0;
+
+    // The zone's own transitions, for cycle_certificate: a constant offset
+    // (UTC, a fixed offset), or the transition instants of the TZif file libc
+    // reads for the zone, together with libc's own reading on each side of
+    // every transition a certificate has needed. Read on first use.
+    enum class ZoneKind : std::uint8_t { Unread, Constant, Table, Unsupported };
+    struct ZoneReading {
+        bool read = false;
+        bool ok = false;
+        std::int32_t offset_before = 0;
+        std::int32_t offset_after = 0;
+        bool dst_before = false;
+        bool dst_after = false;
+    };
+    ZoneKind zone_kind = ZoneKind::Unread;
+    std::vector<std::int64_t> zone_at;
+    std::vector<ZoneReading> zone_readings;
+    // Instants (seconds) at or after it follow the file's POSIX footer rule,
+    // which the table does not list; INT64_MAX when that rule is one offset.
+    std::int64_t zone_covered_until = 0;
 };
 
 namespace {
@@ -1649,6 +1680,7 @@ bool memo_local_day(const SessionCalendar& cal, int64_t ms, MemoState& m, int64_
         }
     }
     CivilStamp c{};
+    ++m.libc_local_reads;
     const bool resolved = epoch_to_stamp_zoned(ms, cal.timezone(), c);
     const int64_t day = resolved ? days_from_civil(c.year, static_cast<unsigned>(c.month),
                                                    static_cast<unsigned>(c.day))
@@ -1877,6 +1909,276 @@ std::optional<int64_t> memo_first_tradable_open(const SessionCalendar& cal,
     return std::nullopt;
 }
 
+// ---------------------------------------------------------------------------
+// Certified session-day cycles (R5 lane PERF-ZONED)
+// ---------------------------------------------------------------------------
+//
+// cycle_certificate says of the session day holding an instant whether its
+// whole cycle [origin, next origin) reads its facts from that day alone. It
+// is certified when the zone's offset around the cycle is known transition
+// by transition and every transition there is small and far from the next:
+//
+//   * the zone is UTC or one fixed offset, or -- under glibc or macOS, whose
+//     mktime the argument below reads -- a TZif file whose table covers the
+//     reach below: libc converts an instant with the table itself, so its
+//     offset changes exactly at the listed instants and nowhere else between
+//     them, and libc's own reading on both sides of each listed instant (and
+//     their agreement from one to the next) is what the conditions test;
+//   * within kCertifiedReachSeconds of the cycle (plus the spacing), every
+//     transition that changes the offset or the daylight-saving flag moves
+//     the offset by at most kCertifiedStepSeconds, between offsets at most
+//     kCertifiedOffsetSeconds from UT; none is a backward move that keeps the
+//     flag; and no two are within kCertifiedSpacingSeconds of each other.
+//
+// The zone is asked first, over the reach of every cycle within two days of
+// the instant, and a day is resolved only where it holds; a cycle there spans
+// a day and at most a step, so the one holding the instant is among them. An
+// instant it refuses is read the exact way, with nothing asked on its behalf.
+//
+// Then a civil time within the reach resolves (resolve_stamp) to the first
+// instant the local wall clock reaches it, whatever was resolved before:
+//
+//   * read once by the wall clock, mktime finds that instant from any start,
+//     the transitions around it being days apart;
+//   * read twice (a backward move, which flips the flag), mktime asked for
+//     each flag finds the reading with it -- glibc, landing on the other
+//     reading, probes a week (601200 s) at a time for an instant with the
+//     flag asked and resolves with that instant's offset, and the spacing
+//     puts the first such probe in the period on that side of the move;
+//     macOS's mktime keeps no state -- and resolve_stamp keeps the earlier;
+//   * never read (a forward move), the search over 14 hours either side of
+//     it finds the move itself, which the offset bound keeps inside that span.
+//
+// Hence every origin within the reach is the first reach of its civil origin,
+// and origins one day apart strictly increase, so those cycles tile. Before
+// an instant of the cycle first reaches the next civil origin its wall clock
+// is below it, and a step back costs at most three hours, so its local date
+// is the cycle's open date, the one before or the one after. Those are
+// exactly the candidates memo_session_day_containing tries, and only this day
+// holds the instant. A day four or more days away cannot hold it either: a
+// resolved origin lies within 26 hours of its civil origin read as UT (the
+// largest offset TZif admits, or the search's 14-hour span), and 72 hours
+// minus two 26-hour margins still leaves them apart. Every lookup of every
+// instant of the cycle is therefore this day, and the reach's resolutions do
+// not depend on the order they are made in.
+
+constexpr int64_t kSecondsPerDay = 86400;
+constexpr int64_t kCertifiedStepSeconds = 3 * 3600;
+// first_representable_at_or_after's span either side of a civil time.
+constexpr int64_t kCertifiedOffsetSeconds = 14 * 3600;
+// More than glibc's week-long probe plus a step.
+constexpr int64_t kCertifiedSpacingSeconds = 8 * kSecondsPerDay;
+constexpr int64_t kCertifiedReachSeconds = 22 * kSecondsPerDay;
+// RFC 8536's bounds on a local time type's UT offset.
+constexpr int64_t kTzifOffsetMin = -89999;
+constexpr int64_t kTzifOffsetMax = 93599;
+
+std::uint32_t tzif_u32(const unsigned char* p) {
+    return (static_cast<std::uint32_t>(p[0]) << 24) | (static_cast<std::uint32_t>(p[1]) << 16)
+        | (static_cast<std::uint32_t>(p[2]) << 8) | static_cast<std::uint32_t>(p[3]);
+}
+
+std::int64_t tzif_i64(const unsigned char* p) {
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v = (v << 8) | p[i];
+    return static_cast<std::int64_t>(v);
+}
+
+struct TzifCounts {
+    std::uint32_t isut = 0, isstd = 0, leap = 0, time = 0, type = 0, chars = 0;
+};
+
+bool tzif_header(const std::string& b, std::size_t at, char& version, TzifCounts& c) {
+    if (at > b.size() || b.size() - at < 44) return false;
+    const auto* p = reinterpret_cast<const unsigned char*>(b.data()) + at;
+    if (std::memcmp(p, "TZif", 4) != 0) return false;
+    version = static_cast<char>(p[4]);
+    c.isut = tzif_u32(p + 20);
+    c.isstd = tzif_u32(p + 24);
+    c.leap = tzif_u32(p + 28);
+    c.time = tzif_u32(p + 32);
+    c.type = tzif_u32(p + 36);
+    c.chars = tzif_u32(p + 40);
+    return c.time <= 65536 && c.type <= 256 && c.chars <= 65536 && c.leap <= 65536
+        && c.isstd <= 256 && c.isut <= 256;
+}
+
+// A POSIX TZ string naming one offset and no daylight-saving rule.
+bool posix_single_offset(std::string_view s) {
+    std::size_t p = 0;
+    return posix_consume_name(s, p) && posix_consume_offset(s, p) && p == s.size();
+}
+
+// The 64-bit table of a version 2+ TZif file (RFC 8536): its transition
+// instants, ascending, and whether instants after the last one keep one
+// offset (an empty footer, or a footer with no daylight-saving rule). false
+// for anything else this reader does not take: version 1 only, leap seconds,
+// malformed counts or indices.
+bool parse_tzif(const std::string& b, std::vector<std::int64_t>& at, bool& constant_tail) {
+    char v1 = 0;
+    TzifCounts c1;
+    if (!tzif_header(b, 0, v1, c1) || v1 < '2') return false;
+    const std::size_t v1_data = static_cast<std::size_t>(c1.time) * 5
+        + static_cast<std::size_t>(c1.type) * 6 + c1.chars
+        + static_cast<std::size_t>(c1.leap) * 8 + c1.isstd + c1.isut;
+    const std::size_t h2 = 44 + v1_data;
+    char v2 = 0;
+    TzifCounts c;
+    if (!tzif_header(b, h2, v2, c) || v2 < '2') return false;
+    if (c.leap != 0 || c.type == 0) return false;
+    if ((c.isstd != 0 && c.isstd != c.type) || (c.isut != 0 && c.isut != c.type)) return false;
+    const std::size_t p = h2 + 44;
+    const std::size_t data = static_cast<std::size_t>(c.time) * 9
+        + static_cast<std::size_t>(c.type) * 6 + c.chars + c.isstd + c.isut;
+    if (b.size() - p < data + 1) return false;
+    const auto* u = reinterpret_cast<const unsigned char*>(b.data());
+    std::vector<std::int64_t> times;
+    times.reserve(c.time);
+    for (std::uint32_t i = 0; i < c.time; ++i) {
+        const std::int64_t t = tzif_i64(u + p + 8 * static_cast<std::size_t>(i));
+        if (!times.empty() && t <= times.back()) return false;
+        times.push_back(t);
+    }
+    const std::size_t idx = p + 8 * static_cast<std::size_t>(c.time);
+    for (std::uint32_t i = 0; i < c.time; ++i) {
+        if (u[idx + i] >= c.type) return false;
+    }
+    const std::size_t types = idx + c.time;
+    for (std::uint32_t i = 0; i < c.type; ++i) {
+        const auto utoff = static_cast<std::int32_t>(tzif_u32(u + types + 6 * static_cast<std::size_t>(i)));
+        if (utoff < kTzifOffsetMin || utoff > kTzifOffsetMax) return false;
+        if (u[types + 6 * static_cast<std::size_t>(i) + 4] > 1) return false;
+    }
+    const std::size_t f = p + data;
+    if (b[f] != '\n') return false;
+    const std::size_t end = b.find('\n', f + 1);
+    if (end == std::string::npos) return false;
+    const std::string_view footer(b.data() + f + 1, end - f - 1);
+    constant_tail = footer.empty() || posix_single_offset(footer);
+    at = std::move(times);
+    return true;
+}
+
+// libc's local reading of one whole second in the calendar's zone: its UT
+// offset and daylight-saving flag.
+bool zone_libc_reading(const std::string& tz, std::int64_t secs, std::int32_t& offset, bool& dst,
+                       MemoState& m) {
+    const time_t t = static_cast<time_t>(secs);
+    if (static_cast<std::int64_t>(t) != secs) return false;
+    std::tm loc{};
+    ++m.libc_local_reads;
+    {
+        tz_util::ScopedTimezone guard(tz);
+        if (localtime_r(&t, &loc) == nullptr) return false;
+    }
+    if (loc.tm_sec > 59 || loc.tm_mon < 0 || loc.tm_mon > 11 || loc.tm_mday < 1) return false;
+    const std::int64_t local = days_from_civil(loc.tm_year + 1900, static_cast<unsigned>(loc.tm_mon + 1),
+                                               static_cast<unsigned>(loc.tm_mday)) * kSecondsPerDay
+        + static_cast<std::int64_t>(loc.tm_hour) * 3600 + static_cast<std::int64_t>(loc.tm_min) * 60
+        + loc.tm_sec;
+    const std::int64_t off = local - secs;
+    if (off < kTzifOffsetMin || off > kTzifOffsetMax) return false;
+    offset = static_cast<std::int32_t>(off);
+    dst = loc.tm_isdst > 0;
+    return true;
+}
+
+void zone_load(const SessionCalendar& cal, MemoState& m) {
+    if (m.zone_kind != MemoState::ZoneKind::Unread) return;
+    m.zone_kind = MemoState::ZoneKind::Unsupported;
+    if (m.utc) {
+        m.zone_kind = MemoState::ZoneKind::Constant;
+        return;
+    }
+    const TzClass cls = timezone_classify(cal.timezone());
+    if (cls.kind == TzClass::Offset) {
+        m.zone_kind = MemoState::ZoneKind::Constant;
+        return;
+    }
+    if (cls.kind != TzClass::Tzfile) return;
+#if !defined(__GLIBC__) && !defined(__APPLE__)
+    // The resolution argument above rests on these two libcs' mktime.
+    return;
+#endif
+    const auto path = tz_file_actual_path(cls.tzfile_name);
+    if (!path) return;
+    std::string bytes;
+    if (!tz_read_resource(*path, bytes)) return;
+    std::vector<std::int64_t> at;
+    bool constant_tail = false;
+    if (!parse_tzif(bytes, at, constant_tail)) return;
+    m.zone_covered_until = constant_tail ? std::numeric_limits<std::int64_t>::max()
+        : (at.empty() ? std::numeric_limits<std::int64_t>::min() : at.back());
+    m.zone_readings.assign(at.size(), MemoState::ZoneReading{});
+    m.zone_at = std::move(at);
+    m.zone_kind = MemoState::ZoneKind::Table;
+}
+
+const MemoState::ZoneReading& zone_reading_at(const SessionCalendar& cal, MemoState& m,
+                                              std::size_t i) {
+    MemoState::ZoneReading& r = m.zone_readings[i];
+    if (!r.read) {
+        r.read = true;
+        const std::int64_t t = m.zone_at[i];
+        r.ok = t > std::numeric_limits<std::int64_t>::min()
+            && zone_libc_reading(cal.timezone(), t - 1, r.offset_before, r.dst_before, m)
+            && zone_libc_reading(cal.timezone(), t, r.offset_after, r.dst_after, m);
+    }
+    return r;
+}
+
+// The conditions above over [lo, hi] (seconds), widened by the spacing.
+bool zone_window_certified(const SessionCalendar& cal, MemoState& m, std::int64_t lo, std::int64_t hi) {
+    zone_load(cal, m);
+    if (m.zone_kind == MemoState::ZoneKind::Constant) return true;
+    if (m.zone_kind != MemoState::ZoneKind::Table) return false;
+    if (m.zone_covered_until != std::numeric_limits<std::int64_t>::max()
+        && (m.zone_covered_until < std::numeric_limits<std::int64_t>::min() + kCertifiedSpacingSeconds
+            || hi >= m.zone_covered_until - kCertifiedSpacingSeconds)) {
+        return false;
+    }
+    const auto& at = m.zone_at;
+    const std::size_t b = static_cast<std::size_t>(
+        std::lower_bound(at.begin(), at.end(), lo - kCertifiedSpacingSeconds) - at.begin());
+    const std::size_t e = static_cast<std::size_t>(
+        std::upper_bound(at.begin(), at.end(), hi + kCertifiedSpacingSeconds) - at.begin());
+    // The readings of the transitions in the window and of one on each side
+    // of it: each interval between two listed instants must read one offset.
+    const std::size_t cb = b > 0 ? b - 1 : 0;
+    const std::size_t ce = e < at.size() ? e + 1 : e;
+    for (std::size_t i = cb; i < ce; ++i) {
+        if (!zone_reading_at(cal, m, i).ok) return false;
+    }
+    for (std::size_t i = cb; i + 1 < ce; ++i) {
+        const auto& left = m.zone_readings[i];
+        const auto& right = m.zone_readings[i + 1];
+        if (left.offset_after != right.offset_before || left.dst_after != right.dst_before) {
+            // libc does not read this table: never certify from it.
+            m.zone_kind = MemoState::ZoneKind::Unsupported;
+            return false;
+        }
+    }
+    std::int64_t last = std::numeric_limits<std::int64_t>::min();
+    for (std::size_t i = b; i < e; ++i) {
+        const auto& r = m.zone_readings[i];
+        const std::int64_t step = static_cast<std::int64_t>(r.offset_after) - r.offset_before;
+        // A listed instant that changes neither reading (a new abbreviation).
+        if (step == 0 && r.dst_before == r.dst_after) continue;
+        if (step > kCertifiedStepSeconds || step < -kCertifiedStepSeconds) return false;
+        if (r.offset_before > kCertifiedOffsetSeconds || r.offset_before < -kCertifiedOffsetSeconds
+            || r.offset_after > kCertifiedOffsetSeconds || r.offset_after < -kCertifiedOffsetSeconds) {
+            return false;
+        }
+        if (step < 0 && r.dst_before == r.dst_after) return false;
+        if (last != std::numeric_limits<std::int64_t>::min()
+            && at[i] - last < kCertifiedSpacingSeconds) {
+            return false;
+        }
+        last = at[i];
+    }
+    return true;
+}
+
 }  // namespace
 
 SessionDayMemo::SessionDayMemo() noexcept = default;
@@ -1902,6 +2204,10 @@ void SessionDayMemo::reset() noexcept {
 
 std::uint64_t SessionDayMemo::interval_resolutions() const noexcept {
     return state_ ? state_->interval_resolutions : 0;
+}
+
+std::uint64_t SessionDayMemo::libc_local_reads() const noexcept {
+    return state_ ? state_->libc_local_reads : 0;
 }
 
 SessionDayMemo::State& SessionDayMemo::bind(const SessionCalendar& calendar) {
@@ -2003,6 +2309,36 @@ bool in_session(const SessionCalendar& calendar, int64_t ms, SessionDayMemo& mem
 
 bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo) {
     return memo.state(calendar).utc;
+}
+
+std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
+                                                  int64_t ms,
+                                                  SessionDayMemo& memo) {
+    MemoState& m = memo.state(calendar);
+    if (!m.valid) return std::nullopt;
+    // The zone first, over the reach of every cycle within two days of `ms`:
+    // where it holds, the cycle holding `ms` is one of them (it spans a day
+    // and at most a step). Nothing is resolved for an instant it refuses.
+    const int64_t seconds = floor_div(ms, kMsPerSecond);
+    const int64_t reach = kCertifiedReachSeconds + 2 * kSecondsPerDay;
+    if (!zone_window_certified(calendar, m, seconds - reach, seconds + reach)) return std::nullopt;
+    const SessionDay* day = memo_session_day_containing(calendar, ms, m);
+    if (!day || ms < day->origin_ms || ms >= day->next_origin_ms) return std::nullopt;
+    CycleCertificate out;
+    out.origin_ms = day->origin_ms;
+    out.next_origin_ms = day->next_origin_ms;
+    out.ordinal = days_from_civil(day->trading_date.year,
+                                  static_cast<unsigned>(day->trading_date.month),
+                                  static_cast<unsigned>(day->trading_date.day));
+    out.spans.reserve(day->spans.size());
+    for (const EpochSpan& span : day->spans) out.spans.emplace_back(span.start_ms, span.end_ms);
+    return out;
+}
+
+int64_t fixed_bucket_ms(const Timeframe& tf) {
+    int64_t bucket = 0;
+    if (!tf.valid() || !mul_ok(tf.count(), unit_ms(tf.unit()), bucket) || bucket <= 0) return 0;
+    return bucket;
 }
 
 }  // inline namespace native_calendar_v2

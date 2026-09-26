@@ -134,6 +134,21 @@ struct PineSecurityEvalState {
     // lookahead_off only), lower-TF arrays and calendar / same-TF
     // requests. False (the default) means "not applicable".
     bool calling_close_completes_partial = false;
+    // Plain ``request.security`` with a requested TF strictly finer than the
+    // finest feed the host supplied (the auxiliary slice, or an input feed
+    // already finer than the chart), e.g. "5S" or "15S" on a lane whose
+    // finest bars are 1m: no bar of the requested timeframe is loaded, so
+    // the site is never fed and reads na on every chart bar. That is
+    // TradingView's own reading of a chart bar that holds no loaded bar of
+    // the requested lower timeframe: it keeps the last 2,000,000 bars of
+    // it, and on the BINANCE:ETHUSDT.P 15m and 1D charts over 2025-04-01..
+    // 2026-05-01 ``request.security(tickerid, "5S", close)`` is na up to
+    // 2026-01-04 22:45 UTC and ``"15S"`` up to 2025-05-18 03:15 UTC (lab tv
+    // pf-krunerr-ltf-horizon / -ltf-count2, 2026-09-26), gaps_on reads na on
+    // the chart bars holding no 5S bar. A chart fed without any intrabar
+    // bars (input_tf == script_tf) still refuses a finer request, so its
+    // host can supply finer bars. False (the default) means "loaded".
+    bool no_loaded_bars = false;
     // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
     // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
     // OHLC is replaced by its Heikin-Ashi candle before the security
@@ -252,6 +267,9 @@ public:
     void on_native_tick(const Bar&, const NativeTickContext&) final;
     void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
     void on_native_bar(const Bar&, const NativeDecisionContext&) final;
+    // A magnified run's intrabar is done: its open-point fills are spent
+    // (PineScheduler::sub_bar_complete).
+    void on_native_sub_bar(const Bar&, const NativeDecisionContext&) final;
     // R6: every calculation of the run arrives here. BarClose forwards to
     // on_native_bar exactly as the kernel's default does; OrderFill is
     // calc_on_order_fills, which the consumer now schedules (spec

@@ -1,0 +1,17 @@
+{
+  "title": "mi-coof-refill",
+  "slug": "mi-coof-refill",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T05:26:33.854Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2026-01-29",
+    "to": "2026-02-03",
+    "timeoutMs": 170000
+  },
+  "pine_sha256": "fce43bb00a4654664aed0d88600fbaca6e06974d0766a6dcfffdd849f3e7550a",
+  "tv_trades_sha256": "7bfe24aef5bd47bca07289e5afb14bf0cb5d01221e8f7642ca6b82fc02cc6eb3",
+  "tv_trades_rows": 432
+}

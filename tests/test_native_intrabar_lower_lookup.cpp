@@ -21,12 +21,23 @@
 // on an Apple M4 Max (clang 17), and 15.7-16.1 before / 4.18-4.26 after on
 // Linux aarch64 (gcc 13, one pinned core). 6 separates the two shapes with
 // more than 40 % of room above the linear one and a factor of 2.6 below the
-// quadratic one. The sample is process CPU time (std::clock), which the
-// runtime-budget ruling (A40 rev 7) found load-robust. RATIO-HARDEN repeats
-// the same 4,000- and 16,000-bar legs until the best small leg has 100 ms of
-// CPU, retaining the x6 bound and the mutant margin. A timed leg that still
-// comes in under it doubles the repeats and times both legs again (R5 lane
-// CI-FLAKE, tests/ratio_timing.hpp).
+// quadratic one. RATIO-HARDEN repeats the same 4,000- and 16,000-bar legs
+// until the best small leg has 100 ms of CPU, retaining the x6 bound and the
+// mutant margin. A timed leg that still comes in under it doubles the repeats
+// and times both legs again (R5 lane CI-FLAKE, tests/ratio_timing.hpp).
+//
+// The sample is the process's USER CPU time (ratio_timing::user_cpu_seconds,
+// R5 lane INT27). Process CPU time (std::clock, which the runtime-budget
+// ruling A40 rev 7 found load-robust) also counts the kernel's page faults,
+// and the allocator maps the 16,000-bar leg's buffers afresh on every run
+// where the 4,000-bar leg reuses its heap: on Linux aarch64 (gcc 13, one
+// pinned core) the large leg spent 0.38-0.41 s of its 0.98 s in system time
+// and the small leg 0.00, so process time read 6.12-6.61 once the per-bar
+// calendar cost left the run (R5 lane PERF-ZONED; 5.71-5.88 before it; the
+// lab's x86 cloud hosts read 6.19-6.28), while user time reads 3.88-4.00 on
+// the same core, and 3.88-4.36 on the M4 Max. Restoring the whole-feed scan
+// still fails the bound under user time: 18.1 on Linux aarch64, 17.0 on the
+// M4 Max.
 //
 // The value half pins what the selection feeds -- the driver points, the
 // fills and every hash over them -- for three feeds: a lower feed that tiles
@@ -216,7 +227,7 @@ struct Bracket final : NativeStrategyHost {
 double run_cpu(int count, int repeats) {
     const NativeRunSpec spec = lower_spec(Feed::Tiling, count, true, "k24-scale");
     const std::vector<Bar> bars = script_feed(count);
-    const std::clock_t started = std::clock();
+    const double started = ratio_timing::user_cpu_seconds();
     for (int repeat = 0; repeat < repeats; ++repeat) {
         Idle host;
         const auto setup = host.configure_native(spec);
@@ -225,7 +236,7 @@ double run_cpu(int count, int repeats) {
         CHECK(host.last_error().empty());
         CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     }
-    return static_cast<double>(std::clock() - started) / CLOCKS_PER_SEC;
+    return ratio_timing::user_cpu_seconds() - started;
 }
 
 double best_of_three(int count, int repeats) {

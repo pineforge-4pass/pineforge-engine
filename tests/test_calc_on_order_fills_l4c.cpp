@@ -232,9 +232,13 @@ void test_historical_refill_is_exact_o_o_near_far_and_capped_at_four() {
 }
 
 // Only the historical bar's O has the documented same-point two-fill
-// exception. When a resting priced entry lands exactly on H/L, that endpoint
-// is consumed before its fill recalc runs; a recalc-born market add must wait
-// for the NEXT waypoint/tick even when the fill price equals the endpoint.
+// exception. When a resting priced entry lands exactly on H/L, ab9714be
+// consumed that endpoint before its fill recalc ran, so a recalc-born market
+// add waited for the NEXT waypoint/tick even when the fill price equalled the
+// endpoint. On the chart path TradingView fills it AT that endpoint (lab tv
+// pa3-f4-stop-w1-mkt-*: a stop entry exactly on a bar's first extreme, then the
+// market add, both at the extreme; R5 lane PAR-ORDERS-3); the magnifier's
+// sub-bar tick keeps the NEXT-tick rule (the row below).
 class EndpointMarketAddProbe final : public CoofBase {
 public:
     void on_source_bar(const Bar&) override {
@@ -262,7 +266,11 @@ void test_non_open_endpoint_fill_consumes_point_before_market_add() {
     CHECK(px.size() == 2);
     if (px.size() == 2) {
         CHECK(near(px[0], 105.0));
-        CHECK(near(px[1], 90.0));
+        // expectation corrected (R5 lane PAR-ORDERS-3): the add's lot 90 (the
+        // bar's second extreme, the next waypoint) -> 105 (the first extreme
+        // the stop entry's fill ended the leg on), as TradingView books the
+        // add of pa3-f4-stop-w1-mkt-long / -short.
+        CHECK(near(px[1], 105.0));
     }
 }
 

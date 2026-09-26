@@ -15,6 +15,13 @@
 // the bar index, the position the script sees and the bar it is handed, then
 // every closed trade and every surviving lot.
 //
+// One amendment: kExpectRefill's lots are TradingView's since R5 lane
+// MAG-INTRABAR. A magnified run now walks TradingView's own intrabars -- on
+// this 15-minute chart 2-minute bars, the chart bar's open print first
+// (tests/fixtures/magnifier_intrabars) -- not the 1-minute feed, so the
+// cascade's waypoints moved (tests/test_native_calc_timing_twin.cpp spells
+// them out); its callback rows are b0cec54's.
+//
 // Corpus breadth is not in this file: the 64 corpus/validation probes whose
 // strategy.pine declares calc_on_order_fills are covered by the whole-corpus
 // byte-identity sweep that accompanies the lane.
@@ -296,9 +303,12 @@ const Bar kCascadeBars[] = {{100, 102, 98, 101, 1, 900000},
 // ---------------------------------------------------------------------------
 // Harvested from the PRE-lowering library (engine main b0cec54). See the file
 // header: these are the adapter's own cadence and book, produced when the
-// adapter still drove the recalculation itself. One instant since: R5 lane
-// PAR-ORDERS dates l5 at its chart bar's open (900000), as TradingView dates a
-// magnified fill; b0cec54 kept its sub-bar's instant (960000).
+// adapter still drove the recalculation itself. Two changes since: the lots'
+// prices are TradingView's cascade since R5 lane MAG-INTRABAR (the file
+// header), and R5 lane PAR-ORDERS dates every lot at its chart bar's open
+// (900000), as TradingView dates a magnified fill -- b0cec54 kept l5's
+// sub-bar instant (960000), and MAG-INTRABAR's straddler stamps l1-l4 one
+// millisecond after the chart bar's open print.
 // ---------------------------------------------------------------------------
 
 const char kExpectRefill[] =
@@ -314,9 +324,9 @@ const char kExpectRefill[] =
     "L6\n"
     "  l0 L0@100@900000\n"
     "  l1 L1@100@900000\n"
-    "  l2 L2@99@900000\n"
-    "  l3 L3@101@900000\n"
-    "  l4 L4@100.25@900000\n"
+    "  l2 L2@100@900000\n"
+    "  l3 L3@99@900000\n"
+    "  l4 L4@101@900000\n"
     "  l5 L5@100.1@900000\n"
     "U6 C8\n";
 const char kExpectChronology[] =
@@ -564,10 +574,12 @@ void test_pine_refusals_compose_with_the_kernel_cadence() {
 //    not reproduce TradingView's eligibility. Lane L5 measured this against a
 //    bare native twin (tests/test_native_calc_timing.cpp, CT11); here it is
 //    measured against the adapter itself — the six refilled lots fill on the
-//    chart bar's own O/L/H/C and the next sub-bar's open, NOT at the
-//    successive sub-bar opens the unqualified birth rule would produce. Every
-//    fill is dated at the chart bar's open, as TradingView dates a magnified
-//    fill (R5 lane PAR-ORDERS), so the prices carry the difference.
+//    fill points of TradingView's magnified path (the chart bar's open print,
+//    then its first 2-minute intrabar's open, open, low and high, then the
+//    next intrabar's open; R5 lane MAG-INTRABAR), NOT at the successive
+//    sub-bar opens the unqualified birth rule would produce. Every fill is
+//    dated at the chart bar's open, as TradingView dates a magnified fill
+//    (R5 lane PAR-ORDERS), so the prices carry the difference.
 // ---------------------------------------------------------------------------
 
 void test_the_waypoint_deferral_is_still_load_bearing() {
@@ -579,7 +591,7 @@ void test_the_waypoint_deferral_is_still_load_bearing() {
     CHECK(refill.last_error().empty());
     const auto position = refill.physical_position();
     CHECK(position.lot_count == 6);
-    const std::vector<double> waypoint_prices = {100.0, 100.0, 99.0, 101.0, 100.25, 100.1};
+    const std::vector<double> waypoint_prices = {100.0, 100.0, 100.0, 99.0, 101.0, 100.1};
     const std::vector<double> birth_rule_prices = {100.0, 100.1, 100.2, 100.3, 100.4, 100.5};
     for (std::size_t i = 0; i < position.lot_count && i < waypoint_prices.size(); ++i) {
         const int index = static_cast<int>(i);

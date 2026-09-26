@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F3 pooc-limit short coof",
+  "slug": "pa3-f3-pooc-limit-short-coof",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:47:14.000Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "a059eb310f1c0770e20cccbebdf081228498ff4ef7d593ad61418c3253e536f6",
+  "tv_trades_sha256": "5590f99e59826d8983e5220f89871077ea6d4c624330c2c4e713e8e3686ffa1f",
+  "tv_trades_rows": 8
+}

@@ -1,0 +1,17 @@
+{
+  "title": "mi-ltf-eth-30",
+  "slug": "mi-ltf-eth-30",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T04:24:47.840Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "30",
+    "from": "2026-04-26",
+    "to": "2026-04-30",
+    "timeoutMs": 120000
+  },
+  "pine_sha256": "71bb408ef32fe078f91df457fd7ee18702beddc7a1780dc9ea3abdce07040f65",
+  "tv_trades_sha256": "271ba1652be63702e4830c68f6f1c9882c69b4fbe2fc552d6cc10d83696e0afb",
+  "tv_trades_rows": 28
+}

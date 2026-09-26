@@ -117,8 +117,8 @@ finding to report, not a step to take.
    `scripts/check_doc_reverts.py`.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
-    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:260 and
-    `RELEASE_MIN_TESTS` ci_verify.py:393. Adding rows means raising the floor
+    *ran* against a floor: `KERNEL_MIN_TESTS` ci_verify.py:274 and
+    `RELEASE_MIN_TESTS` ci_verify.py:429. Adding rows means raising the floor
     in the same commit.
 
 ## The recipe for a lane
@@ -244,7 +244,7 @@ decision, and removing one is a regression:
 
 **kernel** — the Pine-agnostic half of the engine: matching, fills, sizing,
 margin, settlement, indicators, calendars. Buildable alone as
-`PineForge::kernel` CMakeLists.txt:154 with `PINEFORGE_BUILD_SOURCE_LAYER`
+`PineForge::kernel` CMakeLists.txt:155 with `PINEFORGE_BUILD_SOURCE_LAYER`
 CMakeLists.txt:43 off.
 
 **adapter** — `src/source/` and `src/compat/pine/`: the TradingView-parity
@@ -264,7 +264,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(`KERNEL_MIN_TESTS` ci_verify.py:260, `RELEASE_MIN_TESTS` ci_verify.py:393). It
+(`KERNEL_MIN_TESTS` ci_verify.py:274, `RELEASE_MIN_TESTS` ci_verify.py:429). It
 counts rows that ran, so a skipped row does not pad it.
 
 **receipt** — the recorded evidence an ABI-comparison row needs (a prepared

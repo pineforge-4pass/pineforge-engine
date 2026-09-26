@@ -74,15 +74,38 @@ public:
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }
     int source_bar_index_for(const NativeDecisionContext& context) const noexcept;
-    // The leg order is the kernel's answer for the input bar
+    // The next fill point, for a fill recalculation's market order, of the
+    // lower-path bar being walked: a price that bar still reaches, or
+    // (next_open) the next lower-path bar's opening -- NaN when there is
+    // none -- which a plain market order reaches by itself, since the kernel
+    // fills a newborn market request at the path's next discrete point. The
+    // leg order is the kernel's answer for that bar
     // (PineExecutionAdapter::source_path_uses_high_first), not a copy of it.
-    std::optional<double> next_input_waypoint(
-        const PineStrategyHost&, const NativeDecisionContext&,
-        double current_price) const noexcept;
+    struct InputWaypoint {
+        double price;
+        bool next_open;
+    };
+    std::optional<InputWaypoint> next_input_waypoint(
+        const PineStrategyHost&, const NativeDecisionContext&) const noexcept;
     const Bar* current_script_bar() const noexcept {
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
     }
-    std::optional<Bar> broker_bar(const NativeDecisionContext& context) const {
+    // The bar of the run's lower intrabar path the context is walking (its
+    // sub_bar_open_ms), or nullptr when the run declares no lower path or no
+    // bar of it carries that stamp. A magnified run's sub-bars are
+    // TradingView's intrabars built from the input (R5 lane MAG-INTRABAR,
+    // source::tradingview_magnifier_bars), not input bars.
+    const Bar* lower_path_bar_at(const PineStrategyHost& host,
+                                 const NativeDecisionContext& context) const noexcept;
+    // One intrabar of a magnified run's path is done. TradingView's magnified
+    // broker admits the open fill and one refill at EVERY intrabar's open,
+    // not only at the chart bar's first one (R5 lane MAG-INTRABAR,
+    // tests/fixtures/magnifier_intrabars/mi-coof-refill*), so the open-point
+    // count starts over with the next intrabar.
+    void sub_bar_complete() noexcept;
+    std::optional<Bar> broker_bar(const PineStrategyHost& host,
+                                  const NativeDecisionContext& context) const {
+        if (const Bar* sub = lower_path_bar_at(host, context)) return *sub;
         const auto& bars = retained_.bars;
         const std::size_t n = bars.size();
         if (n > 0) {

@@ -23,7 +23,32 @@
 // this lane timed.
 #pragma once
 
+#include <ctime>
+
+#if !defined(_WIN32)
+#include <sys/resource.h>
+#endif
+
 namespace ratio_timing {
+
+// This process's user-mode CPU seconds (POSIX getrusage), for a row whose
+// legs allocate enough that the kernel's page faults dominate the difference
+// between them: std::clock also counts system time, and a leg whose buffers
+// the allocator maps afresh on every run pays a first-touch fault per page
+// that the smaller leg's reused heap never pays -- a cost of the allocator's
+// threshold, not of the code the row times (R5 lane INT27,
+// tests/test_native_intrabar_lower_lookup.cpp). Falls back to std::clock
+// where getrusage does not exist.
+inline double user_cpu_seconds() {
+#if !defined(_WIN32)
+    rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        return static_cast<double>(usage.ru_utime.tv_sec)
+            + 1e-6 * static_cast<double>(usage.ru_utime.tv_usec);
+    }
+#endif
+    return static_cast<double>(std::clock()) / CLOCKS_PER_SEC;
+}
 
 // Doubles `scale` from its start while one sample of the workload at that
 // scale -- the row's `sample(scale)`, in seconds -- is under `min_seconds`,

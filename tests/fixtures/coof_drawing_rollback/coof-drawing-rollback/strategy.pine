@@ -1,0 +1,20 @@
+//@version=6
+// Does a calc_on_order_fills recalculation roll back drawings? A var line's x2
+// is bumped on every execution; n (var) is rolled back, m (varip) is not. The
+// order comments spell all three: x2 == n means drawings roll back with vars,
+// x2 == m means a recalculation's drawing edits persist.
+strategy("PF coof drawing rollback", overlay = true, calc_on_order_fills = true)
+var line l = line.new(0, 0, 0, 0)
+line.set_x2(l, line.get_x2(l) + 1)
+var int n = 0
+n += 1
+varip int m = 0
+m += 1
+var label lab = na
+label.delete(lab)
+lab := label.new(bar_index, high, "k")
+string tag = "x2=" + str.tostring(line.get_x2(l)) + " n=" + str.tostring(n) + " m=" + str.tostring(m) + " labels=" + str.tostring(array.size(label.all))
+if minute(time, "UTC") == 0 and strategy.position_size == 0
+    strategy.entry("L", strategy.long, comment = tag)
+if minute(time, "UTC") == 30
+    strategy.close("L", comment = tag)

@@ -11,8 +11,13 @@
 // session days are the fixed daily cycles, which tile time, so the instant,
 // its interval's open and that first eligible instant share the one session
 // day holding the instant, and the eligible instant is in session on it. An
-// instant out of session, and every instant of any other zone, is still read
-// through its interval, in the order the lane's base read it.
+// instant out of session, and every instant of any other zone, was still read
+// through its interval, in the order the lane's base read it. Lane PERF-ZONED
+// made that read the certified-cycle one, witnessed by
+// tests/test_native_session_day_zoned.cpp: a UTC calendar certifies every
+// cycle, and an instant whose bucket meets no span is read off its day too.
+// UTC0 is a POSIX zone, never certified, so it is still read through its
+// interval.
 //
 // This witness checks that the shortcut changes no fact and keeps the
 // calendar off the per-bar path:
@@ -61,7 +66,8 @@ struct NativeExecutionConsumerProbe {
         return NativeExecutionConsumer::bound(host).calendar_memo_.interval_resolutions();
     }
     static bool calendar_is_utc(const BacktestEngine& host) {
-        return NativeExecutionConsumer::bound(host).calendar_is_utc();
+        const NativeExecutionConsumer& consumer = NativeExecutionConsumer::bound(host);
+        return native_calendar::utc_calendar(consumer.calendar_, consumer.calendar_memo_);
     }
 };
 

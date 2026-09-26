@@ -102,11 +102,11 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors at INT26 are 684 for Debug
-and sanitizers and 693 for native (653 and 662 at the INT24 base, plus wave G's
-six rows, wave H's twenty-four and INT26's own tape row). The full-run release
-and kernel floors are 703 and 286 rows that ran; full runs do not exclude a
-label.
+missing label fails. The PR registration floors at INT27 are 697 for Debug
+and sanitizers and 706 for native (653 and 662 at the INT24 base, plus wave G's
+six rows, wave H's twenty-four, INT26's own tape row and INT27's thirteen). The
+full-run release and kernel floors are 716 and 289 rows that ran; full runs do
+not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
@@ -500,8 +500,11 @@ to a wording the page held before, must be named by the commit's message: by the
 lane label or the hash of the commit that introduced it, by six consecutive
 words of it, or by the key of its table row (`OL7`). A fresh rewrite and a
 re-anchor need no name. It judges the non-merge commits since the merge base
-with `main`; with no `main` ref (the lab's remote hosts) it walks back from
-`HEAD`, and a commit whose tree predates the gate is never judged.
+with `main`; with no `main` ref (the lab's remote hosts) since the newest
+ancestor whose subject ends in a pull request number (`... (#N)`, the commit a
+merged pull request left on `main`, whose branch was judged commit by commit
+before it merged), else it walks back from `HEAD`; a commit whose tree predates
+the gate is never judged.
 `--base R --head R [--message-file F]` judges one replayed change instead:
 lane B-C-SURFACE's pages replayed onto `db98990c` (the rebase that dropped
 V19-D's `keep_handle` row and put D2-C's runtime-block wording back) fail it,

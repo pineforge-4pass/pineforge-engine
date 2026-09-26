@@ -1,5 +1,6 @@
 /*
- * test_second_extreme_order_tapes.cpp -- R5 lane PAR-ORDERS-2 (items 2 and 4).
+ * test_second_extreme_order_tapes.cpp -- R5 lanes PAR-ORDERS-2 (items 2 and 4)
+ * and PAR-ORDERS-3 (findings 1, 2 and 4).
  *
  * Under calc_on_order_fills, the recalculation a fill starts may sit exactly
  * on the bar's SECOND extreme -- the end of the leg that approaches it, the
@@ -50,36 +51,46 @@
  *                      above (long j = 4, 25, 40; short j = 2, 32, 44).
  * TradingView: point-w2 books AX at the second extreme and C at the close /
  * next open; level-w1 books AX at its own level on the leg to the second
- * extreme and C at that extreme. The short point-w2 tapes are exact.
+ * extreme and C at that extreme. Exact since R5 lane PAR-ORDERS-3 (findings 1
+ * and 2): exit() reads the recalculating fill -- the matcher's fill at a
+ * resting request's own level on the extreme leaves no remainder of its leg in
+ * flight, and a fill forced onto the extreme starts the next leg, read from
+ * the extreme itself, whose booked tick an off-grid low (11.425 -> 11.43,
+ * 11.645 -> 11.65) does not equal. The process_orders_on_close short tape's
+ * second cycle holds since the lane's finding 3
+ * (tests/test_pooc_limit_close_tapes.cpp): on bar 31 TradingView fills A's
+ * sell limit at the close its high already reached.
  *
- * What the boundary rows record (RECORDED divergences, older than this lane:
- * the lane's base answers every one of them alike):
- *   - level-w1, rows 1-6 (long) and 1, 2, 5, 6 (short): the exit a
- *     recalculation places on the matcher's fill AT the first extreme is
- *     forced onto the second one (exit(): the in-flight remainder of a
- *     leg-end fill is the whole next leg), so AX books that extreme instead
- *     of its level and C, placed at a forced fill, the close / next open;
- *     the process_orders_on_close short tape is compared on its first cycle:
- *     on bar 31 TradingView fills A's sell limit at the close its high
- *     already reached, where the engine fills it on bar 32;
- *   - point-w2 long, rows 2, 3, 5, 6 (row 6 agrees under
- *     process_orders_on_close, where the close is the extreme): A books the
- *     off-grid low's tick (11.425 -> 11.43, 11.645 -> 11.65), which
- *     next_source_path_waypoint reads as a fill short of the low, so AX is a
- *     plain limit at its level and C fills at the second extreme.
+ * R5 lane PAR-ORDERS-3 carries the rule to the FIRST extreme (finding 4):
+ * after the matcher's fill at a resting request's own level ON a bar's first
+ * extreme, the orders its recalculation places act from that extreme --
+ *   pa3-f4-level-w1-{mkt,close,closeall,order}-*  a market entry B,
+ *       strategy.close("A"), close_all or a market strategy.order fill AT it;
+ *   pa3-f4-level-w1-xstop-*  A's exit stop, already through, fills AT it;
+ *   pa3-f4-level-w1-bstop-*  a stop entry B between the extremes fills at its
+ *       own level on the leg to the second extreme;
+ *   pa3-f4-stop-w1-mkt-*, pa3-f4-xlimit-w1-reentry{,-tp}-*  the two shapes
+ *       ab9714be's rows pinned: a STOP entry exactly on the extreme, then the
+ *       market add; an EXIT limit exactly on it, then the market re-entry,
+ *       whose own exit limit, already through, fills where the path next
+ *       re-crosses its level -- ab9714be advanced every such order to the
+ *       second extreme or the next open;
+ *   pa3-f4-point-w1-mkt-*  the control: a point fill forced onto the first
+ *       extreme starts the next leg, and B fills at the second extreme.
+ * The same reading moves the exit tapes' rows 5 and 7 (long) and 1 (short): a
+ * stop B's recalculation places on the second extreme, reached on the leg to
+ * the close, fills at its own level there, as TradingView books it, where it
+ * used to be forced onto the close's tick. Every compared row is exact: side,
+ * instants, prices, quantity, signals, bars.
  *
- * What the rows record:
- *   - the exit tapes' rows 5 and 7 (long, both variants) and row 1 (short, both
- *     variants): the exit fills on bar j, as on TradingView, but at the close's
- *     tick where TradingView books the stop's own level (11.95 / 11.77 /
- *     11.47): a stop born on the extreme is matched at the close point, not
- *     on the leg to it. RECORDED divergences, asserted to differ.
- * Everything else is exact: side, instants, prices, quantity, signals.
- *
- * Fail-before, this TU against the lane's base (6945fc19): every row of the
- * long exit tapes (8 of 8; 7 of 8 with process_orders_on_close) exits A at the
- * next open, and every close tape row closes A at the next open (or, under
- * process_orders_on_close, at the bar's close, then B by the re-issued close).
+ * Fail-before, this TU against R5 lane PAR-ORDERS-2's base (6945fc19): every
+ * row of the long exit tapes (8 of 8; 7 of 8 with process_orders_on_close)
+ * exits A at the next open, and every close tape row closes A at the next open
+ * (or, under process_orders_on_close, at the bar's close, then B by the
+ * re-issued close). Against R5 lane PAR-ORDERS-3's base (9f7a025c): 82 of 288
+ * checks fail -- every level-w1 row, point-w2 long's rows 2, 3, 5, 6 (2, 3, 5
+ * under process_orders_on_close), the exit tapes' rows 5, 7 / 1, and every
+ * pa3-f4 order but the point-w1 controls'.
  */
 
 #include <pineforge/bar.hpp>
@@ -181,7 +192,28 @@ std::vector<TapeTrade> read_tape(const std::string& slug) {
 // and 4), or the boundary pair -- A's limit on the FIRST extreme (a level
 // fill) or A's market fill ON it (a point fill), each followed by the exit AX
 // and the market entry C.
-enum class Probe { SecondExtremeStop, LevelFirstExtreme, PointSecondExtreme };
+enum class Probe {
+    SecondExtremeStop, LevelFirstExtreme, PointSecondExtreme,
+    // R5 lane PAR-ORDERS-3, finding 4: the order the recalculation on A's
+    // fill places -- a market entry B, strategy.close("A"), close_all, a
+    // market strategy.order B, A's exit AX with its stop already through, or
+    // a stop entry B between the extremes -- A's fill a level fill AT the
+    // first extreme, or (the control) a point fill forced onto it.
+    LevelFirstMarket, LevelFirstClose, LevelFirstCloseAll, LevelFirstOrder,
+    LevelFirstExitStop, LevelFirstStopEntry, PointFirstMarket,
+    // ... and the two shapes ab9714be's rows pin: A a STOP entry exactly on the
+    // first extreme, then the market add B; E's EXIT limit X exactly on it,
+    // then the market re-entry E -- and that re-entry's own exit limit X2
+    // between the extremes, already marketable at its price.
+    StopFirstMarket, ExitLimitFirstReentry, ExitLimitFirstReentryTp,
+};
+bool first_extreme_probe(Probe p) {
+    return p == Probe::LevelFirstMarket || p == Probe::LevelFirstClose
+        || p == Probe::LevelFirstCloseAll || p == Probe::LevelFirstOrder
+        || p == Probe::LevelFirstExitStop || p == Probe::LevelFirstStopEntry
+        || p == Probe::PointFirstMarket || p == Probe::StopFirstMarket
+        || p == Probe::ExitLimitFirstReentry || p == Probe::ExitLimitFirstReentryTp;
+}
 
 struct Variant {
     const char* slug;
@@ -203,7 +235,9 @@ public:
         c.initial_capital = 100000;
         c.default_qty_type = static_cast<int>(QtyType::FIXED);
         c.default_qty_value = 100;
-        c.pyramiding = v.probe == Probe::SecondExtremeStop ? 2 : 1;
+        c.pyramiding = v.probe == Probe::ExitLimitFirstReentry
+                || v.probe == Probe::ExitLimitFirstReentryTp ? 1
+            : v.probe == Probe::SecondExtremeStop || first_extreme_probe(v.probe) ? 2 : 1;
         c.process_orders_on_close = v.pooc;
         c.calc_on_order_fills = true;
         c.slippage = 0;
@@ -217,6 +251,10 @@ public:
     void on_source_bar(const Bar&) override {
         const int k = bar_index_;  // the replay's first bar is the Pine counter's origin
         const double units = signed_position_size();
+        if (first_extreme_probe(v_.probe)) {
+            first_extreme(k, units);
+            return;
+        }
         if (v_.probe != Probe::SecondExtremeStop) {
             boundary(k, units);
             return;
@@ -336,6 +374,109 @@ private:
         }
     }
 
+    void first_extreme(int k, double units) {
+        if (v_.probe == Probe::StopFirstMarket || v_.probe == Probe::ExitLimitFirstReentry
+            || v_.probe == Probe::ExitLimitFirstReentryTp) {
+            first_extreme_pinned_shapes(k, units);
+            return;
+        }
+        const bool point = v_.probe == Probe::PointFirstMarket;
+        static const int kLevelLong[] = {4, 25, 40};
+        static const double kLevelLongA[] = {11.46, 11.73, 11.61};
+        static const int kLevelShort[] = {2, 44};
+        static const double kLevelShortA[] = {11.48, 11.72};
+        static const int kPointLong[] = {3, 41};
+        static const double kPointLongPx[] = {11.44, 11.66};
+        static const int kPointShort[] = {2, 30};
+        static const double kPointShortPx[] = {11.46, 11.85};
+        static const double kLongXStop[] = {11.48, 11.75, 11.63};
+        static const double kShortXStop[] = {11.46, 11.70};
+        static const double kLongBStop[] = {11.50, 11.76, 11.70};
+        static const double kShortBStop[] = {11.43, 11.69};
+        const int cycles = point || !v_.is_long ? 2 : 3;
+        const int* js = point ? (v_.is_long ? kPointLong : kPointShort)
+                              : (v_.is_long ? kLevelLong : kLevelShort);
+        const double* placed = point ? (v_.is_long ? kPointLongPx : kPointShortPx)
+                                     : (v_.is_long ? kLevelLongA : kLevelShortA);
+        const int closed = closed_now(k);
+        const double held = v_.is_long ? 100.0 : -100.0;
+        for (int c = 0; c < cycles; ++c) {
+            const int j = js[c];
+            if (k == j - 1 && units == 0.0) {
+                if (point) {
+                    strategy_entry("P", v_.is_long);
+                    strategy_exit("PX", "P", kNaN, placed[c]);
+                } else {
+                    strategy_entry("A", v_.is_long, placed[c]);
+                }
+            }
+            if (k == j) {
+                if (point && units == 0.0 && closed == 1) strategy_entry("A", v_.is_long);
+                if (units == held && (!point || open_trade_entry_id(0) == "A")) {
+                    switch (v_.probe) {
+                    case Probe::LevelFirstClose: strategy_close("A"); break;
+                    // codegen spells strategy.close_all() as a close of "".
+                    case Probe::LevelFirstCloseAll: strategy_close(""); break;
+                    case Probe::LevelFirstOrder: strategy_order("B", v_.is_long, 100.0); break;
+                    case Probe::LevelFirstExitStop:
+                        strategy_exit("AX", "A", kNaN,
+                                      (v_.is_long ? kLongXStop : kShortXStop)[c]);
+                        break;
+                    case Probe::LevelFirstStopEntry:
+                        strategy_entry("B", v_.is_long, kNaN,
+                                       (v_.is_long ? kLongBStop : kShortBStop)[c]);
+                        break;
+                    default: strategy_entry("B", v_.is_long); break;
+                    }
+                }
+            }
+            // The later scripts cancel what is still working before the close.
+            const bool cancels = v_.probe == Probe::LevelFirstCloseAll
+                || v_.probe == Probe::LevelFirstOrder || v_.probe == Probe::LevelFirstExitStop
+                || v_.probe == Probe::LevelFirstStopEntry;
+            if (k == j + 2 && units != 0.0) {
+                if (cancels) strategy_cancel_all();
+                strategy_close_all();
+            }
+        }
+    }
+
+    void first_extreme_pinned_shapes(int k, double units) {
+        // A buy stop / exit limit at the high of a high-first bar (long), a sell
+        // stop / exit limit at the low of a low-first one (short).
+        static const int kLong[] = {2, 32, 44};
+        static const double kLongLevel[] = {11.48, 11.86, 11.72};
+        static const int kShort[] = {4, 25, 40};
+        static const double kShortLevel[] = {11.46, 11.73, 11.61};
+        static const double kLongTp[] = {11.44, 11.83, 11.69};
+        static const double kShortTp[] = {11.49, 11.76, 11.67};
+        const int* js = v_.is_long ? kLong : kShort;
+        const double* level = v_.is_long ? kLongLevel : kShortLevel;
+        const double* tp = v_.is_long ? kLongTp : kShortTp;
+        const int closed = closed_now(k);
+        const double held = v_.is_long ? 100.0 : -100.0;
+        const bool stop_entry = v_.probe == Probe::StopFirstMarket;
+        for (int c = 0; c < 3; ++c) {
+            const int j = js[c];
+            if (stop_entry) {
+                if (k == j - 1 && units == 0.0) strategy_entry("A", v_.is_long, kNaN, level[c]);
+                if (k == j && units == held) strategy_entry("B", v_.is_long);
+            } else {
+                if (k == j - 1 && units == 0.0) strategy_entry("E", v_.is_long);
+                if (k == j && units == held && closed == 0)
+                    strategy_exit("X", "E", level[c], kNaN);
+                if (k == j && units == 0.0 && closed == 1) strategy_entry("E", v_.is_long);
+                if (v_.probe == Probe::ExitLimitFirstReentryTp && k == j && units == held
+                    && closed == 1)
+                    strategy_exit("X2", "E", tp[c], kNaN);
+            }
+            if (k == j + 2 && units != 0.0) {
+                strategy_cancel_all();
+                strategy_close("");
+            }
+        }
+    }
+
     Variant v_;
     int bar_ = -1;
     int closed_before_ = 0;
@@ -407,38 +548,48 @@ void replay(const Variant& v) {
     std::printf("      %zu rows compared, %d differ\n", v.compared, differing);
 }
 
-unsigned rows(std::initializer_list<int> list) {
-    unsigned mask = 0;
-    for (const int row : list) mask |= 1u << row;
-    return mask;
-}
-
 }  // namespace
 
 int main() {
     const Variant variants[] = {
-        {"pa2-i2-exit-w2-long", true, true, false, 8, rows({5, 7})},
-        {"pa2-i2-exit-w2-long-pooc", true, true, true, 8, rows({5, 7})},
-        {"pa2-i2-exit-w2-short", false, true, false, 2, rows({1})},
-        {"pa2-i2-exit-w2-short-pooc", false, true, true, 2, rows({1})},
+        {"pa2-i2-exit-w2-long", true, true, false, 8, 0u},
+        {"pa2-i2-exit-w2-long-pooc", true, true, true, 8, 0u},
+        {"pa2-i2-exit-w2-short", false, true, false, 2, 0u},
+        {"pa2-i2-exit-w2-short-pooc", false, true, true, 2, 0u},
         {"pa2-i4-close-w2-long", true, false, false, 8, 0u},
         {"pa2-i4-close-w2-long-pooc", true, false, true, 8, 0u},
         {"pa2-i4-close-w2-short", false, false, false, 2, 0u},
         {"pa2-i4-close-w2-short-pooc", false, false, true, 2, 0u},
-        {"pa2-i2-level-w1-long", true, true, false, 6, rows({1, 2, 3, 4, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-long-pooc", true, true, true, 6, rows({1, 2, 3, 4, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-short", false, true, false, 6, rows({1, 2, 5, 6}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-level-w1-short-pooc", false, true, true, 2, rows({1, 2}),
-         Probe::LevelFirstExtreme},
-        {"pa2-i2-point-w2-long", true, true, false, 6, rows({2, 3, 5, 6}),
-         Probe::PointSecondExtreme},
-        {"pa2-i2-point-w2-long-pooc", true, true, true, 6, rows({2, 3, 5}),
-         Probe::PointSecondExtreme},
+        {"pa2-i2-level-w1-long", true, true, false, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-long-pooc", true, true, true, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-short", false, true, false, 6, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-level-w1-short-pooc", false, true, true, 5, 0u, Probe::LevelFirstExtreme},
+        {"pa2-i2-point-w2-long", true, true, false, 6, 0u, Probe::PointSecondExtreme},
+        {"pa2-i2-point-w2-long-pooc", true, true, true, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-short", false, true, false, 6, 0u, Probe::PointSecondExtreme},
         {"pa2-i2-point-w2-short-pooc", false, true, true, 6, 0u, Probe::PointSecondExtreme},
+        {"pa3-f4-level-w1-mkt-long", true, true, false, 6, 0u, Probe::LevelFirstMarket},
+        {"pa3-f4-level-w1-mkt-short", false, true, false, 4, 0u, Probe::LevelFirstMarket},
+        {"pa3-f4-level-w1-close-long", true, true, false, 3, 0u, Probe::LevelFirstClose},
+        {"pa3-f4-level-w1-close-short", false, true, false, 2, 0u, Probe::LevelFirstClose},
+        {"pa3-f4-level-w1-closeall-long", true, true, false, 3, 0u, Probe::LevelFirstCloseAll},
+        {"pa3-f4-level-w1-closeall-short", false, true, false, 2, 0u, Probe::LevelFirstCloseAll},
+        {"pa3-f4-level-w1-order-long", true, true, false, 6, 0u, Probe::LevelFirstOrder},
+        {"pa3-f4-level-w1-order-short", false, true, false, 4, 0u, Probe::LevelFirstOrder},
+        {"pa3-f4-level-w1-xstop-long", true, true, false, 3, 0u, Probe::LevelFirstExitStop},
+        {"pa3-f4-level-w1-xstop-short", false, true, false, 2, 0u, Probe::LevelFirstExitStop},
+        {"pa3-f4-level-w1-bstop-long", true, true, false, 6, 0u, Probe::LevelFirstStopEntry},
+        {"pa3-f4-level-w1-bstop-short", false, true, false, 4, 0u, Probe::LevelFirstStopEntry},
+        {"pa3-f4-stop-w1-mkt-long", true, true, false, 6, 0u, Probe::StopFirstMarket},
+        {"pa3-f4-stop-w1-mkt-short", false, true, false, 6, 0u, Probe::StopFirstMarket},
+        {"pa3-f4-xlimit-w1-reentry-long", true, true, false, 6, 0u, Probe::ExitLimitFirstReentry},
+        {"pa3-f4-xlimit-w1-reentry-short", false, true, false, 6, 0u, Probe::ExitLimitFirstReentry},
+        {"pa3-f4-xlimit-w1-reentry-tp-long", true, true, false, 6, 0u,
+         Probe::ExitLimitFirstReentryTp},
+        {"pa3-f4-xlimit-w1-reentry-tp-short", false, true, false, 6, 0u,
+         Probe::ExitLimitFirstReentryTp},
+        {"pa3-f4-point-w1-mkt-long", true, true, false, 6, 0u, Probe::PointFirstMarket},
+        {"pa3-f4-point-w1-mkt-short", false, true, false, 6, 0u, Probe::PointFirstMarket},
     };
     for (const Variant& v : variants) replay(v);
     std::printf("\n%s second-extreme order tapes: %d checks, %d failures\n",

@@ -1,0 +1,8 @@
+//@version=6
+strategy("TVD cap x1m v6", overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 1000000)
+fast = ta.sma(close, 10)
+slow = ta.sma(close, 30)
+if ta.crossover(fast, slow)
+    strategy.entry("L", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.close("L")

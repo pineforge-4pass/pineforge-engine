@@ -103,12 +103,13 @@ try:
 except ImportError:  # pragma: no cover
     _ilmd = None
 
-# Canonical strategy() defaults. Mirrors the engine base-class defaults in
-# include/pineforge/engine.hpp (initial_capital_, close-timing mode,
-# default_qty_type_, default_qty_value_, pyramiding_, commission_type_,
-# commission_value_, slippage_, close_entries_rule_any_). The codegen ctor
-# emits only a subset (it omits process_orders_on_close + close_entries_rule),
-# so this seed supplies the rest. KEEP IN SYNC with engine.hpp.
+# Canonical strategy() defaults: the member defaults of
+# source::PineStrategyConfig (include/pineforge/source/pine_adapter.hpp),
+# which a generated constructor fills and hands to configure_pine_strategy.
+# The constructor declares only what the script (or, for Pine v6, TradingView's
+# default) sets -- a script that omits process_orders_on_close or
+# close_entries_rule leaves them to the struct -- so this seed supplies the
+# rest. KEEP IN SYNC with PineStrategyConfig.
 STRATEGY_SEED = {
     "initial_capital": 1000000.0,
     "process_orders_on_close": False,
@@ -125,7 +126,24 @@ _QTY_TYPE = {"FIXED": "fixed", "PERCENT_OF_EQUITY": "percent_of_equity", "CASH":
 _COMM_TYPE = {"PERCENT": "percent", "CASH_PER_ORDER": "cash_per_order",
               "CASH_PER_CONTRACT": "cash_per_contract"}
 
-# generated.cpp ctor field name -> provenance key.
+# PineStrategyConfig member -> provenance key: the generated constructor's
+# `cfg.<member> = <value>;` lines (pineforge-codegen since R4-C).
+_CFG_FIELD_KEY = {
+    "initial_capital": "initial_capital",
+    "process_orders_on_close": "process_orders_on_close",
+    "default_qty_type": "default_qty_type",
+    "default_qty_value": "default_qty_value",
+    "pyramiding": "pyramiding",
+    "commission_type": "commission_type",
+    "commission_value": "commission_value",
+    "slippage": "slippage",
+    "close_entries_rule_any": "close_entries_rule",
+}
+_QTY_TYPE_INDEX = {0: "fixed", 1: "percent_of_equity", 2: "cash"}
+_COMM_TYPE_INDEX = {0: "percent", 1: "cash_per_order", 2: "cash_per_contract"}
+_CFG_DECL_RE = re.compile(r"\bPineStrategyConfig\s+(\w+)\s*(?:\{\s*\}|\(\s*\))?\s*;")
+
+# Pre-R4-C generated.cpp ctor member write -> provenance key.
 _STRAT_FIELD_KEY = {
     "initial_capital_": "initial_capital",
     "process" + "_orders_on_close_": "process_orders_on_close",
@@ -202,23 +220,43 @@ def _unwrap_std_string(expr: str) -> str:
     return m.group(1).strip() if m else expr
 
 
+def _strategy_value(key: str, rhs: str):
+    """One declared strategy() value as the provenance spells it. The generated
+    constructor stores PineStrategyConfig's enum members as int
+    (`static_cast<int>(QtyType::FIXED)`); a pre-R4-C one assigned the enum."""
+    rhs = rhs.strip()
+    cast = re.fullmatch(r"static_cast<\s*\w+\s*>\((.*)\)", rhs, re.DOTALL)
+    if cast:
+        rhs = cast.group(1).strip()
+    if key in ("default_qty_type", "commission_type"):
+        names, index = ((_QTY_TYPE, _QTY_TYPE_INDEX) if key == "default_qty_type"
+                        else (_COMM_TYPE, _COMM_TYPE_INDEX))
+        value = _coerce_scalar(rhs)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return index.get(value, rhs)
+        return names.get(rhs.split("::")[-1], rhs)
+    if key == "close_entries_rule":
+        return "ANY" if _coerce_scalar(rhs) is True else "FIFO"
+    return _coerce_scalar(rhs)
+
+
 def parse_strategy_params(cpp_text: str) -> dict:
-    """Parse strategy() header defaults from the constructor body only."""
+    """Parse strategy() header defaults from the constructor body only: the
+    PineStrategyConfig the generated constructor fills (`cfg.<member> = ...;`),
+    or a pre-R4-C constructor's member writes (`<member>_ = ...;`)."""
     out: dict = {}
     body = _ctor_body(cpp_text)
+    decl = _CFG_DECL_RE.search(body)
+    if decl:
+        field = re.compile(r"\b" + re.escape(decl.group(1)) + r"\.(\w+)\s*=\s*([^;]+);")
+        for fld, rhs in field.findall(body):
+            key = _CFG_FIELD_KEY.get(fld)
+            if key:
+                out[key] = _strategy_value(key, rhs)
     for fld, rhs in re.findall(r"(\w+_)\s*=\s*([^;]+);", body):
         key = _STRAT_FIELD_KEY.get(fld)
-        if not key:
-            continue
-        rhs = rhs.strip()
-        if fld == "default_qty_type_":
-            out[key] = _QTY_TYPE.get(rhs.split("::")[-1], rhs)
-        elif fld == "commission_type_":
-            out[key] = _COMM_TYPE.get(rhs.split("::")[-1], rhs)
-        elif fld == "close_entries_rule_any_":
-            out[key] = "ANY" if _coerce_scalar(rhs) is True else "FIFO"
-        else:
-            out[key] = _coerce_scalar(rhs)
+        if key:
+            out[key] = _strategy_value(key, rhs)
     return out
 
 

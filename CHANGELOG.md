@@ -158,6 +158,14 @@ prerelease included.
 These change a strategy's trades or report values; each commit states the
 TradingView behaviour it matches.
 
+- Pine v6 `strategy()` defaults are TradingView's current ones: a v6 script
+  that omits `initial_capital`, `default_qty_type` or `default_qty_value` runs
+  with 100000, `strategy.percent_of_equity` and 100 (100 whatever the type:
+  100 contracts under `strategy.fixed`, 100 of the account currency under
+  `strategy.cash`), which pineforge-codegen 1.0.0 declares in the generated
+  constructor. Pine v5 scripts and a hand-built `PineStrategyConfig` keep
+  1000000, `strategy.fixed` and 1. To keep a v6 script's old sizing, declare
+  the three in its `strategy()` call and transpile it again.
 - `str.tostring` / `str.format` render numbers by the rule TradingView's tapes
   pin (3872c46a, #287).
 - Exact quantities: a Transact that crosses the book is charged exactly its
@@ -198,10 +206,18 @@ TradingView behaviour it matches.
 - A trailing `strategy.exit` placed while its entry is still pending starts
   its running best at the activation, as TradingView's does; on TradingView's
   tapes it exited 1 to 24 bars late.
-- `calc_on_order_fills`: a market order or a `strategy.close` that a
-  recalculation places at a fill on a bar's second high or low fills there,
-  as TradingView does; an order an earlier fill of the same bar pushed onto
-  that extreme still waits for the close or the next open.
+- `calc_on_order_fills`: after a resting order fills at its own level on a
+  bar's high or low, the orders its recalculation places act from that point,
+  as TradingView does: a market order, a `strategy.close`,
+  `strategy.close_all` or a market `strategy.order` fills there, and an exit
+  stop the price has already passed fills there. An exit limit placed on such
+  a fill at the bar's first extreme is live at its own level on the leg to
+  the second; it was forced onto the second extreme. An order an earlier fill
+  of the same bar pushed onto that point still moves on -- to the other
+  extreme from the first, to the close or the next open from the second --
+  and a fill booked at an off-grid extreme's tick counts as a fill at that
+  extreme. Under the bar magnifier, a market order placed after such a fill
+  at an intrabar's second extreme fills there too.
 - `process_orders_on_close`: a stop entry whose stop the placing bar's close
   already reached, and the bar's only entry marketable there, fills at that
   close (slippage applied), on the chart, an aggregated chart and under the
@@ -210,13 +226,32 @@ TradingView behaviour it matches.
   filled at the next open. Such an entry placed again at the close of the
   bar whose `strategy.exit` limit closed the previous one keeps the fresh
   bracket it was placed with; the previous bracket's fill withdrew it at the
-  next open, and the position ran on without an exit.
+  next open, and the position ran on without an exit. A limit entry placed at
+  a bar's close fills at that close when the close's tick reaches its level,
+  with or without `calc_on_order_fills`; one only the bar's range reached
+  still fills on the next bar's touch. It filled a bar late.
   An add can no longer exceed `pyramiding` because an opposite entry was
   resting from an earlier bar. The corpus probe
   `order-deferred-flip-pooc-cross-bar-01` now books all 792 of its
   TradingView tape's trades as TradingView does.
 - An aggregated chart under the bar magnifier dates every fill at its chart
   bar's open, as TradingView does.
+- The bar magnifier walks TradingView's own intrabars, built from the finer
+  feed you supply (`input_tf` finer than the chart): the intrabar timeframe
+  is TradingView's table's (a 15-minute chart walks 2-minute bars, 30 minutes
+  5, 1 hour 10, 4 hours 30, a daily chart hourly bars), each intrabar starts
+  on the session day's grid and belongs to the chart bar that holds its last
+  minute, and the chart bar's own open and close are fill points. Stops,
+  limits, margin calls and `calc_on_order_fills` refills fill where
+  TradingView's magnified broker fills them. A 1- or 5-minute chart needs
+  10- or 30-second bars, which a 1-minute feed cannot build, so it still
+  walks its input bars; an exchange-listed daily chart's bar is still the
+  aggregate of its minutes, where TradingView prices it from its daily feed.
+- A lower-timeframe bar (`IntrabarPath::lower_tf`) with a leg of zero length,
+  such as an open at its own low, is walked through its own four turning
+  points, and a bar with volume 0 at a single price is one point, so margin
+  checks and fills see only prices the bar printed, where the sampler filled
+  in a price the bar never printed.
 - A closed trade's run-up and drawdown (`strategy.closedtrades.max_runup` /
   `max_drawdown` and the report's columns) come from the kernel's per-lot
   sampler for Pine strategies, as for every other host. In 19 corpus probes
@@ -237,3 +272,43 @@ TradingView behaviour it matches.
 - `strategy.margin_liquidation_price` reads `na` when margin calls are
   switched off (`set_margin_call_enabled(false)`, which TradingView has no
   counterpart for); it used to return a price.
+- A `ta.*` call whose length is neither a constant nor an input compiles and
+  computes as TradingView does, with pineforge-codegen 1.0.0 (it refused
+  every such call): a simple length -- fixed for the run, such as one derived
+  from `syminfo` or chosen by an input -- gives exactly the constant length's
+  answers; a series length re-windows `ta.highest`, `ta.lowest`,
+  `ta.highestbars` and `ta.lowestbars` at every call; `ta.supertrend` keeps
+  the factor of its first execution. A length of 0, a negative length or
+  `na` stops the run on the bar TradingView stops it. A series length for `ta.sma`
+  and the other window averages is still refused, and one for `ta.rma`,
+  `ta.ema`, `ta.rsi`, `ta.atr` and the others TradingView refuses too.
+- A `request.security` of a timeframe finer than every feed the run was given
+  (a "5S" request beside a 1-minute feed) reads `na` on every bar, as
+  TradingView reads a timeframe it holds no bars of, instead of stopping the
+  run with "requested timeframe '5S' is finer than input '1'"; supply bars of
+  that timeframe to read values. A chart fed only its own bars still refuses
+  it, so a caller can retry with a finer feed.
+- A daily run with an auxiliary feed no longer stops on a session held after
+  the regular close, such as NSE's Muhurat sessions (2022-10-24,
+  2023-11-12), with "native chart feed trading-period identities must be
+  unique and strictly increasing with an auxiliary security feed"; each such
+  bar keeps its own slice of the auxiliary bars.
+
+### Performance
+
+- A `calc_on_order_fills` strategy that draws labels, lines, boxes or
+  linefills no longer slows down with every drawing it has made: the
+  checkpoint of the script's state each fill recalculation takes shares the
+  drawings between its copies instead of copying all of them, so the run's
+  time grows with its bars, not with their square. What it books and draws
+  does not change.
+
+### Reports and tools
+
+- The run's provenance -- the `strategy` block of `run_strategy.py
+  --fingerprint-json` and of the Docker image's `fingerprint` -- records the
+  `strategy()` values the generated constructor declares (capital, order size
+  and type, commission, slippage, pyramiding, `process_orders_on_close`, the
+  close-entries rule), then the run's overrides. It recorded the defaults for
+  every script, so a fingerprint of a run whose script declares other values
+  changes; the trades do not.

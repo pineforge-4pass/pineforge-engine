@@ -252,6 +252,9 @@ set(TEST_SOURCES
     test_ta_window_underapplied
     test_ta_window_round10
     test_ta_na_source_rules
+    test_ta_series_length_extremes
+    test_ta_series_length_supertrend
+    test_ta_simple_length
     test_matrix
     test_matrix_identity
     test_matrix_na
@@ -394,6 +397,9 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_checkpoint
+    test_coof_drawing_checkpoint_cost
+    test_coof_drawing_rollback_tape
     test_margin_call
     test_high_value_fractional_money_margin
     test_margin_call_intrabar_chronology
@@ -846,6 +852,11 @@ list(APPEND TEST_SOURCES test_session_islastbar_aggregation)
 # against the chart-timeframe path and against TradingView's own tape.
 list(APPEND TEST_SOURCES test_pooc_fill_stamp_aggregation)
 
+# Lane TV-DEFAULTS: TradingView's Pine v6 strategy() defaults for an omitted
+# capital and order size (tests/fixtures/tv_strategy_defaults), replayed under
+# the configuration the generated constructor declares.
+list(APPEND TEST_SOURCES test_tv_strategy_defaults)
+
 # R5 F3: the contracts the kernel documents for every host, witnessed on bare
 # hosts. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_bare_host_contracts)
@@ -872,6 +883,17 @@ list(APPEND TEST_SOURCES test_native_margin_post_fill_path)
 # decision point, and the per-bar resolution cost pinned. Source-free, so it
 # also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_session_day_utc)
+# R5 PERF-ZONED: on a certified cycle of an exchange zone the facts read an
+# instant off its session day -- certificates at real transitions, the POSIX
+# twin's facts at every decision point, the per-bar cost pinned. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_session_day_zoned)
+# R5 lane MAG-INTRABAR: a retained lower bar the direct four-sample path
+# declines (a zero-length leg, an open at its own low) is still walked through
+# its four turning points, so a margin call armed at such an open is booked
+# there, and a bar that traded nothing at one price is one point. Source-free,
+# so it also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_intrabar_turning_points)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail
@@ -1401,6 +1423,24 @@ list(APPEND TEST_SOURCES test_cash_fee_sizing_tapes)
 # tests/fixtures/pooc_stop_reentry_bracket (README.md there names them) replayed
 # through the Pine adapter. Source-bound.
 list(APPEND TEST_SOURCES test_pooc_stop_reentry_bracket_tapes)
+# R5 K-RUNERR: a plain request.security finer than the finest feed the host
+# supplied ("5S" beside a 1m auxiliary slice) reads na on every chart bar
+# instead of stopping the run; a chart fed without intrabar bars still
+# refuses. Source-bound.
+list(APPEND TEST_SOURCES test_security_finer_than_feed)
+# R5 lane MAG-INTRABAR: the intrabars TradingView's bar magnifier walks --
+# its table's timeframe, the session's grid, each owned by the chart bar of
+# its last minute, between the chart bar's own open and close -- as the
+# adapter builds them from the host's 1-minute feed. Source-bound.
+list(APPEND TEST_SOURCES test_magnifier_tradingview_intrabars)
+# ... and on TradingView's tapes (tests/fixtures/magnifier_intrabars): its own
+# request.security_lower_tf intrabars per chart timeframe, magnified bracket
+# tapes and calc_on_order_fills refill cascades replayed through the adapter.
+# Source-bound.
+list(APPEND TEST_SOURCES test_adapter_magnifier_intrabar_tapes)
+# R5 lane PAR-ORDERS-3: a process_orders_on_close limit entry at the close that
+# placed it (TradingView's tapes, tests/fixtures/pooc_limit_close). Source-bound.
+list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2146,7 +2186,11 @@ foreach(_pf_hm_row IN ITEMS
         # R5 lane PAR-ORDERS-2's tape rows.
         "test_flat_coof_exit_tapes|PINEFORGE_PA2_FLAT_COOF_FIXTURE_DIR|flat_coof_exit"
         "test_second_extreme_order_tapes|PINEFORGE_PA2_SECOND_EXTREME_FIXTURE_DIR|second_extreme_orders"
-        "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop")
+        "test_pooc_reversing_stop_tapes|PINEFORGE_PA2_REVERSING_STOP_FIXTURE_DIR|pooc_reversing_stop"
+        # R5 lane MAG-INTRABAR's tape row.
+        "test_adapter_magnifier_intrabar_tapes|PINEFORGE_MI_FIXTURE_DIR|magnifier_intrabars"
+        # R5 lane PAR-ORDERS-3's tape row.
+        "test_pooc_limit_close_tapes|PINEFORGE_PA3_POOC_LIMIT_FIXTURE_DIR|pooc_limit_close")
     string(REPLACE "|" ";" _pf_hm_fields "${_pf_hm_row}")
     list(GET _pf_hm_fields 0 _pf_hm_target)
     list(GET _pf_hm_fields 1 _pf_hm_macro)
@@ -2204,6 +2248,19 @@ endif()
 if(TARGET test_pooc_fill_stamp_aggregation)
     target_compile_definitions(test_pooc_fill_stamp_aggregation PRIVATE
         PINEFORGE_E27_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/session_islastbar")
+endif()
+
+# Lane TV-DEFAULTS reads its TradingView tapes from the fixture tree; source-bound.
+if(TARGET test_tv_strategy_defaults)
+    target_compile_definitions(test_tv_strategy_defaults PRIVATE
+        PINEFORGE_TVD_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tv_strategy_defaults")
+endif()
+
+# K-DRAWSNAP replays TradingView's calc_on_order_fills drawing-rollback tape
+# through the Pine host; source-bound.
+if(TARGET test_coof_drawing_rollback_tape)
+    target_compile_definitions(test_coof_drawing_rollback_tape PRIVATE
+        PINEFORGE_K_DRAWSNAP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/coof_drawing_rollback")
 endif()
 
 # R5 F5 replays the same tapes through a bare host; kernel-only, so this row

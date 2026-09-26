@@ -188,6 +188,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.lower_tf_input_buffer.clear();
         pine.publish_gate_tf_seconds = 0;
         pine.calling_close_completes_partial = false;
+        pine.no_loaded_bars = false;
         pine.calling_open_latches_first = false;
         pine.first_bucket_published = false;
         pine.deferred_aux.clear();
@@ -232,6 +233,19 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // Finer than input — only valid for security_lower_tf with
             // an integer divisor ratio.
             if (!pine.lower_tf_array_requested) {
+                // The host already supplied bars finer than the chart (the
+                // auxiliary slice, or an input finer than the script TF), so
+                // nothing finer is loaded: the site reads na on every chart
+                // bar, TradingView's reading of a chart bar holding no loaded
+                // bar of the requested timeframe (see no_loaded_bars). A chart
+                // fed without intrabar bars keeps the refusal below, which
+                // asks its host for finer bars.
+                const bool intrabar_bars_supplied = input_seconds > 0
+                    && (script_seconds == -1 || input_seconds < script_seconds);
+                if (intrabar_bars_supplied) {
+                    pine.no_loaded_bars = true;
+                    continue;
+                }
                 throw std::runtime_error(
                     "request.security: requested timeframe '" + state.tf
                     + "' is finer than input '" + input_tf
@@ -547,6 +561,9 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         return;
     }
     PineSecurityEvalState& pine = pine_security_state(state.sec_id);
+    // No bar of the requested timeframe is loaded (no_loaded_bars): the
+    // site is never evaluated, so it and its TA read na throughout.
+    if (pine.no_loaded_bars) return;
     // On the pump's runtime block when it has one (R5 lane D2-C).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
