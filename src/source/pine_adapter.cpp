@@ -5064,7 +5064,8 @@ void PineExecutionAdapter::cancel_bracket_origin(native_order::RequestHandle ori
     }
 }
 
-void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle handle) {
+void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle handle,
+                                                   std::uint64_t executed_at) {
     std::optional<PlacementSnapshot> snapshot_copy;
     if (const auto source = placement_.find(handle.incarnation);
         source != placement_.end()) {
@@ -5086,6 +5087,35 @@ void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle h
                 || sibling.family == PineOrderFamily::ExitTrail)) {
             matches.push_back(candidate);
         }
+    }
+    // R5 lane INT26: a terminal receipt is observed at the adapter's next
+    // read, not when its leg executed. A bracket leg the pre-script drain
+    // settles on its parent's touch bar is read at the next bar open, after
+    // that bar's source body and its process_orders_on_close pass; by then a
+    // same-bar re-entry the close already reached has opened (PAR-ORDERS,
+    // H-MEASURE 6b) and its own strategy.exit legs of the same id are
+    // working. A leg of a later strategy.exit call (another command_sequence)
+    // that the kernel accepted after the execution is that later order, not a
+    // sibling of the leg that filled, and it stays. A leg of the filled leg's
+    // own call is its sibling however late it was accepted -- the drain
+    // submits a bracket's legs one at a time, executing each -- and goes.
+    const auto later_call = [&](const native_order::RequestHandle& sibling) {
+        const auto placement = placement_.find(sibling.incarnation);
+        return placement != placement_.end()
+            && placement->second.command_sequence != snapshot.command_sequence;
+    };
+    if (executed_at != 0 && std::any_of(matches.begin(), matches.end(), later_call)) {
+        const auto working = require_host().native_working_requests();
+        matches.erase(std::remove_if(matches.begin(), matches.end(),
+            [&](const native_order::RequestHandle& sibling) {
+                if (!later_call(sibling)) return false;
+                const auto row = std::find_if(working.begin(), working.end(),
+                    [&](const NativeWorkingRequest& request) {
+                        return request.definition->handle == sibling;
+                    });
+                return row != working.end()
+                    && row->definition->birth.acceptance_ordinal > executed_at;
+            }), matches.end());
     }
     for (const auto& sibling : matches) {
         const auto result = require_host().cancel(sibling);
@@ -5378,7 +5408,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
                     }
                 }
             } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
-                if (event.terminal) cancel_bracket_siblings(event.handle());
+                if (event.terminal) cancel_bracket_siblings(event.handle(), event.ordinal);
             }
         }, command);
     };

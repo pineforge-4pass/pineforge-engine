@@ -387,7 +387,10 @@ KERNEL_MIN_TESTS = 286
 # PAR-MARGIN's own count also held the margin differential, which that lane
 # had cherry-picked for its pins; it counts once, as H-MEASURE's. No release
 # row skips, so 702 registered is 702 run.
-RELEASE_MIN_TESTS = 702
+# 703 = those 702 plus INT26 round 2's source-bound tape row,
+# test_pooc_stop_reentry_bracket_tapes (the gate sweep's lost re-entry
+# bracket); 703 registered is 703 run.
+RELEASE_MIN_TESTS = 703
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -411,9 +414,10 @@ ADR_RULED_TEXTS_MIN = 40
 # KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 683/683/692
 # at INT26, each with wave H's twenty-four rows of RELEASE_MIN_TESTS
 # (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
-# +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way.
+# +1, PAR-MARGIN-2 +1, PERF-KEDGE +1, PAR-CASHFEE +1), counted the same way;
+# 684/684/693 with INT26 round 2's tape row.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 683, 'sanitizers': 683, 'native': 692}
+EXCLUDED_REGISTERED_MIN = {'debug': 684, 'sanitizers': 684, 'native': 693}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

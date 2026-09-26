@@ -207,7 +207,10 @@ TradingView behaviour it matches.
   close (slippage applied), on the chart, an aggregated chart and under the
   bar magnifier, and so does one placed while the position still holds the
   other side, once a `strategy.close` on the same bar has closed it; each
-  filled at the next open.
+  filled at the next open. Such an entry placed again at the close of the
+  bar whose `strategy.exit` limit closed the previous one keeps the fresh
+  bracket it was placed with; the previous bracket's fill withdrew it at the
+  next open, and the position ran on without an exit.
   An add can no longer exceed `pyramiding` because an opposite entry was
   resting from an earlier bar. The corpus probe
   `order-deferred-flip-pooc-cross-bar-01` now books all 792 of its

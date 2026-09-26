@@ -1,0 +1,39 @@
+//@version=6
+// INT26 (R5 lane INT26, round 2): the gate sweep's leaver shape, synthetic.
+// Under process_orders_on_close, at each of three signal closes on a flat book
+// the script cancels its pending stop entry and places it again with its
+// strategy.exit bracket (limit 3c beyond the close, stop 10c the other way):
+// first 10c beyond the close (unreached), then 1c beyond it -- the next bar
+// fills the entry and then the bracket's limit, and closes flat -- then AT
+// that close (reached: it fills there), with a fresh bracket of the same exit
+// id whose limit a later bar reaches. Long on bars 39-41 (the limit on bar
+// 42), short on bars 44-46 (the limit on bar 49).
+// NYSE:F 15m, the three replayed days of tests/fixtures/session_islastbar
+// (2025-07-02, 07-03 half day, 07-07); k counts chart bars from 2025-07-02
+// 09:30 ET. No order is placed after 07-07 15:45 ET; whatever is open then is
+// closed on the next bar, outside the replay.
+strategy("INT26 reentry-bracket-mag", overlay=true,
+     initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=100,
+     pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01,
+     slippage=0, process_orders_on_close=true, calc_on_order_fills=false,
+     margin_long=100, margin_short=100, use_bar_magnifier=true)
+
+t0 = timestamp("America/New_York", 2025, 7, 2, 9, 30)
+tEnd = timestamp("America/New_York", 2025, 7, 7, 16, 0)
+var int b0 = na
+if na(b0) and time >= t0
+    b0 := bar_index
+k = na(b0) ? -1 : bar_index - b0
+t = math.floor(close * 100 + 0.000001)
+if time < tEnd and strategy.position_size == 0
+    if k >= 39 and k <= 41
+        strategy.cancel("L")
+        strategy.entry("L", strategy.long, stop=(k == 39 ? t + 10 : k == 40 ? t + 1 : t) / 100)
+        strategy.exit("LX", "L", stop=(t - 10) / 100, limit=(t + 3) / 100)
+    if k >= 44 and k <= 46
+        strategy.cancel("S")
+        strategy.entry("S", strategy.short, stop=(k == 44 ? t - 10 : k == 45 ? t - 1 : t) / 100)
+        strategy.exit("SX", "S", stop=(t + 10) / 100, limit=(t - 3) / 100)
+if time >= tEnd and strategy.position_size != 0
+    strategy.cancel_all()
+    strategy.close_all(comment="after-window")

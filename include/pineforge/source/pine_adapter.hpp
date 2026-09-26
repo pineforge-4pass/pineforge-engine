@@ -1802,7 +1802,10 @@ private:
     // Whether an immediate strategy.close was placed on that bar.
     bool immediate_close_placed_on(std::int32_t bar) const noexcept;
     void cancel_bracket_origin(native_order::RequestHandle);
-    void cancel_bracket_siblings(native_order::RequestHandle);
+    // executed_at: the ordinal a terminal receipt executed at, when the
+    // observer reads it later; a later strategy.exit call's leg accepted
+    // after it is not a sibling.
+    void cancel_bracket_siblings(native_order::RequestHandle, std::uint64_t executed_at = 0);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);
     void retire_in_position_exits_at_flat(bool preserve_pending_parents,
                                           bool dormant_rows_only,

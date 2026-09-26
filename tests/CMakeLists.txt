@@ -1395,6 +1395,12 @@ list(APPEND TEST_SOURCES test_pooc_reversing_stop_tapes)
 # `lab tv` tapes under tests/fixtures/cash_fee_sizing (README.md there names
 # them) replayed on their bars through the Pine adapter. Source-bound.
 list(APPEND TEST_SOURCES test_cash_fee_sizing_tapes)
+# R5 lane INT26 (round 2): a process_orders_on_close stop re-entry its close
+# reached keeps its fresh bracket when the previous bracket's same-bar limit is
+# observed at the next open -- the `lab tv` tapes under
+# tests/fixtures/pooc_stop_reentry_bracket (README.md there names them) replayed
+# through the Pine adapter. Source-bound.
+list(APPEND TEST_SOURCES test_pooc_stop_reentry_bracket_tapes)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
@@ -2155,6 +2161,11 @@ endforeach()
 if(TARGET test_cash_fee_sizing_tapes)
     target_compile_definitions(test_cash_fee_sizing_tapes PRIVATE
         PINEFORGE_CASH_FEE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cash_fee_sizing")
+endif()
+# R5 lane INT26 (round 2) reads its TradingView tapes from the fixture tree too.
+if(TARGET test_pooc_stop_reentry_bracket_tapes)
+    target_compile_definitions(test_pooc_stop_reentry_bracket_tapes PRIVATE
+        PINEFORGE_INT26_REENTRY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooc_stop_reentry_bracket")
 endif()
 
 # R5 E21 reads the kernel's own sources to prove BacktestEngine::marked_equity_at
