@@ -256,7 +256,12 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # summed):
 #   +1 PAR-MARGIN test_native_margin_intrabar_samples (IntrabarSample, item 3)
 # It registers in release too.
-KERNEL_MIN_TESTS = 284
+# 285 = those 284 plus R5 lane PAR-MARGIN-2's source-free row (INT26 pick,
+# summed):
+#   +1 PAR-MARGIN-2 test_native_margin_post_fill_path (the post-fill margin
+#                   check measures from the fill's own waypoint)
+# It registers in release too.
+KERNEL_MIN_TESTS = 285
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -398,7 +403,9 @@ KERNEL_MIN_TESTS = 284
 # summed). The lane's own count of 680 also counted H-MEASURE's
 # test_adapter_margin_schedule_differential, which it had cherry-picked for its
 # pins; H-MEASURE's twelve above already count that row.
-RELEASE_MIN_TESTS = 699
+# 700 = those 699 plus R5 lane PAR-MARGIN-2's kernel row above (INT26 pick,
+# summed).
+RELEASE_MIN_TESTS = 700
 # R5 lane H-DOCGATES (AUDIT4-opus perf N-7) raises both floors by one more:
 # test_native_runtime_ambient_lifo, the runtime blocks' LIFO death row, is
 # source-free, so it registers and runs in the kernel profile (279 -> 280) and

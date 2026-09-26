@@ -56,6 +56,12 @@
  *       AfterApplied point with TradingView's money. Until R5 lane PAR-MARGIN
  *       the adapter never checked that bar (a recorded divergence H-MEASURE
  *       pinned); it now books TradingView's rows on all four tapes.
+ *   R5 lane PAR-MARGIN-2, each section replaying the lane's `lab tv` tapes from
+ *   the fixture's own strategy.pine:
+ *     M7 shapes: limit openings, long and short, leveraged and 1x -- 12 tapes,
+ *       all TradingView's rows (the kernel's post-fill point now measures from
+ *       the fill's own waypoint: a limit filled on its way down faces the
+ *       bar's low, a short filled on its way up its high);
  *
  * Source-bound (includes pineforge/source): release profile only.
  */
@@ -93,6 +99,7 @@ struct FeedBar {
 #include "fixtures/margin_entry_bar/bars.inc"
 #include "fixtures/margin_entry_bar/m10_bars.inc"
 #include "fixtures/intrabar_margin/bars_1m.inc"
+#include "fixtures/margin_entry_bar/pm2_bars.inc"
 
 // ------------------------------------------------------------ TV policy
 // The twin's TradingView money and slice (test_native_margin_hooks_twin.cpp,
@@ -118,6 +125,7 @@ struct Config {
     double qty_step = 0.0;
     double mintick = 0.01;
     bool pooc = false;
+    bool coof = false;
     CommissionType commission = CommissionType::PERCENT;
     double commission_value = 0.0;
     int pyramiding = 1;
@@ -208,6 +216,7 @@ struct PineSide final : source::PineStrategyHost {
     std::function<void(PineSide&, int)> script;
     int calls = 0;
     double last_close = 0.0;
+    std::int64_t last_time = 0;
     explicit PineSide(const Config& c) {
         auto& tv = fixture_configuration();
         tv.initial_capital = c.capital;
@@ -218,6 +227,7 @@ struct PineSide final : source::PineStrategyHost {
         tv.margin_long = c.margin_long;
         tv.margin_short = c.margin_short;
         tv.process_orders_on_close = c.pooc;
+        tv.calc_on_order_fills = c.coof;
         tv.pyramiding = c.pyramiding;
         initial_capital_ = c.capital;
         qty_step_ = c.qty_step;
@@ -228,12 +238,19 @@ struct PineSide final : source::PineStrategyHost {
     void on_source_bar(const Bar& bar) override {
         ++calls;
         last_close = bar.close;
+        last_time = bar.timestamp;
         if (script) script(*this, pine_bar_index());
     }
     void entry(const char* id, bool is_long, double limit, double stop, double qty) {
         strategy_entry(id, is_long, limit, stop, qty);
     }
     void close(const char* id) { strategy_close(id); }
+    void close_all() { strategy_close_all(); }
+    std::string entry_id0() const { return open_trade_entry_id(0); }
+    // strategy.equity at the script's calculation: realized plus open profit.
+    double strategy_equity() const {
+        return initial_capital_ + net_profit_sum_ + open_profit(last_close);
+    }
     int entry_bar_index() const { return open_trade_entry_bar_index(0); }
     double position() const { return physical_position().signed_units; }
     double equity() const { return initial_capital_ + net_profit_sum_; }
@@ -412,13 +429,15 @@ void m7_leveraged_opening_entry_bar() {
 
 // B. A carried 10 @100 long (50 %, capital 1050) adds 10 @95 on a buy limit
 // filled on the H->L leg of bar 2 (O100 H101 L80 C81; high-first). After the
-// add the rest of the path is the close 81: 720 against 810.
-//   kernel: AfterApplied at the add's point books 4 x 90 / 40.5 at 81;
-//   adapter: the point is refused (no scheduling after a leveraged add), and
-//           bar 3 (O100) is solvent -- no margin row at all.
-// (ab9714be books a third answer, 10 @80: the post-add book at the bar's own
-// low. The kernel's AfterApplied mark after a mid-segment fill starts at the
-// segment's destination waypoint, so the rest of the H->L leg is not seen.)
+// add the rest of the path runs down to the low 80: 700 against 800.
+//   kernel: AfterApplied at the add's point books 4 x 100 / 40 = 10 at 80 --
+//           ab9714be's answer too (the post-add book at the bar's own low).
+//           Until R5 lane PAR-MARGIN-2 the kernel's post-fill mark scanned only
+//           the waypoints after the fill's own -- the fill is presented at the
+//           low it was falling toward -- so it booked 4 x 90 / 40.5 = 8.888..
+//           at the close 81;
+//   adapter: the point is refused (no scheduling after an add to a carried
+//           book), and bar 3 (O100) is solvent -- no margin row at all.
 void m7_mid_bar_add() {
     std::printf("-- M7-B mid-bar pyramid add: the add's AfterApplied point\n");
     Config c;
@@ -447,8 +466,8 @@ void m7_mid_bar_add() {
     CHECK(adapter.empty());
     CHECK(pine.position() == 20.0);
     REQUIRE(native.size() == 1);
-    check_fill(native[0], 2, NativePathPhase::Low, 8.8888888888888893, 81.0, true);
-    CHECK(same_value(kernel.position(), 11.111111111111111));
+    check_fill(native[0], 2, NativePathPhase::Low, 10.0, 80.0, true);
+    CHECK(same_value(kernel.position(), 10.0));
 }
 
 // C. A carried POOC short 9.5 @100 (100 %, 0.1 % fee) whose bar 1 reaches
@@ -1225,6 +1244,319 @@ void intrabar_margin_tapes() {
     }
 }
 
+// ================================================================= PAR-MARGIN-2
+// R5 lane PAR-MARGIN-2 measured the margin shapes lane PAR-MARGIN left open,
+// each against TradingView: 57 `lab tv` exports (ws-report-v1, rangeProof
+// covered), every one the lane's own synthetic script. They are replayed here
+// FROM THE SCRIPT TRADINGVIEW RAN: each fixture's strategy.pine is parsed for
+// its signal times, sizes, levels and strategy() flags, so a parameter cannot
+// drift between the tape and its replay. The fixture READMEs name every tape.
+struct ProbeEntry {
+    std::int64_t at = 0;          // the signal bar's open, UTC ms
+    std::string id;
+    bool is_long = true;
+    bool add = false;             // placed on an open position (else: flat)
+    double K = kNaN;              // qty = floor(K * strategy.equity / close * 1000) / 1000
+    double limit_mult = kNaN;     // limit = math.round(close * mult, 2)
+    double stop_abs = kNaN;
+    double limit_abs = kNaN;
+    double stop_offset = kNaN;    // stop = close + offset
+};
+struct ProbeScript {
+    std::vector<ProbeEntry> entries;
+    double capital = 1000.0;
+    double margin = 100.0;
+    double qty_value = 1.0;
+    int pyramiding = 1;
+    bool pooc = false;
+    bool coof = false;
+    bool magnifier = false;
+    int timeout = 3;
+    bool close_all = false;
+    bool per_id_close = false;    // close the open trade entry_id(0) names
+};
+
+std::string read_text(const std::string& path) {
+    std::ifstream in(path);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+double number_after(const std::string& text, const std::string& key, double fallback) {
+    const auto at = text.find(key);
+    return at == std::string::npos ? fallback : std::atof(text.c_str() + at + key.size());
+}
+
+// UTC wall time -> ms (days from civil).
+std::int64_t utc_ms(int y, int mo, int d, int h, int mi) {
+    y -= mo <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const int yoe = y - era * 400;
+    const int doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const std::int64_t days = static_cast<std::int64_t>(era) * 146097 + doe - 719468;
+    return ((days * 24 + h) * 60 + mi) * 60000;
+}
+
+ProbeScript parse_probe(const std::string& path) {
+    const std::string text = read_text(path);
+    ProbeScript ps;
+    ps.capital = number_after(text, "initial_capital=", 1000.0);
+    ps.qty_value = number_after(text, "default_qty_value=", 1.0);
+    ps.pyramiding = static_cast<int>(number_after(text, "pyramiding=", 1.0));
+    ps.margin = number_after(text, "margin_long=", 100.0);
+    ps.pooc = text.find("process_orders_on_close=true") != std::string::npos;
+    ps.coof = text.find("calc_on_order_fills=true") != std::string::npos;
+    ps.magnifier = text.find("use_bar_magnifier=true") != std::string::npos;
+    ps.timeout = static_cast<int>(number_after(text, "strategy.opentrades.entry_bar_index(0) >= ", 3.0));
+    ps.close_all = text.find("strategy.close_all(") != std::string::npos;
+    ps.per_id_close = text.find("strategy.opentrades.entry_id(0) ==") != std::string::npos;
+    std::stringstream lines(text);
+    std::string line;
+    std::int64_t at = 0;
+    bool add = false;
+    while (std::getline(lines, line)) {
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0;
+        const auto ts = line.find("timestamp(\"UTC\", ");
+        if (line.rfind("if time == ", 0) == 0 && ts != std::string::npos
+            && std::sscanf(line.c_str() + ts, "timestamp(\"UTC\", %d, %d, %d, %d, %d)", &y, &mo,
+                           &d, &h, &mi) == 5) {
+            at = utc_ms(y, mo, d, h, mi);
+            add = line.find("strategy.position_size > 0") != std::string::npos;
+            continue;
+        }
+        const auto call = line.find("strategy.entry(\"");
+        if (call == std::string::npos || at == 0) continue;
+        ProbeEntry e;
+        e.at = at;
+        e.add = add;
+        const auto id_end = line.find('"', call + 16);
+        e.id = line.substr(call + 16, id_end - call - 16);
+        e.is_long = line.find("strategy.long") != std::string::npos;
+        e.K = number_after(line, "math.floor(", kNaN);
+        e.limit_mult = number_after(line, "limit = math.round(close * ", kNaN);
+        if (line.find("stop = close ") != std::string::npos) {
+            e.stop_offset = (line.find("stop = close - ") != std::string::npos ? -1.0 : 1.0)
+                * number_after(line, line.find("stop = close - ") != std::string::npos
+                                         ? "stop = close - " : "stop = close + ", kNaN);
+        } else {
+            e.stop_abs = number_after(line, "stop = ", kNaN);
+        }
+        if (!std::isfinite(e.limit_mult)) e.limit_abs = number_after(line, "limit = ", kNaN);
+        ps.entries.push_back(e);
+        at = 0;
+    }
+    return ps;
+}
+
+// One exit as both sides report it: the chart bar it books on, price, units.
+struct ProbeExit {
+    std::int64_t bar = 0;
+    double price = 0.0;
+    double qty = 0.0;
+    bool margin_call = false;
+    double entry = kNaN;          // the trade's entry price
+};
+
+bool exit_order(const ProbeExit& a, const ProbeExit& b) {
+    return a.bar != b.bar ? a.bar < b.bar : a.qty < b.qty;
+}
+
+std::vector<std::string> csv_cells(const std::string& line) {
+    std::vector<std::string> cells(1);
+    bool quoted = false;
+    for (char ch : line) {
+        if (ch == '"') quoted = !quoted;
+        else if (ch == ',' && !quoted) cells.emplace_back();
+        else if (ch != '\r') cells.back() += ch;
+    }
+    return cells;
+}
+
+std::vector<std::vector<std::string>> tape_rows(const std::string& dir) {
+    std::ifstream in(dir + "/tv_trades.csv");
+    std::vector<std::vector<std::string>> out;
+    std::string line;
+    std::getline(in, line);
+    while (std::getline(in, line)) out.push_back(csv_cells(line));
+    return out;
+}
+
+std::vector<ProbeExit> tape_exit_rows(const std::string& dir) {
+    std::vector<ProbeExit> out;
+    std::map<std::string, double> entries;
+    const auto rows = tape_rows(dir);
+    for (const auto& cell : rows)
+        if (cell.size() >= 6 && cell[1].rfind("Entry", 0) == 0) entries[cell[0]] = std::stod(cell[4]);
+    for (const auto& cell : rows) {
+        if (cell.size() < 6 || cell[1].rfind("Exit", 0) != 0) continue;
+        const auto entry = entries.find(cell[0]);
+        out.push_back({tape_ms(cell[2]), std::stod(cell[4]), std::stod(cell[5]),
+                       cell[3] == "Margin call", entry == entries.end() ? kNaN : entry->second});
+    }
+    std::sort(out.begin(), out.end(), exit_order);
+    return out;
+}
+
+std::vector<Bar> feed_bars(const FeedBar* rows, int n) {
+    std::vector<Bar> out;
+    for (int i = 0; i < n; ++i)
+        out.push_back({rows[i].open, rows[i].high, rows[i].low, rows[i].close, 1.0, rows[i].ts});
+    return out;
+}
+
+std::vector<Bar> fifteen_of(const std::vector<Bar>& one) {
+    std::vector<Bar> out;
+    for (const Bar& b : one) {
+        const std::int64_t open = b.timestamp - b.timestamp % (15 * 60000LL);
+        if (out.empty() || out.back().timestamp != open) {
+            out.push_back({b.open, b.high, b.low, b.close, 1.0, open});
+        } else {
+            out.back().high = std::max(out.back().high, b.high);
+            out.back().low = std::min(out.back().low, b.low);
+            out.back().close = b.close;
+        }
+    }
+    return out;
+}
+
+// The adapter side of one tape: the parsed script through the Pine adapter,
+// magnified on the one-minute feed when the script asks for the magnifier.
+std::vector<ProbeExit> run_probe(const ProbeScript& ps, const std::vector<Bar>& input,
+                                 bool one_minute_input, double qty_step, double mintick) {
+    Config c;
+    c.capital = ps.capital;
+    c.margin_long = ps.margin;
+    c.margin_short = ps.margin;
+    c.pooc = ps.pooc;
+    c.coof = ps.coof;
+    c.pyramiding = ps.pyramiding;
+    c.qty_step = qty_step;
+    c.mintick = mintick;
+    c.qty_value = ps.qty_value;
+    PineSide pine(c);
+    pine.script = [&ps](PineSide& h, int bar) {
+        const double equity = h.strategy_equity();
+        const double held = h.position();
+        for (const ProbeEntry& e : ps.entries) {
+            if (h.last_time != e.at || (e.add ? held == 0.0 : held != 0.0)) continue;
+            const double qty = std::isfinite(e.K)
+                ? std::floor(e.K * equity / h.last_close * 1000.0) / 1000.0 : kNaN;
+            const double limit = std::isfinite(e.limit_mult)
+                ? std::round(h.last_close * e.limit_mult * 100.0) / 100.0 : e.limit_abs;
+            const double stop = std::isfinite(e.stop_offset) ? h.last_close + e.stop_offset
+                                                             : e.stop_abs;
+            h.entry(e.id.c_str(), e.is_long, limit, stop, qty);
+        }
+        if (h.position() != 0.0 && bar - h.entry_bar_index() >= ps.timeout) {
+            if (ps.close_all) h.close_all();
+            else h.close(ps.per_id_close ? h.entry_id0().c_str() : ps.entries.front().id.c_str());
+        }
+    };
+    if (ps.magnifier) {
+        pine.run(input.data(), static_cast<int>(input.size()), "1", "15", true);
+    } else {
+        const auto bars = one_minute_input ? fifteen_of(input) : input;
+        pine.run(bars.data(), static_cast<int>(bars.size()), "15", "15", false);
+    }
+    CHECK(pine.last_error().empty());
+    std::vector<ProbeExit> out;
+    for (int i = 0; i < pine.trade_count(); ++i) {
+        const Trade& t = pine.get_trade(i);
+        out.push_back({t.exit_time - t.exit_time % (15 * 60000LL), t.exit_price, t.qty,
+                       t.exit_comment == "Margin call", t.entry_price});
+    }
+    std::sort(out.begin(), out.end(), exit_order);
+    return out;
+}
+
+bool same_exits(const std::vector<ProbeExit>& a, const std::vector<ProbeExit>& b,
+                bool margin_calls_only = false) {
+    std::vector<ProbeExit> x, y;
+    for (const auto& r : a) if (!margin_calls_only || r.margin_call) x.push_back(r);
+    for (const auto& r : b) if (!margin_calls_only || r.margin_call) y.push_back(r);
+    if (x.size() != y.size()) return false;
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        // TradingView prints four quantity decimals and the symbol's price.
+        if (x[i].bar != y[i].bar || std::abs(x[i].price - y[i].price) > 5e-3
+            || std::abs(x[i].qty - y[i].qty) > 5e-5 || x[i].margin_call != y[i].margin_call
+            || std::abs(x[i].entry - y[i].entry) > 5e-3) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string utc_text(std::int64_t ms) {
+    std::int64_t z = ms / 86400000 + 719468;
+    const int minutes = static_cast<int>(ms % 86400000 / 60000);
+    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const unsigned mp = (5 * doy + 2) / 153;
+    const unsigned d = doy - (153 * mp + 2) / 5 + 1;
+    const unsigned m = mp < 10 ? mp + 3 : mp - 9;
+    const long long y = static_cast<long long>(yoe) + era * 400 + (m <= 2);
+    char text[32];
+    std::snprintf(text, sizeof text, "%04lld-%02u-%02u %02d:%02d", y, m, d, minutes / 60,
+                  minutes % 60);
+    return text;
+}
+
+void print_exits(const char* side, const std::vector<ProbeExit>& rows) {
+    std::printf("  %-8s", side);
+    for (const auto& r : rows) {
+        std::printf(" | %s %.17g @ %.4f%s (in %.4f)", utc_text(r.bar).c_str(), r.qty, r.price,
+                    r.margin_call ? " MC" : "", r.entry);
+    }
+    std::printf("\n");
+}
+
+// ---- the M7 shapes (tests/fixtures/margin_entry_bar/pm2-*)
+// A leveraged opening, on the bar it fills. TradingView books the
+// margin call on that bar over the rest of its path, sized on the book the
+// fill left:
+//   pm2-m7-lim-*   a limit opening filled on its way down: the call at that
+//                  bar's LOW, 4 of 4 (the kernel's post-fill point scanned the
+//                  waypoints after the fill's own, so it missed the low -- the
+//                  call came a bar late, or not at all);
+//   pm2-m7-slim-*, pm2-m7-s1lim-*  a SHORT limit opening filled on its way up,
+//                  leveraged (margin 5) and at full margin (1x): the call at
+//                  that bar's HIGH, 8 of 8 (none was booked before);
+struct ShapeTape {
+    const char* slug;
+    const FeedBar* bars;
+    int n;
+};
+
+void m7_shapes_on_tapes() {
+    const std::string dir = PINEFORGE_HM_M7A_FIXTURE_DIR;
+    const ShapeTape tapes[] = {
+        {"pm2-m7-lim-0402-1945", kPm2Chart_0402_1945, 6}, {"pm2-m7-lim-0402-2000", kPm2Chart_0402_2000, 6},
+        {"pm2-m7-lim-0801-0030", kPm2Chart_0801_0030, 6}, {"pm2-m7-lim-1201-0215", kPm2Chart_1201_0215, 6},
+        {"pm2-m7-slim-0402-1330", kPm2Chart_0402_1330, 6}, {"pm2-m7-slim-0509-1100", kPm2Chart_0509_1100, 6},
+        {"pm2-m7-slim-0709-1930", kPm2Chart_0709_1930, 6}, {"pm2-m7-slim-1001-0830", kPm2Chart_1001_0830, 6},
+        {"pm2-m7-s1lim-0402-1330", kPm2Chart_0402_1330, 6}, {"pm2-m7-s1lim-0509-1100", kPm2Chart_0509_1100, 6},
+        {"pm2-m7-s1lim-0709-1930", kPm2Chart_0709_1930, 6}, {"pm2-m7-s1lim-1001-0830", kPm2Chart_1001_0830, 6},
+    };
+    for (const ShapeTape& tape : tapes) {
+        std::printf("-- M7 shape %s\n", tape.slug);
+        const std::string at = dir + "/" + tape.slug;
+        const ProbeScript ps = parse_probe(at + "/strategy.pine");
+        REQUIRE(!ps.entries.empty());
+        // TradingView floors the margin call's minimum to 0.0001 of a contract
+        // on this symbol (M7 above).
+        const auto adapter = run_probe(ps, feed_bars(tape.bars, tape.n), false, 0.0001, 0.01);
+        const auto tv = tape_exit_rows(at);
+        print_exits("tape", tv);
+        print_exits("adapter", adapter);
+        CHECK(std::any_of(tv.begin(), tv.end(), [](const ProbeExit& r) { return r.margin_call; }));
+        CHECK(same_exits(adapter, tv));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1243,6 +1575,7 @@ int main() {
     test("M7 TradingView tapes", m7_tradingview_tapes);
     test("M10 TradingView tapes", m10_tradingview_tapes);
     test("intrabar margin tapes", intrabar_margin_tapes);
+    test("PAR-MARGIN-2 M7 shapes", m7_shapes_on_tapes);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

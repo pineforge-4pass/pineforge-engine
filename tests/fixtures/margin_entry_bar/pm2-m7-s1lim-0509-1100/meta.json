@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7-s1lim-0509-1100",
+  "slug": "pm2-m7-s1lim-0509-1100",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T02:22:22.830Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-05-06",
+    "to": "2025-05-12"
+  },
+  "pine_sha256": "bde14584dec3c9eb6f1dc6248537cb712824f1406d6074fa7e818800fdeb10dc",
+  "tv_trades_sha256": "5f62b5db446e583a8707f142e9b1510901192f664646206a2bcdb8d693a95e34",
+  "tv_trades_rows": 4
+}

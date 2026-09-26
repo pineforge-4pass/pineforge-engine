@@ -14877,7 +14877,12 @@ bool PineExecutionAdapter::schedule_margin_call_path(
     }
     // ab9714be pine_fills.cpp:1025-1063, :1314-1339: an entry-bar margin
     // pass sees only the OHLC suffix after the actual opening point. Later
-    // bars enter here from Open and retain the ordinary remaining path.
+    // bars enter here from Open and retain the ordinary remaining path. A
+    // fill matched at a waypoint was reached on the segment into it, so that
+    // waypoint is still ahead of it (the kernel's post-fill point measures
+    // from it too, NativeExecutionConsumer::margin_segment_origin): a limit
+    // filled on the way down to the low still faces the low (R5 lane
+    // PAR-MARGIN-2).
     const bool high_first = source_path_uses_high_first(bar);
     struct Waypoint { NativePathPhase phase; double price; };
     const Waypoint path[] = {
@@ -14896,7 +14901,7 @@ bool PineExecutionAdapter::schedule_margin_call_path(
         }
     }
     double adverse = kNaN;
-    for (int index = current + 1; index < 4; ++index) {
+    for (int index = std::max(current, 0); index < 4; ++index) {
         if (!finite_positive(path[index].price)) continue;
         if (!std::isfinite(adverse)
             || (position.signed_units > 0.0

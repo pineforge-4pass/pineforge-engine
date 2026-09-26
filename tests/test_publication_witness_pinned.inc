@@ -2,8 +2,9 @@
 // row per run of its battery (name, digest, source folds, closed trades,
 // recorded broker-state hash rows).
 // Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23),
-// once for K-ULP3's whole-lot close and once for V19-FIX's hash step: see
-// the provenance note in the test.
+// once for K-ULP3's whole-lot close, once for V19-FIX's hash step and once
+// for PAR-MARGIN-2's post-fill margin path: see the provenance note in the
+// test.
 // Generated -- never edit a row by hand.
 // R5 lane PAR-ORDERS re-harvested it the same way on its tree (21 of 156 runs move;
 // see the lane's hash commit for why each moves):
@@ -37,7 +38,7 @@ constexpr Pinned kPinned[] = {
     {"ConfigFlags102", 0x91619a8b469ea6aeull, 144, 52, 144},
     {"Config02M", 0xd04764a2d7139486ull, 48, 11, 48},
     {"ConfigFlags102M", 0x854413a4a59d0d33ull, 144, 52, 144},
-    {"Config03", 0x461a919ebdcd41e9ull, 144, 50, 144},
+    {"Config03", 0x461a919ebdcd41e9ull, 144, 48, 144},
     {"ConfigFlags103", 0xcf60de51b3acfcc3ull, 184, 65, 144},
     {"Config03M", 0x4511d5cd864e706full, 144, 48, 144},
     {"ConfigFlags103M", 0xdd7937eb65073a91ull, 184, 66, 144},

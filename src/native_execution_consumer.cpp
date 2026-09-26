@@ -3158,6 +3158,18 @@ double NativeExecutionConsumer::margin_sizing_price(
     return adverse;
 }
 
+NativePathPhase NativeExecutionConsumer::margin_segment_origin(
+        NativePathPhase phase) const noexcept {
+    const NativePathPhase first = margin_path_high_first_ ? NativePathPhase::High
+                                                          : NativePathPhase::Low;
+    const NativePathPhase second = margin_path_high_first_ ? NativePathPhase::Low
+                                                           : NativePathPhase::High;
+    if (phase == first) return NativePathPhase::Open;
+    if (phase == second) return first;
+    if (phase == NativePathPhase::Close) return second;
+    return phase;
+}
+
 std::optional<double> NativeExecutionConsumer::margin_call_units(
         const BacktestEngine& engine, double mark, const native_order::MatchCursor& cursor,
         NativeMarginCheckKind kind, double* out_equity, double* out_required) const {
@@ -7001,14 +7013,19 @@ void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine)
         applied_notifications_.clear();
         notification_head_ = 0;
         // L4: every applied fill re-arms the margin model against the book it
-        // left behind. Inert for a run that declares no margin model.
+        // left behind. Inert for a run that declares no margin model. The
+        // fill was reached on the segment into its driver point, so the path
+        // still ahead of it starts at that point's waypoint: a limit filled on
+        // the way down to the bar's low still faces the low (R5 lane
+        // PAR-MARGIN-2). Measured from the segment's origin, with the fill
+        // price as the point's own mark.
         if (drained && margin_model() != nullptr) {
             native_order::MatchCursor cursor;
             cursor.point = last.point.decision.coordinate;
-            maintain_margin_liquidation(engine, cursor,
-                                        last.point.decision.coordinate.path_phase,
-                                        last.point.price,
-                                        NativeMarginCheckKind::AfterApplied);
+            maintain_margin_liquidation(
+                engine, cursor,
+                margin_segment_origin(last.point.decision.coordinate.path_phase),
+                last.point.price, NativeMarginCheckKind::AfterApplied);
         }
         // L9: the second evaluation point. Every fill of this drain has
         // already been counted; the account facts are measured once, at the

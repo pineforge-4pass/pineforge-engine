@@ -73,6 +73,18 @@
 // in the close pass (4 runs). With the three hash inputs taken out, this TU
 // prints INT25's table byte for byte but for Storm11 and Storm11M, whose
 // trades the cap moves.
+// Re-harvested once more for R5 lane PAR-MARGIN-2 (its v19 re-pin): one run,
+// Config03, opens a short with a sell limit filled at 111.25 on its way up a
+// low-first bar (O110.5 L109.5 H112.5 C112.25), and the kernel's post-fill
+// margin point now measures that bar's high -- the waypoint the fill was
+// reached on the way to -- where it measured the waypoints after it. The run
+// books its margin call on the fill bar at the high, 4 @112.5, where it booked
+// 2 @112.25 there and 6 @114.75 a bar later, so it closes 48 trades instead of
+// 50 and its digest moves (461a919ebdcd41e9 -> 4593ef08ab33e045 on the lane's
+// tree; INT26 moves it on the integrated tree in its v19 hash re-pin); TradingView
+// books a short limit's call at its fill bar's high
+// (tests/fixtures/margin_entry_bar/pm2-m7-slim-*, pm2-m7-s1lim-*). The other 155
+// runs keep their digest and every count.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -766,8 +778,9 @@ void harvest() {
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
                 "// recorded broker-state hash rows).\n"
                 "// Harvested on 6c081f5d, re-harvested once for V19-D's v4 fold (INT23),\n"
-                "// once for K-ULP3's whole-lot close and once for V19-FIX's hash step: see\n"
-                "// the provenance note in the test.\n"
+                "// once for K-ULP3's whole-lot close, once for V19-FIX's hash step and once\n"
+                "// for PAR-MARGIN-2's post-fill margin path: see the provenance note in the\n"
+                "// test.\n"
                 "// Generated -- never edit a row by hand.\n");
     std::printf("constexpr Pinned kPinned[] = {\n");
     for (const Scenario& s : battery()) {

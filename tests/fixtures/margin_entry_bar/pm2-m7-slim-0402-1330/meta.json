@@ -1,0 +1,16 @@
+{
+  "title": "pm2-m7-slim-0402-1330",
+  "slug": "pm2-m7-slim-0402-1330",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T02:22:36.574Z",
+  "chart": {
+    "symbol": "BINANCE:ETHUSDT.P",
+    "interval": "15",
+    "from": "2025-03-30",
+    "to": "2025-04-05"
+  },
+  "pine_sha256": "ce866c18b22bfe031326a6ca9bd00a9b1e18d2c0c2e0f126ee121d13fb7094bd",
+  "tv_trades_sha256": "1d5f09118992a3fdb4eb1e2add229a11c5db524525039daa214044f3ccf6ba8b",
+  "tv_trades_rows": 4
+}

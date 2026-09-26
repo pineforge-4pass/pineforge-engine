@@ -861,6 +861,12 @@ list(APPEND TEST_SOURCES test_native_kernel_edge)
 # NativeMarginCheckKind::IntrabarSample at every delivered sample after the
 # bar's first. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_margin_intrabar_samples)
+# R5 lane PAR-MARGIN-2: the post-fill margin check of a request matched on the
+# segment into a waypoint measures from that segment's origin, so the waypoint
+# the fill was reached on the way to (a limit filled on its way down to the
+# bar's low) is in the scan. Source-free, so it also runs in the kernel-only
+# profile.
+list(APPEND TEST_SOURCES test_native_margin_post_fill_path)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail

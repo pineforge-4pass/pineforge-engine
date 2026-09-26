@@ -28,6 +28,13 @@
 // (TradingView's rule: tests/fixtures/margin_entry_bar), so each books that
 // margin call on the entry bar instead of a bar later; the other 105 values
 // are unchanged.
+//
+// R5 lane PAR-MARGIN-2 re-harvested one more the same way, on its tree: chains
+// seed 1570937, whose limit long filled on its way down is now called on its
+// own bar at the low (46 @106 on bar 25, a bar earlier) -- the kernel's
+// post-fill point measures from the fill's own waypoint, TradingView's rule on
+// its tapes (tests/fixtures/margin_entry_bar/pm2-m7-lim-*). The other 107
+// values are unchanged.
 
 // R5 lane PAR-ORDERS re-harvested it the same way on its tree (29 of 108 digests
 // move; see the lane's hash commit for why each moves).
@@ -137,7 +144,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     12725802557554099964ull,  // chains seed 1256750, 65 trades, 319 commands, 302 rows placed
     1798455623603086886ull,  // chains seed 1361479, 64 trades, 312 commands, 323 rows placed
     9973593188851025006ull,  // chains seed 1466208, 73 trades, 382 commands, 338 rows placed
-    15204985627708005050ull,  // chains seed 1570937, 90 trades, 366 commands, 370 rows placed
+    16038855060654239956ull,  // chains seed 1570937, 90 trades, 366 commands, 370 rows placed
     4161494051921551918ull,  // chains seed 1675666, 64 trades, 321 commands, 339 rows placed
     11993708214650334332ull,  // chains seed 1780395, 82 trades, 480 commands, 436 rows placed
     8033768331525115464ull,  // chains seed 1885124, 66 trades, 360 commands, 304 rows placed

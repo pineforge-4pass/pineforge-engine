@@ -1188,6 +1188,12 @@ private:
     // has no remaining modeled path of its own.
     double margin_sizing_price(bool short_side, NativePathPhase phase,
                                double fallback) const noexcept;
+    // The waypoint the segment into `phase` starts from (Open for the first
+    // extreme, and so on; Open itself has no segment into it). A request
+    // matched at a driver point was reached on that segment, so the path left
+    // after its fill starts AT the point's own waypoint: the post-fill check
+    // measures from here, as fx_roll_margin_check_at's continuous roll does.
+    NativePathPhase margin_segment_origin(NativePathPhase phase) const noexcept;
     // Kernel numbers, the host's requirement decision, the breach test, the
     // kernel sizing, then the host's units override. nullopt means no
     // liquidation.

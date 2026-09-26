@@ -463,7 +463,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1623-1634`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:9122-9162`), which admits the begin, checks the
+(`native_execution_consumer.cpp:9183-9223`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -631,13 +631,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:5617-5621`). Requests accepted before the
+`native_execution_consumer.cpp:5629-5633`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:7063-7065`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:7084-7086`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6955`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:6971`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1286,8 +1286,16 @@ position has already paid. The two agree whenever no open entry paid one.
 
 **Arming (`PathAdverseExtreme`, the default).** At every script-bar open and
 after every applied fill, the kernel measures the requirement against the most
-adverse price the modeled script path still reaches after the current
-waypoint — the same sizing mark a whole-bar broker check would use. If that
+adverse price the modeled script path still reaches — the same sizing mark a
+whole-bar broker check would use. At the open that is the rest of the bar.
+After a fill it is the rest of the segment the fill was matched on and the
+waypoints after it: a request matched at a driver point was reached on the
+segment into it, so a limit filled on its way down to the bar's low still
+faces that low (a short filled on its way up, the high), while the waypoints
+the path already passed do not count (R5 lane PAR-MARGIN-2;
+`tests/test_native_margin_post_fill_path.cpp`; TradingView books those calls
+on the fill's bar, `tests/fixtures/margin_entry_bar/pm2-m7-lim-*`, `-slim-*`,
+`-s1lim-*`). If that
 mark breaches, the kernel rests its own `Reduce` (or `Flatten`) with
 `Stop{L}`, bound to the live book. The reduction therefore *fills at the
 liquidation level*, where the account actually runs out of margin, while it is
@@ -2074,7 +2082,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:7799`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:7835`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2885,7 +2893,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`TimeframeAggregator` `native_execution_consumer.cpp:7879`). What it does
+(`TimeframeAggregator` `native_execution_consumer.cpp:7917`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
