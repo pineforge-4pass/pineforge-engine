@@ -867,6 +867,11 @@ list(APPEND TEST_SOURCES test_native_margin_intrabar_samples)
 # bar's low) is in the scan. Source-free, so it also runs in the kernel-only
 # profile.
 list(APPEND TEST_SOURCES test_native_margin_post_fill_path)
+# R5 PERF-KEDGE: on a UTC calendar the session-day facts read an in-session
+# instant without resolving its interval -- the zone path's facts at every
+# decision point, and the per-bar resolution cost pinned. Source-free, so it
+# also runs in the kernel-only profile.
+list(APPEND TEST_SOURCES test_native_session_day_utc)
 
 # R5 F5: the Pine adapter selects those facts instead of computing its own:
 # the same tapes flag for flag through the adapter, its live-probe tail

@@ -1015,6 +1015,16 @@ private:
         return session_point_resolved(ms);
     }
     SessionPoint session_point_resolved(int64_t ms) const;
+    // The session point of the first eligible instant of the script interval
+    // holding `ms` (`ms` itself when the calendar has no such interval): what
+    // present_session_day reads for an instant, the interval resolved first.
+    SessionPoint eligible_session_point(int64_t ms) const;
+    // Whether calendar_ is UTC (native_calendar::utc_calendar), asked once
+    // per calendar: present_session_day reads it at every bar.
+    bool calendar_is_utc() const {
+        if (!calendar_utc_) calendar_utc_ = native_calendar::utc_calendar(calendar_, calendar_memo_);
+        return *calendar_utc_;
+    }
     struct SessionPointMemo {
         bool held = false;
         int64_t ms = 0;
@@ -1540,6 +1550,8 @@ private:
     // folded; a point whose resolution threw is never held.
     mutable std::array<SessionPointMemo, 2> session_points_{};
     mutable std::size_t session_point_next_ = 0;
+    // calendar_is_utc()'s answer for calendar_. Derived, never folded.
+    mutable std::optional<bool> calendar_utc_;
     // Forget every memo over the calendar and the lookups it keys: called
     // wherever calendar_ is rebuilt.
     void reset_calendar_memos() const noexcept {
@@ -1547,6 +1559,7 @@ private:
         calendar_memo_.reset();
         session_points_ = {};
         session_point_next_ = 0;
+        calendar_utc_.reset();
         interval_cache_.forget_priors();
     }
     Bar forming_{};

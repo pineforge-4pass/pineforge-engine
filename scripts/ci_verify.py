@@ -239,7 +239,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #                  extracted from the page and run)
 # All six register in release too; RATIO-HARDEN, V19-FIX and K-IDX add no row.
 # 278 registered, 277 run: the WebSocket row still skips on a system libcurl.
-# 285 run = those 277 plus the eight source-free rows of wave H (INT26),
+# 286 run = those 277 plus the nine source-free rows of wave H (INT26),
 # counted with ctest -N on the integrated tree:
 #   +1 H-MEASURE    test_native_acid_composite (the G1 acid composite, C++
 #                   and C)
@@ -251,11 +251,13 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 #   +1 PAR-ORDERS-2 test_native_current_cohort_refusal
 #   +1 PAR-MARGIN   test_native_margin_intrabar_samples
 #   +1 PAR-MARGIN-2 test_native_margin_post_fill_path
+#   +1 PERF-KEDGE   test_native_session_day_utc (session-day facts on a UTC
+#                   calendar without a calendar interval per bar)
 # REL10 renames F6's row (test_deprecated_public_spellings ->
 # test_removed_public_spellings); PAR-ORDERS and CI-FLAKE add no row. All
-# eight register in release too. 286 registered, 285 run: the WebSocket row
+# nine register in release too. 287 registered, 286 run: the WebSocket row
 # still skips on a system libcurl.
-KERNEL_MIN_TESTS = 285
+KERNEL_MIN_TESTS = 286
 # Release-row floor, the same gate for the default profile. Before lane P7
 # only the kernel profile had one, so a row that left release alone (a
 # source-bound TU dropped from TEST_SOURCES, a deleted twin or ABI row) left a
@@ -363,8 +365,8 @@ KERNEL_MIN_TESTS = 285
 # wave-G lane adds a source-bound row (the K-ULP4 and K-ULP5 C checks and
 # V19-FIX's scaling rows are rows inside existing TUs). No release row skips,
 # so 678 registered is 678 run.
-# 700 = those 678 plus wave H's twenty-two (INT26), counted with ctest -N on
-# the integrated tree: the eight KERNEL_MIN_TESTS lists above, which register
+# 701 = those 678 plus wave H's twenty-three (INT26), counted with ctest -N on
+# the integrated tree: the nine KERNEL_MIN_TESTS lists above, which register
 # here too, H-MEASURE's eleven source-bound rows the kernel profile does not
 # build (AUDIT4 X14) and PAR-ORDERS-2's three tape rows:
 #   +1 G2-09/-10/-12/-13, E20 f1  test_adapter_margin_schedule_differential
@@ -383,8 +385,8 @@ KERNEL_MIN_TESTS = 285
 #                                 test_pooc_reversing_stop_tapes
 # PAR-MARGIN's own count also held the margin differential, which that lane
 # had cherry-picked for its pins; it counts once, as H-MEASURE's. No release
-# row skips, so 700 registered is 700 run.
-RELEASE_MIN_TESTS = 700
+# row skips, so 701 registered is 701 run.
+RELEASE_MIN_TESTS = 701
 # ADR-0001 ruled-count floors, beside the ctest floors (R5 lane H-DOCGATES,
 # AUDIT4-opus X13 / docs-a N7). check_kernel_residuals.py counts the rulings
 # its vocabulary reads -- 174 identifiers and 45 texts on the lane's tree: the
@@ -405,12 +407,12 @@ ADR_RULED_TEXTS_MIN = 40
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,
-# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 681/681/690
-# at INT26, each with wave H's twenty-two rows of RELEASE_MIN_TESTS (H-MEASURE
-# +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN +1,
-# PAR-MARGIN-2 +1), counted the same way. An excluded run must still discover
-# at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 681, 'sanitizers': 681, 'native': 690}
+# KERNEL-EDGE +1, K-ULP4 +2, K-ULP5 +1, DOC-TRUTH-4 +1) in each; 682/682/691
+# at INT26, each with wave H's twenty-three rows of RELEASE_MIN_TESTS
+# (H-MEASURE +12, H-DOCGATES +3, K-OCA-KEEP +1, PAR-ORDERS-2 +4, PAR-MARGIN
+# +1, PAR-MARGIN-2 +1, PERF-KEDGE +1), counted the same way. An excluded run
+# must still discover at least this many rows before -LE.
+EXCLUDED_REGISTERED_MIN = {'debug': 682, 'sanitizers': 682, 'native': 691}
 # The ctest stage's bound. A full sanitizers run (push to main, a manual
 # dispatch, the maintainers' verification) ran out of its 30 minutes twice on
 # main's four-core runner before every row had finished, so it gets an hour; a

@@ -1597,6 +1597,8 @@ struct SessionDayMemo::State {
     std::size_t next_local = 0;
     std::array<IntervalSlot, kIntervalSlots> intervals{};
     std::size_t next_interval = 0;
+    // Intervals resolved rather than answered from `intervals`.
+    std::uint64_t interval_resolutions = 0;
 };
 
 namespace {
@@ -1893,6 +1895,10 @@ void SessionDayMemo::reset() noexcept {
     calendar_ = nullptr;
 }
 
+std::uint64_t SessionDayMemo::interval_resolutions() const noexcept {
+    return state_ ? state_->interval_resolutions : 0;
+}
+
 SessionDayMemo::State& SessionDayMemo::bind(const SessionCalendar& calendar) {
     auto fresh = std::make_unique<State>();
     fresh->valid = calendar.valid();
@@ -1943,6 +1949,7 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
             return slot.interval;
         }
     }
+    ++m.interval_resolutions;
     auto interval = memo_interval_containing(calendar, script_tf, input_tf, ms, m);
     MemoState::IntervalSlot& slot = m.intervals[m.next_interval];
     m.next_interval = (m.next_interval + 1) % MemoState::kIntervalSlots;
@@ -1987,6 +1994,10 @@ bool in_session(const SessionCalendar& calendar, int64_t ms, SessionDayMemo& mem
     const SessionDay* day = memo_session_day_containing(calendar, ms, m);
     if (!day) return false;
     return ms_in_spans(day->spans, ms);
+}
+
+bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo) {
+    return memo.state(calendar).utc;
 }
 
 }  // inline namespace native_calendar_v2

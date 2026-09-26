@@ -77,6 +77,11 @@ public:
         return bind(calendar);
     }
 
+    // How many intervals the memo has resolved since it was last reset, as
+    // opposed to answered from the last few it holds: a cost reading, derived
+    // like everything else here and folded nowhere (R5 lane PERF-KEDGE).
+    std::uint64_t interval_resolutions() const noexcept;
+
 private:
     State& bind(const SessionCalendar& calendar);
 
@@ -106,6 +111,13 @@ std::optional<NativeSessionDay> session_day_at(const SessionCalendar& calendar,
 
 // Value for value what in_session(calendar, ms) answers.
 bool in_session(const SessionCalendar& calendar, int64_t ms, SessionDayMemo& memo);
+
+// Whether `calendar`'s zone is UTC, as the memo decided once for it and the
+// memo-free calendar decides at every resolution. A UTC calendar is integer
+// arithmetic throughout (no libc zone, no mktime): its session days are the
+// fixed daily cycles [date + origin, next date + origin), which tile time, so
+// every instant has exactly one session day and every lookup finds it.
+bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo);
 
 }  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

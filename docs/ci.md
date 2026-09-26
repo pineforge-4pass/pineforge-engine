@@ -100,10 +100,10 @@ requires the rows that actually ran to equal the second count, and records
 `registered`, `labelled = registered - selected`, and `ran` in
 `ctest-exclusion.log` and `ci-summary.json`. A skip, missing executable, lost
 registration below the PR registration floor, unreadable enumeration, or
-missing label fails. The PR registration floors at INT25 are 659 for Debug
-and sanitizers and 668 for native (653 and 662 at the INT24 base, plus wave G's
-six rows). The full-run release and kernel floors are 680 and 278 rows that
-ran; full runs do not exclude a label.
+missing label fails. The PR registration floors at INT26 are 682 for Debug
+and sanitizers and 691 for native (653 and 662 at the INT24 base, plus wave G's
+six rows and wave H's twenty-three). The full-run release and kernel floors are
+701 and 286 rows that ran; full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
