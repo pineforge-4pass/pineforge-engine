@@ -1433,6 +1433,13 @@
 //   Random10/0/0: trades 0xc9ae66b6356d2649 -> 0xaae6484f97956d07, boundary_count 69 -> 67
 //   Random20/0/1: trades 0x936a146fbbfb7d4b -> 0x4ae8ba38071c5c60, boundary_count 70 -> 69
 //   Random20/0/0: trades 0x936a146fbbfb7d4b -> 0x4ae8ba38071c5c60, boundary_count 70 -> 69
+// expectation corrected (INT27 v19 hash re-pin, 15 values over 6 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane PAR-ORDERS-3's recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are INT26's pins, which every INT27 pick before PAR-ORDERS-3 kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every PAR-ORDERS-3 commit; this host projects one fixed execution hash, so the continuation does not enter; no trade, trade digest or count moves in this commit (the trade digests and boundary counts PAR-ORDERS-3 moves are pinned by its behaviour half above):
+//   CalcOnFills/0/1: boundary 0xbd9feba11a355c84ull -> 0x109b8bbd2db3c39cull, rows 0xbd62a54cd2c27075ull -> 0x4990637dd008c142ull, final_hash 0x8e716ca55979f5e4ull -> 0x23caae4465e49b8dull [PAR-ORDERS-3 f4]
+//   CalcOnFills/0/0: boundary 0xbd9feba11a355c84ull -> 0x109b8bbd2db3c39cull, final_hash 0x8e716ca55979f5e4ull -> 0x23caae4465e49b8dull [PAR-ORDERS-3 f4]
+//   Random10/0/1: boundary 0x82933908492fe6aeull -> 0x53a92b8342582407ull, rows 0x839a10fa6478c692ull -> 0x337fd61947e125a0ull, final_hash 0x6907e89e2f502bd7ull -> 0xfb592dc1ad328c0bull [PAR-ORDERS-3 f4]
+//   Random10/0/0: boundary 0x82933908492fe6aeull -> 0x53a92b8342582407ull, final_hash 0x6907e89e2f502bd7ull -> 0xfb592dc1ad328c0bull [PAR-ORDERS-3 f4]
+//   Random20/0/1: boundary 0xad83f25bfdab1b50ull -> 0x6d39d123fcb64c3cull, rows 0x103b25042e1313deull -> 0x4350e4a911697ba6ull, final_hash 0xb27d00f43fad75a1ull -> 0x2fff8a1132834fe4ull [PAR-ORDERS-3 f4]
+//   Random20/0/0: boundary 0xad83f25bfdab1b50ull -> 0x6d39d123fcb64c3cull, final_hash 0xb27d00f43fad75a1ull -> 0x2fff8a1132834fe4ull [PAR-ORDERS-3 f4]
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0xcd8d3ecb4d2c740aull, 0xe6da4342a82c460cull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 40, 0},
     {"Quiet", 0, 0, 0xcd8d3ecb4d2c740aull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x458f1ecf00ef1d5cull, 40, 0, 0},
@@ -1478,8 +1485,8 @@ constexpr Pinned kPinned[] = {
     {"DeclinedReversal", 0, 0, 0x5dc519d25cd8e456ull, 0x14650fb0739d0383ull, 0xc3448bef59024d51ull, 0xacfb010f8ef2c1dbull, 24, 0, 1},
     {"DeclinedReversal", 1, 1, 0x506c2023d62a4e6full, 0xe0eb2dae405533f4ull, 0xc3448bef59024d51ull, 0x980a839868ba5b97ull, 24, 24, 1},
     {"DeclinedReversal", 1, 0, 0x506c2023d62a4e6full, 0x14650fb0739d0383ull, 0xc3448bef59024d51ull, 0x980a839868ba5b97ull, 24, 0, 1},
-    {"CalcOnFills", 0, 1, 0xbd9feba11a355c84ull, 0xbd62a54cd2c27075ull, 0x6f29557db540e116ull, 0x8e716ca55979f5e4ull, 55, 40, 8},
-    {"CalcOnFills", 0, 0, 0xbd9feba11a355c84ull, 0x14650fb0739d0383ull, 0x6f29557db540e116ull, 0x8e716ca55979f5e4ull, 55, 0, 8},
+    {"CalcOnFills", 0, 1, 0x109b8bbd2db3c39cull, 0x4990637dd008c142ull, 0x6f29557db540e116ull, 0x23caae4465e49b8dull, 55, 40, 8},
+    {"CalcOnFills", 0, 0, 0x109b8bbd2db3c39cull, 0x14650fb0739d0383ull, 0x6f29557db540e116ull, 0x23caae4465e49b8dull, 55, 0, 8},
     {"CalcOnFills", 1, 1, 0x0e2860d938b1d36dull, 0xfe826221acbd42c3ull, 0xa16d17de4933efdaull, 0x1ae91d50d6762fd0ull, 52, 40, 6},
     {"CalcOnFills", 1, 0, 0x0e2860d938b1d36dull, 0x14650fb0739d0383ull, 0xa16d17de4933efdaull, 0x1ae91d50d6762fd0ull, 52, 0, 6},
     {"CloseOrders", 0, 1, 0xb27e9cfcbfee41d3ull, 0x0033c4a6a644f0ddull, 0xbc944a52841481b1ull, 0xbedbc1183b7526a1ull, 48, 48, 16},
@@ -1550,8 +1557,8 @@ constexpr Pinned kPinned[] = {
     {"Random09", 0, 0, 0xaaff8dcd840f16ceull, 0x14650fb0739d0383ull, 0xcda6a598aa82b5f0ull, 0xbbe3c07366b0cbeaull, 58, 0, 2},
     {"Random09", 1, 1, 0x026e829145cad6f5ull, 0x32ca6bae685cea43ull, 0x86b2bbc1465372d7ull, 0xc55c597c6508d557ull, 58, 58, 2},
     {"Random09", 1, 0, 0x026e829145cad6f5ull, 0x14650fb0739d0383ull, 0x86b2bbc1465372d7ull, 0xc55c597c6508d557ull, 58, 0, 2},
-    {"Random10", 0, 1, 0x82933908492fe6aeull, 0x839a10fa6478c692ull, 0xaae6484f97956d07ull, 0x6907e89e2f502bd7ull, 67, 51, 23},
-    {"Random10", 0, 0, 0x82933908492fe6aeull, 0x14650fb0739d0383ull, 0xaae6484f97956d07ull, 0x6907e89e2f502bd7ull, 67, 0, 23},
+    {"Random10", 0, 1, 0x53a92b8342582407ull, 0x337fd61947e125a0ull, 0xaae6484f97956d07ull, 0xfb592dc1ad328c0bull, 67, 51, 23},
+    {"Random10", 0, 0, 0x53a92b8342582407ull, 0x14650fb0739d0383ull, 0xaae6484f97956d07ull, 0xfb592dc1ad328c0bull, 67, 0, 23},
     {"Random10", 1, 1, 0x3af283057bf553afull, 0xd948d5022e691361ull, 0x724c585ad13c935dull, 0x794b361143554e09ull, 67, 51, 23},
     {"Random10", 1, 0, 0x3af283057bf553afull, 0x14650fb0739d0383ull, 0x724c585ad13c935dull, 0x794b361143554e09ull, 67, 0, 23},
     {"Random11", 0, 1, 0x9f99f3ad7d35ba23ull, 0x29a35fd6705cc48aull, 0x2f92b1af8d2cfafcull, 0x8235cad2a6dfb3f3ull, 60, 60, 3},
@@ -1590,8 +1597,8 @@ constexpr Pinned kPinned[] = {
     {"Random19", 0, 0, 0xa21f7b0b62d72170ull, 0x14650fb0739d0383ull, 0x95d7b888983ad8e6ull, 0x0bcf8b1fde6775f8ull, 40, 0, 10},
     {"Random19", 1, 1, 0xceae18544190aae2ull, 0x7d8104e455ec01f8ull, 0x011bec7774b82ec9ull, 0x426c72d5bce82609ull, 40, 40, 11},
     {"Random19", 1, 0, 0xceae18544190aae2ull, 0x14650fb0739d0383ull, 0x011bec7774b82ec9ull, 0x426c72d5bce82609ull, 40, 0, 11},
-    {"Random20", 0, 1, 0xad83f25bfdab1b50ull, 0x103b25042e1313deull, 0x4ae8ba38071c5c60ull, 0xb27d00f43fad75a1ull, 69, 57, 21},
-    {"Random20", 0, 0, 0xad83f25bfdab1b50ull, 0x14650fb0739d0383ull, 0x4ae8ba38071c5c60ull, 0xb27d00f43fad75a1ull, 69, 0, 21},
+    {"Random20", 0, 1, 0x6d39d123fcb64c3cull, 0x4350e4a911697ba6ull, 0x4ae8ba38071c5c60ull, 0x2fff8a1132834fe4ull, 69, 57, 21},
+    {"Random20", 0, 0, 0x6d39d123fcb64c3cull, 0x14650fb0739d0383ull, 0x4ae8ba38071c5c60ull, 0x2fff8a1132834fe4ull, 69, 0, 21},
     {"Random20", 1, 1, 0x4b8bcf5ef1f015c5ull, 0x6e2d790aa8a7762bull, 0x57a697ba56dd611eull, 0xd3e60d6fda04adbeull, 72, 57, 21},
     {"Random20", 1, 0, 0x4b8bcf5ef1f015c5ull, 0x14650fb0739d0383ull, 0x57a697ba56dd611eull, 0xd3e60d6fda04adbeull, 72, 0, 21},
     {"Random21", 0, 1, 0xd7b52779988b5cfaull, 0xcfddcd52fb629169ull, 0xbc89178a735678f6ull, 0xfd9b7e4dad3197b5ull, 54, 54, 18},

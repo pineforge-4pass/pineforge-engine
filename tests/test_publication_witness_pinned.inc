@@ -211,6 +211,8 @@
 //   TwoLegsOnlyM: digest 0xa713e15d8063372full -> 0x8b4283e07b576d5full [H-THIN]
 //   LegsApart: digest 0xcfcd1f1d87803a44ull -> 0x64ff417b6bcf212full [H-THIN]
 //   LegsApartM: digest 0x701aca7df9071fb5ull -> 0xaa0c742ddeacc4d5ull [H-THIN]
+// expectation corrected (INT27 v19 hash re-pin, 1 values over 1 rows), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane PAR-ORDERS-3's recalculation rules (findings 1-2, an exit placed on a fill at a bar's extreme reads that fill; finding 4, after the matcher's own-level fill on a bar's first extreme the recalculation's orders act from that extreme); old values are INT26's pins, which every INT27 pick before PAR-ORDERS-3 kept (0631e045 reproduces each), harvested with this TU's own switch on the integrated tree and at every PAR-ORDERS-3 commit; the source folds, closed trades and recorded rows did not move:
+//   ConfigFlags103: digest 0x9e412b4fb357ae55ull -> 0x275174bdfd481a1bull [PAR-ORDERS-3 f1-2, PAR-ORDERS-3 f4]
 constexpr Pinned kPinned[] = {
     {"Config01", 0xb668af594ea2f5d9ull, 144, 44, 144},
     {"ConfigFlags101", 0xe7f27c137f45ac4bull, 145, 45, 144},
@@ -221,7 +223,7 @@ constexpr Pinned kPinned[] = {
     {"Config02M", 0x4983b8719bbfd192ull, 48, 11, 48},
     {"ConfigFlags102M", 0xeed018756d1228e9ull, 144, 52, 144},
     {"Config03", 0x0fc93105580e996eull, 144, 48, 144},
-    {"ConfigFlags103", 0x9e412b4fb357ae55ull, 184, 63, 144},
+    {"ConfigFlags103", 0x275174bdfd481a1bull, 184, 63, 144},
     {"Config03M", 0x2e2ff1ccdf841c8dull, 144, 44, 144},
     {"ConfigFlags103M", 0xa68e0a951db111ddull, 184, 65, 144},
     {"Config04", 0x63aa9da27d89b846ull, 144, 21, 144},
