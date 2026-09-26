@@ -496,3 +496,13 @@ double reserve_percent_commission(double cash) const {
         ? cash / (1.0 + commission_value_ / 100.0) : cash;
 }
 ```
+
+> **Corrected by R5 lane PAR-CASHFEE.** The block's last claim -- that a
+> cash-per-order or cash-per-contract commission reserves nothing -- does not
+> hold on TradingView. A percent-of-equity default quantity under a cash
+> commission takes its percentage of `strategy.equity` (the open entries' cash
+> fees charged) and leaves out the fee its own order pays: the value per order,
+> or the value per contract against the contract's notional. The adapter's
+> `default_sizing_cash` does so; the tapes are under
+> `tests/fixtures/cash_fee_sizing` and `docs/design/native-feature-parity.md`
+> §3.10 records the measurement.
