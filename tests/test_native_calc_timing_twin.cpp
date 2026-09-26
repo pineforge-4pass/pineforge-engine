@@ -158,19 +158,24 @@ void test_twin_against_the_adapter() {
     CHECK(native.native_recalculations_skipped() == 0);
 
     // The ONE itemized difference: where each route delivers a request born
-    // in a fill recalculation. The adapter re-presents it at the chart bar's
-    // next waypoint (CT11, the TV-only `coof_next_waypoint` refill rule,
-    // which R5-5 deliberately leaves in the source layer), so its six lots
-    // fill along script bar 0's own O/L/H/C and then bar 1's open. The kernel
-    // has no waypoint rule: a newborn market request is eligible at the next
+    // in a fill recalculation. The adapter re-presents it at the next fill
+    // point of TradingView's magnified path (CT11, the TV-only
+    // `coof_next_waypoint` refill rule, which R5-5 deliberately leaves in the
+    // source layer). Since R5 lane MAG-INTRABAR that path is TradingView's
+    // 2-minute intrabars (tests/fixtures/magnifier_intrabars, mi-coof-refill*
+    // 72 of 72 cascades): the chart bar's open print (L0), the [14,16)
+    // straddler it owns -- its open twice, its low, its high (a tie walks the
+    // low first) -- then the next intrabar's open, [16,18) at 960000. The
+    // straddler is stamped one millisecond after the print. The kernel has no
+    // waypoint rule: a newborn market request is eligible at the next
     // discrete matching point of the delivered path, which under a retained
     // lower feed is the next sub-bar's opening. Nothing else differs: same
     // rule, same six ids, same order, same resulting book. The adapter dates
-    // every one of its fills at the chart bar's open, the sixth (filled at
-    // the next sub-bar's open, 960000) included, as TradingView dates a
-    // magnified fill (R5 lane PAR-ORDERS); the native route keeps the
-    // kernel's instants.
-    const std::vector<double> adapter_prices = {100.0, 100.0, 99.0, 101.0, 100.25, 100.10};
+    // every one of its fills at the chart bar's open, the straddler's four
+    // (stamped 900001) and the sixth (filled at the next intrabar's open,
+    // 960000) included, as TradingView dates a magnified fill (R5 lane
+    // PAR-ORDERS); the native route keeps the kernel's instants.
+    const std::vector<double> adapter_prices = {100.0, 100.0, 100.0, 99.0, 101.0, 100.10};
     const std::vector<std::int64_t> adapter_times = {900000, 900000, 900000, 900000,
                                                      900000, 900000};
     const std::vector<double> native_prices = {100.0, 100.1, 100.2, 100.3, 100.4, 100.5};

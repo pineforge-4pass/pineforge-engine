@@ -1,0 +1,44 @@
+// R5 lane MAG-INTRABAR: TradingView's own "30" intrabars (the bar magnifier's intrabar
+// timeframe for this chart in TradingView's table) inside the listed chart bars, read through
+// request.security_lower_tf and printed as order comments: open times (in m since the UTC
+// day's start), then open, high, low, close.
+//@version=6
+strategy("mi-ltf-eth-240", overlay=true, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=100)
+t = request.security_lower_tf(syminfo.tickerid, "30", time)
+o = request.security_lower_tf(syminfo.tickerid, "30", open)
+h = request.security_lower_tf(syminfo.tickerid, "30", high)
+l = request.security_lower_tf(syminfo.tickerid, "30", low)
+c = request.security_lower_tf(syminfo.tickerid, "30", close)
+tc = request.security_lower_tf(syminfo.tickerid, "30", time_close)
+day(a) =>
+    out = array.new_float()
+    for v in a
+        array.push(out, (v % 86400000) / 60000)
+    out
+part(a, i, n) =>
+    str.tostring(array.slice(a, math.min(i, array.size(a)), math.min(i + n, array.size(a))))
+if time == timestamp("UTC", 2026, 4, 28, 12, 0)
+    n = array.size(t)
+    strategy.entry("b0n", strategy.long, comment = "b0 n=" + str.tostring(n) + " t" + str.tostring(time / 1000) + " tc" + str.tostring(time_close / 1000) + " O" + str.tostring(open) + " H" + str.tostring(high) + " L" + str.tostring(low) + " C" + str.tostring(close))
+    for i = 0 to 3
+        if i * 8 < n
+            strategy.entry("b0t" + str.tostring(i), strategy.long, comment = "b0t" + str.tostring(i) + part(day(t), i * 8, 8))
+            strategy.entry("b0e" + str.tostring(i), strategy.long, comment = "b0e" + str.tostring(i) + part(day(tc), i * 8, 8))
+            strategy.entry("b0o" + str.tostring(i), strategy.long, comment = "b0o" + str.tostring(i) + part(o, i * 8, 8))
+            strategy.entry("b0h" + str.tostring(i), strategy.long, comment = "b0h" + str.tostring(i) + part(h, i * 8, 8))
+            strategy.entry("b0l" + str.tostring(i), strategy.long, comment = "b0l" + str.tostring(i) + part(l, i * 8, 8))
+            strategy.entry("b0c" + str.tostring(i), strategy.long, comment = "b0c" + str.tostring(i) + part(c, i * 8, 8))
+if time == timestamp("UTC", 2026, 4, 28, 16, 0)
+    n = array.size(t)
+    strategy.entry("b1n", strategy.long, comment = "b1 n=" + str.tostring(n) + " t" + str.tostring(time / 1000) + " tc" + str.tostring(time_close / 1000) + " O" + str.tostring(open) + " H" + str.tostring(high) + " L" + str.tostring(low) + " C" + str.tostring(close))
+    for i = 0 to 3
+        if i * 8 < n
+            strategy.entry("b1t" + str.tostring(i), strategy.long, comment = "b1t" + str.tostring(i) + part(day(t), i * 8, 8))
+            strategy.entry("b1e" + str.tostring(i), strategy.long, comment = "b1e" + str.tostring(i) + part(day(tc), i * 8, 8))
+            strategy.entry("b1o" + str.tostring(i), strategy.long, comment = "b1o" + str.tostring(i) + part(o, i * 8, 8))
+            strategy.entry("b1h" + str.tostring(i), strategy.long, comment = "b1h" + str.tostring(i) + part(h, i * 8, 8))
+            strategy.entry("b1l" + str.tostring(i), strategy.long, comment = "b1l" + str.tostring(i) + part(l, i * 8, 8))
+            strategy.entry("b1c" + str.tostring(i), strategy.long, comment = "b1c" + str.tostring(i) + part(c, i * 8, 8))
+if strategy.position_size > 0 and barstate.isconfirmed and not na(time[1]) and strategy.opentrades > 0 and bar_index > strategy.opentrades.entry_bar_index(0) + 1
+    strategy.close_all(comment = "done")

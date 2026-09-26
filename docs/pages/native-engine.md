@@ -1320,7 +1320,8 @@ lower-timeframe low that crosses, sized there
 (`tests/fixtures/intrabar_margin`). TradingView's lower timeframe is its own:
 on a 15-minute chart its bar magnifier walks 2-minute intrabars, each owned by
 the chart bar that holds its last minute, so the samples a run declares decide
-where its calls land.
+where its calls land. A compiled Pine strategy declares exactly those: its host
+builds TradingView's intrabars from the finer feed (@ref magnifier_intrabars).
 
 `basis` chooses the equity side of that comparison, at every check point.
 `MarkedEquity` (the default) is `marked_equity(mark)` itself, which the open
@@ -1546,12 +1547,11 @@ crosses the reduced book's line, on a leveraged long (plain, under
 `process_orders_on_close` or under `calc_on_order_fills`) and on a short at any
 margin, plain or under `calc_on_order_fills` (`tests/fixtures/intrabar_margin`,
 20 magnified tapes). It checks at its own 2-minute intrabars (above), which
-TradingView's `request.security_lower_tf` prints, and a model of that check
-books all 20 tapes' calls; the adapter checks the samples its host feeds, one
-minute on the corpus, so six tapes part where the two grids resolve a crossing
-differently -- recorded, not fixed here: sampling the magnifier at
-TradingView's intrabar timeframe moves every magnified fill, not only margin
-calls. A full-margin long (its one-contract money call) and a short under
+TradingView's `request.security_lower_tf` prints. Since R5 lane MAG-INTRABAR
+the adapter walks those intrabars, built from its host's finer feed
+(@ref magnifier_intrabars), and books all 20 tapes' calls; walking the feed's
+own minutes, it parted on six where the two grids resolve a crossing
+differently. A full-margin long (its one-contract money call) and a short under
 `process_orders_on_close` keep their routes there. A margin call is a market
 execution at the print it fired at, so an off-grid print books its nearest
 tick (12.105 books 12.11), as every TradingView market fill does, while a stop
@@ -4320,8 +4320,8 @@ type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:83`).
 Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all ten `src/source/` ones, and
-`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:113`) holds the kernel's own
-thirty-five, which are what `add_library` (`CMakeLists.txt:153`) compiles into
+`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:114`) holds the kernel's own
+thirty-five, which are what `add_library` (`CMakeLists.txt:154`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

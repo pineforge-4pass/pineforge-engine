@@ -19,7 +19,9 @@ TradingView dates a magnified fill at its chart bar's open.
   would have booked one a minute earlier; the export repeats over three other
   windows. Explained by R5 lane PAR-MARGIN-2 (below): TradingView's magnifier
   walks 2-minute intrabars on a 15-minute chart, and 01:42-01:43 is ONE of them,
-  its low 2673.33. Recorded: the adapter samples the one-minute feed.
+  its low 2673.33. Since R5 lane MAG-INTRABAR the adapter walks those intrabars
+  too (built from the one-minute feed) and books the tape's rows, 0130
+  included.
 
 `bars_1m.inc` holds each event's 1-minute bars from the corpus feed;
 `pm-i3-eth-ltf-lows` prints TradingView's own 1-minute lows inside the two
@@ -70,13 +72,13 @@ call, 1908.17, is that minute's low: it precedes the fill at the signal close).
 `tests/test_adapter_margin_schedule_differential.cpp` ("intrabar shapes")
 replays every tape from its own `strategy.pine` and models the check: at
 TradingView's 2-minute intrabars the model books every call of all 16
-magnified tapes here (and of the four `pm2-m7-mag-*`), and at the one-minute
-samples the adapter's host feeds it books exactly what the adapter books. The
-two grids agree on 10 of the 16, where the adapter books the tape's rows; they
-part on six (0130 plain and COOF, pooc 0109, 0402 and 0707, s1x 0623), which
-stay recorded. `pm2-ltf-*` is checked against the feed ("TradingView
-intrabars"). `pm2_bars_1m.inc` holds each new event's one-minute bars from the
-corpus feed.
+magnified tapes here (and of the four `pm2-m7-mag-*`). Since R5 lane
+MAG-INTRABAR the adapter walks TradingView's intrabars, built from its host's
+one-minute feed, and books every tape's rows; at the feed's own one-minute
+samples, which it walked before, the model parts from TradingView on six (0130
+plain and COOF, pooc 0109, 0402 and 0707, s1x 0623) and agrees on 10.
+`pm2-ltf-*` is checked against the feed ("TradingView intrabars").
+`pm2_bars_1m.inc` holds each new event's one-minute bars from the corpus feed.
 
 | probe | window | TradingView's margin calls | tvTradesCsvHash |
 |---|---|---|---|

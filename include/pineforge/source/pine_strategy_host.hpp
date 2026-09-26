@@ -267,6 +267,9 @@ public:
     void on_native_tick(const Bar&, const NativeTickContext&) final;
     void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
     void on_native_bar(const Bar&, const NativeDecisionContext&) final;
+    // A magnified run's intrabar is done: its open-point fills are spent
+    // (PineScheduler::sub_bar_complete).
+    void on_native_sub_bar(const Bar&, const NativeDecisionContext&) final;
     // R6: every calculation of the run arrives here. BarClose forwards to
     // on_native_bar exactly as the kernel's default does; OrderFill is
     // calc_on_order_fills, which the consumer now schedules (spec

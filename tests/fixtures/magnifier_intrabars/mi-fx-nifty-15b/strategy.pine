@@ -1,0 +1,12 @@
+// R5 lane MAG-INTRABAR: which intrabars TradingView's bar magnifier walks on a 15-minute
+// NSE:NIFTY chart. A market long every 2 chart bars while flat inside the window, bracketed at
+// +-400 ticks from its fill: both legs often sit inside one chart bar, so the exit taken
+// depends on the intrabar path.
+//@version=6
+strategy("mi-fx-nifty-15b", overlay=true, pyramiding=1, initial_capital=1000000,
+     default_qty_type=strategy.fixed, default_qty_value=1, commission_value=0, slippage=0,
+     use_bar_magnifier=true)
+inWindow = time >= timestamp("UTC", 2026, 2, 1, 0, 0) and time < timestamp("UTC", 2026, 2, 2, 0, 0)
+if strategy.position_size == 0 and bar_index % 2 == 1 and inWindow
+    strategy.entry("L", strategy.long)
+strategy.exit("X", "L", profit=400, loss=400)

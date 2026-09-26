@@ -6,6 +6,7 @@
 #include "pine_host_reads.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -176,12 +177,54 @@ int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) co
     return source_bar_count_;
 }
 
-std::optional<double> PineScheduler::next_input_waypoint(
-        const PineStrategyHost& host, const NativeDecisionContext& context,
-        double current_price) const noexcept {
-    const auto found = std::find_if(retained_.bars.begin(), retained_.bars.end(),
-        [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
-    if (found == retained_.bars.end()) return std::nullopt;
+const Bar* PineScheduler::lower_path_bar_at(
+        const PineStrategyHost& host, const NativeDecisionContext& context) const noexcept {
+    const NativeRunSpec* spec = detail::run_spec(host);
+    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
+    if (!lower) return nullptr;
+    // preflight_intrabar_path admitted the path only with strictly
+    // increasing stamps.
+    const auto found = std::lower_bound(
+        lower->bars.begin(), lower->bars.end(), context.sub_bar_open_ms,
+        [](const Bar& bar, std::int64_t time) { return bar.timestamp < time; });
+    if (found == lower->bars.end() || found->timestamp != context.sub_bar_open_ms)
+        return nullptr;
+    return &*found;
+}
+
+void PineScheduler::sub_bar_complete() noexcept {
+    if (!retained_.bar_magnifier) return;
+    saw_open_fill_ = false;
+    open_point_fills_ = 0;
+}
+
+namespace {
+// A one-price bar that traded nothing: a print of a Pine magnified path (the
+// chart bar's own open or close, source::tradingview_magnifier_bars).
+bool single_print(const Bar& bar) noexcept {
+    return bar.volume == 0.0 && bar.high == bar.open && bar.low == bar.open
+        && bar.close == bar.open;
+}
+}  // namespace
+
+std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
+        const PineStrategyHost& host, const NativeDecisionContext& context) const noexcept {
+    // The sub-bar being walked is a bar of the run's lower path -- one of
+    // TradingView's intrabars since R5 lane MAG-INTRABAR, no longer always an
+    // input bar -- so it is looked up there.
+    const Bar* found = lower_path_bar_at(host, context);
+    if (!found) return std::nullopt;
+    // TradingView's magnified broker fills a fill recalculation's order at
+    // the next of the path's fill points: the chart bar's own open (a print,
+    // walked once), then each intrabar's open, first extreme and second
+    // extreme -- an intrabar's close is not one, the next intrabar's open
+    // follows its second extreme (tests/fixtures/magnifier_intrabars/
+    // mi-coof-refill*, 72 of 72 cascades; R5 lane MAG-INTRABAR).
+    const auto* spec = detail::run_spec(host);
+    const auto& path = spec->intrabar.lower()->bars;
+    const InputWaypoint next_open{found + 1 < path.data() + path.size()
+        ? (found + 1)->open : std::numeric_limits<double>::quiet_NaN(), true};
+    if (single_print(*found)) return next_open;
     const bool high_first = host.adapter_.source_path_uses_high_first(*found);
     const NativePathPhase phase[] = {
         NativePathPhase::Open,
@@ -197,9 +240,13 @@ std::optional<double> PineScheduler::next_input_waypoint(
     };
     for (int index = 0; index < 4; ++index) {
         if (phase[index] != context.coordinate.path_phase) continue;
-        if (index > 0 && current_price != price[index]) return price[index];
-        if (index < 3) return price[index + 1];
-        return std::nullopt;
+        // A fill AT an extreme books that print's tick, which can sit a
+        // binary64 ulp off the print (coof_fill_at_path_point): it is at the
+        // waypoint, not short of it.
+        if (index > 0 && index < 3 && !host.adapter_.coof_fill_at_path_point(price[index]))
+            return InputWaypoint{price[index], false};
+        if (index < 2) return InputWaypoint{price[index + 1], false};
+        return next_open;
     }
     return std::nullopt;
 }
@@ -590,9 +637,18 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     const NativePathPhase first_extreme = bar_known
         && host.adapter_.source_path_uses_high_first(current_script_bar_)
         ? NativePathPhase::High : NativePathPhase::Low;
-    const bool open_point = context.coordinate.path_phase == NativePathPhase::Open
-        || (bar_known && context.coordinate.path_phase == first_extreme
-            && event.cursor.t == 0.0);
+    // A print of a magnified path (the chart bar's own open) admits the
+    // carried fill alone: TradingView's refill waits for the first intrabar's
+    // open (sub_bar_complete, next_input_waypoint).
+    // On a lower path a point's phase is its sub-bar's, so the open point is
+    // that sub-bar's own Open: the chart bar's first extreme says nothing
+    // about it.
+    const Bar* path_bar = lower_path_bar_at(host, context);
+    const bool open_point = path_bar
+        ? !single_print(*path_bar) && context.coordinate.path_phase == NativePathPhase::Open
+        : context.coordinate.path_phase == NativePathPhase::Open
+            || (bar_known && context.coordinate.path_phase == first_extreme
+                && event.cursor.t == 0.0);
     const bool at_open = open_point && open_point_fills_ < 2;
     open_point_fills_ = at_open ? open_point_fills_ + 1 : 2;
     const bool first_open = at_open && !saw_open_fill_;
