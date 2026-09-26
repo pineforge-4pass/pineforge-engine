@@ -186,6 +186,13 @@
     ]
   },
   "observableRewrites": {
+    "test_calc_on_order_fills": {
+      "baseAssertions": 242,
+      "reason": "the chart-path endpoint row follows the R5 PAR-ORDERS-3 TradingView tapes (pa3-f4-stop-w1-mkt-*): a market add placed by the recalculation on a stop entry's fill exactly at a bar's first extreme fills at that extreme, not at the next waypoint",
+      "twin": "test_calc_on_order_fills_l4c.cpp",
+      "twinAssertionSha256": "4fe9c2736bc13f4489d9600c0fbbb11e3890e531418dab2a994db7e2012e81a3",
+      "twinAssertions": 242
+    },
     "test_direct_short_reversal_affordability": {
       "baseAssertions": 48,
       "reason": "owner-seeded margin fixtures are rebuilt as public command tapes",

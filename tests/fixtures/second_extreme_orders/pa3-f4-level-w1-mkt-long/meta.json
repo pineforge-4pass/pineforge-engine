@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F4 level-w1 mkt long",
+  "slug": "pa3-f4-level-w1-mkt-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:47:18.137Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "05f5e84e31045cc229a0443cf2cf0b2cd5bf99b2f98f6a75a8ea7ea7749ac894",
+  "tv_trades_sha256": "3a1d2405c1917c4b952affb50f59479af56218cc82401a20d8216860dc05b2ae",
+  "tv_trades_rows": 12
+}

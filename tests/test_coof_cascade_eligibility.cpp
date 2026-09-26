@@ -90,6 +90,12 @@ public:
 // Fixed 4-event engine exact-level fills that second bracket at 93 ON the
 // W2->C segment (exit_bar == 1). The new rule holds it: no extreme remains
 // after W2, C is ineligible, so it converts to resting and fills on bar 2.
+// Since R5 lane PAR-ORDERS-3 the re-entry fills at W1=101 instead: the tp
+// bracket's fill at 101 is its own level on the extreme, which ends the leg
+// there, and TradingView books the recalculation's market re-entry at that
+// extreme (lab tv pa3-f4-xlimit-w1-reentry-*); the tp @93 born there is then
+// already through and fills on the W2->C re-cross of 93, on bar 1 (lab tv
+// pa3-f4-xlimit-w1-reentry-tp-*, below).
 class CascadeBracketW2CProbe final : public CoofBase {
 public:
     void on_source_bar(const Bar&) override {
@@ -129,12 +135,17 @@ void test_r1_cascade_bracket_does_not_exact_fill_on_w2_c_segment() {
         CHECK(near(p.get_trade(0).exit_price, 101.0));
         CHECK(p.get_trade(0).entry_bar_index == 1);
         CHECK(p.get_trade(0).exit_bar_index == 1);
-        // Cycle 2: cascade re-entry at W2=90; its tp=93 is inside W2->C, so the
-        // exit must NOT occur on bar 1 — it converts to resting and fills bar 2.
-        CHECK(near(p.get_trade(1).entry_price, 90.0));
+        // Cycle 2. The pins of this row a later lane moved on purpose (R5 lane
+        // PAR-ORDERS-3): expectation corrected: the re-entry 90 (W2) -> 101
+        // (W1) and its exit bar 2 -> 1, because the tp bracket's fill at 101
+        // is its own level on the bar's first extreme, and TradingView fills
+        // the recalculation's market re-entry at that extreme; the tp @93
+        // born there fills where the path next re-crosses 93 from below, on
+        // bar 1's W2->C leg (lab tv pa3-f4-xlimit-w1-reentry-tp-*).
+        CHECK(near(p.get_trade(1).entry_price, 101.0));
         CHECK(near(p.get_trade(1).exit_price, 93.0));
         CHECK(p.get_trade(1).entry_bar_index == 1);
-        CHECK(p.get_trade(1).exit_bar_index == 2);   // RED vs fixed budget (==1)
+        CHECK(p.get_trade(1).exit_bar_index == 1);
     }
 }
 

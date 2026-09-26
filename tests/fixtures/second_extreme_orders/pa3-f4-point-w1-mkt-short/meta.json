@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F4 point-w1 mkt short",
+  "slug": "pa3-f4-point-w1-mkt-short",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T03:47:42.217Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "1e6becc58556c58f9291c01d07e58b0a3236b2e2429726feb88a7f9dcb29f0b9",
+  "tv_trades_sha256": "b85b054c0c53200c9db1f8fd5c0c1bb6008bb38277034ed05ba0d5f3155666ff",
+  "tv_trades_rows": 12
+}

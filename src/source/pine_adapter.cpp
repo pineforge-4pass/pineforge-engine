@@ -5792,6 +5792,18 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
             if (path_index) *path_index = index;
             return path_price[index];
         }
+        // The matcher's fill of a resting request at its own level ON an
+        // extreme ends the leg there: the recalculation's orders act from that
+        // point, as TradingView books them -- a market order, a close or
+        // close_all fills at it, a priced order is live at its own level from
+        // it (lab tv pa3-f4-level-w1-*; the second extreme, H-MEASURE Finding
+        // 6d, pa2-i2-exit-w2-*). A fill the adapter forced onto the point
+        // starts the next leg (pa3-f4-point-w1-mkt-*; R5 lane PAR-ORDERS-3).
+        if (index > 0 && index < 3 && at_waypoint && !forced_waypoint
+            && !coof_fill_forced_) {
+            if (path_index) *path_index = index;
+            return path_price[index];
+        }
         if (path_index && index < 3) *path_index = index + 1;
         return index < 3 ? path_price[index + 1] : kNaN;
     }
@@ -8996,6 +9008,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     auto submit_leg = [&](PineOrderFamily family, native_order::Trigger trigger) {
         bool defer_marketable_coof_stop = false;
+        // A stop reached at the point its recalculating fill ended the leg on:
+        // executed there, so never staged behind the recalculation.
+        bool coof_stop_at_leg_end = false;
         bool coof_limit_waypoint_qualified = false;
         double coof_limit_waypoint_price = kNaN;
         double coof_stop_waypoint_price = kNaN;
@@ -9083,7 +9098,17 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                            && finite_positive(stop_price)) {
                     const bool marketable = closing_long
                         ? point->price <= stop_price : point->price >= stop_price;
-                    if (marketable && phase != NativePathPhase::Open
+                    if (marketable && fill_ends_leg) {
+                        // Reached at the point the fill ended its leg on: it
+                        // fills there, as a market close does.  A stop at the
+                        // point itself, not a market leg: the recalculation
+                        // executes market newborns at their point, which a
+                        // cohort-bound leg (close_entries_rule "any") cannot
+                        // take, so it would book this price on a later bar.
+                        trigger = native_order::Stop{point->price};
+                        coof_stop_waypoint_price = point->price;
+                        coof_stop_at_leg_end = true;
+                    } else if (marketable && phase != NativePathPhase::Open
                         && std::isfinite(qty) && finite_positive(endpoint)
                         && !source_same_point(point->price, endpoint, staged_.syminfo.mintick)) {
                         trigger = native_order::Stop{endpoint};
@@ -9334,7 +9359,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         point->decision.coordinate.interval_index);
                     return !direct_partial;
                 };
-                if ((wrong_stop || wrong_limit)
+                if ((wrong_stop || wrong_limit) && !coof_stop_at_leg_end
                     && (coof_first_open_ || wrong_stop || !qualified_recross())) {
                     snapshot.defer_until_post_parent_calculation = true;
                     delayed_market_orders_.push_back({
@@ -9346,7 +9371,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto native = detail::run_state(require_host());
             const bool stage_chart_tick_scope = config_.calc_on_order_fills
                 && !config_.process_orders_on_close
-                && coof_recalc_active_ && !defer_coof_tail()
+                && coof_recalc_active_ && !defer_coof_tail() && !coof_stop_at_leg_end
                 && (!native.spec || native.spec->intrabar.is_none())
                 && (family == PineOrderFamily::ExitLimit
                     || family == PineOrderFamily::ExitStop);

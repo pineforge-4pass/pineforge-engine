@@ -1,0 +1,16 @@
+{
+  "title": "PA3 F4 xlimit-w1 reentry tp long",
+  "slug": "pa3-f4-xlimit-w1-reentry-tp-long",
+  "source": "pineforge-workflow campaign lab tv",
+  "channel": "ws-report-v1",
+  "exportedAt": "2026-09-26T04:13:40.464Z",
+  "chart": {
+    "symbol": "NYSE:F",
+    "interval": "15",
+    "from": "2025-07-01",
+    "to": "2025-07-08"
+  },
+  "pine_sha256": "905853c06131afced309c43098f5fb2ccd0e2d22057dc91a299234061512df08",
+  "tv_trades_sha256": "b44f5702fe7b13f6e67cb56dc9d9be378057529a1f96da45d3cdfb34c1d6f0ec",
+  "tv_trades_rows": 12
+}
