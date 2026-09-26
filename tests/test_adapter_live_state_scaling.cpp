@@ -115,6 +115,23 @@
 // removal kept but a walk over every origin the run accepted at every bar
 // fails the flip at x11.99, on the ratio alone.
 //
+// R5 lane CI-FLAKE times every workload's two sizes in turn. The replay and
+// the churn were still timed in blocks -- five runs of the small tape, then
+// five of the large -- and engine CI run 36194784147 (hosted Ubuntu x86-64,
+// `ctest --parallel 4` on four SMT threads) measured the replay at 5.10: 2,000
+// bars 0.1724 s, 8,000 bars 0.8789 s, 86 against 110 us a bar. The shape is
+// linear: on idle spark cores the unchanged row measured the replay at
+// 4.00-4.05 at those sizes (Cortex-A725, 20 runs) and 3.99-4.01 at 4,000 /
+// 16,000 bars (Cortex-X925, 20 runs), and the leg alone costs 31.4 us and
+// about 405,000 user instructions a bar from 1,000 to 32,000 bars (X925). In
+// blocks, a load that rises after the first small run and before the first
+// large one ends slows the large block alone; in turn, only a rise inside the
+// first round does. Moved to the Mac's efficiency cores partway through the
+// replay row (3.9 times the CPU a bar), the blocks failed for a move 2.75 to
+// 3.75 s into the row and the rounds for one 2.75 to 3.25 s in. For a rise
+// of CI's size (the large leg 27.5 % dearer a bar) the blocks' window is four
+// small runs longer than the rounds': on that runner about 0.8 s against 0.1.
+//
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
 // replay|churn|straddle|recancel|constant|cancelall|flip <bars>
 // [--no-recording]` runs one leg and prints its CPU time, retained rows and
@@ -338,15 +355,6 @@ int attempts() {
     return parsed > 0 ? parsed : 5;
 }
 
-Leg best_of(Workload workload, const std::vector<Bar>& bars, bool recording) {
-    Leg best;
-    for (int attempt = 0; attempt < attempts(); ++attempt) {
-        const Leg sample = replay(workload, bars, recording);
-        if (attempt == 0 || sample.seconds < best.seconds) best = sample;
-    }
-    return best;
-}
-
 constexpr int kBars = 1000;
 constexpr double kShapeBound = 5.0;
 // Every ratio leg is calibrated to at least this much process CPU. The cap
@@ -362,9 +370,9 @@ constexpr std::size_t kRowBound = 64;
 // that still work or hold a lot, and the last bar's closes (R5 lane V19-FIX).
 constexpr std::size_t kRosterBound = 8;
 
-// The straddle's two sizes, timed in turn round after round (which goes first
-// alternates), each keeping its best round: its legs are milliseconds long, so
-// a load change between two blocks of rounds would land on one side only.
+// A workload's two sizes, timed in turn round after round (which goes first
+// alternates), each keeping its best round: a load change between two blocks
+// of rounds would land on one side only.
 void interleaved_best(Workload workload, const std::vector<Bar>& small_tape,
                       const std::vector<Bar>& large_tape, bool recording, Leg& small,
                       Leg& large) {
@@ -392,14 +400,8 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
     Leg small;
     Leg large;
     const auto time_legs = [&](int count) {
-        const std::vector<Bar> small_tape = tape(count, step);
-        const std::vector<Bar> large_tape = tape(count * 4, step);
-        if (short_bars) {
-            interleaved_best(workload, small_tape, large_tape, recording, small, large);
-        } else {
-            small = best_of(workload, small_tape, recording);
-            large = best_of(workload, large_tape, recording);
-        }
+        interleaved_best(workload, tape(count, step), tape(count * 4, step), recording, small,
+                         large);
         return std::min(small.seconds, large.seconds);
     };
     if (gated())
